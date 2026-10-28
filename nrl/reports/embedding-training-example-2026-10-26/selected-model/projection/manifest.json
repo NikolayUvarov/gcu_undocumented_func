@@ -1,0 +1,105 @@
+{
+  "schema": "nrl.model/0",
+  "kind": "standalone",
+  "descriptor": {
+    "family": "feed-forward",
+    "adapter": "nrl.feed-forward",
+    "adapter_version": 0,
+    "configuration": {
+      "schema": "nrl.graph/0",
+      "input_width": 3,
+      "nodes": [
+        {
+          "id": "body",
+          "op": {
+            "operator": "gated",
+            "input": "input",
+            "object": "body"
+          }
+        },
+        {
+          "id": "residual",
+          "op": {
+            "operator": "add",
+            "left": "input",
+            "right": "body"
+          }
+        },
+        {
+          "id": "readout",
+          "op": {
+            "operator": "affine",
+            "input": "residual",
+            "object": "readout"
+          }
+        }
+      ],
+      "output": "readout"
+    },
+    "preprocessor": "identity-f64/0",
+    "tasks": [
+      "regression-vector/0"
+    ],
+    "state": "stateless",
+    "tied_objects": []
+  },
+  "execution": {
+    "schema": "nrl.execution/0",
+    "backend": "cpu-scalar",
+    "dtype": "f64",
+    "layout": "row-major",
+    "max_batch_rows": 256,
+    "max_activation_values": 65536
+  },
+  "base": null,
+  "objects": {
+    "body": {
+      "file": "object-0000.json",
+      "sha256": "b9cc645665f62218f2cc11e2f615aad86189f6c4bd33361af3d7c168ab6e4f07",
+      "bytes": 1898,
+      "parameters": {
+        "kind": "gated",
+        "schema": "nrl.block/5",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "dense",
+        "channels": 4,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 47,
+        "trainable_values": 47,
+        "bias_values": 11
+      }
+    },
+    "readout": {
+      "file": "object-0001.json",
+      "sha256": "9b7a9bde4ec1010ebb1dc7c4fec641a3218be90abec0b2240bea11b566b62e4f",
+      "bytes": 479,
+      "parameters": {
+        "kind": "affine",
+        "schema": "nrl.affine/0",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "dense",
+        "channels": null,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 12,
+        "trainable_values": 12,
+        "bias_values": 3
+      }
+    }
+  },
+  "sources": [
+    {
+      "identifier": "synthetic://nrl-original-embedding-projection-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    }
+  ],
+  "history": [],
+  "changes": []
+}

@@ -1,0 +1,39 @@
+# 900-NRL-0004 — Validate dense and linear-spline gated blocks against the reference — done
+
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-25) · **Blocked by:** 900-NRL-0001, 0002, 0003 · **Roadmap:** G; issue 900 T03 (first slice); minimal T04 round trip · **Constitution:** MC-5.1, MC-5.2, MC-8.5, MC-11.2, MC-11.8, MC-12.1, MC-12.2, MC-12.3
+
+## Problem
+
+Issue [900](../issues/900-neural-representation-lab.md) needs a reproducible, narrowly scoped first Rust numerical path. This task carries T03 (first slice); minimal T04 round trip of the starting plan accepted by the maintainer on 2026-10-25.
+
+## Plan
+
+1. Implement dense SiLU and linear-spline bias-free gated blocks with explicit buffers and analytic gradients.
+2. Compare forward, input and parameter gradients with reference tensors, and with independent numerical differences away from kinks.
+3. Exercise knots, tails, invalid shapes/grids/sizes and finite-value handling.
+4. Demonstrate one local training step and a bounded save/load round trip with a machine-readable report.
+
+## Acceptance criteria
+
+- [x] Reference forward and backward agree within the documented f64 tolerances.
+- [x] Independent gradient checks, knot/tail cases and malformed-input checks pass.
+- [x] A saved block reloads with the same forward result and refuses invalid versions, data and overwrites.
+- [x] The report states actual work and remaining T03/T04 work; it claims neither useful compression nor native execution.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md).
+- [262](../issues/262-model-runtime-on-the-machines-full-hardware.md), APP's model service.
+- [NRL](../docs/nrl/README.md).
+
+## Progress (2026-10-25)
+
+The first block implementation is in 900-NRL-0003's backend spike. This task adds the stored-reference comparisons, independent finite differences for every input/trainable parameter, knot/tail checks, malformed artifact checks, exact round trips, and explicit buffer/overflow checks. The initial run had ten passing host tests; the final eleven-test check follows staging on fast-test, on the NRL branch only. No acceptance checkbox is closed on the strength of the added test alone.
+
+## Resolution
+
+- The branch's dense SiLU and linear-spline gated block implementations are checked by `nrl/crates/nrl-lab/tests/numerics.rs` against externally generated PyTorch outputs, input/parameter gradients and a one-step training result.
+- Independent finite differences exercise every input and trainable parameter away from knots. Separate checks cover exact knots, both tails, finite values, buffer lengths, overflow, malformed/oversized/versioned artifacts, unknown/duplicate fields, no-overwrite and exact round trips.
+- After staging the built branch in fast-test (`cb3fb7da`), `bash nrl/tools/check.sh` passed on the **NRL branch** at `3d820f72`: **11 Rust tests**, release rlibs for x86_64-unknown-none and aarch64-unknown-none-softfloat, and the two-case host demonstration. No build or test ran on fast-test. Full output: `nrl/reports/rust-check-2026-10-25.txt`.
+- Maximum recorded reference error was 5.551115123125783e-17. The dense synthetic MSE moved from 0.10231179736197876 to 0.09556269780699116; the spline MSE from 0.15264958541547757 to 0.12677966117930756. These are different fixed test blocks, not a quality/compression comparison or held-out model result.
+- `nrl/reports/cpu-f64-2026-10-25.json` records the profile and limitations. The rest of T03 (pruned, cubic Hermite, SVD), general T04 import/export and T11 remain open under 900. Code landing and CI wiring are pending.

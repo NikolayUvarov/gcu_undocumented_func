@@ -1,0 +1,1104 @@
+{
+  "arms": [
+    {
+      "history": [
+        {
+          "accumulated_error": {
+            "logit_mse": 5.110463673904768,
+            "maximum_absolute_logit_error": 12.827900124155677,
+            "output_values": 23552
+          },
+          "fits": [],
+          "pair_id": null,
+          "round": 0,
+          "student_model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+          "validation_nll": 4.010611310636807
+        },
+        {
+          "accumulated_error": {
+            "logit_mse": 5.110394316558329,
+            "maximum_absolute_logit_error": 12.827634610343923,
+            "output_values": 23552
+          },
+          "fits": [
+            {
+              "after": {
+                "mae": 0.12492041540050723,
+                "max_absolute_error": 0.8360406861218976,
+                "mse": 0.02651925277712492,
+                "near_zero_energy": false,
+                "nmse": 0.3067170106965071,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.12492316630884429,
+                "max_absolute_error": 0.8360578534604839,
+                "mse": 0.02652026558279305,
+                "near_zero_energy": false,
+                "nmse": 0.30672872462862866,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "layer": 0
+            },
+            {
+              "after": {
+                "mae": 0.2336597472676264,
+                "max_absolute_error": 1.584093456849439,
+                "mse": 0.09536425960448676,
+                "near_zero_energy": false,
+                "nmse": 0.6899436885508291,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.13822035216351014,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.23366321955608046,
+                "max_absolute_error": 1.5841020379581232,
+                "mse": 0.09536758329263244,
+                "near_zero_energy": false,
+                "nmse": 0.6899677348514908,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.13822035216351014,
+                "values": 4096
+              },
+              "layer": 2
+            }
+          ],
+          "pair_id": "50c9c7a52e04417e2f27b12ab1704dcbc9565f83367856e7a10c5434393a814d",
+          "round": 1,
+          "student_model_id": "dba2a3e0ec5c5076f55e15a1abbf672374be06efe107971f3945d3ffeb7e2ecc",
+          "validation_nll": 4.010596090558136
+        },
+        {
+          "accumulated_error": {
+            "logit_mse": 5.110324974197758,
+            "maximum_absolute_logit_error": 12.827369141606168,
+            "output_values": 23552
+          },
+          "fits": [
+            {
+              "after": {
+                "mae": 0.12491766490243444,
+                "max_absolute_error": 0.8360235201958047,
+                "mse": 0.02651824022037505,
+                "near_zero_energy": false,
+                "nmse": 0.3067052996433304,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.12492041540050723,
+                "max_absolute_error": 0.8360406861218976,
+                "mse": 0.02651925277712492,
+                "near_zero_energy": false,
+                "nmse": 0.3067170106965071,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "layer": 0
+            },
+            {
+              "after": {
+                "mae": 0.23365562889694794,
+                "max_absolute_error": 1.584099730489429,
+                "mse": 0.09536040880543319,
+                "near_zero_energy": false,
+                "nmse": 0.6899193700362168,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.1382196426814735,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.23365910059808842,
+                "max_absolute_error": 1.5841083115104415,
+                "mse": 0.09536373152017556,
+                "near_zero_energy": false,
+                "nmse": 0.68994340941787,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.1382196426814735,
+                "values": 4096
+              },
+              "layer": 2
+            }
+          ],
+          "pair_id": "db4480bfd5ec809343d03acd536a1c0b2673cb29f5bd915214516d2dbebc07e2",
+          "round": 2,
+          "student_model_id": "5984fd755e01df0791b8ec2e1be476f4ee497282dab2041566476977fdfed1c0",
+          "validation_nll": 4.010580871596909
+        },
+        {
+          "accumulated_error": {
+            "logit_mse": 5.110255646816257,
+            "maximum_absolute_logit_error": 12.827103717931209,
+            "output_values": 23552
+          },
+          "fits": [
+            {
+              "after": {
+                "mae": 0.12491491481451161,
+                "max_absolute_error": 0.8360063556821176,
+                "mse": 0.026517227912437547,
+                "near_zero_energy": false,
+                "nmse": 0.3066935914678736,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.12491766490243444,
+                "max_absolute_error": 0.8360235201958047,
+                "mse": 0.02651824022037505,
+                "near_zero_energy": false,
+                "nmse": 0.3067052996433304,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "layer": 0
+            },
+            {
+              "after": {
+                "mae": 0.23365151112468147,
+                "max_absolute_error": 1.584106001617761,
+                "mse": 0.09535655904130928,
+                "near_zero_energy": false,
+                "nmse": 0.6898950584058512,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.13821893327030177,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.23365498223873388,
+                "max_absolute_error": 1.5841145825512615,
+                "mse": 0.09535988078320431,
+                "near_zero_energy": false,
+                "nmse": 0.6899190908724347,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.13821893327030177,
+                "values": 4096
+              },
+              "layer": 2
+            }
+          ],
+          "pair_id": "03a19d3965d8f85f29ac75a52f33eb3d9e2d70ac6dfe1f5b5d509671b140d48e",
+          "round": 3,
+          "student_model_id": "b10cd1cce38946afdb71cac20d342de8f2246aebd958238bfda1a7a86302da8f",
+          "validation_nll": 4.010565653753475
+        }
+      ],
+      "protocol": "frozen-teacher-on-student-input/0",
+      "selected_raw_model_id": "b10cd1cce38946afdb71cac20d342de8f2246aebd958238bfda1a7a86302da8f",
+      "selected_round": 3
+    },
+    {
+      "history": [
+        {
+          "accumulated_error": {
+            "logit_mse": 5.110463673904768,
+            "maximum_absolute_logit_error": 12.827900124155677,
+            "output_values": 23552
+          },
+          "fits": [],
+          "pair_id": null,
+          "round": 0,
+          "student_model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+          "validation_nll": 4.010611310636807
+        },
+        {
+          "accumulated_error": {
+            "logit_mse": 5.110391605385791,
+            "maximum_absolute_logit_error": 12.827730855060052,
+            "output_values": 23552
+          },
+          "fits": [
+            {
+              "after": {
+                "mae": 0.12492041540050723,
+                "max_absolute_error": 0.8360406861218976,
+                "mse": 0.02651925277712492,
+                "near_zero_energy": false,
+                "nmse": 0.3067170106965071,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.12492316630884429,
+                "max_absolute_error": 0.8360578534604839,
+                "mse": 0.02652026558279305,
+                "near_zero_energy": false,
+                "nmse": 0.30672872462862866,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "layer": 0
+            },
+            {
+              "after": {
+                "mae": 0.23068139150660683,
+                "max_absolute_error": 2.176096797970829,
+                "mse": 0.09367727311199246,
+                "near_zero_energy": false,
+                "nmse": 0.6102139324402007,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.2306860393707353,
+                "max_absolute_error": 2.1761941196838013,
+                "mse": 0.0936815706528523,
+                "near_zero_energy": false,
+                "nmse": 0.6102419266294079,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "layer": 2
+            }
+          ],
+          "pair_id": "9ff48a2a5aac8c7fd52236b17cdd9e614ccfb9455a6171cb21d14f5f30b3efed",
+          "round": 1,
+          "student_model_id": "6db378073ecb7ed35c76f097e5e23e201ec3deb45c8af731c0d52ee73e74526e",
+          "validation_nll": 4.0106058594199405
+        },
+        {
+          "accumulated_error": {
+            "logit_mse": 5.110319558004766,
+            "maximum_absolute_logit_error": 12.827561601536507,
+            "output_values": 23552
+          },
+          "fits": [
+            {
+              "after": {
+                "mae": 0.12491766490243444,
+                "max_absolute_error": 0.8360235201958047,
+                "mse": 0.02651824022037505,
+                "near_zero_energy": false,
+                "nmse": 0.3067052996433304,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.12492041540050723,
+                "max_absolute_error": 0.8360406861218976,
+                "mse": 0.02651925277712492,
+                "near_zero_energy": false,
+                "nmse": 0.3067170106965071,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "layer": 0
+            },
+            {
+              "after": {
+                "mae": 0.23067674476199004,
+                "max_absolute_error": 2.1759994919326475,
+                "mse": 0.09367297748391319,
+                "near_zero_energy": false,
+                "nmse": 0.6101859507108498,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.23068139150660683,
+                "max_absolute_error": 2.176096797970829,
+                "mse": 0.09367727311199246,
+                "near_zero_energy": false,
+                "nmse": 0.6102139324402007,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "layer": 2
+            }
+          ],
+          "pair_id": "d9df4b9863e818d198b2486d80c09f0de59043858cdd0f221466803521edc156",
+          "round": 2,
+          "student_model_id": "1001c3120e5a6a1356ef63e0cd69fc54d7b3d0b7c23503cdc1dd08dbc22b140a",
+          "validation_nll": 4.010600402221693
+        },
+        {
+          "accumulated_error": {
+            "logit_mse": 5.110247531746947,
+            "maximum_absolute_logit_error": 12.827392363586728,
+            "output_values": 23552
+          },
+          "fits": [
+            {
+              "after": {
+                "mae": 0.12491491481451161,
+                "max_absolute_error": 0.8360063556821176,
+                "mse": 0.026517227912437547,
+                "near_zero_energy": false,
+                "nmse": 0.3066935914678736,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.12491766490243444,
+                "max_absolute_error": 0.8360235201958047,
+                "mse": 0.02651824022037505,
+                "near_zero_energy": false,
+                "nmse": 0.3067052996433304,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "layer": 0
+            },
+            {
+              "after": {
+                "mae": 0.23067209913623454,
+                "max_absolute_error": 2.17590220156618,
+                "mse": 0.09366868376684948,
+                "near_zero_energy": false,
+                "nmse": 0.6101579814298578,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "before": {
+                "mae": 0.23067674476199004,
+                "max_absolute_error": 2.1759994919326475,
+                "mse": 0.09367297748391319,
+                "near_zero_energy": false,
+                "nmse": 0.6101859507108498,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "layer": 2
+            }
+          ],
+          "pair_id": "ea22869e626a6ce031d919a1b699f707f62ddfc79a7d3ee9b75307cddc9d8090",
+          "round": 3,
+          "student_model_id": "187dbee4f919b2469e2b8f388ee1ca68a6c2db077290ed5637722ca89c9efbd6",
+          "validation_nll": 4.010594939048665
+        }
+      ],
+      "protocol": "frozen-teacher-on-original-input/0",
+      "selected_raw_model_id": "187dbee4f919b2469e2b8f388ee1ca68a6c2db077290ed5637722ca89c9efbd6",
+      "selected_round": 3
+    }
+  ],
+  "control_model_id": "fc61291fd10a7d3d32d027d5bd4a0a5e551abf0788987e766b3d5507e1f7d358",
+  "initial_model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+  "interpretation": "Bounded local recovery with simultaneous updates and complete-model validation; not end-to-end decoder gradients or a general quality/performance guarantee.",
+  "native_execution": false,
+  "recommendation": {
+    "actual_package_budget_pass": true,
+    "native_execution": false,
+    "observed_nonoverlapping_timing_pass": true,
+    "quality_budget_pass": false,
+    "recommended": "dense",
+    "rule": "student only if all three predeclared quality/package/nonoverlap timing conditions pass, otherwise dense",
+    "selection_split": "validation",
+    "test_used_for_selection": false
+  },
+  "record_id": "e18be99405280d17a0e8fea21ff26d47e943c4be923126eaca14e8e7b3a050b6",
+  "schema": "nrl.recovery-summary/0",
+  "student_model_id": "ddd173ade7b9056c39d6c2f78790f6196b7ccd2cfd903d96855d62f300ce7615",
+  "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+  "test": {
+    "control": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "98dc56b0cefb0b27cc6e874eff80e97da8dc8677e0ae6ad8df7595780c6cedff",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "fc61291fd10a7d3d32d027d5bd4a0a5e551abf0788987e766b3d5507e1f7d358",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "fc61291fd10a7d3d32d027d5bd4a0a5e551abf0788987e766b3d5507e1f7d358",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390774,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 15040512,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "test",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 11.617348911176297,
+          "p95_token_nll": 10.938930525485588,
+          "perplexity": 105.0542294982339,
+          "predicted_tokens": 54,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.2037037037037037
+        },
+        "metric": "mean-nll",
+        "value": 4.654476688243819
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 27648,
+        "quality_passes": 1,
+        "rows_per_pass": 54,
+        "timed_passes": 0,
+        "total_forward_rows": 54,
+        "warmup_passes": 0
+      }
+    },
+    "dense": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "98dc56b0cefb0b27cc6e874eff80e97da8dc8677e0ae6ad8df7595780c6cedff",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 264128,
+        "effective_parameter_values": 260032,
+        "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1064421,
+        "patch_layers": [],
+        "retained_numeric_values": 264128,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 15040512,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "test",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 7.866782737686735,
+          "p95_token_nll": 6.601167196333709,
+          "perplexity": 9.35922873023494,
+          "predicted_tokens": 54,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.4444444444444444
+        },
+        "metric": "mean-nll",
+        "value": 2.2363628864784584
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 27648,
+        "quality_passes": 1,
+        "rows_per_pass": 54,
+        "timed_passes": 0,
+        "total_forward_rows": 54,
+        "warmup_passes": 0
+      }
+    },
+    "initial": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "98dc56b0cefb0b27cc6e874eff80e97da8dc8677e0ae6ad8df7595780c6cedff",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390400,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 15040512,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "test",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 11.617991753032136,
+          "p95_token_nll": 10.93888635924818,
+          "perplexity": 105.06599106128081,
+          "predicted_tokens": 54,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.2037037037037037
+        },
+        "metric": "mean-nll",
+        "value": 4.654588639040633
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 27648,
+        "quality_passes": 1,
+        "rows_per_pass": 54,
+        "timed_passes": 0,
+        "total_forward_rows": 54,
+        "warmup_passes": 0
+      }
+    },
+    "student": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "98dc56b0cefb0b27cc6e874eff80e97da8dc8677e0ae6ad8df7595780c6cedff",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "ddd173ade7b9056c39d6c2f78790f6196b7ccd2cfd903d96855d62f300ce7615",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "ddd173ade7b9056c39d6c2f78790f6196b7ccd2cfd903d96855d62f300ce7615",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390803,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 15040512,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "test",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 11.617302198473421,
+          "p95_token_nll": 10.939030814619624,
+          "perplexity": 105.0541886201988,
+          "predicted_tokens": 54,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.2037037037037037
+        },
+        "metric": "mean-nll",
+        "value": 4.654476299130089
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 27648,
+        "quality_passes": 1,
+        "rows_per_pass": 54,
+        "timed_passes": 0,
+        "total_forward_rows": 54,
+        "warmup_passes": 0
+      }
+    }
+  },
+  "validation": {
+    "control": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "98dc56b0cefb0b27cc6e874eff80e97da8dc8677e0ae6ad8df7595780c6cedff",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "fc61291fd10a7d3d32d027d5bd4a0a5e551abf0788987e766b3d5507e1f7d358",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "fc61291fd10a7d3d32d027d5bd4a0a5e551abf0788987e766b3d5507e1f7d358",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390774,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 15040512,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": {
+          "max_forward_rows": 65536,
+          "repeats": 3,
+          "schema": "nrl.measurement/0",
+          "warmups": 1
+        },
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "validation",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 14.35463781303442,
+          "p95_token_nll": 8.40898799852603,
+          "perplexity": 55.17968935179501,
+          "predicted_tokens": 46,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.17391304347826086
+        },
+        "metric": "mean-nll",
+        "value": 4.010594939048665
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": {
+        "median_seconds": 0.004298945,
+        "minimum_seconds": 0.004180921,
+        "p95_seconds": 0.004352193,
+        "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+        "seconds": [
+          0.004298945,
+          0.004180921,
+          0.004352193
+        ]
+      },
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 23552,
+        "quality_passes": 1,
+        "rows_per_pass": 46,
+        "timed_passes": 3,
+        "total_forward_rows": 230,
+        "warmup_passes": 1
+      }
+    },
+    "dense": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "98dc56b0cefb0b27cc6e874eff80e97da8dc8677e0ae6ad8df7595780c6cedff",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 264128,
+        "effective_parameter_values": 260032,
+        "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1064421,
+        "patch_layers": [],
+        "retained_numeric_values": 264128,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 15040512,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": {
+          "max_forward_rows": 65536,
+          "repeats": 3,
+          "schema": "nrl.measurement/0",
+          "warmups": 1
+        },
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "validation",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 14.099985525122536,
+          "p95_token_nll": 7.8854697672441185,
+          "perplexity": 16.31808307739832,
+          "predicted_tokens": 46,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.3695652173913043
+        },
+        "metric": "mean-nll",
+        "value": 2.792273884144422
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": {
+        "median_seconds": 0.005588973,
+        "minimum_seconds": 0.005526013,
+        "p95_seconds": 0.00563346,
+        "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+        "seconds": [
+          0.005588973,
+          0.00563346,
+          0.005526013
+        ]
+      },
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 23552,
+        "quality_passes": 1,
+        "rows_per_pass": 46,
+        "timed_passes": 3,
+        "total_forward_rows": 230,
+        "warmup_passes": 1
+      }
+    },
+    "initial": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "98dc56b0cefb0b27cc6e874eff80e97da8dc8677e0ae6ad8df7595780c6cedff",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390400,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 15040512,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": {
+          "max_forward_rows": 65536,
+          "repeats": 3,
+          "schema": "nrl.measurement/0",
+          "warmups": 1
+        },
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "validation",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 14.354020194248998,
+          "p95_token_nll": 8.408567149323977,
+          "perplexity": 55.1805927383378,
+          "predicted_tokens": 46,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.17391304347826086
+        },
+        "metric": "mean-nll",
+        "value": 4.010611310636807
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": {
+        "median_seconds": 0.004300675,
+        "minimum_seconds": 0.004139293,
+        "p95_seconds": 0.005262904,
+        "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+        "seconds": [
+          0.004139293,
+          0.004300675,
+          0.005262904
+        ]
+      },
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 23552,
+        "quality_passes": 1,
+        "rows_per_pass": 46,
+        "timed_passes": 3,
+        "total_forward_rows": 230,
+        "warmup_passes": 1
+      }
+    },
+    "student": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "98dc56b0cefb0b27cc6e874eff80e97da8dc8677e0ae6ad8df7595780c6cedff",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "ddd173ade7b9056c39d6c2f78790f6196b7ccd2cfd903d96855d62f300ce7615",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "ddd173ade7b9056c39d6c2f78790f6196b7ccd2cfd903d96855d62f300ce7615",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390803,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 15040512,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": {
+          "max_forward_rows": 65536,
+          "repeats": 3,
+          "schema": "nrl.measurement/0",
+          "warmups": 1
+        },
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "validation",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 14.354344039951846,
+          "p95_token_nll": 8.408822249748773,
+          "perplexity": 55.17807342196547,
+          "predicted_tokens": 46,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.17391304347826086
+        },
+        "metric": "mean-nll",
+        "value": 4.010565653753475
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": {
+        "median_seconds": 0.00417664,
+        "minimum_seconds": 0.004169463,
+        "p95_seconds": 0.004406981,
+        "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+        "seconds": [
+          0.004406981,
+          0.004169463,
+          0.00417664
+        ]
+      },
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 23552,
+        "quality_passes": 1,
+        "rows_per_pass": 46,
+        "timed_passes": 3,
+        "total_forward_rows": 230,
+        "warmup_passes": 1
+      }
+    }
+  }
+}

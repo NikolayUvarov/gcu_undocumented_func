@@ -1,0 +1,70 @@
+{
+  "architecture": "x86_64",
+  "archive_sha256": "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
+  "checks": [
+    {
+      "loss_after": 0.09556269780699116,
+      "loss_before": 0.10231179736197876,
+      "max_reference_error": 2.7755575615628914e-17,
+      "representation": "dense",
+      "sample_count": 3
+    },
+    {
+      "loss_after": 0.12677966117930756,
+      "loss_before": 0.15264958541547757,
+      "max_reference_error": 5.551115123125783e-17,
+      "representation": "spline-linear",
+      "sample_count": 3
+    },
+    {
+      "loss_after": 94.91618022101002,
+      "loss_before": 95.02726876288641,
+      "max_reference_error": 2.842170943040401e-14,
+      "representation": "pruned",
+      "sample_count": 3
+    },
+    {
+      "loss_after": 0.12683170841336067,
+      "loss_before": 0.15287797802927358,
+      "max_reference_error": 5.551115123125783e-17,
+      "representation": "spline-cubic",
+      "sample_count": 3
+    }
+  ],
+  "commands": [
+    "bash nrl/tools/check.sh",
+    "regenerate_fixtures --check: byte-identical"
+  ],
+  "elapsed_seconds": 0.000775998,
+  "fast_test_staging_commit": "e9c3a9e5",
+  "fixture_round_trips": 4,
+  "fixture_sha256": "8ddb51724f78ad98ee9122f6331adb573c13de580f1bfb36264d2c055cca16dd",
+  "log_sha256": "26b0fc49d4ce0557d18da4a81134c0c430a696c634fd6968d6cf171f7dc26882",
+  "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
+  "native_execution": false,
+  "os": "linux",
+  "portable_release_builds": [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat"
+  ],
+  "portable_scope": "rlibs only; not native execution",
+  "profile": "host-cpu-scalar-f64",
+  "recorded_date": "2026-10-26",
+  "rust_tests": {
+    "failed": 0,
+    "ignored": 0,
+    "passed": 20
+  },
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "schema": "nrl.demo-report/0",
+  "seed": 42,
+  "task": "900-NRL-0006",
+  "test_location": "own NRL branch; no tests on fast-test",
+  "tested_commit": "296935cd7d6e7f7bab092570912cb74bc79171f3",
+  "unimplemented": [
+    "svd",
+    "model adapters",
+    "nnd integration"
+  ],
+  "version": "0.1.0"
+}

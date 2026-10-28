@@ -1,0 +1,844 @@
+   Compiling nrl-lab v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nrl/crates/nrl-lab)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
+     Running unittests src/lib.rs (nrl/target/debug/build/nrl-core/5940cdcc4b65a630/out/nrl_core-5940cdcc4b65a630)
+
+running 1 test
+test tests::shape_refuses_zero_overflow_and_unbounded_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (nrl/target/debug/build/nrl-lab/18fef65101f364f8/out/nrl_lab-18fef65101f364f8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (nrl/target/debug/build/nrl-lab/c241c9f87db121d8/out/nrl_lab-c241c9f87db121d8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/affine.rs (nrl/target/debug/build/nrl-lab/1c1ddb97c9254401/out/affine-1c1ddb97c9254401)
+
+running 6 tests
+test bias_gradients_accumulate_while_compact_input_gradient_is_replaced ... ok
+test absent_zero_and_mixed_biases_have_explicit_semantics ... ok
+test descriptor_refuses_unsupported_contracts_and_devices_without_fallback ... ok
+test full_rank_svd_preserves_every_output_bias_and_affine_outputs ... ok
+test affine_channel_scores_and_selected_biases_match_independent_torch_oracle ... ok
+test invalid_biases_and_gradient_mismatches_are_errors_without_source_mutation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hermite.rs (nrl/target/debug/build/nrl-lab/efcc49676f68ef53/out/hermite-efcc49676f68ef53)
+
+running 4 tests
+test cubic_is_c1_at_every_knot_and_coefficient_derivatives_match_finite_differences ... ok
+test two_knots_reduce_to_linear_and_cubic_tails_never_grow_cubically ... ok
+test hermite_matches_reference_at_knots_interior_and_linear_tails ... ok
+test cubic_control_preserves_the_shared_channel_mapping_and_projections ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/model.rs (nrl/target/debug/build/nrl-lab/a92daa63827d1382/out/model-a92daa63827d1382)
+
+running 7 tests
+test affine_primitive_matches_external_gradients_and_independent_differences ... ok
+test complete_graph_and_overlay_match_explicit_external_torch_networks ... ok
+test replacements_and_output_files_refuse_overwrites_and_boundary_changes ... ok
+test overlay_resolves_only_against_exact_base_and_flattened_model_runs_without_base_files ... ok
+test graph_references_shapes_aliases_reachability_profiles_and_input_budgets_are_enforced ... ok
+test standalone_export_cli_reports_the_written_package_identity ... ok
+test package_hashes_paths_versions_and_provenance_cannot_be_silently_changed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/numerics.rs (nrl/target/debug/build/nrl-lab/b03bfff41b2c592a/out/numerics-b03bfff41b2c592a)
+
+running 6 tests
+test standalone_spline_matches_reference_at_knots_and_in_both_tails ... ok
+test malformed_shapes_grids_and_finite_value_errors_are_controlled ... ok
+test supported_blocks_match_torch_forward_backward_and_one_step ... ok
+test artifact_round_trips_exactly_and_never_overwrites ... ok
+test loader_refuses_versions_unknown_fields_duplicates_and_oversized_files ... ok
+test every_input_and_trainable_parameter_has_an_independent_numerical_gradient ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/pruning.rs (nrl/target/debug/build/nrl-lab/76c8efce2d406867/out/pruning-76c8efce2d406867)
+
+running 5 tests
+test heap_selection_agrees_with_an_independent_full_sort_including_ties ... ok
+test spline_control_uses_identical_channels_and_preserves_trainable_projection_weights ... ok
+test nonfinite_scores_overflow_and_invalid_mappings_are_refused ... ok
+test ranking_and_packed_weights_match_external_reference_and_full_width_is_identity ... ok
+test calibration_caps_rows_explicitly_and_refuses_empty_or_malformed_inputs ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/qsl.rs (nrl/target/debug/build/nrl-lab/340a66d69c6dbba8/out/qsl-340a66d69c6dbba8)
+
+running 6 tests
+test directory_import_refuses_symlinked_payloads ... ok
+test all_five_saved_qsl_representations_import_against_external_f64_oracle ... ok
+test input_identity_licence_limits_versions_and_duplicate_json_are_checked ... ok
+test tensor_dtype_shape_offsets_nonfinite_values_and_exact_inventory_are_checked ... ok
+test standalone_block_set_round_trips_and_never_overwrites ... ok
+test corrupt_package_paths_hashes_source_metadata_and_flags_are_refused ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/svd.rs (nrl/target/debug/build/nrl-lab/8584f25809f793ed/out/svd-8584f25809f793ed)
+
+running 5 tests
+test factor_backward_accumulates_and_explicit_buffer_shapes_are_checked ... ok
+test initializer_refuses_invalid_limits_nonfinite_data_and_nonconvergence ... ok
+test full_rank_control_matches_dense_and_executes_without_materialized_projection_arrays ... ok
+test jacobi_singular_values_reconstruction_and_truncation_match_external_f64_oracle ... ok
+test malformed_factor_artifacts_and_training_errors_leave_the_source_unchanged ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/training.rs (nrl/target/debug/build/nrl-lab/9fc260af2e05c735/out/training-9fc260af2e05c735)
+
+running 8 tests
+test gradient_inventory_shapes_numerics_and_training_budgets_fail_without_mutation ... ok
+test duplicate_add_inputs_accumulate_twice_and_relu_zero_has_declared_subgradient ... ok
+test full_graph_gradients_and_single_tied_parameter_step_match_external_torch ... ok
+test dataset_leakage_versions_shapes_sources_and_work_limits_are_refused_before_training ... ok
+test validation_selects_an_earlier_checkpoint_and_test_targets_cannot_select_parameters ... ok
+test complete_regression_history_selected_model_and_held_out_outputs_match_torch ... ok
+test saved_experiment_cli_replays_identically_preserves_provenance_and_exports_independently ... ok
+test every_complete_graph_parameter_and_input_has_an_independent_finite_difference ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+     Running unittests src/lib.rs (nrl/target/debug/build/nrl-repr/cf32889886d47e09/out/nrl_repr-cf32889886d47e09)
+
+running 4 tests
+test tests::silu_handles_saturation_without_overflow ... ok
+test tests::caller_buffer_mismatches_and_arithmetic_overflow_are_errors ... ok
+test tests::knots_use_the_right_segment_and_tails_are_linear ... ok
+test tests::refuses_bad_grids_and_non_finite_data ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests nrl_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests nrl_lab
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests nrl_repr
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `release` profile [optimized] target(s) in 0.14s
+    Finished `release` profile [optimized] target(s) in 0.13s
+    Finished `release` profile [optimized] target(s) in 0.43s
+     Running `nrl/target/release/nrl-lab demo nrl/tests/fixtures/f64-v5.json /tmp/nrl-check.z9wjHK/demo`
+{
+  "architecture": "x86_64",
+  "archive_sha256": "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
+  "checks": [
+    {
+      "bias_parameters": 0,
+      "loss_after": 0.09556269780699116,
+      "loss_before": 0.10231179736197876,
+      "max_reference_error": 2.7755575615628914e-17,
+      "representation": "dense",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 0,
+      "loss_after": 0.12677966117930756,
+      "loss_before": 0.15264958541547757,
+      "max_reference_error": 5.551115123125783e-17,
+      "representation": "spline-linear",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 0,
+      "loss_after": 94.91618022101002,
+      "loss_before": 95.02726876288641,
+      "max_reference_error": 2.842170943040401e-14,
+      "representation": "pruned",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 0,
+      "loss_after": 0.12683170841336067,
+      "loss_before": 0.15287797802927358,
+      "max_reference_error": 5.551115123125783e-17,
+      "representation": "spline-cubic",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 0,
+      "loss_after": 0.05414763909270817,
+      "loss_before": 0.05414836039695466,
+      "max_reference_error": 4.336808689942018e-19,
+      "representation": "svd",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 11,
+      "loss_after": 0.1108933000132282,
+      "loss_before": 0.12545124716366893,
+      "max_reference_error": 1.1102230246251565e-16,
+      "representation": "dense",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 11,
+      "loss_after": 0.14495471303669571,
+      "loss_before": 0.19260729313824923,
+      "max_reference_error": 3.3306690738754696e-16,
+      "representation": "spline-linear",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 7,
+      "loss_after": 106.55350470026379,
+      "loss_before": 106.68351816890801,
+      "max_reference_error": 5.684341886080802e-14,
+      "representation": "pruned",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 11,
+      "loss_after": 0.14516709423925137,
+      "loss_before": 0.19313448925087523,
+      "max_reference_error": 1.6653345369377348e-16,
+      "representation": "spline-cubic",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 11,
+      "loss_after": 0.05668677735273082,
+      "loss_before": 0.057698144310583656,
+      "max_reference_error": 4.163336342344337e-17,
+      "representation": "svd",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 10,
+      "loss_after": 0.054737520032301694,
+      "loss_before": 0.056120013524134225,
+      "max_reference_error": 3.469446951953614e-18,
+      "representation": "dense",
+      "sample_count": 2
+    },
+    {
+      "bias_parameters": 10,
+      "loss_after": 0.05423269431050168,
+      "loss_before": 0.05558874458983636,
+      "max_reference_error": 5.421010862427522e-20,
+      "representation": "svd",
+      "sample_count": 2
+    }
+  ],
+  "elapsed_seconds": 0.003244648,
+  "fixture_round_trips": 12,
+  "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
+  "native_execution": false,
+  "os": "linux",
+  "profile": "host-cpu-scalar-f64",
+  "schema": "nrl.demo-report/1",
+  "seed": 42,
+  "unimplemented": [
+    "language model adapter",
+    "classification training",
+    "language training",
+    "nnd integration"
+  ],
+  "version": "0.1.0"
+}
+    Finished `release` profile [optimized] target(s) in 0.41s
+     Running `nrl/target/release/nrl-lab import-qsl nrl/tests/fixtures/qsl-overlay-v1 /tmp/nrl-check.z9wjHK/qsl 'MIT; deterministic synthetic fixture'`
+{
+  "schema": "nrl.block-set/0",
+  "scope": "standalone-numerical-blocks",
+  "block_schema": "nrl.block/5",
+  "source": {
+    "format": "qwen-spline-lab-overlay-v1",
+    "manifest_sha256": "03ec45c5a5cc6358a2c23b9250d2d56d3113560f7a89c556a2a7babc3afcc423",
+    "weights_sha256": "a143520c8a7484076788ab78a17961db1baf7a19922fc96e20ffb63dc56d2098",
+    "artifact_id": "edb573650f7b4d6ee5990ec4ea8409a9f24fe3a3359398cfbd5ea322b9fda584",
+    "original_patch_bytes": 2688,
+    "base": {
+      "fingerprint": "synthetic-nrl-import-π",
+      "licence": "MIT; deterministic synthetic fixture, no pretrained weights",
+      "model_type": "synthetic-mlp",
+      "source": "synthetic://nrl-qsl-import-fixture"
+    },
+    "base_identity_verified": false,
+    "licence": "MIT; deterministic synthetic fixture",
+    "numerical_policy": "source-f32-to-f64-exact/0"
+  },
+  "blocks": [
+    {
+      "id": "qsl.layer.0",
+      "file": "block-0000.json",
+      "sha256": "b122d2d5b293e5bd64ff37ab41f5e129e8b26c4a808e2c3a4fa4c77d2750b647",
+      "bytes": 1309
+    },
+    {
+      "id": "qsl.layer.1",
+      "file": "block-0001.json",
+      "sha256": "fb7781209a562d69cd6fc9ccda5f7049199838e8acc0012961b978702e72979d",
+      "bytes": 975
+    },
+    {
+      "id": "qsl.layer.2",
+      "file": "block-0002.json",
+      "sha256": "7b7ae3f1ba614ba5788e23162eda68fe4d23e91b3270e1e07c249e9c190b6a37",
+      "bytes": 1326
+    },
+    {
+      "id": "qsl.layer.3",
+      "file": "block-0003.json",
+      "sha256": "8339aa939f8f8ed549003be90a55d749efd2e450b383322d77665ff2a6c77b07",
+      "bytes": 1325
+    },
+    {
+      "id": "qsl.layer.4",
+      "file": "block-0004.json",
+      "sha256": "0f10153f4ef57524179659b4280db46c96ade7d89f44eb8e7d614a92410fa3ff",
+      "bytes": 1723
+    }
+  ],
+  "expanded_block_bytes": 6658,
+  "unrecorded_channel_mappings": [
+    "qsl.layer.1",
+    "qsl.layer.2",
+    "qsl.layer.3"
+  ]
+}
+    Finished `release` profile [optimized] target(s) in 0.41s
+     Running `nrl/target/release/nrl-lab check-block-set /tmp/nrl-check.z9wjHK/qsl`
+{
+  "schema": "nrl.block-set/0",
+  "scope": "standalone-numerical-blocks",
+  "block_schema": "nrl.block/5",
+  "source": {
+    "format": "qwen-spline-lab-overlay-v1",
+    "manifest_sha256": "03ec45c5a5cc6358a2c23b9250d2d56d3113560f7a89c556a2a7babc3afcc423",
+    "weights_sha256": "a143520c8a7484076788ab78a17961db1baf7a19922fc96e20ffb63dc56d2098",
+    "artifact_id": "edb573650f7b4d6ee5990ec4ea8409a9f24fe3a3359398cfbd5ea322b9fda584",
+    "original_patch_bytes": 2688,
+    "base": {
+      "fingerprint": "synthetic-nrl-import-π",
+      "licence": "MIT; deterministic synthetic fixture, no pretrained weights",
+      "model_type": "synthetic-mlp",
+      "source": "synthetic://nrl-qsl-import-fixture"
+    },
+    "base_identity_verified": false,
+    "licence": "MIT; deterministic synthetic fixture",
+    "numerical_policy": "source-f32-to-f64-exact/0"
+  },
+  "blocks": [
+    {
+      "id": "qsl.layer.0",
+      "file": "block-0000.json",
+      "sha256": "b122d2d5b293e5bd64ff37ab41f5e129e8b26c4a808e2c3a4fa4c77d2750b647",
+      "bytes": 1309
+    },
+    {
+      "id": "qsl.layer.1",
+      "file": "block-0001.json",
+      "sha256": "fb7781209a562d69cd6fc9ccda5f7049199838e8acc0012961b978702e72979d",
+      "bytes": 975
+    },
+    {
+      "id": "qsl.layer.2",
+      "file": "block-0002.json",
+      "sha256": "7b7ae3f1ba614ba5788e23162eda68fe4d23e91b3270e1e07c249e9c190b6a37",
+      "bytes": 1326
+    },
+    {
+      "id": "qsl.layer.3",
+      "file": "block-0003.json",
+      "sha256": "8339aa939f8f8ed549003be90a55d749efd2e450b383322d77665ff2a6c77b07",
+      "bytes": 1325
+    },
+    {
+      "id": "qsl.layer.4",
+      "file": "block-0004.json",
+      "sha256": "0f10153f4ef57524179659b4280db46c96ade7d89f44eb8e7d614a92410fa3ff",
+      "bytes": 1723
+    }
+  ],
+  "expanded_block_bytes": 6658,
+  "unrecorded_channel_mappings": [
+    "qsl.layer.1",
+    "qsl.layer.2",
+    "qsl.layer.3"
+  ]
+}
+    Finished `release` profile [optimized] target(s) in 0.41s
+     Running `nrl/target/release/nrl-lab pack-model nrl/tests/fixtures/model-v0/definition.json /tmp/nrl-check.z9wjHK/model-base`
+{
+  "activation_values_per_row": 47,
+  "dependency_bytes": 0,
+  "family": "feed-forward",
+  "input_width": 3,
+  "kind": "standalone",
+  "local_objects": 7,
+  "model_id": "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee",
+  "native_execution": false,
+  "nodes": 15,
+  "numeric_bytes": 2296,
+  "numeric_values": 287,
+  "objects": 7,
+  "output_width": 2,
+  "package_bytes": 16804,
+  "schema": "nrl.model-info/0",
+  "tied_objects": [
+    {
+      "nodes": [
+        "left",
+        "right"
+      ],
+      "object": "embed"
+    }
+  ],
+  "total_required_package_bytes": 16804,
+  "trainable_values": 271
+}
+    Finished `release` profile [optimized] target(s) in 0.45s
+     Running `nrl/target/release/nrl-lab run-model /tmp/nrl-check.z9wjHK/model-base nrl/tests/fixtures/model-v0/input.json /tmp/nrl-check.z9wjHK/base-output.json`
+{
+  "activation_values_per_row": 47,
+  "dependency_bytes": 0,
+  "family": "feed-forward",
+  "input_width": 3,
+  "kind": "standalone",
+  "local_objects": 7,
+  "model_id": "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee",
+  "native_execution": false,
+  "nodes": 15,
+  "numeric_bytes": 2296,
+  "numeric_values": 287,
+  "objects": 7,
+  "output_width": 2,
+  "package_bytes": 16804,
+  "schema": "nrl.model-info/0",
+  "tied_objects": [
+    {
+      "nodes": [
+        "left",
+        "right"
+      ],
+      "object": "embed"
+    }
+  ],
+  "total_required_package_bytes": 16804,
+  "trainable_values": 271
+}
+    Finished `release` profile [optimized] target(s) in 0.43s
+     Running `nrl/target/release/nrl-lab export-overlay /tmp/nrl-check.z9wjHK/model-base nrl/tests/fixtures/model-v0/replacements.json /tmp/nrl-check.z9wjHK/model-overlay`
+{
+  "activation_values_per_row": 47,
+  "dependency_bytes": 16804,
+  "family": "feed-forward",
+  "input_width": 3,
+  "kind": "overlay",
+  "local_objects": 2,
+  "model_id": "5bbcc60e0ca9f866c1e0d6a41c6235e54ad5d6a6d2cda422875cdf1c4953ced7",
+  "native_execution": false,
+  "nodes": 15,
+  "numeric_bytes": 2488,
+  "numeric_values": 311,
+  "objects": 7,
+  "output_width": 2,
+  "package_bytes": 9099,
+  "schema": "nrl.model-info/0",
+  "tied_objects": [
+    {
+      "nodes": [
+        "left",
+        "right"
+      ],
+      "object": "embed"
+    }
+  ],
+  "total_required_package_bytes": 25903,
+  "trainable_values": 287
+}
+    Finished `release` profile [optimized] target(s) in 0.39s
+     Running `nrl/target/release/nrl-lab run-model /tmp/nrl-check.z9wjHK/model-overlay nrl/tests/fixtures/model-v0/input.json /tmp/nrl-check.z9wjHK/overlay-output.json /tmp/nrl-check.z9wjHK/model-base`
+{
+  "activation_values_per_row": 47,
+  "dependency_bytes": 16804,
+  "family": "feed-forward",
+  "input_width": 3,
+  "kind": "overlay",
+  "local_objects": 2,
+  "model_id": "5bbcc60e0ca9f866c1e0d6a41c6235e54ad5d6a6d2cda422875cdf1c4953ced7",
+  "native_execution": false,
+  "nodes": 15,
+  "numeric_bytes": 2488,
+  "numeric_values": 311,
+  "objects": 7,
+  "output_width": 2,
+  "package_bytes": 9099,
+  "schema": "nrl.model-info/0",
+  "tied_objects": [
+    {
+      "nodes": [
+        "left",
+        "right"
+      ],
+      "object": "embed"
+    }
+  ],
+  "total_required_package_bytes": 25903,
+  "trainable_values": 287
+}
+    Finished `release` profile [optimized] target(s) in 0.43s
+     Running `nrl/target/release/nrl-lab export-standalone /tmp/nrl-check.z9wjHK/model-overlay /tmp/nrl-check.z9wjHK/model-flat /tmp/nrl-check.z9wjHK/model-base`
+{
+  "activation_values_per_row": 47,
+  "dependency_bytes": 0,
+  "family": "feed-forward",
+  "input_width": 3,
+  "kind": "standalone",
+  "local_objects": 7,
+  "model_id": "369b1f14df0f200f09e73724c5b9479ccabd32746bf804f94beb9bf52ac4fd0c",
+  "native_execution": false,
+  "nodes": 15,
+  "numeric_bytes": 2488,
+  "numeric_values": 311,
+  "objects": 7,
+  "output_width": 2,
+  "package_bytes": 19262,
+  "schema": "nrl.model-info/0",
+  "tied_objects": [
+    {
+      "nodes": [
+        "left",
+        "right"
+      ],
+      "object": "embed"
+    }
+  ],
+  "total_required_package_bytes": 19262,
+  "trainable_values": 287
+}
+    Finished `release` profile [optimized] target(s) in 0.41s
+     Running `nrl/target/release/nrl-lab run-model /tmp/nrl-check.z9wjHK/model-flat nrl/tests/fixtures/model-v0/input.json /tmp/nrl-check.z9wjHK/flat-output.json`
+{
+  "activation_values_per_row": 47,
+  "dependency_bytes": 0,
+  "family": "feed-forward",
+  "input_width": 3,
+  "kind": "standalone",
+  "local_objects": 7,
+  "model_id": "369b1f14df0f200f09e73724c5b9479ccabd32746bf804f94beb9bf52ac4fd0c",
+  "native_execution": false,
+  "nodes": 15,
+  "numeric_bytes": 2488,
+  "numeric_values": 311,
+  "objects": 7,
+  "output_width": 2,
+  "package_bytes": 19262,
+  "schema": "nrl.model-info/0",
+  "tied_objects": [
+    {
+      "nodes": [
+        "left",
+        "right"
+      ],
+      "object": "embed"
+    }
+  ],
+  "total_required_package_bytes": 19262,
+  "trainable_values": 287
+}
+    Finished `release` profile [optimized] target(s) in 0.43s
+     Running `nrl/target/release/nrl-lab pack-model nrl/tests/fixtures/model-v0/plain.json /tmp/nrl-check.z9wjHK/regression-input`
+{
+  "activation_values_per_row": 11,
+  "dependency_bytes": 0,
+  "family": "feed-forward",
+  "input_width": 2,
+  "kind": "standalone",
+  "local_objects": 2,
+  "model_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+  "native_execution": false,
+  "nodes": 3,
+  "numeric_bytes": 136,
+  "numeric_values": 17,
+  "objects": 2,
+  "output_width": 1,
+  "package_bytes": 2993,
+  "schema": "nrl.model-info/0",
+  "tied_objects": [],
+  "total_required_package_bytes": 2993,
+  "trainable_values": 17
+}
+    Finished `release` profile [optimized] target(s) in 0.40s
+     Running `nrl/target/release/nrl-lab train-regression /tmp/nrl-check.z9wjHK/regression-input nrl/tests/fixtures/training-v0/data.json nrl/tests/fixtures/training-v0/run.json /tmp/nrl-check.z9wjHK/regression`
+{
+  "schema": "nrl.regression-report/0",
+  "training_record_sha256": "e4119639e56891369696f3e4e3a4179d0f0cdea5e0fbfcb29acd58f25d504801",
+  "initial_model_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+  "selected_model_id": "0cb40e71303b15daf2785215de8eed53a5528200c56eae4a11d8de03ed18d78c",
+  "dataset_id": "9df2970cca84d6229cf229b13f2fd2a14067afb493d3572462ca5de951eea1f4",
+  "run_id": "5b848b0276129dcd7394862a3a77138ec12e4674e5755dc22a135e893ea4ad3a",
+  "completed_epochs": 128,
+  "selected_epoch": 91,
+  "graph_forward_rows": 9272,
+  "baseline": {
+    "train": {
+      "rows": 32,
+      "values": 32,
+      "mse": 0.8938463732331189,
+      "mae": 0.7937839854111406,
+      "max_absolute_error": 1.7805437665782495,
+      "target_mean_energy": 0.8372690676251853,
+      "nmse": 1.067573624531966,
+      "near_zero_target_energy": false
+    },
+    "validation": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.8827004365972109,
+      "mae": 0.7897629310344827,
+      "max_absolute_error": 1.6261140583554377,
+      "target_mean_energy": 0.9839718583118153,
+      "nmse": 0.8970789450336982,
+      "near_zero_target_energy": false
+    },
+    "test": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.7019184889255535,
+      "mae": 0.6972513262599469,
+      "max_absolute_error": 1.4716843501326262,
+      "target_mean_energy": 0.7981728042834324,
+      "nmse": 0.8794066712855594,
+      "near_zero_target_energy": false
+    }
+  },
+  "selected": {
+    "train": {
+      "rows": 32,
+      "values": 32,
+      "mse": 0.016521970210151126,
+      "mae": 0.09326704525670351,
+      "max_absolute_error": 0.41760310339853257,
+      "target_mean_energy": 0.8372690676251853,
+      "nmse": 0.01973316685042927,
+      "near_zero_target_energy": false
+    },
+    "validation": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.011830794085379374,
+      "mae": 0.10017718474698684,
+      "max_absolute_error": 0.15083970738089936,
+      "target_mean_energy": 0.9839718583118153,
+      "nmse": 0.012023508584561835,
+      "near_zero_target_energy": false
+    },
+    "test": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.016083866958995992,
+      "mae": 0.10813677355215379,
+      "max_absolute_error": 0.1864177579774311,
+      "target_mean_energy": 0.7981728042834324,
+      "nmse": 0.020150858150868024,
+      "near_zero_target_energy": false
+    }
+  },
+  "native_execution": false,
+  "limitations": [
+    "regression only; full-batch scalar CPU f64",
+    "no optimizer resume, local calibration/distillation, classification or language task",
+    "source declarations retained; no authenticity or licence verification",
+    "logical training buffers and forward-row work counts exclude scratch, serialization, parsed objects and host overhead",
+    "metrics on supplied data only; no speed, memory, compression or native guarantee"
+  ]
+}
+    Finished `release` profile [optimized] target(s) in 0.43s
+     Running `nrl/target/release/nrl-lab check-experiment /tmp/nrl-check.z9wjHK/regression`
+{
+  "schema": "nrl.regression-report/0",
+  "training_record_sha256": "e4119639e56891369696f3e4e3a4179d0f0cdea5e0fbfcb29acd58f25d504801",
+  "initial_model_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+  "selected_model_id": "0cb40e71303b15daf2785215de8eed53a5528200c56eae4a11d8de03ed18d78c",
+  "dataset_id": "9df2970cca84d6229cf229b13f2fd2a14067afb493d3572462ca5de951eea1f4",
+  "run_id": "5b848b0276129dcd7394862a3a77138ec12e4674e5755dc22a135e893ea4ad3a",
+  "completed_epochs": 128,
+  "selected_epoch": 91,
+  "graph_forward_rows": 9272,
+  "baseline": {
+    "train": {
+      "rows": 32,
+      "values": 32,
+      "mse": 0.8938463732331189,
+      "mae": 0.7937839854111406,
+      "max_absolute_error": 1.7805437665782495,
+      "target_mean_energy": 0.8372690676251853,
+      "nmse": 1.067573624531966,
+      "near_zero_target_energy": false
+    },
+    "validation": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.8827004365972109,
+      "mae": 0.7897629310344827,
+      "max_absolute_error": 1.6261140583554377,
+      "target_mean_energy": 0.9839718583118153,
+      "nmse": 0.8970789450336982,
+      "near_zero_target_energy": false
+    },
+    "test": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.7019184889255535,
+      "mae": 0.6972513262599469,
+      "max_absolute_error": 1.4716843501326262,
+      "target_mean_energy": 0.7981728042834324,
+      "nmse": 0.8794066712855594,
+      "near_zero_target_energy": false
+    }
+  },
+  "selected": {
+    "train": {
+      "rows": 32,
+      "values": 32,
+      "mse": 0.016521970210151126,
+      "mae": 0.09326704525670351,
+      "max_absolute_error": 0.41760310339853257,
+      "target_mean_energy": 0.8372690676251853,
+      "nmse": 0.01973316685042927,
+      "near_zero_target_energy": false
+    },
+    "validation": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.011830794085379374,
+      "mae": 0.10017718474698684,
+      "max_absolute_error": 0.15083970738089936,
+      "target_mean_energy": 0.9839718583118153,
+      "nmse": 0.012023508584561835,
+      "near_zero_target_energy": false
+    },
+    "test": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.016083866958995992,
+      "mae": 0.10813677355215379,
+      "max_absolute_error": 0.1864177579774311,
+      "target_mean_energy": 0.7981728042834324,
+      "nmse": 0.020150858150868024,
+      "near_zero_target_energy": false
+    }
+  },
+  "native_execution": false,
+  "limitations": [
+    "regression only; full-batch scalar CPU f64",
+    "no optimizer resume, local calibration/distillation, classification or language task",
+    "source declarations retained; no authenticity or licence verification",
+    "logical training buffers and forward-row work counts exclude scratch, serialization, parsed objects and host overhead",
+    "metrics on supplied data only; no speed, memory, compression or native guarantee"
+  ]
+}
+    Finished `release` profile [optimized] target(s) in 0.48s
+     Running `nrl/target/release/nrl-lab replay-regression /tmp/nrl-check.z9wjHK/regression /tmp/nrl-check.z9wjHK/regression-replay`
+{
+  "schema": "nrl.regression-report/0",
+  "training_record_sha256": "e4119639e56891369696f3e4e3a4179d0f0cdea5e0fbfcb29acd58f25d504801",
+  "initial_model_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+  "selected_model_id": "0cb40e71303b15daf2785215de8eed53a5528200c56eae4a11d8de03ed18d78c",
+  "dataset_id": "9df2970cca84d6229cf229b13f2fd2a14067afb493d3572462ca5de951eea1f4",
+  "run_id": "5b848b0276129dcd7394862a3a77138ec12e4674e5755dc22a135e893ea4ad3a",
+  "completed_epochs": 128,
+  "selected_epoch": 91,
+  "graph_forward_rows": 9272,
+  "baseline": {
+    "train": {
+      "rows": 32,
+      "values": 32,
+      "mse": 0.8938463732331189,
+      "mae": 0.7937839854111406,
+      "max_absolute_error": 1.7805437665782495,
+      "target_mean_energy": 0.8372690676251853,
+      "nmse": 1.067573624531966,
+      "near_zero_target_energy": false
+    },
+    "validation": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.8827004365972109,
+      "mae": 0.7897629310344827,
+      "max_absolute_error": 1.6261140583554377,
+      "target_mean_energy": 0.9839718583118153,
+      "nmse": 0.8970789450336982,
+      "near_zero_target_energy": false
+    },
+    "test": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.7019184889255535,
+      "mae": 0.6972513262599469,
+      "max_absolute_error": 1.4716843501326262,
+      "target_mean_energy": 0.7981728042834324,
+      "nmse": 0.8794066712855594,
+      "near_zero_target_energy": false
+    }
+  },
+  "selected": {
+    "train": {
+      "rows": 32,
+      "values": 32,
+      "mse": 0.016521970210151126,
+      "mae": 0.09326704525670351,
+      "max_absolute_error": 0.41760310339853257,
+      "target_mean_energy": 0.8372690676251853,
+      "nmse": 0.01973316685042927,
+      "near_zero_target_energy": false
+    },
+    "validation": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.011830794085379374,
+      "mae": 0.10017718474698684,
+      "max_absolute_error": 0.15083970738089936,
+      "target_mean_energy": 0.9839718583118153,
+      "nmse": 0.012023508584561835,
+      "near_zero_target_energy": false
+    },
+    "test": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.016083866958995992,
+      "mae": 0.10813677355215379,
+      "max_absolute_error": 0.1864177579774311,
+      "target_mean_energy": 0.7981728042834324,
+      "nmse": 0.020150858150868024,
+      "near_zero_target_energy": false
+    }
+  },
+  "native_execution": false,
+  "limitations": [
+    "regression only; full-batch scalar CPU f64",
+    "no optimizer resume, local calibration/distillation, classification or language task",
+    "source declarations retained; no authenticity or licence verification",
+    "logical training buffers and forward-row work counts exclude scratch, serialization, parsed objects and host overhead",
+    "metrics on supplied data only; no speed, memory, compression or native guarantee"
+  ]
+}

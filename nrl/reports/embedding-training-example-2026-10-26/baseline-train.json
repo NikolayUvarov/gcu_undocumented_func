@@ -1,0 +1,161 @@
+{
+  "schema": "nrl.evaluation/0",
+  "profile": {
+    "task": "embedding-trained-retrieval/0",
+    "data_id": "8b2be3ffdd9289d9b7c867b89a5058d160c550af45bbc73be6ce9f9f4a1a105b",
+    "split": "train",
+    "baseline_id": "7307151f403dc1f64e1a91c174535671a88b0c5ff3584a6c0c552f7ae5386dd4",
+    "preprocessing": "exact-ascii-mean-projection-l2/0",
+    "geometry": [
+      32,
+      3
+    ],
+    "measurement": null
+  },
+  "model_id": "7307151f403dc1f64e1a91c174535671a88b0c5ff3584a6c0c552f7ae5386dd4",
+  "environment": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logical_cpus": 24,
+    "executable_sha256": "272f34e3d5d23ce3dde0b80da264c29843ac3e2f17991b2460552ba53fcd8d65",
+    "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+    "backend": "host-cpu-scalar-f64/0",
+    "runtime_threads": 1,
+    "debug_assertions": false
+  },
+  "work": {
+    "documents_or_batches": 8,
+    "rows_per_pass": 8,
+    "output_values_per_pass": 24,
+    "quality_passes": 1,
+    "warmup_passes": 0,
+    "timed_passes": 0,
+    "total_forward_rows": 8
+  },
+  "quality": {
+    "metric": "ndcg-loss-at-k",
+    "value": 0.1450951293015672,
+    "details": {
+      "direction": "lower loss is better; Recall/MRR/NDCG are higher-is-better",
+      "index_scope": "fixed document index shared across query splits; no fitting or selection",
+      "mrr": 1.0,
+      "ndcg_at_k": 0.8549048706984328,
+      "rankings": [
+        {
+          "ndcg_at_k": 1.0,
+          "query_id": "query-fox",
+          "ranking": [
+            [
+              "animal-fox",
+              0.9999218144098969
+            ],
+            [
+              "animal-dog",
+              0.9496027172912994
+            ],
+            [
+              "weather-snow",
+              0.27405052486922266
+            ],
+            [
+              "space-moon",
+              0.084709408284415
+            ],
+            [
+              "space-star",
+              0.07279515542289244
+            ],
+            [
+              "weather-rain",
+              0.06234862862932468
+            ]
+          ],
+          "recall_at_k": 1.0,
+          "reciprocal_rank": 1.0
+        },
+        {
+          "ndcg_at_k": 0.7098097413968655,
+          "query_id": "query-dog",
+          "ranking": [
+            [
+              "animal-fox",
+              0.9999449806793029
+            ],
+            [
+              "animal-dog",
+              0.950257700833881
+            ],
+            [
+              "weather-snow",
+              0.26858509353414406
+            ],
+            [
+              "space-moon",
+              0.09315106283256284
+            ],
+            [
+              "space-star",
+              0.08432085039089518
+            ],
+            [
+              "weather-rain",
+              0.052604436963928414
+            ]
+          ],
+          "recall_at_k": 1.0,
+          "reciprocal_rank": 1.0
+        }
+      ],
+      "recall_at_k": 1.0,
+      "ties": "descending f64 dot product, then lexical document ID",
+      "top_k": 2
+    }
+  },
+  "timing": null,
+  "model_information": {
+    "adapter_version": 0,
+    "family": "nrl.mean-embedding",
+    "lookup_width": 3,
+    "max_input_tokens": 32,
+    "model_id": "7307151f403dc1f64e1a91c174535671a88b0c5ff3584a6c0c552f7ae5386dd4",
+    "native_execution": false,
+    "normalization": "l2-reject-norm-at-most-1e-12/0",
+    "numeric_values": 95,
+    "output_width": 3,
+    "package_bytes": 6319,
+    "pooling": "arithmetic-mean/0",
+    "preprocessor": "exact-ascii-whitespace/0",
+    "projection": {
+      "activation_values_per_row": 12,
+      "dependency_bytes": 0,
+      "family": "feed-forward",
+      "input_width": 3,
+      "kind": "standalone",
+      "local_objects": 2,
+      "model_id": "c3aad5c4402843067c54f4e19490e7355db35662fe078de80d00bad421a88e63",
+      "native_execution": false,
+      "nodes": 3,
+      "numeric_bytes": 472,
+      "numeric_values": 59,
+      "objects": 2,
+      "output_width": 3,
+      "package_bytes": 4587,
+      "schema": "nrl.model-info/0",
+      "tied_objects": [],
+      "total_required_package_bytes": 4587,
+      "trainable_values": 59
+    },
+    "schema": "nrl.embedding-info/0",
+    "state": "stateless",
+    "supported_tasks": [
+      "embedding-retrieval/0"
+    ],
+    "training_scope": "analytic lookup/mean/projection/L2 backward; bounded full-batch contrastive AdamW; query-split validation selection",
+    "transform_scope": "existing checked projection objects only; lookup/pooling/normalization remain unchanged",
+    "vocabulary_size": 12
+  },
+  "process_peak_rss_bytes": 5111808,
+  "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+  "native_execution": false
+}

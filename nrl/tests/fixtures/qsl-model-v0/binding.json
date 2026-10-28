@@ -1,0 +1,20 @@
+{
+  "adapter": "llama2c-f32-v0/0",
+  "base_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+  "layers": {
+    "0": 0,
+    "1": 1,
+    "2": 2,
+    "4": 4
+  },
+  "qsl_artifact_id": "48a2086a4969756793176498c8b3f9169550929f36308fb8acd6eb4b892a07a4",
+  "schema": "nrl.qsl-decoder-binding/0",
+  "source": {
+    "identifier": "nrl://original-qsl-complete-model-fixture",
+    "licence": "MIT; derived publisher-declared MIT TinyStories weights and archived QSL writer",
+    "notices": [
+      "Numerical full-model bridge fixture; no accepted compression or model-quality claim."
+    ],
+    "sha256": null
+  }
+}

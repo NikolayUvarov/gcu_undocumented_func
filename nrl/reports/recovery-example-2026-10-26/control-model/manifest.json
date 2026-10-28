@@ -1,0 +1,90 @@
+{
+  "schema": "nrl.decoder/0",
+  "adapter": "llama2c-f32-v0/0",
+  "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+  "config": {
+    "dim": 64,
+    "hidden": 172,
+    "layers": 5,
+    "heads": 8,
+    "kv_heads": 4,
+    "vocab": 512,
+    "context": 512,
+    "tied_head": true
+  },
+  "weights": {
+    "file": "weights.bin",
+    "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+    "bytes": 1056540
+  },
+  "tokenizer": {
+    "file": "tokenizer.bin",
+    "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+    "bytes": 6227
+  },
+  "patches": {
+    "0": {
+      "file": "block-0000.json",
+      "sha256": "5e309c8d383ab422fdc07ff315046d5692b28467a55f88cd9802e60067e0bda3",
+      "bytes": 166429
+    },
+    "2": {
+      "file": "block-0002.json",
+      "sha256": "b4070a2b33041a7795c6872dd09325a938d2e10395b7237772a0366ccde83957",
+      "bytes": 157820
+    }
+  },
+  "sources": [
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/stories260K.bin",
+      "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ]
+    },
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/tok512.bin",
+      "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ]
+    },
+    {
+      "identifier": "synthetic://nrl-original-language-documents-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL test sentences",
+      "notices": [
+        "Original independent miniature documents, one declared related group per document.",
+        "A reproducible test corpus, not a claim of representative language quality."
+      ]
+    },
+    {
+      "identifier": "derived://nrl-plan/mixed-linear-pruned/layer-0#c6df0582f1f5a2cc6eb96090ef90126d14e46e9ac753ef82227f954377d39550",
+      "sha256": "c6df0582f1f5a2cc6eb96090ef90126d14e46e9ac753ef82227f954377d39550",
+      "licence": "MIT OR Apache-2.0; original NRL test sentences",
+      "notices": [
+        "Rust train-only initializer and full-batch local SGD; validation selects; source weights/tokenizer notices retained."
+      ]
+    },
+    {
+      "identifier": "derived://nrl-plan/mixed-linear-pruned/layer-2#acaa443122e7f3d4a107123b4c7be71734fee59ea93bd1d60ca17927fe75d09a",
+      "sha256": "acaa443122e7f3d4a107123b4c7be71734fee59ea93bd1d60ca17927fe75d09a",
+      "licence": "MIT OR Apache-2.0; original NRL test sentences",
+      "notices": [
+        "Rust train-only initializer and full-batch local SGD; validation selects; source weights/tokenizer notices retained."
+      ]
+    },
+    {
+      "identifier": "derived://nrl-recovery/control#e18be99405280d17a0e8fea21ff26d47e943c4be923126eaca14e8e7b3a050b6",
+      "sha256": "e18be99405280d17a0e8fea21ff26d47e943c4be923126eaca14e8e7b3a050b6",
+      "licence": "MIT OR Apache-2.0; original NRL test sentences",
+      "notices": [
+        "Frozen original FFN teacher targets; actual train-only inputs; local SGD with full-model validation selection. Canonical recovery record hash; not end-to-end decoder backpropagation."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "branch": "codex/NRL-lab",
+  "compiler": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "date": "2026-10-26",
+  "expanded_numeric_replay_matches_first_saved_run": true,
+  "expanded_selected": "dense",
+  "failed": 0,
+  "final_generation": {
+    "accepted_host_experiment": true,
+    "identical_tokens": true,
+    "intermediate_overlapping_repeat_preserved": "generation-after-promotion-2026-10-26.json",
+    "observed_elapsed_reduction_fraction": 0.29919093275356223,
+    "prepared_median_seconds": 0.009985396,
+    "reference_median_seconds": 0.014248383,
+    "report": "generation-final-build-2026-10-26.json"
+  },
+  "host_tests": 95,
+  "ignored": 0,
+  "new_reference_reproduction": {
+    "embedding_autograd_and_adamw": "byte-identical",
+    "expanded_corpus": "byte-identical from pinned source",
+    "optimizer_pytorch": "byte-identical",
+    "rustfmt": "passed",
+    "unchanged_qsl_writer_full_decoder": "identical weights/binding/oracle/core manifest; environment record excluded as specified"
+  },
+  "portable_release_builds": [
+    {
+      "crate": "nrl-repr",
+      "target": "x86_64-unknown-none"
+    },
+    {
+      "crate": "nrl-repr",
+      "target": "aarch64-unknown-none-softfloat"
+    },
+    {
+      "crate": "nrl-runtime",
+      "target": "x86_64-unknown-none"
+    },
+    {
+      "crate": "nrl-runtime",
+      "target": "aarch64-unknown-none-softfloat"
+    }
+  ],
+  "raw_log": "five-extensions-check-2026-10-26.txt",
+  "raw_log_sha256": "8e3c8bb7c3c22955332c9103fd05253048f6016d49a05dfbfbb40dcb92634fb0",
+  "release_executable_sha256": "9ffc7e3722d454a9f405605ecf03177b66a8e00e0046e92f99e09a628da4cb6a",
+  "saved_examples": {
+    "embedding": "embedding-training-example-2026-10-26/summary.json",
+    "expanded": "expanded-study-final-2026-10-26/summary.json",
+    "generation": "generation-final-build-2026-10-26.json",
+    "optimizer": "adamw-example-2026-10-26/summary.json",
+    "qsl": "qsl-model-example-2026-10-26/info.json"
+  },
+  "schema": "nrl.five-extensions-evidence/0",
+  "sha256": {
+    "nrl/reports/expanded-study-final-2026-10-26/summary.json": "9b52a74a1d6c58d0d35a675ffda74902a6fefd871724be95870c25103febd05d",
+    "nrl/reports/generation-after-promotion-2026-10-26.json": "6436a12dbd354a814bd0a2b488256c80bde16f050864d4b7587a3704534e3d49",
+    "nrl/reports/generation-before-promotion-2026-10-26.json": "bfc98e18e4bfe4441d6a6bf7cac66b307cf88c247985726f4880bf6a28ac7b69",
+    "nrl/reports/generation-final-build-2026-10-26.json": "2838788a2e8dc982303898eca9837139f68dffef04826d41829ccb629a11008b",
+    "nrl/tests/fixtures/adaptation-v0/optimizer-oracle.json": "252133105e11e8b3a5bf53d7aad9bd6420118bcddb265df4f8ac8486cbf8592e",
+    "nrl/tests/fixtures/embedding-training-v0/oracle.json": "46aef33dbab19a81f5c041339a347bf614267abeef973cd503d2680d746e7dde",
+    "nrl/tests/fixtures/expanded-v0/adaptation.json": "39e99e17576e4009b775b7e5ceef02d59f03b41a30fb38b68cbd71c5f96ff985",
+    "nrl/tests/fixtures/expanded-v0/corpus.json": "5c3d3b8cf520a7ce52fa91b7a147a577410f698f941ad78a61d02da8fc9c72b4",
+    "nrl/tests/fixtures/expanded-v0/study.json": "42d80d1eb2498a173f3a5cff4c5c7d2e3b28dddb3cd9794c47c5d0b8b935577e",
+    "nrl/tests/fixtures/qsl-model-v0/blocks.safetensors": "99a54646296faf497785057d80ce0fa670a8a997fac6f78ef117931a7a5b9908",
+    "nrl/tests/fixtures/qsl-model-v0/expected.json": "62e618cc1ab476e7a189e298693e10cdab89617d519188f9ad0d9972917ba450"
+  },
+  "source_boundaries": {
+    "accepted_compression": false,
+    "broader_optimizer_features": "No LoRA/QLoRA, mixed precision, gradient accumulation or full decoder backpropagation.",
+    "hf_qwen_import_supported": false,
+    "native_decoder_or_embedding_supported": false,
+    "native_execution": false,
+    "repository_wide_landing_gate": "pending integrator; NRL checks are not the full repository gate",
+    "t11_complete": false
+  },
+  "tasks": {
+    "900-NRL-0020": "bounded AdamW, exact complete continuation and refreshed-input matched SGD comparison",
+    "900-NRL-0021": "prepared incremental sessions; complete logits/token equality, late numerical KV rollback and measured default promotion",
+    "900-NRL-0022": "complete lookup/mean/projection/L2 backward, graded contrastive fitting and trained-table retrieval task",
+    "900-NRL-0023": "full executable QSL overlay and standalone for explicit supported llama2c adapter only",
+    "900-NRL-0024": "48 attributed source prefixes; frozen eight plans and two recovery arms; validation-only selection"
+  },
+  "test_command": "bash nrl/tools/check.sh --expanded",
+  "tested_source_commit": "b44fbc0d2ac16e293175ec0611511898a1678713"
+}

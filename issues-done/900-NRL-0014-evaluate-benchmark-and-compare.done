@@ -1,0 +1,33 @@
+# 900-NRL-0014 — Comparable regression/language evaluation and measured host benchmarks — done
+
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — (T05–T07 are on this branch) · **Roadmap:** G; 900 T08 · **Constitution:** MC-5.1, MC-8.5, MC-9.1, MC-12.1, MC-12.2, MC-12.3, MC-12.9
+
+## Problem
+
+Local block MSE and fewer parameters do not establish model quality or speed. T08 needs two complete task profiles, actual repeated timing/work/resource records and explicit comparability rules before mixed-plan search.
+
+## Plan
+
+1. Add shared versioned evaluation/measurement/comparison reports for regression and shifted next-token language tasks, with exact model/baseline/data/split/preprocessing/numerical identities.
+2. Compute regression errors and stable full-vocabulary language NLL/perplexity/top-1 from actual work, not proxy block loss.
+3. Benchmark preprocessed forward passes with fresh per-document state, warmups/repeats, monotonic timing distributions and actual forward-row counts. Record executable/host identity and clearly scoped process peak RSS, logical parameters and package bytes.
+4. Refuse comparisons across task/data/split/baseline/geometry/backend/executable/host/measurement policies. No gain is inferred from parameter count or process-RSS attribution.
+5. Add independent evaluate/benchmark/compare CLI entries, external numerical checks, repeat/work/compatibility/bounds tests and dated reports. Use the pre-frozen study profile for subsequent T09/T10, without test-based tuning.
+
+## Acceptance criteria
+
+- [x] Regression and language task metrics match independent references on the supported profiles; all output/work counts and policies are explicit.
+- [x] Benchmark warmups/repeats/work limits are checked; measured distribution includes min/median/p95 and environment/executable identity.
+- [x] Memory/disk/parameter fields distinguish effective, retained, package and whole-process peak counts without claiming unmeasured savings.
+- [x] Compatible reports compare correctly; incompatible task/data/split/source/policy/executable/host/budget records and malformed versions/metrics fail clearly.
+- [x] Independent evaluation/benchmark/comparison tools preserve machine-readable evidence without overwrites, and the frozen next-stage study profile remains unchanged.
+- [x] Full host checks and portable rlibs pass; saved real language/regression baseline/student reports show actual outcomes without claiming general optimization/native support.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md), T08 and section 13.
+- [0011](../issues-done/900-NRL-0011-feed-forward-training-and-evaluation.done), [0012](../issues-done/900-NRL-0012-trained-decoder-and-tokenizer.done), [0013](../issues-done/900-NRL-0013-calibration-and-resumable-local-training.done).
+
+## Resolution
+
+Implemented `research/evaluate.rs`, independent evaluation/benchmark/comparison CLI operations, two complete task metrics, bounded work/timing and strict compatibility. Independent PyTorch NLL/perplexity/top-1 and established regression test errors agree. All 65 host tests, two portable rlibs and CLI cycles passed on `8793e106` (source `3817e79d`). [Evidence](../nrl/reports/evaluation-2026-10-26.json), [saved reports](../nrl/reports/evaluation-example-2026-10-26/language-comparison.json), [contract](../nrl/specs/evaluation-v0.md). The language student worsens validation NLL; no quality/speed/memory gain is inferred. The frozen study profile is unchanged. Full repository landing gate remains pending.

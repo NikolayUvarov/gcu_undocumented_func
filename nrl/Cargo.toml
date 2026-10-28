@@ -1,0 +1,16 @@
+[workspace]
+members = ["crates/nrl-core", "crates/nrl-repr", "crates/nrl-lab", "crates/nrl-runtime"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+nrl-core = { path = "crates/nrl-core" }
+nrl-repr = { path = "crates/nrl-repr" }
+nrl-runtime = { path = "crates/nrl-runtime" }
+libm = "=0.2.16"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["float_roundtrip"] }
