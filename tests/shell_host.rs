@@ -414,12 +414,15 @@ fn update_takes_its_requests_and_says_what_the_updater_holds() {
     out.clear();
     updates::rollback_question(&mut out, &staged);
     assert!(out.starts_with("ROLL BACK TO SLOT B? ") && out.ends_with("FALLING BACK TO SLOT A."), "{}", out);
-    // What the updater would refuse is answered without a question.
-    assert_eq!(updates::refused(&root, true), Some(updates::NO_SLOT));
-    assert_eq!(updates::refused(&trial, false), Some(updates::TRIAL));
-    assert_eq!(updates::refused(&View { trial: false, ..trial }, true), Some(updates::NOT_STAGED));
-    assert_eq!(updates::refused(&View { trial: false, ..trial }, false), None);
-    assert_eq!(updates::refused(&staged, true), None);
+    // After a restart nothing reads as staged, but the other slot may hold a release: the updater checks it.
+    out.clear();
+    updates::apply_question(&mut out, &View { staged: 0, ..staged }, 3);
+    assert_eq!(out, "APPLY THE RELEASE IN SLOT B (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 3 TRIES, FALLING BACK TO SLOT A.");
+    // What the updater would refuse whatever the other slot holds is answered without a question.
+    assert_eq!(updates::refused(&root), Some(updates::NO_SLOT));
+    assert_eq!(updates::refused(&trial), Some(updates::TRIAL));
+    assert_eq!(updates::refused(&View { trial: false, ..trial }), None);
+    assert_eq!(updates::refused(&staged), None);
     assert_eq!(updates::error(8), "THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE");
     assert_eq!(updates::error(99), "THE UPDATER ANSWERED AN ERROR");
 }
