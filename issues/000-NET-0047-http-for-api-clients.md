@@ -1,6 +1,6 @@
 # 000-NET-0047 — HTTP for API clients in `libmind`: bodies, multipart, redirects, compression, a streaming body, Server-Sent Events
 
-**Type:** network (`libmind` `http`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (made and tested on both architectures but HEAD, PATCH and DELETE; landing left) · **Blocked by:** — · **Main task:** — (for 253, 255, 260, 261 and 000-NET-0048) · **Constitution:** MC-6.6, MC-11.5, MC-11.11, MC-12.1
+**Type:** network (`libmind` `http`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (landed in round 39; HEAD, PATCH and DELETE left) · **Blocked by:** — · **Main task:** — (for 253, 255, 260, 261 and 000-NET-0048) · **Constitution:** MC-6.6, MC-11.5, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md).
 
@@ -88,6 +88,10 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
 
 - **Host tests:** each framing (length, chunked, close), multipart's boundary, every redirect rule, a gzip bomb stopped, SSE split at every byte boundary, `Retry-After` in both forms.
 - **In QEMU, x86 and aarch64:** a stand-in server (`tests/http_api_stub.py`, HTTPS with the suite's test CA) answers a JSON POST, a multipart upload, a redirect chain, a gzip body and an SSE stream of 1000 events. A test program checks each.
+
+## Progress (2026-10-28)
+
+Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85): `parse.wit` 2.0, redirects, content codings, multipart bodies, Server-Sent Events, chunked uploads and Retry-After, with `webcheck --api` against the stand-in in the `tls` suite, x86 and aarch64, and the host tests `http`, `sse`, `multipart` and `http_coding`. Left: HEAD, PATCH and DELETE checked against the stand-in.
 
 ## Related
 

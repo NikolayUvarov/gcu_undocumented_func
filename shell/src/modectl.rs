@@ -23,6 +23,8 @@ pub fn command(shell: &mut crate::Shell, args: &[u8]) {
     }
     let client = mind::ipc::Endpoint(mind::abi::SLOT_MODE);
     if let Asked::Set { which, on, reason } = asked {
+        // Never from the link, its console's script either (800-APP-0108, MC-12.6): the cable turns no mode on or off.
+        if shell.unasked { let _ = writeln!(shell.term, "MODE: NOT CHANGED: A LINE OF THE LINK MAY NOT CHANGE THE MODE"); return; }
         if on {
             let mut text = alloc::string::String::new();
             modes::question(&mut text, which);
@@ -40,11 +42,19 @@ pub fn command(shell: &mut crate::Shell, args: &[u8]) {
         Ok(Err(e)) => { let _ = writeln!(shell.term, "MODE: {}", error(e)); }
         Err(_) => { let _ = writeln!(shell.term, "MODE: INIT DOES NOT ANSWER"); }
     }
+    if crate::link_console() { let _ = writeln!(shell.term, "{}", LINK_CONSOLE); }
 }
 
-// The modes above the first prompt, and in the system log, while one is on. No timeout: a call given up revokes its lent
+// The `link-console` mode (init.wit 1.8, 800-APP-0108): only data/mode.conf sets it, so `mode` shows it and never changes it.
+const LINK_CONSOLE: &str = "LINK CONSOLE: ON (DATA/MODE.CONF, DEV IN LINK.CONF): THE LINK'S LINES ARE THE CONSOLE'S, BUT NOT MODE";
+
+// The modes, and the link's console, above the first prompt and in the system log while one is on. No timeout: a call given up revokes its lent
 // buffer under init's late answer (the fault of LNK's report, 2026-10-22), and init answers `mode` at once.
 pub fn notice(shell: &mut crate::Shell) {
+    if crate::link_console() {
+        let _ = writeln!(shell.term, "{}", LINK_CONSOLE);
+        mind::println!("[SHELL] {}", LINK_CONSOLE);
+    }
     if mind::dev::cap_info(mind::abi::SLOT_MODE).0 != mind::abi::CAP_KIND_ENDPOINT { return; }
     let Ok(Ok(state)) = init::mode(mind::ipc::Endpoint(mind::abi::SLOT_MODE)) else { return };
     let mut text = alloc::string::String::new();

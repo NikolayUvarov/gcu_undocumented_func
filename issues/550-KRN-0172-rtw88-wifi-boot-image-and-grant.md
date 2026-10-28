@@ -1,6 +1,6 @@
 # 550-KRN-0172 — The boot image `rtw88_wifi` and init's grant for the DEXP's RTL8821CE (ABI 21)
 
-**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (made; landing and a run on the DEXP left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track A (drivers), track D (network) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
+**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (landed in round 37, `main` c8fe8d03, both architectures gated; the run on the DEXP left, DRV's) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track A (drivers), track D (network) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
 
 **Asked by:** the drivers track (`DRV`) on 2026-10-27, for [550-DRV-0042](550-DRV-0042-rtl8821ce-wifi.md), in `KRN/2026-10-27T1700Z-DRV-the-boot-image-rtw88-wifi-and-its-grant.md` on `internal-dev-messages`.
 - **Why now:** the maintainer's order for the DEXP is Wi-Fi first. No Ethernet cable is at hand, so the RTL8821CE is the only way onto the network for the server's Effector agent.
