@@ -1,6 +1,6 @@
 # 000-NET-0045 — Secrets per program in `keystore`: a token, a password or an API key that only its program reads
 
-**Type:** network (`keystore`, `idl/keystore.wit`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open · **Blocked by:** [000-KRN-0170](000-KRN-0170-a-programs-own-data-directory.md) (the program's identity) · **Main task:** — (for 253, 254, 260, 261) · **Constitution:** MC-3.1, MC-10.3, MC-11.9, MC-12.4
+**Type:** network (`keystore`, `idl/keystore.wit`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open · **Blocked by:** [000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done) (the program's identity) · **Main task:** — (for 253, 254, 260, 261) · **Constitution:** MC-3.1, MC-10.3, MC-11.9, MC-12.4
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md). 253, 254, 260 and 261 are each blocked by "where the token lives".
 
@@ -34,4 +34,4 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
 
 ## Related
 
-[000-KRN-0170](000-KRN-0170-a-programs-own-data-directory.md), [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md), [253](253-telegram-and-whatsapp-text-client.md), [260](260-ai-agents-on-the-platform.md), [261](261-mail-client.md).
+[000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done), [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md), [253](253-telegram-and-whatsapp-text-client.md), [260](260-ai-agents-on-the-platform.md), [261](261-mail-client.md).

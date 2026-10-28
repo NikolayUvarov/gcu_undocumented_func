@@ -1,6 +1,6 @@
 # 000-NET-0046 — Public root certificates in the image
 
-**Type:** network (`tls`'s root store, the image builders) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (made; the run on the maintainer's machine and landing left) · **Blocked by:** — · **Main task:** — (for 253 to 261 and 000-NET-0048) · **Constitution:** MC-11.6, MC-12.1, MC-12.3
+**Type:** network (`tls`'s root store, the image builders) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (landed in round 39; a real machine's HTTPS left) · **Blocked by:** — · **Main task:** — (for 253 to 261 and 000-NET-0048) · **Constitution:** MC-11.6, MC-12.1, MC-12.3
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md).
 
@@ -45,6 +45,10 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
   - a server with a certificate under no root in the store is refused.
 - **On the maintainer's machine:** a real HTTPS request to a public site verifies, named with its configuration (MC-12.1).
 - **THIRD_PARTY.md and docs/network** name the store, its source, date and licence.
+
+## Progress (2026-10-28)
+
+Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85): Mozilla's public roots as `tlsroots.pem` in both images, checked against their record at each build; the `tls` suite on x86 and aarch64 in the gate. Left: HTTPS to a public server from a real machine, with the build named (MC-12.1).
 
 ## Related
 

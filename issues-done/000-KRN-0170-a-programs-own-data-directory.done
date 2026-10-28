@@ -1,6 +1,6 @@
-# 000-KRN-0170 — A program's own data directory and its identity, given by the loader by the program's name
+# 000-KRN-0170 — A program's own data directory and its identity, given by the loader by the program's name — done
 
-**Type:** kernel (`loader`, `init`, `vfs_server`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — (for 253, 254, 255, 260, 261) · **Constitution:** MC-3.1, MC-3.8, MC-10.3, MC-11.9, MC-12.4
+**Type:** kernel (`loader`, `init`, `vfs_server`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-28) · **Blocked by:** — · **Main task:** — (for 253, 254, 255, 260, 261) · **Constitution:** MC-3.1, MC-3.8, MC-10.3, MC-11.9, MC-12.4
 
 Recorded by the kernel track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md), at the maintainer's request.
 
@@ -81,6 +81,10 @@ Recorded by the kernel track on 2026-10-25, for the plan [docs/communications-an
 - "the owner's file tools see it only as the owner asks": the shell reaches no program's directory at all yet;
 - the full gate.
 
+## Resolution
+
+Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85, the gate green). The loader gives a program that asks for `REQUEST_OWN` and that it runs by its name from the booted slot, the volume's root or `data/apps/` a writable `vfs_server` scope of `system/own/<name>/` in `SLOT_OWN` (ABI 22), adopted for its task (`vfs.wit` 2.5); a program run by any other path gets none. Evidence: the `bench` suite's own-directory check on x86 and aarch64 (check's runs counted across starts, bench's file not in check's directory, the shell's listing of `system/own/` refused) and the host test `vfs_zone`. Its limit, stated in the profile: no per-program quota; two programs of one name share the directory.
+
 ## Related
 
-[000-NET-0045](000-NET-0045-secrets-per-program-in-keystore.md), [750-KRN-0169](../issues-done/750-KRN-0169-the-loader-checks-an-installed-application.done), [253](253-telegram-and-whatsapp-text-client.md), [260](260-ai-agents-on-the-platform.md), [261](261-mail-client.md).
+[000-NET-0045](../issues/000-NET-0045-secrets-per-program-in-keystore.md), [750-KRN-0169](../issues-done/750-KRN-0169-the-loader-checks-an-installed-application.done), [253](../issues/253-telegram-and-whatsapp-text-client.md), [260](../issues/260-ai-agents-on-the-platform.md), [261](../issues/261-mail-client.md).

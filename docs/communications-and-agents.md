@@ -50,7 +50,7 @@ The maintainer, 2026-10-25:
 
 | Task | What | Blocks |
 |---|---|---|
-| [000-KRN-0170](../issues/000-KRN-0170-a-programs-own-data-directory.md) | A program's own data directory and its identity, given by the loader by the program's name | the secrets, every client's settings and cache |
+| [000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done) | A program's own data directory and its identity, given by the loader by the program's name | the secrets, every client's settings and cache |
 | [000-NET-0045](../issues/000-NET-0045-secrets-per-program-in-keystore.md) | Secrets per program in `keystore`: a token, a password or an API key that only its program reads, never logged | `mail`, `tgtxt`, `agent` |
 | [000-NET-0046](../issues/000-NET-0046-public-root-certificates.md) | Public root certificates in the image (Mozilla's set, MPL-2.0) | every client of a public service |
 | [000-NET-0047](../issues/000-NET-0047-http-for-api-clients.md) | HTTP for API clients in `libmind`: bodies and headers, multipart, redirects, gzip, a streaming body, Server-Sent Events, Retry-After | `get`, `tgtxt`, `agent`, `www` |

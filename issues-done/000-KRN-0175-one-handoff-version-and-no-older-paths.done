@@ -1,6 +1,6 @@
-# 000-KRN-0175 — The kernel takes one handoff version; no path left for an older version of our own software
+# 000-KRN-0175 — The kernel takes one handoff version; no path left for an older version of our own software — done
 
-**Type:** kernel (`common/abi.rs`, the kernel's entry), libmind · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (made; landing left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.4, MC-12.7
+**Type:** kernel (`common/abi.rs`, the kernel's entry), libmind · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-28) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.4, MC-12.7
 
 **Recorded by:** the kernel track on 2026-10-28, under the maintainer's rule of 2026-10-25 (AGENTS.md, section 3): before the first release, no code exists only so that an older version of our own software, format or interface keeps working.
 
@@ -39,6 +39,10 @@
 - **Host tests** pass.
 - **QEMU, x86:** a kernel built for the next handoff stops with the new line on the serial line and on the screen.
 
+## Resolution
+
+Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85, the gate green on that tree: x86 on un-rizen's three lanes, aarch64 on un-rizen and PCU). The kernel takes the one handoff version `BOOT_HANDOFF_VERSION` and refuses any other by name; `BOOT_HANDOFF_OLDEST` and the paths for older loaders are gone. Evidence: the `boot` suite's loader-abi-test case (x86 and aarch64 in the gate) and the host test `boot_abi`.
+
 ## Related
 
-[550-KRN-0172](550-KRN-0172-rtw88-wifi-boot-image-and-grant.md), [351-KRN-0166](../issues-done/351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [351-KRN-0167](../issues-done/351-KRN-0167-a-kernel-that-refuses-its-loader-on-trial-restarts.done).
+[550-KRN-0172](../issues/550-KRN-0172-rtw88-wifi-boot-image-and-grant.md), [351-KRN-0166](../issues-done/351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [351-KRN-0167](../issues-done/351-KRN-0167-a-kernel-that-refuses-its-loader-on-trial-restarts.done).

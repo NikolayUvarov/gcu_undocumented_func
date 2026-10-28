@@ -1,6 +1,6 @@
-# 176-KRN-0181 — `check`'s "the RTC advances" counts its window from before the first read
+# 176-KRN-0181 — `check`'s "the RTC advances" counts its window from before the first read — done
 
-**Type:** `check` (`bench/src/bin/check.rs`, the clock group) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (made; the bench suite's run left) · **Blocked by:** — · **Main task:** [176](176-test-and-performance-utilities.md) · **Constitution:** MC-12.1, MC-12.2
+**Type:** `check` (`bench/src/bin/check.rs`, the clock group) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-28) · **Blocked by:** — · **Main task:** [176](../issues/176-test-and-performance-utilities.md) · **Constitution:** MC-12.1, MC-12.2
 
 **Reported by:** the tools track (`APP`), `KRN/2026-10-28T0504Z-APP-checks-rtc-advances-races-with-its-first-read.md` on `internal-dev-messages`: seen on i9 under WSL2, aarch64 with 4 CPUs, once in three runs of the `bench` suite, and once in `diag/quick.msh` step 16.
 
@@ -25,6 +25,10 @@
 - The `bench` suite passes on x86 and on aarch64 with 4 CPUs.
 - `check kernel clock files sound` in `diag/quick.msh` passes in the same suites.
 
+## Resolution
+
+Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85). The gate ran `check` and `diag/quick.msh` in the x86 `bench` suite and in the aarch64 group "programs, shell and four CPUs" with 4 CPUs, both passing: the row now counts its window from before the first RTC read and allows the window's whole seconds.
+
 ## Related
 
-[176](176-test-and-performance-utilities.md), [176-KRN-0147](176-KRN-0147-check-kernel-waits-long-enough.md).
+[176](../issues/176-test-and-performance-utilities.md), [176-KRN-0147](../issues/176-KRN-0147-check-kernel-waits-long-enough.md).
