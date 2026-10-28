@@ -132,6 +132,10 @@
   - for a transformer's MLP blocks, the same report.
   - Whether to go on is the maintainer's decision from these numbers.
 
+## Progress
+
+- **Stage 0** is [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md): the design page [docs/nn/runtime.md](../docs/nn/runtime.md) 0.1 (2026-10-28), for agreement with `NRL` and `KRN`, for NRL's first portable family (stateless feed-forward); `nnd` as a boot service is asked of `KRN` in [requests-KRN.md](requests-KRN.md#the-model-service-nnd-for-262-app-0112).
+
 ## Acceptance criteria
 
 Each stage's criteria above. The main task is split into `APP` tasks per stage when stage 0's design is agreed. Results are stated per machine, device and model (MC-12.1), and a test pass is not called a proof (MC-12.2).

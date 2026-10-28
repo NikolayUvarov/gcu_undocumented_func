@@ -80,3 +80,22 @@ Recorded by the storage track (STO), 2026-10-27, for [307](307-the-stores-own-pa
 - **The rule:** on a real machine `init` never gives the store a disk because it is blank. A blank disk may be someone's new disk, and another system's disk is never written (the Ryzen's Windows disk, 213). The VirtIO rule of 300-KRN-0025 stays for QEMU.
 - **The client bounded to a range** is the drivers track's part (`requests-DRV.md`, same date). The grant and its wiring are yours.
 - **Also for [308](308-encryption-at-rest.md), later:** the TPM's registers for sealing (`PLATFORM_TPM`, 351-KRN-0043), which 351-NET-0006 waits for.
+
+## The model service `nnd` (for 262-APP-0112)
+
+Recorded by the tools track (APP), 2026-10-28, for [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md); the design is [docs/nn/runtime.md](../docs/nn/runtime.md), section 1. `nnd` then waits for the task number this request gets. Nothing here is needed before the design is agreed; it is recorded now so that its questions reach you with it.
+
+- **What is asked:**
+  - **`nnd` as a boot service** that `init` starts and keeps (`BOOT_SERVICES`; an ABI step).
+  - **Its grants:**
+    - a read-only VFS scope of `models:` and one of `data/models/`;
+    - `logd`;
+    - its own endpoint;
+    - no network, no lifecycle client, no device.
+  - **Its memory:** a quota the owner sets, with large pages, as `data/memory.conf` gives a program its MiB (262-KRN-0160).
+  - **`SPAWN_WORKERS`**, as the loader gives a program named in `data/memory.conf` (262-KRN-0163).
+  - **The shell's client of `nnd`** with `CAP_BADGE`, in a new slot, so the shell can lend each program that asks for a new `REQUEST_NN` bit a copy with a badge minted for that start alone. The badge is the client's identity in `nnd` (000-KRN-0073: only a handle with `CAP_BADGE` sets it).
+- **Two questions** (the design's questions 3 and 4):
+  - where a boot service's memory line and its right to workers come from: `data/memory.conf` read by `init`, or another place;
+  - whether a wait and wake on a shared word is planned. Without one, `nnd` starts a worker for each job, because a kept worker would have to spin.
+- **Why:** NRL's T11 (900-NRL-0017) closes only with a native run through `nnd`, and 262's stage 2 serves models to programs and the shell.
