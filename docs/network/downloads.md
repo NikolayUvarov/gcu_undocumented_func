@@ -79,7 +79,7 @@ For an `https://` URL `download` runs each connection as a session of the TLS se
 
 - **The session runs on `download`'s own flow grant.** `attach` lends the TLS service a child of the grant, so the policy, its term and its volume apply to the encrypted connection as to a plain one. The TLS service has no network access of its own.
 - **The server is verified by the roots or by a pinned key:**
-  - **Without `--pin`:** the certificate chain must lead to a root in `tlsroots.pem` on the boot disk and be valid for the URL's host, as for the shell's `https`.
+  - **Without `--pin`:** the certificate chain must lead to a root in `tlsroots.pem` on the boot disk and be valid for the URL's host, as for the shell's `https`. The image ships Mozilla's public roots there (000-NET-0046, `third_party/roots/SOURCE.md`); the owner may replace or trim the file.
   - **With `--pin HEX`:** the SHA-256 of the server certificate's SubjectPublicKeyInfo must be `HEX` (`connect-pinned`, `idl/tls.wit` 1.1). No root, name or validity period is checked, but the server must still sign the handshake with that key. A pinned key is trusted whoever signed its certificate, so an update server needs no CA: the pin can come with the channel's configuration.
 
     The pin of a certificate is `openssl x509 -in cert.pem -pubkey -noout | openssl pkey -pubin -outform der | sha256sum`.
@@ -108,7 +108,7 @@ These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networ
 
 ## Not provided yet
 
-- **Roots shipped with a release** and covered by its signature: the roots are whatever `tlsroots.pem` holds, which nothing authenticates; a pin is the way to trust the update server for now.
+- **Roots covered by a release's signature:** the image ships Mozilla's roots as `tlsroots.pem` (000-NET-0046), but the boot manifest does not list the file and a slot update does not replace it. The roots are whatever the file holds, which nothing authenticates; a pin is the way to trust the update server for now.
 - **HTTPS by name with a pin from the channel:** the updater's (351-UPD-0007).
 - **In `get` and `download`:** chunked bodies, redirects, keep-alive, several connections at once, IPv6. A service has chunked bodies and keep-alive through `mind::http::Connection` ([services.md](services.md), 750-NET-0019).
 - **Fast writes of a large file.** `vfs_server` writes a file one 512-byte sector per block request, and walks the file's cluster chain from its start on every write. So writing slows down as the file grows. That is `vfs_server`'s, not this task's.

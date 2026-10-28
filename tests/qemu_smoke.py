@@ -6832,7 +6832,7 @@ def download_check(args, disk):
     port = release.server_address[1]
     # The same files over HTTPS: the test CA's server (in tlsroots.pem), and one from a CA nobody trusts.
     _certificates(certificates)
-    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    _roots_with_test_ca(certificates, disk)
     secure = serve_release.serve(files, certificates / "server.pem", certificates / "server.key", cuts={"/big.bin": cut})
     rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
@@ -7850,6 +7850,14 @@ def slow_radio_check(args):
           f"silent, the station joined once it answered, scanning by itself first; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
+def _roots_with_test_ca(certificates, disk):
+    # Mozilla's public roots as the image ships them (000-NET-0046), with the test CA added as an owner adds a root:
+    # the suites check that tls takes the whole store; returns how many roots it holds.
+    store = (ROOT / "third_party/roots/cacert.pem").read_bytes() + b"\n" + (certificates / "ca.pem").read_bytes()
+    (disk / "tlsroots.pem").write_bytes(store)
+    return store.count(b"-----BEGIN CERTIFICATE-----")
+
+
 def _certificates(directory):
     # A test CA (RSA) and a server certificate it signs (ECDSA P-256) for mind.test and 10.0.2.2; a second CA nobody
     # trusts and a server certificate from it for the same names.
@@ -8267,7 +8275,7 @@ def tls_suite(args, disk):
     # one; without RDRAND both services fail closed.
     certificates = Path(tempfile.mkdtemp(prefix="mind-tls-"))
     _certificates(certificates)
-    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    roots = _roots_with_test_ca(certificates, disk)
     good, _ = _https_server(certificates, "server")
     rogue, _ = _https_server(certificates, "rogue")
     asking, asking_context = _https_server(certificates, "server")
@@ -8290,7 +8298,7 @@ def tls_suite(args, disk):
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
     try:
         require(vm.service_logs("keystore", "DEVICE KEY READY"), "[KEYSTORE] DEVICE KEY READY: MIND ")
-        require(vm.service_logs("tls", "[TLS] READY"), f"[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM tlsroots.pem, RANDOM FROM {entropy}")
+        require(vm.service_logs("tls", "[TLS] READY"), f"[TLS] READY: TLS 1.3 CLIENT, {roots} ROOTS FROM tlsroots.pem, RANDOM FROM {entropy}")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
         page = vm.command(f"https 10.0.2.2:{ports['good']} /secure mind.test")
         for line in ("HTTPS: mind.test VERIFIED, TLS 1.3 SUITE", "HTTP/1.0 200 OK", "hello from the host: /secure to nobody"):

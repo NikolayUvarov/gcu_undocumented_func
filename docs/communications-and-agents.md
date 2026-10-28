@@ -29,7 +29,7 @@ The maintainer, 2026-10-25:
 
   This plan follows them; it does not repeat their designs.
 - **In the system today:**
-  - the TLS 1.3 client service `tls`, which verifies servers against `tlsroots.pem` on the boot disk;
+  - the TLS 1.3 client service `tls`, which verifies servers against `tlsroots.pem` on the boot disk, where the image ships Mozilla's public roots (000-NET-0046);
   - `libmind`'s HTTP client (GET with resume, chunked bodies, keep-alive), `json` and `inflate`;
   - the `parse` service, for untrusted input in a session of its own (track D);
   - the network policy's flow grants by name (351-NET-0003);

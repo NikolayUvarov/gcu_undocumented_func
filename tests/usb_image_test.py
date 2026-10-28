@@ -43,6 +43,7 @@ for licence in [root / "LICENSE-MIT", root / "LICENSE-APACHE", root / "THIRD_PAR
     put(f"LICENSES/{licence.name}", licence.read_bytes())
 put("voice/model.bin", b"model")
 put("voice/commands.txt", b"commands\n")
+put("tlsroots.pem", b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
 put("MANIFEST", "".join(f"file {name} 0\n" for name in ["kernel.elf", *boot]).encode())
 put("MANIFEST.SIG", b"signature")
 '''
