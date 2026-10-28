@@ -289,11 +289,20 @@ fn clock(run: &mut Run) {
         (Some((y, _, _)), _) => fail(format!("the year is {}: set the clock (date set)", y)),
         _ => fail(String::from("the RTC service did not answer")),
     });
-    // The RTC moves with the monotonic clock: about 1 s over 1.2 s.
-    let (s0, t0) = (mind::rtc::seconds_since_midnight(), now());
-    while now() - t0 < 1_200_000_000 { mind::time::sleep(100); }
-    run.report("the RTC advances", match (s0, mind::rtc::seconds_since_midnight()) {
-        (Some(a), Some(b)) => { let moved = (b + 86_400 - a) % 86_400; if (1..=2).contains(&moved) { pass(format!("{} s in {}", moved, report::duration(now() - t0))) } else { fail(format!("{} s in {}", moved, report::duration(now() - t0))) } }
+    // The RTC moves with the monotonic clock. Both reads lie in the window from before the first to after the second, at
+    // least 1.2 s apart, so its seconds move at least 1 and at most the window's whole seconds rounded up (176-KRN-0181).
+    let t0 = now();
+    let s0 = mind::rtc::seconds_since_midnight();
+    let asked = now();
+    while now() - asked < 1_200_000_000 { mind::time::sleep(100); }
+    let s1 = mind::rtc::seconds_since_midnight();
+    let window = now() - t0;
+    run.report("the RTC advances", match (s0, s1) {
+        (Some(a), Some(b)) => {
+            let moved = (b + 86_400 - a) % 86_400;
+            let text = format!("{} s in {}", moved, report::duration(window));
+            if moved >= 1 && moved as u64 <= window.div_ceil(1_000_000_000) { pass(text) } else { fail(text) }
+        }
         _ => fail(String::from("the RTC service did not answer")),
     });
     let (_, resolution, hz) = mind::time::clock_info();
