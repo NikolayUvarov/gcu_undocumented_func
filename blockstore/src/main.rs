@@ -4,7 +4,7 @@
 // log on a block device (store.rs); nothing stored is overwritten and every block read is checked against its CID.
 // Serves idl/blockstore.wit to the rights in each client's badge (mind::blockstore, 300-STO-0004); every refusal is
 // logged. Leases are measured on the monotonic clock (303-STO-0001); a commit changes several names at once (304-STO-0007);
-// the current names are listed by prefix, 16 at a time (300-STO-0018).
+// the current names are listed by prefix, 16 at a time (300-STO-0018); each write says how far it reached (307-STO-0019).
 // A medium it cannot mount leaves it running and answering every request with the reason (305-STO-0008). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 mod store;
 
@@ -15,7 +15,7 @@ use cid::Cid;
 use mind::abi::BootInfo;
 use mind::block::Device as Client;
 use mind::blockstore::{allowed, Operation};
-use mind::idl::blockstore::{self, Collected, Error, Head as Current, Kept, Named, Pinned, Request, Stats, Usage};
+use mind::idl::blockstore::{self, Collected, Committed, Durability, Error, Head as Current, Kept, Named, PinTaken, Pinned, Published, Request, Stats, Usage};
 use mind::idl::codec::{List, Text};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
@@ -98,8 +98,15 @@ fn main(_info: &'static BootInfo) {
          &mut *core::ptr::addr_of_mut!(RECORD), &mut *core::ptr::addr_of_mut!(WALK), &mut *core::ptr::addr_of_mut!(SCRATCH),
          &mut *core::ptr::addr_of_mut!(OUT))
     };
+    // How far a write reaches is the medium's: nothing outlives a reset on a RAM disk; elsewhere the driver acknowledged
+    // a flush after it, and what that reaches is the driver's to state (307-STO-0019).
+    let mut durability = Durability::Volatile;
     let mounted = match Client::open(Endpoint(BLOCK)) {
-        Ok(client) => { let index = index_for(client.sectors()); Store::mount(Medium(client), index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()) }
+        Ok(client) => {
+            if client.kind() != mind::block::KIND_RAM { durability = Durability::Flushed; }
+            let index = index_for(client.sectors());
+            Store::mount(Medium(client), index, heads, pinned, runs, record, walk, mind::time::monotonic_ns())
+        }
         Err(_) => Err(store::Error::Device),
     };
     // Without a medium every request is answered with the reason, so clients are not left waiting.
@@ -107,7 +114,7 @@ fn main(_info: &'static BootInfo) {
         Ok(mut store) => {
             store.renew(mind::time::monotonic_ns());
             let s = store.stats();
-            mind::println!("[BLOCKSTORE] READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={}", s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged);
+            mind::println!("[BLOCKSTORE] READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={} DURABILITY={}", s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged, mind::blockstore::class(durability as u8));
             Ok(store)
         }
         Err(e) => { mind::println!("[BLOCKSTORE] NOT MOUNTED: {:?}", e); Err(error(e)) }
@@ -163,7 +170,7 @@ fn main(_info: &'static BootInfo) {
                 // Unmounted, the store says why rather than report an empty store (305-STO-0008).
                 let stats = store.as_ref().map_err(|e| *e).map(|s| {
                     let s = s.stats();
-                    Stats { blocks: s.blocks, bytes: s.bytes, used: s.used, sectors: s.sectors, corrupt: s.corrupt, damaged: s.damaged, capacity: s.capacity, names: s.names }
+                    Stats { blocks: s.blocks, bytes: s.bytes, used: s.used, sectors: s.sectors, corrupt: s.corrupt, damaged: s.damaged, capacity: s.capacity, names: s.names, durability }
                 });
                 blockstore::reply_stat(call, stats.as_ref().map_err(|e| *e))
             }
@@ -179,9 +186,9 @@ fn main(_info: &'static BootInfo) {
                     let s = store.as_mut().map_err(|e| *e)?;
                     let version = s.publish(name.as_str().as_bytes(), expected, &root, badge).map_err(error)?;
                     mind::println!("[BLOCKSTORE] PUBLISHED {} VERSION {} ROOT {} BY PID {}", name, version, root, pid);
-                    Ok(version)
+                    Ok(Published { version, durability })
                 });
-                blockstore::reply_publish(call, version)
+                blockstore::reply_publish(call, version.as_ref().map_err(|e| *e))
             }
             Ok((Request::Resolve { name }, call)) => {
                 let head = store.as_ref().map_err(|e| *e).and_then(|s| s.resolve(name.as_str().as_bytes()).map_err(error));
@@ -191,7 +198,7 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Unpublish { name, expected }, call)) => {
                 let version = store.as_mut().map_err(|e| *e).and_then(|s| s.unpublish(name.as_str().as_bytes(), expected, badge).map_err(error));
                 if let Ok(v) = version { mind::println!("[BLOCKSTORE] REMOVED {} VERSION {} BY PID {}", name, v, pid); }
-                blockstore::reply_unpublish(call, version)
+                blockstore::reply_unpublish(call, version.map(|version| Published { version, durability }).as_ref().map_err(|e| *e))
             }
             Ok((Request::History { name }, call)) => {
                 let mut kept = [Kept::default(); store::HISTORY];
@@ -207,9 +214,9 @@ fn main(_info: &'static BootInfo) {
                 let id = parse(root).and_then(|root| {
                     let id = store.as_mut().map_err(|e| *e)?.pin(&root, badge).map_err(error)?;
                     mind::println!("[BLOCKSTORE] PINNED {} AS {} BY PID {} (BADGE {})", root, id, pid, badge);
-                    Ok(id)
+                    Ok(PinTaken { id, durability })
                 });
-                blockstore::reply_pin(call, id)
+                blockstore::reply_pin(call, id.as_ref().map_err(|e| *e))
             }
             Ok((Request::Unpin { id }, call)) => {
                 let done = store.as_mut().map_err(|e| *e).and_then(|s| s.unpin(id, badge).map_err(error));
@@ -248,7 +255,8 @@ fn main(_info: &'static BootInfo) {
                     }
                     Ok(versions)
                 });
-                blockstore::reply_commit(call, versions.as_ref().map(|v| &v[..updates.len()]).map_err(|e| *e))
+                let committed = versions.map(|v| Committed { versions: List::from_slice(&v[..updates.len()]).unwrap_or_default(), durability });
+                blockstore::reply_commit(call, committed.as_ref().map_err(|e| *e))
             }
             Ok((Request::Snapshot { names }, call)) => {
                 let mut heads = [Current::default(); COMMIT_MAX];

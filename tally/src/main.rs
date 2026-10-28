@@ -46,7 +46,7 @@ impl checkpoint::Store for Remote {
     fn commit(&mut self, names: [&str; 2], expected: u64, roots: [Cid; 2]) -> Result<u64, Error> {
         let updates = [0, 1].map(|k| Update { name: Text::new(names[k]).unwrap_or_default(), expected, root: List::from_slice(&roots[k].to_bytes()).unwrap_or_default() });
         match blockstore::commit(STORE, &updates) {
-            Ok(Ok(v)) => v.as_slice().first().copied().ok_or(Error::Store),
+            Ok(Ok(done)) => done.versions.as_slice().first().copied().ok_or(Error::Store),
             Ok(Err(blockstore::Error::Conflict)) => Err(Error::Fenced),
             _ => Err(Error::Store),
         }
