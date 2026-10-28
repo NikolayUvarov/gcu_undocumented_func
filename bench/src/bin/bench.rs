@@ -16,7 +16,7 @@ use mind::idl::{loader, sysinfo, video};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_CAMERA);
+mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_CAMERA | REQUEST_OWN);
 
 const GROUPS: [(&str, &str); 4] = [("files", "Files"), ("services", "Service round trips"), ("crypto", "Hashing"), ("camera", "The camera")];
 const USAGE: &str = "usage: bench [files|services|crypto|camera …] [--quick]";

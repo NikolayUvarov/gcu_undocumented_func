@@ -3,7 +3,7 @@
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use uefi::prelude::*;
-use uefi::proto::console::gop::{GraphicsOutput, Mode, ModeInfo, PixelFormat};
+use uefi::proto::console::gop::{GraphicsOutput, ModeInfo, PixelFormat};
 use uefi::proto::console::text::{Key, ScanCode};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 #[cfg(target_arch = "x86_64")]
@@ -12,7 +12,7 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
+use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod edid; mod elf_reloc; mod slots; mod verify;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -126,7 +126,8 @@ impl core::fmt::Display for Shown {
 // The screen's GOP, as Linux's EFI stub picks it (find_gop): the first of an active console output with a linear
 // framebuffer, else the first with one, else the first. With two GPUs (a MacBook Pro's) or the console splitter's own
 // GOP the first one listed may not be the screen's. Opened without taking it from the console: progress keeps showing.
-// Keeps the firmware's mode if it has a linear framebuffer, else switches to the largest such mode up to 1920x1200.
+// Sets the monitor's preferred mode from the output's EDID when it is listed with a linear framebuffer (211-PRT-0011);
+// else keeps the firmware's mode if it has one, else switches to the largest such mode up to 1920x1200.
 fn select_display(system_table: &SystemTable<Boot>) -> Result<(*mut u32, ModeInfo), &'static str> {
     let services = system_table.boot_services();
     let handles = services.locate_handle_buffer(SearchType::from_proto::<GraphicsOutput>()).map_err(|_| "no graphics output")?;
@@ -146,15 +147,61 @@ fn select_display(system_table: &SystemTable<Boot>) -> Result<(*mut u32, ModeInf
         if usable && linear.is_none() { linear = Some(index); }
     }
     let chosen = console.or(linear).unwrap_or(0);
-    let mut gop = open(*handles.get(chosen).ok_or("no graphics output")?).map_err(|_| "cannot open graphics output")?;
-    if !drawable(&gop.current_mode_info()) {
-        let area = |mode: &Mode| { let (w, h) = mode.info().resolution(); if w <= 1920 && h <= 1200 { w * h } else { 0 } };
-        let best = gop.modes(services).filter(|mode| drawable(mode.info())).max_by_key(area).ok_or("no mode with a linear framebuffer (BltOnly)")?;
-        gop.set_mode(&best).map_err(|_| "cannot set a mode with a linear framebuffer")?;
+    let handle = *handles.get(chosen).ok_or("no graphics output")?;
+    let mut gop = open(handle).map_err(|_| "cannot open graphics output")?;
+    let preferred = preferred_mode(system_table, handle, chosen);
+    let mut modes = [(0usize, 0usize, false); MODES_MAX];
+    let mut count = 0;
+    for mode in gop.modes(services).take(MODES_MAX) { let (w, h) = mode.info().resolution(); modes[count] = (w, h, drawable(mode.info())); count += 1; }
+    let current = gop.current_mode_info();
+    let (n, why) = match edid::choose(&modes[..count], drawable(&current), preferred) {
+        edid::Choice::Preferred(n) => (n, "THE MONITOR'S PREFERRED"),
+        edid::Choice::Largest(n) => (n, "THE FIRMWARE'S HAS NO LINEAR FRAMEBUFFER: THE LARGEST UP TO 1920x1200"),
+        edid::Choice::Keep => (usize::MAX, if preferred.is_some() { "THE PREFERRED NOT LISTED WITH A LINEAR FRAMEBUFFER, OR LARGER THAN 2880x1800" } else { "NO PREFERRED MODE" }),
+        edid::Choice::Nothing => return Err("no mode with a linear framebuffer (BltOnly)"),
+    };
+    let (w, h, _) = if n == usize::MAX { (current.resolution().0, current.resolution().1, true) } else { modes[n] };
+    if n != usize::MAX && (w, h) != current.resolution() {
+        let mode = gop.modes(services).nth(n).ok_or("the chosen mode is gone")?;
+        gop.set_mode(&mode).map_err(|_| "cannot set a mode with a linear framebuffer")?;
+        say(system_table, format_args!("{} MODES; SET {}x{}: {}", count, w, h, why));
+    } else {
+        say(system_table, format_args!("{} MODES; KEPT THE FIRMWARE'S {}x{}: {}", count, w, h, if n == usize::MAX { why } else { "THE MONITOR'S PREFERRED" }));
     }
     let (fb_ptr, info) = (gop.frame_buffer().as_mut_ptr().cast::<u32>(), gop.current_mode_info());
     say(system_table, format_args!("USING GOP {}: {}", chosen, Shown(info, fb_ptr as u64)));
     Ok((fb_ptr, info))
+}
+
+// The modes of one output the loader looks at; a GOP lists a few dozen.
+const MODES_MAX: usize = 128;
+
+// The monitor's EDID as the firmware passes it on an output's handle: the active one (what the output uses, possibly
+// overridden) or the discovered one (read from the monitor), UEFI 2.x section 12.9.
+#[repr(C)]
+#[uefi::proto::unsafe_protocol("bd8c1056-9f36-44ec-92a8-a6337f817986")]
+struct EdidActive { size: u32, edid: *const u8 }
+#[repr(C)]
+#[uefi::proto::unsafe_protocol("1c0c34f6-d380-41fa-a049-8ad06c1a66aa")]
+struct EdidDiscovered { size: u32, edid: *const u8 }
+
+// The preferred width and height from the output's EDID, with a line that says where it came from or why there is none.
+fn preferred_mode(system_table: &SystemTable<Boot>, handle: Handle, index: usize) -> Option<(usize, usize)> {
+    let services = system_table.boot_services();
+    let params = OpenProtocolParams { handle, agent: services.image_handle(), controller: None };
+    let bytes = |size: u32, edid: *const u8| (size >= 128 && !edid.is_null()).then(|| unsafe { core::slice::from_raw_parts(edid, size as usize) });
+    let (source, edid) = if let Some(e) = unsafe { services.open_protocol::<EdidActive>(params, OpenProtocolAttributes::GetProtocol) }.ok().and_then(|e| bytes(e.size, e.edid)) {
+        ("ACTIVE", e)
+    } else if let Some(e) = unsafe { services.open_protocol::<EdidDiscovered>(OpenProtocolParams { handle, agent: services.image_handle(), controller: None }, OpenProtocolAttributes::GetProtocol) }.ok().and_then(|e| bytes(e.size, e.edid)) {
+        ("DISCOVERED", e)
+    } else {
+        say(system_table, format_args!("GOP {}: NO EDID", index));
+        return None;
+    };
+    match edid::preferred(edid) {
+        Ok((w, h)) => { say(system_table, format_args!("GOP {}: EDID ({}, {} BYTES): THE MONITOR PREFERS {}x{}", index, source, edid.len(), w, h)); Some((w, h)) }
+        Err(why) => { say(system_table, format_args!("GOP {}: EDID ({}, {} BYTES) WITHOUT A PREFERRED MODE: {:?}", index, source, edid.len(), why)); None }
+    }
 }
 
 fn halt() -> ! {

@@ -10751,9 +10751,14 @@ def boot_suite(args, disk):
                      r"MIND CORE BOOT: GOP 0: \d+x\d+ STRIDE \d+ BLT ONLY FB 0x0+ CONSOLE\n",
                      r"MIND CORE BOOT: USING GOP 1: \d+x\d+ STRIDE \d+ BGR FB 0x[0-9A-F]{16}\n", r"MIND CORE BOOT: \d+ CPUS; EXITING BOOT SERVICES\n"):
             assert re.search(line, log), (line, log[-3000:])
+        # 211-PRT-0011: the output's EDID (or its absence) and the mode the loader set or kept, each named.
+        edid = re.search(r"MIND CORE BOOT: (GOP 1: (?:NO EDID|EDID \((?:ACTIVE|DISCOVERED), \d+ BYTES\)[^\n]*))\n", log)
+        mode = re.search(r"MIND CORE BOOT: (\d+ MODES; (?:SET|KEPT THE FIRMWARE'S) \d+x\d+: [^\n]+)\n", log)
+        assert edid and mode, log[-3000:]
     finally:
         vm.close()
-    print("PASS: bootloader takes the GOP of a console output with a linear framebuffer, not the first listed; its progress lines show on the console", flush=True)
+    print(f"PASS: bootloader takes the GOP of a console output with a linear framebuffer, not the first listed; its progress lines show on the console; "
+          f"{edid[1]}; {mode[1]}", flush=True)
     # 351-UPD-0006: slots A and B on a raw disk, where the bootloader counts a trial's tries and falls back.
     def boot_image(image, until):
         vm = VM(args, str(image), raw=True, snapshot=False, prompt=False)

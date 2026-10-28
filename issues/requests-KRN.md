@@ -4,7 +4,7 @@
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
-The request on `bcm_wifi`'s DMA region and interrupt became [550-KRN-0091](550-KRN-0091-bcm-wifi-dma-and-its-interrupt.md) (2026-10-12).
+The request on `bcm_wifi`'s DMA region and interrupt became [550-KRN-0091](550-KRN-0091-bcm-wifi-dma-and-its-interrupt.md) (2026-10-12). NRL's request for its host checks in CI became [900-KRN-0174](900-KRN-0174-nrl-checks-in-ci.md) (2026-10-28).
 
 ## A PS/2 key press lost once on its way to `wm` (x86, after 000-KRN-0083)
 
@@ -53,22 +53,6 @@ bounded integration dependency of DRV-0031/0032, not ownership of the remaining
 kernel backlog. No change is sent to the kernel owner's branch. Physical
 MacBook/Ryzen evidence and the deferred ARM gate remain open.
 
-
-## NRL: add the first Rust numerical workspace to the host checks
-
-**From:** NRL / Codex, 2026-10-25 · **For:** [900](900-neural-representation-lab.md), 900-NRL-0003 and 0004 · **Owner to number:** KRN (CI/scripts).
-
-The first independent workspace is under `nrl/`, with portable crates and a host runner. Please add its explicit checks to the appropriate CI/host-test entry points when the NRL branch is integrated:
-
-- `cargo test --manifest-path nrl/Cargo.toml --locked` (includes stored-tensor and independent numerical-gradient tests; no Python or model download).
-- `cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target x86_64-unknown-none`.
-- The corresponding portable build for `aarch64-unknown-none-softfloat`, in a suitable build group.
-
-`bash nrl/tools/check.sh` combines those checks and a fresh host demonstration. The workspace is not discovered by the existing host scripts. NRL changes none of the owning track's build/CI scripts itself. A cross-built rlib is not a native OS test; an nnd smoke test remains later work with APP. The recorded first checks are in `nrl/reports/cpu-f64-2026-10-25.json`.
-
-NRL update (2026-10-26, 900-NRL-0012–0016): the same explicit check entry now covers **70 host tests**, two portable rlibs and fresh decoder/calibration/continuation/two-task benchmarking/six-plan search/recovery/check/replay cycles. No network or Python is required after locked dependencies are cached; the pinned permissively licensed small model/tokenizer and oracles are committed. Please run `bash nrl/tools/check.sh` explicitly during landing until CI wiring is integrated. [Latest evidence](../nrl/reports/recovery-2026-10-26.json). No KRN-owned scripts were changed by NRL.
-
-NRL T11–T13 host update (2026-10-26): `bash nrl/tools/check.sh` now passes **82 tests**, builds both `nrl-repr` and no_std/no_alloc `nrl-runtime` for both bare-metal targets, and runs the prior pipelines plus budgeted graph execution, fixed paired decoder profiling and embedding/retrieval import/prune/benchmark/compare. Please keep this explicit candidate check until CI wiring is integrated. No KRN-owned source or script was changed. Latest [evidence](../nrl/reports/embedding-2026-10-26.json). Native nnd/IDL and named-target acceptance remain an APP integration request.
 
 ## The store's own partition: media classified and a bounded grant (for 307)
 
