@@ -362,6 +362,33 @@ fn files(run: &mut Run) {
         Err(e) => fail(format!("the loader did not answer: {:?}", e)),
     };
     run.report("programs on the disk", verdict);
+    own(run);
+}
+
+// Its own directory, system/own/check/ (000-KRN-0170): each run counts itself there, and lists what is there, so a
+// second run and another program's directory show; the other programs' are hidden from its files client.
+fn own(run: &mut Run) {
+    use mind::fs::own;
+    if !own::given() { return run.report("its own directory", skip(String::from("none given: run check by its name"))); }
+    let verdict = (|| -> Result<String, mind::fs::Error> {
+        let mut text = [0u8; 16];
+        let before = own::read("runs.txt", &mut text).ok().and_then(|n| core::str::from_utf8(&text[..n]).ok()?.trim().parse::<u64>().ok()).unwrap_or(0);
+        own::write("runs.txt", format!("{}\n", before + 1).as_bytes())?;
+        let n = own::read("runs.txt", &mut text)?;
+        let after = core::str::from_utf8(&text[..n]).ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
+        let mut names = Vec::new();
+        own::list(|e| names.push(String::from_utf8_lossy(e.name).to_lowercase()))?;
+        Ok(if after == before + 1 { format!("run {}; it holds {}", after, names.join(" ")) } else { format!("wrote {}, read {}", before + 1, after) })
+    })();
+    run.report("its own directory", match verdict {
+        Ok(detail) if detail.starts_with("run ") => pass(detail),
+        Ok(detail) => fail(detail),
+        Err(e) => fail(format!("{:?}", e)),
+    });
+    run.report("system/own/ hidden", match mind::fs::list("system/own", |_| ()) {
+        Err(e) => pass(format!("system/own/ refused to its files client ({:?})", e)),
+        Ok(n) => fail(format!("system/own/ listed: {} entries", n)),
+    });
 }
 
 fn services(run: &mut Run, info: &mind::BootInfo) {
