@@ -1,6 +1,6 @@
 # 550-DRV-0042 — `rtw88_wifi`: the DEXP's RTL8821CE Wi-Fi as a `wlanhw` radio
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 (the maintainer's first, 2026-10-27) · **Status:** in progress (2026-10-27) · **Blocked by:** `KRN`: a boot image and `init`'s grant for `10ec:c821` (announced on `internal-dev-messages`, 2026-10-27; to be asked with the image's name and DMA size) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-10.2, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 (the maintainer's first, 2026-10-27) · **Status:** in progress (2026-10-27): runs on the DEXP · **Blocked by:** — (`KRN`'s 550-KRN-0172 is in `fast-test`) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-10.2, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -84,7 +84,25 @@ A new boot service, `rtw88_wifi`, ported from Linux v6.12's `rtw88` (`adc218676e
     - the filter;
     - the power sequences' writes and waits;
     - the rings' buffer descriptors.
-- **Blocked by `KRN`:** the boot image and `init`'s grant. Nothing runs on the DEXP until then (asked on `internal-dev-messages`).
+- **2026-10-27, `KRN`'s boot image and grant:** `550-KRN-0172`, ABI 21, in `fast-test` 4986bc7e.
+- **2026-10-27, the first run on the DEXP** (a disk written from `fast-test` 4986bc7e, `data/firmware/rtw88/` copied):
+  - **The download stopped** at its first reserved page: `BCN_VALID` at 0x204 never set.
+    - The beacon ring's buffer descriptor had only its first segment, the TX descriptor.
+    - rtw88 fills the second one too, the chunk itself; the data rings already did.
+    - Fixed in 2ca6b542, with a host test (`fast-test` f738273b).
+  - **The fixed driver over the cable** (`effector485` `replace`, built for ABI 21):
+    - the chip: cut 4, one path;
+    - firmware 24.11 running (`MCUFW_CTRL C078`);
+    - the eFuse: RFE 0, crystal 0x20, MAC `1C:79:2D:F0:6B:A5`;
+    - IQK reported done.
+  - **The radio:**
+    - it hears about 260 buffers in 10 s on channel 1;
+    - `wlan`, started again (it had been quarantined after three starts without a radio), scanned and joined the kept network on channel 8;
+    - DHCP gave 192.168.2.141/24;
+    - the Effector agent connected to its server, pinned, and sends telemetry;
+    - frames sent are acknowledged (21 of 21, 29 of 29 in 10 s), with no bad FCS.
+  - **Until a boot image carries 2ca6b542,** a restart brings the failing driver back. The `replace` lasts until the next boot.
+  - **Seen on the way:** the eFuse's country code is `FF FF` (unset), and the log prints it as is.
 
 ## Acceptance criteria
 
