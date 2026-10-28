@@ -8,6 +8,7 @@
 //! removed; an owner (the badge) pins objects; what an owner retains is bounded by its quota (303-STO-0002..0004, 1.2).
 //! Several names change at once, all or none, and are read at one point (304-STO-0007, 1.3). The current names are
 //! listed by prefix, page by page (300-STO-0018, 1.4). A write says how far it reached, and 1.x is refused (307-STO-0019, 2.0).
+//! The records are sealed on the medium, and a volume key that does not open the superblock's check is refused (308-STO-0021, 2.1).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -17,7 +18,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:blockstore";
-pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+pub const VERSION: (u8, u8, u8) = (2, 1, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
@@ -26,13 +27,15 @@ const MAJOR: usize = 2;
 /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
 /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
 /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
-/// owner would retain more than its quota; nothing is published or pinned (1.2).
+/// owner would retain more than its quota; nothing is published or pinned (1.2). `key`: the store is not mounted,
+/// since its volume key does not open the superblock's check or comes from a source this build does not know; every
+/// request gets it (2.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NotFound = 0, Corrupt = 1, Full = 2, TooLarge = 3, ReadOnly = 4, Device = 5, Unsupported = 6, Rights = 7, Invalid = 8, Conflict = 9, Incomplete = 10, Quota = 11 }
+pub enum Error { #[default] NotFound = 0, Corrupt = 1, Full = 2, TooLarge = 3, ReadOnly = 4, Device = 5, Unsupported = 6, Rights = 7, Invalid = 8, Conflict = 9, Incomplete = 10, Quota = 11, Key = 12 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Corrupt), 2 => Some(Self::Full), 3 => Some(Self::TooLarge), 4 => Some(Self::ReadOnly), 5 => Some(Self::Device), 6 => Some(Self::Unsupported), 7 => Some(Self::Rights), 8 => Some(Self::Invalid), 9 => Some(Self::Conflict), 10 => Some(Self::Incomplete), 11 => Some(Self::Quota), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Corrupt), 2 => Some(Self::Full), 3 => Some(Self::TooLarge), 4 => Some(Self::ReadOnly), 5 => Some(Self::Device), 6 => Some(Self::Unsupported), 7 => Some(Self::Rights), 8 => Some(Self::Invalid), 9 => Some(Self::Conflict), 10 => Some(Self::Incomplete), 11 => Some(Self::Quota), 12 => Some(Self::Key), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
