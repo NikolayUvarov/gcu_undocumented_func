@@ -3418,6 +3418,11 @@ def store_suite(vm):
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
     # 307-STO-0019: on the RAM disk nothing outlives a reset, and the store says so in its log, stat and each write.
     require(logs, "DURABILITY=VOLATILE")
+    # 308-STO-0021: the blank medium got a volume key, and the store says its records are sealed under a key in the clear.
+    made = re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE (FROM \w+|WITHOUT \w+: DERIVED FROM THE MEDIUM AND THE TIME)", logs)
+    assert made, logs
+    print(f"INFO: the store's volume key: {made[0]}", flush=True)
+    require(logs, "SEALED, KEY IN THE CLEAR")
     require(blocks("stat"), "DURABILITY=VOLATILE")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
@@ -3458,7 +3463,10 @@ def store_suite(vm):
     # is checked whole after each restart (a check takes over a minute under TCG on aarch64).
     require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
     again = f"[BLOCKSTORE] READY BLOCKS={stat[1]} NAMES=1 SECTORS={stat[2]}/16384 CORRUPT=0 DAMAGED=0"
-    require(vm.service_logs("blockstore", again), again)
+    remounted = vm.service_logs("blockstore", again)
+    require(remounted, again)
+    # The key is found in the superblock: none is made again, and every record opens under it.
+    assert "VOLUME KEY MADE" not in remounted, remounted
     # 303-STO-0001: right after a mount every block's lease runs (60 s): no block goes; the earlier versions' name
     # records may. Before the long check below, which takes more than a lease under TCG on aarch64.
     first = blocks("collect")
@@ -3671,15 +3679,27 @@ def guest_ram(vm):
     return (0x4000_0000 if vm.args.arch == "aarch64" else 0), int(gibibytes(getattr(vm.args, "memory", None)) * (1 << 30))
 
 
-def poke(vm, needle, offset, port):
-    """Fault injection from the host (300-STO-0005): in every copy of `needle` in the guest's RAM, the byte `offset`
-    bytes after its start gets one bit flipped. The RAM is read with QMP pmemsave; the bytes are written through
-    QEMU's gdbstub in physical-memory mode, which stops the guest for the write. Returns how many copies changed."""
+def guest_dump(vm):
+    """The guest's RAM, read with QMP pmemsave."""
     base, size = guest_ram(vm)
     with tempfile.TemporaryDirectory() as temp:
         dump = Path(temp) / "ram"
         vm.hmp(f'pmemsave {base} {size} "{dump}"')
-        data = dump.read_bytes()
+        return dump.read_bytes()
+
+
+def poke(vm, needle, offset, port):
+    """Fault injection from the host (300-STO-0005): in every copy of `needle` in the guest's RAM, the byte `offset`
+    bytes after its start gets one bit flipped. Returns how many copies changed."""
+    return rewrite(vm, needle, lambda sector: sector[:offset] + bytes([sector[offset] ^ 0x10]) + sector[offset + 1:], port)
+
+
+def rewrite(vm, needle, edit, port):
+    """Every copy of `needle` in the guest's RAM gets the 512 bytes it starts replaced by `edit` of them. The RAM is read
+    with QMP pmemsave; the bytes are written through QEMU's gdbstub in physical-memory mode, which stops the guest for
+    the write. Returns how many copies changed."""
+    base, _ = guest_ram(vm)
+    data = guest_dump(vm)
     places, at = [], data.find(needle)
     while at >= 0:
         places.append(at)
@@ -3700,25 +3720,77 @@ def poke(vm, needle, offset, port):
                 pending += gdb.recv(4096)
         assert packet("Qqemu.PhyMemMode:1") == "OK"
         for at in places:
-            byte = data[at + offset] ^ 0x10
-            assert packet(f"M{base + at + offset:x},1:{byte:02x}") == "OK", "gdbstub refused the write"
+            old = data[at:at + 512]
+            for k, (was, now) in enumerate(zip(old, edit(old))):
+                if was != now:
+                    assert packet(f"M{base + at + k:x},1:{now:02x}") == "OK", "gdbstub refused the write"
         packet("D")
     return len(places)
 
 
-def record_header(chunk):
-    """A raw block's record header on the store's medium, up to its CID (layout 2, blockstore/src/store.rs)."""
-    import hashlib
+def chacha20(key, nonce, counter, data):
+    """ChaCha20 (RFC 8439, section 2.4) over `data` from block `counter`, written here for the storefaults suite."""
+    def rotl(v, c):
+        return ((v << c) & 0xffffffff) | (v >> (32 - c))
+    def quarter(s, a, b, c, d):
+        s[a] = (s[a] + s[b]) & 0xffffffff; s[d] = rotl(s[d] ^ s[a], 16)
+        s[c] = (s[c] + s[d]) & 0xffffffff; s[b] = rotl(s[b] ^ s[c], 12)
+        s[a] = (s[a] + s[b]) & 0xffffffff; s[d] = rotl(s[d] ^ s[a], 8)
+        s[c] = (s[c] + s[d]) & 0xffffffff; s[b] = rotl(s[b] ^ s[c], 7)
+    out = bytearray()
+    for k in range(0, len(data), 64):
+        state = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574, *struct.unpack("<8I", key), counter + k // 64, *struct.unpack("<3I", nonce)]
+        s = list(state)
+        for _ in range(10):
+            quarter(s, 0, 4, 8, 12); quarter(s, 1, 5, 9, 13); quarter(s, 2, 6, 10, 14); quarter(s, 3, 7, 11, 15)
+            quarter(s, 0, 5, 10, 15); quarter(s, 1, 6, 11, 12); quarter(s, 2, 7, 8, 13); quarter(s, 3, 4, 9, 14)
+        stream = struct.pack("<16I", *((a + b) & 0xffffffff for a, b in zip(s, state)))
+        out += bytes(x ^ y for x, y in zip(data[k:k + 64], stream))
+    return bytes(out)
+
+
+def sealed_record(vm, match):
+    """The frame (its first 44 bytes) of the block store's one sealed record in the guest's RAM whose first sector
+    `match` accepts once opened (308-STO-0021). The volume key is read from the superblock, where it is kept in the
+    clear for now; each frame's first sector is decrypted with it, its tag not checked."""
+    import hmac
+    # RFC 8439, 2.4.2: the cipher written here is ChaCha20.
+    sunscreen = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+    assert chacha20(bytes(range(32)), bytes(7) + b"\x4a" + bytes(4), 1, sunscreen)[:16].hex() == "6e2e359a2568f98041ba0728dd0d6981"
+    data = guest_dump(vm)
+    head = b"MIND-STO" + (3).to_bytes(2, "little") + (512).to_bytes(2, "little") + bytes([1])
+    keys, at = set(), data.find(head)
+    while at >= 0:
+        block = data[at:at + 172]
+        if hashlib.sha256(block[:140]).digest() == block[140:]:
+            keys.add(hmac.new(block[48:80], b"MIND-STO seal", hashlib.sha256).digest())
+        at = data.find(head, at + 1)
+    assert len(keys) == 1, f"{len(keys)} volume keys in the guest's RAM"
+    key = keys.pop()
+    found, at = set(), data.find(b"MIND-SLD\x03\x00")
+    while at >= 0:
+        frame = data[at:at + 44]
+        if match(chacha20(key, frame[16:28], 1, data[at + 44:at + 512])):
+            found.add(frame)
+        at = data.find(b"MIND-SLD\x03\x00", at + 1)
+    assert len(found) == 1, f"{len(found)} records match"
+    return found.pop()
+
+
+def block_record(chunk):
+    """Whether an opened first sector is the record of the raw block `chunk` (blockstore/src/store.rs, layout 3)."""
     cid = bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(chunk).digest()
-    return b"MIND-BLK" + (2).to_bytes(2, "little") + bytes(2) + len(chunk).to_bytes(4, "little") + cid
+    return lambda opened: opened[:8] == b"MIND-BLK" and opened[16:52] == cid
 
 
 def store_faults_suite(vm):
     """300-STO-0005: damage on the block store's own medium, injected from the host into the RAM disk's bytes in guest
     memory (no program can reach that medium). A flipped byte in a chunk is refused when read and when mounting; a
     collection refuses while a name's object lacks it; a put of the same bytes repairs it and a collection frees the
-    damaged copy. A damaged name record is reported, and the version before it stands. A damaged record header loses
-    that record alone: its sectors are counted damaged, and the records after it are found."""
+    damaged copy. A damaged name record is reported, and the version before it stands. A damaged frame loses that
+    record alone: its sectors are counted damaged, and the records after it are found. The records are sealed
+    (308-STO-0021): the host finds each by opening frames with the key the superblock holds, and a changed byte of a
+    sealed record makes it corrupt. A key that does not open the superblock's check is refused at mount."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
@@ -3731,8 +3803,9 @@ def store_faults_suite(vm):
     require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
     require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
     require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1")
-    # A byte of the third chunk, 100 bytes into its data: refused when read, and the name's object is no longer whole.
-    assert poke(vm, record_header(chunk(2)), 84 + 100, GDB_PORT) >= 1
+    # A byte of the third chunk, 100 bytes into its data: its seal no longer opens, so it is refused when read, and the
+    # name's object is no longer whole.
+    assert poke(vm, sealed_record(vm, block_record(chunk(2))), 44 + 84 + 100, GDB_PORT) >= 1
     require(blocks(f"check {root} pattern"), "blocks: check: Corrupt (the store: Corrupt)")
     require(vm.service_logs("blockstore", "[BLOCKSTORE] CORRUPT"), f"[BLOCKSTORE] CORRUPT {cid_raw(chunk(2))}")
     require(blocks("stat"), "CORRUPT=1 DAMAGED=0")
@@ -3743,33 +3816,33 @@ def store_faults_suite(vm):
     assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
     require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
     # A byte of the fifth chunk, found when a new instance mounts the medium.
-    assert poke(vm, record_header(chunk(4)), 84 + 100, GDB_PORT) >= 1
+    assert poke(vm, sealed_record(vm, block_record(chunk(4))), 44 + 84 + 100, GDB_PORT) >= 1
     require(restart(), "CORRUPT=1 DAMAGED=0")
     require(blocks(f"check {root} pattern"), "blocks: check: NotFound")
     require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
-    # A damaged name record: the second version's. A new instance counts its sector damaged; the first version stands.
+    # A damaged name record: the second version's. A new instance counts it corrupt, with the fifth chunk's copy; the
+    # first version stands.
     require(vm.command("write ram:v2.txt second"), "WROTE 7 BYTES")
     second = cid_raw(b"second\n")
     require(blocks("put ram:v2.txt"), f"PUT {second} SIZE 7")
     require(blocks(f"publish obj {second} 1"), "PUBLISHED obj VERSION 2")
     import base64
     second_bytes = base64.b32decode(second[1:].upper() + "=" * (-len(second[1:]) % 8))
-    name_record = b"MIND-REF" + (2).to_bytes(2, "little") + (3).to_bytes(2, "little") + (2).to_bytes(8, "little") + second_bytes
-    assert poke(vm, name_record, 100, GDB_PORT) >= 1
-    require(restart(), "DAMAGED=1")
+    name_record = b"MIND-REF" + (3).to_bytes(2, "little") + (3).to_bytes(2, "little") + (2).to_bytes(8, "little") + second_bytes
+    assert poke(vm, sealed_record(vm, lambda opened: opened.startswith(name_record)), 44 + 100, GDB_PORT) >= 1
+    require(restart(), "CORRUPT=2 DAMAGED=0")
     require(blocks("resolve obj"), f"obj VERSION 1 ROOT {root}")
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
-    # A damaged header, in the second chunk's CID: that record is lost whole, its 33 sectors counted damaged with the
-    # name record's one; the chunks after it are found. A collection first frees the fifth chunk's corrupt copy.
+    # A damaged frame, in the second chunk's magic: that record is lost whole, its 33 sectors counted damaged; the chunks
+    # after it are found. A collection first frees the fifth chunk's corrupt copy and the corrupt name record.
     assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
-    assert poke(vm, record_header(chunk(1)), 30, GDB_PORT) >= 1
-    require(restart(), f"CORRUPT=0 DAMAGED={1 + (84 + 16384 + 511) // 512}")
+    assert poke(vm, sealed_record(vm, block_record(chunk(1))), 2, GDB_PORT) >= 1
+    require(restart(), f"CORRUPT=0 DAMAGED={(44 + 84 + 16384 + 511) // 512}")
     require(blocks(f"check {root} pattern"), "blocks: check: NotFound")
     require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
-    # A damaged commit (304-STO-0007): a byte of its first entry; a new instance applies none of it, and counts its
-    # header and both entries damaged.
+    # A damaged commit (304-STO-0007): a byte of its header; a new instance applies none of it, and counts it corrupt.
     for path, text in (("ram:c1.txt", "first change"), ("ram:c2.txt", "second change")):
         require(vm.command(f"write {path} {text}"), f"WROTE {len(text) + 1} BYTES")
         require(blocks(f"put {path}"), f"PUT {cid_raw(text.encode() + bytes([10]))} SIZE {len(text) + 1}")
@@ -3777,15 +3850,15 @@ def store_faults_suite(vm):
     done = blocks(f"commit obj 1 {first} aux 0 {other}")
     for line in ("COMMITTED obj VERSION 2", "COMMITTED aux VERSION 1"):
         require(done, line)
-    txn = b"MIND-TXN" + (2).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(4)
-    assert poke(vm, txn, 512 + 100, GDB_PORT) >= 1
-    require(restart(), f"CORRUPT=0 DAMAGED={34 + 3}")
+    txn = b"MIND-TXN" + (3).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(4)
+    assert poke(vm, sealed_record(vm, lambda opened: opened.startswith(txn)), 44 + 100, GDB_PORT) >= 1
+    require(restart(), "CORRUPT=1 DAMAGED=33")
     snap = blocks("snapshot obj aux")
     for line in (f"obj VERSION 1 ROOT {root}", "aux NONE"):
         require(snap, line)
     print("PASS: block store damage injected on its medium: a chunk refused when read and when mounting, a collection "
           "refused meanwhile, a put repairs it; a damaged name record reported, the version before it stands; a damaged "
-          "header loses its record alone; a damaged commit changes no name", flush=True)
+          "frame loses its record alone; a damaged commit changes no name; every record found by opening its seal", flush=True)
     # 305-STO-0008: a crash. init restarts the killed store within its budget, and the new instance mounts the medium.
     old = vm.services()["blockstore"]
     starts = int(re.search(r"^blockstore\s+\d+\s+(\d+)", vm.command("svc", raw=True), re.M)[1])
@@ -3796,12 +3869,21 @@ def store_faults_suite(vm):
         time.sleep(.25)
     else:
         raise AssertionError("init did not restart the block store")
-    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "CORRUPT=0 DAMAGED=37")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "CORRUPT=1 DAMAGED=33")
     assert re.search(fr"^blockstore\s+\d+\s+{starts + 1}\s+running", vm.command("svc", raw=True), re.M)
     require(blocks("snapshot obj"), f"obj VERSION 1 ROOT {root}")
+    # Another key in the superblock, its digest made whole: it does not open the check, and the store says so to every
+    # request (308-STO-0021).
+    superblock = b"MIND-STO" + (3).to_bytes(2, "little") + (512).to_bytes(2, "little")
+    def other_key(sector):
+        changed = sector[:50] + bytes([sector[50] ^ 0x10]) + sector[51:140]
+        return changed + hashlib.sha256(changed).digest() + sector[172:]
+    assert rewrite(vm, superblock, other_key, GDB_PORT) >= 1
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "NOT MOUNTED"), "[BLOCKSTORE] NOT MOUNTED: Key")
+    require(blocks("stat"), "blocks: stat: Key")
     # A medium it cannot mount (sector 0's digest damaged): the store stays up and answers every request with the
     # reason, and the system, started from the boot volume, goes on without it (MC-6.8, Appendix B.4).
-    superblock = b"MIND-STO" + (2).to_bytes(2, "little") + (512).to_bytes(2, "little")
     assert poke(vm, superblock, 20, GDB_PORT) >= 1
     require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
     require(vm.service_logs("blockstore", "NOT MOUNTED"), "[BLOCKSTORE] NOT MOUNTED: Foreign")

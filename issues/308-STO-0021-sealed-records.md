@@ -12,8 +12,11 @@ Every record of the store is plain on its medium: blocks, CIDs, names, pins, com
 
 - **Layout 3 replaces layout 2,** which is refused by name, with no conversion code (AGENTS.md section 3).
 - **A sealed record:**
-  - a plain frame: magic, layout, domain (0 until [308-STO-0023](308-STO-0023-memory-domains.md)), the payload's length, a nonce of 12 random bytes and the tag;
-  - then the record of layout 2 (block, name, pin, commit or free marker) sealed with ChaCha20-Poly1305 (RFC 8439) under the volume key.
+  - a plain frame: magic, layout, domain (0 until [308-STO-0023](308-STO-0023-memory-domains.md)), the sectors the record covers, a nonce of 12 bytes and the tag;
+  - then the record of layout 2 (block, name, pin, commit or free marker) and the zeros up to the end of its last sector, sealed with ChaCha20-Poly1305 (RFC 8439) under the volume key.
+  - Changed while building (2026-10-28):
+    - **The nonce is derived, not random:** the first 12 bytes of an HMAC-SHA-256 of the associated data and the sealed bytes, under a key derived from the volume key (a synthetic nonce, as in SIV). The processor's random source is RDRAND or RNDR alone and fails closed (issue 103), and a qemu64 CPU and the i7-930 have neither: random nonces would leave the store unable to write there. A derived nonce repeats only for the same record at the same place, which seals to the same bytes.
+    - **The frame gives sectors, not a length,** and the zeros to the sector's end are sealed too: a length would tell a name record (192 bytes) from a pin (88) or a free marker (48).
   - **The associated data** is the frame and the record's first sector number, so a record moved to another place does not open.
   - **Nothing in the clear** but the frame: not the kind of a record, its CID, a name or a root.
 - **The superblock** carries the key's source and a check value, so a wrong key is refused at mount by its own reason (`key`, `blockstore.wit` 2.1), not as a store of damaged records.

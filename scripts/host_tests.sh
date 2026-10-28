@@ -8,7 +8,7 @@ rustc --edition=2021 --test tests/runtime.rs -o "$OUT/runtime-tests"
 "$OUT/runtime-tests"
 rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
-for test in heap keys tui viewer idl record rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid battery aml gpio pins wifi path video uvc iso_ring line beep console say jpeg script diag cid blockstore netpolicy dag checkpoint boot_slots http tpm fbank nn russian syntax shell image bench vfs_zone release models idl_fuzz updater json rtl8168 rtw88_tables rtw88_driver rtw89_firmware rtw89_power rtw89_fwcmd rtw89_mac rtw89_pcie rtw89_download rtw89_phy rtw89_iqk rtw89_calibration rtw89_channel_policy rtw89_channel_power rtw89_startup rtw89_pipeline rtw89_pipeline_mac rtw89_initial_phy rtw89_channel_rfk rtw89_station rtw89_calibration_policy rtw89_runtime_mac rtw89_phycap rtw89_rx rtw89_frames rtw89_data_mode rtw89_native_dma rtw89_connection rtw89_tx rtw89_post_mac rtw89_h2c rtw89_btc rtw89_btc_init rtw89_btc_reports rtw89_btc_codec rtw89_btc_control rtw89_btc_session rtw89_dpk realtek_probe fch_watchdog pci_control boot_abi io bcm_txwait serial usb_hub effector_session effector_policy effector_json effector_wire effector_config effector_journal effector_gateway effector_png effector_telemetry effector_bench zip wifijoin wlan_auto remote_marks services bt_hci edid sse multipart http_coding link_names; do
+for test in heap keys tui viewer idl record rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid battery aml gpio pins wifi path video uvc iso_ring line beep console say jpeg script diag cid netpolicy dag checkpoint boot_slots http tpm fbank nn russian syntax shell image bench vfs_zone release models idl_fuzz updater json rtl8168 rtw88_tables rtw88_driver rtw89_firmware rtw89_power rtw89_fwcmd rtw89_mac rtw89_pcie rtw89_download rtw89_phy rtw89_iqk rtw89_calibration rtw89_channel_policy rtw89_channel_power rtw89_startup rtw89_pipeline rtw89_pipeline_mac rtw89_initial_phy rtw89_channel_rfk rtw89_station rtw89_calibration_policy rtw89_runtime_mac rtw89_phycap rtw89_rx rtw89_frames rtw89_data_mode rtw89_native_dma rtw89_connection rtw89_tx rtw89_post_mac rtw89_h2c rtw89_btc rtw89_btc_init rtw89_btc_reports rtw89_btc_codec rtw89_btc_control rtw89_btc_session rtw89_dpk realtek_probe fch_watchdog pci_control boot_abi io bcm_txwait serial usb_hub effector_session effector_policy effector_json effector_wire effector_config effector_journal effector_gateway effector_png effector_telemetry effector_bench zip wifijoin wlan_auto remote_marks services bt_hci edid sse multipart http_coding link_names; do
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
@@ -24,6 +24,9 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -o "$OUT/rp2-link-tests" devices/rp2-link/
 "$OUT/rp2-link-tests"
 # The SSH client against OpenSSH's server, which its tests start on 127.0.0.1 (351-NET-0026): needs openssh-server.
 cargo test --quiet --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target"
+# The store's tests seal every record and time 100 000 puts: optimized, its checks of overflow and assertions kept (308-STO-0021).
+rustc --edition=2021 -O -C debug-assertions=on --test tests/blockstore_host.rs -o "$OUT/blockstore-tests"
+"$OUT/blockstore-tests"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"

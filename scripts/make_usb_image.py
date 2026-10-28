@@ -239,11 +239,13 @@ def add_log_partition(image, when):
 
 
 def store_superblock():
-    """The block store's superblock, as blockstore/src/store.rs writes it when it formats a medium: its magic, its layout
-    (read from that file), the sector size, and the SHA-256 of those 16 bytes."""
+    """The block store's superblock with no volume key yet, as blockstore/src/store.rs reads it (superblock(None)): its
+    magic, its layout (read from that file), the sector size, key source 0, the SHA-256 of those 16 bytes, zeros where
+    the key and its check go, and the SHA-256 of the 140 bytes before it. The store makes the key at its first mount."""
     layout = int(re.search(r"pub const LAYOUT: u16 = (\d+);", (ROOT / "blockstore/src/store.rs").read_text())[1])
-    head = b"MIND-STO" + struct.pack("<HH", layout, SECTOR) + bytes(4)
-    return (head + hashlib.sha256(head).digest()).ljust(SECTOR, b"\0")
+    head = b"MIND-STO" + struct.pack("<HHB", layout, SECTOR, 0) + bytes(3)
+    first = (head + hashlib.sha256(head).digest()).ljust(140, b"\0")
+    return (first + hashlib.sha256(first).digest()).ljust(SECTOR, b"\0")
 
 
 def add_store_partition(image):
