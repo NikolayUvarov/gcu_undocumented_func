@@ -3,42 +3,38 @@
 //! head itself (MC-11.11). `mind::http::get` checks whatever comes back against what it asked for (MC-11.5). Release
 //! channels and boot manifests to and from `mind::release` (351-NET-0011): the updater encodes what comes back again
 //! and compares it with the signed bytes. A `Session` is a parser process of one session's own (109-NET-0010).
-use crate::http::{self, Head, Range};
+use crate::http::{self, Encoding, Field, Head, Range, RetryAfter};
 use crate::idl::codec::{List, Text};
-use crate::idl::parse::{self, HttpHead, HttpResponse};
+use crate::idl::parse::{self, ContentCoding, HttpResponse, RetryKind};
 use crate::ipc::{Endpoint, Message};
 use crate::release;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-pub fn to_record(head: &Head) -> HttpHead {
+/// A head as parse.wit 2.0's `http-response` carries it (750-NET-0019, 000-NET-0047).
+pub fn to_response(head: &Head) -> HttpResponse {
     let (has_range, range_unsatisfied, range_start, range_end, range_total) = match head.range {
         None => (false, false, 0, 0, 0),
         Some(Range::Bytes { start, end, total }) => (true, false, start, end, total),
         Some(Range::Unsatisfied { total }) => (true, true, 0, 0, total),
     };
-    HttpHead { status: head.status, has_length: head.length.is_some(), length: head.length.unwrap_or(0), has_range, range_unsatisfied, range_start, range_end, range_total, chunked: head.chunked }
+    let encoding = match head.encoding { Encoding::Identity => ContentCoding::Identity, Encoding::Gzip => ContentCoding::Gzip, Encoding::Deflate => ContentCoding::Deflate, Encoding::Other => ContentCoding::Other };
+    let (retry, retry_after) = match head.retry_after { None => (RetryKind::None, 0), Some(RetryAfter::Seconds(s)) => (RetryKind::Seconds, s), Some(RetryAfter::Date(d)) => (RetryKind::Date, d) };
+    HttpResponse { status: head.status, has_length: head.length.is_some(), length: head.length.unwrap_or(0), has_range, range_unsatisfied, range_start, range_end, range_total,
+                   chunked: head.chunked, close: head.close, encoding, media: Text::new(head.media.as_str()).unwrap_or_default(),
+                   location: Text::new(head.location.as_str()).unwrap_or_default(), retry, retry_after }
 }
 
-pub fn from_record(record: &HttpHead) -> Head {
-    let range = match (record.has_range, record.range_unsatisfied) {
+/// The head a parser's `http-response` says; None if its media type or location is not what a head may carry.
+pub fn from_response(r: &HttpResponse) -> Option<Head> {
+    let range = match (r.has_range, r.range_unsatisfied) {
         (false, _) => None,
-        (true, true) => Some(Range::Unsatisfied { total: record.range_total }),
-        (true, false) => Some(Range::Bytes { start: record.range_start, end: record.range_end, total: record.range_total }),
+        (true, true) => Some(Range::Unsatisfied { total: r.range_total }),
+        (true, false) => Some(Range::Bytes { start: r.range_start, end: r.range_end, total: r.range_total }),
     };
-    Head { status: record.status, length: record.has_length.then_some(record.length), range, chunked: record.chunked, close: false }
-}
-
-/// A head with whether its connection closes after it (parse.wit 1.3, 750-NET-0019).
-pub fn to_response(head: &Head) -> HttpResponse {
-    let r = to_record(head);
-    HttpResponse { status: r.status, has_length: r.has_length, length: r.length, has_range: r.has_range, range_unsatisfied: r.range_unsatisfied,
-                   range_start: r.range_start, range_end: r.range_end, range_total: r.range_total, chunked: r.chunked, close: head.close }
-}
-
-pub fn from_response(r: &HttpResponse) -> Head {
-    let head = HttpHead { status: r.status, has_length: r.has_length, length: r.length, has_range: r.has_range, range_unsatisfied: r.range_unsatisfied,
-                          range_start: r.range_start, range_end: r.range_end, range_total: r.range_total, chunked: r.chunked };
-    Head { close: r.close, ..from_record(&head) }
+    let encoding = match r.encoding { ContentCoding::Identity => Encoding::Identity, ContentCoding::Gzip => Encoding::Gzip, ContentCoding::Deflate => Encoding::Deflate, ContentCoding::Other => Encoding::Other };
+    let retry_after = match r.retry { RetryKind::None => None, RetryKind::Seconds => Some(RetryAfter::Seconds(r.retry_after)), RetryKind::Date => Some(RetryAfter::Date(r.retry_after)) };
+    Some(Head { status: r.status, length: r.has_length.then_some(r.length), range, chunked: r.chunked, close: r.close, encoding,
+                media: Field::new(r.media.as_str())?, location: Field::new(r.location.as_str())?, retry_after })
 }
 
 /// A `mind::http::Parser` that asks the parser service at the endpoint (`SLOT_PARSE` in a program that asked for it).
@@ -47,7 +43,7 @@ pub struct Service(pub Endpoint);
 impl http::Parser for Service {
     fn head(&mut self, head: &[u8]) -> Result<Head, http::Error> {
         match parse::http_response(self.0, head) {
-            Ok(Ok(record)) => Ok(from_response(&record)),
+            Ok(Ok(record)) => from_response(&record).ok_or(http::Error::Head),
             Ok(Err(parse::Error::Malformed)) => Err(http::Error::Head),
             Err(_) => Err(http::Error::Parser),
         }

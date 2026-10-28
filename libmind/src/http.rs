@@ -10,6 +10,11 @@
 //! caller's headers within a bound and a body streamed from a `Source`; a response's body is read in pieces, framed by
 //! `Content-Length`, chunked, or (when the caller allows it) the end of the connection. The library frames only: the
 //! head is still the parser's, chunk-size lines and trailers are bounded and not interpreted.
+//!
+//! For API clients (000-NET-0047): a head also says the body's content coding, its media type, a redirect's `Location`
+//! and `Retry-After`; `redirect` applies the redirect rules (the caller follows, within its own flow grant); a request
+//! body of unknown length is sent chunked. Decoding a coded body, multipart bodies and Server-Sent Events are in
+//! `http_coding`, `multipart` and `sse`.
 
 /// The longest response head read.
 pub const HEAD_MAX: usize = 8192;
@@ -42,11 +47,68 @@ pub enum Error {
     Framing,
     /// The connection is closed: a new one is needed.
     Closed,
+    /// A content coding other than identity, gzip and deflate, or a coded body that does not decode.
+    Encoding,
+    /// A decoded body, or an event, larger than the caller's limit.
+    TooLarge,
+    /// A redirect that is not followed: no or a malformed `Location`, from HTTPS to HTTP, or more than `REDIRECTS_MAX`.
+    Redirect,
 }
 
 /// What a response head says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Head { pub status: u16, pub length: Option<u64>, pub range: Option<Range>, pub chunked: bool, pub close: bool }
+pub struct Head {
+    pub status: u16, pub length: Option<u64>, pub range: Option<Range>, pub chunked: bool, pub close: bool,
+    /// `Content-Encoding` (000-NET-0047).
+    pub encoding: Encoding,
+    /// `Content-Type`'s media type in lower case, without its parameters; empty when there is none.
+    pub media: Field<MEDIA_MAX>,
+    /// `Location` as the server wrote it; empty when there is none.
+    pub location: Field<LOCATION_MAX>,
+    /// `Retry-After`, when it is there and valid.
+    pub retry_after: Option<RetryAfter>,
+}
+
+impl Head {
+    /// A head with only a status: no length, range, coding, type, location or retry.
+    pub const fn status(status: u16) -> Self {
+        Head { status, length: None, range: None, chunked: false, close: false, encoding: Encoding::Identity, media: Field::EMPTY, location: Field::EMPTY, retry_after: None }
+    }
+}
+
+/// The longest media type and `Location` a head may carry.
+pub const MEDIA_MAX: usize = 64;
+pub const LOCATION_MAX: usize = 1024;
+
+/// A body's content coding (`Content-Encoding`): one coding at most; anything else is `Other`, which is not decoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoding { Identity, Gzip, Deflate, Other }
+
+/// `Retry-After`: a number of seconds, or a date as seconds since 1970-01-01 00:00:00 UTC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetryAfter { Seconds(u64), Date(u64) }
+
+/// Visible ASCII text of at most `N` bytes, kept in place.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Field<const N: usize> { bytes: [u8; N], len: u16 }
+
+impl<const N: usize> Field<N> {
+    pub const EMPTY: Self = Field { bytes: [0; N], len: 0 };
+    /// `text` if it is visible ASCII of at most `N` bytes.
+    pub fn new(text: &str) -> Option<Self> {
+        if text.len() > N || !text.bytes().all(|b| b.is_ascii_graphic()) { return None; }
+        let mut field = Self::EMPTY;
+        field.bytes[..text.len()].copy_from_slice(text.as_bytes());
+        field.len = text.len() as u16;
+        Some(field)
+    }
+    pub fn as_str(&self) -> &str { core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("") }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
+}
+
+impl<const N: usize> core::fmt::Debug for Field<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { core::fmt::Debug::fmt(self.as_str(), f) }
+}
 
 /// `Content-Range`: bytes `start` to `end` (inclusive) of `total`, or `*/total` (nothing satisfied the request).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +203,7 @@ pub fn parse_head(head: &[u8]) -> Result<Head, Error> {
     let version = words.next().filter(|v| *v == "HTTP/1.1" || *v == "HTTP/1.0").ok_or(Error::Head)?;
     let status = words.next().and_then(|c| (c.len() == 3).then(|| c.parse::<u16>().ok()).flatten()).ok_or(Error::Head)?;
     let (mut length, mut range, mut chunked) = (None, None, false);
+    let (mut encoding, mut media, mut location, mut retry_after) = (Encoding::Identity, Field::EMPTY, Field::EMPTY, None);
     // HTTP/1.0 closes unless it says keep-alive; HTTP/1.1 keeps the connection unless it says close.
     let (mut close, mut keep) = (false, false);
     for line in lines {
@@ -149,13 +212,123 @@ pub fn parse_head(head: &[u8]) -> Result<Head, Error> {
         if name.eq_ignore_ascii_case("content-length") { length = Some(number(value).ok_or(Error::Head)?); }
         else if name.eq_ignore_ascii_case("content-range") { range = Some(content_range(value).ok_or(Error::Head)?); }
         else if name.eq_ignore_ascii_case("transfer-encoding") && !value.eq_ignore_ascii_case("identity") { chunked = true; }
+        else if name.eq_ignore_ascii_case("content-encoding") { encoding = content_encoding(value); }
+        else if name.eq_ignore_ascii_case("content-type") { media = media_type(value).ok_or(Error::Head)?; }
+        else if name.eq_ignore_ascii_case("location") { location = Field::new(value).ok_or(Error::Head)?; }
+        // An invalid `Retry-After` is ignored, as RFC 9110 says of a field a recipient cannot use.
+        else if name.eq_ignore_ascii_case("retry-after") { retry_after = number(value).map(RetryAfter::Seconds).or_else(|| http_date(value).map(RetryAfter::Date)); }
         else if name.eq_ignore_ascii_case("connection") {
             for token in value.split(',').map(str::trim) {
                 if token.eq_ignore_ascii_case("close") { close = true; } else if token.eq_ignore_ascii_case("keep-alive") { keep = true; }
             }
         }
     }
-    Ok(Head { status, length, range, chunked, close: close || (version == "HTTP/1.0" && !keep) })
+    Ok(Head { status, length, range, chunked, close: close || (version == "HTTP/1.0" && !keep), encoding, media, location, retry_after })
+}
+
+// One coding, or none; `x-gzip` is gzip (RFC 9110 8.4.1.3).
+fn content_encoding(value: &str) -> Encoding {
+    let mut codings = value.split(',').map(str::trim).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("identity"));
+    match (codings.next(), codings.next()) {
+        (None, _) => Encoding::Identity,
+        (Some(c), None) if c.eq_ignore_ascii_case("gzip") || c.eq_ignore_ascii_case("x-gzip") => Encoding::Gzip,
+        (Some(c), None) if c.eq_ignore_ascii_case("deflate") => Encoding::Deflate,
+        _ => Encoding::Other,
+    }
+}
+
+// `type/subtype` in lower case, its parameters dropped.
+fn media_type(value: &str) -> Option<Field<MEDIA_MAX>> {
+    let media = value.split(';').next().unwrap_or("").trim();
+    let mut lower = [0u8; MEDIA_MAX];
+    if media.len() > MEDIA_MAX || media.split('/').count() != 2 { return None; }
+    for (out, b) in lower.iter_mut().zip(media.bytes()) { *out = b.to_ascii_lowercase(); }
+    Field::new(core::str::from_utf8(&lower[..media.len()]).ok()?)
+}
+
+/// An HTTP-date (RFC 9110 5.6.7) as seconds since 1970-01-01 00:00:00 UTC: IMF-fixdate (`Sun, 06 Nov 1994 08:49:37
+/// GMT`), and the obsolete RFC 850 (`Sunday, 06-Nov-94 08:49:37 GMT`) and asctime (`Sun Nov  6 08:49:37 1994`) forms,
+/// which a recipient must accept. A two-digit year is the one within 50 years of 2000.
+pub fn http_date(text: &str) -> Option<u64> {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let month = |m: &str| MONTHS.iter().position(|n| *n == m).map(|i| i as u64 + 1);
+    let clock = |t: &str| -> Option<u64> {
+        let mut parts = t.split(':');
+        let (h, m, s) = (parts.next()?, parts.next()?, parts.next()?);
+        if parts.next().is_some() || h.len() != 2 || m.len() != 2 || s.len() != 2 { return None; }
+        let (h, m, s) = (number(h)?, number(m)?, number(s)?);
+        (h < 24 && m < 60 && s < 61).then_some(h * 3600 + m * 60 + s.min(59))
+    };
+    let words: [&str; 6] = {
+        let mut w = [""; 6];
+        let mut n = 0;
+        for word in text.split(' ').filter(|w| !w.is_empty()) { if n == 6 { return None; } w[n] = word; n += 1; }
+        if n < 4 { return None; }
+        w
+    };
+    let (year, month, day, time) = if words[0].ends_with(',') && words[5] == "GMT" && words[1].len() == 2 {
+        // IMF-fixdate
+        (number(words[3])?, month(words[2])?, number(words[1])?, clock(words[4])?)
+    } else if words[0].ends_with(',') && words[3] == "GMT" && words[4].is_empty() {
+        // RFC 850: dd-Mon-yy
+        let mut d = words[1].split('-');
+        let (day, mon, yy) = (d.next()?, d.next()?, d.next()?);
+        if d.next().is_some() || day.len() != 2 || yy.len() != 2 { return None; }
+        let yy = number(yy)?;
+        (if yy < 50 { 2000 + yy } else { 1900 + yy }, month(mon)?, number(day)?, clock(words[2])?)
+    } else if !words[0].ends_with(',') && words[5].is_empty() && words[4].len() == 4 {
+        // asctime: Mon dd hh:mm:ss yyyy
+        (number(words[4])?, month(words[1])?, number(words[2])?, clock(words[3])?)
+    } else { return None };
+    if year < 1970 || !(1..=31).contains(&day) { return None; }
+    // Days since 1970-01-01 (Howard Hinnant's days_from_civil).
+    let (y, m) = (if month <= 2 { year - 1 } else { year }, month);
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = (era * 146_097 + doe).checked_sub(719_468)?;
+    Some(days * 86_400 + time)
+}
+
+/// How many redirects a client follows for one request.
+pub const REDIRECTS_MAX: u32 = 10;
+
+/// Where a redirect leads: the next URL, written into the caller's buffer, and the method and body to send there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Redirected { pub length: usize, pub method: Method, pub keep_body: bool, pub same_host: bool }
+
+/// The redirect a response asks for (RFC 9110 15.4): for 301, 302, 303, 307 and 308 with a `Location`, the URL it leads
+/// to, resolved against `from` and written into `out`; None for any other status. 303 turns any method but HEAD into GET
+/// without a body, and so do 301 and 302 for a POST (as browsers do); 307 and 308 keep the method and the body. A
+/// redirect from HTTPS to HTTP, or after `followed` reached `REDIRECTS_MAX`, is refused. Whether the next host may be
+/// reached is the caller's flow grant's to say (`same_host` tells it).
+pub fn redirect(from: &Url, method: Method, head: &Head, followed: u32, out: &mut [u8]) -> Result<Option<Redirected>, Error> {
+    if !matches!(head.status, 301 | 302 | 303 | 307 | 308) { return Ok(None); }
+    if head.location.is_empty() || followed >= REDIRECTS_MAX { return Err(Error::Redirect); }
+    // A fragment is the client's alone; a reference with another scheme is not followed.
+    let location = head.location.as_str().split('#').next().unwrap_or("");
+    let scheme_named = location.split(['/', '?']).next().is_some_and(|first| first.contains(':'));
+    if location.is_empty() || (scheme_named && !location.starts_with("http://") && !location.starts_with("https://")) { return Err(Error::Redirect); }
+    let mut text = Text { buffer: out, len: 0 };
+    use core::fmt::Write;
+    let scheme = if from.https { "https" } else { "http" };
+    let written = if location.starts_with("http://") || location.starts_with("https://") { text.write_str(location) }
+        else if let Some(rest) = location.strip_prefix("//") { write!(text, "{}://{}", scheme, rest) }
+        else if location.starts_with('/') { write!(text, "{}://{}{}", scheme, from.authority, location) }
+        else {
+            // A relative reference: against the directory of the path, without its query.
+            let path = from.path.split('?').next().unwrap_or("/");
+            let directory = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+            write!(text, "{}://{}{}{}", scheme, from.authority, if directory.is_empty() { "/" } else { directory }, location)
+        };
+    let length = text.len;
+    written.map_err(|_| Error::Redirect)?;
+    let next = Url::parse(core::str::from_utf8(&out[..length]).map_err(|_| Error::Redirect)?).map_err(|_| Error::Redirect)?;
+    if from.https && !next.https { return Err(Error::Redirect); }
+    let to_get = head.status == 303 || (matches!(head.status, 301 | 302) && method == Method::Post);
+    let method = if to_get { Method::Get } else { method };
+    Ok(Some(Redirected { length, method, keep_body: !to_get, same_host: next.host.eq_ignore_ascii_case(from.host) && next.port == from.port && next.https == from.https }))
 }
 
 /// GET `url`'s path from byte `offset` on (`Range: bytes=offset-` when not 0), the head parsed by `parser`, the body into
@@ -221,7 +394,8 @@ pub fn get(transport: &mut impl Transport, url: &Url, offset: u64, sink: &mut im
 pub enum Method { Get, Post, Put }
 
 impl Method {
-    fn name(self) -> &'static str { match self { Method::Get => "GET", Method::Post => "POST", Method::Put => "PUT" } }
+    /// The method as a request line names it.
+    pub fn name(self) -> &'static str { match self { Method::Get => "GET", Method::Post => "POST", Method::Put => "PUT" } }
 }
 
 /// Bounds of a request and a response: the caller's headers, the request head, a chunk-size line (extensions
@@ -264,7 +438,8 @@ pub struct Connection<T: Transport> { transport: T, carry: [u8; HEAD_MAX], start
 enum Framing { Length(u64), Chunk(u64), ChunkEnd, ChunkSize, Close, Done }
 
 /// A response whose body is read in pieces; the connection serves the next request once it has been read to its end.
-pub struct Response<'c, T: Transport> { pub status: u16, pub length: Option<u64>, connection: &'c mut Connection<T>, framing: Framing, close: bool }
+/// `head` is the whole head as the parser read it (its coding, media type, `Location`, `Retry-After`: 000-NET-0047).
+pub struct Response<'c, T: Transport> { pub status: u16, pub length: Option<u64>, pub head: Head, connection: &'c mut Connection<T>, framing: Framing, close: bool }
 
 impl<T: Transport> Connection<T> {
     pub fn new(transport: T) -> Self { Connection { transport, carry: [0; HEAD_MAX], start: 0, end: 0, open: true, served: 0 } }
@@ -305,6 +480,18 @@ impl<T: Transport> Connection<T> {
     /// only the end of the connection ends is refused unless `close_delimited`.
     pub fn request<'c>(&'c mut self, method: Method, url: &Url, headers: &[(&str, &str)], body: Option<(u64, &mut dyn Source)>,
                        parser: &mut impl Parser, close_delimited: bool) -> Result<Response<'c, T>, Error> {
+        self.send(method, url, headers, body.map(|(length, source)| (Some(length), source)), parser, close_delimited)
+    }
+
+    /// As `request`, with a body whose length is not known before it is sent: it goes chunked, each piece the source
+    /// gives as one chunk, until the source gives 0 (000-NET-0047).
+    pub fn request_streamed<'c>(&'c mut self, method: Method, url: &Url, headers: &[(&str, &str)], body: &mut dyn Source,
+                                parser: &mut impl Parser, close_delimited: bool) -> Result<Response<'c, T>, Error> {
+        self.send(method, url, headers, Some((None, body)), parser, close_delimited)
+    }
+
+    fn send<'c>(&'c mut self, method: Method, url: &Url, headers: &[(&str, &str)], body: Option<(Option<u64>, &mut dyn Source)>,
+                parser: &mut impl Parser, close_delimited: bool) -> Result<Response<'c, T>, Error> {
         if !self.open { return Err(Error::Closed); }
         if headers.len() > HEADERS_MAX || !headers.iter().all(|(n, v)| header_ok(n, v)) { return Err(Error::Header); }
         let mut head = [0u8; REQUEST_HEAD_MAX];
@@ -312,13 +499,17 @@ impl<T: Transport> Connection<T> {
         use core::fmt::Write;
         let mut written = write!(text, "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: MIND-Core\r\n", method.name(), url.path, url.authority).is_ok();
         for (name, value) in headers { written &= write!(text, "{}: {}\r\n", name, value).is_ok(); }
-        if let Some((length, _)) = body.as_ref() { written &= write!(text, "Content-Length: {}\r\n", length).is_ok(); }
+        match body.as_ref() {
+            Some((Some(length), _)) => written &= write!(text, "Content-Length: {}\r\n", length).is_ok(),
+            Some((None, _)) => written &= text.write_str("Transfer-Encoding: chunked\r\n").is_ok(),
+            None => {}
+        }
         written &= text.write_str("\r\n").is_ok();
         if !written { return Err(Error::Header); }
         let len = text.len;
         let sent = self.transport.send(&head[..len]).and_then(|_| match body {
             None => Ok(()),
-            Some((length, source)) => {
+            Some((Some(length), source)) => {
                 let (mut left, mut buffer) = (length, [0u8; 4096]);
                 while left > 0 {
                     let want = (left as usize).min(buffer.len());
@@ -328,6 +519,21 @@ impl<T: Transport> Connection<T> {
                     left -= n as u64;
                 }
                 Ok(())
+            }
+            // Chunked: each piece behind its size line, then the last chunk with no trailers.
+            Some((None, source)) => {
+                let mut buffer = [0u8; 4096 + 12];
+                loop {
+                    let n = source.read(&mut buffer[10..10 + 4096])?.min(4096);
+                    if n == 0 { break; }
+                    let mut size = [0u8; 10];
+                    let len = { let mut line = Text { buffer: &mut size, len: 0 }; let _ = write!(line, "{:x}\r\n", n); line.len };
+                    let start = 10 - len;
+                    buffer[start..10].copy_from_slice(&size[..len]);
+                    buffer[10 + n..12 + n].copy_from_slice(b"\r\n");
+                    self.transport.send(&buffer[start..12 + n])?;
+                }
+                self.transport.send(b"0\r\n\r\n")
             }
         });
         if let Err(error) = sent { self.open = false; return Err(error); }
@@ -352,7 +558,7 @@ impl<T: Transport> Connection<T> {
                 else if close_delimited { Framing::Close }
                 else { self.open = false; return Err(Error::Length) };
             let close = parsed.close || framing == Framing::Close;
-            let mut response = Response { status: parsed.status, length: parsed.length.filter(|_| !parsed.chunked), connection: self, framing, close };
+            let mut response = Response { status: parsed.status, length: parsed.length.filter(|_| !parsed.chunked), head: parsed, connection: self, framing, close };
             if framing == Framing::Done { response.end(); }
             return Ok(response);
         }
