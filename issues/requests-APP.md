@@ -15,7 +15,7 @@ Numbered on 2026-10-20:
 - `app`, `app2` and `dzen-clock` cleaned, from the critique of 2026-10-14: [000-APP-0087](../issues-done/000-APP-0087-app-app2-and-dzen-cleaned.done);
 - `files` reading the kernel from the slot that booted, for 351-UPD-0016: [351-APP-0088](../issues-done/351-APP-0088-files-reads-the-booted-slots-kernel.done);
 - screenshots and recordings for the project's page, for 000-KRN-0093: [000-APP-0089](000-APP-0089-screenshots-and-recordings-for-the-page.md);
-- horizontal scrolling from a trackpad, for 211-DRV-0018: [211-APP-0090](211-APP-0090-horizontal-scrolling.md), waiting for an across field in absolute pointer events ([requests-KRN.md](requests-KRN.md));
+- horizontal scrolling from a trackpad, for 211-DRV-0018: [211-APP-0090](../issues-done/211-APP-0090-horizontal-scrolling.done), done 2026-10-28 on the across field of 211-KRN-0150;
 - `wm`'s moving background drawn by rows, with 000-KRN-0081: [000-APP-0091](000-APP-0091-wms-background-by-rows.md);
 - `svc boot`, `enable`, `disable`, `after`, `reset`, for 173: [173-APP-0092](173-APP-0092-svc-boot.md), waiting for 173-KRN-0035;
 - the shell's `effector` command, for 750: [750-APP-0093](750-APP-0093-the-shells-effector-command.md), waiting for 750-EFF-0003 and 750-EFF-0006;

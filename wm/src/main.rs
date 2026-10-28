@@ -632,13 +632,13 @@ fn main(info: &'static BootInfo) {
                 Input::Pointer(p) => {
                     if let Some((gx, gy)) = mind::input::pointer_pixel() { (px, py) = (x0 + gx, y0 + gy); }
                     manager.wm.now = mind::time::uptime_ms(); // for a double click on a title (211-APP-0046)
-                    manager.wm.pointer(p.x, p.y, p.buttons, p.wheel)
+                    manager.wm.pointer_scroll(p.x, p.y, p.buttons, p.wheel, p.across)
                 }
             };
             // Keys, clicks and the wheel are logged; moves of the mouse are not (a drag is logged when it ends).
             let log = match input {
                 Input::Key(_) => true,
-                Input::Pointer(p) => p.buttons != buttons || p.wheel != 0 || !matches!(action, Action::Redraw | Action::Pointer { .. }),
+                Input::Pointer(p) => p.buttons != buttons || p.wheel != 0 || p.across != 0 || !matches!(action, Action::Redraw | Action::Pointer { .. }),
             };
             buttons = if let Input::Pointer(p) = input { p.buttons } else { buttons };
             match action {
@@ -752,9 +752,9 @@ fn main(info: &'static BootInfo) {
                         }
                     }
                 }
-                Action::Pointer { id, x, y, buttons, wheel } => {
-                    manager.pointer(id, mind::window::pointer_at(buttons, x, y, wheel));
-                    if log { mind::println!("[WM] POINTER {} AT {},{} BUTTONS={} WHEEL={}", id, x, y, buttons, wheel); }
+                Action::Pointer { id, x, y, buttons, wheel, across } => {
+                    manager.pointer(id, mind::window::pointer_at(buttons, x, y, wheel, across));
+                    if log { mind::println!("[WM] POINTER {} AT {},{} BUTTONS={} WHEEL={} ACROSS={}", id, x, y, buttons, wheel, across); }
                 }
             }
             if log { mind::println!("[WM] {}", manager.wm.status()); }
