@@ -112,6 +112,9 @@ Their terms forbid redistribution. A script fetches each from the source named h
 
 RTL8852BE's `rtw89/rtw8852b_fw-1.bin` is fetched from official `linux-firmware` commit `599764611a8ac213c6aa6dad17c941c2f46b53cb` by [`scripts/firmware/rtl8852be.py`](scripts/firmware/rtl8852be.py), also invoked by the standard `scripts/proprietary.sh fetch` used by `build-and-write.sh`. [The source/size/hash record](hwdocs/rtl8852be.md#firmware-pin-and-personal-store) pins both firmware and `LICENCE.rtlwifi_firmware.txt`. Unlike the Broadcom files above, Realtek's terms permit unmodified binary redistribution with its notice and conditions; they prohibit reverse engineering, decompilation and disassembly. The project's personal-store workflow is nevertheless used: both downloads stay under ignored `proprietary/firmware/rtw89/`, outside built images and this repository, and `scripts/proprietary.sh copy` copies them together after a disk image is written. The binary is not a test fixture or part of the BSD-licensed helper code.
 
+
+The RTL8821C Bluetooth controller's `rtl_bt/rtl8821c_fw.bin` and `rtl_bt/rtl8821c_config.bin` (`bt_hci`, 700-BLT-0001) come from the same `linux-firmware` commit, fetched by [`scripts/firmware/rtl8821c_bt.py`](scripts/firmware/rtl8821c_bt.py) through `scripts/proprietary.sh fetch`, with the same `LICENCE.rtlwifi_firmware.txt` (WHENCE's `rtl_bt` section). They stay in ignored `proprietary/firmware/rtl_bt/` and reach a disk's `data/firmware/rtl_bt/` the same way; [their pins](hwdocs/rtl8821c-bt.md#the-patch). `bt_hci`'s loader is written from the patch file's layout, not from Linux's `btrtl.c`.
+
 ## Tools used at build or test time (not distributed)
 
 - OVMF (EDK II UEFI firmware, BSD-2-Clause-Patent) to boot QEMU; installed by the system package manager or placed next to the launch scripts.
