@@ -1,6 +1,6 @@
-# 800-APP-0108 — In the `link-console` mode, the shell takes the link's lines as the console's
+# 800-APP-0108 — In the `link-console` mode, the shell takes the link's lines as the console's — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "effector and effector485 have to have equal rights in maintenance mode, or we need an additional mode line for the 485 debug link", 2026-10-23) · **Status:** open · **Blocked by:** [800-KRN-0155](../issues-done/800-KRN-0155-the-links-console-mode.done) in `main` (`init.wit` 1.8 `link-console`; on `claude/youthful-mendel-mf1soy` c10b15b5, in the landing queue for round 16) · **Main task:** [800](800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware · **Constitution:** MC-3.11, MC-12.3, MC-12.6
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "effector and effector485 have to have equal rights in maintenance mode, or we need an additional mode line for the 485 debug link", 2026-10-23) · **Status:** done (2026-10-28) · **Blocked by:** — ([800-KRN-0155](800-KRN-0155-the-links-console-mode.done), `init.wit` 1.8 `link-console`, is in `main`) · **Main task:** [800](../issues/800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware · **Constitution:** MC-3.11, MC-12.3, MC-12.6
 
 **Recorded by:** the tools track, 2026-10-23, from LNK's request (`APP/2026-10-23T0223Z-LNK-the-links-lines-as-the-consoles-in-link-console-mode.md` on `internal-dev-messages`), for 800-LNK-0019.
 
@@ -38,6 +38,25 @@ What the link may do in this mode is shown on the configurations tested only (MC
 
 ## Related
 
-- [800-APP-0102](800-APP-0102-the-shells-run-for-the-links-client.md): the link's client.
+- [800-APP-0102](../issues/800-APP-0102-the-shells-run-for-the-links-client.md): the link's client.
 - 800-LNK-0019: the link's part.
-- [750-APP-0105](../issues-done/750-APP-0105-the-mode-command.done): `mode`.
+- [750-APP-0105](750-APP-0105-the-mode-command.done): `mode`.
+
+## Resolution
+
+Done on `claude/wizardly-franklin-kec1a9` (50037556), for the landing queue.
+
+- **The rule** (`shell/src/clients.rs`): `Client::LinkConsole` beside `Program` and `Link`.
+  - A script by its file (`msh <file>`) and the network policy's changes (`netpolicy add|remove`, `netrevoke`) run at once.
+  - `mode`, `msh -c`, options and two files stay refused.
+  - Every other line is as for the link's client.
+- **The shell** (`shell/src/main.rs`): a line badged `BADGE_SHELL_LINK` asks `init` `link-console()` (`init.wit` 1.8). An error, or an `init` that does not answer, counts as off.
+- **While such a line runs** (`shell/src/msh.rs`, `ask`): a script's questions, its `requires:` among them, are answered yes on the screen, and each answer is logged as `[SHELL] THE LINK'S CONSOLE ANSWERED YES: <question>`.
+- **`mode` from the link** (`shell/src/modectl.rs`): no line of the link changes a mode, from a script the link started either (MC-12.6). `mode` and the notice above the first prompt add `LINK CONSOLE: ON (DATA/MODE.CONF, DEV IN LINK.CONF): THE LINK'S LINES ARE THE CONSOLE'S, BUT NOT MODE`, the notice in the system log too.
+- **The log, changed from the plan.** It names the line's word alone, as for the link's client: `[SHELL] FOR THE LINK'S CONSOLE THE SHELL RAN MSH`. The plan's `[SHELL] LINK CONSOLE: <line>` would put the line's arguments, which may be the user's, into the system log.
+- **Tests:**
+  - host: `the_links_console_gets_scripts_and_the_policy_but_never_mode` in `tests/shell_host.rs`;
+  - QEMU: the `modes` suite's reboot step (`dev` in `link.conf`, `link-console` in `data/mode.conf`) checks the line `mode` shows. x86 `--suites modes,link` passed on this branch, 2026-10-28.
+  - The `link` suite's part, a script sent over the link in this mode and refused without it, is LNK's 800-LNK-0019.
+- **Docs:** `docs/tools/README.md` and `README_RU.md`, beside 800-APP-0102's paragraph and under `mode`.
+- **Not offered:** `mode link-console on|off`, since only `data/mode.conf` sets the word (`init.wit` 1.8).
