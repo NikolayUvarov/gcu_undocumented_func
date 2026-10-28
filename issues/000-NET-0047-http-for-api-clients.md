@@ -1,6 +1,6 @@
 # 000-NET-0047 — HTTP for API clients in `libmind`: bodies, multipart, redirects, compression, a streaming body, Server-Sent Events
 
-**Type:** network (`libmind` `http`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (made but HEAD, PATCH and DELETE; x86 passed, aarch64's run left) · **Blocked by:** — · **Main task:** — (for 253, 255, 260, 261 and 000-NET-0048) · **Constitution:** MC-6.6, MC-11.5, MC-11.11, MC-12.1
+**Type:** network (`libmind` `http`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (made and tested on both architectures but HEAD, PATCH and DELETE; landing left) · **Blocked by:** — · **Main task:** — (for 253, 255, 260, 261 and 000-NET-0048) · **Constitution:** MC-6.6, MC-11.5, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md).
 
@@ -81,9 +81,8 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
   - the bomb stopped at 1 048 576 bytes;
   - 1000 events in order, the last id 999 and `retry` 3000;
   - `Retry-After` as 7 seconds, and as the date 1445412480.
-- **Left:**
-  - **`Head`, `Patch` and `Delete`** wait for the Effector agent to stop matching `Method` exhaustively (`requests-EFF.md`, 2026-10-28).
-  - **The aarch64 run** (the gate's "aarch64: files, network and TLS").
+- **Tested on aarch64** (QEMU under TCG, 4 CPUs): the `tls` and `net` suites passed whole (29 checks), the API clients' among them, with the same lines.
+- **Left:** `Head`, `Patch` and `Delete` wait for the Effector agent to stop matching `Method` exhaustively (`requests-EFF.md`, 2026-10-28).
 
 ## Acceptance criteria
 

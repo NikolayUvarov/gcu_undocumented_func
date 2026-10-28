@@ -34,6 +34,9 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
   - The `tls` suite requires all of them parsed: 119 on this store.
   - It keeps its refusals: a name that does not match (`NotValidForName`) and a CA that is not in the store (`UnknownIssuer`).
 - **THIRD_PARTY.md, `docs/network/downloads.md`, `docs/profile/tcb.md` and `docs/communications-and-agents.md`** name the store.
+- **Tested in QEMU under TCG, 4 CPUs:**
+  - **x86:** the `tls` and `net` suites passed, `tls` reading `119 ROOTS FROM tlsroots.pem`;
+  - **aarch64:** the same suites passed, and `scripts/build_aarch64.sh` checked and shipped the store.
 
 ## Acceptance criteria
 
