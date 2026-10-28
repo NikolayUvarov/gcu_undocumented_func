@@ -22,6 +22,13 @@ Appendix B.3: "encryption and key management are designed before confidential da
   - keys held by `keystore` (`NET`, 000-NET-0045); the store asks it to wrap and unwrap, and never holds the volume key's material longer than a mount (MC-11.9).
 - **The recovery set of [305](../issues-done/305-recovery-without-the-store.done)** depends on none of it (MC-6.8).
 
+## Tasks
+
+- [308-STO-0021](308-STO-0021-sealed-records.md): sealed records, layout 3, ChaCha20-Poly1305; the key in the clear on the medium for now (no confidentiality yet).
+- [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.md): the volume key held by `keystore`, sealed by the TPM or unlocked by a passphrase, with a recovery key.
+- [308-STO-0023](308-STO-0023-memory-domains.md): memory domains, a key per domain, forgetting by destroying it.
+- [308-STO-0024](308-STO-0024-what-sealing-protects.md): the threat model and the profile.
+
 ## Acceptance criteria
 
 - Host: a forged or moved record refused; the wrong key refused; a domain whose key is destroyed is unreadable, then collected.
