@@ -25,7 +25,7 @@ Before the first release a new version replaces the old one and no older one is 
 
 ## 1. What `nnd` holds, and nothing more
 
-`nnd` is a boot service that `init` starts and keeps. That is `KRN`'s part, asked in [requests-KRN.md](../../issues/requests-KRN.md#the-model-service-nnd-for-262-app-0112). It holds:
+`nnd` is a boot service that `init` starts and keeps. That is `KRN`'s part, [262-KRN-0178](../../issues/262-KRN-0178-nnd-as-a-boot-service.md) (asked 2026-10-28; it waits for this page's agreement). It holds:
 
 - **Model files, read only:** a VFS scope of the model disk (`models:`, 251) and one of `data/models/`. It writes no file.
 - **Its memory:** a quota the owner sets, as `data/memory.conf` sets a program's (262-KRN-0160), with large pages for weights.
@@ -232,7 +232,7 @@ The shared `parse` service is not used: its JSON (`parse.wit` 1.4) is bounded to
 
 ## 9. What other tracks give
 
-- **`KRN`** ([requests-KRN.md](../../issues/requests-KRN.md#the-model-service-nnd-for-262-app-0112)):
+- **`KRN`** ([262-KRN-0178](../../issues/262-KRN-0178-nnd-as-a-boot-service.md); the wait of question 4 is [262-KRN-0179](../../issues/262-KRN-0179-a-wait-on-a-shared-word.md)):
   - `nnd` as a boot service, with the grants of section 1;
   - its memory line and `SPAWN_WORKERS` for a service;
   - the shell's slot with `CAP_BADGE`, and `REQUEST_NN`.
