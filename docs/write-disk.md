@@ -91,7 +91,7 @@ On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the
 **From WSL on Windows, in one step:** `scripts/build_and_write.sh <disk number>`.
 - It pulls `fast-test` (or builds `--commit <id>`), builds, and packs the image.
 - It opens an elevated PowerShell running `05_write_usb_windows.ps1`, which asks before it writes (`ERASE <number>`).
-- After the write it copies the proprietary files and the desktop pictures onto the disk, and the test files its options ask for: `--link-dev`, `--keep-wifi`, `--wifi-ofdm` and others, listed in the script's header.
+- After the write it copies the proprietary files, the desktop pictures and an Intel Mac's `mac/startup-disk.sh` (section 6) onto the disk, and the test files its options ask for: `--link-dev`, `--keep-wifi`, `--wifi-ofdm` and others, listed in the script's header.
 - **`--slots`** writes an image with boot slots and an `update.txt` that takes releases from `data/link/rel/`. After that one write, `scripts/link_update.py` updates the machine over the link (351-KRN-0141).
 - **`--mode=maintenance`** puts `data/mode.conf` with that one line on the disk, so `init` starts in the maintenance mode and runs the Effector agent's services (750-KRN-0143). `--mode=development` and `--mode=development,maintenance` work the same way.
 - **`link-console`** may stand beside them, with `--link-dev`: for example, `--mode=maintenance,link-console`. `init` then takes the link as the owner's console (800-KRN-0155, 800-LNK-0019). Without `dev` in `link.conf`, `init` leaves the word out, so the script refuses it without `--link-dev`. Only the disk's word turns it on or off: `mode` in the shell keeps it as it is.
@@ -119,31 +119,39 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
 
 **Start it** from the firmware's boot menu (often F8, F11 or F12) by choosing the disk's UEFI entry, or by putting it first in the boot order.
 
-**An Intel Mac** (for example a MacBook Pro of 2012–13; not tried yet, [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md)):
+**An Intel Mac** (for example a MacBook Pro of 2012–13; run on a MacBook Pro since 2026-10-21, [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md)):
 
 - **Starting it.** Attach the disk by USB, hold Option (⌥) at power-on and choose its `EFI Boot` entry.
   - Macs before the T2 chip have nothing to change in the firmware.
   - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
 - **Restarting into MIND Core.** The choice made with Option holds for that boot only. Any restart starts macOS again, `mindlink reboot` included: seen on the MacBook Pro on 2026-10-21.
-  - **To make the disk the default startup disk,** run this once in the Terminal of macOS Recovery, with the disk attached. macOS itself refuses it (below).
+  - **To make the disk the default startup disk,** once, in the Terminal of macOS Recovery, with the disk attached: mount its boot partition and run `mac/startup-disk.sh` from it. `build_and_write.sh` copies that script onto every disk it writes (800-LNK-0029). macOS itself refuses it (below).
     - macOS mounts only the log partition, `MIND LOG`. The boot partition is marked as the EFI system partition (type `0xEF`), which macOS leaves unmounted, so it is mounted by hand first.
     - `MIND LOG`'s disk is the stick: `disk2`, say, and the boot partition is its first, `disk2s1`.
 
     ```bash
-    diskutil info "/Volumes/MIND LOG" | grep "Part of Whole"     # the stick, e.g. disk2
-    sudo mkdir -p /Volumes/MINDCORE
-    sudo mount -t msdos /dev/disk2s1 /Volumes/MINDCORE           # its boot partition
-    sudo bless --mount /Volumes/MINDCORE --setBoot --file /Volumes/MINDCORE/EFI/BOOT/BOOTX64.EFI --shortform
-    bless --getBoot                                              # the device the firmware starts now
-    sudo umount /Volumes/MINDCORE
+    diskutil list                                                # the stick: the disk with MIND LOG, e.g. disk2
+    mkdir -p /Volumes/MINDCORE
+    mount -t msdos /dev/disk2s1 /Volumes/MINDCORE                # its boot partition
+    sh /Volumes/MINDCORE/mac/startup-disk.sh
     ```
+
+    - **The script** runs `bless --mount /Volumes/MINDCORE --setBoot --file /Volumes/MINDCORE/EFI/BOOT/BOOTX64.EFI --shortform`, checks with `bless --getBoot` that the firmware now starts that partition, and says so. It refuses a volume without `EFI/BOOT/BOOTX64.EFI`, and names Recovery when `bless` is refused.
+      - It is tested against stand-ins of `bless` and `diskutil` (`tests/mac_startup_disk_test.py`). It has not run on a Mac yet (2026-10-28).
+    - **A disk written before the script** (2026-10-28): the same by hand, after the `mount`:
+
+      ```bash
+      bless --mount /Volumes/MINDCORE --setBoot --file /Volumes/MINDCORE/EFI/BOOT/BOOTX64.EFI --shortform
+      bless --getBoot                                            # the device the firmware starts now
+      umount /Volumes/MINDCORE
+      ```
 
     `bless` records the disk in the firmware's settings (NVRAM). The Mac should then start it at every power-on and restart while it is attached, and macOS when it is not.
   - **Where it works: macOS Recovery.** Hold Command-R at power-on, then Utilities, Terminal. It runs as root, so no `sudo`. The disk numbers there may differ: find the stick with `diskutil list`.
     - **On the MacBook Pro on 2026-10-21 it worked from Recovery.**
     - After it, `mindlink reboot` came back into MIND Core in about 9 s, with no key pressed, and the Wi-Fi joined again.
   - **From macOS itself it is refused.** With the partition mounted, `bless` answered `Could not set boot device property: 0xe00002e2`. That is `kIOReturnNotPermitted`, from macOS's System Integrity Protection (from 10.11), and `bless --getBoot` still named macOS's volume.
-  - **A rewrite may lose it.** On 2026-10-21 the Mac started macOS after the disk was written again; on 2026-10-22 it started the disk. If it starts macOS, run the commands again from Recovery. A disk written with `--slots` (section 5) keeps the bootloader where it was, so the commands are the same. Updates through the link do not rewrite the disk. Since 351-UPD-0010 they do not need to for a new loader either: each release brings its own into its slot, and the loader at `EFI/BOOT/` starts it ([slots.md](update/slots.md)). A stick written before that task boots every slot with its own old loader, so it is written once more.
+  - **A rewrite may lose it.** On 2026-10-21 the Mac started macOS after the disk was written again; on 2026-10-22 it started the disk. If it starts macOS, run the script again from Recovery. A disk written with `--slots` (section 5) keeps the bootloader where it was, so the script is the same. Updates through the link do not rewrite the disk. Since 351-UPD-0010 they do not need to for a new loader either: each release brings its own into its slot, and the loader at `EFI/BOOT/` starts it ([slots.md](update/slots.md)). A stick written before that task boots every slot with its own old loader, so it is written once more.
   - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:
   - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done));
