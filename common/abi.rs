@@ -60,15 +60,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // This transition does not promise detection of ABI 9 or older layouts.
 pub const ABI_VERSION: u32 = 21;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
-// from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes the versions from
-// BOOT_HANDOFF_OLDEST to it. A change to BootInfo or BOOT_FILES sets both to one number above every ABI_VERSION so far
-// (MC-12.4). Handoff 21 (550-KRN-0172): a 44th image renumbers the images after it and moves every field after
-// extra_programs, so an older loader is refused by name; before the first release no older handoff is read (AGENTS.md, section 3).
+// from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
+// alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
+// BOOT_FILES sets it to one number above every ABI_VERSION so far (MC-12.4). Handoff 21 (550-KRN-0172): a 44th image
+// renumbers the images after it and moves every field after extra_programs, so an older loader is refused by name.
 // Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
 // refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
 pub const BOOT_HANDOFF_VERSION: u32 = 21;
-pub const BOOT_HANDOFF_OLDEST: u32 = 21;
-pub const fn handoff_accepted(version: u32) -> bool { version >= BOOT_HANDOFF_OLDEST && version <= BOOT_HANDOFF_VERSION }
 // BootInfo.boot_flags: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init ignores
 // data/services.txt (173-KRN-0036).
 pub const BOOT_SAFE: u32 = 1;

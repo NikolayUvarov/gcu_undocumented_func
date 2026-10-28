@@ -57,8 +57,8 @@ impl http::Parser for Service {
 /// A parser process of one session's own (109-NET-0010, Appendix B.6): the loader starts `parse` as a helper that holds
 /// nothing but this session's endpoint, and it ends when the session is dropped (or `end` is called), or after 30 s
 /// without a request. The session keeps only a copy that calls, so a call to a helper that has ended fails at once,
-/// and the session starts another and asks again. Where the loader starts no helper (an older loader, or no endpoint
-/// left in this program's quota), the session uses the shared service at `shared`.
+/// and the session starts another and asks again. Where the loader starts no helper (no endpoint left in this
+/// program's quota, or the loader refuses), the session uses the shared service at `shared`.
 pub struct Session { endpoint: Endpoint, pid: Option<u64>, loader: Option<Endpoint>, restarts: u32 }
 
 /// Why a session got no parser of its own.
