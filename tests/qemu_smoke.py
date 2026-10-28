@@ -9748,7 +9748,9 @@ def wm_suite(vm):
                 keys("esc")
 
         def tidy():
-            # The windows the entry opened, closed (a program that ended keeps its window until then).
+            # The windows the entry opened, closed (a program that ended keeps its window until then). Alt+W closes
+            # the window in front, which may be one the entry opened after the state was read (round 39's gate, KRN's
+            # note of 2026-10-28): whichever wm closes must be one of the entry's, and the loop goes on until none is left.
             for _ in range(30):
                 extra = [w for w in state()[2] if w not in base]
                 if not extra:
@@ -9756,9 +9758,12 @@ def wm_suite(vm):
                 window = extra[-1]
                 if state()[1] != window:
                     front(window)
-                keys("alt-w", text=f"CLOSE {window}")
-                until(f"GONE {window}")
-                while window in state()[2]:
+                vm.hmp("sendkey alt-w")
+                vm.serial(enter=False)
+                closed = int(re.findall(r"CLOSE (\d+)", wait("CLOSE "))[-1])
+                assert closed not in base, (closed, base, state())
+                until(f"GONE {closed}")
+                while closed in state()[2]:
                     wait()
             raise AssertionError(state())
 

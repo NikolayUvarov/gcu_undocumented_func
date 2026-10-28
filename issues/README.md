@@ -319,6 +319,8 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [000-APP-0113](../issues-done/000-APP-0113-console-drops-a-line-typed-before-the-last-one-ran.done) | `console` dropped a line typed before the one before it had run (the `wm` suite, 2026-10-28) | the loop stops reading keys at an Enter, so each line runs in turn; done (2026-10-28) |
+| [211-APP-0090](../issues-done/211-APP-0090-horizontal-scrolling.done) | Horizontal scrolling from a trackpad (211-DRV-0018) | `mind::input::Pointer`'s `across`, `wm` passes it to the window under the pointer, `view` scrolls unwrapped text by it; host tests; the MacBook Pro's swipe is the maintainer's run; done (2026-10-28) |
 | [000-KRN-0175](../issues-done/000-KRN-0175-one-handoff-version-and-no-older-paths.done) | The kernel takes one handoff version; `BOOT_HANDOFF_OLDEST` and the older loaders' paths gone (round 39) | done (2026-10-28) |
 | [000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done) | A program's own data directory `system/own/<name>/` in `SLOT_OWN`, given by the loader by the program's name (ABI 22, round 39) | done (2026-10-28) |
 | [176-KRN-0181](../issues-done/176-KRN-0181-checks-rtc-window-covers-both-reads.done) | `check`'s "the RTC advances" counts its window from before the first read (round 39) | done (2026-10-28) |

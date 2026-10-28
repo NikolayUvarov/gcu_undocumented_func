@@ -1,0 +1,20 @@
+# 000-APP-0113 — `console` dropped a line typed before the one before it had run — done
+
+**Type:** tools (`console`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-28) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.3
+
+**Recorded by:** the tools track, 2026-10-28, from a run of the `wm` suite in its own container (x86, QEMU, TCG, 4 CPUs): of two runs of the same tree, the second failed in `console_joined`.
+
+## Problem
+
+- **What the suite saw.** It typed `cd` and `pwd` into `console` one after the other. `console` showed `docs> cd`, then `docs> pwd` and `/docs`: the `cd` was shown, but never ran.
+- **Why** (`console/src/main.rs`):
+  - each turn of its loop reads every key waiting in the window's queue;
+  - an Enter makes the line it ends the one to run, `pending`;
+  - when two Enters come in one turn, the second line takes the place of the first, which is drawn as typed but never run.
+- **When it happens.** Lines typed faster than `console` turns its loop, as a paste or a script of keys does, or a loaded machine: here the suite's keys came while a long `cat` was being drawn.
+
+## Resolution
+
+- **The change** (`console/src/main.rs`): the loop stops reading keys at an Enter that ends a line. The keys after it wait in the queue, and the next turn runs that line first, then reads on.
+- **Tests:** the `wm` suite's `console_joined` (x86) types lines back to back, with no change to it.
+- **Docs:** none. What `console` does is unchanged; it no longer loses a line.
