@@ -127,6 +127,7 @@ cd "${TREE:-$ROOT}" || exit 2
 missing=()
 for tool in cargo rustup python3 mcopy mkfs.fat qemu-img swtpm; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 want host && { command -v java >/dev/null || missing+=(java); } # the models (TLC) only
+want host && { python3 -c 'import tomllib' 2>/dev/null || missing+=("Python 3.11 or later (tomllib)"); } # scripts/models.py and tests/models_host.rs
 SSHD_PATH=${MIND_SSHD:-/usr/sbin/sshd}
 want host && { [[ $SSHD_PATH == /* && -f $SSHD_PATH && -x $SSHD_PATH ]] || missing+=("sshd (openssh-server or MIND_SSHD: $SSHD_PATH)"); } # the SSH client's host tests (351-NET-0026)
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
