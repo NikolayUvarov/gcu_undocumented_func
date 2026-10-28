@@ -1,0 +1,3 @@
+/target/
+/reports/local-*/
+__pycache__/

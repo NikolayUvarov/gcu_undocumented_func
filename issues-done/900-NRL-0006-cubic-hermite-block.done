@@ -1,0 +1,37 @@
+# 900-NRL-0006 — Cubic Hermite gated blocks — done
+
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — (earlier tasks are on the NRL branch) · **Roadmap:** G; issue 900 T03 · **Constitution:** MC-5.1, MC-8.5, MC-11.8, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+
+## Problem
+
+The cubic reference representation uses Hermite segments with finite-difference slopes and linear tails. It is not a B-spline, and linear interpolation alone does not cover it.
+
+## Plan
+
+1. Add allocation-free Hermite sampling and analytic input/coefficient derivatives, retaining the reference's endpoint and tail conventions.
+2. Extend the gated block, training and standalone artifact path with an explicit format transition.
+3. Generate external cubic block and standalone spline fixtures from the unchanged reference.
+4. Exercise all parameters, two-knot grids, exact knots, both tails, continuity and refusals.
+
+## Acceptance criteria
+
+- [x] Forward, input/coefficient and full block gradients agree with external PyTorch data.
+- [x] Independent finite differences and explicit knot/tail/continuity checks pass.
+- [x] Cubic controls retain the same source-channel mapping; SGD and exact save/load work.
+- [x] The format transition is documented; no earlier in-project compatibility reader is added.
+- [x] Host checks and both portable release builds pass on the NRL branch; no B-spline or real-model benefit is claimed.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md), T03.
+- [0005](../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done).
+- [NRL](../nrl/README.md).
+
+## Resolution
+
+- `Spline::hermite` and the gated block implement the original cubic basis, neighbour-dependent analytic gradients and linear tails. Cubic controls share the pruned mapping and projections.
+- Schema 2 replaces 0/1 with explicit refusals. Four external fixtures check forward/backward, an SGD step and exact artifact round trips.
+- On 296935cd, following fast-test staging e9c3a9e5, **20 host tests** and both portable release rlibs passed on the NRL branch. No build or test ran on fast-test.
+- The cubic block's maximum recorded reference error is 5.551115123125783e-17. Separate tests exercise two knots, exact knots, both tails, C1 continuity and independent input/coefficient differences; full-block differences cover every trainable parameter.
+- Fixture regeneration was byte-identical (SHA-256 8ddb51724f78ad98ee9122f6331adb573c13de580f1bfb36264d2c055cca16dd). Dated evidence is `nrl/reports/hermite-f64-2026-10-26.json` and `hermite-check-2026-10-26.txt`.
+- These are bias-free block results, not B-spline implementation, trained-model improvement or native execution. SVD and the general pipeline remain under 900.

@@ -1,0 +1,136 @@
+{
+  "schema": "nrl.model/0",
+  "kind": "standalone",
+  "descriptor": {
+    "family": "feed-forward",
+    "adapter": "nrl.feed-forward",
+    "adapter_version": 0,
+    "configuration": {
+      "schema": "nrl.graph/0",
+      "input_width": 3,
+      "nodes": [
+        {
+          "id": "body",
+          "op": {
+            "operator": "gated",
+            "input": "input",
+            "object": "body"
+          }
+        },
+        {
+          "id": "residual",
+          "op": {
+            "operator": "add",
+            "left": "input",
+            "right": "body"
+          }
+        },
+        {
+          "id": "readout",
+          "op": {
+            "operator": "affine",
+            "input": "residual",
+            "object": "readout"
+          }
+        }
+      ],
+      "output": "readout"
+    },
+    "preprocessor": "identity-f64/0",
+    "tasks": [
+      "regression-vector/0"
+    ],
+    "state": "stateless",
+    "tied_objects": []
+  },
+  "execution": {
+    "schema": "nrl.execution/0",
+    "backend": "cpu-scalar",
+    "dtype": "f64",
+    "layout": "row-major",
+    "max_batch_rows": 256,
+    "max_activation_values": 65536
+  },
+  "base": null,
+  "objects": {
+    "body": {
+      "file": "object-0000.json",
+      "sha256": "aba252593c1c6922c47bb2df878efbae4f230f5643fc2c3840ccc63652b66bbf",
+      "bytes": 1286,
+      "parameters": {
+        "kind": "gated",
+        "schema": "nrl.block/5",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "pruned",
+        "channels": 2,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 25,
+        "trainable_values": 25,
+        "bias_values": 7
+      }
+    },
+    "readout": {
+      "file": "object-0001.json",
+      "sha256": "78a61f1daca8ab512e40fbb25754e5904a52a732380c4c151afa56f17684245a",
+      "bytes": 295,
+      "parameters": {
+        "kind": "affine",
+        "schema": "nrl.affine/0",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "dense",
+        "channels": null,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 12,
+        "trainable_values": 12,
+        "bias_values": 3
+      }
+    }
+  },
+  "sources": [
+    {
+      "identifier": "synthetic://nrl-original-embedding-projection-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    },
+    {
+      "identifier": "synthetic://nrl-embedding-projection-replacement-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    }
+  ],
+  "history": [
+    {
+      "object": "body",
+      "operation": "manual-parameter-replacement/0",
+      "base_model_id": "c3aad5c4402843067c54f4e19490e7355db35662fe078de80d00bad421a88e63",
+      "before_sha256": "44bc3f0ff124c6e0a86a22f8d485a2207ae7f817f0a8632b29efe05ec542fdca",
+      "after_sha256": "aba252593c1c6922c47bb2df878efbae4f230f5643fc2c3840ccc63652b66bbf",
+      "parameters": {
+        "kind": "gated",
+        "schema": "nrl.block/5",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "pruned",
+        "channels": 2,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 25,
+        "trainable_values": 25,
+        "bias_values": 7
+      },
+      "reason": "Explicit weight-energy pruned embedding projection control; no quality or speed gain inferred",
+      "source_identifier": "synthetic://nrl-embedding-projection-replacement-v0"
+    }
+  ],
+  "changes": []
+}

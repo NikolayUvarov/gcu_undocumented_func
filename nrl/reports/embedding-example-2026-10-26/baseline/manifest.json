@@ -1,0 +1,34 @@
+{
+  "schema": "nrl.embedding/0",
+  "family": "nrl.mean-embedding",
+  "adapter_version": 0,
+  "preprocessor": "exact-ascii-whitespace/0",
+  "pooling": "arithmetic-mean/0",
+  "normalization": "l2-reject-norm-at-most-1e-12/0",
+  "state": "stateless",
+  "max_input_tokens": 32,
+  "table": {
+    "bytes": 583,
+    "sha256": "b0cfe594701c7f27f5e210b979c539d29606089c565bcb483bf7baaaa6d7bc2f"
+  },
+  "projection_model_id": "c3aad5c4402843067c54f4e19490e7355db35662fe078de80d00bad421a88e63",
+  "sources": [
+    {
+      "identifier": "synthetic://nrl-original-token-embedding-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    },
+    {
+      "identifier": "synthetic://nrl-original-embedding-projection-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    }
+  ],
+  "previous_projection_ids": []
+}

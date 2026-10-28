@@ -1,0 +1,85 @@
+{
+  "schema": "nrl.decoder/0",
+  "adapter": "llama2c-f32-v0/0",
+  "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+  "config": {
+    "dim": 64,
+    "hidden": 172,
+    "layers": 5,
+    "heads": 8,
+    "kv_heads": 4,
+    "vocab": 512,
+    "context": 512,
+    "tied_head": true
+  },
+  "weights": {
+    "file": "weights.bin",
+    "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+    "bytes": 1056540
+  },
+  "tokenizer": {
+    "file": "tokenizer.bin",
+    "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+    "bytes": 6227
+  },
+  "patches": {
+    "0": {
+      "file": "block-0000.json",
+      "sha256": "ef3af15eacc86884cb79eaf78c0a7254b807166431d1436aee2eb95dc430d237",
+      "bytes": 166485
+    },
+    "2": {
+      "file": "block-0002.json",
+      "sha256": "d3473fdf48b53b2dd37ea97c4ed11ce10c251b75d5f160dcf0064ff62bc0eb2e",
+      "bytes": 157961
+    }
+  },
+  "sources": [
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/stories260K.bin",
+      "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ]
+    },
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/tok512.bin",
+      "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ]
+    },
+    {
+      "identifier": "https://huggingface.co/datasets/roneneldan/TinyStories/tree/f54c09fd23315a6f9c86f9dc80f725de7d8f9c64",
+      "sha256": "94e431816c4cce81ff71e4408ff8d3bda9a42e8d2663986697c3954288cb38b4",
+      "licence": "CDLA-Sharing-1.0 (TinyStories data and modified selection)",
+      "notices": [
+        "TinyStories by Ronen Eldan and Yuanzhi Li; source dataset roneneldan/TinyStories.",
+        "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/f54c09fd23315a6f9c86f9dc80f725de7d8f9c64/TinyStories-valid.txt",
+        "MODIFIED DATA: selected 48 source validation stories by ascending full-story SHA-256; retained up to first 384 UTF-8 bytes on character boundaries; removed duplicate normalized prefixes; assigned 24/12/12 train/validation/test in hash order.",
+        "Data and this selection/arrangement are CDLA-Sharing-1.0; https://cdla.dev/sharing-1-0/ . Full agreement accompanies corpus.json.",
+        "Story IDs preserve source identity; related-story and pretraining overlap beyond exact-prefix checks are unknown. No unseen-pretraining or broad language-model-quality claim."
+      ]
+    },
+    {
+      "identifier": "derived://nrl-plan/mixed-linear-pruned/layer-0#daefc5b6011471ad38a870dacc7b6a26e4384ab35e68663526366bd2cb5d9f7b",
+      "sha256": "daefc5b6011471ad38a870dacc7b6a26e4384ab35e68663526366bd2cb5d9f7b",
+      "licence": "CDLA-Sharing-1.0 (TinyStories data and modified selection)",
+      "notices": [
+        "Rust train-only initializer and full-batch local SGD; validation selects; source weights/tokenizer notices retained."
+      ]
+    },
+    {
+      "identifier": "derived://nrl-plan/mixed-linear-pruned/layer-2#4df2b7be2f14c74ff336003e529dc0f3e0c84ec652cc9f9cba6ba169fcf410be",
+      "sha256": "4df2b7be2f14c74ff336003e529dc0f3e0c84ec652cc9f9cba6ba169fcf410be",
+      "licence": "CDLA-Sharing-1.0 (TinyStories data and modified selection)",
+      "notices": [
+        "Rust train-only initializer and full-batch local SGD; validation selects; source weights/tokenizer notices retained."
+      ]
+    }
+  ]
+}

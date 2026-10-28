@@ -1,0 +1,27 @@
+# 900-NRL-0022: End-to-end embedding training and checkpoints — done
+
+**Type:** implementation, `NRL` · **Owner:** Codex (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — · **Roadmap:** G; 900 T07, T13 · **Constitution:** MC-5.2, MC-11.1, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+
+## Problem
+
+The maintainer requested the five autonomous extensions after the first T11 preparation and host T12/T13 results. Existing host evidence does not establish this extension or native execution.
+
+## Plan
+
+Differentiate lookup, mean pooling, checked projection and L2 normalization; train a bounded retrieval objective using shared AdamW, validation selection and standalone export.
+
+## Acceptance criteria
+
+- [x] Independent full gradient oracle, repeated-token accumulation, deterministic checkpoint continuation, no test-based selection, saved train/validation/test retrieval reports.
+- [x] Document the supported profile and limitations, run affected checks on the track branch, preserve reports, and submit an updated landing request.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md), T07, T13.
+- [NRL](../nrl/README.md). Native T11 remains a separate APP dependency.
+
+## Resolution
+
+Implemented analytic lookup/mean/projection/L2 backward, repeated-token accumulation, graded contrastive full-batch AdamW, complete resumable state, partial-start/resume/export CLI and standalone selected packages. PyTorch autograd and two external optimizer steps match. The distinct trained-table retrieval task preserves the original projection-only input-content restriction. Train/validation contrastive loss improves on the synthetic fixture; NDCG does not. The document index is shared; only query splits are held out.
+
+The final NRL profile passes on `b44fbc0d`: 95 host tests, four portable builds and all CLI cycles, including `--expanded`; new external oracles reproduce. [Evidence](../nrl/reports/five-extensions-2026-10-26.json). The full repository gate and code landing belong to the integrator; native T11 remains open.

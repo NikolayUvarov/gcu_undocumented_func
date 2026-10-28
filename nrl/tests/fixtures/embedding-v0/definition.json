@@ -1,0 +1,245 @@
+{
+  "max_input_tokens": 32,
+  "projection": {
+    "descriptor": {
+      "adapter": "nrl.feed-forward",
+      "adapter_version": 0,
+      "configuration": {
+        "input_width": 3,
+        "nodes": [
+          {
+            "id": "body",
+            "op": {
+              "input": "input",
+              "object": "body",
+              "operator": "gated"
+            }
+          },
+          {
+            "id": "residual",
+            "op": {
+              "left": "input",
+              "operator": "add",
+              "right": "body"
+            }
+          },
+          {
+            "id": "readout",
+            "op": {
+              "input": "residual",
+              "object": "readout",
+              "operator": "affine"
+            }
+          }
+        ],
+        "output": "readout",
+        "schema": "nrl.graph/0"
+      },
+      "family": "feed-forward",
+      "preprocessor": "identity-f64/0",
+      "state": "stateless",
+      "tasks": [
+        "regression-vector/0"
+      ],
+      "tied_objects": []
+    },
+    "execution": {
+      "backend": "cpu-scalar",
+      "dtype": "f64",
+      "layout": "row-major",
+      "max_activation_values": 65536,
+      "max_batch_rows": 256,
+      "schema": "nrl.execution/0"
+    },
+    "objects": {
+      "body": {
+        "data": {
+          "bias": {
+            "down": [
+              -0.005,
+              -0.001153846153846154,
+              0.0026923076923076926
+            ],
+            "gate": [
+              -0.1,
+              -0.009090909090909094,
+              0.08181818181818182,
+              0.1727272727272727
+            ],
+            "up": [
+              -0.1,
+              -0.016666666666666677,
+              0.06666666666666665,
+              0.15
+            ]
+          },
+          "descriptor": {
+            "dtype": "f64",
+            "kind": "gated-feed-forward/0",
+            "layout": "row-major",
+            "parameter_sharing": "independent",
+            "source_activation": "silu",
+            "state": "stateless"
+          },
+          "down": [
+            -0.02,
+            -0.01736842105263158,
+            -0.01473684210526316,
+            -0.012105263157894739,
+            -0.009473684210526318,
+            -0.006842105263157897,
+            -0.004210526315789475,
+            -0.0015789473684210548,
+            0.0010526315789473662,
+            0.0036842105263157872,
+            0.006315789473684208,
+            0.008947368421052631
+          ],
+          "factors": null,
+          "gate": [
+            -0.4,
+            -0.3230769230769231,
+            -0.24615384615384617,
+            -0.16923076923076924,
+            -0.09230769230769231,
+            -0.015384615384615385,
+            0.06153846153846154,
+            0.1384615384615384,
+            0.2153846153846154,
+            0.29230769230769227,
+            0.36923076923076925,
+            0.4461538461538461
+          ],
+          "representation": "dense",
+          "schema": "nrl.block/5",
+          "selection": null,
+          "shape": [
+            3,
+            4,
+            3
+          ],
+          "spline": null,
+          "up": [
+            -0.4,
+            -0.3375,
+            -0.275,
+            -0.21250000000000002,
+            -0.15000000000000002,
+            -0.08750000000000002,
+            -0.025000000000000022,
+            0.03749999999999998,
+            0.09999999999999998,
+            0.16249999999999998,
+            0.22499999999999998,
+            0.2875
+          ]
+        },
+        "kind": "gated"
+      },
+      "readout": {
+        "data": {
+          "bias": [
+            0.01,
+            -0.02,
+            0.005
+          ],
+          "schema": "nrl.affine/0",
+          "shape": [
+            3,
+            3
+          ],
+          "weights": [
+            1,
+            0.02,
+            -0.01,
+            0.01,
+            1,
+            0.03,
+            -0.02,
+            0.01,
+            1
+          ]
+        },
+        "kind": "affine"
+      }
+    },
+    "schema": "nrl.model-definition/0",
+    "sources": [
+      {
+        "identifier": "synthetic://nrl-original-embedding-projection-v0",
+        "licence": "MIT OR Apache-2.0; original NRL fixture",
+        "notices": [
+          "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+        ],
+        "sha256": null
+      }
+    ]
+  },
+  "schema": "nrl.embedding-definition/0",
+  "sources": [
+    {
+      "identifier": "synthetic://nrl-original-token-embedding-v0",
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ],
+      "sha256": null
+    }
+  ],
+  "table": {
+    "dimension": 3,
+    "schema": "nrl.embedding-table/0",
+    "tokens": [
+      "red",
+      "fox",
+      "dog",
+      "small",
+      "cold",
+      "rain",
+      "snow",
+      "white",
+      "star",
+      "moon",
+      "sky",
+      "bright"
+    ],
+    "values": [
+      0.9,
+      0.02,
+      0.05,
+      1,
+      0.02,
+      0.03,
+      0.95,
+      0.01,
+      0.04,
+      0.3,
+      0.3,
+      0.3,
+      0.03,
+      0.95,
+      0.01,
+      0.03,
+      1,
+      0.02,
+      0.01,
+      0.9,
+      0.08,
+      0.3,
+      0.3,
+      0.3,
+      0.01,
+      0.03,
+      1,
+      0.05,
+      0.01,
+      0.95,
+      0.05,
+      0.48,
+      0.48,
+      0.1,
+      0.1,
+      0.8
+    ]
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "schema": "nrl.language-data/0",
+  "source": {
+    "identifier": "synthetic://nrl-original-language-documents-v0",
+    "sha256": null,
+    "licence": "MIT OR Apache-2.0; original NRL test sentences",
+    "notices": [
+      "Original independent miniature documents, one declared related group per document.",
+      "A reproducible test corpus, not a claim of representative language quality."
+    ]
+  },
+  "max_tokens_per_document": 96,
+  "documents": [
+    {
+      "id": "doc-00",
+      "group": "story-00",
+      "split": "train",
+      "text": "A young fox carried a blue cup to the river."
+    },
+    {
+      "id": "doc-01",
+      "group": "story-01",
+      "split": "train",
+      "text": "The baker put warm bread on a clean plate."
+    },
+    {
+      "id": "doc-02",
+      "group": "story-02",
+      "split": "train",
+      "text": "Mia found a tiny bell under the old chair."
+    },
+    {
+      "id": "doc-03",
+      "group": "story-03",
+      "split": "train",
+      "text": "Rain fell on the quiet road beside the farm."
+    },
+    {
+      "id": "doc-04",
+      "group": "story-04",
+      "split": "validation",
+      "text": "A little dog watched the boat leave the lake."
+    },
+    {
+      "id": "doc-05",
+      "group": "story-05",
+      "split": "validation",
+      "text": "Sam planted a seed and gave it fresh water."
+    },
+    {
+      "id": "doc-06",
+      "group": "story-06",
+      "split": "test",
+      "text": "The red bird sang while the children walked home."
+    },
+    {
+      "id": "doc-07",
+      "group": "story-07",
+      "split": "test",
+      "text": "Nora opened a book about stars after dinner."
+    }
+  ]
+}
