@@ -25,3 +25,6 @@ pub fn allowed(badge: u16, operation: Operation) -> bool {
         Operation::Stat | Operation::Pins | Operation::Usage => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH) != 0,
     }
 }
+
+/// A durability class (its number in idl/blockstore.wit's `durability`) as the log and the tools write it (307-STO-0019).
+pub fn class(durability: u8) -> &'static str { ["VOLATILE", "FLUSHED", "COPIED"].get(durability as usize).copied().unwrap_or("?") }

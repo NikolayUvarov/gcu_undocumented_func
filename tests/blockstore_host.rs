@@ -1324,3 +1324,27 @@ fn a_three_gibibyte_object_fits() {
     assert!(peak_kib() < (SIZE >> 10) / 8, "the process held {} KiB", peak_kib());
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn a_partition_holding_only_the_superblock_mounts_as_an_empty_store() {
+    // 307-STO-0020: the bytes scripts/make_usb_image.py writes first in the store's partition (store_superblock): the
+    // magic, layout 2, the sector size, the SHA-256 of those 16 bytes. A blank medium formatted by the store holds the same.
+    let mut head = Vec::from(&b"MIND-STO"[..]);
+    head.extend_from_slice(&2u16.to_le_bytes());
+    head.extend_from_slice(&(SECTOR as u16).to_le_bytes());
+    head.extend_from_slice(&[0; 4]);
+    let mut first = head.clone();
+    first.extend_from_slice(&sha256::digest(&head));
+    first.resize(SECTOR, 0);
+    let mut blank = Memory::new(256);
+    let mut room = Room::new(64);
+    drop(mount(&mut blank, &mut room).unwrap());
+    assert_eq!(&blank.data[..SECTOR], &first[..], "the store formats a blank medium as the image does");
+    let mut medium = Memory::new(256);
+    medium.data[..SECTOR].copy_from_slice(&first);
+    let mut room = Room::new(64);
+    let stats = mount(&mut medium, &mut room).unwrap().stats();
+    assert_eq!((stats.blocks, stats.names, stats.used, stats.corrupt, stats.damaged), (0, 0, 1, 0, 0));
+    assert_eq!(medium.written, 0, "nothing written to mount it: it is a store already");
+}
+

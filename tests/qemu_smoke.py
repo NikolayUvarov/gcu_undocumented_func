@@ -3413,6 +3413,9 @@ def store_suite(vm):
     # 251-STO-0013: the index sized from the medium, its capacity what stat gives.
     require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
+    # 307-STO-0019: on the RAM disk nothing outlives a reset, and the store says so in its log, stat and each write.
+    require(logs, "DURABILITY=VOLATILE")
+    require(blocks("stat"), "DURABILITY=VOLATILE")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
     whole("pattern 4194305", f"PUT {root} SIZE 4194305")
@@ -3433,7 +3436,7 @@ def store_suite(vm):
     assert re.search(r"\[BLOCKSTORE\] REFUSED Put FOR PID \d+ \(BADGE 1\)", log) and re.search(r"\[BLOCKSTORE\] REFUSED Publish FOR PID \d+ \(BADGE 1\)", log), log
     require(blocks("resolve ro"), "blocks: resolve ro: NotFound")
     # Names: compare-and-swap on the version; only roots whose blocks are all stored.
-    require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1")
+    require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1 (VOLATILE)")
     require(blocks(f"publish obj {note}"), "blocks: publish obj: Conflict")
     require(blocks(f"publish obj {note} 1"), "PUBLISHED obj VERSION 2")
     require(blocks(f"resolve obj"), f"obj VERSION 2 ROOT {note}")
@@ -10438,7 +10441,9 @@ def store_disk_check(args, disk):
             assert "FROM VIRTIO" not in vm.command("dmesg -s vfs_server", raw=True)
             put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
             assert put, vm.output
-            require(vm.command("blocks stat", raw=True), "SECTORS=")
+            # 307-STO-0019: a write on a disk reaches its driver's flush, and the store says so.
+            require(vm.command("blocks stat", raw=True), "DURABILITY=FLUSHED")
+            require(vm.command(f"blocks publish disk {put[1]}", raw=True), "PUBLISHED disk VERSION 1 (FLUSHED)")
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
@@ -10447,9 +10452,11 @@ def store_disk_check(args, disk):
             stat = vm.command("blocks stat", raw=True)
             assert re.search(r"BLOCKS=[1-9]\d* .*SECTORS=\d+/65536", stat), stat
             require(vm.command(f"blocks check {put[1]} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+            require(vm.command("blocks resolve disk", raw=True), f"disk VERSION 1 ROOT {put[1]}")
         finally:
             vm.close()
-    print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot", flush=True)
+    print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot; "
+          "its writes report FLUSHED, and a name published there is found after the reboot", flush=True)
     # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
     with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
         big = Path(temp) / "store.img"

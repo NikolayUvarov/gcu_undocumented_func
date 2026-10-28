@@ -166,6 +166,8 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [251-STO-0015](251-STO-0015-a-model-read-into-memory.md) | A model read back into memory for a recognizer: a memory object of a file from the store, or a copy made once (split from 251-STO-0010) | `STO` | P3 | — (the store's memory quota: requests-KRN.md) | track B |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | — (351-UPD-0007 and the store's disk, 300-KRN-0025, done) | track B, C |
 | [307](307-the-stores-own-partition.md) | A durable medium on real machines: the store's own partition (track B, eighth step) | main task, `STO` | P1 | — | track B |
+| [307-STO-0019](307-STO-0019-how-far-a-write-reached.md) | How far a write reached: `volatile`, `flushed`, `copied` in `blockstore.wit` 2.0 | `STO` | P1 | — | track B |
+| [307-STO-0020](307-STO-0020-the-stores-partition-on-the-stick.md) | The store's partition on the stick: `MIND STORE`, type `0x7F`, formatted as an empty store | `STO` | P1 | — | track B |
 | [308](308-encryption-at-rest.md) | Encryption at rest, and the key's lifecycle, before any personal data | main task, `STO` | P1 | [307](307-the-stores-own-partition.md) (a medium worth sealing) | track B |
 | [309](309-copies-scrub-and-repair.md) | Copies, scrub and repair | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
