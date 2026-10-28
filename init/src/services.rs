@@ -6,7 +6,7 @@ pub const MAX: usize = 4096;
 
 // What the file may turn off or order: services init starts after vfs_server, the essential ones aside (the core,
 // loader, the link, the Effector services, which data/mode.conf decides, the shell, and tpm, which seals the device key).
-pub const CONFIGURABLE: [&str; 23] = ["blockstore", "gpio", "battery", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi",
+pub const CONFIGURABLE: [&str; 22] = ["blockstore", "gpio", "battery", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bcm_wifi",
                                       "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater"];
 // What one cannot work without: turning the second off turns the first off, and the first starts after it.
 pub const NEEDS: [(&str, &str); 6] = [("netpolicy", "netstack"), ("tls", "netstack"), ("tls", "keystore"), ("ssh", "netstack"), ("ssh", "keystore"), ("tts", "audio_gw")];

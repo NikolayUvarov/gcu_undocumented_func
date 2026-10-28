@@ -1,6 +1,6 @@
 # 700-KRN-0176 — The boot image `bt_hci` and init's grant for a USB Bluetooth controller (ABI 23, handoff 23)
 
-**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (made; landing and a run on the DEXP left) · **Blocked by:** the drivers track's fix of `usb_host`'s buffer table ([requests-DRV.md](requests-DRV.md), 2026-10-28) · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
+**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (made, then taken out of the branch until DRV's fix; see Progress) · **Blocked by:** the drivers track's fix of `usb_host`'s buffer table ([requests-DRV.md](requests-DRV.md), 2026-10-28) · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
 
 **Asked by:** the Bluetooth track (`BLT`) on 2026-10-28, for [700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), in `KRN/2026-10-28T0329Z-BLT-the-boot-image-bt-hci-and-its-grant.md` on `internal-dev-messages`. The maintainer's order for the DEXP: Wi-Fi, Ethernet, the screen, then Bluetooth "to connect devices".
 
@@ -35,6 +35,11 @@ The DEXP's RTL8821CE has a Bluetooth half, `0BDA:C821`, on its xHCI.
 - **The fix is the drivers track's.** It is recorded in [requests-DRV.md](requests-DRV.md).
   - With the table one entry longer, in a local tree only, the suite passes and the VM log shows no panic.
   - This task lands after that fix.
+- **Taken out of the branch, the same day.** No fix had come by the end of landing round 38, so the kernel track's other work lands without this task (round 39).
+  - The boot image, `init`'s grant, `CONFIGURABLE`, `SAFE_LEFT_OUT` and the build line are reversed, together with ABI 23, handoff 23 and the tests, docs and README rows.
+  - The branch is back at ABI 22 and handoff 21 with 44 images, the layout `fast-test` carried with 000-KRN-0170.
+  - The safe-start line's fix stays: it names every service left out.
+- **What comes back after DRV's fix.** d53bc153 as it was, with ABI 23 and handoff 23 for the same layout as `fast-test` 5a8aaf1a, and the `usb` suite as a criterion.
 
 ## Acceptance criteria
 

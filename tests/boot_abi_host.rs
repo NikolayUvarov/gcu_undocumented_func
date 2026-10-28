@@ -49,19 +49,15 @@ fn version_read_needs_only_the_old_record() {
 }
 
 // 351-KRN-0166: the loader's handoff apart from the system calls, one version with no range (000-KRN-0175). Handoff 21
-// (550-KRN-0172) adds a 44th image and handoff 23 (700-KRN-0176) a 45th, each moving every field after extra_programs.
+// (550-KRN-0172) adds a 44th image, which moves every field after extra_programs.
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
-    assert_eq!(BOOT_HANDOFF_VERSION, 23);
-    assert_eq!(BOOT_IMAGES, 45, "a change of the boot images is a change of the handoff");
-    assert_eq!(size_of::<BootInfo>(), 1064 + size_of::<ProgramImage>(), "a change of BootInfo is a change of the handoff");
+    assert_eq!(BOOT_HANDOFF_VERSION, 21);
+    assert_eq!(BOOT_IMAGES, 44, "a change of the boot images is a change of the handoff");
+    assert_eq!(size_of::<BootInfo>(), 1064, "a change of BootInfo is a change of the handoff");
     let at = BOOT_SERVICES.iter().position(|&name| name == "rtw88_wifi").unwrap();
     assert_eq!((BOOT_SERVICES[at - 1], BOOT_FILES[at]), ("rtw89_wifi", "rtw88_wifi.elf"));
     assert!(at < BOOT_SERVICES.iter().position(|&name| name == "wlan").unwrap(), "init starts the radio before wlan");
-    // bt_hci after rtw88_wifi: after usb_host, whose client it holds, and vfs_server, whose reader reads its patch.
-    let bt = BOOT_SERVICES.iter().position(|&name| name == "bt_hci").unwrap();
-    assert_eq!((bt, BOOT_FILES[bt]), (at + 1, "bt_hci.elf"));
-    for before in ["usb_host", "vfs_server"] { assert!(BOOT_SERVICES.iter().position(|&name| name == before).unwrap() < bt, "{before} starts before bt_hci"); }
 }
 
 // 173-KRN-0036: boot_flags stays the last field.

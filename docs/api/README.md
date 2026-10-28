@@ -1,6 +1,6 @@
 # MIND Core API
 
-**Version:** ABI 23 (`ABI_VERSION` in `common/abi.rs`; 700-KRN-0176: the boot image `bt_hci`) · **Stability:** unstable, see [Stability](#stability)
+**Version:** ABI 22 (`ABI_VERSION` in `common/abi.rs`; 000-KRN-0170: `SLOT_OWN`, a program's own directory) · **Stability:** unstable, see [Stability](#stability)
 
 Programs reach MIND Core through three layers:
 
@@ -196,13 +196,12 @@ MIND Core is pre-1.0. The system call numbers, records and service interfaces ca
 
 ### The loader's handoff (351-KRN-0166)
 
-The UEFI loader hands the kernel `BootInfo` with `BOOT_HANDOFF_VERSION` (23) in the word ABI 10 put the ABI in. The kernel
+The UEFI loader hands the kernel `BootInfo` with `BOOT_HANDOFF_VERSION` (21) in the word ABI 10 put the ABI in. The kernel
 takes that version alone (000-KRN-0175). A change of system calls alone needs no new loader; a change of `BootInfo` or
 `BOOT_FILES` sets the version above every ABI so far, and the kernel then refuses any other loader with
 `KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES m`. Programs keep checking `ABI_VERSION`.
 Handoff 21 (550-KRN-0172) adds a 44th image, `rtw88_wifi`, after `rtw89_wifi`: it renumbers the images after it and moves
 every field after `extra_programs`, so a loader of handoff 20 or older is refused, as no compatibility with older versions is kept before the first release.
-Handoff 23 (700-KRN-0176) adds a 45th, `bt_hci`, after `rtw88_wifi`, in the same way; a loader of handoff 21 is refused.
 
 `boot_flags` (173-KRN-0036) holds `BOOT_SAFE` when Esc or S was pressed at the loader, before or within the second it waits
 after `ESC OR S WITHIN 1 S`. init then ignores `data/services.txt`.
