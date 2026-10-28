@@ -48,7 +48,7 @@ pub fn command(shell: &mut crate::Shell, args: &[u8]) {
         Asked::Apply(_) | Asked::Rollback => {
             let Ok(state) = update::status(updater) else { return silent(shell) };
             let (shown, apply) = (view(&state), matches!(asked, Asked::Apply(_)));
-            if let Some(code) = updates::refused(&shown, apply) { let _ = writeln!(shell.term, "UPDATE: {}", updates::error(code)); return; }
+            if let Some(code) = updates::refused(&shown) { let _ = writeln!(shell.term, "UPDATE: {}", updates::error(code)); return; }
             let mut question = alloc::string::String::new();
             match asked { Asked::Apply(tries) => updates::apply_question(&mut question, &shown, tries), _ => updates::rollback_question(&mut question, &shown) }
             let into = updates::other(shown.slot);

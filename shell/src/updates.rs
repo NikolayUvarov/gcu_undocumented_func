@@ -12,7 +12,6 @@ pub const TRIES: u8 = 3;
 /// `update.wit` error codes the shell answers itself before it asks the operator.
 pub const NO_SLOT: usize = 1;
 pub const TRIAL: usize = 2;
-pub const NOT_STAGED: usize = 11;
 
 /// `update` alone is `update status`.
 pub fn parse(args: &str) -> Result<Asked, &'static str> {
@@ -47,7 +46,7 @@ pub fn error(code: usize) -> &'static str {
         8 => "THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE",
         9 => "A FILE NOT AS ITS MANIFEST LISTS IT",
         10 => "THE SLOT OR A BOOT RECORD COULD NOT BE WRITTEN",
-        NOT_STAGED => "NO VERIFIED NEWER RELEASE IN THE OTHER SLOT",
+        11 => "NO VERIFIED NEWER RELEASE IN THE OTHER SLOT",
         12 => "NO SLOT TO ROLL BACK TO, OR ITS VERSION IS NOT KNOWN OR BELOW THE MINIMUM",
         13 => "INIT REFUSED THE RESTART",
         14 => "THE PARSER SERVICE DID NOT ANSWER",
@@ -96,10 +95,14 @@ pub fn offer(out: &mut impl Write, name: &str, version: u64, minimum: u64, expir
     let _ = writeln!(out, "UPDATE: CHANNEL {} OFFERS VERSION {} (MINIMUM {}, EXPIRES {}); RUNNING VERSION {}", name, version, Version(minimum), expires, Version(running));
 }
 
-/// The question before `apply`, which restarts the machine.
+/// The question before `apply`, which restarts the machine. `staged` is 0 after a restart, while the other slot may still
+/// hold a release staged before it: the updater checks that slot on the disk.
 pub fn apply_question(out: &mut impl Write, view: &View, tries: u8) {
-    let _ = write!(out, "APPLY VERSION {} (RUNNING {})? THE MACHINE RESTARTS INTO SLOT {} ON TRIAL WITH {} TR{}, FALLING BACK TO SLOT {}.",
-                   view.staged, Version(view.running), other(view.slot), tries, if tries == 1 { "Y" } else { "IES" }, view.slot as char);
+    let _ = match view.staged {
+        0 => write!(out, "APPLY THE RELEASE IN SLOT {} (RUNNING {})?", other(view.slot), Version(view.running)),
+        version => write!(out, "APPLY VERSION {} (RUNNING {})?", version, Version(view.running)),
+    };
+    let _ = write!(out, " THE MACHINE RESTARTS INTO SLOT {} ON TRIAL WITH {} TR{}, FALLING BACK TO SLOT {}.", other(view.slot), tries, if tries == 1 { "Y" } else { "IES" }, view.slot as char);
 }
 
 /// The question before `rollback`, which restarts the machine.
@@ -108,7 +111,8 @@ pub fn rollback_question(out: &mut impl Write, view: &View) {
                    other(view.slot), view.slot as char);
 }
 
-/// Why the shell answers `apply` or `rollback` itself, without a question: the code of the updater's own refusal.
-pub fn refused(view: &View, apply: bool) -> Option<usize> {
-    if view.slot == 0 { Some(NO_SLOT) } else if view.trial { Some(TRIAL) } else if apply && view.staged == 0 { Some(NOT_STAGED) } else { None }
+/// Why the shell answers `apply` or `rollback` itself, without a question: the updater refuses both without a slot or on
+/// trial. Whether the other slot holds a newer release is the updater's to check.
+pub fn refused(view: &View) -> Option<usize> {
+    if view.slot == 0 { Some(NO_SLOT) } else if view.trial { Some(TRIAL) } else { None }
 }
