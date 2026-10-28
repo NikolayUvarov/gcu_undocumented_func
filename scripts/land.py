@@ -288,7 +288,9 @@ def lane_parts(entries):
 
 
 def builds_for(parts, part_of, done=()):
-    """The build groups a lane runs before groups of these parts: the x86 image and test programs, the aarch64 image."""
+    """The build groups a lane runs before groups of these parts: the x86 image and test programs, the aarch64 image.
+    The host part needs the x86 image too: its host tests read the image's ELF files (tests/runtime.rs)."""
+    parts = set(parts) | ({"x86"} if "host" in parts else set())
     return [(part_of[b], b) for part in ("x86", "aarch64") if part in parts for b in BUILDS[part] if b in part_of and b not in done]
 
 
