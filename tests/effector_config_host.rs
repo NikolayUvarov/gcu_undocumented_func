@@ -84,3 +84,39 @@ fn a_server_that_asks_no_token() {
     assert_eq!(kind(&format!("{base}token 0123456789abcdef\n")), (5, ErrorKind::Malformed));
     assert_eq!(kind(&format!("{base}token none\ntoken none\n")), (6, ErrorKind::Duplicate));
 }
+
+#[test]
+fn the_machine_print_rounds_the_memory_to_a_power_of_two() {
+    let mut out = [0u8; PRINT_MAX];
+    assert_eq!(print("Intel(R) N100", 16_719_953_920, &mut out), "Intel(R) N100, 16 GiB", "the DEXP: 15.6 GiB");
+    assert_eq!(print("Intel(R) N100", 16_100_000_000, &mut out), "Intel(R) N100, 16 GiB", "a larger reserve gives the same");
+    assert_eq!(print("", 8_100_000_000, &mut out), "8 GiB", "no processor name where user code cannot read it");
+    assert_eq!(print("x", 12 << 30, &mut out), "x, 16 GiB");
+    assert_eq!(print("x", 0, &mut out), "x, 0 GiB");
+}
+
+#[test]
+fn the_machine_record_tells_a_copied_identity() {
+    let here = "Intel(R) N100, 16 GiB";
+    let mut out = [0u8; RECORD_MAX];
+    assert_eq!(machine(None, here), Machine::Unrecorded);
+    assert_eq!(machine(Some(b"\xff\n"), here), Machine::Unrecorded, "unreadable: the identity is kept");
+    assert_eq!(machine(Some(record(here, "", &mut out)), here), Machine::This { foreign: "" });
+    let mut out = [0u8; RECORD_MAX];
+    let copied = record(here, "mind-macbook-pro", &mut out).to_vec();
+    assert_eq!(copied, b"Intel(R) N100, 16 GiB\nmind-macbook-pro\n");
+    assert_eq!(machine(Some(&copied), here), Machine::This { foreign: "mind-macbook-pro" });
+    assert_eq!(machine(Some(b"Intel(R) Core(TM) i7-4870HQ CPU @ 2.50GHz, 16 GiB\r\n"), here), Machine::Other { print: "Intel(R) Core(TM) i7-4870HQ CPU @ 2.50GHz, 16 GiB" });
+    let mut out = [0u8; RECORD_MAX];
+    assert_eq!(record(here, "no spaces allowed", &mut out), b"Intel(R) N100, 16 GiB\n", "a malformed hostname is not kept");
+}
+
+#[test]
+fn a_hostname_of_the_machines_own() {
+    let mut out = [0u8; NAME_MAX];
+    assert_eq!(own_hostname("Intel(R) N100", &mut out), "mind-n100");
+    assert_eq!(own_hostname("Intel(R) Core(TM) i7-4870HQ CPU @ 2.50GHz", &mut out), "mind-core-i7-4870hq");
+    assert_eq!(own_hostname("AMD Ryzen 7 5800X 8-Core Processor", &mut out), "mind-ryzen-7-5800x-8-core");
+    assert_eq!(own_hostname("", &mut out), "mindcore");
+    assert_eq!(own_hostname("Intel(R) CPU", &mut out), "mindcore");
+}
