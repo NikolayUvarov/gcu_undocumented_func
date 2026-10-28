@@ -93,6 +93,7 @@ USER_CRATES=(
     "rtl8168:rtl8168:rtl8168.elf"
     "rtw89_wifi:rtw89_wifi:rtw89_wifi.elf"
     "rtw88_wifi:rtw88_wifi:rtw88_wifi.elf"
+    "bt_hci:bt_hci:bt_hci.elf"
     "bcm_wifi:bcm_wifi:bcm_wifi.elf"
     "wlan:wlan:wlan.elf"
     "netstack:netstack:netstack.elf"
