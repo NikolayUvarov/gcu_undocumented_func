@@ -28,6 +28,7 @@ fail() { echo "proprietary: $*" >&2; exit 1; }
 
 fetch() {
     python3 "$ROOT/scripts/firmware/rtl8852be.py" fetch
+    python3 "$ROOT/scripts/firmware/rtl8821c_bt.py" fetch
     command -v b43-fwcutter >/dev/null || fail "b43-fwcutter is not installed (sudo apt-get install b43-fwcutter)"
     mkdir -p "$STORE/downloads" "$STORE/firmware/b43"
     local archive="$STORE/downloads/${B43_URL##*/}"
