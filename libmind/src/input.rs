@@ -144,11 +144,12 @@ impl KeyEvent {
 }
 
 /// A pointer event (issues 156, u001, 161): buttons held (`POINTER_*`), movement in pixels (dy grows downwards),
-/// wheel steps (negative: away from the user, to scroll up) and the cell the pointer is on. In a window the window
+/// wheel steps (negative: away from the user, to scroll up), horizontal wheel steps (`across`, positive to the right: a
+/// trackpad's swipe, 211-APP-0090) and the cell the pointer is on. In a window the window
 /// manager says the cell and the movement is 0; on a screen the cell follows a mouse's movement, or is where a tablet
 /// puts it, within `pointer_area`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pointer { pub buttons: u8, pub dx: i32, pub dy: i32, pub wheel: i32, pub x: usize, pub y: usize }
+pub struct Pointer { pub buttons: u8, pub dx: i32, pub dy: i32, pub wheel: i32, pub across: i32, pub x: usize, pub y: usize }
 
 /// A key or a pointer event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,13 +171,13 @@ pub fn read_input() -> Option<Input> {
         word if event_key(word) == KEY_POINTER => {
             if crate::windowed::active() {
                 let (buttons, x, y, wheel) = pointer_absolute_fields(word)?;
-                return Some(Input::Pointer(Pointer { buttons, dx: 0, dy: 0, wheel, x, y }));
+                return Some(Input::Pointer(Pointer { buttons, dx: 0, dy: 0, wheel, across: pointer_across(word), x, y }));
             }
             // next_word moved the pointer of the screen already.
             let (buttons, wheel) = match pointer_absolute_fields(word) { Some((buttons, _, _, wheel)) => (buttons, wheel), None => { let (b, _, _, w) = pointer_fields(word); (b, w) } };
             let (x, y) = pointer_cell().unwrap_or((0, 0));
             let (dx, dy) = (MOVED[0].load(Ordering::Relaxed) as i32, MOVED[1].load(Ordering::Relaxed) as i32);
-            Some(Input::Pointer(Pointer { buttons, dx, dy, wheel, x, y }))
+            Some(Input::Pointer(Pointer { buttons, dx, dy, wheel, across: pointer_across(word), x, y }))
         }
         word => Some(Input::Key(KeyEvent::from_word(seen(word)))),
     }
