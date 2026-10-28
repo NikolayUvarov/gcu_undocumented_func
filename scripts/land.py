@@ -488,7 +488,7 @@ def text_only(path):
         return True
     if path.startswith("issues-audit/") and "/repro/" not in path:
         return path.endswith(".md")
-    return path.startswith(TEXT_DIRS) and path.endswith(".md")
+    return path.startswith(TEXT_DIRS) and path.endswith((".md", ".done"))  # a closed issue is Markdown under .done
 
 
 def cmd_push(_args):
