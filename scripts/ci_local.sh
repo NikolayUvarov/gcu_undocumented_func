@@ -66,6 +66,7 @@ HOST_GROUPS=(
     "network driver without legacy|(cd virtio_net && cargo build --release --no-default-features --target-dir $TMP/virtio-net-modern-only)"
     "host tests|scripts/host_tests.sh"
     "models (TLC)|scripts/model_check.sh"
+    "NRL checks|bash nrl/tools/check.sh"
 )
 X86_GROUPS=(
     "build (x86 test programs)|scripts/x86_fixtures.sh"

@@ -223,6 +223,7 @@ pub const REQUEST_BATTERY: u32 = 2097152; // the battery service's client in SLO
 pub const REQUEST_WIFI: u32 = 4194304; // the Wi-Fi station's configuration client in SLOT_WIFI (550-KRN-0097, for 550-APP-0033)
 pub const REQUEST_NET_COUNTERS: u32 = 8388608; // a network card's read-only client (BADGE_COUNTERS) in SLOT_NET (000-NET-0015, for 000-APP-0049)
 pub const REQUEST_SSH: u32 = 16777216; // the SSH service's client in SLOT_SSH, with a flow grant (351-KRN-0115, for 351-NET-0027)
+pub const REQUEST_OWN: u32 = 33554432; // its own directory, system/own/<name>/, in SLOT_OWN: from the loader itself, by its name (000-KRN-0170)
 // The badge of a loader client that may only list, inspect and start helpers (loader.wit 1.10, 109-KRN-0117): the updater's.
 pub const BADGE_HELPERS_ONLY: u16 = 1;
 

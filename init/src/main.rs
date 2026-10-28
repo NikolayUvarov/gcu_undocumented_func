@@ -27,7 +27,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
     "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
-    "spawn privilege", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
+    "spawn privilege; a VFS client of system/own/ for the programs' own directories", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
@@ -580,6 +580,8 @@ impl Init {
                 self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 self.lend(&mut grants, 4, "audio_gw")?; grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
                 self.lend(&mut grants, 6, "tts")?;
+                // The client that alone opens system/own/, where it makes and scopes each program's own directory (000-KRN-0170).
+                grants.add(7, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_OWNERS)?, CLIENT);
             }
             "audio_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
@@ -1595,8 +1597,10 @@ fn boot(info: &'static BootInfo) {
     let firmware = platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_FIRMWARE, 0).ok();
     let (safe, marked) = firmware.map_or((false, false), run_mark);
     if safe {
-        mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: {}, {}, {}, {}, {}",
-                       SAFE_LEFT_OUT[0], SAFE_LEFT_OUT[1], SAFE_LEFT_OUT[2], SAFE_LEFT_OUT[3], SAFE_LEFT_OUT[4]);
+        // Every service left out, named (the list had grown past the five the line once printed).
+        let mut names = mind::util::FixedBuf::<128>::new();
+        for (i, name) in SAFE_LEFT_OUT.iter().enumerate() { let _ = core::fmt::Write::write_fmt(&mut names, format_args!("{}{}", if i == 0 { "" } else { ", " }, name)); }
+        mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: {}", names.as_str());
     }
     if !marked { mind::println!("[INIT] NO RUN MARK: THE FIRMWARE KEEPS NO VARIABLES FOR IT; A RUN THAT STOPS EARLY IS NOT NOTICED"); }
     let mut mark = firmware.filter(|_| marked);

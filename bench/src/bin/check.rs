@@ -15,7 +15,7 @@ use mind::idl::{init as lifecycle, loader, socket, sysinfo};
 use mind::ipc::{self, Endpoint, Message};
 use mind::mem::Pages;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_LIFECYCLE | REQUEST_NETWORK);
+mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_LIFECYCLE | REQUEST_NETWORK | REQUEST_OWN);
 
 const GROUPS: [(&str, &str); 8] = [
     ("kernel", "Kernel"), ("security", "Security"), ("clock", "Clocks"), ("files", "Files and programs"),
@@ -289,11 +289,20 @@ fn clock(run: &mut Run) {
         (Some((y, _, _)), _) => fail(format!("the year is {}: set the clock (date set)", y)),
         _ => fail(String::from("the RTC service did not answer")),
     });
-    // The RTC moves with the monotonic clock: about 1 s over 1.2 s.
-    let (s0, t0) = (mind::rtc::seconds_since_midnight(), now());
-    while now() - t0 < 1_200_000_000 { mind::time::sleep(100); }
-    run.report("the RTC advances", match (s0, mind::rtc::seconds_since_midnight()) {
-        (Some(a), Some(b)) => { let moved = (b + 86_400 - a) % 86_400; if (1..=2).contains(&moved) { pass(format!("{} s in {}", moved, report::duration(now() - t0))) } else { fail(format!("{} s in {}", moved, report::duration(now() - t0))) } }
+    // The RTC moves with the monotonic clock. Both reads lie in the window from before the first to after the second, at
+    // least 1.2 s apart, so its seconds move at least 1 and at most the window's whole seconds rounded up (176-KRN-0181).
+    let t0 = now();
+    let s0 = mind::rtc::seconds_since_midnight();
+    let asked = now();
+    while now() - asked < 1_200_000_000 { mind::time::sleep(100); }
+    let s1 = mind::rtc::seconds_since_midnight();
+    let window = now() - t0;
+    run.report("the RTC advances", match (s0, s1) {
+        (Some(a), Some(b)) => {
+            let moved = (b + 86_400 - a) % 86_400;
+            let text = format!("{} s in {}", moved, report::duration(window));
+            if moved >= 1 && moved as u64 <= window.div_ceil(1_000_000_000) { pass(text) } else { fail(text) }
+        }
         _ => fail(String::from("the RTC service did not answer")),
     });
     let (_, resolution, hz) = mind::time::clock_info();
@@ -362,6 +371,33 @@ fn files(run: &mut Run) {
         Err(e) => fail(format!("the loader did not answer: {:?}", e)),
     };
     run.report("programs on the disk", verdict);
+    own(run);
+}
+
+// Its own directory, system/own/check/ (000-KRN-0170): each run counts itself there, and lists what is there, so a
+// second run and another program's directory show; the other programs' are hidden from its files client.
+fn own(run: &mut Run) {
+    use mind::fs::own;
+    if !own::given() { return run.report("its own directory", skip(String::from("none given: run check by its name, from the disk"))); }
+    let verdict = (|| -> Result<String, mind::fs::Error> {
+        let mut text = [0u8; 16];
+        let before = own::read("runs.txt", &mut text).ok().and_then(|n| core::str::from_utf8(&text[..n]).ok()?.trim().parse::<u64>().ok()).unwrap_or(0);
+        own::write("runs.txt", format!("{}\n", before + 1).as_bytes())?;
+        let n = own::read("runs.txt", &mut text)?;
+        let after = core::str::from_utf8(&text[..n]).ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
+        let mut names = Vec::new();
+        own::list(|e| names.push(String::from_utf8_lossy(e.name).to_lowercase()))?;
+        Ok(if after == before + 1 { format!("run {}; it holds {}", after, names.join(" ")) } else { format!("wrote {}, read {}", before + 1, after) })
+    })();
+    run.report("its own directory", match verdict {
+        Ok(detail) if detail.starts_with("run ") => pass(detail),
+        Ok(detail) => fail(detail),
+        Err(e) => fail(format!("{:?}", e)),
+    });
+    run.report("system/own/ hidden", match mind::fs::list("system/own", |_| ()) {
+        Err(e) => pass(format!("system/own/ refused to its files client ({:?})", e)),
+        Ok(n) => fail(format!("system/own/ listed: {} entries", n)),
+    });
 }
 
 fn services(run: &mut Run, info: &mind::BootInfo) {

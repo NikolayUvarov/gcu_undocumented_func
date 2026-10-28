@@ -16,7 +16,7 @@ use mind::idl::{loader, sysinfo, video};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_CAMERA);
+mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_CAMERA | REQUEST_OWN);
 
 const GROUPS: [(&str, &str); 4] = [("files", "Files"), ("services", "Service round trips"), ("crypto", "Hashing"), ("camera", "The camera")];
 const USAGE: &str = "usage: bench [files|services|crypto|camera …] [--quick]";
@@ -83,6 +83,22 @@ fn files(run: &mut Run) {
     volume(run, "ram:", "ram:");
     volume(run, "data/", "data/");
     volume(run, "log:", "log:");
+    own(run);
+}
+
+// Its own directory, system/own/bench/ (000-KRN-0170): a 1 KiB file cycle there, and bench.txt left for the run after.
+fn own(run: &mut Run) {
+    use mind::fs::own;
+    let name = "own: 1 KiB file cycle";
+    if !own::given() { return run.skip(name, "none given: run bench by its name"); }
+    let data = [0x5Au8; SMALL];
+    let mut buffer = [0u8; SMALL];
+    let mut errors = 0;
+    let mut cycles = batches(run.reps(20), 1, || {
+        if own::write("cycle.tmp", &data).is_err() || own::read("cycle.tmp", &mut buffer).map_or(true, |got| got != SMALL) || own::remove("cycle.tmp").is_err() { errors += 1; }
+    });
+    if errors == 0 { let _ = run.row(name, &mut cycles, 1); } else { run.fail(name, &format!("{} cycles failed", errors)); }
+    let _ = own::write("bench.txt", b"bench was here\n");
 }
 
 // A round trip measured in batches; `op` says whether it succeeded.

@@ -35,6 +35,8 @@ SIGNED = ("MANIFEST", "MANIFEST.SIG")
 VOICE = ("voice/model.bin", "voice/commands.txt")
 # The runs on real hardware (176-KRN-0087).
 DIAG = tuple(sorted(f"diag/{p.name}" for p in (ROOT / "diag").glob("*.msh")))
+# Mozilla's public roots, which tls reads (000-NET-0046); at the root, shared by the slots, and the owner's to change.
+ROOTS = ("tlsroots.pem",)
 SECTOR = 512
 # The log partition after the boot one (211-PRT-0006): FAT16 with an ordinary MBR type (0x0E, FAT16 LBA), which Windows,
 # macOS and Linux mount and write. vfs_server mounts it as log: by its label and saves each boot's system log there.
@@ -70,12 +72,12 @@ def applications(source):
 
 def files(arch, source=None):
     """The files of the image for `arch`: the bootloader, the kernel, its boot services, the applications, licences, voice,
-    the runs on real hardware."""
+    the runs on real hardware, the public root store."""
     spec = ARCHES[arch]
     source = Path(source or ROOT / spec["root"])
     names = listed(source)
     boot = tuple(name for name in BOOT_FILES if name not in spec["missing"] and (names is None or name in names))
-    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *DIAG, *SIGNED)
+    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *DIAG, *ROOTS, *SIGNED)
 
 
 def find_qemu_img(requested):
@@ -114,7 +116,7 @@ def read_payloads(source, arch="x86_64"):
         if not 0 < file.stat().st_size <= 4 * 1024 * 1024:
             raise ValueError(f"Invalid size of {file}: expected 1..4194304 bytes.")
         data = file.read_bytes()
-        if name in LICENSES or name in VOICE or name in DIAG or name in SIGNED:
+        if name in LICENSES or name in VOICE or name in DIAG or name in ROOTS or name in SIGNED:
             pass
         elif name.endswith(".elf"):
             if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != machine:

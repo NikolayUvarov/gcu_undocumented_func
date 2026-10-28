@@ -14,7 +14,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:vfs";
-pub const VERSION: (u8, u8, u8) = (2, 4, 0);
+pub const VERSION: (u8, u8, u8) = (2, 5, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -308,6 +308,18 @@ pub fn fill(endpoint: Endpoint, file: u32, offset: u64, target: usize) -> Result
     Ok(Ok(wire::field(&reply, 1, 0, 64) as u64))
 }
 
+/// Makes the scope whose badge is `scope` task `task`'s alone, as if that task had used it first: it then lasts as
+/// long as that task, whether or not the task opens it within a minute. Only the task that made the scope may ask;
+/// one another task already uses is refused (denied). For the loader, which learns the program's PID only once it
+/// has started it with the scope (2.5, 000-KRN-0170).
+pub fn adopt(endpoint: Endpoint, scope: u16, task: u64) -> Result<core::result::Result<(), Error>> {
+    let words = [18 | MAJOR << 8 | ((scope) as usize) << 16, ((task) as usize) << 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 16394;
 
@@ -331,6 +343,7 @@ pub enum Request<'a> {
     Scope { dir: u32, writable: bool },
     Format { handle: u32, label: Text<11> },
     Fill { file: u32, offset: u64, target: usize },
+    Adopt { scope: u16, task: u64 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -471,6 +484,10 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0xffffffff0000, 0xffffffffffffffff], CAP_KIND_MEMORY, true)?;
             Ok((Request::Fill { file: wire::field(&words, 0, 16, 32) as u32, offset: wire::field(&words, 1, 0, 64) as u64, target: cap }, Call::words(request, cap)))
         }
+        18 => {
+            wire::body(request, cap, [0xffff0000, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
+            Ok((Request::Adopt { scope: wire::field(&words, 0, 16, 16) as u16, task: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -543,4 +560,8 @@ pub fn reply_format(call: Call, value: core::result::Result<(), Error>) -> Resul
 pub fn reply_fill(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, ((value) as usize) << 0])
+}
+pub fn reply_adopt(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

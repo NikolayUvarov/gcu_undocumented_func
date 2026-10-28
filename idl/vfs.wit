@@ -4,7 +4,7 @@
 /// from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
 /// the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files and the model disk `models` are never writable. Major
 /// version 2: directory handles change the meaning of `open` and `list` of 1.0.
-package mind:vfs@2.4.0;
+package mind:vfs@2.5.0;
 
 interface vfs {
     /// Why a request failed.
@@ -63,4 +63,9 @@ interface vfs {
     /// count. The caller lends the object with the write right, so the bytes are charged to it, not to vfs_server; one
     /// call for the whole object, with no 16 KiB limit; a file up to 4 GiB − 1 byte, FAT32's limit (2.4, 262-KRN-0162).
     fill: func(file: u32, offset: u64, target: borrow<memory>) -> result<u64, error>;
+    /// Makes the scope whose badge is `scope` task `task`'s alone, as if that task had used it first: it then lasts as
+    /// long as that task, whether or not the task opens it within a minute. Only the task that made the scope may ask;
+    /// one another task already uses is refused (denied). For the loader, which learns the program's PID only once it
+    /// has started it with the scope (2.5, 000-KRN-0170).
+    adopt: func(scope: u16, task: u64) -> result<_, error>;
 }

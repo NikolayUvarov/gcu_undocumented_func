@@ -1,6 +1,6 @@
 # 000-NET-0047 — HTTP for API clients in `libmind`: bodies, multipart, redirects, compression, a streaming body, Server-Sent Events
 
-**Type:** network (`libmind` `http`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — (for 253, 255, 260, 261 and 000-NET-0048) · **Constitution:** MC-6.6, MC-11.5, MC-11.11, MC-12.1
+**Type:** network (`libmind` `http`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (made and tested on both architectures but HEAD, PATCH and DELETE; landing left) · **Blocked by:** — · **Main task:** — (for 253, 255, 260, 261 and 000-NET-0048) · **Constitution:** MC-6.6, MC-11.5, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md).
 
@@ -35,6 +35,54 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
 - **Deadlines:** for the connection, for the head and between pieces of the body, each the caller's.
 - **`Retry-After`:** parsed, in seconds or as a date, and given to the caller. The caller decides whether to repeat: nothing here repeats a request on its own (MC-6.6).
 - **Parsing stays where it is:** the head and the framing here, a body's JSON or HTML in the caller's parser session (MC-11.11).
+
+## What was done (2026-10-28)
+
+- **`idl/parse.wit` 2.0.** One response head, `http-response`, now also carries:
+  - the content coding;
+  - the media type;
+  - `Location`;
+  - `Retry-After`, in seconds or as a date.
+
+  1.x's `http-head` is gone (no older version kept, the maintainer's rule of 2026-10-25). `parse` and `mind::parse` follow.
+- **`libmind` `http`:**
+  - **The head.** `Head` has the new fields, and `Response::head` gives it whole. `http_date` reads the three HTTP-date forms.
+  - **Redirects.** `redirect` applies the redirect rules: 303, and 301 or 302 after a POST, become GET; 307 and 308 keep the method and body. It refuses another scheme, HTTPS to HTTP, a missing `Location` and the eleventh. It tells the caller whether the host changed, since the caller's flow grant decides.
+  - **Chunked uploads.** `request_streamed` sends a body of unknown length chunked.
+- **`libmind` `http_coding`.** It decodes identity, gzip (members one after another) and deflate (zlib or raw) as the body arrives, up to the caller's limit (`TooLarge`).
+  - **The readers.** `inflate` gains readers that ask for bytes as the stream needs them (`inflate_from`, `zlib_from`, `gzip_from`), and the gzip header and trailer. Its existing functions are unchanged.
+- **`libmind` `multipart`.** RFC 7578 bodies of fields and streamed files, with the length known first.
+  - **The boundary** is made from 16 random bytes.
+  - **A field** that holds it is refused before anything is sent. **A file** is matched as it streams (Knuth-Morris-Pratt) and the request fails if the boundary occurs in it.
+- **`libmind` `sse`.** Server-Sent Events by the WHATWG rules, fed in pieces of any size, with a limit on a line and on an event.
+- **Host tests.**
+  - **`tests/http_host.rs` (20 tests):** heads, dates, redirect rules and chunked uploads.
+  - **`tests/sse_host.rs` (6 tests):** the standard's examples, every line ending, every split point and 1000 events.
+  - **`tests/multipart_host.rs` (4 tests):** RFC 7578's form, the boundary found across reads, names that cannot be written, and a short file.
+  - **`tests/http_coding_host.rs` (4 tests):** every coding in pieces down to one byte, a damaged CRC, an unknown coding, a bomb stopped at its limit, and a sink that stops.
+  - **The fixtures** are written by `tests/data/http/make.py`.
+- **The QEMU check.** `tests/http_api_stub.py` serves HTTPS with the suite's test CA, and `webcheck --api` runs each check against it in the download suite (`api_runs`):
+  - a JSON POST;
+  - a multipart upload that Python's own parser reads;
+  - a chunked upload;
+  - redirect chains;
+  - gzip and deflate;
+  - a 64 MiB bomb;
+  - 1000 events;
+  - `Retry-After` in both forms.
+- **Docs.** [docs/network/services.md](../docs/network/services.md) 0.2.
+- **Tested on x86** (QEMU under TCG, 4 CPUs, user networking): the download suite passed whole (27 checks), its `api_runs` among them, all on the test CA's HTTPS:
+  - the JSON POST answered;
+  - the multipart upload's 100 000 bytes arrived with the SHA-256 the guest computed;
+  - the chunked upload's 50 000 bytes arrived;
+  - four redirects (301, 308, 307, 302) then 200, and a 303 after a POST followed as a GET;
+  - the loop refused after its 10th redirect, and the way down to HTTP refused;
+  - gzip (12 630 bytes) and deflate (12 862) both decoded to the same 225 000 bytes;
+  - the bomb stopped at 1 048 576 bytes;
+  - 1000 events in order, the last id 999 and `retry` 3000;
+  - `Retry-After` as 7 seconds, and as the date 1445412480.
+- **Tested on aarch64** (QEMU under TCG, 4 CPUs): the `tls` and `net` suites passed whole (29 checks), the API clients' among them, with the same lines.
+- **Left:** `Head`, `Patch` and `Delete` wait for the Effector agent to stop matching `Method` exhaustively (`requests-EFF.md`, 2026-10-28).
 
 ## Acceptance criteria
 

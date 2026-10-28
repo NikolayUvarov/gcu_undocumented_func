@@ -212,15 +212,16 @@ impl Session {
 
 struct Service { provider: Arc<CryptoProvider>, sessions: Vec<Box<Session>>, next: u32 }
 
-// The root store from the boot disk, read for every connection so a changed file takes effect.
-fn roots() -> RootCertStore {
+// The root store from the boot disk, read for every connection so a changed file takes effect; with the count of
+// certificates in it that did not parse.
+fn roots() -> (RootCertStore, usize) {
     let mut store = RootCertStore::empty();
-    let Ok(file) = mind::fs::File::open(ROOTS_FILE) else { return store };
+    let Ok(file) = mind::fs::File::open(ROOTS_FILE) else { return (store, 0) };
     let mut text = alloc::vec![0u8; file.size().min(512 * 1024)];
     let length = file.read_at(0, &mut text).unwrap_or(0);
     let certificates = pem::certificates(core::str::from_utf8(&text[..length]).unwrap_or(""));
-    store.add_parsable_certificates(certificates.into_iter().map(pki_types::CertificateDer::from));
-    store
+    let (_, refused) = store.add_parsable_certificates(certificates.into_iter().map(pki_types::CertificateDer::from));
+    (store, refused)
 }
 
 impl Service {
@@ -244,7 +245,7 @@ impl Service {
         let builder = match pins {
             Some(pins) => builder.dangerous().with_custom_certificate_verifier(Arc::new(pins)),
             None => {
-                let roots = roots();
+                let (roots, _) = roots();
                 if roots.is_empty() { return Err(Error::NoRoots); }
                 builder.with_webpki_verifier(WebPkiServerVerifier::builder_with_provider(Arc::new(roots), self.provider.clone()).build().map_err(|_| Error::NoRoots)?)
             }
@@ -354,7 +355,10 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut service = Service { provider: provider::provider(), sessions: Vec::new(), next: 0 };
     let (entropy, outcome) = if mind::random::available() { ("RANDOM FROM ", "") } else { ("NO ", ": EVERY CONNECTION WILL BE REFUSED") };
-    mind::println!("[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM {}, {}{}{}", ROOTS_FILE, entropy, mind::random::SOURCE, outcome);
+    let (store, refused) = roots();
+    let unparsed = if refused > 0 { alloc::format!(" ({} NOT PARSED)", refused) } else { alloc::string::String::new() };
+    mind::println!("[TLS] READY: TLS 1.3 CLIENT, {} ROOTS FROM {}{}, {}{}{}", store.len(), ROOTS_FILE, unparsed, entropy, mind::random::SOURCE, outcome);
+    drop(store);
     let mut scratch = Box::new([0u8; api::REQUEST_MAX]);
     let mut buffer = Box::new([0u8; CHUNK]);
     let mut checked = 0u64;

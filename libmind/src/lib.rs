@@ -31,6 +31,7 @@ pub mod gpio;
 pub mod heap;
 pub mod hid;
 pub mod http;
+pub mod multipart;
 pub mod idl;
 pub mod input;
 pub mod io;
@@ -74,6 +75,10 @@ pub mod jpeg;
 pub mod jpegdec;
 #[cfg(feature = "alloc")]
 pub mod inflate;
+#[cfg(feature = "alloc")]
+pub mod http_coding;
+#[cfg(feature = "alloc")]
+pub mod sse;
 #[cfg(feature = "alloc")]
 pub mod zip;
 #[cfg(feature = "alloc")]
