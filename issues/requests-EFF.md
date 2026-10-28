@@ -74,3 +74,11 @@ tasks/owner handling it, the agreed contract location/version and the first
 build available for joint acceptance. Keep the binding outcome in the tasks
 and this request on main. Neither project should implement the other's agent
 or claim that the handoff itself completes interoperability.
+
+## From NET: name a request's method with `Method::name()` (000-NET-0047)
+
+**Recorded by:** the network track (NET, the kernel session), 2026-10-28, for [000-NET-0047](000-NET-0047-http-for-api-clients.md).
+
+- **What is asked.** `effector/src/main.rs` (line 269 at `main` c8fe8d03) names a failed request's method with a `match` over every case of `mind::http::Method`: `Get`, `Post` and `Put`. Use `method.name()` instead, which `libmind` makes public with 000-NET-0047.
+- **Why.** 000-NET-0047 adds `Head`, `Patch` and `Delete`, which API clients send. A new case breaks an exhaustive `match` outside `libmind`, so the cases wait until the agent no longer has one.
+- **Nothing else changes for the agent.** `request`, `Response::read` and `finish` keep their signatures; `Response` gains `head`, the whole response head.

@@ -34,13 +34,6 @@ fn main(_info: &'static BootInfo) {
         if !request.is_call { if session { return } else { continue } }
         let _ = match parse::decode(&request, RECEIVED, scratch) {
             Err(reason) => wire::reject(reason),
-            Ok((parse::Request::HttpHead { head }, call)) => {
-                let typed = http::parse_head(head).map(|head| mind::parse::to_record(&head)).map_err(|_| {
-                    if !session { mind::println!("[PARSE] REFUSED AN HTTP HEAD FOR PID {}: MALFORMED ({} BYTES)", request.sender, head.len()); }
-                    Error::Malformed
-                });
-                parse::reply_http_head(call, typed.as_ref().map_err(|e| *e))
-            }
             Ok((parse::Request::HttpResponse { head }, call)) => {
                 let typed = http::parse_head(head).map(|head| mind::parse::to_response(&head)).map_err(|_| {
                     if !session { mind::println!("[PARSE] REFUSED AN HTTP HEAD FOR PID {}: MALFORMED ({} BYTES)", request.sender, head.len()); }

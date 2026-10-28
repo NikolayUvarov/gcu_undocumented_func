@@ -47,6 +47,9 @@ done
 cp "$ROOT"/LICENSE-MIT "$ROOT"/LICENSE-APACHE "$ROOT"/THIRD_PARTY.md "$ROOT"/LICENSES/*.txt "$OUT/LICENSES/"
 cp "$ROOT"/voice/model.bin "$ROOT"/voice/commands.txt "$OUT/voice/"
 cp "$ROOT"/diag/*.msh "$OUT/diag/"
+# Mozilla's public roots as tlsroots.pem, the committed copy checked against its record (000-NET-0046).
+python3 "$ROOT/scripts/update_roots.py" --check
+cp "$ROOT/third_party/roots/cacert.pem" "$OUT/tlsroots.pem"
 if [[ "${1:-}" == --fixtures ]]; then
     for case in kernel_read text_write stack_exec undefined; do
         rustc --edition=2021 --target "$TARGET" --crate-type bin -C opt-level=2 -C panic=abort -C relocation-model=pic \

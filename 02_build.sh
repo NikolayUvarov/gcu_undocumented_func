@@ -93,7 +93,6 @@ USER_CRATES=(
     "rtl8168:rtl8168:rtl8168.elf"
     "rtw89_wifi:rtw89_wifi:rtw89_wifi.elf"
     "rtw88_wifi:rtw88_wifi:rtw88_wifi.elf"
-    "bt_hci:bt_hci:bt_hci.elf"
     "bcm_wifi:bcm_wifi:bcm_wifi.elf"
     "wlan:wlan:wlan.elf"
     "netstack:netstack:netstack.elf"
@@ -200,6 +199,10 @@ cp "$BUILD_SCRIPT_DIR"/voice/model.bin "$BUILD_SCRIPT_DIR"/voice/commands.txt "$
 # The runs on real hardware, quick and full, as msh scripts (176-KRN-0087).
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/diag"
 cp "$BUILD_SCRIPT_DIR"/diag/*.msh "$BUILD_SCRIPT_DIR/usb_root/diag/"
+# Mozilla's public roots as tlsroots.pem, the committed copy checked against its record (000-NET-0046).
+STEP="the public root store"
+python3 "$BUILD_SCRIPT_DIR/scripts/update_roots.py" --check
+cp "$BUILD_SCRIPT_DIR/third_party/roots/cacert.pem" "$BUILD_SCRIPT_DIR/usb_root/tlsroots.pem"
 # With $MIND_SECURE_BOOT_KEYS (a directory holding db.key and db.crt), the bootloader is signed for Secure Boot
 # first (351-UPD-0012, docs/update/secure-boot.md). Then the boot manifest and its signature: the bootloader loads
 # only what it lists (350-UPD-0002, docs/update/README.md).

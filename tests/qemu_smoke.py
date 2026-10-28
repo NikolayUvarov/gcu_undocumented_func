@@ -38,6 +38,7 @@ import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
+import http_api_stub  # noqa: E402
 import release as release_tool  # noqa: E402
 import link_update  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
@@ -6880,12 +6881,13 @@ def download_check(args, disk):
     port = release.server_address[1]
     # The same files over HTTPS: the test CA's server (in tlsroots.pem), and one from a CA nobody trusts.
     _certificates(certificates)
-    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    _roots_with_test_ca(certificates, disk)
     secure = serve_release.serve(files, certificates / "server.pem", certificates / "server.key", cuts={"/big.bin": cut})
     rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
     service = _service_server(certificates)
+    api_stub = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # 000-NET-0047
     _expired_certificate(certificates)
     expired, _ = _https_server(certificates, "expired")
     service_port, expired_port = service.server_address[1], expired.server_address[1]
@@ -6895,7 +6897,8 @@ def download_check(args, disk):
     sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
                                         + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
-                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port)))
+                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port))
+                                        + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n")
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -6919,6 +6922,7 @@ def download_check(args, disk):
         parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
         service_runs(vm, service_port)
+        api_runs(vm, api_stub.server_address[1])
         pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
     finally:
         vm.close()
@@ -6926,7 +6930,7 @@ def download_check(args, disk):
         stall.go.set()
         if sftp:
             sftp.stop()
-        for server in (release, secure, rogue, held, service, expired, stall):
+        for server in (release, secure, rogue, held, stall, service, api_stub, expired):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -6961,6 +6965,41 @@ def service_runs(vm, port):
     require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
     print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
           "nesting refused and logged with the client's PID", flush=True)
+
+
+def api_runs(vm, port):
+    """000-NET-0047: HTTP for API clients against tests/http_api_stub.py over HTTPS with the test CA: a JSON POST, a
+    multipart upload checked by Python's own parser, a chunked upload, redirect chains by their rules, gzip and deflate
+    bodies decoded as they come and a bomb stopped at 1 MiB, 1000 Server-Sent Events in order, Retry-After in both forms."""
+    vm.send(f"webcheck https://10.0.2.2:{port}/ --api\n")
+    out = vm.expect("MIND> ", timeout=900, after="WEBCHECK DONE")
+    data = bytes(i * 7 % 251 for i in range(100_000))
+    require(out, 'WEBCHECK API JSON 200 application/json {"model":"mind-test","content":"DNIM morf olleh","bytes":')
+    require(out, f"WEBCHECK API FILE SHA256 {hashlib.sha256(data).hexdigest()}")
+    multipart = re.search(r"WEBCHECK API MULTIPART 200 (\d+) BYTES (\{.*\})", out)
+    assert multipart, out
+    answer = json.loads(multipart[2])
+    assert answer["length"] == int(multipart[1]) and answer["parts"] == {
+        "chat_id": "42", "document": {"filename": "data.bin", "type": "application/octet-stream", "length": 100_000, "sha256": hashlib.sha256(data).hexdigest()}}, answer
+    require(out, f'WEBCHECK API STREAMED 200 {{"chunked":true,"length":50000,"sha256":"{hashlib.sha256(data[:50_000]).hexdigest()}"}}')
+    for line in ("WEBCHECK API REDIRECT 301 GET TO /api/r/3", "WEBCHECK API REDIRECT 308 GET TO /api/r/2", "WEBCHECK API REDIRECT 307 GET TO /api/r/1",
+                 "WEBCHECK API REDIRECT 302 GET TO /api/final", "WEBCHECK API REDIRECTS 4 THEN 200 the end ",
+                 "WEBCHECK API REDIRECT 303 GET TO /api/final?from=post", "WEBCHECK API SEE OTHER 1 THEN 200 the end from=post",
+                 "WEBCHECK API REDIRECT 302 GET TO /api/loop?10", "WEBCHECK API LOOP Err(Redirect)", "WEBCHECK API DOWN Err(Redirect)"):
+        require(out, line)
+    assert "/api/loop?11" not in out, out
+    for name, coding in (("gzip", "Gzip"), ("deflate", "Deflate")):
+        require(out, f"WEBCHECK API {name} {coding} ")
+        require(out, f"BYTES DECODED Ok({len(http_api_stub.TEXT)}) SHA256 {http_api_stub.TEXT_SHA256}")
+    bomb = re.search(r"WEBCHECK API BOMB Err\(TooLarge\) AFTER (\d+) BYTES", out)
+    assert bomb and int(bomb[1]) <= 1 << 20, out
+    require(out, f"WEBCHECK API EVENTS text/event-stream {http_api_stub.EVENTS} DELTAS IN ORDER true DONE true LAST ID {http_api_stub.EVENTS - 1} RETRY Some(3000)")
+    require(out, "WEBCHECK API busy 503 RETRY-AFTER Some(Seconds(7))")
+    require(out, "WEBCHECK API limited 429 RETRY-AFTER Some(Date(1445412480))")
+    print("PASS: HTTP for API clients over HTTPS: a JSON POST, a multipart upload of a field and a 100 000-byte file, a chunked "
+          "upload, redirects by their rules (301, 302, 307, 308, 303 after a POST; a loop refused after 10, HTTPS to HTTP refused), "
+          f"gzip and deflate bodies decoded as they came, a bomb stopped at {int(bomb[1])} bytes, {http_api_stub.EVENTS} "
+          "Server-Sent Events in order, Retry-After in seconds and as a date", flush=True)
 
 
 def pinned_runs(vm, certificates, port, rogue_port, expired_port):
@@ -7898,6 +7937,14 @@ def slow_radio_check(args):
           f"silent, the station joined once it answered, scanning by itself first; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
+def _roots_with_test_ca(certificates, disk):
+    # Mozilla's public roots as the image ships them (000-NET-0046), with the test CA added as an owner adds a root:
+    # the suites check that tls takes the whole store; returns how many roots it holds.
+    store = (ROOT / "third_party/roots/cacert.pem").read_bytes() + b"\n" + (certificates / "ca.pem").read_bytes()
+    (disk / "tlsroots.pem").write_bytes(store)
+    return store.count(b"-----BEGIN CERTIFICATE-----")
+
+
 def _certificates(directory):
     # A test CA (RSA) and a server certificate it signs (ECDSA P-256) for mind.test and 10.0.2.2; a second CA nobody
     # trusts and a server certificate from it for the same names.
@@ -8315,7 +8362,7 @@ def tls_suite(args, disk):
     # one; without RDRAND both services fail closed.
     certificates = Path(tempfile.mkdtemp(prefix="mind-tls-"))
     _certificates(certificates)
-    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    roots = _roots_with_test_ca(certificates, disk)
     good, _ = _https_server(certificates, "server")
     rogue, _ = _https_server(certificates, "rogue")
     asking, asking_context = _https_server(certificates, "server")
@@ -8338,7 +8385,7 @@ def tls_suite(args, disk):
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
     try:
         require(vm.service_logs("keystore", "DEVICE KEY READY"), "[KEYSTORE] DEVICE KEY READY: MIND ")
-        require(vm.service_logs("tls", "[TLS] READY"), f"[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM tlsroots.pem, RANDOM FROM {entropy}")
+        require(vm.service_logs("tls", "[TLS] READY"), f"[TLS] READY: TLS 1.3 CLIENT, {roots} ROOTS FROM tlsroots.pem, RANDOM FROM {entropy}")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
         page = vm.command(f"https 10.0.2.2:{ports['good']} /secure mind.test")
         for line in ("HTTPS: mind.test VERIFIED, TLS 1.3 SUITE", "HTTP/1.0 200 OK", "hello from the host: /secure to nobody"):

@@ -34,13 +34,14 @@ The maintainer (2026-10-27): the DEXP desktop's agent appeared on the server as 
   - `NEW AGENT ID mind_09dca8b4def0f6e6`.
 
   The server lists it online, not activated, hostname `mind-n100`; the MacBook's entry is offline. The one-off is not committed.
-- **Until a release carries this agent,** a restart of the DEXP runs the boot image's agent. It keeps the new ID from `system/effector/agent_id` but reports `effector.conf`'s hostname, `mind-macbook-pro`.
+- **2026-10-27, a release over the cable** (`link_update.py` through `effector485`, slot B confirmed) carries this agent to the DEXP. After the restart it logs `HOSTNAME mind-n100 …` and `AGENT mind_09dca8b4def0f6e6`, and waits for the owner's activation.
+- **The `effector` QEMU suite passes on x86** (all 8 checks, 2026-10-27). The check of a copied identity in QEMU is not written yet.
 
 ## Acceptance criteria
 
 - [x] Host tests: the print and its rounding, the record read and written, a copied identity told apart, the hostname of the machine's own.
 - [ ] The `effector` QEMU suite passes, x86 and aarch64: a first start records the machine, and a record of another print gives a new agent ID.
-- [ ] On the DEXP, from a release: the record is read as this machine's, and the hostname stays `mind-n100` until the owner names it. Evidence for the DEXP only (MC-12.1).
+- [x] On the DEXP, from a release (slot B, version 202610272251, 2026-10-27): the record is read as this machine's. The agent keeps `mind_09dca8b4def0f6e6` and reports `mind-n100`, since `effector.conf` still names `mind-macbook-pro`. Evidence for the DEXP only (MC-12.1).
 
 ## Related
 

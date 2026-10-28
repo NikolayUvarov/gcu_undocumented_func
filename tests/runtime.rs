@@ -387,7 +387,7 @@ fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
     }
     assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
     assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS, SLOT_OWN, SLOT_DYNAMIC, ABI_VERSION),
-        (30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 23));
+        (30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 22));
     for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY, SLOT_WIFI, SLOT_NET, SLOT_SSH] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
     assert!(!LAUNCH_SLOTS.contains(&SLOT_UPDATE), "the updater's client is the shell's alone");
     assert!(!LAUNCH_SLOTS.contains(&SLOT_MODE), "the mode client is the shell's alone");
