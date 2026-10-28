@@ -212,22 +212,33 @@ POLICY_KEEP="${POLICY_KEEP:-$HOME/.config/mind/netpolicy}"
 OLD_DISK_WAIT="${OLD_DISK_WAIT:-600}"
 OLD_LETTER=""
 find_old_volume() {
-    local ps="\$ProgressPreference = 'SilentlyContinue'; \$p = Get-Partition -DiskNumber $DISK -ErrorAction SilentlyContinue | Get-Volume | Where-Object { \$_.FileSystemLabel -eq 'MIND CORE' -and \$_.DriveLetter } | Select-Object -First 1; if (\$p) { \$p.DriveLetter }"
-    OLD_LETTER=$(winps "$ps" | tr -d '\r\n')
-    if [[ ! $OLD_LETTER =~ ^[A-Z]$ ]]; then
-        echo ">>> Insert the disk to be written (disk $DISK) now: what it keeps (--keep-wifi, --keep-effector) is saved from it before the write. Waiting up to $((OLD_DISK_WAIT / 60)) min; Enter goes on without it."
-        local end=$((SECONDS + OLD_DISK_WAIT)) tty=0
-        { exec 3< /dev/tty; } 2> /dev/null && tty=1
-        while (( SECONDS < end )); do
-            if (( tty )); then
-                if read -r -t 3 _ <&3; then echo ">>> Going on without the old disk: what was saved before is put back."; break; fi
-            else sleep 3; fi
-            OLD_LETTER=$(winps "$ps" | tr -d '\r\n')
-            [[ $OLD_LETTER =~ ^[A-Z]$ ]] && { echo ">>> Disk $DISK is here, its volume MIND CORE at $OLD_LETTER:"; break; }
-        done
-        (( tty )) && exec 3<&-
+    # The disk's state: its volume MIND CORE's letter; `mounting` while that volume has none yet; `fresh` when the disk
+    # holds no such volume (a new stick, another system); `absent` when there is no such disk.
+    local ps="\$ProgressPreference = 'SilentlyContinue'; if (-not (Get-Disk -Number $DISK -ErrorAction SilentlyContinue)) { 'absent' } else { \$m = Get-Partition -DiskNumber $DISK -ErrorAction SilentlyContinue | Get-Volume -ErrorAction SilentlyContinue | Where-Object { \$_.FileSystemLabel -eq 'MIND CORE' } | Select-Object -First 1; if (\$m -and \$m.DriveLetter) { \$m.DriveLetter } elseif (\$m) { 'mounting' } else { 'fresh' } }"
+    local state fresh=0
+    state=$(winps "$ps" | tr -d '\r\n')
+    if [[ ! $state =~ ^[A-Z]$ && $state != fresh ]]; then
+        echo ">>> Insert the disk to be written (disk $DISK) now: what it keeps (--keep-wifi, --keep-effector, --keep-settings) is saved from it before the write. Waiting up to $((OLD_DISK_WAIT / 60)) min; Enter goes on without it."
     fi
-    [[ $OLD_LETTER =~ ^[A-Z]$ ]] || OLD_LETTER=""
+    local end=$((SECONDS + OLD_DISK_WAIT)) tty=0
+    # Opened only when it opens: a failed exec redirection would end the script.
+    if (: < /dev/tty) 2> /dev/null; then exec 3< /dev/tty; tty=1; fi
+    while [[ ! $state =~ ^[A-Z]$ ]] && (( SECONDS < end )); do
+        # A disk with no volume MIND CORE, seen twice 3 s apart (Windows names a volume a moment after the disk), has
+        # nothing to save: the write goes on at once.
+        if [[ $state == fresh ]]; then
+            if (( ++fresh >= 2 )); then echo ">>> Disk $DISK holds no volume MIND CORE (a new disk): nothing is saved from it; what was saved before is put back."; break; fi
+        else fresh=0; fi
+        if (( tty )); then
+            if read -r -t 3 _ <&3; then echo ">>> Going on without the old disk: what was saved before is put back."; break; fi
+        else sleep 3; fi
+        state=$(winps "$ps" | tr -d '\r\n')
+        [[ $state =~ ^[A-Z]$ ]] && echo ">>> Disk $DISK is here, its volume MIND CORE at $state:"
+    done
+    (( tty )) && exec 3<&-
+    OLD_LETTER=""
+    [[ $state =~ ^[A-Z]$ ]] && OLD_LETTER=$state
+    return 0
 }
 save_keystore() {
     local letter dir n=0

@@ -419,7 +419,7 @@ macro_rules! types {
 }
 types! {
     battery: Error Status;
-    blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
+    blockstore: Error Codec Durability Stats Head Collected Kept Pinned Usage Update Named Published PinTaken Committed;
     display: Error Mode RemoteState;
     effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary Load Space Sample;
     gpio: Kind Pull Error Controller Pin;

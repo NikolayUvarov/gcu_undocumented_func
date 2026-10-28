@@ -147,7 +147,7 @@ fn import(only: Option<&str>, builder: &mut Builder, data: &mut [u8; CHUNK], rem
         let name = core::str::from_utf8(&name.buf[..name.len]).unwrap_or("");
         let expected = match blockstore::resolve(STORE, name) { Ok(Ok(head)) => head.version, _ => 0 };
         match blockstore::publish(STORE, name, expected, &root.to_bytes()) {
-            Ok(Ok(version)) => mind::println!("IMPORTED {}: {} FILES, {} BYTES, OBJECT {} ({} BYTES) AS {} VERSION {}", id, n, bytes, root, size, name, version),
+            Ok(Ok(done)) => mind::println!("IMPORTED {}: {} FILES, {} BYTES, OBJECT {} ({} BYTES) AS {} VERSION {} ({})", id, n, bytes, root, size, name, done.version, mind::blockstore::class(done.durability as u8)),
             Ok(Err(e)) => { mind::println!("blocks: models: publish {}: {:?}", name, e); return; }
             Err(e) => { mind::println!("blocks: models: the store does not answer: {:?}", e); return; }
         }
