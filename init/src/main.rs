@@ -32,6 +32,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
     "RTL8821CE BAR2 initially non-mastering; 1 MiB DMA below 4 GiB; read-only VFS for its firmware; a wlanhw endpoint for wlan; polled, no interrupt",
+    "a USB client for Bluetooth controllers; read-only VFS for its patch",
     "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
@@ -515,6 +516,14 @@ impl Init {
                 if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
                 // Its idl/wlanhw.wit endpoint, whose client goes to wlan alone.
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+            }
+            // A USB Bluetooth controller's HCI driver (700-KRN-0176, for 700-BLT-0001): usb_host's client badged for the
+            // wireless controller interface alone, as usb_serial's is for converters, and a reader for its patch.
+            "bt_hci" => {
+                if !self.running(service_index("usb_host")) { return Err(Error::NotFound); }
+                grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", mind::usb::BADGE_BLUETOOTH)?, CLIENT);
+                // A reader's client of vfs_server for the controller's patch and configuration in data/firmware/rtl_bt/.
+                if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
             }
             "bcm_wifi" => {
                 // The MacBook Pro's Broadcom BCM4331 (14E4:4331), or a Broadcom network controller of class 02:80:00: BAR0 only (550-KRN-0059).
@@ -1510,7 +1519,7 @@ fn boot_order() -> impl Iterator<Item = usize> {
 
 // What a safe start leaves out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
 // run was most likely in. Their plans are prepared and their devices stopped, so `svc start` starts them (000-KRN-0131).
-const SAFE_LEFT_OUT: [&str; 6] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi"];
+const SAFE_LEFT_OUT: [&str; 7] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
 
@@ -1597,8 +1606,10 @@ fn boot(info: &'static BootInfo) {
     let firmware = platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_FIRMWARE, 0).ok();
     let (safe, marked) = firmware.map_or((false, false), run_mark);
     if safe {
-        mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: {}, {}, {}, {}, {}",
-                       SAFE_LEFT_OUT[0], SAFE_LEFT_OUT[1], SAFE_LEFT_OUT[2], SAFE_LEFT_OUT[3], SAFE_LEFT_OUT[4]);
+        // Every service left out, named (the list had grown past the five the line once printed).
+        let mut names = mind::util::FixedBuf::<128>::new();
+        for (i, name) in SAFE_LEFT_OUT.iter().enumerate() { let _ = core::fmt::Write::write_fmt(&mut names, format_args!("{}{}", if i == 0 { "" } else { ", " }, name)); }
+        mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: {}", names.as_str());
     }
     if !marked { mind::println!("[INIT] NO RUN MARK: THE FIRMWARE KEEPS NO VARIABLES FOR IT; A RUN THAT STOPS EARLY IS NOT NOTICED"); }
     let mut mark = firmware.filter(|_| marked);
