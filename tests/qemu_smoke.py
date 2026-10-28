@@ -4748,7 +4748,9 @@ def gateway_stub_check(args):
             vm.send("mode maintenance on the modes suite\n")
             require(vm.expect("(Y/N)", timeout=10), "TURN THE MAINTENANCE MODE ON?")
             vm.send_bytes(b"y")
-            require(vm.expect("MIND> ", timeout=30), "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")
+            shown = vm.expect("MIND> ", timeout=30)
+            require(shown, "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")
+            require(shown, "LINK CONSOLE: ON (DATA/MODE.CONF, DEV IN LINK.CONF)")  # the shell shows the link's console (800-APP-0108)
             kept = vm.command("cat data/mode.conf", raw=True)
             for word in ("development", "maintenance", "link-console"):
                 assert re.search(rf"^{word}$", kept.replace("\r", ""), re.M), (word, kept)
@@ -4770,14 +4772,15 @@ def installed_apps_check(args):
     the owner's policy trusting that key for some names. The version `current` names runs, by its short path and its
     versioned one; the loader refuses, logging why, a program with one byte changed, a MANIFEST changed after it was
     signed, a name the policy has no key line for, one whose line names another application, a program that asks for
-    more than its file line says, and a version `current` does not name. The names are one letter and the program `m`:
-    the shell's `run` takes 16 bytes. Not shown: an install by the gateway."""
+    more than its file line says, and a version `current` does not name. The names are one letter and the program `m`;
+    `memtest`'s runs by paths longer than a program's name, which the shell's `run` takes up to 63 bytes (750-APP-0109),
+    and a longer one the shell refuses. Not shown: an install by the gateway."""
     import app_package
     arch = "aarch64" if args.arch == "aarch64" else "x86_64"
     program = (ROOT / IMAGE / "memtest.elf").read_bytes()
     public = sign_manifest.public_key(app_package.TEST_SEED)
     # a: trusted, two versions; b: one byte changed; c: MANIFEST changed; d: no key line; e: the line names z; f: more requests.
-    lines = "".join(f"package-key {n} {public.hex()}\n" for n in ("a", "b", "c", "f", "z"))
+    lines = "".join(f"package-key {n} {public.hex()}\n" for n in ("a", "b", "c", "f", "z", "memtest"))
     extra = {"data/effector/policy": f"effector-policy 1\nagent off\n{lines}".encode()}
     with tempfile.TemporaryDirectory(prefix="smoke-apps-", dir=ROOT / IMAGE) as temp:
         def package(name, version, change=None):
@@ -4800,13 +4803,13 @@ def installed_apps_check(args):
             for path in where.iterdir():
                 extra[f"data/apps/{name}/{version}/{path.name}"] = path.read_bytes()
             extra[f"data/apps/{name}/current"] = f"{version}\n".encode()
-        package("a", 1); package("a", 2)
+        package("a", 1); package("a", 2); package("memtest", 1)
         for name, change in (("b", "byte"), ("c", "manifest"), ("d", None), ("e", None), ("f", "requests")):
             package(name, 1, change)
         image, _, _ = raw_fat_image(Path(temp), extra=extra)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
         try:
-            for path in ("data/apps/a/m", "data/apps/a/2/m"):
+            for path in ("data/apps/a/m", "data/apps/a/2/m", "data/apps/memtest/m", "data/apps/memtest/1/m"):
                 started = re.search(r"STARTED PID=(\d+)", vm.command(f"run {path} naps 300 &"))
                 assert started, (path, vm.command("dmesg -s loader", raw=True)[-1500:])
                 require(vm.program_logs(int(started[1]), "NAPS", tries=60), "[MEMTEST] NAPS")
@@ -4819,6 +4822,9 @@ def installed_apps_check(args):
             log = vm.command("dmesg -s loader", raw=True)
             for path, why in refusals.items():
                 require(log, f"[LOADER] {path}: NOT RUN: {why}")
+            # 750-APP-0109: a path past the loader's 63 bytes is refused by the shell; a name past 16 still is.
+            require(vm.command(f"run data/apps/{'x' * 52}/m"), "PROGRAM PATH TOO LONG (63 BYTES AT MOST)")
+            require(vm.command("run abcdefghijklmnopq"), "PROGRAM NAME TOO LONG")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
@@ -4826,7 +4832,7 @@ def installed_apps_check(args):
     print("PASS: installed applications (750-KRN-0169): the version data/apps/<name>/current names runs under a key the "
           "owner's policy trusts for its name; one byte of the program changed, its MANIFEST changed after signing, no key "
           "line for the name, a line naming another application, more requests than its file line, another version: not "
-          "run, the loader's log saying why", flush=True)
+          "run, the loader's log saying why; the shell's `run` takes an installed application's path up to 63 bytes (750-APP-0109)", flush=True)
 
 
 def services_config_check(args):
