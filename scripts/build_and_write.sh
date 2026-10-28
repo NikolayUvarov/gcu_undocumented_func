@@ -6,8 +6,8 @@
 #   --commit <id>  build that commit (a short or full hash, a tag) instead of the branch's latest; the clone returns
 #                  to the branch when the script ends, so this script stays in it.
 #   --image <file> write that image instead of building one (a trial built elsewhere); the image's MANIFEST must lie
-#                  beside it, so the steps after the write find its volume. Proprietary files and wallpapers are
-#                  not copied then.
+#                  beside it, so the steps after the write find its volume. Proprietary files, wallpapers and
+#                  mac/startup-disk.sh are not copied then.
 #   --slots        the image with boot slots (docs/update/slots.md) and an update.txt at its root that takes releases
 #                  from data/link/rel/ (351-KRN-0141): after this one write, scripts/link_update.py updates the machine
 #                  over the link, with no rewrite. It writes link.conf as --link does unless a --link option is given.
@@ -502,6 +502,10 @@ if [[ $HAVE_PROPRIETARY == 1 ]]; then scripts/proprietary.sh copy || echo ">>> P
 # Desktop pictures (wallpapers/README.md): not in the image either, copied to data/wallpapers/ and read back.
 if [[ -z $IMAGE_FILE && -x scripts/disk_copy.sh ]] && compgen -G "wallpapers/*.jpg" > /dev/null; then
     ONLY='*.jpg' scripts/disk_copy.sh wallpapers data/wallpapers wallpapers || echo ">>> Desktop pictures NOT copied: run ONLY='*.jpg' scripts/disk_copy.sh wallpapers data/wallpapers wallpapers." >&2
+fi
+# An Intel Mac's startup disk (800-LNK-0029): mac/startup-disk.sh, run in macOS Recovery, makes the Mac start this disk.
+if [[ -z $IMAGE_FILE && -x scripts/disk_copy.sh ]]; then
+    scripts/disk_copy.sh scripts/mac mac mac || echo ">>> mac/startup-disk.sh NOT copied: run scripts/disk_copy.sh scripts/mac mac mac." >&2
 fi
 for flag in "${FLAGS[@]}"; do put_flag "$flag" || echo ">>> data/${flag%%:*} NOT put on the disk." >&2; done
 if [[ $WIFIJOIN == 1 ]]; then put_wifijoin || echo ">>> The Wi-Fi network NOT put on the disk." >&2; fi
