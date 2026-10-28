@@ -8,7 +8,8 @@
 // policy is kept in the broker's private directory of the boot disk, which only its VFS client opens (`system/
 // netpolicy`), and read in place of the shipped file; the shell asks the user before it asks for a change. The policy's
 // `default card N` line names the stack's preferred card (550-NET-0025), told to the stack at start, after each change
-// and every 10 s (a restarted stack learns it again). Holds: a stack client to mint from (slot 2), a VFS client with the
+// and every 10 s (a restarted stack learns it again). A `browse` line gives a program any public address on its ports
+// (000-NET-0049); the stack logs each new host it reaches so. Holds: a stack client to mint from (slot 2), a VFS client with the
 // broker's own badge (slot 3), the stack's policy client (slot 4).
 extern crate alloc;
 
@@ -101,8 +102,16 @@ fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, u32, u64) {
     let resolver = resolver(text);
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
+        // A browsing grant (000-NET-0049): any public address on its ports, a rule of address 0 each (socket.wit 2.7).
+        if let Some((name, ports, count, s, b)) = mind::network::browse_line(line) {
+            if !name.eq_ignore_ascii_case(program) { continue; }
+            for &port in &ports[..count] { if rules.len() < 16 { rules.push(Rule { address: 0, port, protocol: Protocol::Tcp }); } }
+            if let Some(s) = s { seconds = Some(seconds.map_or(s, |t| t.min(s))); }
+            if let Some(b) = b { bytes = Some(bytes.map_or(b, |v| v.min(b))); }
+            continue;
+        }
         let words: Vec<&str> = line.split_whitespace().collect();
-        if words.len() < 2 || !words[0].eq_ignore_ascii_case(program) || words[0].eq_ignore_ascii_case("resolver") { continue; }
+        if words.len() < 2 || !words[0].eq_ignore_ascii_case(program) || words[0].eq_ignore_ascii_case("resolver") || words[0].eq_ignore_ascii_case("browse") { continue; }
         let rule = if words[1].eq_ignore_ascii_case("dns") {
             (dns != 0).then_some(Rule { address: dns, port: 53, protocol: Protocol::Udp })
         } else {
@@ -134,11 +143,12 @@ fn normal(line: &str) -> String {
     line.split('#').next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-// Whether `line` is a line the broker understands: a rule, `program dns`, `resolver A.B.C.D[:PORT]` (108), or
-// `default card N` (550-NET-0025).
+// Whether `line` is a line the broker understands: a rule, `program dns`, `resolver A.B.C.D[:PORT]` (108),
+// `default card N` (550-NET-0025), or `browse program public tcp PORTS [SECONDS [BYTES]]` (000-NET-0049).
 fn valid(line: &str) -> bool {
     let words: Vec<&str> = line.split_whitespace().collect();
     if line.contains('#') { return false; }
+    if words.first().is_some_and(|w| w.eq_ignore_ascii_case("browse")) { return mind::network::browse_line(line).is_some(); }
     match words.as_slice() {
         [word, kind, number] if word.eq_ignore_ascii_case("default") && kind.eq_ignore_ascii_case("card") => number.parse::<u8>().is_ok_and(|n| n < CARDS),
         [word, server] if word.eq_ignore_ascii_case("resolver") => {
@@ -193,7 +203,9 @@ impl Broker {
             return Err(Error::NoNetwork);
         }
         self.grants.push(Grant { badge, program: Text::new(program).unwrap_or_default(), cap, rules: rules.len() as u8, taken: false, pid: 0 });
-        mind::println!("[NETPOLICY] GRANT {} TO {}: {} RULES, {} S, {} BYTES{}", badge, program, rules.len(), seconds, bytes,
+        let browsing = rules.iter().filter(|r| r.address == 0).count();
+        mind::println!("[NETPOLICY] GRANT {} TO {}: {} RULES{}, {} S, {} BYTES{}", badge, program, rules.len(),
+            if browsing > 0 { ", BROWSING ANY PUBLIC ADDRESS" } else { "" }, seconds, bytes,
             if may_change_policy(launcher) { "" } else { ", ASKED BY A LAUNCH-ONLY CLIENT" });
         Ok(badge)
     }
