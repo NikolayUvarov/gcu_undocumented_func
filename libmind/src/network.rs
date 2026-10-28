@@ -40,3 +40,6 @@ pub const BADGE_KEY_STATION: u16 = 2;
 /// The key service's SSH service (idl/keystore.wit 1.2, 351-NET-0027): `ssh`'s client may ask for `ssh-login`
 /// signatures, and nothing else of the device key.
 pub const BADGE_KEY_SSH: u16 = 3;
+/// The key service's loader (idl/keystore.wit 1.4, 000-KRN-0182): the loader's client may ask for a client for each
+/// program's secrets, which it lends in SLOT_SECRETS; it reads no secret itself.
+pub const BADGE_KEY_LOADER: u16 = 4;
