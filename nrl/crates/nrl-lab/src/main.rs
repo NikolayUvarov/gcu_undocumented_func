@@ -1,0 +1,583 @@
+use nrl_lab::{check_case, close, load, read_json, save, Artifact};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
+use std::time::Instant;
+
+fn run() -> Result<(), String> {
+    let args: Vec<_> = std::env::args().collect();
+    if args.len() == 7 && args[1] == "bind-qsl-decoder" {
+        let base = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let binding = nrl_lab::qsl_model::Binding::load(Path::new(&args[4]))?;
+        let imported = nrl_lab::qsl_model::import(&base, Path::new(&args[3]), binding, &args[5])?;
+        imported.save_overlay(Path::new(&args[6]))?;
+        println!("{}", imported.info()?);
+        return Ok(());
+    }
+    if args.len() == 4 && args[1] == "check-qsl-decoder" {
+        let base = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        println!(
+            "{}",
+            nrl_lab::qsl_model::load(&base, Path::new(&args[3]))?.info()?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "export-qsl-decoder" {
+        let base = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        nrl_lab::qsl_model::load(&base, Path::new(&args[3]))?
+            .model
+            .save(Path::new(&args[4]))?;
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "run-qsl-decoder" {
+        let base = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        nrl_lab::qsl_model::load(&base, Path::new(&args[3]))?
+            .model
+            .probe_to_file(&args[4], Path::new(&args[5]))?;
+        return Ok(());
+    }
+    if args.len() == 7 && args[1] == "start-embedding" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let d = nrl_lab::research::retrieval::Dataset::load(Path::new(&args[3]))?;
+        let c = nrl_lab::research::embedding_train::Config::load(Path::new(&args[4]))?;
+        let mut state = nrl_lab::research::embedding_train::State::start(&e, d, c)?;
+        state.advance(args[6].parse().map_err(|_| "invalid continuation step")?)?;
+        state.save(Path::new(&args[5]))?;
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "train-embedding" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let d = nrl_lab::research::retrieval::Dataset::load(Path::new(&args[3]))?;
+        let c = nrl_lab::research::embedding_train::Config::load(Path::new(&args[4]))?;
+        let report = nrl_lab::research::embedding_train::run(&e, d, c, Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "resume-embedding" {
+        let mut state = nrl_lab::research::embedding_train::State::load(Path::new(&args[2]))?;
+        state.advance(args[4].parse().map_err(|_| "invalid continuation step")?)?;
+        state.save(Path::new(&args[3]))?;
+        return Ok(());
+    }
+    if args.len() == 4 && args[1] == "export-trained-embedding" {
+        nrl_lab::research::embedding_train::State::load(Path::new(&args[2]))?
+            .export()?
+            .save(Path::new(&args[3]))?;
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "profile-generation" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let study = nrl_lab::research::generation::Study::load(Path::new(&args[3]))?;
+        let report =
+            nrl_lab::research::generation::save_profile(Path::new(&args[4]), &model, &study)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 7 && args[1] == "compare-adaptation" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let initial = nrl_lab::decoder::load(Path::new(&args[3]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[4]))?;
+        let config = nrl_lab::research::adaptation::Config::load(Path::new(&args[5]))?;
+        let report = nrl_lab::research::adaptation::compare(
+            &teacher,
+            &initial,
+            corpus,
+            config,
+            Path::new(&args[6]),
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 8 && args[1] == "train-adaptation" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let initial = nrl_lab::decoder::load(Path::new(&args[3]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[4]))?;
+        let config = nrl_lab::research::adaptation::Config::load(Path::new(&args[5]))?;
+        let mut state =
+            nrl_lab::research::adaptation::State::start(&teacher, &initial, corpus, config)?;
+        state.advance(
+            &teacher,
+            args[7].parse().map_err(|_| "invalid continuation step")?,
+        )?;
+        state.save(&teacher, Path::new(&args[6]))?;
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "resume-adaptation" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let mut state = nrl_lab::research::adaptation::State::load(&teacher, Path::new(&args[3]))?;
+        state.advance(
+            &teacher,
+            args[5].parse().map_err(|_| "invalid continuation step")?,
+        )?;
+        state.save(&teacher, Path::new(&args[4]))?;
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "export-adaptation" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let state = nrl_lab::research::adaptation::State::load(&teacher, Path::new(&args[3]))?;
+        state.export(&teacher)?.save(Path::new(&args[4]))?;
+        return Ok(());
+    }
+    if args.len() == 4 && args[1] == "import-embedding" {
+        let d = nrl_lab::embedding::Definition::load(Path::new(&args[2]))?;
+        let e = nrl_lab::embedding::Encoder::from_definition(d)?;
+        e.save(Path::new(&args[3]))?;
+        println!("{}", e.info()?);
+        return Ok(());
+    }
+    if args.len() == 3 && args[1] == "check-embedding" {
+        println!("{}", nrl_lab::embedding::load(Path::new(&args[2]))?.info()?);
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "encode-embedding" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        println!("{}", e.encode_to_file(&args[3], Path::new(&args[4]))?);
+        return Ok(());
+    }
+    if args.len() == 7 && args[1] == "prune-embedding" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let width = args[4].parse().map_err(|_| "invalid embedding width")?;
+        let source =
+            serde_json::from_value(read_json(Path::new(&args[5]))?).map_err(|e| e.to_string())?;
+        let candidate = e.prune_projection(&args[3], width, source)?;
+        candidate.save(Path::new(&args[6]))?;
+        println!("{}", candidate.info()?);
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "replace-embedding-projection" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let p = nrl_lab::model::load(Path::new(&args[3]), None)?;
+        let source =
+            serde_json::from_value(read_json(Path::new(&args[4]))?).map_err(|e| e.to_string())?;
+        let candidate = e.replace_projection(p, source)?;
+        candidate.save(Path::new(&args[5]))?;
+        println!("{}", candidate.info()?);
+        return Ok(());
+    }
+    if args.len() >= 2
+        && matches!(
+            args[1].as_str(),
+            "evaluate-trained-retrieval" | "benchmark-trained-retrieval"
+        )
+    {
+        let measured = args[1] == "benchmark-trained-retrieval";
+        if args.len() != if measured { 8 } else { 7 } {
+            return Err("expected BASELINE ENCODER DATA SPLIT [MEASUREMENT] NEW_REPORT".into());
+        }
+        let a = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let b = nrl_lab::embedding::load(Path::new(&args[3]))?;
+        let data = nrl_lab::research::retrieval::Dataset::load(Path::new(&args[4]))?;
+        let spec = if measured {
+            Some(nrl_lab::research::evaluate::Measurement::load(Path::new(
+                &args[6],
+            ))?)
+        } else {
+            None
+        };
+        let report = nrl_lab::research::retrieval::evaluate_trained(&a, &b, &data, &args[5], spec)?;
+        report.save(Path::new(&args[if measured { 7 } else { 6 }]))?;
+        return Ok(());
+    }
+    if args.len() >= 2
+        && matches!(
+            args[1].as_str(),
+            "evaluate-retrieval" | "benchmark-retrieval"
+        )
+    {
+        let measured = args[1] == "benchmark-retrieval";
+        if args.len() != if measured { 8 } else { 7 } {
+            return Err("expected BASELINE ENCODER DATA SPLIT [MEASUREMENT] NEW_REPORT".into());
+        }
+        let a = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let b = nrl_lab::embedding::load(Path::new(&args[3]))?;
+        let data = nrl_lab::research::retrieval::Dataset::load(Path::new(&args[4]))?;
+        let spec = if measured {
+            Some(nrl_lab::research::evaluate::Measurement::load(Path::new(
+                &args[6],
+            ))?)
+        } else {
+            None
+        };
+        let r = nrl_lab::research::retrieval::evaluate(&a, &b, &data, &args[5], spec)?;
+        r.save(Path::new(&args[if measured { 7 } else { 6 }]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&r).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "profile-decoder" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[3]))?;
+        let study = nrl_lab::research::optimize::Study::load(Path::new(&args[4]))?;
+        let r = nrl_lab::research::optimize::save_profile(
+            Path::new(&args[5]),
+            &model,
+            &corpus,
+            &study,
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&r).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "run-budgeted-model" {
+        let model = nrl_lab::model::load(Path::new(&args[2]), None)?;
+        let input: Vec<f64> =
+            serde_json::from_value(read_json(Path::new(&args[3]))?).map_err(|e| e.to_string())?;
+        let policy = nrl_lab::runtime_bridge::Policy::load(Path::new(&args[4]))?;
+        let report =
+            nrl_lab::runtime_bridge::run_to_file(&model, &input, &policy, Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 7 && args[1] == "recover-plan" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let initial = nrl_lab::decoder::load(Path::new(&args[3]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[4]))?;
+        let study = nrl_lab::research::plan::Study::load(Path::new(&args[5]))?;
+        let run = nrl_lab::research::recovery::run(&teacher, &initial, corpus, study)?;
+        run.save(Path::new(&args[6]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&run.summary()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if (args.len() == 4 && args[1] == "check-recovery")
+        || (args.len() == 5 && args[1] == "replay-recovery")
+    {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let run = nrl_lab::research::recovery::replay(&teacher, Path::new(&args[3]))?;
+        if args.len() == 5 {
+            run.save(Path::new(&args[4]))?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&run.summary()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 7 && args[1] == "apply-plan" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[3]))?;
+        let study = nrl_lab::research::plan::Study::load(Path::new(&args[4]))?;
+        let applied = nrl_lab::research::plan::apply(&teacher, &corpus, &study, &args[5])?;
+        applied.save(Path::new(&args[6]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&applied.training_report()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "search-plans" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[3]))?;
+        let study = nrl_lab::research::plan::Study::load(Path::new(&args[4]))?;
+        let search = nrl_lab::research::plan::search(&teacher, corpus, study)?;
+        search.save(Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&search.selection).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() >= 2
+        && matches!(
+            args[1].as_str(),
+            "evaluate-language"
+                | "benchmark-language"
+                | "evaluate-regression"
+                | "benchmark-regression"
+        )
+    {
+        use nrl_lab::research::evaluate::{self, Measurement};
+        let measured = args[1].starts_with("benchmark");
+        if args.len() != if measured { 8 } else { 7 } {
+            return Err("expected BASELINE MODEL DATA SPLIT [MEASUREMENT] NEW_REPORT".into());
+        }
+        let spec = if measured {
+            Some(Measurement::load(Path::new(&args[6]))?)
+        } else {
+            None
+        };
+        let report = if args[1].ends_with("language") {
+            let baseline = nrl_lab::decoder::load(Path::new(&args[2]))?;
+            let model = nrl_lab::decoder::load(Path::new(&args[3]))?;
+            let data = nrl_lab::research::Corpus::load(Path::new(&args[4]))?;
+            evaluate::evaluate_language(&baseline, &model, &data, &args[5], spec)?
+        } else {
+            let baseline = nrl_lab::model::load(Path::new(&args[2]), None)?;
+            let model = nrl_lab::model::load(Path::new(&args[3]), None)?;
+            let data = nrl_lab::experiment::Dataset::load(Path::new(&args[4]))?;
+            evaluate::evaluate_regression(&baseline, &model, &data, &args[5], spec)?
+        };
+        report.save(Path::new(&args[if measured { 7 } else { 6 }]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "compare-reports" {
+        use nrl_lab::research::evaluate::{self, Report};
+        let baseline = Report::load(Path::new(&args[2]))?;
+        let candidate = Report::load(Path::new(&args[3]))?;
+        let comparison = evaluate::compare(&baseline, &candidate)?;
+        evaluate::save_comparison(Path::new(&args[4]), &baseline, &candidate)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&comparison).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 7 && args[1] == "calibrate-decoder" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[3]))?;
+        let layer = args[4].parse().map_err(|_| "invalid layer")?;
+        let rows = args[5].parse().map_err(|_| "invalid row cap")?;
+        let cal = nrl_lab::research::Calibration::collect(&model, corpus, layer, rows)?;
+        cal.save(Path::new(&args[6]))?;
+        println!(
+            "{}",
+            serde_json::json!({"schema":"nrl.calibration-info/0","calibration_id":cal.calibration_id()?,"teacher_model_id":cal.teacher_model_id,"layer":cal.layer,"train_rows":cal.batch("train")?.0.len()/cal.dim,"validation_rows":cal.batch("validation")?.0.len()/cal.dim,"test_activations":0})
+        );
+        return Ok(());
+    }
+    if (args.len() == 6 || args.len() == 7) && args[1] == "train-local" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let cal = nrl_lab::research::Calibration::load(Path::new(&args[3]))?;
+        let config = nrl_lab::research::LocalConfig::load(Path::new(&args[4]))?;
+        let until = if args.len() == 7 {
+            args[6].parse().map_err(|_| "invalid stop step")?
+        } else {
+            config.max_steps
+        };
+        let mut state = nrl_lab::research::LocalState::start(&model, cal, config)?;
+        state.advance(until)?;
+        state.save(Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&state.report()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "resume-local" {
+        let mut state = nrl_lab::research::LocalState::load(Path::new(&args[2]))?;
+        state.advance(args[4].parse().map_err(|_| "invalid continuation step")?)?;
+        state.save(Path::new(&args[3]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&state.report()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "export-local" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let state = nrl_lab::research::LocalState::load(Path::new(&args[3]))?;
+        let model = state.export(&teacher)?;
+        model.save(Path::new(&args[4]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&model.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "import-decoder" {
+        let model = nrl_lab::decoder::import(
+            Path::new(&args[2]),
+            Path::new(&args[3]),
+            Path::new(&args[4]),
+        )?;
+        model.save(Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&model.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 3 && args[1] == "check-decoder" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&model.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "probe-decoder" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let result = model.probe_to_file(&args[3], Path::new(&args[4]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "train-regression" {
+        let initial = nrl_lab::model::load(Path::new(&args[2]), None)?;
+        let data = nrl_lab::experiment::Dataset::load(Path::new(&args[3]))?;
+        let config = nrl_lab::experiment::Run::load(Path::new(&args[4]))?;
+        let experiment = nrl_lab::experiment::execute(&initial, data, config)?;
+        experiment.save(Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&experiment.report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 3 && args[1] == "check-experiment" {
+        let report = nrl_lab::experiment::check_saved(Path::new(&args[2]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 4 && args[1] == "replay-regression" {
+        let source = Path::new(&args[2]);
+        nrl_lab::experiment::check_saved(source)?;
+        let initial = nrl_lab::model::load(&source.join("initial-model"), None)?;
+        let data = nrl_lab::experiment::Dataset::load(&source.join("data.json"))?;
+        let config = nrl_lab::experiment::Run::load(&source.join("run.json"))?;
+        let experiment = nrl_lab::experiment::execute(&initial, data, config)?;
+        experiment.save(Path::new(&args[3]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&experiment.report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 4 && args[1] == "pack-model" {
+        let definition = nrl_lab::model::Definition::load(Path::new(&args[2]))?;
+        let model = nrl_lab::model::Model::from_definition(definition)?;
+        model.save(Path::new(&args[3]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&model.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "export-overlay" {
+        let base = nrl_lab::model::load(Path::new(&args[2]), None)?;
+        let replacements = nrl_lab::model::Replacements::load(Path::new(&args[3]))?;
+        let overlay = base.overlay(replacements)?;
+        overlay.save(Path::new(&args[4]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&overlay.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if ((args.len() == 3 || args.len() == 4) && args[1] == "check-model")
+        || ((args.len() == 4 || args.len() == 5) && args[1] == "export-standalone")
+        || ((args.len() == 5 || args.len() == 6) && args[1] == "run-model")
+    {
+        let base_index = match args[1].as_str() {
+            "check-model" => 3,
+            "export-standalone" => 4,
+            _ => 5,
+        };
+        let base = if args.len() > base_index {
+            Some(nrl_lab::model::load(Path::new(&args[base_index]), None)?)
+        } else {
+            None
+        };
+        let mut model = nrl_lab::model::load(Path::new(&args[2]), base.as_ref())?;
+        if args[1] == "run-model" {
+            let input: Vec<f64> = serde_json::from_value(read_json(Path::new(&args[3]))?)
+                .map_err(|e| e.to_string())?;
+            model.run_to_file(&input, Path::new(&args[4]))?;
+        } else if args[1] == "export-standalone" {
+            model = model.standalone()?;
+            model.save(Path::new(&args[3]))?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&model.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "import-qsl" {
+        let imported = nrl_lab::qsl::import_directory(Path::new(&args[2]), &args[4])?;
+        imported.save(Path::new(&args[3]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(imported.manifest()).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 3 && args[1] == "check-block-set" {
+        let set = nrl_lab::qsl::load(Path::new(&args[2]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(set.manifest()).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() != 4 || args[1] != "demo" {
+        return Err("usage: nrl-lab start-embedding ENCODER DATA CONFIG NEW_CHECKPOINT UNTIL | profile-generation MODEL STUDY NEW_REPORT | compare-adaptation BASE INITIAL CORPUS CONFIG NEW_DIRECTORY | train-adaptation BASE INITIAL CORPUS CONFIG NEW_CHECKPOINT UNTIL | resume-adaptation BASE CHECKPOINT NEW_CHECKPOINT UNTIL | export-adaptation BASE CHECKPOINT NEW_MODEL | train-embedding ENCODER DATA CONFIG NEW_DIRECTORY | resume-embedding CHECKPOINT NEW_CHECKPOINT UNTIL | export-trained-embedding CHECKPOINT NEW_MODEL | evaluate-trained-retrieval BASELINE ENCODER DATA SPLIT NEW_REPORT | benchmark-trained-retrieval BASELINE ENCODER DATA SPLIT MEASUREMENT NEW_REPORT | bind-qsl-decoder BASE QSL BINDING LICENCE NEW_OVERLAY | check-qsl-decoder BASE OVERLAY | run-qsl-decoder BASE OVERLAY TEXT NEW_PROBE | export-qsl-decoder BASE OVERLAY NEW_MODEL | calibrate-decoder MODEL CORPUS LAYER ROW_CAP NEW_CAL | train-local MODEL CAL CONFIG NEW_CHECKPOINT [UNTIL] | resume-local CHECKPOINT NEW_CHECKPOINT UNTIL | export-local MODEL CHECKPOINT NEW_DIRECTORY | import-embedding DEFINITION NEW_PACKAGE | check-embedding PACKAGE | encode-embedding PACKAGE TEXT NEW_VECTOR | prune-embedding ENCODER OBJECT WIDTH SOURCE NEW_PACKAGE | replace-embedding-projection ENCODER PROJECTION SOURCE NEW_PACKAGE | evaluate-retrieval BASELINE ENCODER DATA SPLIT NEW_REPORT | benchmark-retrieval BASELINE ENCODER DATA SPLIT MEASUREMENT NEW_REPORT | profile-decoder MODEL CORPUS STUDY NEW_REPORT | run-budgeted-model MODEL INPUT POLICY NEW_REPORT | recover-plan TEACHER INITIAL_STUDENT CORPUS STUDY NEW_BUNDLE | check-recovery TEACHER BUNDLE | replay-recovery TEACHER BUNDLE NEW_BUNDLE | apply-plan TEACHER CORPUS STUDY PLAN_ID NEW_BUNDLE | search-plans TEACHER CORPUS STUDY NEW_BUNDLE | evaluate-language BASELINE MODEL CORPUS SPLIT NEW_REPORT | benchmark-language BASELINE MODEL CORPUS SPLIT MEASUREMENT NEW_REPORT | evaluate-regression BASELINE MODEL DATA SPLIT NEW_REPORT | benchmark-regression BASELINE MODEL DATA SPLIT MEASUREMENT NEW_REPORT | compare-reports BASELINE_REPORT CANDIDATE_REPORT NEW_COMPARISON | import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
+    }
+    let fixture = read_json(Path::new(&args[2]))?;
+    if fixture["schema"] != "nrl.fixture/5" {
+        return Err("unsupported fixture schema".into());
+    }
+    let cases = fixture["cases"].as_array().ok_or("missing fixture cases")?;
+    let started = Instant::now();
+    let checks: Vec<_> = cases.iter().map(check_case).collect::<Result<_, _>>()?;
+    let dir = Path::new(&args[3]);
+    fs::create_dir(dir).map_err(|e| e.to_string())?;
+    for (index, case) in cases.iter().enumerate() {
+        let artifact: Artifact =
+            serde_json::from_value(case["artifact"].clone()).map_err(|e| e.to_string())?;
+        let input: Vec<f64> =
+            serde_json::from_value(case["input"].clone()).map_err(|e| e.to_string())?;
+        let file = dir.join(format!("block-{index}.json"));
+        save(&file, &artifact)?;
+        let loaded = load(&file)?;
+        if close(&artifact.forward(&input)?, &loaded.forward(&input)?)? != 0.0 {
+            return Err("artifact round trip changed outputs".into());
+        }
+    }
+    let report = serde_json::json!({"schema": "nrl.demo-report/1", "version": env!("CARGO_PKG_VERSION"),
+        "profile": "host-cpu-scalar-f64", "architecture": std::env::consts::ARCH, "os": std::env::consts::OS,
+        "archive_sha256": fixture["archive_sha256"], "seed": fixture["seed"], "checks": checks,
+        "fixture_round_trips": cases.len(), "elapsed_seconds": started.elapsed().as_secs_f64(),
+        "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
+        "native_execution": false, "unimplemented": ["language model adapter", "classification training", "language training", "nnd integration"]});
+    OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(dir.join("report.json"))
+        .map_err(|e| e.to_string())?
+        .write_all(
+            serde_json::to_string_pretty(&report)
+                .map_err(|e| e.to_string())?
+                .as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("nrl-lab: {error}");
+        std::process::exit(1);
+    }
+}

@@ -1,0 +1,38 @@
+# 900-NRL-0013 — Split-aware language calibration and resumable local training — done
+
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — (T06 is complete on this branch) · **Roadmap:** G; 900 T07 · **Constitution:** MC-5.1, MC-8.5, MC-9.1, MC-11.2, MC-11.3, MC-11.8, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+
+## Problem
+
+T07 needs language activations collected only after explicit document/group splitting, transformation initialization independent of test data, local replacement training and exact checkpoint continuation. T05 replay alone is not optimizer resume.
+
+## Plan
+
+1. Define a bounded language corpus with sources, stable document/group IDs, predeclared splits and explicit byte-BPE/context policy. Reject cross-split duplicate documents/token sequences and groups before activations.
+2. Collect bounded original-teacher FFN input/target pairs from train/validation only, retaining actual sampled documents/tokens, model/data/layer identity and row caps.
+3. Initialize pruned, linear/cubic spline and SVD replacements from shared training-only channel scores/grids. Preserve the explicit pre-SVD channel map separately; keep existing artifact/SVD limits.
+4. Train all supported replacement parameters with full-batch SGD and validation-only checkpoint selection. Save initial/current/best parameters, configuration/data/order, completed step/history, stateless optimizer and explicit no-RNG state for exact continuation.
+5. Provide independent CLI calibration/start/resume/export entries and tests for split integrity, source/geometry/checkpoint corruption, exact resume, validation-only selection and integration with the real decoder.
+
+## Acceptance criteria
+
+- [x] Corpus/group/token split checks run before activation collection; test activations never initialize or train/select a replacement.
+- [x] Calibrations bind exact teacher/data/layer/input/target/sample identities, actual row counts and declared sampling/limits.
+- [x] All four compressed controls initialize in Rust from training inputs, retain provenance and respect previous mathematical/format bounds.
+- [x] Local SGD covers every trainable projection/factor/coefficient/bias; validation alone selects the earliest best checkpoint and reports MSE/NMSE/absolute errors and grid coverage.
+- [x] Serialized optimizer/configuration/data-order/step and current/best state resume identically to uninterrupted training on the stated host; no Python is needed.
+- [x] New outputs never overwrite; invalid versions/hash/shape/source/bounds/checkpoints are refused. The selected artifact loads in the trained decoder.
+- [x] Full host checks and portable rlibs pass with saved real-model calibration/training/checkpoint evidence; T08–T10 continue next.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md), T07 and sections 8, 13–15.
+- [0012](../issues-done/900-NRL-0012-trained-decoder-and-tokenizer.done).
+
+## Resolution
+
+Implemented bounded language corpus/group/token validation before activations, original-teacher train/validation FFN pairs with actual document/token/row provenance and independent teacher recomputation, and no test activations. Train-only shared-channel initialization covers pruning, linear/cubic splines and SVD after the explicitly recorded reduction, preserving all earlier bounds. Local SGD selects only by validation and saves initial/current/best weights, full calibration/config/order/step, stateless optimizer and explicit no-RNG state. Saved checkpoints continue exactly, rather than replaying from zero, and selected artifacts export into the real decoder with licence/provenance records.
+
+At `04901a53`, **62 host tests**, both portable rlibs and all previous plus calibration/train/resume/export CLI cycles passed. Independent real-model PyTorch channel selection and four SGD steps match; all four compressed initializers run. Corrupt source/data/checkpoint/shape/order/budget/overwrite cases are refused. [Dated evidence](../nrl/reports/local-training-2026-10-26.json), [raw log](../nrl/reports/local-check-2026-10-26.txt), [saved checkpoint example](../nrl/reports/local-example-2026-10-26/report.json), [contract](../nrl/specs/calibration-local-v0.md).
+
+T07 is complete for the declared scalar f64 replacement profile. Before any T08 study test evaluation, the six candidate plans, validation quality/package budgets and T10 adaptation protocol/rounds were fixed in `nrl/tests/fixtures/study-v0/profile.json`, whose hash is recorded in the evidence. T08–T10 continue as explicitly requested, independently of landing. Local metrics alone are not model-quality, speed or compression evidence; native execution remains separate.

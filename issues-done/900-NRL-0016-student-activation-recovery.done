@@ -1,0 +1,30 @@
+# 900-NRL-0016 — Multiple replacements and student-activation recovery — done
+
+**Type:** implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — (T07–T09 complete on branch) · **Roadmap:** G; 900 T10 · **Constitution:** MC-5.1, MC-8.5, MC-9.1, MC-12.1, MC-12.2, MC-12.3, MC-12.9
+
+## Problem
+
+Two replacements change the inputs seen by downstream blocks. Fitting only on the original teacher trajectory does not test adaptation to actual student activations or accumulated model-level error.
+
+## Plan
+
+Use the pre-frozen two-layer start plan, three rounds and learning rate. Collect train-only normalized FFN inputs from a frozen current student each round; the frozen original teacher FFN evaluated on those same inputs defines targets. Update all replacements simultaneously with local analytic SGD. Compare a matched fixed-original-input control. Select each arm's earliest minimum full-model validation NLL, then evaluate test separately. Save actual pairs, deterministic run record, whole-model metrics/timing and standalone models; verify/replay the record independently. This is local recovery with model-level selection, not end-to-end decoder backpropagation.
+
+## Acceptance criteria
+
+- [x] At least two replacements have explicit source/student/corpus/target identities, bounded train-only actual student pairs and a frozen teacher; downstream student inputs differ as expected.
+- [x] Targets equal original teacher FFNs applied to student inputs; simultaneous round updates and a matched original-input control are checked independently of original-teacher calibration.
+- [x] All rounds including zero report full-model validation quality and accumulated logit error; validation alone selects the earliest best round; test follows selection.
+- [x] Saved payloads/pairs/models preserve provenance, ordering, budgets, exact repeatability on this profile and refusal of corrupt/incompatible inputs; independent CLI recovery/check/replay operations work.
+- [x] Actual same-backend dense/initial/recovered/control benchmarks and held-out results are saved honestly, including unchanged/dense fallback when quality/time budgets fail.
+- [x] Full host suites, both portable rlibs and complete CLI cycles pass; branch documentation/status and landing handoff cover T06–T10.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md), T10; [T07](../issues-done/900-NRL-0013-calibration-and-resumable-local-training.done), [T08](../issues-done/900-NRL-0014-evaluate-benchmark-and-compare.done), [T09](../issues-done/900-NRL-0015-mixed-plans-and-bounded-search.done).
+
+## Resolution
+
+Implemented `research/recovery.rs`, actual train-only student trajectories, original teacher FFNs on the same inputs, simultaneous local SGD, matched original-input control and earliest full-model validation selection. Pair/run hashes, every round, whole-logit error, standalone models, compatible benchmarks and separate held-out metrics are saved and recomputed by independent recovery/check/replay tools. All **70 host tests**, both portable rlibs and complete CLI cycles passed on `5edd9bc6`. [Evidence](../nrl/reports/recovery-2026-10-26.json), [complete saved run](../nrl/reports/recovery-example-2026-10-26/complete.json), [contract](../nrl/specs/student-recovery-v0.md).
+
+Both arms select round 3. Student-input recovery improves validation NLL from 4.010611310636807 to 4.010565653753475 (original-input control: 4.010594939048665). It still exceeds the dense baseline 2.792273884144422 and the pre-frozen quality budget. Held-out perplexity is 105.0541886201988 versus dense 9.35922873023494. The deployment recommendation remains **dense** despite lower observed forward time. This is a valid negative compression result on the miniature corpus, not end-to-end decoder backpropagation, representative language quality or native performance evidence. T06–T10 are complete for the declared bounded host profiles; native integration and broader optimization/families remain T11–T13. Full landing gate is pending.

@@ -1,0 +1,121 @@
+{
+  "schema": "nrl.t09-evidence/0",
+  "date": "2026-10-26",
+  "tested_commit": "f6361f5ec948d7da6f0d82740666e755e96ed279",
+  "toolchain": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "host_tests": 68,
+  "portable_rlibs": [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat"
+  ],
+  "frozen_study_sha256": "da512b009bf26720d4014a02f252995fa6521d1446d45f059ad023748ee3fab2",
+  "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648",
+  "selected": "dense",
+  "selection": {
+    "assessments": [
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "pruned-layer0",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "spline-linear-layer0",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "spline-cubic-layer0",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "svd-layer0",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "mixed-linear-pruned",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "mixed-svd-cubic",
+        "quality_budget_pass": false
+      }
+    ],
+    "pareto": [
+      "dense",
+      "svd-layer0",
+      "mixed-svd-cubic"
+    ],
+    "process_rss_used_for_selection": false,
+    "rule": "quality delta and actual package budgets; candidate p95 strictly below dense minimum; among eligible lowest median then NLL then plan ID; otherwise dense",
+    "schema": "nrl.plan-selection/0",
+    "selected_plan": "dense",
+    "selection_split": "validation",
+    "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648",
+    "test_used_for_selection": false,
+    "timing_scope": "observed scalar host run only; no statistical or general performance guarantee"
+  },
+  "candidates": [
+    {
+      "plan": "pruned-layer0",
+      "refusal": null,
+      "validation_nll": 3.673740095680173,
+      "median_seconds": 0.00463778,
+      "package_bytes": 1223229
+    },
+    {
+      "plan": "spline-linear-layer0",
+      "refusal": null,
+      "validation_nll": 3.679410816455266,
+      "median_seconds": 0.004646135,
+      "package_bytes": 1231861
+    },
+    {
+      "plan": "spline-cubic-layer0",
+      "refusal": null,
+      "validation_nll": 3.6736129081553703,
+      "median_seconds": 0.004661043,
+      "package_bytes": 1231842
+    },
+    {
+      "plan": "svd-layer0",
+      "refusal": null,
+      "validation_nll": 3.379424597765754,
+      "median_seconds": 0.004505396,
+      "package_bytes": 1097546
+    },
+    {
+      "plan": "mixed-linear-pruned",
+      "refusal": null,
+      "validation_nll": 4.010611310636807,
+      "median_seconds": 0.004005571,
+      "package_bytes": 1390400
+    },
+    {
+      "plan": "mixed-svd-cubic",
+      "refusal": null,
+      "validation_nll": 3.8511978158436415,
+      "median_seconds": 0.003875146,
+      "package_bytes": 1264642
+    }
+  ],
+  "result": "Bounded measured experiment; dense fallback is a valid negative optimization result. Test evaluated only after selection.",
+  "saved_run": "nrl/reports/plan-example-2026-10-26",
+  "gate": "NRL checks passed; full repository gate belongs to LANDING",
+  "native_execution": false
+}

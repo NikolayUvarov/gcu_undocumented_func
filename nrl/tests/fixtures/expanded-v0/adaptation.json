@@ -1,0 +1,25 @@
+{
+  "max_package_ratio": 1.5,
+  "max_validation_nll_increase": 0.25,
+  "optimizer": {
+    "algorithm": "adamw",
+    "beta1": 0.9,
+    "beta2": 0.999,
+    "epsilon": 1e-08,
+    "learning_rate": 0.0002,
+    "max_steps": 8,
+    "schema": "nrl.optimizer/0",
+    "weight_decay": 0.01
+  },
+  "row_limit": 128,
+  "schema": "nrl.adaptation-config/0",
+  "source": {
+    "identifier": "nrl://expanded-tinystories-recovery-v0",
+    "licence": "MIT (derived from publisher-declared MIT TinyStories weights); original corpus MIT OR Apache-2.0",
+    "notices": [
+      "Local FFN fitting on refreshed student trajectories; no whole-decoder training.",
+      "Dataset provenance and pinned CDLA-Sharing-1.0 source notices retained; no pretraining overlap exclusion."
+    ],
+    "sha256": null
+  }
+}

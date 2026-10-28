@@ -1,0 +1,9 @@
+{
+  "decoded_utf8": "Once upon a time time time time time time time time time",
+  "generated_tokens": 8,
+  "input_tokens": 5,
+  "model_id": "6f2b3a5cc6971733b8c6070865f809a30390fe0a2c2b2d05d67c2aa0995be59e",
+  "native_execution": false,
+  "output_sha256": "d8a379184d8c3afae8e89280b9d5ba3b2b114863095e648aa1dcf8e762aa1ced",
+  "schema": "nrl.decoder-probe/0"
+}

@@ -1,0 +1,144 @@
+{
+  "architecture": "x86_64",
+  "archive_sha256": "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
+  "cargo_lock_sha256": "e29d047c7f2a41ea9d39ccecb1e86209d87aaef7725c3cd3a11df12c96cb4914",
+  "checks": [
+    {
+      "bias_parameters": 0,
+      "loss_after": 0.09556269780699116,
+      "loss_before": 0.10231179736197876,
+      "max_reference_error": 2.7755575615628914e-17,
+      "representation": "dense",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 0,
+      "loss_after": 0.12677966117930756,
+      "loss_before": 0.15264958541547757,
+      "max_reference_error": 5.551115123125783e-17,
+      "representation": "spline-linear",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 0,
+      "loss_after": 94.91618022101002,
+      "loss_before": 95.02726876288641,
+      "max_reference_error": 2.842170943040401e-14,
+      "representation": "pruned",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 0,
+      "loss_after": 0.12683170841336067,
+      "loss_before": 0.15287797802927358,
+      "max_reference_error": 5.551115123125783e-17,
+      "representation": "spline-cubic",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 0,
+      "loss_after": 0.05414763909270817,
+      "loss_before": 0.05414836039695466,
+      "max_reference_error": 4.336808689942018e-19,
+      "representation": "svd",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 11,
+      "loss_after": 0.1108933000132282,
+      "loss_before": 0.12545124716366893,
+      "max_reference_error": 1.1102230246251565e-16,
+      "representation": "dense",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 11,
+      "loss_after": 0.14495471303669571,
+      "loss_before": 0.19260729313824923,
+      "max_reference_error": 3.3306690738754696e-16,
+      "representation": "spline-linear",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 7,
+      "loss_after": 106.55350470026379,
+      "loss_before": 106.68351816890801,
+      "max_reference_error": 5.684341886080802e-14,
+      "representation": "pruned",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 11,
+      "loss_after": 0.14516709423925137,
+      "loss_before": 0.19313448925087523,
+      "max_reference_error": 1.6653345369377348e-16,
+      "representation": "spline-cubic",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 11,
+      "loss_after": 0.05668677735273082,
+      "loss_before": 0.057698144310583656,
+      "max_reference_error": 4.163336342344337e-17,
+      "representation": "svd",
+      "sample_count": 3
+    },
+    {
+      "bias_parameters": 10,
+      "loss_after": 0.054737520032301694,
+      "loss_before": 0.056120013524134225,
+      "max_reference_error": 3.469446951953614e-18,
+      "representation": "dense",
+      "sample_count": 2
+    },
+    {
+      "bias_parameters": 10,
+      "loss_after": 0.05423269431050168,
+      "loss_before": 0.05558874458983636,
+      "max_reference_error": 5.421010862427522e-20,
+      "representation": "svd",
+      "sample_count": 2
+    }
+  ],
+  "commands": [
+    "bash nrl/tools/check.sh",
+    "python nrl/tools/generate_fixtures.py --reference-root REF --output nrl/tests/fixtures/f64-v4.json --check"
+  ],
+  "elapsed_seconds": 0.00089506,
+  "external_oracles": {
+    "explicit_affine_extension_cases": 5,
+    "rectangular_affine_cases": 2,
+    "svd_initializer_matrices": 9,
+    "unmodified_qsl_cases": 5
+  },
+  "fast_test_staging_commit": "cac5b40e",
+  "fixture_round_trips": 12,
+  "fixture_sha256": "85cd6f82b729c0843a54717a4e97fd1716239192008e0d073026337ebfbb211a",
+  "log_sha256": "fecc5852f2ca7dddaa43ecd982d576a76e0aa6ce1595519a86303a85bce312d3",
+  "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
+  "native_execution": false,
+  "os": "linux",
+  "portable_release_builds": [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat"
+  ],
+  "portable_scope": "rlibs only; not native execution",
+  "profile": "host-cpu-scalar-f64",
+  "recorded_date": "2026-10-26",
+  "rust_tests": {
+    "failed": 0,
+    "ignored": 0,
+    "passed": 31
+  },
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "schema": "nrl.demo-report/1",
+  "seed": 42,
+  "task": "900-NRL-0008",
+  "test_location": "own NRL branch; no tests on fast-test",
+  "tested_commit": "52773a8e58bedd69774c2d142063292e3f862e0f",
+  "unimplemented": [
+    "model adapters",
+    "nnd integration"
+  ],
+  "version": "0.1.0"
+}

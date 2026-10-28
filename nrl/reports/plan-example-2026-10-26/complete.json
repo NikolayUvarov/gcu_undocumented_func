@@ -1,0 +1,1753 @@
+{
+  "baseline_report_id": "c7573921a6ed4c9f87a49873b6e058521ae8a4778ec2aa80fccbcd299075b4da",
+  "candidates": [
+    {
+      "plan_id": "pruned-layer0",
+      "refusal": null,
+      "training": {
+        "composition": "all selected original-teacher local blocks installed together; whole-model validation required",
+        "local_runs": [
+          {
+            "calibration_id": "0c609cc9c0dc682223e3e1218d911ffba81934c54531483d14ceb088d622b6eb",
+            "checkpoint_id": "ee2ed9fdab6d41dd4f9f8c8fd6c3771bf99c02b69b54b10e9c7162bc1c07f1ff",
+            "completed_steps": 8,
+            "config_id": "0833d541546969caa52c66534c7e5f5ce18c029687385bb3530d08b70c43b3fd",
+            "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+            "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+            "initial": {
+              "step": 0,
+              "train": {
+                "mae": 0.1250471032774405,
+                "max_absolute_error": 0.8131000734313859,
+                "mse": 0.026576874334992798,
+                "near_zero_energy": false,
+                "nmse": 0.30738345149442264,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.15286435873518162,
+                "max_absolute_error": 1.6938568470348192,
+                "mse": 0.047294870425377084,
+                "near_zero_energy": false,
+                "nmse": 0.5766207105262326,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "layer": 0,
+            "native_execution": false,
+            "next_data_cursor": 0,
+            "optimizer": "full-batch-sgd/0",
+            "parameter_summary": {
+              "bias_values": 0,
+              "channels": 32,
+              "input_width": 64,
+              "kind": "gated",
+              "knots": null,
+              "numeric_values": 6144,
+              "output_width": 64,
+              "rank": null,
+              "representation": "pruned",
+              "schema": "nrl.block/5",
+              "trainable_values": 6144
+            },
+            "retained_indices": [
+              12,
+              15,
+              20,
+              25,
+              40,
+              48,
+              52,
+              54,
+              60,
+              66,
+              70,
+              76,
+              78,
+              83,
+              99,
+              100,
+              112,
+              118,
+              121,
+              126,
+              127,
+              129,
+              130,
+              132,
+              134,
+              135,
+              136,
+              146,
+              160,
+              165,
+              167,
+              171
+            ],
+            "rng_state": "none; deterministic source initialization and supplied document/token order",
+            "schema": "nrl.local-report/0",
+            "selected": {
+              "step": 8,
+              "train": {
+                "mae": 0.1250067371771991,
+                "max_absolute_error": 0.8128629824755295,
+                "mse": 0.026562101915299032,
+                "near_zero_energy": false,
+                "nmse": 0.3072125962879315,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.1528447293015351,
+                "max_absolute_error": 1.6940457912109999,
+                "mse": 0.047287026092907296,
+                "near_zero_energy": false,
+                "nmse": 0.5765250721510421,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "selected_step": 8,
+            "source_hidden": 172,
+            "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+            "transform": {
+              "knots": 0,
+              "rank": 0,
+              "representation": "pruned",
+              "schema": "nrl.transform/0",
+              "width": 32
+            }
+          }
+        ],
+        "model_id": "eca76c9fea67cb76099b2c65b8c94bafc3880e3e62bb20be914b2f9beda096eb",
+        "native_execution": false,
+        "plan": {
+          "entries": [
+            {
+              "layer": 0,
+              "transform": {
+                "knots": 0,
+                "rank": 0,
+                "representation": "pruned",
+                "schema": "nrl.transform/0",
+                "width": 32
+              }
+            }
+          ],
+          "id": "pruned-layer0"
+        },
+        "schema": "nrl.applied-plan/0",
+        "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648"
+      },
+      "validation": {
+        "environment": {
+          "architecture": "x86_64",
+          "backend": "host-cpu-scalar-f64/0",
+          "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+          "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+          "debug_assertions": false,
+          "executable_sha256": "87c14b657e97024c91cf9c38316108e4b4b998e46e4008d28cf681addcc48d16",
+          "logical_cpus": 24,
+          "os": "linux",
+          "runtime_threads": 1
+        },
+        "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+        "model_id": "eca76c9fea67cb76099b2c65b8c94bafc3880e3e62bb20be914b2f9beda096eb",
+        "model_information": {
+          "adapter": "llama2c-f32-v0/0",
+          "base_parameter_values": 260032,
+          "config": {
+            "context": 512,
+            "dim": 64,
+            "heads": 8,
+            "hidden": 172,
+            "kv_heads": 4,
+            "layers": 5,
+            "tied_head": true,
+            "vocab": 512
+          },
+          "effective_numeric_values": 237248,
+          "effective_parameter_values": 233152,
+          "model_id": "eca76c9fea67cb76099b2c65b8c94bafc3880e3e62bb20be914b2f9beda096eb",
+          "native_execution": false,
+          "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+          "package_bytes": 1223229,
+          "patch_layers": [
+            0
+          ],
+          "retained_numeric_values": 270272,
+          "retains_original_dense_weights": true,
+          "schema": "nrl.decoder-info/0"
+        },
+        "native_execution": false,
+        "process_peak_rss_bytes": 10817536,
+        "profile": {
+          "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+          "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+          "geometry": [
+            512,
+            96
+          ],
+          "measurement": {
+            "max_forward_rows": 65536,
+            "repeats": 3,
+            "schema": "nrl.measurement/0",
+            "warmups": 1
+          },
+          "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+          "split": "validation",
+          "task": "language-next-token/0"
+        },
+        "quality": {
+          "details": {
+            "maximum_token_nll": 14.651892325727541,
+            "p95_token_nll": 10.369211205448522,
+            "perplexity": 39.39898662045806,
+            "predicted_tokens": 46,
+            "state": "fresh causal cache per document",
+            "top1_accuracy": 0.2391304347826087
+          },
+          "metric": "mean-nll",
+          "value": 3.673740095680173
+        },
+        "schema": "nrl.evaluation/0",
+        "timing": {
+          "median_seconds": 0.00463778,
+          "minimum_seconds": 0.004560792,
+          "p95_seconds": 0.004652883,
+          "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+          "seconds": [
+            0.004652883,
+            0.004560792,
+            0.00463778
+          ]
+        },
+        "work": {
+          "documents_or_batches": 2,
+          "output_values_per_pass": 23552,
+          "quality_passes": 1,
+          "rows_per_pass": 46,
+          "timed_passes": 3,
+          "total_forward_rows": 230,
+          "warmup_passes": 1
+        }
+      }
+    },
+    {
+      "plan_id": "spline-linear-layer0",
+      "refusal": null,
+      "training": {
+        "composition": "all selected original-teacher local blocks installed together; whole-model validation required",
+        "local_runs": [
+          {
+            "calibration_id": "0c609cc9c0dc682223e3e1218d911ffba81934c54531483d14ceb088d622b6eb",
+            "checkpoint_id": "31ae69302af94315a3858fbcd9cf658066c0eaf8f9fd15121dcf861ad3ce94fa",
+            "completed_steps": 8,
+            "config_id": "f35a89ec986412e6d94a345e3e271cf297e4a05d8b7986acbb2c89ab1651d79b",
+            "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+            "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+            "initial": {
+              "step": 0,
+              "train": {
+                "mae": 0.12496723965840165,
+                "max_absolute_error": 0.8363327327156423,
+                "mse": 0.026536505415769854,
+                "near_zero_energy": false,
+                "nmse": 0.3069165516789124,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.1526682020904831,
+                "max_absolute_error": 1.7260110458310909,
+                "mse": 0.047289090717353204,
+                "near_zero_energy": false,
+                "nmse": 0.5765502441243293,
+                "outside_grid_fraction": 0.002717391304347826,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "layer": 0,
+            "native_execution": false,
+            "next_data_cursor": 0,
+            "optimizer": "full-batch-sgd/0",
+            "parameter_summary": {
+              "bias_values": 0,
+              "channels": 32,
+              "input_width": 64,
+              "kind": "gated",
+              "knots": 8,
+              "numeric_values": 6464,
+              "output_width": 64,
+              "rank": null,
+              "representation": "spline-linear",
+              "schema": "nrl.block/5",
+              "trainable_values": 6400
+            },
+            "retained_indices": [
+              12,
+              15,
+              20,
+              25,
+              40,
+              48,
+              52,
+              54,
+              60,
+              66,
+              70,
+              76,
+              78,
+              83,
+              99,
+              100,
+              112,
+              118,
+              121,
+              126,
+              127,
+              129,
+              130,
+              132,
+              134,
+              135,
+              136,
+              146,
+              160,
+              165,
+              167,
+              171
+            ],
+            "rng_state": "none; deterministic source initialization and supplied document/token order",
+            "schema": "nrl.local-report/0",
+            "selected": {
+              "step": 8,
+              "train": {
+                "mae": 0.12492316630884429,
+                "max_absolute_error": 0.8360578534604839,
+                "mse": 0.02652026558279305,
+                "near_zero_energy": false,
+                "nmse": 0.30672872462862866,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.1526451252004954,
+                "max_absolute_error": 1.7258405708071392,
+                "mse": 0.047279397185254195,
+                "near_zero_energy": false,
+                "nmse": 0.5764320602427335,
+                "outside_grid_fraction": 0.002717391304347826,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "selected_step": 8,
+            "source_hidden": 172,
+            "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+            "transform": {
+              "knots": 8,
+              "rank": 0,
+              "representation": "spline-linear",
+              "schema": "nrl.transform/0",
+              "width": 32
+            }
+          }
+        ],
+        "model_id": "47c66bf06a7a265b58e511ddc467681d8ab9f7c5160908e6c10880966b503463",
+        "native_execution": false,
+        "plan": {
+          "entries": [
+            {
+              "layer": 0,
+              "transform": {
+                "knots": 8,
+                "rank": 0,
+                "representation": "spline-linear",
+                "schema": "nrl.transform/0",
+                "width": 32
+              }
+            }
+          ],
+          "id": "spline-linear-layer0"
+        },
+        "schema": "nrl.applied-plan/0",
+        "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648"
+      },
+      "validation": {
+        "environment": {
+          "architecture": "x86_64",
+          "backend": "host-cpu-scalar-f64/0",
+          "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+          "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+          "debug_assertions": false,
+          "executable_sha256": "87c14b657e97024c91cf9c38316108e4b4b998e46e4008d28cf681addcc48d16",
+          "logical_cpus": 24,
+          "os": "linux",
+          "runtime_threads": 1
+        },
+        "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+        "model_id": "47c66bf06a7a265b58e511ddc467681d8ab9f7c5160908e6c10880966b503463",
+        "model_information": {
+          "adapter": "llama2c-f32-v0/0",
+          "base_parameter_values": 260032,
+          "config": {
+            "context": 512,
+            "dim": 64,
+            "heads": 8,
+            "hidden": 172,
+            "kv_heads": 4,
+            "layers": 5,
+            "tied_head": true,
+            "vocab": 512
+          },
+          "effective_numeric_values": 237568,
+          "effective_parameter_values": 233408,
+          "model_id": "47c66bf06a7a265b58e511ddc467681d8ab9f7c5160908e6c10880966b503463",
+          "native_execution": false,
+          "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+          "package_bytes": 1231861,
+          "patch_layers": [
+            0
+          ],
+          "retained_numeric_values": 270592,
+          "retains_original_dense_weights": true,
+          "schema": "nrl.decoder-info/0"
+        },
+        "native_execution": false,
+        "process_peak_rss_bytes": 11890688,
+        "profile": {
+          "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+          "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+          "geometry": [
+            512,
+            96
+          ],
+          "measurement": {
+            "max_forward_rows": 65536,
+            "repeats": 3,
+            "schema": "nrl.measurement/0",
+            "warmups": 1
+          },
+          "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+          "split": "validation",
+          "task": "language-next-token/0"
+        },
+        "quality": {
+          "details": {
+            "maximum_token_nll": 14.583371169394683,
+            "p95_token_nll": 10.314353449585305,
+            "perplexity": 39.62304194959582,
+            "predicted_tokens": 46,
+            "state": "fresh causal cache per document",
+            "top1_accuracy": 0.2391304347826087
+          },
+          "metric": "mean-nll",
+          "value": 3.679410816455266
+        },
+        "schema": "nrl.evaluation/0",
+        "timing": {
+          "median_seconds": 0.004646135,
+          "minimum_seconds": 0.004612995,
+          "p95_seconds": 0.004684915,
+          "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+          "seconds": [
+            0.004646135,
+            0.004612995,
+            0.004684915
+          ]
+        },
+        "work": {
+          "documents_or_batches": 2,
+          "output_values_per_pass": 23552,
+          "quality_passes": 1,
+          "rows_per_pass": 46,
+          "timed_passes": 3,
+          "total_forward_rows": 230,
+          "warmup_passes": 1
+        }
+      }
+    },
+    {
+      "plan_id": "spline-cubic-layer0",
+      "refusal": null,
+      "training": {
+        "composition": "all selected original-teacher local blocks installed together; whole-model validation required",
+        "local_runs": [
+          {
+            "calibration_id": "0c609cc9c0dc682223e3e1218d911ffba81934c54531483d14ceb088d622b6eb",
+            "checkpoint_id": "a09ed13612f150dd31b8d3181e02badeb98db14838714309e9f4a38f1d405693",
+            "completed_steps": 8,
+            "config_id": "5bcfe91e66be64f15368fd7379972f6e0698f405bc6e4ffe64bd3bf4cdc263a8",
+            "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+            "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+            "initial": {
+              "step": 0,
+              "train": {
+                "mae": 0.12502421380494333,
+                "max_absolute_error": 0.8140939871846742,
+                "mse": 0.02657608406581837,
+                "near_zero_energy": false,
+                "nmse": 0.30737431138022475,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.15286783379738844,
+                "max_absolute_error": 1.6932457762757185,
+                "mse": 0.047304656211576736,
+                "near_zero_energy": false,
+                "nmse": 0.5767400191730426,
+                "outside_grid_fraction": 0.002717391304347826,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "layer": 0,
+            "native_execution": false,
+            "next_data_cursor": 0,
+            "optimizer": "full-batch-sgd/0",
+            "parameter_summary": {
+              "bias_values": 0,
+              "channels": 32,
+              "input_width": 64,
+              "kind": "gated",
+              "knots": 8,
+              "numeric_values": 6464,
+              "output_width": 64,
+              "rank": null,
+              "representation": "spline-cubic",
+              "schema": "nrl.block/5",
+              "trainable_values": 6400
+            },
+            "retained_indices": [
+              12,
+              15,
+              20,
+              25,
+              40,
+              48,
+              52,
+              54,
+              60,
+              66,
+              70,
+              76,
+              78,
+              83,
+              99,
+              100,
+              112,
+              118,
+              121,
+              126,
+              127,
+              129,
+              130,
+              132,
+              134,
+              135,
+              136,
+              146,
+              160,
+              165,
+              167,
+              171
+            ],
+            "rng_state": "none; deterministic source initialization and supplied document/token order",
+            "schema": "nrl.local-report/0",
+            "selected": {
+              "step": 8,
+              "train": {
+                "mae": 0.12497955461631519,
+                "max_absolute_error": 0.8138553378301597,
+                "mse": 0.026559659028812625,
+                "near_zero_energy": false,
+                "nmse": 0.30718434229273495,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.1528444428923947,
+                "max_absolute_error": 1.6934253735144538,
+                "mse": 0.047295067747192554,
+                "near_zero_energy": false,
+                "nmse": 0.5766231162806922,
+                "outside_grid_fraction": 0.002717391304347826,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "selected_step": 8,
+            "source_hidden": 172,
+            "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+            "transform": {
+              "knots": 8,
+              "rank": 0,
+              "representation": "spline-cubic",
+              "schema": "nrl.transform/0",
+              "width": 32
+            }
+          }
+        ],
+        "model_id": "04f82cd7b280f06dd3097e772911625917a4d03109b17dd797fc93ab8b40c60c",
+        "native_execution": false,
+        "plan": {
+          "entries": [
+            {
+              "layer": 0,
+              "transform": {
+                "knots": 8,
+                "rank": 0,
+                "representation": "spline-cubic",
+                "schema": "nrl.transform/0",
+                "width": 32
+              }
+            }
+          ],
+          "id": "spline-cubic-layer0"
+        },
+        "schema": "nrl.applied-plan/0",
+        "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648"
+      },
+      "validation": {
+        "environment": {
+          "architecture": "x86_64",
+          "backend": "host-cpu-scalar-f64/0",
+          "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+          "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+          "debug_assertions": false,
+          "executable_sha256": "87c14b657e97024c91cf9c38316108e4b4b998e46e4008d28cf681addcc48d16",
+          "logical_cpus": 24,
+          "os": "linux",
+          "runtime_threads": 1
+        },
+        "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+        "model_id": "04f82cd7b280f06dd3097e772911625917a4d03109b17dd797fc93ab8b40c60c",
+        "model_information": {
+          "adapter": "llama2c-f32-v0/0",
+          "base_parameter_values": 260032,
+          "config": {
+            "context": 512,
+            "dim": 64,
+            "heads": 8,
+            "hidden": 172,
+            "kv_heads": 4,
+            "layers": 5,
+            "tied_head": true,
+            "vocab": 512
+          },
+          "effective_numeric_values": 237568,
+          "effective_parameter_values": 233408,
+          "model_id": "04f82cd7b280f06dd3097e772911625917a4d03109b17dd797fc93ab8b40c60c",
+          "native_execution": false,
+          "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+          "package_bytes": 1231842,
+          "patch_layers": [
+            0
+          ],
+          "retained_numeric_values": 270592,
+          "retains_original_dense_weights": true,
+          "schema": "nrl.decoder-info/0"
+        },
+        "native_execution": false,
+        "process_peak_rss_bytes": 11890688,
+        "profile": {
+          "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+          "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+          "geometry": [
+            512,
+            96
+          ],
+          "measurement": {
+            "max_forward_rows": 65536,
+            "repeats": 3,
+            "schema": "nrl.measurement/0",
+            "warmups": 1
+          },
+          "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+          "split": "validation",
+          "task": "language-next-token/0"
+        },
+        "quality": {
+          "details": {
+            "maximum_token_nll": 14.646472314367685,
+            "p95_token_nll": 10.35493730421977,
+            "perplexity": 39.39397587952869,
+            "predicted_tokens": 46,
+            "state": "fresh causal cache per document",
+            "top1_accuracy": 0.2391304347826087
+          },
+          "metric": "mean-nll",
+          "value": 3.6736129081553703
+        },
+        "schema": "nrl.evaluation/0",
+        "timing": {
+          "median_seconds": 0.004661043,
+          "minimum_seconds": 0.004633637,
+          "p95_seconds": 0.004939918,
+          "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+          "seconds": [
+            0.004661043,
+            0.004939918,
+            0.004633637
+          ]
+        },
+        "work": {
+          "documents_or_batches": 2,
+          "output_values_per_pass": 23552,
+          "quality_passes": 1,
+          "rows_per_pass": 46,
+          "timed_passes": 3,
+          "total_forward_rows": 230,
+          "warmup_passes": 1
+        }
+      }
+    },
+    {
+      "plan_id": "svd-layer0",
+      "refusal": null,
+      "training": {
+        "composition": "all selected original-teacher local blocks installed together; whole-model validation required",
+        "local_runs": [
+          {
+            "calibration_id": "0c609cc9c0dc682223e3e1218d911ffba81934c54531483d14ceb088d622b6eb",
+            "checkpoint_id": "2da9b2767f373f1eb97376d7cbd87625139989cb220f175ae7bc16f2b5223f9c",
+            "completed_steps": 8,
+            "config_id": "38ebb27605a187e08f29356fee49e6cae5e759df361d2a997b53a731f69ac146",
+            "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+            "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+            "initial": {
+              "step": 0,
+              "train": {
+                "mae": 0.1947193831239129,
+                "max_absolute_error": 2.510560773587412,
+                "mse": 0.08921655051621193,
+                "near_zero_energy": false,
+                "nmse": 1.0318629227212008,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.18674814637464815,
+                "max_absolute_error": 2.510560773587412,
+                "mse": 0.08284699486030968,
+                "near_zero_energy": false,
+                "nmse": 1.0100734521873687,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "layer": 0,
+            "native_execution": false,
+            "next_data_cursor": 0,
+            "optimizer": "full-batch-sgd/0",
+            "parameter_summary": {
+              "bias_values": 0,
+              "channels": 32,
+              "input_width": 64,
+              "kind": "gated",
+              "knots": null,
+              "numeric_values": 1152,
+              "output_width": 64,
+              "rank": 4,
+              "representation": "svd",
+              "schema": "nrl.block/5",
+              "trainable_values": 1152
+            },
+            "retained_indices": [
+              12,
+              15,
+              20,
+              25,
+              40,
+              48,
+              52,
+              54,
+              60,
+              66,
+              70,
+              76,
+              78,
+              83,
+              99,
+              100,
+              112,
+              118,
+              121,
+              126,
+              127,
+              129,
+              130,
+              132,
+              134,
+              135,
+              136,
+              146,
+              160,
+              165,
+              167,
+              171
+            ],
+            "rng_state": "none; deterministic source initialization and supplied document/token order",
+            "schema": "nrl.local-report/0",
+            "selected": {
+              "step": 8,
+              "train": {
+                "mae": 0.19469553466415243,
+                "max_absolute_error": 2.510509987317273,
+                "mse": 0.0891868243610188,
+                "near_zero_energy": false,
+                "nmse": 1.0315191152415193,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.1867363180621558,
+                "max_absolute_error": 2.510509987317273,
+                "mse": 0.08283201609747691,
+                "near_zero_energy": false,
+                "nmse": 1.0098908305882448,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "selected_step": 8,
+            "source_hidden": 172,
+            "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+            "transform": {
+              "knots": 0,
+              "rank": 4,
+              "representation": "svd",
+              "schema": "nrl.transform/0",
+              "width": 32
+            }
+          }
+        ],
+        "model_id": "7138ade681e573899af4d8ae9e74c92d50c28a03880324425512d7cdd56b1593",
+        "native_execution": false,
+        "plan": {
+          "entries": [
+            {
+              "layer": 0,
+              "transform": {
+                "knots": 0,
+                "rank": 4,
+                "representation": "svd",
+                "schema": "nrl.transform/0",
+                "width": 32
+              }
+            }
+          ],
+          "id": "svd-layer0"
+        },
+        "schema": "nrl.applied-plan/0",
+        "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648"
+      },
+      "validation": {
+        "environment": {
+          "architecture": "x86_64",
+          "backend": "host-cpu-scalar-f64/0",
+          "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+          "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+          "debug_assertions": false,
+          "executable_sha256": "87c14b657e97024c91cf9c38316108e4b4b998e46e4008d28cf681addcc48d16",
+          "logical_cpus": 24,
+          "os": "linux",
+          "runtime_threads": 1
+        },
+        "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+        "model_id": "7138ade681e573899af4d8ae9e74c92d50c28a03880324425512d7cdd56b1593",
+        "model_information": {
+          "adapter": "llama2c-f32-v0/0",
+          "base_parameter_values": 260032,
+          "config": {
+            "context": 512,
+            "dim": 64,
+            "heads": 8,
+            "hidden": 172,
+            "kv_heads": 4,
+            "layers": 5,
+            "tied_head": true,
+            "vocab": 512
+          },
+          "effective_numeric_values": 232256,
+          "effective_parameter_values": 228160,
+          "model_id": "7138ade681e573899af4d8ae9e74c92d50c28a03880324425512d7cdd56b1593",
+          "native_execution": false,
+          "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+          "package_bytes": 1097546,
+          "patch_layers": [
+            0
+          ],
+          "retained_numeric_values": 265280,
+          "retains_original_dense_weights": true,
+          "schema": "nrl.decoder-info/0"
+        },
+        "native_execution": false,
+        "process_peak_rss_bytes": 11890688,
+        "profile": {
+          "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+          "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+          "geometry": [
+            512,
+            96
+          ],
+          "measurement": {
+            "max_forward_rows": 65536,
+            "repeats": 3,
+            "schema": "nrl.measurement/0",
+            "warmups": 1
+          },
+          "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+          "split": "validation",
+          "task": "language-next-token/0"
+        },
+        "quality": {
+          "details": {
+            "maximum_token_nll": 11.656338643885498,
+            "p95_token_nll": 6.506291515665415,
+            "perplexity": 29.353875967187875,
+            "predicted_tokens": 46,
+            "state": "fresh causal cache per document",
+            "top1_accuracy": 0.21739130434782608
+          },
+          "metric": "mean-nll",
+          "value": 3.379424597765754
+        },
+        "schema": "nrl.evaluation/0",
+        "timing": {
+          "median_seconds": 0.004505396,
+          "minimum_seconds": 0.004476013,
+          "p95_seconds": 0.004522445,
+          "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+          "seconds": [
+            0.004476013,
+            0.004522445,
+            0.004505396
+          ]
+        },
+        "work": {
+          "documents_or_batches": 2,
+          "output_values_per_pass": 23552,
+          "quality_passes": 1,
+          "rows_per_pass": 46,
+          "timed_passes": 3,
+          "total_forward_rows": 230,
+          "warmup_passes": 1
+        }
+      }
+    },
+    {
+      "plan_id": "mixed-linear-pruned",
+      "refusal": null,
+      "training": {
+        "composition": "all selected original-teacher local blocks installed together; whole-model validation required",
+        "local_runs": [
+          {
+            "calibration_id": "0c609cc9c0dc682223e3e1218d911ffba81934c54531483d14ceb088d622b6eb",
+            "checkpoint_id": "c6df0582f1f5a2cc6eb96090ef90126d14e46e9ac753ef82227f954377d39550",
+            "completed_steps": 8,
+            "config_id": "c8869052dcd49b0906a848e2d111d1e68bdc199af0ad49c2c828356c3daa9dfc",
+            "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+            "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+            "initial": {
+              "step": 0,
+              "train": {
+                "mae": 0.12496723965840165,
+                "max_absolute_error": 0.8363327327156423,
+                "mse": 0.026536505415769854,
+                "near_zero_energy": false,
+                "nmse": 0.3069165516789124,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.1526682020904831,
+                "max_absolute_error": 1.7260110458310909,
+                "mse": 0.047289090717353204,
+                "near_zero_energy": false,
+                "nmse": 0.5765502441243293,
+                "outside_grid_fraction": 0.002717391304347826,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "layer": 0,
+            "native_execution": false,
+            "next_data_cursor": 0,
+            "optimizer": "full-batch-sgd/0",
+            "parameter_summary": {
+              "bias_values": 0,
+              "channels": 32,
+              "input_width": 64,
+              "kind": "gated",
+              "knots": 8,
+              "numeric_values": 6464,
+              "output_width": 64,
+              "rank": null,
+              "representation": "spline-linear",
+              "schema": "nrl.block/5",
+              "trainable_values": 6400
+            },
+            "retained_indices": [
+              12,
+              15,
+              20,
+              25,
+              40,
+              48,
+              52,
+              54,
+              60,
+              66,
+              70,
+              76,
+              78,
+              83,
+              99,
+              100,
+              112,
+              118,
+              121,
+              126,
+              127,
+              129,
+              130,
+              132,
+              134,
+              135,
+              136,
+              146,
+              160,
+              165,
+              167,
+              171
+            ],
+            "rng_state": "none; deterministic source initialization and supplied document/token order",
+            "schema": "nrl.local-report/0",
+            "selected": {
+              "step": 8,
+              "train": {
+                "mae": 0.12492316630884429,
+                "max_absolute_error": 0.8360578534604839,
+                "mse": 0.02652026558279305,
+                "near_zero_energy": false,
+                "nmse": 0.30672872462862866,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.1526451252004954,
+                "max_absolute_error": 1.7258405708071392,
+                "mse": 0.047279397185254195,
+                "near_zero_energy": false,
+                "nmse": 0.5764320602427335,
+                "outside_grid_fraction": 0.002717391304347826,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "selected_step": 8,
+            "source_hidden": 172,
+            "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+            "transform": {
+              "knots": 8,
+              "rank": 0,
+              "representation": "spline-linear",
+              "schema": "nrl.transform/0",
+              "width": 32
+            }
+          },
+          {
+            "calibration_id": "0ca46ff5287be269e05ba11e8e307eb6871d744708b9623e344f910fd2091b78",
+            "checkpoint_id": "acaa443122e7f3d4a107123b4c7be71734fee59ea93bd1d60ca17927fe75d09a",
+            "completed_steps": 8,
+            "config_id": "1033173bc4d41e3d39b3d142dc744e7316cca5918e6d0b5fb73bbafb0fa1ea34",
+            "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+            "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+            "initial": {
+              "step": 0,
+              "train": {
+                "mae": 0.23076062019070379,
+                "max_absolute_error": 2.177753513349199,
+                "mse": 0.09375060066040451,
+                "near_zero_energy": false,
+                "nmse": 0.6106915882278454,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.24760096370764498,
+                "max_absolute_error": 2.165954088729784,
+                "mse": 0.11146027851341954,
+                "near_zero_energy": false,
+                "nmse": 0.7147456910499523,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.1559439670768575,
+                "values": 2944
+              }
+            },
+            "layer": 2,
+            "native_execution": false,
+            "next_data_cursor": 0,
+            "optimizer": "full-batch-sgd/0",
+            "parameter_summary": {
+              "bias_values": 0,
+              "channels": 32,
+              "input_width": 64,
+              "kind": "gated",
+              "knots": null,
+              "numeric_values": 6144,
+              "output_width": 64,
+              "rank": null,
+              "representation": "pruned",
+              "schema": "nrl.block/5",
+              "trainable_values": 6144
+            },
+            "retained_indices": [
+              5,
+              8,
+              12,
+              15,
+              33,
+              35,
+              37,
+              41,
+              42,
+              54,
+              65,
+              75,
+              84,
+              85,
+              90,
+              94,
+              95,
+              98,
+              99,
+              100,
+              110,
+              112,
+              116,
+              118,
+              120,
+              132,
+              134,
+              144,
+              145,
+              149,
+              153,
+              164
+            ],
+            "rng_state": "none; deterministic source initialization and supplied document/token order",
+            "schema": "nrl.local-report/0",
+            "selected": {
+              "step": 8,
+              "train": {
+                "mae": 0.2306860393707353,
+                "max_absolute_error": 2.1761941196838013,
+                "mse": 0.0936815706528523,
+                "near_zero_energy": false,
+                "nmse": 0.6102419266294079,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.24757523791623814,
+                "max_absolute_error": 2.165825193308197,
+                "mse": 0.11143766185980972,
+                "near_zero_energy": false,
+                "nmse": 0.7146006604082817,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.1559439670768575,
+                "values": 2944
+              }
+            },
+            "selected_step": 8,
+            "source_hidden": 172,
+            "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+            "transform": {
+              "knots": 0,
+              "rank": 0,
+              "representation": "pruned",
+              "schema": "nrl.transform/0",
+              "width": 32
+            }
+          }
+        ],
+        "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+        "native_execution": false,
+        "plan": {
+          "entries": [
+            {
+              "layer": 0,
+              "transform": {
+                "knots": 8,
+                "rank": 0,
+                "representation": "spline-linear",
+                "schema": "nrl.transform/0",
+                "width": 32
+              }
+            },
+            {
+              "layer": 2,
+              "transform": {
+                "knots": 0,
+                "rank": 0,
+                "representation": "pruned",
+                "schema": "nrl.transform/0",
+                "width": 32
+              }
+            }
+          ],
+          "id": "mixed-linear-pruned"
+        },
+        "schema": "nrl.applied-plan/0",
+        "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648"
+      },
+      "validation": {
+        "environment": {
+          "architecture": "x86_64",
+          "backend": "host-cpu-scalar-f64/0",
+          "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+          "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+          "debug_assertions": false,
+          "executable_sha256": "87c14b657e97024c91cf9c38316108e4b4b998e46e4008d28cf681addcc48d16",
+          "logical_cpus": 24,
+          "os": "linux",
+          "runtime_threads": 1
+        },
+        "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+        "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+        "model_information": {
+          "adapter": "llama2c-f32-v0/0",
+          "base_parameter_values": 260032,
+          "config": {
+            "context": 512,
+            "dim": 64,
+            "heads": 8,
+            "hidden": 172,
+            "kv_heads": 4,
+            "layers": 5,
+            "tied_head": true,
+            "vocab": 512
+          },
+          "effective_numeric_values": 210688,
+          "effective_parameter_values": 206528,
+          "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+          "native_execution": false,
+          "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+          "package_bytes": 1390400,
+          "patch_layers": [
+            0,
+            2
+          ],
+          "retained_numeric_values": 276736,
+          "retains_original_dense_weights": true,
+          "schema": "nrl.decoder-info/0"
+        },
+        "native_execution": false,
+        "process_peak_rss_bytes": 11890688,
+        "profile": {
+          "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+          "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+          "geometry": [
+            512,
+            96
+          ],
+          "measurement": {
+            "max_forward_rows": 65536,
+            "repeats": 3,
+            "schema": "nrl.measurement/0",
+            "warmups": 1
+          },
+          "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+          "split": "validation",
+          "task": "language-next-token/0"
+        },
+        "quality": {
+          "details": {
+            "maximum_token_nll": 14.354020194248998,
+            "p95_token_nll": 8.408567149323977,
+            "perplexity": 55.1805927383378,
+            "predicted_tokens": 46,
+            "state": "fresh causal cache per document",
+            "top1_accuracy": 0.17391304347826086
+          },
+          "metric": "mean-nll",
+          "value": 4.010611310636807
+        },
+        "schema": "nrl.evaluation/0",
+        "timing": {
+          "median_seconds": 0.004005571,
+          "minimum_seconds": 0.003988244,
+          "p95_seconds": 0.004112038,
+          "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+          "seconds": [
+            0.003988244,
+            0.004112038,
+            0.004005571
+          ]
+        },
+        "work": {
+          "documents_or_batches": 2,
+          "output_values_per_pass": 23552,
+          "quality_passes": 1,
+          "rows_per_pass": 46,
+          "timed_passes": 3,
+          "total_forward_rows": 230,
+          "warmup_passes": 1
+        }
+      }
+    },
+    {
+      "plan_id": "mixed-svd-cubic",
+      "refusal": null,
+      "training": {
+        "composition": "all selected original-teacher local blocks installed together; whole-model validation required",
+        "local_runs": [
+          {
+            "calibration_id": "0c609cc9c0dc682223e3e1218d911ffba81934c54531483d14ceb088d622b6eb",
+            "checkpoint_id": "ee7e5a6a835619f3d46af875517898c3c1d7a1ddd237b17712872c57e3e7d6e7",
+            "completed_steps": 8,
+            "config_id": "d79c0c73074ed8b45f957dece42f0b247c4eedf9addf51e425fc7a2ba36603ad",
+            "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+            "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+            "initial": {
+              "step": 0,
+              "train": {
+                "mae": 0.1947193831239129,
+                "max_absolute_error": 2.510560773587412,
+                "mse": 0.08921655051621193,
+                "near_zero_energy": false,
+                "nmse": 1.0318629227212008,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.18674814637464815,
+                "max_absolute_error": 2.510560773587412,
+                "mse": 0.08284699486030968,
+                "near_zero_energy": false,
+                "nmse": 1.0100734521873687,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "layer": 0,
+            "native_execution": false,
+            "next_data_cursor": 0,
+            "optimizer": "full-batch-sgd/0",
+            "parameter_summary": {
+              "bias_values": 0,
+              "channels": 32,
+              "input_width": 64,
+              "kind": "gated",
+              "knots": null,
+              "numeric_values": 1152,
+              "output_width": 64,
+              "rank": 4,
+              "representation": "svd",
+              "schema": "nrl.block/5",
+              "trainable_values": 1152
+            },
+            "retained_indices": [
+              12,
+              15,
+              20,
+              25,
+              40,
+              48,
+              52,
+              54,
+              60,
+              66,
+              70,
+              76,
+              78,
+              83,
+              99,
+              100,
+              112,
+              118,
+              121,
+              126,
+              127,
+              129,
+              130,
+              132,
+              134,
+              135,
+              136,
+              146,
+              160,
+              165,
+              167,
+              171
+            ],
+            "rng_state": "none; deterministic source initialization and supplied document/token order",
+            "schema": "nrl.local-report/0",
+            "selected": {
+              "step": 8,
+              "train": {
+                "mae": 0.19469553466415243,
+                "max_absolute_error": 2.510509987317273,
+                "mse": 0.0891868243610188,
+                "near_zero_energy": false,
+                "nmse": 1.0315191152415193,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.08646163027249053,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.1867363180621558,
+                "max_absolute_error": 2.510509987317273,
+                "mse": 0.08283201609747691,
+                "near_zero_energy": false,
+                "nmse": 1.0098908305882448,
+                "outside_grid_fraction": null,
+                "target_mean_energy": 0.082020762629589,
+                "values": 2944
+              }
+            },
+            "selected_step": 8,
+            "source_hidden": 172,
+            "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+            "transform": {
+              "knots": 0,
+              "rank": 4,
+              "representation": "svd",
+              "schema": "nrl.transform/0",
+              "width": 32
+            }
+          },
+          {
+            "calibration_id": "0ca46ff5287be269e05ba11e8e307eb6871d744708b9623e344f910fd2091b78",
+            "checkpoint_id": "e87484f0a64af26f29ac4a1d2a4b660e5a41b6bdb4b3a1bed69522447dec528a",
+            "completed_steps": 8,
+            "config_id": "622c69d1cebc972f588b897e24c2f7acffcb00317312e8efd28c861cf7491508",
+            "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+            "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+            "initial": {
+              "step": 0,
+              "train": {
+                "mae": 0.2307752129193697,
+                "max_absolute_error": 2.17760927678546,
+                "mse": 0.09375369729314884,
+                "near_zero_energy": false,
+                "nmse": 0.6107117596993397,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.24761847267855566,
+                "max_absolute_error": 2.15938164011452,
+                "mse": 0.11146443159238557,
+                "near_zero_energy": false,
+                "nmse": 0.7147723229167946,
+                "outside_grid_fraction": 0.010869565217391304,
+                "target_mean_energy": 0.1559439670768575,
+                "values": 2944
+              }
+            },
+            "layer": 2,
+            "native_execution": false,
+            "next_data_cursor": 0,
+            "optimizer": "full-batch-sgd/0",
+            "parameter_summary": {
+              "bias_values": 0,
+              "channels": 32,
+              "input_width": 64,
+              "kind": "gated",
+              "knots": 8,
+              "numeric_values": 6464,
+              "output_width": 64,
+              "rank": null,
+              "representation": "spline-cubic",
+              "schema": "nrl.block/5",
+              "trainable_values": 6400
+            },
+            "retained_indices": [
+              5,
+              8,
+              12,
+              15,
+              33,
+              35,
+              37,
+              41,
+              42,
+              54,
+              65,
+              75,
+              84,
+              85,
+              90,
+              94,
+              95,
+              98,
+              99,
+              100,
+              110,
+              112,
+              116,
+              118,
+              120,
+              132,
+              134,
+              144,
+              145,
+              149,
+              153,
+              164
+            ],
+            "rng_state": "none; deterministic source initialization and supplied document/token order",
+            "schema": "nrl.local-report/0",
+            "selected": {
+              "step": 8,
+              "train": {
+                "mae": 0.23069942516077085,
+                "max_absolute_error": 2.1760061363008534,
+                "mse": 0.09368371361119986,
+                "near_zero_energy": false,
+                "nmse": 0.6102558858640961,
+                "outside_grid_fraction": 0.0,
+                "target_mean_energy": 0.15351546094233529,
+                "values": 4096
+              },
+              "validation": {
+                "mae": 0.24759203783710956,
+                "max_absolute_error": 2.159211581220566,
+                "mse": 0.1114411921042798,
+                "near_zero_energy": false,
+                "nmse": 0.7146232983117303,
+                "outside_grid_fraction": 0.010869565217391304,
+                "target_mean_energy": 0.1559439670768575,
+                "values": 2944
+              }
+            },
+            "selected_step": 8,
+            "source_hidden": 172,
+            "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+            "transform": {
+              "knots": 8,
+              "rank": 0,
+              "representation": "spline-cubic",
+              "schema": "nrl.transform/0",
+              "width": 32
+            }
+          }
+        ],
+        "model_id": "42f3f33b6a347316e298b35136dae143ccfe13f0670a2cc47385ee96304f5d43",
+        "native_execution": false,
+        "plan": {
+          "entries": [
+            {
+              "layer": 0,
+              "transform": {
+                "knots": 0,
+                "rank": 4,
+                "representation": "svd",
+                "schema": "nrl.transform/0",
+                "width": 32
+              }
+            },
+            {
+              "layer": 2,
+              "transform": {
+                "knots": 8,
+                "rank": 0,
+                "representation": "spline-cubic",
+                "schema": "nrl.transform/0",
+                "width": 32
+              }
+            }
+          ],
+          "id": "mixed-svd-cubic"
+        },
+        "schema": "nrl.applied-plan/0",
+        "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648"
+      },
+      "validation": {
+        "environment": {
+          "architecture": "x86_64",
+          "backend": "host-cpu-scalar-f64/0",
+          "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+          "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+          "debug_assertions": false,
+          "executable_sha256": "87c14b657e97024c91cf9c38316108e4b4b998e46e4008d28cf681addcc48d16",
+          "logical_cpus": 24,
+          "os": "linux",
+          "runtime_threads": 1
+        },
+        "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+        "model_id": "42f3f33b6a347316e298b35136dae143ccfe13f0670a2cc47385ee96304f5d43",
+        "model_information": {
+          "adapter": "llama2c-f32-v0/0",
+          "base_parameter_values": 260032,
+          "config": {
+            "context": 512,
+            "dim": 64,
+            "heads": 8,
+            "hidden": 172,
+            "kv_heads": 4,
+            "layers": 5,
+            "tied_head": true,
+            "vocab": 512
+          },
+          "effective_numeric_values": 205696,
+          "effective_parameter_values": 201536,
+          "model_id": "42f3f33b6a347316e298b35136dae143ccfe13f0670a2cc47385ee96304f5d43",
+          "native_execution": false,
+          "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+          "package_bytes": 1264642,
+          "patch_layers": [
+            0,
+            2
+          ],
+          "retained_numeric_values": 271744,
+          "retains_original_dense_weights": true,
+          "schema": "nrl.decoder-info/0"
+        },
+        "native_execution": false,
+        "process_peak_rss_bytes": 12107776,
+        "profile": {
+          "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+          "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+          "geometry": [
+            512,
+            96
+          ],
+          "measurement": {
+            "max_forward_rows": 65536,
+            "repeats": 3,
+            "schema": "nrl.measurement/0",
+            "warmups": 1
+          },
+          "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+          "split": "validation",
+          "task": "language-next-token/0"
+        },
+        "quality": {
+          "details": {
+            "maximum_token_nll": 12.3329827594831,
+            "p95_token_nll": 7.818613017715623,
+            "perplexity": 47.04938599267296,
+            "predicted_tokens": 46,
+            "state": "fresh causal cache per document",
+            "top1_accuracy": 0.1956521739130435
+          },
+          "metric": "mean-nll",
+          "value": 3.8511978158436415
+        },
+        "schema": "nrl.evaluation/0",
+        "timing": {
+          "median_seconds": 0.003875146,
+          "minimum_seconds": 0.003873008,
+          "p95_seconds": 0.004075463,
+          "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+          "seconds": [
+            0.003873008,
+            0.004075463,
+            0.003875146
+          ]
+        },
+        "work": {
+          "documents_or_batches": 2,
+          "output_values_per_pass": 23552,
+          "quality_passes": 1,
+          "rows_per_pass": 46,
+          "timed_passes": 3,
+          "total_forward_rows": 230,
+          "warmup_passes": 1
+        }
+      }
+    }
+  ],
+  "native_execution": false,
+  "schema": "nrl.search/0",
+  "selected_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+  "selected_test_report_id": "0e5eaa19de7835e815c5ac2ebbc387bed6c587ca93f343e40b13b24b0e66dfa8",
+  "selection": {
+    "assessments": [
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "pruned-layer0",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "spline-linear-layer0",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "spline-cubic-layer0",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "svd-layer0",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "mixed-linear-pruned",
+        "quality_budget_pass": false
+      },
+      {
+        "actual_package_budget_pass": true,
+        "eligible": false,
+        "observed_nonoverlapping_timing_pass": true,
+        "plan_id": "mixed-svd-cubic",
+        "quality_budget_pass": false
+      }
+    ],
+    "pareto": [
+      "dense",
+      "svd-layer0",
+      "mixed-svd-cubic"
+    ],
+    "process_rss_used_for_selection": false,
+    "rule": "quality delta and actual package budgets; candidate p95 strictly below dense minimum; among eligible lowest median then NLL then plan ID; otherwise dense",
+    "schema": "nrl.plan-selection/0",
+    "selected_plan": "dense",
+    "selection_split": "validation",
+    "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648",
+    "test_used_for_selection": false,
+    "timing_scope": "observed scalar host run only; no statistical or general performance guarantee"
+  },
+  "study_id": "b809b5cc693b61049085df90509490da1ce18eb89cdc3033e6373d0a14b62648"
+}

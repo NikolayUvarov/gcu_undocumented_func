@@ -7,9 +7,10 @@ use std::time::Duration;
 const BODY_MAX: usize = 1 << 20;
 
 /// `origin` and `host` as the client sent them: a browser sends both, the command line `host` alone.
-/// `websocket`: the Sec-WebSocket-Key of a page asking for the feed.
+/// `websocket`: the Sec-WebSocket-Key of a page asking for the feed. `session` and `pin`: the lease a call holds.
 pub struct Request { pub method: String, pub path: String, pub query: Vec<(String, String)>, pub key: Option<String>, pub body: String,
-                    pub origin: Option<String>, pub host: Option<String>, pub websocket: Option<String> }
+                    pub origin: Option<String>, pub host: Option<String>, pub websocket: Option<String>,
+                    pub session: Option<String>, pub pin: Option<String> }
 
 impl Request {
     pub fn param(&self, name: &str) -> Option<&str> { self.query.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str()) }
@@ -38,7 +39,7 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("/").to_string());
-    let (mut length, mut key, mut origin, mut host, mut websocket) = (0usize, None, None, None, None);
+    let (mut length, mut key, mut origin, mut host, mut websocket, mut session, mut pin) = (0usize, None, None, None, None, None, None);
     loop {
         let mut h = String::new();
         if reader.read_line(&mut h).map_err(|e| e.to_string())? == 0 || h.trim().is_empty() { break; }
@@ -49,6 +50,8 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             "origin" => origin = Some(value.trim().to_string()),
             "host" => host = Some(value.trim().to_ascii_lowercase()),
             "sec-websocket-key" => websocket = Some(value.trim().to_string()),
+            "x-effector-reservation-session" => session = Some(value.trim().to_string()),
+            "x-effector-reservation-pin" => pin = Some(value.trim().to_string()),
             _ => {}
         }
     }
@@ -60,7 +63,8 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
         let (k, v) = p.split_once('=').unwrap_or((p, ""));
         (unescape(k), unescape(v))
     }).collect();
-    Ok(Request { method, path: path.to_string(), query, key, body: String::from_utf8(body).map_err(|_| "the body is not UTF-8")?, origin, host, websocket })
+    Ok(Request { method, path: path.to_string(), query, key, body: String::from_utf8(body).map_err(|_| "the body is not UTF-8")?, origin, host, websocket,
+                 session, pin })
 }
 
 pub fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &str) {
@@ -69,14 +73,15 @@ pub fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &s
     stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(body.as_bytes())).ok();
 }
 
-/// One call to the daemon at `at`: its status and body.
-pub fn call(at: &str, method: &str, path: &str, key: Option<&str>, body: Option<&str>) -> Result<(u16, String), String> {
+/// One call to the daemon at `at`, with `headers` besides its own: its status and body.
+pub fn call(at: &str, method: &str, path: &str, key: Option<&str>, headers: &[(&str, &str)], body: Option<&str>) -> Result<(u16, String), String> {
     let mut stream = TcpStream::connect(at).map_err(|e| format!("{at}: {e} (is `effector485 daemon` running?)"))?;
     stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
     let body = body.unwrap_or("");
     let mut request = format!("{method} {path} HTTP/1.1\r\nHost: {at}\r\nConnection: close\r\nContent-Length: {}\r\n", body.len());
     if !body.is_empty() { request.push_str("Content-Type: application/json\r\n"); }
     if let Some(k) = key { request.push_str(&format!("X-API-Key: {k}\r\n")); }
+    for (name, value) in headers { request.push_str(&format!("{name}: {value}\r\n")); }
     request.push_str("\r\n");
     stream.write_all(request.as_bytes()).and_then(|_| stream.write_all(body.as_bytes())).map_err(|e| e.to_string())?;
     let mut answer = Vec::new();

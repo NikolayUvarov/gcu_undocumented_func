@@ -1,0 +1,71 @@
+{
+  "format": "qwen-spline-lab-overlay-v1",
+  "base": {
+    "source": "nrl://pinned-tinyllamas-260k",
+    "fingerprint": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+    "fingerprint_policy": "nrl-decoder-model-id/0",
+    "model_type": "llama2c-f32-v0/0",
+    "licence": "MIT; publisher-declared source weights"
+  },
+  "blocks": {
+    "0": {
+      "representation": "pruned",
+      "hidden_size": 64,
+      "original_width": 172,
+      "width": 16,
+      "rank": 4,
+      "knots": 8
+    },
+    "1": {
+      "representation": "spline-linear",
+      "hidden_size": 64,
+      "original_width": 172,
+      "width": 16,
+      "rank": 4,
+      "knots": 8
+    },
+    "2": {
+      "representation": "spline-cubic",
+      "hidden_size": 64,
+      "original_width": 172,
+      "width": 16,
+      "rank": 4,
+      "knots": 8
+    },
+    "4": {
+      "representation": "svd",
+      "hidden_size": 64,
+      "original_width": 172,
+      "width": 16,
+      "rank": 4,
+      "knots": 8
+    }
+  },
+  "weights_sha256": "99a54646296faf497785057d80ce0fa670a8a997fac6f78ef117931a7a5b9908",
+  "patch_file_bytes": 51400,
+  "patch_storage_dtype": "float32",
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "packages": {
+      "torch": "2.10.0+cpu",
+      "numpy": "2.4.1",
+      "safetensors": "0.7.0",
+      "transformers": "4.57.6",
+      "huggingface-hub": "0.36.2",
+      "accelerate": "1.12.0"
+    },
+    "cuda_available": false,
+    "cuda_version": null,
+    "torch_threads": 1,
+    "cpu_logical_count": 24,
+    "cpu_processor": "x86_64",
+    "cuda_devices": [],
+    "gpu": null
+  },
+  "details": {
+    "fixture": "four transformed FFNs from actual pinned 260K weights; numerical bridge only",
+    "reference_archive_sha256": "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25"
+  },
+  "artifact_id": "48a2086a4969756793176498c8b3f9169550929f36308fb8acd6eb4b892a07a4"
+}

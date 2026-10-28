@@ -1,0 +1,119 @@
+{
+  "base_numeric_values_including_rope": 264128,
+  "base_parameter_values": 260032,
+  "checks": [
+    "all-position logits and every layer FFN input/output match independent vectorized PyTorch f64",
+    "original C f32 logits compared separately",
+    "cached and uncached prefixes agree exactly",
+    "source-bound cache/context/token/trace limits",
+    "UTF-8/whitespace/fallback token and decoded-byte goldens",
+    "data-only package/hash/config/replacement bounds and existing-output refusals"
+  ],
+  "commands": [
+    "bash nrl/tools/check.sh",
+    "generate_decoder_fixtures.py --output nrl/tests/fixtures/decoder-v0.json --check"
+  ],
+  "f64_tolerance": "1e-12 + 1e-10*abs(reference)",
+  "fast_test_staging_commit": "d7fff0d4b3cb29d11aacc6db237c1f8677840fc2",
+  "full_repository_gate": "pending integrator landing; run NRL check explicitly until KRN wiring lands",
+  "limitations": [
+    "small llama2.c-v0 profile only; not Qwen or arbitrary Llama",
+    "original dense weights retained when patched; effective parameter count is not disk/RSS saving",
+    "trained-model numerical baseline, not held-out language quality or useful compression",
+    "no native/GPU/quantized execution",
+    "hash identity and publisher licence declarations are not authenticity/legal verification",
+    "T07 calibration/checkpoints and T08-T10 evaluation/plans/adaptation follow separately"
+  ],
+  "log_sha256": "153679e077de498d032553f79026b11d47a581ca7d49de8c93d1448c099b7912",
+  "numerical_cases": [
+    {
+      "decoded_utf8": "Once upon a time, there was a little girl",
+      "max_f64_error": 2.842170943040401e-14,
+      "max_original_c_f32_error": 1.571915935016932e-05,
+      "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+      "probe_file": "nrl/reports/decoder-probes-2026-10-26/0.json",
+      "probe_sha256": "7509387075e87b79693650ac4ba6fbc414e1d145e854e94f5af2ab38136e91e0",
+      "tokens": 5
+    },
+    {
+      "decoded_utf8": "A red fox. He liked to play with his to",
+      "max_f64_error": 2.4868995751603507e-14,
+      "max_original_c_f32_error": 9.69157978758517e-06,
+      "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+      "probe_file": "nrl/reports/decoder-probes-2026-10-26/1.json",
+      "probe_sha256": "533b6c3e98c093e67d63ee4f62e1f5d2d16728f18dbd3bc075a8dc039bd69dda",
+      "tokens": 9
+    },
+    {
+      "decoded_utf8": "Hi \ud83e\udd8a. Aready, ",
+      "max_f64_error": 2.2648549702353193e-14,
+      "max_original_c_f32_error": 1.4921884905483296e-05,
+      "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+      "probe_file": "nrl/reports/decoder-probes-2026-10-26/2.json",
+      "probe_sha256": "14c01a982589eca0fef72a187b2446da7d92109d52a4c9dacfda30b5d0169605",
+      "tokens": 8
+    }
+  ],
+  "oracle_sha256": "8edeb0fb1a557f87ae1d62bd1c3c615948e905ac491d7234cf9be6dd122a0844",
+  "original_c_f32_tolerance": "3e-4 + 3e-5*abs(reference); distinct arithmetic/positional policy",
+  "portable_release_builds": [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat"
+  ],
+  "portable_scope": "rlibs only; not native execution",
+  "raw_log": "decoder-check-2026-10-26.txt",
+  "recorded_date": "2026-10-26",
+  "reference_manifest": {
+    "code_reference_revision": "350e04fe35433e6d2941dce5a1f53308f87058eb",
+    "declared_licence": "MIT (publisher model card and llama2.c reference)",
+    "files": {
+      "LICENSE": {
+        "bytes": 1063,
+        "sha256": "e87b912002f04cdfa837eaf7f70548ab79b9cb62a285495edf575f3da875aec4",
+        "url": "https://raw.githubusercontent.com/karpathy/llama2.c/350e04fe35433e6d2941dce5a1f53308f87058eb/LICENSE"
+      },
+      "reference-run.c": {
+        "bytes": 38545,
+        "sha256": "9c4f2d5c6ae01b71726d1cc37530d71e60bff0ec7cc012565f16a43c1ca658bd",
+        "url": "https://raw.githubusercontent.com/karpathy/llama2.c/350e04fe35433e6d2941dce5a1f53308f87058eb/run.c"
+      },
+      "stories260K.bin": {
+        "bytes": 1056540,
+        "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+        "url": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/stories260K.bin"
+      },
+      "tok512.bin": {
+        "bytes": 6227,
+        "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+        "url": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/tok512.bin"
+      },
+      "tok512.model": {
+        "bytes": 7645,
+        "sha256": "dfff07d929db979913f166ec94a6f5ecad4c70cfed8eb5c9cbe7e464455e46f5",
+        "url": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/tok512.model"
+      },
+      "upstream-readme.md": {
+        "bytes": 2804,
+        "sha256": "b743d79e10d9fdd57686aaef8fbb8ac337672dc0e098f9aebe672e4faea06ba4",
+        "url": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/readme.md"
+      }
+    },
+    "model_revision": "0bd21da7698eaf29a0d7de3992de8a46ef624add",
+    "publisher": "karpathy",
+    "schema": "nrl.reference/0"
+  },
+  "regeneration": "byte-identical",
+  "rust_tests": {
+    "decoder_tests": 5,
+    "failed": 0,
+    "ignored": 0,
+    "passed": 57
+  },
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "schema": "nrl.decoder-check/0",
+  "task": "900-NRL-0012",
+  "test_location": "own NRL branch; no tests on fast-test",
+  "tested_commit": "63bdc5384dfc57b70e185d1064fdcc9242aab201",
+  "tied_head_counted_once": true,
+  "tokenizer_cases": 9
+}

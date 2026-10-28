@@ -1,0 +1,93 @@
+{
+  "schema": "nrl.evaluation/0",
+  "profile": {
+    "task": "language-next-token/0",
+    "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+    "split": "validation",
+    "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+    "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+    "geometry": [
+      512,
+      96
+    ],
+    "measurement": {
+      "schema": "nrl.measurement/0",
+      "warmups": 1,
+      "repeats": 3,
+      "max_forward_rows": 65536
+    }
+  },
+  "model_id": "eca76c9fea67cb76099b2c65b8c94bafc3880e3e62bb20be914b2f9beda096eb",
+  "environment": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logical_cpus": 24,
+    "executable_sha256": "87c14b657e97024c91cf9c38316108e4b4b998e46e4008d28cf681addcc48d16",
+    "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+    "backend": "host-cpu-scalar-f64/0",
+    "runtime_threads": 1,
+    "debug_assertions": false
+  },
+  "work": {
+    "documents_or_batches": 2,
+    "rows_per_pass": 46,
+    "output_values_per_pass": 23552,
+    "quality_passes": 1,
+    "warmup_passes": 1,
+    "timed_passes": 3,
+    "total_forward_rows": 230
+  },
+  "quality": {
+    "metric": "mean-nll",
+    "value": 3.673740095680173,
+    "details": {
+      "maximum_token_nll": 14.651892325727541,
+      "p95_token_nll": 10.369211205448522,
+      "perplexity": 39.39898662045806,
+      "predicted_tokens": 46,
+      "state": "fresh causal cache per document",
+      "top1_accuracy": 0.2391304347826087
+    }
+  },
+  "timing": {
+    "seconds": [
+      0.004652883,
+      0.004560792,
+      0.00463778
+    ],
+    "minimum_seconds": 0.004560792,
+    "median_seconds": 0.00463778,
+    "p95_seconds": 0.004652883,
+    "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded"
+  },
+  "model_information": {
+    "adapter": "llama2c-f32-v0/0",
+    "base_parameter_values": 260032,
+    "config": {
+      "context": 512,
+      "dim": 64,
+      "heads": 8,
+      "hidden": 172,
+      "kv_heads": 4,
+      "layers": 5,
+      "tied_head": true,
+      "vocab": 512
+    },
+    "effective_numeric_values": 237248,
+    "effective_parameter_values": 233152,
+    "model_id": "eca76c9fea67cb76099b2c65b8c94bafc3880e3e62bb20be914b2f9beda096eb",
+    "native_execution": false,
+    "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+    "package_bytes": 1223229,
+    "patch_layers": [
+      0
+    ],
+    "retained_numeric_values": 270272,
+    "retains_original_dense_weights": true,
+    "schema": "nrl.decoder-info/0"
+  },
+  "process_peak_rss_bytes": 10817536,
+  "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+  "native_execution": false
+}

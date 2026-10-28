@@ -1,0 +1,29 @@
+{
+  "schema": "nrl.qsl-decoder-overlay/0",
+  "binding": {
+    "schema": "nrl.qsl-decoder-binding/0",
+    "adapter": "llama2c-f32-v0/0",
+    "base_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+    "qsl_artifact_id": "48a2086a4969756793176498c8b3f9169550929f36308fb8acd6eb4b892a07a4",
+    "layers": {
+      "0": 0,
+      "1": 1,
+      "2": 2,
+      "4": 4
+    },
+    "source": {
+      "identifier": "nrl://original-qsl-complete-model-fixture",
+      "sha256": null,
+      "licence": "MIT; derived publisher-declared MIT TinyStories weights and archived QSL writer",
+      "notices": [
+        "Numerical full-model bridge fixture; no accepted compression or model-quality claim."
+      ]
+    }
+  },
+  "source_manifest_sha256": "6e1fe012306ab7bd992b01ba358d8913ff0974fcde8b042e95361d2f64071c0e",
+  "source_manifest_bytes": 1968,
+  "weights_sha256": "99a54646296faf497785057d80ce0fa670a8a997fac6f78ef117931a7a5b9908",
+  "weights_bytes": 51400,
+  "licence": "MIT",
+  "resolved_model_id": "6f2b3a5cc6971733b8c6070865f809a30390fe0a2c2b2d05d67c2aa0995be59e"
+}

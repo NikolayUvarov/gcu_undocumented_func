@@ -1,0 +1,13 @@
+{
+  "baseline_package_bytes": 6319,
+  "baseline_report_id": "d512dd3087d6dc3f979772777db903bc95ca596f77869602a2c23b6fc1206808",
+  "candidate_package_bytes": 7433,
+  "candidate_report_id": "8bfa7c23258e9d3e6741465005d07469ec7d879e6b0af25aa16d60df0526c05a",
+  "candidate_to_baseline_median_time_ratio": null,
+  "interpretation": "Compatible recorded task/host configuration only; ratios and parameter counts are not a general speed or memory guarantee.",
+  "metric": "ndcg-loss-at-k",
+  "native_execution": false,
+  "process_peak_rss_not_attributed_to_model": true,
+  "quality_delta": 0.0,
+  "schema": "nrl.comparison/0"
+}

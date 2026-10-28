@@ -1,0 +1,686 @@
+{
+  "adamw_selected_step": 8,
+  "adamw_validation_history": [
+    4.010611310636807,
+    4.004069474399189,
+    3.9978068362403323,
+    3.991761693834825,
+    3.986000503676372,
+    3.9805148960230934,
+    3.9753083114316676,
+    3.9703662767032286,
+    3.9656676845096888
+  ],
+  "candidate_package_ratio": 1.3065929740206177,
+  "config": {
+    "max_package_ratio": 1.5,
+    "max_validation_nll_increase": 0.25,
+    "optimizer": {
+      "algorithm": "adamw",
+      "beta1": 0.9,
+      "beta2": 0.999,
+      "epsilon": 1e-8,
+      "learning_rate": 0.0002,
+      "max_steps": 8,
+      "schema": "nrl.optimizer/0",
+      "weight_decay": 0.01
+    },
+    "row_limit": 64,
+    "schema": "nrl.adaptation-config/0",
+    "source": {
+      "identifier": "nrl://adamw-recovery-v0",
+      "licence": "MIT (derived from publisher-declared MIT TinyStories weights); original corpus MIT OR Apache-2.0",
+      "notices": [
+        "Local FFN fitting on refreshed student trajectories; no whole-decoder training."
+      ],
+      "sha256": null
+    }
+  },
+  "control": "same rate, steps, initialization, data order, local MSE and validation selection; SGD without moments or decay",
+  "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+  "native_execution": false,
+  "recommendation": "dense",
+  "reports": {
+    "adamw-test": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "12904ba9c5c48d3856f384cd1b7e56ec194f3404243b1448c3a99dbc26dbc878",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "ac6306c634a4d3c7b14ca7e7fae2826d69fa316da6bf15f4d9e1a1ae92d9e480",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "ac6306c634a4d3c7b14ca7e7fae2826d69fa316da6bf15f4d9e1a1ae92d9e480",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390765,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 18919424,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "test",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 11.186935160683493,
+          "p95_token_nll": 10.831623857995194,
+          "perplexity": 96.45900927568064,
+          "predicted_tokens": 54,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.2037037037037037
+        },
+        "metric": "mean-nll",
+        "value": 4.569118143757484
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 27648,
+        "quality_passes": 1,
+        "rows_per_pass": 54,
+        "timed_passes": 0,
+        "total_forward_rows": 54,
+        "warmup_passes": 0
+      }
+    },
+    "adamw-validation": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "12904ba9c5c48d3856f384cd1b7e56ec194f3404243b1448c3a99dbc26dbc878",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "ac6306c634a4d3c7b14ca7e7fae2826d69fa316da6bf15f4d9e1a1ae92d9e480",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "ac6306c634a4d3c7b14ca7e7fae2826d69fa316da6bf15f4d9e1a1ae92d9e480",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390765,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 18919424,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "validation",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 14.452694503322085,
+          "p95_token_nll": 8.47491018967865,
+          "perplexity": 52.75548165089795,
+          "predicted_tokens": 46,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.17391304347826086
+        },
+        "metric": "mean-nll",
+        "value": 3.9656676845096888
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 23552,
+        "quality_passes": 1,
+        "rows_per_pass": 46,
+        "timed_passes": 0,
+        "total_forward_rows": 46,
+        "warmup_passes": 0
+      }
+    },
+    "dense-test": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "12904ba9c5c48d3856f384cd1b7e56ec194f3404243b1448c3a99dbc26dbc878",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 264128,
+        "effective_parameter_values": 260032,
+        "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1064421,
+        "patch_layers": [],
+        "retained_numeric_values": 264128,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 18919424,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "test",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 7.866782737686735,
+          "p95_token_nll": 6.601167196333709,
+          "perplexity": 9.35922873023494,
+          "predicted_tokens": 54,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.4444444444444444
+        },
+        "metric": "mean-nll",
+        "value": 2.2363628864784584
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 27648,
+        "quality_passes": 1,
+        "rows_per_pass": 54,
+        "timed_passes": 0,
+        "total_forward_rows": 54,
+        "warmup_passes": 0
+      }
+    },
+    "dense-validation": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "12904ba9c5c48d3856f384cd1b7e56ec194f3404243b1448c3a99dbc26dbc878",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 264128,
+        "effective_parameter_values": 260032,
+        "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1064421,
+        "patch_layers": [],
+        "retained_numeric_values": 264128,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 18919424,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "validation",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 14.099985525122536,
+          "p95_token_nll": 7.8854697672441185,
+          "perplexity": 16.31808307739832,
+          "predicted_tokens": 46,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.3695652173913043
+        },
+        "metric": "mean-nll",
+        "value": 2.792273884144422
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 23552,
+        "quality_passes": 1,
+        "rows_per_pass": 46,
+        "timed_passes": 0,
+        "total_forward_rows": 46,
+        "warmup_passes": 0
+      }
+    },
+    "initial-test": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "12904ba9c5c48d3856f384cd1b7e56ec194f3404243b1448c3a99dbc26dbc878",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390400,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 18919424,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "test",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 11.617991753032136,
+          "p95_token_nll": 10.93888635924818,
+          "perplexity": 105.06599106128081,
+          "predicted_tokens": 54,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.2037037037037037
+        },
+        "metric": "mean-nll",
+        "value": 4.654588639040633
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 27648,
+        "quality_passes": 1,
+        "rows_per_pass": 54,
+        "timed_passes": 0,
+        "total_forward_rows": 54,
+        "warmup_passes": 0
+      }
+    },
+    "initial-validation": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "12904ba9c5c48d3856f384cd1b7e56ec194f3404243b1448c3a99dbc26dbc878",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "8764792726ad497d7e087c32cf5f7525e48d415afac3e46a85eb5ebf1b8ea5a2",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390400,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 18919424,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "validation",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 14.354020194248998,
+          "p95_token_nll": 8.408567149323977,
+          "perplexity": 55.1805927383378,
+          "predicted_tokens": 46,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.17391304347826086
+        },
+        "metric": "mean-nll",
+        "value": 4.010611310636807
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 23552,
+        "quality_passes": 1,
+        "rows_per_pass": 46,
+        "timed_passes": 0,
+        "total_forward_rows": 46,
+        "warmup_passes": 0
+      }
+    },
+    "sgd-test": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "12904ba9c5c48d3856f384cd1b7e56ec194f3404243b1448c3a99dbc26dbc878",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "284cf962a845bb87266ba9f1e38040f31323f207ff192ea64b21d430b727f11e",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "284cf962a845bb87266ba9f1e38040f31323f207ff192ea64b21d430b727f11e",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390784,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 18919424,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "test",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 11.617623958244721,
+          "p95_token_nll": 10.938963409188682,
+          "perplexity": 105.05969590808549,
+          "predicted_tokens": 54,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.2037037037037037
+        },
+        "metric": "mean-nll",
+        "value": 4.654528721062132
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 27648,
+        "quality_passes": 1,
+        "rows_per_pass": 54,
+        "timed_passes": 0,
+        "total_forward_rows": 54,
+        "warmup_passes": 0
+      }
+    },
+    "sgd-validation": {
+      "environment": {
+        "architecture": "x86_64",
+        "backend": "host-cpu-scalar-f64/0",
+        "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+        "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+        "debug_assertions": false,
+        "executable_sha256": "12904ba9c5c48d3856f384cd1b7e56ec194f3404243b1448c3a99dbc26dbc878",
+        "logical_cpus": 24,
+        "os": "linux",
+        "runtime_threads": 1
+      },
+      "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+      "model_id": "284cf962a845bb87266ba9f1e38040f31323f207ff192ea64b21d430b727f11e",
+      "model_information": {
+        "adapter": "llama2c-f32-v0/0",
+        "base_parameter_values": 260032,
+        "config": {
+          "context": 512,
+          "dim": 64,
+          "heads": 8,
+          "hidden": 172,
+          "kv_heads": 4,
+          "layers": 5,
+          "tied_head": true,
+          "vocab": 512
+        },
+        "effective_numeric_values": 210688,
+        "effective_parameter_values": 206528,
+        "model_id": "284cf962a845bb87266ba9f1e38040f31323f207ff192ea64b21d430b727f11e",
+        "native_execution": false,
+        "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+        "package_bytes": 1390784,
+        "patch_layers": [
+          0,
+          2
+        ],
+        "retained_numeric_values": 276736,
+        "retains_original_dense_weights": true,
+        "schema": "nrl.decoder-info/0"
+      },
+      "native_execution": false,
+      "process_peak_rss_bytes": 18919424,
+      "profile": {
+        "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+        "data_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+        "geometry": [
+          512,
+          96
+        ],
+        "measurement": null,
+        "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+        "split": "validation",
+        "task": "language-next-token/0"
+      },
+      "quality": {
+        "details": {
+          "maximum_token_nll": 14.354192924637298,
+          "p95_token_nll": 8.408703256567296,
+          "perplexity": 55.179248984327735,
+          "predicted_tokens": 46,
+          "state": "fresh causal cache per document",
+          "top1_accuracy": 0.17391304347826086
+        },
+        "metric": "mean-nll",
+        "value": 4.010586958408874
+      },
+      "schema": "nrl.evaluation/0",
+      "timing": null,
+      "work": {
+        "documents_or_batches": 2,
+        "output_values_per_pass": 23552,
+        "quality_passes": 1,
+        "rows_per_pass": 46,
+        "timed_passes": 0,
+        "total_forward_rows": 46,
+        "warmup_passes": 0
+      }
+    }
+  },
+  "schema": "nrl.adaptation-comparison/0",
+  "sgd_selected_step": 8,
+  "sgd_validation_history": [
+    4.010611310636807,
+    4.010608266451808,
+    4.01060522231152,
+    4.010602178215951,
+    4.01059913416509,
+    4.010596090158955,
+    4.010593046197535,
+    4.010590002280843,
+    4.010586958408874
+  ],
+  "test_used_for_selection": false,
+  "training_scope": "local replaced FFNs, refreshed teacher targets on student inputs; no attention/embedding/whole-decoder backpropagation"
+}

@@ -1,0 +1,19 @@
+{
+  "kind": "affine",
+  "data": {
+    "schema": "nrl.affine/0",
+    "shape": [
+      4,
+      1
+    ],
+    "weights": [
+      0.4,
+      -0.2,
+      0.3,
+      0.1
+    ],
+    "bias": [
+      -0.05
+    ]
+  }
+}
