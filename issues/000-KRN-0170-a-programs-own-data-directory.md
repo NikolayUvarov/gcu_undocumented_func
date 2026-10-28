@@ -43,6 +43,9 @@ Recorded by the kernel track on 2026-10-25, for the plan [docs/communications-an
 - **The directory is `system/own/<name>/`,** not `data/own/`.
   - `system/` holds the private directories already, and every badge but the owner's finds them hidden. The user's shell and every program are among those, so no rule is needed for `data/`.
   - `own` is `vfs_server`'s fifth private directory (`zone.rs` `PRIVATE`), badge `mind::fs::BADGE_OWNERS` (8).
+- **Only a program that asks for it** (`mind::process::REQUEST_OWN`, in its `.mind_request` note) gets one. The loader serves the request itself; no launcher lends it.
+  - A program that never keeps anything makes no directory, and its start writes nothing to the boot volume.
+  - The first form gave one to every program run by name. The boot suite then found the volume's dirty bit set after a boot, from a program's directory made at that boot: a cut power at that moment leaves a volume to check.
 - **The identity** is the name the loader runs the program by:
   - only when it runs it from the booted slot or the volume's root by a bare name, or from `data/apps/` (750-KRN-0169);
   - a program run by any other path (`data/link/t/x.elf`) gets no directory;

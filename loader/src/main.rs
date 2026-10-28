@@ -185,13 +185,13 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>, Option<Installed>), Er
 // it gets a text input whose writer's handle comes back beside its PID (1.9, 000-KRN-0094), else 0.
 fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed: bool) -> Result<(u64, usize), Error> {
     let (file, task, app) = open(name)?;
-    // A program run by its name (the booted slot's or the root's) or installed in data/apps/ owns system/own/<name>/;
-    // one run by any other path has no identity to own a directory by (000-KRN-0170).
-    let own = if !name.contains(&b'/') || app.is_some() { own_dir(task.as_str()) } else { None };
     let (image, size) = read_image(&file)?;
     let (flags, memory) = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
     if let Some(app) = &app { check_installed(core::str::from_utf8(name).unwrap_or("?"), app, &image.as_slice()[..size], flags, memory)?; }
-    let cap = image.share()?;
+    // A program that asks for it (REQUEST_OWN), run by its name (the booted slot's or the root's) or installed in
+    // data/apps/, owns system/own/<name>/; one run by any other path has no identity to own one by (000-KRN-0170).
+    let asks = flags & mind::process::REQUEST_OWN != 0;
+    let own = if asks && (!name.contains(&b'/') || app.is_some()) { own_dir(task.as_str()) } else { None };    let cap = image.share()?;
     let client = CAP_WRITE | CAP_GRANT;
     let mut grants = [Grant::default(); SPAWN_GRANTS_MAX];
     let standard = [grant(SLOT_RTC, OWN_RTC, client), grant(SLOT_VFS, OWN_VFS, client), grant(SLOT_AUDIO, OWN_AUDIO, client),

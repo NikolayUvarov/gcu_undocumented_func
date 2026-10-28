@@ -15,7 +15,7 @@ use mind::idl::{init as lifecycle, loader, socket, sysinfo};
 use mind::ipc::{self, Endpoint, Message};
 use mind::mem::Pages;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_LIFECYCLE | REQUEST_NETWORK);
+mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_LIFECYCLE | REQUEST_NETWORK | REQUEST_OWN);
 
 const GROUPS: [(&str, &str); 8] = [
     ("kernel", "Kernel"), ("security", "Security"), ("clock", "Clocks"), ("files", "Files and programs"),
@@ -369,7 +369,7 @@ fn files(run: &mut Run) {
 // second run and another program's directory show; the other programs' are hidden from its files client.
 fn own(run: &mut Run) {
     use mind::fs::own;
-    if !own::given() { return run.report("its own directory", skip(String::from("none given: run check by its name"))); }
+    if !own::given() { return run.report("its own directory", skip(String::from("none given: run check by its name, from the disk"))); }
     let verdict = (|| -> Result<String, mind::fs::Error> {
         let mut text = [0u8; 16];
         let before = own::read("runs.txt", &mut text).ok().and_then(|n| core::str::from_utf8(&text[..n]).ok()?.trim().parse::<u64>().ok()).unwrap_or(0);
