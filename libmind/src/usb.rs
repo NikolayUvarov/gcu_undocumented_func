@@ -17,11 +17,17 @@ pub const BADGE_SERIAL: u16 = 4;
 /// The converters `usb_serial` drives, by vendor and product ID: the FTDI FT232R and the WCH CH340.
 pub const SERIAL_DEVICES: [(u16, u16); 2] = [(0x0403, 0x6001), (0x1A86, 0x7523)];
 pub fn is_serial(vendor: u16, product: u16) -> bool { SERIAL_DEVICES.contains(&(vendor, product)) }
+/// Bluetooth controllers (700-DRV-0043): the HCI interface, wireless controller class 0xE0, RF subclass 1, Bluetooth
+/// protocol 1. Its client sends HCI commands to the device as a whole, as the HCI's USB transport has them.
+pub const BADGE_BLUETOOTH: u16 = 5;
+pub fn is_bluetooth(info: &Interface) -> bool { (info.class, info.subclass, info.protocol) == (0xE0, 1, 1) }
 /// Whether `badge` names a class driver at all.
-pub fn known(badge: u16) -> bool { badge == BADGE_SERIAL || class_of(badge).is_some() }
-/// Whether the client with `badge` may claim interface `info`: its class, or for a converter its chip.
+pub fn known(badge: u16) -> bool { badge == BADGE_SERIAL || badge == BADGE_BLUETOOTH || class_of(badge).is_some() }
+/// Whether the client with `badge` may claim interface `info`: its class, for a converter its chip, for a Bluetooth
+/// controller its HCI interface.
 pub fn claims(badge: u16, info: &Interface) -> bool {
     if badge == BADGE_SERIAL { return info.class == 0xFF && is_serial(info.vendor, info.product); }
+    if badge == BADGE_BLUETOOTH { return is_bluetooth(info); }
     class_of(badge) == Some(info.class)
 }
 
