@@ -65,9 +65,18 @@ Recorded by the kernel track on 2026-10-25, for the plan [docs/communications-an
 
 **The limit:** no per-program disk quota exists yet, so the boot volume's free space bounds a directory. The profile says so (MC-3.7 row).
 
+**Tested, locally (QEMU under TCG):**
+- builds for x86 and aarch64;
+- host tests `vfs_zone_host.rs` (`only_the_loaders_badge_opens_the_programs_own_directories`), `runtime.rs` (slots, ABI 22) and `idl_fuzz_host.rs` pass;
+- the `bench` suite on x86 and on aarch64 passes:
+  - `check` finds its run 2, then 3, in `system/own/check/`;
+  - that directory holds only `runs.txt` after `bench` wrote `bench.txt` in its own;
+  - `system/own/` is hidden from `check`'s files client;
+  - the shell's `ls system/own` is refused (`DENIED`).
+
 **Left:**
 - "the owner's file tools see it only as the owner asks": the shell reaches no program's directory at all yet;
-- the run on both architectures in the gate.
+- the full gate.
 
 ## Related
 
