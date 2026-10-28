@@ -1,6 +1,6 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.5 (2026-10-28): the store's partition, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
@@ -19,12 +19,13 @@
 ./04_make_usb_image.sh --force
 ```
 
-It builds everything and writes `dist/mind-core-usb.img` (568 MiB). Its MBR has two partitions:
+It builds everything and writes `dist/mind-core-usb.img` (about 700 MiB). Its MBR has three partitions:
 
 - **`MIND CORE`**, the boot volume: FAT16, marked as the EFI system partition. It holds `EFI/BOOT/BOOTX64.EFI`, the kernel, the services and the programs.
 - **`MIND LOG`**, the log volume: 64 MiB of FAT16 with an ordinary type, which Windows, macOS and Linux mount by themselves. MIND Core writes the system log of each boot there as `BOOTNNNN.LOG` (section 9).
+- **`MIND STORE`**, the block store's partition (307-STO-0020): 128 MiB of MBR type `0x7F`, which other systems do not mount. It holds an empty store: the store's superblock, then blank sectors. MIND Core does not use it yet: the store still runs on a RAM disk on a real machine until `init` gives it this partition ([307](../issues/307-the-stores-own-partition.md)).
 
-The script checks every file it packed and both partitions, and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
+The script checks every file it packed and the three partitions, and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
 
 With `--slots` the kernel, the services, the applications (351-UPD-0023) and the signed manifest go into slot A (`MIND/A/`), confirmed in `MIND/BOOT0`, so that the updater can fill slot B ([docs/update/updater.md](update/updater.md)). `--channel FILE` keeps a release's signed channel file in slot A, and then the updater knows the running version; its manifest must be this build's. `--update FILE` puts an `update.txt` at the root.
 
