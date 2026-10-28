@@ -197,9 +197,9 @@ MIND Core is pre-1.0. The system call numbers, records and service interfaces ca
 ### The loader's handoff (351-KRN-0166)
 
 The UEFI loader hands the kernel `BootInfo` with `BOOT_HANDOFF_VERSION` (21) in the word ABI 10 put the ABI in. The kernel
-takes the versions from `BOOT_HANDOFF_OLDEST` (21) to its own. A change of system calls alone needs no new loader; a change
-of `BootInfo` or `BOOT_FILES` sets both versions above every ABI so far, and the kernel then refuses older loaders with
-`KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES a TO b`. Programs keep checking `ABI_VERSION`.
+takes that version alone (000-KRN-0175). A change of system calls alone needs no new loader; a change of `BootInfo` or
+`BOOT_FILES` sets the version above every ABI so far, and the kernel then refuses any other loader with
+`KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES m`. Programs keep checking `ABI_VERSION`.
 Handoff 21 (550-KRN-0172) adds a 44th image, `rtw88_wifi`, after `rtw89_wifi`: it renumbers the images after it and moves
 every field after `extra_programs`, so a loader of handoff 20 or older is refused, as no compatibility with older versions is kept before the first release.
 
