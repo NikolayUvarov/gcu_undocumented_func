@@ -171,9 +171,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-UPD-0017](351-UPD-0017-bootloader-multi-os-boot-selection.md) | Bootloader multi-OS boot selection: can our bootloader programmatically switch between mind-core-os and Ubuntu for update and firmware operations? | `UPD` | P3 | — | track C |
 | [251-STO-0015](251-STO-0015-a-model-read-into-memory.md) | A model read back into memory for a recognizer: a memory object of a file from the store, or a copy made once (split from 251-STO-0010) | `STO` | P3 | — (the store's memory quota: requests-KRN.md) | track B |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | — (351-UPD-0007 and the store's disk, 300-KRN-0025, done) | track B, C |
-| [307](307-the-stores-own-partition.md) | A durable medium on real machines: the store's own partition (track B, eighth step) | main task, `STO` | P1 | — | track B |
-| [307-STO-0019](307-STO-0019-how-far-a-write-reached.md) | How far a write reached: `volatile`, `flushed`, `copied` in `blockstore.wit` 2.0 | `STO` | P1 | — | track B |
-| [307-STO-0020](307-STO-0020-the-stores-partition-on-the-stick.md) | The store's partition on the stick: `MIND STORE`, type `0x7F`, formatted as an empty store | `STO` | P1 | — | track B |
+| [307](307-the-stores-own-partition.md) | A durable medium on real machines: the store's own partition (track B, eighth step) | main task, `STO` | P1 | [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md) (waits for `DRV`'s bounded client) | track B |
 | [308](308-encryption-at-rest.md) | Encryption at rest, and the key's lifecycle, before any personal data | main task, `STO` | P1 | [307](307-the-stores-own-partition.md) (a medium worth sealing) | track B |
 | [309](309-copies-scrub-and-repair.md) | Copies, scrub and repair | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
@@ -307,6 +305,8 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [307-STO-0019](../issues-done/307-STO-0019-how-far-a-write-reached.done) | How far a write reached: `volatile`, `flushed`, `copied` in `blockstore.wit` 2.0 | publish, unpublish, commit and pin report it, stat gives the medium's; 1.x refused; the store suite and the store-disk check on x86 and aarch64 (round 37) |
+| [307-STO-0020](../issues-done/307-STO-0020-the-stores-partition-on-the-stick.done) | The store's partition on the stick | MBR entry 3, type `0x7F`, 128 MiB, formatted as an empty store; checked by `check_image`; images boot on x86 and aarch64 |
 | [800-LNK-0022](../issues-done/800-LNK-0022-effector485-hangs-after-a-cancel.done) | effector485 hung after a cancel: `save` pruned inside a route and the poisoned lock stopped every request | Prune in the worker only, answers before the save, a poisoned lock taken back; host tests, and the cancel under a lease on the maintainer's machine |
 | [900-NRL-0024](../issues-done/900-NRL-0024-expanded-representation-study.done) | Expanded held-out representation study | Done on NRL branch; 95 tests/four builds and expanded CLI profile; exact scope in Resolution, landing pending |
 | [900-NRL-0023](../issues-done/900-NRL-0023-qsl-complete-model-bridge.done) | Executable QSL overlays bound to a complete supported model | Done on NRL branch; 95 tests/four builds and expanded CLI profile; exact scope in Resolution, landing pending |
