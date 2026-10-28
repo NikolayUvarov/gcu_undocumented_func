@@ -1,6 +1,6 @@
 # 700-KRN-0176 — The boot image `bt_hci` and init's grant for a USB Bluetooth controller (ABI 23, handoff 23)
 
-**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (made; landing and a run on the DEXP left) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
+**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (made; landing and a run on the DEXP left) · **Blocked by:** the drivers track's fix of `usb_host`'s buffer table ([requests-DRV.md](requests-DRV.md), 2026-10-28) · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
 
 **Asked by:** the Bluetooth track (`BLT`) on 2026-10-28, for [700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), in `KRN/2026-10-28T0329Z-BLT-the-boot-image-bt-hci-and-its-grant.md` on `internal-dev-messages`. The maintainer's order for the DEXP: Wi-Fi, Ethernet, the screen, then Bluetooth "to connect devices".
 
@@ -26,6 +26,16 @@ The DEXP's RTL8821CE has a Bluetooth half, `0BDA:C821`, on its xHCI.
   - The safe-start line now names every service left out; it printed only the first five of the list's six.
 - **`HOLDS`, README and `docs/profile/bootstrap.md`** say what it holds; `docs/api` gives the new versions.
 
+## Progress (2026-10-28)
+
+- **The `usb` suite fails on x86 with this image** (eb3abb26, 4 CPUs, every run):
+  - `usb_host` panics at `bt_hci`'s attach: `index out of bounds: the len is 5 but the index is 5`;
+  - its table of client buffers holds badges 0 to 4, and 700-DRV-0043 made `BADGE_BLUETOOTH` 5;
+  - `init` restarts it, the next attach panics it again, and the keyboards' reports stop.
+- **The fix is the drivers track's.** It is recorded in [requests-DRV.md](requests-DRV.md).
+  - With the table one entry longer, in a local tree only, the suite passes and the VM log shows no panic.
+  - This task lands after that fix.
+
 ## Acceptance criteria
 
 - **Builds:** x86 and aarch64.
@@ -34,6 +44,7 @@ The DEXP's RTL8821CE has a Bluetooth half, `0BDA:C821`, on its xHCI.
   - `tests/runtime.rs`: ABI 23;
   - `tests/services_host.rs` and `tests/shell_host.rs`.
 - **QEMU, x86:** the boot suite passes, and with no Bluetooth controller in the machine `bt_hci` holds its client and waits.
+- **QEMU, x86:** the `usb` suite passes with `bt_hci` in the images.
 - **On the DEXP** (BLT's run, through a slot update by `effector485`):
   - `bt_hci` patches the controller;
   - it lists the devices it hears.
