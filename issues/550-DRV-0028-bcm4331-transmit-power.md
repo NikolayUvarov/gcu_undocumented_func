@@ -18,6 +18,23 @@ On the MacBook Pro, one boot on request logs the SPROM's power data, the idle TS
 
 ## Progress
 
+- **2026-10-22: the gain entry is not shown to be the MacBook Pro's frame losses; entry 40 stays.**
+  - **Why it was tried.** EFF saw the BCM4331 lose a fifth to two fifths of frames under the Effector session. CoolNet2 (channel 8, −45 dBm) hears the station near its edge, and the gain is fixed and uncalibrated.
+  - **The run.** `bcm_wifi` was built from the release on the disk (b509a304, slot B) with the transmit gain entry 40, 20 and 10, and a tally of the frames sent by size that names the entry. Each build was put in with `replace` through EFF's `effector485` on COM22 (800-LNK-0016), with no reboot. The gateway was pinged with `netcheck`, 50 pings a run, and the build put back to the boot image after.
+  - **Two passes.** The first ran 40, 20, 10; the second 10, 20, 40, with two ping runs each:
+
+| Entry | Pings answered, first pass | Pings answered, second pass | Frames acknowledged, the driver's 10 s tallies |
+|---|---|---|---|
+| 40 | 38 of 50 | 48, 47 of 50 | 81% of 194 (5 tallies); the boot image at 40: 77% of 5058 (238 tallies) |
+| 20 | 45 of 50 | none: the station was rejoining (`[WLAN] Joining: LOST` twice) | 44% of 34, mostly the rejoin |
+| 10 | 48 of 50 | 47, 49 of 50 | 89% of 264 (5 tallies) |
+
+  - **What it shows.**
+    - The same entry 40 answered 38 and then 48 of 50, so time or load moves the losses more than the gain does.
+    - Entry 10 may acknowledge somewhat more, but on five tallies. The variant logged its tagged tally only now and then, so a longer run is needed before that counts.
+    - At every entry about half the frames needed a retry: first try 48 to 69%.
+    - Entry 40 stays. A stronger fixed entry would also send at an unknown power, which this task's plan forbids (the SPROM's maximum, then the country's EIRP).
+  - **Seen on the way.** After a restart of `bcm_wifi` the join can fail for half a minute (`[WLAN] Joining: LOST`), and frames sent then at 1 Mbit/s were not acknowledged (8 of 8 lost). That is the rejoin's own problem, apart from the losses in steady traffic.
 - **2026-10-20: a country's EIRP limits wait for this task.** `bcm_wifi` takes `wlanhw` 1.2's `set-country` and keeps to its channels and listen-only channels (550-DRV-0027). It does not apply the EIRP figures: its gain is fixed and its output in dBm is unknown. When power control works, the target power per channel becomes the least of the SPROM's maximum and the country's EIRP, less the antenna gain the SPROM gives.
 
 The work on receiving OFDM moved to [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) on 2026-10-14. It is not part of this task's plan, and its record stays here up to then. This task keeps the transmit power: nothing of the SPROM's power data or of power control is done yet, and the runs used the fixed gain entry 40 with power control off.

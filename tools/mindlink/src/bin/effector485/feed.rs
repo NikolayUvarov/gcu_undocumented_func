@@ -1,5 +1,5 @@
-//! The page's live feed over a WebSocket (`GET /api/v1/stream`): the cable's state, the operations and the output of
-//! the one the page follows. It must never slow the cable's work: a feed never waits for the state's lock (a busy lock
+//! The page's live feed over a WebSocket (`GET /api/v1/stream`): the machines on the cable (800-LNK-0026), each with
+//! the lease that holds it, the operations and the output of the one the page follows. It must never slow the cable's work: a feed never waits for the state's lock (a busy lock
 //! skips a tick), looks at it only when the change counter moved, holds it only to copy a few fields, and writes to the
 //! browser after letting it go. A browser that stops reading is dropped, and few feeds run at once.
 use crate::json::{self, obj, s, Value};
@@ -43,15 +43,11 @@ impl Drop for Place {
 }
 
 /// What a feed copies under the lock: small values, and at most CHUNK bytes of output.
-struct Copy { link: Value, ops: Option<Vec<Value>>, output: Option<(String, u64, u64, Vec<u8>)> }
+struct Copy { links: Value, ops: Option<Vec<Value>>, output: Option<(String, u64, u64, Vec<u8>)> }
 
 fn copy(st: &State, follow: Option<&(String, u64)>, list: bool) -> Copy {
-    let l = &st.link;
-    let link = obj(vec![
-        ("type", s("link")), ("port", s(&l.port)), ("online", Value::Bool(l.online)), ("name", s(&l.name)),
-        ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)),
-        ("queued", Value::Num(st.queued() as f64)), ("running", Value::Num(st.running() as f64)),
-    ]);
+    let now = crate::ops::now();
+    let links = obj(vec![("type", s("links")), ("links", Value::Arr(st.endpoints(now)))]);
     let ops = list.then(|| {
         let mut queued = 0;
         let positions: Vec<Option<usize>> = st.ops.iter().map(|o| (o.status == "queued").then(|| { queued += 1; queued })).collect();
@@ -59,10 +55,11 @@ fn copy(st: &State, follow: Option<&(String, u64)>, list: bool) -> Copy {
         st.ops[from..].iter().zip(&positions[from..]).map(|(o, p)| {
             let time = |t: Option<u64>| t.map_or(Value::Null, |t| Value::Num(t as f64));
             obj(vec![
-                ("id", s(&o.id)), ("kind", s(&o.kind)), ("status", s(&o.status)), ("reason", s(&o.reason)), ("params", o.params.clone()),
+                ("id", s(&o.id)), ("agent_id", s(&o.agent)), ("kind", s(&o.kind)), ("status", s(&o.status)), ("reason", s(&o.reason)), ("params", o.params.clone()),
                 ("position", p.map_or(Value::Null, |p| Value::Num(p as f64))), ("created_at", time(Some(o.created))),
                 ("started_at", time(o.started)), ("finished_at", time(o.finished)), ("result", o.result.clone()),
                 ("output_bytes", Value::Num(o.output_bytes as f64)), ("cancelling", Value::Bool(o.cancel.is_some())),
+                ("waiting", st.waiting(o, now).unwrap_or(Value::Null)),
             ])
         }).collect()
     });
@@ -74,7 +71,7 @@ fn copy(st: &State, follow: Option<&(String, u64)>, list: bool) -> Copy {
         let bytes = o.output[at..(at + CHUNK).min(o.output.len())].to_vec();
         Some((o.status.clone(), from, o.output_bytes, bytes))
     });
-    Copy { link, ops, output }
+    Copy { links, ops, output }
 }
 
 /// Serves one page after the handshake, until it closes, stops reading or the daemon's key is not given.
@@ -138,11 +135,11 @@ pub fn serve(mut stream: TcpStream, state: Arc<Mutex<State>>, changes: Arc<Atomi
         let c = match state.try_lock() {
             Ok(st) => copy(&st, follow.as_ref(), now != seen),
             Err(TryLockError::WouldBlock) => continue,
-            Err(TryLockError::Poisoned(_)) => return,
+            Err(TryLockError::Poisoned(p)) => copy(&p.into_inner(), follow.as_ref(), now != seen),
         };
         // The lock is let go: what follows waits on the browser alone.
         (seen, beat, more) = (now, Instant::now(), false);
-        if !say(&mut stream, c.link) { return; }
+        if !say(&mut stream, c.links) { return; }
         if let Some(ops) = c.ops {
             let text = obj(vec![("type", s("ops")), ("ops", Value::Arr(ops))]).text();
             if text != listed {

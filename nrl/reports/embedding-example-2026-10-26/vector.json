@@ -1,0 +1,14 @@
+{
+  "model_id": "7307151f403dc1f64e1a91c174535671a88b0c5ff3584a6c0c552f7ae5386dd4",
+  "native_execution": false,
+  "schema": "nrl.embedding-vector/0",
+  "tokens": [
+    9,
+    10
+  ],
+  "vector": [
+    0.06396149081083428,
+    0.31898631703763697,
+    0.94559857087245
+  ]
+}

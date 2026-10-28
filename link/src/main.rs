@@ -12,15 +12,19 @@
 use linkproto::app::{FileService, Files, RunOutput, COMMAND_MAX, EXIT_UNKNOWN, RUN_ENDED, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::{Line, Service, Slave};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SHELL, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_DISPLAY, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SHELL, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
 use mind::fs::{self, File};
-use mind::idl::{init as lifecycle, loader, netpolicy, serial, shell};
+use mind::idl::{display, init as lifecycle, loader, netpolicy, serial, shell};
 use mind::ipc::{self, Endpoint};
 
 const DIR: &str = "data/link";
 /// Where a put is written until its SHA-256 matches; left out of listings.
 const PART: &str = "data/link/link-part.tmp";
 const FIRST_BAUD: u32 = 115_200;
+// The screen's mark for the link (800-LNK-0020, the compositor's 800-KRN-0156): said every MARK_MS; a master heard in
+// the last PEER_MS is connected.
+const MARK_MS: u64 = 1000;
+const PEER_MS: u64 = 5000;
 /// The longest path `loader` takes (idl/loader.wit `begin`).
 const LOADER_PATH_MAX: usize = 64;
 
@@ -680,9 +684,38 @@ impl Service for Logged {
     }
 }
 
+/// The link's mark on the screen (800-LNK-0020): grey with no master heard for PEER_MS, red while one is and `dev` lets
+/// it change the machine, yellow while it may only read. The compositor shows it a few seconds past the last call.
+struct Mark { requests: u32, heard: u64, next: u64, on: bool, said: Option<display::RemoteState> }
+impl Mark {
+    fn tick(&mut self, requests: u32, dev: bool) {
+        let now = mind::time::uptime_ms() as u64;
+        if requests != self.requests { (self.requests, self.heard) = (requests, now); }
+        if !self.on || now < self.next { return; }
+        self.next = now + MARK_MS;
+        let state = if self.heard == 0 || now - self.heard > PEER_MS { display::RemoteState::Unconnected }
+                    else if dev { display::RemoteState::Changing } else { display::RemoteState::Reading };
+        match display::remote(Endpoint(SLOT_DISPLAY), state) {
+            Ok(Ok(())) => if self.said != Some(state) { mind::println!("[LINK] MARK: {:?}", state); self.said = Some(state); },
+            // An older compositor, or no grant: said once, then not asked again.
+            other => { mind::println!("[LINK] NO MARK ON THE SCREEN: {:?}", other.map(|r| r.err())); self.on = false; }
+        }
+    }
+}
+
 /// The rate from the arguments (`baud=<rate>`), else 115200.
 fn baud() -> u32 {
     mind::process::args_str().split_ascii_whitespace().find_map(|w| w.strip_prefix("baud=")?.parse().ok()).unwrap_or(FIRST_BAUD)
+}
+
+/// This machine's address on a line shared by several (800-LNK-0026): `address=<1..247>` in link.conf. None, or one out
+/// of range (said once), is a line with one slave, answered in version 1 frames as before.
+fn address() -> u8 {
+    let Some(word) = mind::process::args_str().split_ascii_whitespace().find_map(|w| w.strip_prefix("address=")) else { return 0 };
+    match word.parse::<u8>() {
+        Ok(a) if (1..=linkproto::frame::ADDRESS_MAX).contains(&a) => a,
+        _ => { mind::println!("[LINK] address={} IS NOT 1 TO {}: SERVING A LINE OF ONE", word, linkproto::frame::ADDRESS_MAX); 0 }
+    }
 }
 
 /// Programs may be started only with the word `run` in link.conf; their output comes to an endpoint of link's.
@@ -729,9 +762,13 @@ fn main(_info: &'static BootInfo) {
     let mut service = Logged(FileService::new(store));
     service.0.set_name("MIND Core link");
     let mut slave = Slave::new(Port { endpoint, pending: [0; 4096], at: 0, len: 0 });
+    slave.address = address();
+    if slave.address != 0 { mind::println!("[LINK] ADDRESS {} ON A SHARED LINE: ONLY FRAMES TO IT ARE ANSWERED", slave.address); }
     let mut dropped = 0;
+    let mut mark = Mark { requests: 0, heard: 0, next: 0, on: holds(SLOT_DISPLAY), said: None };
     loop {
         if slave.serve(&mut service, 1000).is_err() { mind::time::sleep(100); }
+        mark.tick(slave.stats.requests, programs().dev);
         // A REBOOT is carried out once its answer has gone; the line has had time to turn round.
         let p = programs();
         // So is a COMMAND's line, whose output the master then reads.

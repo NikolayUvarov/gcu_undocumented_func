@@ -1,0 +1,85 @@
+{
+  "schema": "nrl.decoder/0",
+  "adapter": "llama2c-f32-v0/0",
+  "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+  "config": {
+    "dim": 64,
+    "hidden": 172,
+    "layers": 5,
+    "heads": 8,
+    "kv_heads": 4,
+    "vocab": 512,
+    "context": 512,
+    "tied_head": true
+  },
+  "weights": {
+    "file": "weights.bin",
+    "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+    "bytes": 1056540
+  },
+  "tokenizer": {
+    "file": "tokenizer.bin",
+    "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+    "bytes": 6227
+  },
+  "patches": {
+    "0": {
+      "file": "block-0000.json",
+      "sha256": "534a30d0053aab1296894ce69ecb213c98170559c9540a2ccefeafc4ca0c534e",
+      "bytes": 78866
+    },
+    "1": {
+      "file": "block-0001.json",
+      "sha256": "4968e7df41757136011032c601b050068205d93ae0f5ce15710d59b2d748f93f",
+      "bytes": 82826
+    },
+    "2": {
+      "file": "block-0002.json",
+      "sha256": "46d2a0ec623df79c0069d8219562bdd433874086328cf524e73f0b1ec8d90a7f",
+      "bytes": 82821
+    },
+    "4": {
+      "file": "block-0004.json",
+      "sha256": "383930f32cc6f83172e08baa22e9b470f44d30188c85738e7ee1b89a49e0fad7",
+      "bytes": 78441
+    }
+  },
+  "sources": [
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/stories260K.bin",
+      "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ]
+    },
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/tok512.bin",
+      "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ]
+    },
+    {
+      "identifier": "nrl://original-qsl-complete-model-fixture",
+      "sha256": null,
+      "licence": "MIT; derived publisher-declared MIT TinyStories weights and archived QSL writer",
+      "notices": [
+        "Numerical full-model bridge fixture; no accepted compression or model-quality claim."
+      ]
+    },
+    {
+      "identifier": "qsl-overlay://48a2086a4969756793176498c8b3f9169550929f36308fb8acd6eb4b892a07a4",
+      "sha256": "6e1fe012306ab7bd992b01ba358d8913ff0974fcde8b042e95361d2f64071c0e",
+      "licence": "MIT",
+      "notices": [
+        "External QSL overlay; source F32 parameters exactly widened to scalar F64. Base fingerprint verified under explicit NRL model-ID policy, not Hugging Face model_fingerprint.",
+        "{\n  \"format\": \"qwen-spline-lab-overlay-v1\",\n  \"base\": {\n    \"source\": \"nrl://pinned-tinyllamas-260k\",\n    \"fingerprint\": \"fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa\",\n    \"fingerprint_policy\": \"nrl-decoder-model-id/0\",\n    \"model_type\": \"llama2c-f32-v0/0\",\n    \"licence\": \"MIT; publisher-declared source weights\"\n  },\n  \"blocks\": {\n    \"0\": {\n      \"representation\": \"pruned\",\n      \"hidden_size\": 64,\n      \"original_width\": 172,\n      \"width\": 16,\n      \"rank\": 4,\n      \"knots\": 8\n    },\n    \"1\": {\n      \"representation\": \"spline-linear\",\n      \"hidden_size\": 64,\n      \"original_width\": 172,\n      \"width\": 16,\n      \"rank\": 4,\n      \"knots\": 8\n    },\n    \"2\": {\n      \"representation\": \"spline-cubic\",\n      \"hidden_size\": 64,\n      \"original_width\": 172,\n      \"width\": 16,\n      \"rank\": 4,\n      \"knots\": 8\n    },\n    \"4\": {\n      \"representation\": \"svd\",\n      \"hidden_size\": 64,\n      \"original_width\": 172,\n      \"width\": 16,\n      \"rank\": 4,\n      \"knots\": 8\n    }\n  },\n  \"weights_sha256\": \"99a54646296faf497785057d80ce0fa670a8a997fac6f78ef117931a7a5b9908\",\n  \"patch_file_bytes\": 51400,\n  \"patch_storage_dtype\": \"float32\",\n  \"environment\": {\n    \"python\": \"3.12.3\",\n    \"platform\": \"Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39\",\n    \"packages\": {\n      \"torch\": \"2.10.0+cpu\",\n      \"numpy\": \"2.4.1\",\n      \"safetensors\": \"0.7.0\",\n      \"transformers\": \"4.57.6\",\n      \"huggingface-hub\": \"0.36.2\",\n      \"accelerate\": \"1.12.0\"\n    },\n    \"cuda_available\": false,\n    \"cuda_version\": null,\n    \"torch_threads\": 1,\n    \"cpu_logical_count\": 24,\n    \"cpu_processor\": \"x86_64\",\n    \"cuda_devices\": [],\n    \"gpu\": null\n  },\n  \"details\": {\n    \"fixture\": \"four transformed FFNs from actual pinned 260K weights; numerical bridge only\",\n    \"reference_archive_sha256\": \"5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25\"\n  },\n  \"artifact_id\": \"48a2086a4969756793176498c8b3f9169550929f36308fb8acd6eb4b892a07a4\"\n}\n",
+        "Binding: {\"schema\":\"nrl.qsl-decoder-binding/0\",\"adapter\":\"llama2c-f32-v0/0\",\"base_model_id\":\"fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa\",\"qsl_artifact_id\":\"48a2086a4969756793176498c8b3f9169550929f36308fb8acd6eb4b892a07a4\",\"layers\":{\"0\":0,\"1\":1,\"2\":2,\"4\":4},\"source\":{\"identifier\":\"nrl://original-qsl-complete-model-fixture\",\"sha256\":null,\"licence\":\"MIT; derived publisher-declared MIT TinyStories weights and archived QSL writer\",\"notices\":[\"Numerical full-model bridge fixture; no accepted compression or model-quality claim.\"]}}"
+      ]
+    }
+  ]
+}

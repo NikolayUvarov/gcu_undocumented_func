@@ -1,0 +1,27 @@
+# 900-NRL-0020: Reusable AdamW and resumable decoder recovery — done
+
+**Type:** implementation, `NRL` · **Owner:** Codex (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — · **Roadmap:** G; 900 T07, T10 · **Constitution:** MC-5.2, MC-11.1, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+
+## Problem
+
+The maintainer requested the five autonomous extensions after the first T11 preparation and host T12/T13 results. Existing host evidence does not establish this extension or native execution.
+
+## Plan
+
+Implement a bounded named-tensor AdamW optimizer with bias correction, decoupled decay and complete checkpoint state. Repeat multi-layer teacher-on-student-input recovery; retain validation selection and a matched SGD control.
+
+## Acceptance criteria
+
+- [x] Independent optimizer oracle; exact interrupted/resumed continuation; nonfinite/shape/state refusals are transactional; saved recovery and held-out comparison.
+- [x] Document the supported profile and limitations, run affected checks on the track branch, preserve reports, and submit an updated landing request.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md), T07, T10.
+- [NRL](../nrl/README.md). Native T11 remains a separate APP dependency.
+
+## Resolution
+
+Added reusable bounded named-tensor AdamW with bias correction, decoupled decay, complete moment/parameter binding and transactional refusals. Refreshed local FFN recovery has checksummed exact continuation, validation selection, an SGD control and saved held-out comparisons. AdamW improves the local fit but does not make the mixed compressed model eligible. Attention/whole-decoder backward and LoRA/QLoRA remain unsupported. See `nrl/specs/adamw-recovery-v0.md` and `nrl/reports/adamw-example-2026-10-26/summary.json`.
+
+The final NRL profile passes on `b44fbc0d`: 95 host tests, four portable builds and all CLI cycles, including `--expanded`; new external oracles reproduce. [Evidence](../nrl/reports/five-extensions-2026-10-26.json). The full repository gate and code landing belong to the integrator; native T11 remains open.

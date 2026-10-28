@@ -31,6 +31,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
+    "RTL8821CE BAR2 initially non-mastering; 1 MiB DMA below 4 GiB; read-only VFS for its firmware; a wlanhw endpoint for wlan; polled, no interrupt",
     "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
@@ -52,12 +53,14 @@ const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame
 const RTL8168_DMA_BYTES: usize = 2 * 1024 * 1024;
 const RTL8852BE_DMA_BYTES: usize = 8 * 1024 * 1024;
 const WIFI_DMA_BYTES: usize = 512 * 1024; // bcm_wifi: the 64-bit descriptor rings and their frame buffers (550-DRV-0025)
+const RTL8821CE_DMA_BYTES: usize = 1024 * 1024; // rtw88_wifi: rings and buffers, from the arena below 4 GiB for its 32-bit DMA (550-KRN-0172)
 // The Wi-Fi station's slots (550-KRN-0097): the radio's client and keystore's in wlan, wlan's client in netstack (its third card).
 const WIFI_RADIO: usize = 2;
 const WIFI_KEYS: usize = 3;
 const WIFI_CARD: usize = 4;
-// The radios wlan may drive (idl/wlanhw.wit): the MacBook Pro's bcm_wifi (550-DRV-0027), else QEMU's stand-in.
-const RADIOS: [&str; 2] = ["bcm_wifi", "wlansim"];
+// The radios wlan may drive (idl/wlanhw.wit): the MacBook Pro's bcm_wifi (550-DRV-0027), the DEXP's rtw88_wifi
+// (550-KRN-0172), else QEMU's stand-in.
+const RADIOS: [&str; 3] = ["bcm_wifi", "rtw88_wifi", "wlansim"];
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
@@ -68,6 +71,7 @@ const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and thei
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
 const LINK_DIR: &str = "data/link"; // the only files the link to another machine reaches (800-KRN-0128)
+const FIRMWARE_DIR: &str = "data/firmware"; // the drivers' proprietary files; link writes there in developer mode (800-KRN-0173)
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
 const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
@@ -282,7 +286,7 @@ impl Init {
         if let Some(plan) = self.plans[index] {
             // A restart, or a start a safe start prepared: the device was stopped; the same capabilities are granted.
             if let Some(device) = self.devices[index] {
-                if matches!(name, "rtl8168" | "rtw89_wifi") {
+                if matches!(name, "rtl8168" | "rtw89_wifi" | "rtw88_wifi") {
                     platform::registers_only(device)?;
                 } else { platform::resume(device)?; }
             }
@@ -460,7 +464,7 @@ impl Init {
                     grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_DEVELOPER)?, CLIENT);
                     // The shell's commands, badged so that the shell applies the link's rule to them (800-KRN-0148).
                     grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
-                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS");
+                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}/ TO WRITE", FIRMWARE_DIR);
                 }
             }
             "virtio_blk" => {
@@ -496,6 +500,21 @@ impl Init {
                         grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                     }
                 }
+            }
+            "rtw88_wifi" => {
+                // The DEXP's Realtek RTL8821CE (10EC:C821, class 02:80): BAR2 with memory decoding only; the driver turns
+                // mastering on once its rings are programmed, and its rings are polled, so no interrupt (550-KRN-0172).
+                let device = platform::find_device_id(0x02_80_00, 0xFF_FF_00, 0xC821_10EC, 0)?;
+                self.devices[index] = Some(device);
+                let registers = minted.mint(PLATFORM_DEVICE_BAR_IDLE, device, 2)?;
+                if cap_info(registers).0 != CAP_KIND_MMIO { return Err(Error::NotFound); }
+                grants.add(SLOT_DEV0, registers, 0);
+                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", device));
+                grants.copy(SLOT_MEM, self.dma(index, RTL8821CE_DMA_BYTES)?, 0);
+                // A reader's client of vfs_server for its firmware in data/firmware/rtw88/.
+                if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
+                // Its idl/wlanhw.wit endpoint, whose client goes to wlan alone.
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
             }
             "bcm_wifi" => {
                 // The MacBook Pro's Broadcom BCM4331 (14E4:4331), or a Broadcom network controller of class 02:80:00: BAR0 only (550-KRN-0059).
@@ -854,6 +873,14 @@ impl Init {
             match self.scope(badge, dir, writable) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(child, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
+            }
+        }
+        // In developer mode link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file
+        // goes over the cable, not by writing the disk again (800-KRN-0173, for 800-LNK-0027). The user's badge writes there.
+        if name == "link" && self.link_dev() && grants.count < SPAWN_GRANTS_MAX {
+            match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true) {
+                Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
+                Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, FIRMWARE_DIR, error),
             }
         }
         // The Effector gateway's deliveries: a writable scope of the root the owner's policy names, read at each start
@@ -1481,7 +1508,7 @@ fn boot_order() -> impl Iterator<Item = usize> {
 
 // What a safe start leaves out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
 // run was most likely in. Their plans are prepared and their devices stopped, so `svc start` starts them (000-KRN-0131).
-const SAFE_LEFT_OUT: [&str; 5] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi"];
+const SAFE_LEFT_OUT: [&str; 6] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
 

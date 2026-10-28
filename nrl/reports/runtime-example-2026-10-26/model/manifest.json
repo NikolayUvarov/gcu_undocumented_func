@@ -1,0 +1,298 @@
+{
+  "schema": "nrl.model/0",
+  "kind": "standalone",
+  "descriptor": {
+    "family": "feed-forward",
+    "adapter": "nrl.feed-forward",
+    "adapter_version": 0,
+    "configuration": {
+      "schema": "nrl.graph/0",
+      "input_width": 3,
+      "nodes": [
+        {
+          "id": "left",
+          "op": {
+            "operator": "affine",
+            "input": "input",
+            "object": "embed"
+          }
+        },
+        {
+          "id": "right",
+          "op": {
+            "operator": "affine",
+            "input": "input",
+            "object": "embed"
+          }
+        },
+        {
+          "id": "left_silu",
+          "op": {
+            "operator": "silu",
+            "input": "left"
+          }
+        },
+        {
+          "id": "right_relu",
+          "op": {
+            "operator": "relu",
+            "input": "right"
+          }
+        },
+        {
+          "id": "features",
+          "op": {
+            "operator": "add",
+            "left": "left_silu",
+            "right": "right_relu"
+          }
+        },
+        {
+          "id": "g0",
+          "op": {
+            "operator": "gated",
+            "input": "features",
+            "object": "block0"
+          }
+        },
+        {
+          "id": "g1",
+          "op": {
+            "operator": "gated",
+            "input": "features",
+            "object": "block1"
+          }
+        },
+        {
+          "id": "g2",
+          "op": {
+            "operator": "gated",
+            "input": "features",
+            "object": "block2"
+          }
+        },
+        {
+          "id": "g3",
+          "op": {
+            "operator": "gated",
+            "input": "features",
+            "object": "block3"
+          }
+        },
+        {
+          "id": "g4",
+          "op": {
+            "operator": "gated",
+            "input": "features",
+            "object": "block4"
+          }
+        },
+        {
+          "id": "sum1",
+          "op": {
+            "operator": "add",
+            "left": "g0",
+            "right": "g1"
+          }
+        },
+        {
+          "id": "sum2",
+          "op": {
+            "operator": "add",
+            "left": "sum1",
+            "right": "g2"
+          }
+        },
+        {
+          "id": "sum3",
+          "op": {
+            "operator": "add",
+            "left": "sum2",
+            "right": "g3"
+          }
+        },
+        {
+          "id": "sum4",
+          "op": {
+            "operator": "add",
+            "left": "sum3",
+            "right": "g4"
+          }
+        },
+        {
+          "id": "prediction",
+          "op": {
+            "operator": "affine",
+            "input": "sum4",
+            "object": "head"
+          }
+        }
+      ],
+      "output": "prediction"
+    },
+    "preprocessor": "identity-f64/0",
+    "tasks": [
+      "regression-vector/0"
+    ],
+    "state": "stateless",
+    "tied_objects": [
+      {
+        "object": "embed",
+        "nodes": [
+          "left",
+          "right"
+        ]
+      }
+    ]
+  },
+  "execution": {
+    "schema": "nrl.execution/0",
+    "backend": "cpu-scalar",
+    "dtype": "f64",
+    "layout": "row-major",
+    "max_batch_rows": 256,
+    "max_activation_values": 65536
+  },
+  "base": null,
+  "objects": {
+    "block0": {
+      "file": "object-0000.json",
+      "sha256": "44d56b16af69609ca92c2d18bd5a529d7f4962cbdebad60be3236593cbc65092",
+      "bytes": 1744,
+      "parameters": {
+        "kind": "gated",
+        "schema": "nrl.block/5",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "dense",
+        "channels": 4,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 47,
+        "trainable_values": 47,
+        "bias_values": 11
+      }
+    },
+    "block1": {
+      "file": "object-0001.json",
+      "sha256": "4bc5b2eff085a6800bf11b24d9cdcc3b0dcb351d8946c439735c5a6fcac6db84",
+      "bytes": 2165,
+      "parameters": {
+        "kind": "gated",
+        "schema": "nrl.block/5",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "spline-linear",
+        "channels": 4,
+        "rank": null,
+        "knots": 4,
+        "numeric_values": 71,
+        "trainable_values": 63,
+        "bias_values": 11
+      }
+    },
+    "block2": {
+      "file": "object-0002.json",
+      "sha256": "56026d89342e9b90fe47403d4de90cded14e300caa3dfb6d3e4b693ace8d70eb",
+      "bytes": 1022,
+      "parameters": {
+        "kind": "gated",
+        "schema": "nrl.block/5",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "pruned",
+        "channels": 2,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 25,
+        "trainable_values": 25,
+        "bias_values": 7
+      }
+    },
+    "block3": {
+      "file": "object-0003.json",
+      "sha256": "d17be4c817118109045cdc8599afd232edcd74233bc6a2dcc72fea02ed15a2e0",
+      "bytes": 2164,
+      "parameters": {
+        "kind": "gated",
+        "schema": "nrl.block/5",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "spline-cubic",
+        "channels": 4,
+        "rank": null,
+        "knots": 4,
+        "numeric_values": 71,
+        "trainable_values": 63,
+        "bias_values": 11
+      }
+    },
+    "block4": {
+      "file": "object-0004.json",
+      "sha256": "f3aab60084dc9433a669c086bf22a1ddb355fcf1dfc0bb907296e0866a314ed6",
+      "bytes": 2130,
+      "parameters": {
+        "kind": "gated",
+        "schema": "nrl.block/5",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "svd",
+        "channels": 4,
+        "rank": 2,
+        "knots": null,
+        "numeric_values": 53,
+        "trainable_values": 53,
+        "bias_values": 11
+      }
+    },
+    "embed": {
+      "file": "object-0005.json",
+      "sha256": "2e2f59dcf3d25d7c83701be48d51cbd0cf17881278a1b6ffb81347a4ceae67ea",
+      "bytes": 287,
+      "parameters": {
+        "kind": "affine",
+        "schema": "nrl.affine/0",
+        "input_width": 3,
+        "output_width": 3,
+        "representation": "dense",
+        "channels": null,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 12,
+        "trainable_values": 12,
+        "bias_values": 3
+      }
+    },
+    "head": {
+      "file": "object-0006.json",
+      "sha256": "5799e06064230cc10e6433b6d53df6fcd3df03b2bcb986fca8fd7c5a687e1e6a",
+      "bytes": 241,
+      "parameters": {
+        "kind": "affine",
+        "schema": "nrl.affine/0",
+        "input_width": 3,
+        "output_width": 2,
+        "representation": "dense",
+        "channels": null,
+        "rank": null,
+        "knots": null,
+        "numeric_values": 8,
+        "trainable_values": 8,
+        "bias_values": 2
+      }
+    }
+  },
+  "sources": [
+    {
+      "identifier": "synthetic://nrl-composed-graph-v0",
+      "sha256": null,
+      "licence": "MIT; deterministic synthetic fixture, no pretrained weights",
+      "notices": [
+        "Generated by NRL fixture tools.",
+        "No model quality or optimization claim."
+      ]
+    }
+  ],
+  "history": [],
+  "changes": []
+}

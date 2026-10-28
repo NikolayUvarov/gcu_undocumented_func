@@ -1,0 +1,27 @@
+{
+  "schema": "nrl.t11-preparation-evidence/0",
+  "date": "2026-10-26",
+  "tested_commit": "2bef450244014eacd664b4fe086b5f25f6bf9d9b",
+  "toolchain": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "host_tests": 74,
+  "portable_builds": {
+    "nrl-repr": [
+      "x86_64-unknown-none",
+      "aarch64-unknown-none-softfloat"
+    ],
+    "nrl-runtime": [
+      "x86_64-unknown-none",
+      "aarch64-unknown-none-softfloat"
+    ]
+  },
+  "executable_sha256": "a9d3be088c12fce2dfb7a1dc24dd181a76fea850058835d6f40ceb08830bd698",
+  "saved_example": "nrl/reports/runtime-example-2026-10-26",
+  "native_execution": false,
+  "t11_complete": false,
+  "remaining": [
+    "APP-owned nnd and versioned nn.wit with parser/capability/memory/time/worker/cancel integration",
+    "Named MIND Core standalone-model/client-isolation/budget/cancellation/failure tests",
+    "Portable trained-decoder/state family is not covered by stateless graph executor"
+  ],
+  "gate": "NRL checks passed; full repository gate belongs to LANDING"
+}

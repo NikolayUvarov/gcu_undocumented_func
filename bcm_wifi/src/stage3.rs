@@ -45,7 +45,7 @@ impl<'a> Core<'a> {
     fn us(&self, n: usize) { for _ in 0..n { let _ = self.r32(0x1500); } }
 
     pub(crate) fn phy(&self, reg: u16) -> u16 { self.phy_writes.set(0); self.w16(PHY_CONTROL, reg); self.r16(PHY_DATA) }
-    fn phy_w(&self, reg: u16, v: u16) {
+    pub(crate) fn phy_w(&self, reg: u16, v: u16) {
         if self.phy_writes.get() >= WRITES_IN_ROW { let _ = self.r16(PHY_VERSION); self.phy_writes.set(0); }
         self.phy_writes.set(self.phy_writes.get() + 1);
         self.w16(PHY_CONTROL, reg); self.w16(PHY_DATA, v);

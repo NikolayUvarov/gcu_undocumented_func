@@ -1,0 +1,23 @@
+{
+  "schema": "nrl.embedding-training-config/0",
+  "optimizer": {
+    "schema": "nrl.optimizer/0",
+    "algorithm": "adamw",
+    "learning_rate": 0.003,
+    "beta1": 0.9,
+    "beta2": 0.999,
+    "epsilon": 1e-08,
+    "weight_decay": 0.01,
+    "max_steps": 16
+  },
+  "temperature": 0.1,
+  "max_training_values": 65536,
+  "source": {
+    "identifier": "nrl://embedding-training-v0",
+    "licence": "MIT OR Apache-2.0; original NRL fixture",
+    "notices": [
+      "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+    ],
+    "sha256": null
+  }
+}

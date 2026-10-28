@@ -1,0 +1,516 @@
+{
+  "schema": "nrl.t13-evidence/0",
+  "date": "2026-10-26",
+  "tested_commit": "b9c52c5413b0ebf105a65de3f5d99f299df6aee2",
+  "toolchain": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "host_tests": 82,
+  "portable_builds": [
+    "nrl-repr and nrl-runtime for x86_64-unknown-none and aarch64-unknown-none-softfloat"
+  ],
+  "fixture_sha256": {
+    "data.json": "5d1845c94ba0df9aa8139de6d21faec2ddf0444a090c32e6d23d49efb437a36c",
+    "definition.json": "b52a2804ad194718cb54c991ba49c1786a75f475a95dbd14fe7243b57d0c04c7",
+    "expected.json": "fc57879fcefd8960cf7c8b03e677e33ed87da1c3d4ba01b640d83f7adb645a87",
+    "replacement-source.json": "72b922139623ddf12c268781f96dee776ff5b32d18f1ef1a4c8df241570ed1db"
+  },
+  "oracle_regeneration": "four files byte-identical in the pinned optional PyTorch environment",
+  "saved_run": "nrl/reports/embedding-example-2026-10-26",
+  "metrics": {
+    "train": {
+      "baseline": {
+        "metric": "ndcg-loss-at-k",
+        "value": 0.1450951293015672,
+        "details": {
+          "direction": "lower loss is better; Recall/MRR/NDCG are higher-is-better",
+          "index_scope": "fixed document index shared across query splits; no fitting or selection",
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8549048706984328,
+          "rankings": [
+            {
+              "ndcg_at_k": 1.0,
+              "query_id": "query-fox",
+              "ranking": [
+                [
+                  "animal-fox",
+                  0.9999218144098969
+                ],
+                [
+                  "animal-dog",
+                  0.9496027172912994
+                ],
+                [
+                  "weather-snow",
+                  0.27405052486922266
+                ],
+                [
+                  "space-moon",
+                  0.084709408284415
+                ],
+                [
+                  "space-star",
+                  0.07279515542289244
+                ],
+                [
+                  "weather-rain",
+                  0.06234862862932468
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            },
+            {
+              "ndcg_at_k": 0.7098097413968655,
+              "query_id": "query-dog",
+              "ranking": [
+                [
+                  "animal-fox",
+                  0.9999449806793029
+                ],
+                [
+                  "animal-dog",
+                  0.950257700833881
+                ],
+                [
+                  "weather-snow",
+                  0.26858509353414406
+                ],
+                [
+                  "space-moon",
+                  0.09315106283256284
+                ],
+                [
+                  "space-star",
+                  0.08432085039089518
+                ],
+                [
+                  "weather-rain",
+                  0.052604436963928414
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            }
+          ],
+          "recall_at_k": 1.0,
+          "ties": "descending f64 dot product, then lexical document ID",
+          "top_k": 2
+        }
+      },
+      "pruned": {
+        "metric": "ndcg-loss-at-k",
+        "value": 0.1450951293015672,
+        "details": {
+          "direction": "lower loss is better; Recall/MRR/NDCG are higher-is-better",
+          "index_scope": "fixed document index shared across query splits; no fitting or selection",
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8549048706984328,
+          "rankings": [
+            {
+              "ndcg_at_k": 1.0,
+              "query_id": "query-fox",
+              "ranking": [
+                [
+                  "animal-fox",
+                  0.9999218718202808
+                ],
+                [
+                  "animal-dog",
+                  0.9496542544788988
+                ],
+                [
+                  "weather-snow",
+                  0.27456786868436844
+                ],
+                [
+                  "space-moon",
+                  0.08517151193423142
+                ],
+                [
+                  "space-star",
+                  0.07317302864648516
+                ],
+                [
+                  "weather-rain",
+                  0.0628345988259404
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            },
+            {
+              "ndcg_at_k": 0.7098097413968655,
+              "query_id": "query-dog",
+              "ranking": [
+                [
+                  "animal-fox",
+                  0.9999450047539035
+                ],
+                [
+                  "animal-dog",
+                  0.9503072658960212
+                ],
+                [
+                  "weather-snow",
+                  0.2690989374754423
+                ],
+                [
+                  "space-moon",
+                  0.09360704405965788
+                ],
+                [
+                  "space-star",
+                  0.08469379962503693
+                ],
+                [
+                  "weather-rain",
+                  0.0530881977197047
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            }
+          ],
+          "recall_at_k": 1.0,
+          "ties": "descending f64 dot product, then lexical document ID",
+          "top_k": 2
+        }
+      }
+    },
+    "validation": {
+      "baseline": {
+        "metric": "ndcg-loss-at-k",
+        "value": 0.1450951293015672,
+        "details": {
+          "direction": "lower loss is better; Recall/MRR/NDCG are higher-is-better",
+          "index_scope": "fixed document index shared across query splits; no fitting or selection",
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8549048706984328,
+          "rankings": [
+            {
+              "ndcg_at_k": 1.0,
+              "query_id": "query-rain",
+              "ranking": [
+                [
+                  "weather-rain",
+                  0.9999892344353395
+                ],
+                [
+                  "weather-snow",
+                  0.9367277097795758
+                ],
+                [
+                  "space-moon",
+                  0.35892012058515727
+                ],
+                [
+                  "animal-dog",
+                  0.2751693812223438
+                ],
+                [
+                  "space-star",
+                  0.1190526743364407
+                ],
+                [
+                  "animal-fox",
+                  0.06215843793804432
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            },
+            {
+              "ndcg_at_k": 0.7098097413968655,
+              "query_id": "query-snow",
+              "ranking": [
+                [
+                  "weather-rain",
+                  0.9969141366462555
+                ],
+                [
+                  "weather-snow",
+                  0.9498943804445328
+                ],
+                [
+                  "space-moon",
+                  0.4234795576810552
+                ],
+                [
+                  "animal-dog",
+                  0.2736061027585312
+                ],
+                [
+                  "space-star",
+                  0.1884743372353893
+                ],
+                [
+                  "animal-fox",
+                  0.04473981335370564
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            }
+          ],
+          "recall_at_k": 1.0,
+          "ties": "descending f64 dot product, then lexical document ID",
+          "top_k": 2
+        }
+      },
+      "pruned": {
+        "metric": "ndcg-loss-at-k",
+        "value": 0.1450951293015672,
+        "details": {
+          "direction": "lower loss is better; Recall/MRR/NDCG are higher-is-better",
+          "index_scope": "fixed document index shared across query splits; no fitting or selection",
+          "mrr": 1.0,
+          "ndcg_at_k": 0.8549048706984328,
+          "rankings": [
+            {
+              "ndcg_at_k": 1.0,
+              "query_id": "query-rain",
+              "ranking": [
+                [
+                  "weather-rain",
+                  0.9999892498369345
+                ],
+                [
+                  "weather-snow",
+                  0.9367404400093451
+                ],
+                [
+                  "space-moon",
+                  0.35902730626082247
+                ],
+                [
+                  "animal-dog",
+                  0.27552862830223973
+                ],
+                [
+                  "space-star",
+                  0.11911171512624602
+                ],
+                [
+                  "animal-fox",
+                  0.06264413516999667
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            },
+            {
+              "ndcg_at_k": 0.7098097413968655,
+              "query_id": "query-snow",
+              "ranking": [
+                [
+                  "weather-rain",
+                  0.9969159617467673
+                ],
+                [
+                  "weather-snow",
+                  0.9498967905718403
+                ],
+                [
+                  "space-moon",
+                  0.4235604521229766
+                ],
+                [
+                  "animal-dog",
+                  0.27395945404623756
+                ],
+                [
+                  "space-star",
+                  0.18850740492932233
+                ],
+                [
+                  "animal-fox",
+                  0.045230593169447914
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            }
+          ],
+          "recall_at_k": 1.0,
+          "ties": "descending f64 dot product, then lexical document ID",
+          "top_k": 2
+        }
+      }
+    },
+    "test": {
+      "baseline": {
+        "metric": "ndcg-loss-at-k",
+        "value": 0.04134029364352143,
+        "details": {
+          "direction": "lower loss is better; Recall/MRR/NDCG are higher-is-better",
+          "index_scope": "fixed document index shared across query splits; no fitting or selection",
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9586597063564786,
+          "rankings": [
+            {
+              "ndcg_at_k": 1.0,
+              "query_id": "query-star",
+              "ranking": [
+                [
+                  "space-star",
+                  0.9978846216242582
+                ],
+                [
+                  "space-moon",
+                  0.9570364921942643
+                ],
+                [
+                  "weather-snow",
+                  0.34956422596887604
+                ],
+                [
+                  "animal-dog",
+                  0.26168620525767816
+                ],
+                [
+                  "weather-rain",
+                  0.07252522778471993
+                ],
+                [
+                  "animal-fox",
+                  0.033544428947523984
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            },
+            {
+              "ndcg_at_k": 0.9173194127129571,
+              "query_id": "query-sky",
+              "ranking": [
+                [
+                  "space-moon",
+                  0.9055407589334544
+                ],
+                [
+                  "weather-snow",
+                  0.8774718374293626
+                ],
+                [
+                  "space-star",
+                  0.7738581825014837
+                ],
+                [
+                  "weather-rain",
+                  0.7177918935276566
+                ],
+                [
+                  "animal-dog",
+                  0.408103140620223
+                ],
+                [
+                  "animal-fox",
+                  0.11078486371046206
+                ]
+              ],
+              "recall_at_k": 0.5,
+              "reciprocal_rank": 1.0
+            }
+          ],
+          "recall_at_k": 0.75,
+          "ties": "descending f64 dot product, then lexical document ID",
+          "top_k": 2
+        }
+      },
+      "pruned": {
+        "metric": "ndcg-loss-at-k",
+        "value": 0.04134029364352143,
+        "details": {
+          "direction": "lower loss is better; Recall/MRR/NDCG are higher-is-better",
+          "index_scope": "fixed document index shared across query splits; no fitting or selection",
+          "mrr": 1.0,
+          "ndcg_at_k": 0.9586597063564786,
+          "rankings": [
+            {
+              "ndcg_at_k": 1.0,
+              "query_id": "query-star",
+              "ranking": [
+                [
+                  "space-star",
+                  0.9978832184260854
+                ],
+                [
+                  "space-moon",
+                  0.9570133231709301
+                ],
+                [
+                  "weather-snow",
+                  0.34956887847557866
+                ],
+                [
+                  "animal-dog",
+                  0.261897860026014
+                ],
+                [
+                  "weather-rain",
+                  0.07255958270107984
+                ],
+                [
+                  "animal-fox",
+                  0.033894171887240115
+                ]
+              ],
+              "recall_at_k": 1.0,
+              "reciprocal_rank": 1.0
+            },
+            {
+              "ndcg_at_k": 0.9173194127129571,
+              "query_id": "query-sky",
+              "ranking": [
+                [
+                  "space-moon",
+                  0.9055262502577087
+                ],
+                [
+                  "weather-snow",
+                  0.8775244031197019
+                ],
+                [
+                  "space-star",
+                  0.7738015757416191
+                ],
+                [
+                  "weather-rain",
+                  0.7178976381580721
+                ],
+                [
+                  "animal-dog",
+                  0.4084560609214265
+                ],
+                [
+                  "animal-fox",
+                  0.11132625310602652
+                ]
+              ],
+              "recall_at_k": 0.5,
+              "reciprocal_rank": 1.0
+            }
+          ],
+          "recall_at_k": 0.75,
+          "ties": "descending f64 dot product, then lexical document ID",
+          "top_k": 2
+        }
+      }
+    }
+  },
+  "final_build_optimization_profile": "optimization-final-build-2026-10-26.json",
+  "native_execution": false,
+  "t11_complete": false,
+  "limits": [
+    "Original synthetic embedding/retrieval data, not pretrained or representative quality.",
+    "Five existing projection representations reused; no new spline/SVD mathematics.",
+    "No full lookup/pooling/normalization backward or native embedding adapter.",
+    "No accepted retrieval compression/speed/memory gain claimed; measurements are recorded observations."
+  ],
+  "gate": "All NRL checks pass on own branch; full repository gate remains with LANDING",
+  "validation_followup": {
+    "tested_commit": "28c5b0b0853049ac4e20053ac02769649e6e0553",
+    "host_tests": 82,
+    "report": "final-host-check-2026-10-26.json",
+    "change": "Reject normalized retrieval loss outside [0,1]; all numerical semantics and prior reports retained."
+  }
+}

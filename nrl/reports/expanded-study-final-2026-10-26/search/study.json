@@ -1,0 +1,165 @@
+{
+  "schema": "nrl.study-profile/0",
+  "baseline_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+  "corpus_id": "25250ff6d3f6814d353f2d9b1ba130fce942c6bcc159e2e86f53a7dbc7aa1dfa",
+  "row_limit": 128,
+  "local_steps": 16,
+  "local_learning_rate": 0.002,
+  "maximum_validation_nll_increase": 0.25,
+  "maximum_package_ratio": 1.5,
+  "measurement": {
+    "schema": "nrl.measurement/0",
+    "warmups": 1,
+    "repeats": 3,
+    "max_forward_rows": 65536
+  },
+  "plans": [
+    {
+      "id": "pruned-layer0",
+      "entries": [
+        {
+          "layer": 0,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "pruned",
+            "width": 32,
+            "knots": 0,
+            "rank": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "spline-linear-layer0",
+      "entries": [
+        {
+          "layer": 0,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "spline-linear",
+            "width": 32,
+            "knots": 8,
+            "rank": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "spline-cubic-layer0",
+      "entries": [
+        {
+          "layer": 0,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "spline-cubic",
+            "width": 32,
+            "knots": 8,
+            "rank": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "svd-layer0",
+      "entries": [
+        {
+          "layer": 0,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "svd",
+            "width": 32,
+            "knots": 0,
+            "rank": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "mixed-linear-pruned",
+      "entries": [
+        {
+          "layer": 0,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "spline-linear",
+            "width": 32,
+            "knots": 8,
+            "rank": 0
+          }
+        },
+        {
+          "layer": 2,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "pruned",
+            "width": 32,
+            "knots": 0,
+            "rank": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "mixed-svd-cubic",
+      "entries": [
+        {
+          "layer": 0,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "svd",
+            "width": 32,
+            "knots": 0,
+            "rank": 4
+          }
+        },
+        {
+          "layer": 2,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "spline-cubic",
+            "width": 32,
+            "knots": 8,
+            "rank": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "pruned64-layer0",
+      "entries": [
+        {
+          "layer": 0,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "pruned",
+            "width": 64,
+            "knots": 0,
+            "rank": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "linear64-layer0",
+      "entries": [
+        {
+          "layer": 0,
+          "transform": {
+            "schema": "nrl.transform/0",
+            "representation": "spline-linear",
+            "width": 64,
+            "knots": 8,
+            "rank": 0
+          }
+        }
+      ]
+    }
+  ],
+  "recovery": {
+    "start_plan": "mixed-linear-pruned",
+    "rounds": 3,
+    "learning_rate": 0.001,
+    "row_limit": 64,
+    "protocol": "frozen-teacher-on-student-input/0"
+  }
+}

@@ -1,0 +1,297 @@
+{
+  "cargo_lock_sha256": "e29d047c7f2a41ea9d39ccecb1e86209d87aaef7725c3cd3a11df12c96cb4914",
+  "checks": [
+    "validation selects epoch 91 of 128, not the last epoch; zero and tied checkpoints follow the earliest-minimum rule",
+    "changing finite test targets leaves selected parameter hashes, epoch and train/validation history unchanged",
+    "sample IDs, group leakage, exact cross-split duplicate inputs including signed zero, shapes, finite data and sources checked before activations",
+    "training buffer, forward-row work, epoch, optimizer, rate and gradient inventory/shape/finite limits enforced",
+    "duplicate add inputs accumulate twice and ReLU derivative at exactly zero is zero",
+    "same-host repeats and CLI replay produce identical training records and selected model identities",
+    "saved experiment record/report/source identities and initial/selected metrics rechecked; corruption rejected",
+    "old manual-replacement history and source licences/notices preserved; selected standalone runs after other experiment files are removed",
+    "existing output directories refused",
+    "training provenance source capacity reserved before computation even for a colliding placeholder hash"
+  ],
+  "commands": [
+    "bash nrl/tools/check.sh",
+    "generate_training_fixtures.py --reference-root REF --output nrl/tests/fixtures/training-v0 --check",
+    "nrl-lab check-experiment nrl/reports/regression-example-2026-10-26",
+    "nrl-lab replay-regression nrl/reports/regression-example-2026-10-26 NEW_DIRECTORY"
+  ],
+  "experiment_directory": "regression-example-2026-10-26",
+  "experiment_files_sha256": {
+    "data.json": "7bcad69ee29b40e922adef4a669d0dc7d34cfd0ca32f0bac73b3ff381e86f072",
+    "initial-model/manifest.json": "29f86f030ec37c61233eddfa2da10bbbac367ef581d40982cd77e4cf2821daf1",
+    "initial-model/object-0000.json": "e50cfaf838bbed27ad963c602af5821bae1c90df873684f70a8f40b739878d65",
+    "initial-model/object-0001.json": "6b6bf5bb948a0282d3b05f40e90c30aebd01749245104fbc4d1e8c6ddda30046",
+    "report.json": "b81e9de7e7d5f16c73732e48fa0aec4ca405c9a6456f131473021a8352b49782",
+    "run.json": "f1aadc77e6d0a709a2771b0f8e9952faaa2cdb031a2836239738d6390b37b384",
+    "selected-model/manifest.json": "85ca22ba5de5cea611311b15a0d52d2a694020c290f1c864c588fee30339a154",
+    "selected-model/object-0000.json": "463602b2d54c9d5f4e709191885902fa509d08af8f54c3ec1a530c92b41d8696",
+    "selected-model/object-0001.json": "aeaa465f578c9961b8c3d0bcd744ab67652f345bae3495d9c640a9c8186939c5",
+    "training-record.json": "e4119639e56891369696f3e4e3a4179d0f0cdea5e0fbfcb29acd58f25d504801"
+  },
+  "external_oracle": {
+    "absolute_relative_tolerance": "1e-12 + 1e-10*abs(reference)",
+    "dtype": "f64",
+    "full_graph": "15-node graph: all five gated representations, shared affine object, activations, adds and rectangular head",
+    "full_graph_checks": [
+      "output",
+      "input gradient",
+      "every parameter gradient",
+      "one complete SGD step with each shared object updated once"
+    ],
+    "independent_central_differences": {
+      "absolute_relative_tolerance": "1e-6 + 1e-5*abs(analytic)",
+      "input_values": 9,
+      "parameters": 271,
+      "step": 1e-06
+    },
+    "regression_history_mse_max_absolute_error": 3.3306690738754696e-16,
+    "regression_history_rows": 129,
+    "seed": 42,
+    "selected_epoch_matches": true,
+    "threads": 1,
+    "torch": "2.10.0+cpu"
+  },
+  "fast_test_staging_commit": "034221589e7ebf26101e523c98ac584a8f8b8f49",
+  "fixture_sha256": {
+    "nrl/tests/fixtures/training-v0/data.json": "8bf91280e4f6a3c536c7bba776bb33a0f3a6edd9f4c4d9b2776fd7f96a4d7f81",
+    "nrl/tests/fixtures/training-v0/expected.json": "7672f9a3ccefd170138fbe5eeed65268d9765ffa299dbc20f3a54526d3f80c99",
+    "nrl/tests/fixtures/training-v0/run.json": "ea8750e8a91edaa898dd735875bdec30792b4123f01f286304ccc75cd05437ee"
+  },
+  "full_repository_gate": "pending integrator landing round; NRL check must be run explicitly until KRN CI wiring lands",
+  "limitations": [
+    "regression only; full-batch scalar CPU f64",
+    "no optimizer resume, local calibration/distillation, classification or language task",
+    "source declarations retained; no authenticity or licence verification",
+    "logical training buffers and forward-row work counts exclude scratch, serialization, parsed objects and host overhead",
+    "metrics on supplied data only; no speed, memory, compression or native guarantee",
+    "synthetic independent regression task; no pretrained-model quality or representation comparison",
+    "classification, language/stateful graphs, local calibration/distillation, mixed plans/search and benchmark/compare remain open",
+    "no exact optimizer resume; replay restarts the full run from saved initial model/data/config",
+    "no bit-identity promise across different toolchains, hosts or backends"
+  ],
+  "log_sha256": "c9021bd60d0c0020886a84c05b8493d2832c89c92c7eaddd41ad68a7592cce62",
+  "model_package_regression": "complete base/overlay/standalone CLI cycle passed",
+  "numerical_demo": {
+    "architecture": "x86_64",
+    "archive_sha256": "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
+    "checks": [
+      {
+        "bias_parameters": 0,
+        "loss_after": 0.09556269780699116,
+        "loss_before": 0.10231179736197876,
+        "max_reference_error": 2.7755575615628914e-17,
+        "representation": "dense",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 0,
+        "loss_after": 0.12677966117930756,
+        "loss_before": 0.15264958541547757,
+        "max_reference_error": 5.551115123125783e-17,
+        "representation": "spline-linear",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 0,
+        "loss_after": 94.91618022101002,
+        "loss_before": 95.02726876288641,
+        "max_reference_error": 2.842170943040401e-14,
+        "representation": "pruned",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 0,
+        "loss_after": 0.12683170841336067,
+        "loss_before": 0.15287797802927358,
+        "max_reference_error": 5.551115123125783e-17,
+        "representation": "spline-cubic",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 0,
+        "loss_after": 0.05414763909270817,
+        "loss_before": 0.05414836039695466,
+        "max_reference_error": 4.336808689942018e-19,
+        "representation": "svd",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 11,
+        "loss_after": 0.1108933000132282,
+        "loss_before": 0.12545124716366893,
+        "max_reference_error": 1.1102230246251565e-16,
+        "representation": "dense",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 11,
+        "loss_after": 0.14495471303669571,
+        "loss_before": 0.19260729313824923,
+        "max_reference_error": 3.3306690738754696e-16,
+        "representation": "spline-linear",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 7,
+        "loss_after": 106.55350470026379,
+        "loss_before": 106.68351816890801,
+        "max_reference_error": 5.684341886080802e-14,
+        "representation": "pruned",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 11,
+        "loss_after": 0.14516709423925137,
+        "loss_before": 0.19313448925087523,
+        "max_reference_error": 1.6653345369377348e-16,
+        "representation": "spline-cubic",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 11,
+        "loss_after": 0.05668677735273082,
+        "loss_before": 0.057698144310583656,
+        "max_reference_error": 4.163336342344337e-17,
+        "representation": "svd",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 10,
+        "loss_after": 0.054737520032301694,
+        "loss_before": 0.056120013524134225,
+        "max_reference_error": 3.469446951953614e-18,
+        "representation": "dense",
+        "sample_count": 2
+      },
+      {
+        "bias_parameters": 10,
+        "loss_after": 0.05423269431050168,
+        "loss_before": 0.05558874458983636,
+        "max_reference_error": 5.421010862427522e-20,
+        "representation": "svd",
+        "sample_count": 2
+      }
+    ],
+    "elapsed_seconds": 0.003244648,
+    "fixture_round_trips": 12,
+    "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
+    "native_execution": false,
+    "os": "linux",
+    "profile": "host-cpu-scalar-f64",
+    "schema": "nrl.demo-report/1",
+    "seed": 42,
+    "unimplemented": [
+      "language model adapter",
+      "classification training",
+      "language training",
+      "nnd integration"
+    ],
+    "version": "0.1.0"
+  },
+  "portable_release_builds": [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat"
+  ],
+  "portable_scope": "rlibs only; not native execution",
+  "qsl_block_bridge_regression": "five representations and import/package/CLI cycle passed",
+  "raw_log": "training-check-2026-10-26.txt",
+  "recorded_date": "2026-10-26",
+  "regeneration": "all three training fixture files byte-identical through verified original QSL and explicit independent PyTorch graphs",
+  "regression_report": {
+    "baseline": {
+      "test": {
+        "mae": 0.6972513262599469,
+        "max_absolute_error": 1.4716843501326262,
+        "mse": 0.7019184889255535,
+        "near_zero_target_energy": false,
+        "nmse": 0.8794066712855594,
+        "rows": 8,
+        "target_mean_energy": 0.7981728042834324,
+        "values": 8
+      },
+      "train": {
+        "mae": 0.7937839854111406,
+        "max_absolute_error": 1.7805437665782495,
+        "mse": 0.8938463732331189,
+        "near_zero_target_energy": false,
+        "nmse": 1.067573624531966,
+        "rows": 32,
+        "target_mean_energy": 0.8372690676251853,
+        "values": 32
+      },
+      "validation": {
+        "mae": 0.7897629310344827,
+        "max_absolute_error": 1.6261140583554377,
+        "mse": 0.8827004365972109,
+        "near_zero_target_energy": false,
+        "nmse": 0.8970789450336982,
+        "rows": 8,
+        "target_mean_energy": 0.9839718583118153,
+        "values": 8
+      }
+    },
+    "completed_epochs": 128,
+    "dataset_id": "9df2970cca84d6229cf229b13f2fd2a14067afb493d3572462ca5de951eea1f4",
+    "graph_forward_rows": 9272,
+    "initial_model_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+    "limitations": [
+      "regression only; full-batch scalar CPU f64",
+      "no optimizer resume, local calibration/distillation, classification or language task",
+      "source declarations retained; no authenticity or licence verification",
+      "logical training buffers and forward-row work counts exclude scratch, serialization, parsed objects and host overhead",
+      "metrics on supplied data only; no speed, memory, compression or native guarantee"
+    ],
+    "native_execution": false,
+    "run_id": "5b848b0276129dcd7394862a3a77138ec12e4674e5755dc22a135e893ea4ad3a",
+    "schema": "nrl.regression-report/0",
+    "selected": {
+      "test": {
+        "mae": 0.10813677355215379,
+        "max_absolute_error": 0.1864177579774311,
+        "mse": 0.016083866958995992,
+        "near_zero_target_energy": false,
+        "nmse": 0.020150858150868024,
+        "rows": 8,
+        "target_mean_energy": 0.7981728042834324,
+        "values": 8
+      },
+      "train": {
+        "mae": 0.09326704525670351,
+        "max_absolute_error": 0.41760310339853257,
+        "mse": 0.016521970210151126,
+        "near_zero_target_energy": false,
+        "nmse": 0.01973316685042927,
+        "rows": 32,
+        "target_mean_energy": 0.8372690676251853,
+        "values": 32
+      },
+      "validation": {
+        "mae": 0.10017718474698684,
+        "max_absolute_error": 0.15083970738089936,
+        "mse": 0.011830794085379374,
+        "near_zero_target_energy": false,
+        "nmse": 0.012023508584561835,
+        "rows": 8,
+        "target_mean_energy": 0.9839718583118153,
+        "values": 8
+      }
+    },
+    "selected_epoch": 91,
+    "selected_model_id": "0cb40e71303b15daf2785215de8eed53a5528200c56eae4a11d8de03ed18d78c",
+    "training_record_sha256": "e4119639e56891369696f3e4e3a4179d0f0cdea5e0fbfcb29acd58f25d504801"
+  },
+  "rust_tests": {
+    "failed": 0,
+    "ignored": 0,
+    "passed": 52,
+    "training_tests": 8
+  },
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "schema": "nrl.training-check/0",
+  "task": "900-NRL-0011",
+  "test_location": "own NRL branch; no tests on fast-test",
+  "tested_commit": "f76c83763569bb51766f4ab6a64290b65c5f744b"
+}

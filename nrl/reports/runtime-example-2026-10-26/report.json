@@ -1,0 +1,35 @@
+{
+  "control_checkpoints": 50,
+  "elapsed_seconds": 8.348e-6,
+  "executor": "nrl-runtime/0; no_std/no_alloc; caller-owned row workspace",
+  "model_id": "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee",
+  "native_execution": false,
+  "output": [
+    0.5289660534219036,
+    -0.06521224447542881,
+    9.579420417810082,
+    -1.3753147554865992,
+    0.44852716434513873,
+    -0.17955012656958597
+  ],
+  "owner_scope": "trusted host adapter supplies owner; no capability-authentication claim",
+  "policy": {
+    "deadline_duration_ns": 1000000000,
+    "max_output_values": 65536,
+    "max_requests": 4,
+    "max_rows": 64,
+    "max_work_units": 1000000,
+    "max_workspace_values": 65536,
+    "owner": 42,
+    "schema": "nrl.runtime-policy/0"
+  },
+  "schema": "nrl.runtime-report/0",
+  "usage": {
+    "requests": 1,
+    "rows": 3,
+    "work_units": 1893
+  },
+  "work_policy": "stored numeric values + 16 per gated channel + output width; one unit per non-kernel scalar output",
+  "workspace_cleared": true,
+  "workspace_values": 77
+}

@@ -1,0 +1,273 @@
+{
+  "cargo_lock_sha256": "e29d047c7f2a41ea9d39ccecb1e86209d87aaef7725c3cd3a11df12c96cb4914",
+  "checks": [
+    "exact base identity required, including licence metadata; missing or wrong base rejected",
+    "standalone output unchanged after base and overlay directories and live source models are removed",
+    "licences, notices, tied-object identity and change history preserved",
+    "corrupt paths, sizes, hashes, summaries, versions, duplicate keys and provenance rejected",
+    "cycles, missing/forward references, unreachable nodes, unused objects, aliases, shape and budget errors rejected",
+    "existing package directories and prediction files never overwritten",
+    "CLI export reports the identity, kind and dependencies of the written standalone package"
+  ],
+  "commands": [
+    "bash nrl/tools/check.sh",
+    "generate_model_fixtures.py --reference-root REF --output nrl/tests/fixtures/model-v0 --check"
+  ],
+  "external_oracle": {
+    "absolute_relative_tolerance": "1e-12 + 1e-10*abs(reference)",
+    "affine_gradients": "external autograd and independent central differences for every input, weight and bias",
+    "dtype": "f64",
+    "graph_cases": [
+      "15-node shared-affine five-gated-representation model",
+      "two-object replacement overlay",
+      "independent ordinary affine/ReLU/affine model"
+    ],
+    "seed": 42,
+    "threads": 1,
+    "torch": "2.10.0+cpu"
+  },
+  "fast_test_staging_commit": "dbb24be0fdc07b186d94ec6a2431225ead41b8fd",
+  "fixture_sha256": {
+    "nrl/tests/fixtures/model-v0/definition.json": "fdd5bb55fdaec6c736043f3656658625f5a0a35750a6077ceb27bbf88b1b7879",
+    "nrl/tests/fixtures/model-v0/expected.json": "8414e5703e2ad1dc48fb9aa8beb33f22ce58535190ba2c6fa27906d947220fc3",
+    "nrl/tests/fixtures/model-v0/input.json": "26c04d62e66b2ca926f710fdd41dff8f6de43802c27496593676c4702bc383f6",
+    "nrl/tests/fixtures/model-v0/plain-input.json": "426b36b7cb813375efa82006688efb06c878f3d5965671122df6c4fed96e78f6",
+    "nrl/tests/fixtures/model-v0/plain.json": "6a72bb662e708f1436785c05cbf2f4a18a3e7acbaf4fb7abb18e09d8a9b43213",
+    "nrl/tests/fixtures/model-v0/replacements.json": "0c604cb9d7152fd50b84775775af6acf887f287e712a0672e586ca40cf98c6dd"
+  },
+  "full_repository_gate": "pending integrator landing round; NRL check must be run explicitly until KRN CI wiring lands",
+  "limitations": [
+    "bounded stateless feed-forward graph, CPU scalar f64 only",
+    "complete graph forward only; no full-graph backward or training/evaluation pipeline",
+    "synthetic numerical fixtures; no pretrained-model quality, speed, memory or compression result",
+    "no QSL standalone language-model adapter, tokenizer, attention or KV cache",
+    "no native nnd, GPU execution, native memory/deadline guarantee or new OS profile claim",
+    "hash identity and preserved source declarations are not authenticity or licence verification",
+    "activation budget excludes weights, object scratch, parsed JSON and host container overhead"
+  ],
+  "log_sha256": "3caaceee23f5109f03d9cf1577ef4fa6530c0fd7a1b86a25ef5f87111fb80f7d",
+  "model_packages": {
+    "base": {
+      "activation_values_per_row": 47,
+      "dependency_bytes": 0,
+      "family": "feed-forward",
+      "input_width": 3,
+      "kind": "standalone",
+      "local_objects": 7,
+      "model_id": "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee",
+      "native_execution": false,
+      "nodes": 15,
+      "numeric_bytes": 2296,
+      "numeric_values": 287,
+      "objects": 7,
+      "output_width": 2,
+      "package_bytes": 16804,
+      "schema": "nrl.model-info/0",
+      "tied_objects": [
+        {
+          "nodes": [
+            "left",
+            "right"
+          ],
+          "object": "embed"
+        }
+      ],
+      "total_required_package_bytes": 16804,
+      "trainable_values": 271
+    },
+    "overlay": {
+      "activation_values_per_row": 47,
+      "dependency_bytes": 16804,
+      "family": "feed-forward",
+      "input_width": 3,
+      "kind": "overlay",
+      "local_objects": 2,
+      "model_id": "5bbcc60e0ca9f866c1e0d6a41c6235e54ad5d6a6d2cda422875cdf1c4953ced7",
+      "native_execution": false,
+      "nodes": 15,
+      "numeric_bytes": 2488,
+      "numeric_values": 311,
+      "objects": 7,
+      "output_width": 2,
+      "package_bytes": 9099,
+      "schema": "nrl.model-info/0",
+      "tied_objects": [
+        {
+          "nodes": [
+            "left",
+            "right"
+          ],
+          "object": "embed"
+        }
+      ],
+      "total_required_package_bytes": 25903,
+      "trainable_values": 287
+    },
+    "resolved_standalone": {
+      "activation_values_per_row": 47,
+      "dependency_bytes": 0,
+      "family": "feed-forward",
+      "input_width": 3,
+      "kind": "standalone",
+      "local_objects": 7,
+      "model_id": "369b1f14df0f200f09e73724c5b9479ccabd32746bf804f94beb9bf52ac4fd0c",
+      "native_execution": false,
+      "nodes": 15,
+      "numeric_bytes": 2488,
+      "numeric_values": 311,
+      "objects": 7,
+      "output_width": 2,
+      "package_bytes": 19262,
+      "schema": "nrl.model-info/0",
+      "tied_objects": [
+        {
+          "nodes": [
+            "left",
+            "right"
+          ],
+          "object": "embed"
+        }
+      ],
+      "total_required_package_bytes": 19262,
+      "trainable_values": 287
+    }
+  },
+  "numerical_demo": {
+    "architecture": "x86_64",
+    "archive_sha256": "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
+    "checks": [
+      {
+        "bias_parameters": 0,
+        "loss_after": 0.09556269780699116,
+        "loss_before": 0.10231179736197876,
+        "max_reference_error": 2.7755575615628914e-17,
+        "representation": "dense",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 0,
+        "loss_after": 0.12677966117930756,
+        "loss_before": 0.15264958541547757,
+        "max_reference_error": 5.551115123125783e-17,
+        "representation": "spline-linear",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 0,
+        "loss_after": 94.91618022101002,
+        "loss_before": 95.02726876288641,
+        "max_reference_error": 2.842170943040401e-14,
+        "representation": "pruned",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 0,
+        "loss_after": 0.12683170841336067,
+        "loss_before": 0.15287797802927358,
+        "max_reference_error": 5.551115123125783e-17,
+        "representation": "spline-cubic",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 0,
+        "loss_after": 0.05414763909270817,
+        "loss_before": 0.05414836039695466,
+        "max_reference_error": 4.336808689942018e-19,
+        "representation": "svd",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 11,
+        "loss_after": 0.1108933000132282,
+        "loss_before": 0.12545124716366893,
+        "max_reference_error": 1.1102230246251565e-16,
+        "representation": "dense",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 11,
+        "loss_after": 0.14495471303669571,
+        "loss_before": 0.19260729313824923,
+        "max_reference_error": 3.3306690738754696e-16,
+        "representation": "spline-linear",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 7,
+        "loss_after": 106.55350470026379,
+        "loss_before": 106.68351816890801,
+        "max_reference_error": 5.684341886080802e-14,
+        "representation": "pruned",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 11,
+        "loss_after": 0.14516709423925137,
+        "loss_before": 0.19313448925087523,
+        "max_reference_error": 1.6653345369377348e-16,
+        "representation": "spline-cubic",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 11,
+        "loss_after": 0.05668677735273082,
+        "loss_before": 0.057698144310583656,
+        "max_reference_error": 4.163336342344337e-17,
+        "representation": "svd",
+        "sample_count": 3
+      },
+      {
+        "bias_parameters": 10,
+        "loss_after": 0.054737520032301694,
+        "loss_before": 0.056120013524134225,
+        "max_reference_error": 3.469446951953614e-18,
+        "representation": "dense",
+        "sample_count": 2
+      },
+      {
+        "bias_parameters": 10,
+        "loss_after": 0.05423269431050168,
+        "loss_before": 0.05558874458983636,
+        "max_reference_error": 5.421010862427522e-20,
+        "representation": "svd",
+        "sample_count": 2
+      }
+    ],
+    "elapsed_seconds": 0.001696237,
+    "fixture_round_trips": 12,
+    "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
+    "native_execution": false,
+    "os": "linux",
+    "profile": "host-cpu-scalar-f64",
+    "schema": "nrl.demo-report/1",
+    "seed": 42,
+    "unimplemented": [
+      "language model adapter",
+      "full-graph training",
+      "nnd integration"
+    ],
+    "version": "0.1.0"
+  },
+  "portable_release_builds": [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat"
+  ],
+  "portable_scope": "rlibs only; not native execution",
+  "qsl_block_bridge_regression": "five representations and import/package/CLI cycle passed",
+  "raw_log": "model-check-2026-10-26.txt",
+  "recorded_date": "2026-10-26",
+  "regeneration": "all six complete-model fixture files byte-identical through verified original QSL plus explicit independent PyTorch graphs",
+  "rust_tests": {
+    "failed": 0,
+    "ignored": 0,
+    "model_tests": 7,
+    "passed": 44
+  },
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "schema": "nrl.model-check/0",
+  "sha256_project_source": "libmind/src/sha256.rs, reused unchanged through a host module",
+  "sha256_source_sha256": "404abecbb8f9c398652965391c718ec90d79a9e91035067715537849f1a189b0",
+  "task": "900-NRL-0010",
+  "test_location": "own NRL branch; no tests on fast-test",
+  "tested_commit": "fed1435069d327cfd8df91373b97d62b8b55eed7"
+}

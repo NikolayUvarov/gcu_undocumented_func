@@ -1,0 +1,63 @@
+{
+  "documents": [
+    {
+      "group": "story-00",
+      "id": "doc-00",
+      "split": "train",
+      "text": "A young fox carried a blue cup to the river."
+    },
+    {
+      "group": "story-01",
+      "id": "doc-01",
+      "split": "train",
+      "text": "The baker put warm bread on a clean plate."
+    },
+    {
+      "group": "story-02",
+      "id": "doc-02",
+      "split": "train",
+      "text": "Mia found a tiny bell under the old chair."
+    },
+    {
+      "group": "story-03",
+      "id": "doc-03",
+      "split": "train",
+      "text": "Rain fell on the quiet road beside the farm."
+    },
+    {
+      "group": "story-04",
+      "id": "doc-04",
+      "split": "validation",
+      "text": "A little dog watched the boat leave the lake."
+    },
+    {
+      "group": "story-05",
+      "id": "doc-05",
+      "split": "validation",
+      "text": "Sam planted a seed and gave it fresh water."
+    },
+    {
+      "group": "story-06",
+      "id": "doc-06",
+      "split": "test",
+      "text": "The red bird sang while the children walked home."
+    },
+    {
+      "group": "story-07",
+      "id": "doc-07",
+      "split": "test",
+      "text": "Nora opened a book about stars after dinner."
+    }
+  ],
+  "max_tokens_per_document": 96,
+  "schema": "nrl.language-data/0",
+  "source": {
+    "identifier": "synthetic://nrl-original-language-documents-v0",
+    "licence": "MIT OR Apache-2.0; original NRL test sentences",
+    "notices": [
+      "Original independent miniature documents, one declared related group per document.",
+      "A reproducible test corpus, not a claim of representative language quality."
+    ],
+    "sha256": null
+  }
+}

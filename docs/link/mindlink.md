@@ -75,8 +75,16 @@ Options come before the command; what follows the command is its own, a program'
 | `--tries <n>` | 8 tries for each request |
 | `--turnaround <us>` | `serve`: 500 µs before each answer, for an RS-485 converter to turn the line round |
 | `--payload <bytes>` | 1024: the largest frame's payload, from 64. Less for a noisy line, and 256 for QEMU's emulated converter (below) |
+| `--address <n>` | none: a line with one machine. On a line shared by several (below): the other end's address, 1 to 247; with `serve`, this end's own |
 
 Each file moved is reported with its size, time, rate and SHA-256. A refusal or a missing answer is reported with its reason, and the exit status is 1.
+
+**The mark on MIND Core's screen** (800-LNK-0020). While a master is heard over the link, MIND Core's `link` lights a ring with a dot in the screen's top right corner:
+- **red** with `dev` in `link.conf`: the master can change the machine;
+- **yellow** without it: the master can only read;
+- **grey** once the master has been quiet for 5 s. The mark goes away when `link` stops.
+
+The compositor draws the mark, so no screen capture holds it and no other program can light it (800-KRN-0156). `effector485` keeps the line warm with a POLL every 2 s, so the mark stays lit between its operations. A `mindlink` command lights it only while it runs.
 
 ## The converters on Windows
 
@@ -138,6 +146,24 @@ WSL 2 does not see Windows' COM ports. A USB converter reaches WSL through [usbi
 - **On a long cable,** a 120 Ω resistor across A and B at each end. A short desk cable works without.
 - **The line is half-duplex.** The protocol never has two senders. Converters that switch direction by themselves (the FT232R's TXDEN, the CH340 modules) need nothing more.
 
+## Several machines on one line
+
+An RS-485 pair can carry up to 32 standard loads (more with fractional-load converters), so one converter at the master reaches several machines (800-LNK-0026, the protocol's version 2).
+
+- **The wiring:** one pair from machine to machine, A to every A and B to every B, with short stubs to each converter. The 120 Ω resistors go only at the pair's two far ends, however many machines sit between them.
+- **Each machine gets an address,** 1 to 247, no two alike:
+  - MIND Core: `address=<n>` in `link.conf` (`scripts/build_and_write.sh --link-address=<n>`). `link` logs `[LINK] ADDRESS <n> ON A SHARED LINE` and then answers only frames to it;
+  - `mindlink serve --address <n>`.
+- **The master names the machine** in each command: `mindlink --address 2 /dev/ttyUSB0 log`. Commands to different machines take turns on the line, as the protocol answers one request at a time.
+- **One machine without an address** may stay on the pair, as every machine before version 2 is. Commands without `--address` reach it alone.
+
+```bash
+mindlink --address 1 --baud 460800 /dev/ttyUSB0 hello     # the MacBook, address=1 in its link.conf
+mindlink --address 2 --baud 460800 /dev/ttyUSB0 log       # a second machine on the same pair
+```
+
+Evidence: the host tests below run three addressed slaves and one without an address on a simulated shared line. A real pair's is recorded in 800-LNK-0026 when measured (MC-12.1).
+
 ## Two converters back to back
 
 The first test of the line (800-LNK-0004's acceptance), with both converters on one PC and wired to each other:
@@ -173,6 +199,8 @@ mindlink --payload 256 /dev/pts/N hello
 - over TCP;
 - against a stopped server, which must fail in bounded time;
 - a tree made, moved and removed, with `ls` at each step; programs started with `serve --run`, their output and exit code, a stop; none started without `--run`.
+
+`tools/mindlink/tests/bus.rs` runs three `mindlink serve` with addresses 1 to 3 and one without, all on one simulated shared line (a TCP hub that repeats each end's bytes to the others): each address is answered by its own slave alone, the one without by itself, an unknown address by none.
 
 `tools/mindlink/tests/effector485.rs` drives [effector485](effector485.md) the same way.
 
