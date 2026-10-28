@@ -102,8 +102,16 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   | x86: scheduling, isolation, heap | 111 | 112 |
   | aarch64: boot and fault containment | 173 (acc-2) | 93 |
   | aarch64: NVMe boot disk | 82 (acc-2) | 102 |
+  | x86: keys, shell, tools | 1010 (acc-1) | 1047 |
+  | x86: files and block writes | 1047 (acc-2) | 1032 |
+  | x86: services, storage, audio | 561 (acc-2) | 541 |
+  | x86: RAM above 4 GiB | 1092 (acc-2) | 1079 |
+  | x86: reproducible build | 724 (acc-2) | 509 |
 
-  All passed. The host tests failed there only because that lane had built no x86 image, which they read (`scripts/land.py` now builds it first).
+  All these passed. The long x86 groups take about as long as on un-rizen, one lane on each machine.
+- **What fails there, because of Python 3.10:**
+  - the host tests: `scripts/models.py` and `tests/models_host.rs` read TOML with `tomllib` (Python 3.11). `scripts/ci_local.sh` now names it among the missing tools for the host part. Run the host part on un-rizen or i9;
+  - the Effector suites: `tests/effector_server.py` answers 400 to every POST without a query, as Python 3.10's `parse_qs` refuses an empty query in strict mode (`issues/requests-EFF.md`). The groups with them, x86 "boot, display, network, TLS, shell, memory, clock" and aarch64 "files, network and TLS", run elsewhere until EFF's fix.
 - **Setting up another machine.** `scripts/setup_build_env.sh` installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone. Run it once as root, for example from Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
 
 ## 2. The key
@@ -218,7 +226,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 ## 4. Gates on a remote machine
 
 - **A gate run through Effector is a local gate** in the sense of [AGENTS.md](../AGENTS.md), section 4, when every group of `scripts/ci_local.sh` passes.
-- **The landing queue's gate** (AGENTS.md, section 4, since 2026-10-21) runs this way. `scripts/land.sh gate` spreads every group of `scripts/ci_local.sh --list` over the machines' lanes and runs a failed group once more, alone. It sends the key only from the file `$EFFECTOR_KEY_FILE` (section 2). The presets name its lanes: `full`, and `no-i9` while another track's gate loads i9.
+- **The landing queue's gate** (AGENTS.md, section 4, since 2026-10-21) runs this way. `scripts/land.sh gate` spreads every group of `scripts/ci_local.sh --list` over the machines' lanes and runs a failed group once more, alone. It sends the key only from the file `$EFFECTOR_KEY_FILE` (section 2). The presets name its lanes: `full`, and `no-i9` while another track's gate loads i9; `i9-on-rz`, which rounds 34 to 39 used while i9 was offline; `wide` since 2026-10-28, with `acc-1` and `acc-2` taking the long x86 groups, and `wide-no-i9` while i9 is busy.
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 

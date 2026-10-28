@@ -235,6 +235,34 @@ PRESETS = {
         "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
         "default": {"host": "rz", "x86": "rz-3", "aarch64": "rz-2"},
     },
+    # 2026-10-28, with the maintainer's acc-1 and acc-2 (docs/effector.md, section 1): the long x86 groups there, one lane
+    # each; i9 the group with the Effector suite (the fixture needs Python 3.11, they have 3.10: requests-EFF.md); the host
+    # part (Python 3.11 for models.py) and the short x86 groups on un-rizen; aarch64 as in "full".
+    "wide": {
+        "i9": ["x86: boot, display, network, TLS, shell, memory, clock"],
+        "acc1": ["x86: keys, shell, tools", "x86: RAM above 4 GiB", "x86: scheduling, isolation, heap"],
+        "acc2": ["x86: files and block writes", "x86: services, storage, audio", "x86: reproducible build", "x86: NVMe boot disk"],
+        "rz": ["network driver without legacy", "host tests", "models (TLC)", "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT",
+               "x86: x2APIC", "x86: padded vector area", "x86: protection probes", "x86: TSC measured again", "x86: the watchdog",
+               "x86: USB image", "x86: Secure Boot with our keys", "x86: 16 CPUs"],
+        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files, network and TLS",
+                 "aarch64: 16 CPUs"],
+        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
+        "default": {"host": "rz", "x86": "acc2", "aarch64": "rz-2"},
+    },
+    # "wide" while i9 is busy or offline: its group first on un-rizen's first lane.
+    "wide-no-i9": {
+        "acc1": ["x86: keys, shell, tools", "x86: RAM above 4 GiB", "x86: scheduling, isolation, heap"],
+        "acc2": ["x86: files and block writes", "x86: services, storage, audio", "x86: reproducible build", "x86: NVMe boot disk"],
+        "rz": ["x86: boot, display, network, TLS, shell, memory, clock", "network driver without legacy", "host tests", "models (TLC)",
+               "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT", "x86: x2APIC", "x86: padded vector area",
+               "x86: protection probes", "x86: TSC measured again", "x86: the watchdog", "x86: USB image", "x86: Secure Boot with our keys",
+               "x86: 16 CPUs"],
+        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files, network and TLS",
+                 "aarch64: 16 CPUs"],
+        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
+        "default": {"host": "rz", "x86": "acc2", "aarch64": "rz-2"},
+    },
     # Gate g0142: while another track's gate loads i9, its groups go to un-rizen's two lanes.
     "no-i9": {
         "rz": ["network driver without legacy", "host tests", "models (TLC)", "x86: keys, shell, tools",
