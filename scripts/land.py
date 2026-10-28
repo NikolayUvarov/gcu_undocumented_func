@@ -202,6 +202,9 @@ MACHINES = {
            "env": "export NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1"},
     "rz": {"agent": "un-rizen_2a8b108d5593", "run_as": "un", "env": ""},
     "pcu": {"agent": "PCU_585240b00e8a", "run_as": "un", "env": ""},
+    # The maintainer's gate machines of 2026-10-28 (docs/effector.md, section 1): the agent runs as un, in sh.
+    "acc1": {"agent": "acc-1_e9f12f8b0550", "run_as": None, "env": ""},
+    "acc2": {"agent": "acc-2_a01a5832facb", "run_as": None, "env": ""},
 }
 # Lanes: one queue of the track on one machine ("rz-2": its second clone there, docs/effector.md, section 3, rule 1).
 # Each preset is a measured split; a group no preset names runs on its part's default lane.
@@ -218,6 +221,19 @@ PRESETS = {
                  "aarch64: 16 CPUs"],
         "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
         "default": {"host": "rz", "x86": "i9", "aarch64": "rz-2"},
+    },
+    # Round 34: i9 offline since 2026-10-24 19:32 UTC; its groups run on a third clone on un-rizen, the other lanes as in "full".
+    "i9-on-rz": {
+        "rz-3": ["x86: keys, shell, tools", "x86: boot, display, network, TLS, shell, memory, clock", "x86: files and block writes",
+                 "x86: services, storage, audio", "x86: scheduling, isolation, heap", "x86: NVMe boot disk", "x86: 16 CPUs",
+                 "x86: RAM above 4 GiB", "x86: reproducible build"],
+        "rz": ["network driver without legacy", "host tests", "models (TLC)", "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT",
+               "x86: x2APIC", "x86: padded vector area", "x86: protection probes", "x86: TSC measured again", "x86: the watchdog",
+               "x86: USB image", "x86: Secure Boot with our keys"],
+        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files, network and TLS",
+                 "aarch64: 16 CPUs"],
+        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
+        "default": {"host": "rz", "x86": "rz-3", "aarch64": "rz-2"},
     },
     # Gate g0142: while another track's gate loads i9, its groups go to un-rizen's two lanes.
     "no-i9": {
