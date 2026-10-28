@@ -6,12 +6,15 @@
 // never exported. Serves
 // idl/keystore.wit: the certificate and the public key to anyone; signatures only to the signer's badge (the TLS
 // service) for TLS and to the SSH service's badge for SSH logins (1.2), only for data of the form the purpose names, and
-// within each one's budget per boot; the Wi-Fi station's remembered networks (1.1, wifi.rs) and its country (1.3) only to the station's badge. Holds: an RTC client (slot 2) for the certificate's start
+// within each one's budget per boot; the Wi-Fi station's remembered networks (1.1, wifi.rs) and its country (1.3) only to the station's badge;
+// each program's secrets (1.4, secrets.rs) only to the client the loader got for that program. Holds: an RTC client (slot 2) for the certificate's start
 // date, a VFS client with its own badge (slot 3) for `system/keystore`, the TPM service's client with the seal badge
 // (slot 4).
 extern crate alloc;
 
 mod certificate;
+mod secret_file;
+mod secrets;
 mod stored;
 mod wifi;
 
@@ -29,7 +32,7 @@ const BUDGET: u32 = 4096; // TLS signatures per boot
 const SSH_BUDGET: u32 = 256; // SSH logins per boot (1.2)
 const TLS13_CLIENT: &[u8] = b"TLS 1.3, client CertificateVerify\0";
 
-struct Keys { key: Option<SigningKey>, certificate: Vec<u8>, usage: Usage, ssh_logins: u32, wifi: Option<wifi::Wifi> }
+struct Keys { key: Option<SigningKey>, certificate: Vec<u8>, usage: Usage, ssh_logins: u32, wifi: Option<wifi::Wifi>, secrets: secrets::Clients }
 
 impl Keys {
     fn new() -> Self {
@@ -52,7 +55,17 @@ impl Keys {
         };
         // The remembered Wi-Fi networks open under the device key, so there are none without it.
         let wifi = key.as_ref().map(|key| { let mut seed = key.to_bytes(); let wifi = wifi::Wifi::load(&seed); stored::wipe(&mut seed); wifi });
-        Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, ssh_logins: 0, wifi }
+        Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, ssh_logins: 0, wifi, secrets: secrets::Clients::new() }
+    }
+
+    // A secrets client's call (1.4): `f` gets the device key's seed (wiped after) and the caller's program; `denied` to
+    // any other client, `no-key` without the device key.
+    fn secret<T>(&mut self, badge: u16, pid: u64, f: impl FnOnce(&[u8; 32], &str) -> Result<T, Error>) -> Result<T, Error> {
+        let program = self.secrets.program(badge, pid)?;
+        let mut seed = self.key.as_ref().map(SigningKey::to_bytes).ok_or(Error::NoKey)?;
+        let result = f(&seed, program.as_str());
+        stored::wipe(&mut seed);
+        result
     }
 
     // The stored seed, or a new one made and stored (351-NET-0005); false without the random source.
@@ -182,10 +195,12 @@ impl Keys {
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut keys = Keys::new();
-    let mut scratch = [0u8; keystore::REQUEST_MAX];
+    // A secret's value passes through here: the copy is wiped after each request that carried one.
+    let mut scratch = alloc::boxed::Box::new([0u8; keystore::REQUEST_MAX]);
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         if !request.is_call { continue; }
+        let mut carried = false;
         let _ = match keystore::decode(&request, RECEIVED, &mut scratch) {
             Err(reason) => wire::reject(reason),
             Ok((keystore::Request::Certificate, call)) => {
@@ -230,6 +245,34 @@ fn main(_info: &'static BootInfo) {
                 let result = Keys::station(request.badge, request.sender, "COUNTRY").and_then(|()| wifi::keep_country(request.sender, code.as_str()));
                 keystore::reply_wifi_keep_country(call, result)
             }
+            // The loader's calls for a program's secrets client (1.4): its badge alone.
+            Ok((keystore::Request::SecretsClient, call)) => keystore::reply_secrets_client(call, keys.secrets.client(request.badge, request.sender)),
+            Ok((keystore::Request::SecretsName { client, program }, call)) => {
+                keystore::reply_secrets_name(call, keys.secrets.name(request.badge, request.sender, client, program.as_str()))
+            }
+            Ok((keystore::Request::SecretsAdopt { client, task }, call)) => keystore::reply_secrets_adopt(call, keys.secrets.adopt(request.badge, request.sender, client, task)),
+            // A program's calls on its secrets client: about its own secrets alone.
+            Ok((keystore::Request::SecretPut { name, value }, call)) => {
+                carried = true;
+                let result = keys.secret(request.badge, request.sender, |seed, program| secrets::put(seed, program, request.sender, name.as_str(), value));
+                keystore::reply_secret_put(call, result)
+            }
+            Ok((keystore::Request::SecretGet { name }, call)) => {
+                let mut result = keys.secret(request.badge, request.sender, |seed, program| secrets::get(seed, program, request.sender, name.as_str()));
+                let reply = keystore::reply_secret_get(call, result.as_deref().map_err(|e| *e));
+                if let Ok(value) = result.as_mut() { stored::wipe(value); }
+                reply
+            }
+            Ok((keystore::Request::SecretDelete { name }, call)) => {
+                let result = keys.secret(request.badge, request.sender, |seed, program| secrets::delete(seed, program, request.sender, name.as_str()));
+                keystore::reply_secret_delete(call, result)
+            }
+            Ok((keystore::Request::SecretList, call)) => {
+                let mut list = List::default();
+                let result = keys.secret(request.badge, request.sender, |seed, program| secrets::list(seed, program, &mut list));
+                keystore::reply_secret_list(call, result.map(|_| list.as_slice()))
+            }
         };
+        if carried { stored::wipe(&mut scratch[..]); }
     }
 }

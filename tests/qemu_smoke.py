@@ -383,6 +383,11 @@ def require(text, fragment):
     assert fragment in text, (fragment, text)
 
 
+def require_all(text, *fragments):
+    for fragment in fragments:
+        require(text, fragment)
+
+
 def hold_frames(vm, frames, leave_mib):
     """Starts memtest instances that hold all but about `leave_mib` of what applications may take of the frame pool
     (the recovery reserve stays for services, issue 169); returns their PIDs."""
@@ -8437,12 +8442,14 @@ def tls_suite(args, disk):
         require(vm.command("dmesg -s tls"), "THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
-        # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys.
+        # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
+        # loader's, badged BADGE_KEY_LOADER in its slot 8, asks only for programs' secrets clients (000-KRN-0182).
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         real = vm.services()
         keystore = [ep for ep, server in servers.items() if server == real["keystore"]]
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
-        assert {"tls", "ssh"} <= set(holders) <= {"tls", "ssh", "wlan"}, holders
+        assert {"tls", "ssh", "loader"} <= set(holders) <= {"tls", "ssh", "wlan", "loader"}, holders
+        assert re.search(fr"^SLOT=8 GEN=\d+ KIND=1 .*BADGE=4 EP={keystore[0]}\b", vm.command(f"stat caps {real['loader']}", raw=True), re.M)
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
         assert re.search(fr"^SLOT=4 GEN=\d+ KIND=1 .*BADGE=3 EP={keystore[0]}\b", vm.command(f"stat caps {real['ssh']}", raw=True), re.M)
         # The shell holds the SSH service's client in SLOT_SSH (34) and the updater's in SLOT_UPDATE (35), ABI 12.
@@ -8481,7 +8488,9 @@ def device_key_check(args, cpu):
         print("SKIP: the device key check needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
     with tempfile.TemporaryDirectory(prefix="smoke-key-", dir=ROOT / IMAGE) as temp:
-        image, start, fs_sectors = raw_fat_image(Path(temp))
+        # 000-NET-0045: netcheck's secret from a file; netpeer, the same program by another name; a copy run by a path.
+        netcheck = (ROOT / IMAGE / "netcheck.elf").read_bytes()
+        image, start, fs_sectors = raw_fat_image(Path(temp), extra={"secret.txt": SECRET, "netpeer.elf": netcheck, "tmp/netcheck.elf": netcheck})
         part = f"{image}@@{start * 512}"
 
         def boot():
@@ -8511,11 +8520,14 @@ def device_key_check(args, cpu):
             require(vm.command("write system/keystore/device.key x"), "ERROR: WRITE: DENIED")
             # 108: a change of the network policy is kept on the disk too.
             require(policy_answer(vm, "netpolicy add kept 10.0.2.2 tcp 7", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+            secrets_first_boot(vm)
         finally:
             vm.close()
+        kept = secrets_file(part, Path(temp), "netcheck")
         vm, log, second = boot()
         try:
             require(vm.command("netpolicy"), "kept 10.0.2.2 tcp 7")
+            secrets_second_boot(vm)
         finally:
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key (ON DISK, NOT SEALED)")
@@ -8530,6 +8542,52 @@ def device_key_check(args, cpu):
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
           "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
+    print(f"PASS: a program's secret in keystore (000-NET-0045): netcheck kept {len(SECRET)} bytes from a file and read them back "
+          f"after a reboot (SHA-256 checked); netpeer, the same program by another name, finds none, nor opens netcheck's file "
+          f"copied under its name; a copy run by a path gets no secrets client; the file ({kept} bytes) is sealed, and the value "
+          "is in no log line and no command line", flush=True)
+
+
+# 000-NET-0045: a secret that must appear in no log line, no command line and not in the clear on the disk.
+SECRET = b"sk-MIND-0045-" + bytes(range(0x41, 0x5b)) + b"-never-logged"
+
+
+def secrets_first_boot(vm):
+    """netcheck keeps a secret from a file and reads it back; netpeer (the same code by another name) and a copy run by a
+    path reach none of it; a name keystore refuses."""
+    digest = hashlib.sha256(SECRET).hexdigest()
+    require(vm.command("netcheck secret-put:token:secret.txt"), "NETCHECK secret-put:token:secret.txt OK")
+    require_all(vm.command("netcheck secret-get:token secrets"), f"NETCHECK secret-get:token OK {len(SECRET)} BYTES SHA-256 {digest}", "NETCHECK secrets OK token")
+    require_all(vm.command("netpeer secret-get:token secrets"), "NETCHECK secret-get:token Missing", "NETCHECK secrets OK (NONE)")
+    require(vm.command("tmp/netcheck.elf secret-get:token"), "NETCHECK secret-get:token NO SECRETS CLIENT")
+    require(vm.command("netcheck secret-put:a/b:secret.txt"), "NETCHECK secret-put:a/b:secret.txt Invalid")
+    log = vm.service_logs("keystore", "SECRET token OF netcheck READ BY PID")
+    require_all(log, "[KEYSTORE] SECRETS CLIENT", " FOR netcheck", " FOR netpeer", "[KEYSTORE] SECRET token OF netcheck KEPT FOR PID",
+                "[KEYSTORE] SECRET token OF netcheck READ BY PID", "[KEYSTORE] SECRET token OF netpeer: NONE KEPT",
+                "[KEYSTORE] REFUSED SECRET (A NAME REFUSED) OF netcheck FOR PID")
+    assert SECRET.decode() not in vm.log, "the secret is in the log"
+
+
+def secrets_file(part, temp, program):
+    """The program's sealed file read from the disk on the host: MAGIC, no value in the clear; copied under netpeer's
+    name, which must not open it. Returns its size."""
+    out = temp / f"{program}.kept"
+    subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/secrets/{program}.kept", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
+    data = out.read_bytes()
+    assert data[:8] == b"MINDSEC1" and SECRET not in data and b"token" not in data, data[:64]
+    subprocess.run(["mcopy", "-o", "-i", part, str(out), "::/system/keystore/secrets/netpeer.kept"], env=MTOOLS_ENV, check=True, capture_output=True)
+    return len(data)
+
+
+def secrets_second_boot(vm):
+    """After the reboot: netcheck's secret as it was kept; netpeer's copy of the file does not open under its name; the
+    secret forgotten."""
+    digest = hashlib.sha256(SECRET).hexdigest()
+    require(vm.command("netcheck secret-get:token"), f"NETCHECK secret-get:token OK {len(SECRET)} BYTES SHA-256 {digest}")
+    require(vm.command("netpeer secret-get:token"), "NETCHECK secret-get:token NoKey")
+    require(vm.service_logs("keystore", "SECRETS OF netpeer"), "[KEYSTORE] SECRETS OF netpeer DO NOT OPEN UNDER THIS DEVICE KEY AND NAME: NOT READ")
+    require_all(vm.command("netcheck secret-delete:token secret-get:token secrets"), "NETCHECK secret-delete:token OK true", "NETCHECK secret-get:token Missing", "NETCHECK secrets OK (NONE)")
+    assert SECRET.decode() not in vm.log, "the secret is in the log"
 
 
 def tls_lending_check(vm, servers, tls, ssh):

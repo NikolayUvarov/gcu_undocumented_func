@@ -1,4 +1,4 @@
-# 700-KRN-0176 — The boot image `bt_hci` and init's grant for a USB Bluetooth controller (ABI 23, handoff 23)
+# 700-KRN-0176 — The boot image `bt_hci` and init's grant for a USB Bluetooth controller (ABI 25, handoff 25)
 
 **Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (made, then taken out of the branch until DRV's fix; see Progress) · **Blocked by:** the drivers track's fix of `usb_host`'s buffer table ([requests-DRV.md](requests-DRV.md), 2026-10-28) · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
 
@@ -39,7 +39,9 @@ The DEXP's RTL8821CE has a Bluetooth half, `0BDA:C821`, on its xHCI.
   - The boot image, `init`'s grant, `CONFIGURABLE`, `SAFE_LEFT_OUT` and the build line are reversed, together with ABI 23, handoff 23 and the tests, docs and README rows.
   - The branch is back at ABI 22 and handoff 21 with 44 images, the layout `fast-test` carried with 000-KRN-0170.
   - The safe-start line's fix stays: it names every service left out.
-- **What comes back after DRV's fix.** d53bc153 as it was, with ABI 23 and handoff 23 for the same layout as `fast-test` 5a8aaf1a, and the `usb` suite as a criterion.
+- **What comes back after DRV's fix.** d53bc153 as it was, and the `usb` suite as a criterion.
+  - [000-KRN-0182](000-KRN-0182-a-programs-secrets-client.md) took ABI 24 meanwhile, so this task comes back with **ABI 25 and handoff 25**, one above every ABI so far.
+  - `fast-test` 5a8aaf1a's ABI 23 and handoff 23 are never used again.
 
 ## Acceptance criteria
 

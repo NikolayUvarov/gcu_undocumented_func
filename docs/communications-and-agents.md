@@ -194,7 +194,7 @@ Fill in [AGENTS.md](../AGENTS.md), section 7, with:
   - stand-in provider servers under `tests/` (`tests/llm_stub.py`), their suites in `tests/qemu_smoke.py` and their groups in `scripts/ci_local.sh`.
 - **First:** `llm` with one wire format and its stand-in server, then `ask`; `agent` after them (260's stages).
 - **What it needs from other tracks:**
-  - HTTP with SSE and redirects from `NET` (000-NET-0047); keys from `keystore` (000-NET-0045), from a file until then;
+  - HTTP with SSE and redirects from `NET` (000-NET-0047); keys from `keystore` (000-NET-0045: a program that asks for `REQUEST_SECRETS` keeps and reads its own in `SLOT_SECRETS`);
   - flow grants for the providers' hosts from `NET`;
   - its data directory from `KRN` (000-KRN-0170);
   - the `mind::tui` widgets from `APP`, for `agent`'s screen.
