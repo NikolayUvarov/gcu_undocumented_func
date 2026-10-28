@@ -1820,7 +1820,8 @@ CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota hold
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
                "launch: stop and notice", "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "a replace refused", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "its own directory", "system/own/ hidden", "the boot", "the modes", "a mode change refused",
+               "a replace refused", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -1856,8 +1857,8 @@ def check_tool_check(vm):
 
 # bench's rows that every suite machine has (176-KRN-0064); data/ and log: are skipped where the disk has neither, the
 # camera is the gateway's synthetic source, audio_gw runs on x86 only.
-BENCH_ROWS = ["ram: write 2 MiB", "ram: read 2 MiB", "ram: 1 KiB file cycle", "vfs_server: attributes", "sysmon: memory figures",
-              "rtc: the time", "loader: inspect", "SHA-256 of 4 MiB", "SHA-256 of 64 bytes"]
+BENCH_ROWS = ["ram: write 2 MiB", "ram: read 2 MiB", "ram: 1 KiB file cycle", "own: 1 KiB file cycle", "vfs_server: attributes",
+              "sysmon: memory figures", "rtc: the time", "loader: inspect", "SHA-256 of 4 MiB", "SHA-256 of 64 bytes"]
 
 
 def bench_tool_check(vm):
@@ -1882,11 +1883,32 @@ def bench_tool_check(vm):
     require(vm.command("bench nosuch"), "bench: no group nosuch")
 
 
+def own_directory_check(vm):
+    """000-KRN-0170: a program run by its name finds what it wrote in its own directory on the next run; two names get
+    two directories (bench's file is not in check's); neither the user's files client nor a program's reaches them."""
+    def own_row():
+        output = vm.command("check files", timeout=120)
+        rows = {name.strip(): (mark, detail.strip()) for mark, name, detail in CHECK_ROW.findall(output.replace("\r", ""))}
+        mark, detail = rows.get("its own directory", ("?", ""))
+        found = re.match(r"run (\d+); it holds (.*)$", detail)
+        assert mark == "✓" and found, (rows.get("its own directory"), output[-2000:])
+        assert rows.get("system/own/ hidden", ("?",))[0] == "✓", rows
+        return int(found[1]), found[2].split()
+    first, held = own_row()
+    second, held = own_row()
+    assert second == first + 1 and held == ["runs.txt"], (first, second, held)
+    listing = vm.command("ls system/own")
+    assert "runs.txt" not in listing and "bench.txt" not in listing, listing
+    print(f"PASS: own directories: check's run {first} then {second} in system/own/check/, which holds only runs.txt after bench "
+          f"wrote its own; the shell's ls of system/own/: {listing.strip().splitlines()[-1] if listing.strip() else 'nothing'}", flush=True)
+
+
 def bench_suite(vm):
     """176: the utilities that check the system and measure it, from the shell, and the runs on real hardware."""
     check_tool_check(vm)
     kbench_check(vm)
     bench_tool_check(vm)
+    own_directory_check(vm)
     diag_check(vm)
 
 

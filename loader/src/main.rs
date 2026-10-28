@@ -20,6 +20,8 @@ const MEMORY_FILE: &str = "data/memory.conf"; // the owner's lines `<program> <M
 const WORKERS_QUOTA: u16 = 255; // the task quota of a program named there: the kernel allows one worker per online CPU
 // Loader's own slots (granted by init): its endpoint, client endpoints passed on to applications, spawn privilege.
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;
+const OWN_DIRS: usize = 7; // vfs_server's client badged BADGE_OWNERS: it alone opens system/own/ (000-KRN-0170)
+const OWN_ROOT: &str = "system/own"; // the programs' own directories, one by name
 const MAX_IMAGE: usize = 4 * 1024 * 1024;
 // Helpers (1.8, 109-KRN-0096): programs that serve one caller and hold nothing but its endpoint.
 const HELPER_MEMORY_MIB: u16 = 2;
@@ -183,6 +185,9 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>, Option<Installed>), Er
 // it gets a text input whose writer's handle comes back beside its PID (1.9, 000-KRN-0094), else 0.
 fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed: bool) -> Result<(u64, usize), Error> {
     let (file, task, app) = open(name)?;
+    // A program run by its name (the booted slot's or the root's) or installed in data/apps/ owns system/own/<name>/;
+    // one run by any other path has no identity to own a directory by (000-KRN-0170).
+    let own = if !name.contains(&b'/') || app.is_some() { own_dir(task.as_str()) } else { None };
     let (image, size) = read_image(&file)?;
     let (flags, memory) = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
     if let Some(app) = &app { check_installed(core::str::from_utf8(name).unwrap_or("?"), app, &image.as_slice()[..size], flags, memory)?; }
@@ -197,6 +202,7 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
     // Debug mode (log:debug.txt, 211-KRN-0053): a program its launcher gave no log client gets a copy of the loader's,
     // so what it prints reaches the system log and this boot's log file.
     if debug_mode() && !extra.iter().any(|&(child, _)| child as usize == SLOT_LOG) && count < grants.len() { grants[count] = grant(SLOT_LOG, SLOT_LOG, client); count += 1; }
+    if let Some((handle, _)) = own.filter(|_| count < grants.len()) { grants[count] = grant_moved(SLOT_OWN, handle, u8::MAX); count += 1; }
     // SPAWN takes `name\0arguments`.
     let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
     let args = &args[..args.len().min(ARGS_MAX)];
@@ -231,7 +237,37 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
         }
     }
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
+    // The scope is the program's alone for as long as it runs, whenever it first opens it; unused, it ends in a minute.
+    if let Some((handle, badge)) = own {
+        match result {
+            Ok((pid, _)) => { if !matches!(mind::idl::vfs::adopt(Endpoint(OWN_DIRS), badge, pid), Ok(Ok(()))) { mind::println!("[LOADER] {}: ITS OWN DIRECTORY NOT KEPT FOR PID {}", task.as_str(), pid); } }
+            Err(_) => { let _ = ipc::drop_cap(handle); }
+        }
+    }
     result
+}
+
+// A writable scope of system/own/<task>/, made if missing, and its badge; None (logged) when vfs_server refuses.
+fn own_dir(task: &str) -> Option<(usize, u16)> {
+    use mind::idl::vfs;
+    let files = Endpoint(OWN_DIRS);
+    let made = (|| -> core::result::Result<(usize, u16), &'static str> {
+        let root = vfs::root(files, "").ok().and_then(|r| r.ok()).ok_or("NO BOOT VOLUME")?;
+        let parent = vfs::open_dir(files, root, OWN_ROOT, true);
+        let _ = vfs::close(files, root);
+        let parent = parent.ok().and_then(|r| r.ok()).ok_or("system/own NOT OPENED")?;
+        let dir = vfs::open_dir(files, parent, task, true);
+        let _ = vfs::close(files, parent);
+        let dir = dir.ok().and_then(|r| r.ok()).ok_or("ITS DIRECTORY NOT MADE")?;
+        let scoped = vfs::scope(files, dir, true, RECEIVED_CAP);
+        let _ = vfs::close(files, dir);
+        scoped.ok().and_then(|r| r.ok()).ok_or("NO SCOPE")?;
+        let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0);
+        let _ = ipc::drop_cap(RECEIVED_CAP);
+        let handle = handle.map_err(|_| "NO SLOT")?;
+        Ok((handle, mind::dev::cap_info(handle).1 as u16))
+    })();
+    made.inspect_err(|why| mind::println!("[LOADER] {}: NO OWN DIRECTORY ({})", task, why)).ok()
 }
 
 // The MiB the owner's data/memory.conf gives program `task` (a line `<program> <MiB>`; `#` starts a comment), read at

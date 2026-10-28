@@ -27,7 +27,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
     "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
-    "spawn privilege", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
+    "spawn privilege; a VFS client of system/own/ for the programs' own directories", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
@@ -580,6 +580,8 @@ impl Init {
                 self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 self.lend(&mut grants, 4, "audio_gw")?; grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
                 self.lend(&mut grants, 6, "tts")?;
+                // The client that alone opens system/own/, where it makes and scopes each program's own directory (000-KRN-0170).
+                grants.add(7, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_OWNERS)?, CLIENT);
             }
             "audio_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
