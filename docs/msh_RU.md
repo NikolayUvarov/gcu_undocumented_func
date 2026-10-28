@@ -130,7 +130,7 @@ print("done: {total}")
   - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`, а также `>` или `>>` после команды (000-APP-0074);
   - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`, `netstat`;
   - `log`: `logger`, `log()`;
-  - `lifecycle`: `kill`, `budget`, `stop`, `reboot`, `poweroff`, `shutdown`, `update`.
+  - `lifecycle`: `kill`, `budget`, `stop`, `reboot`.
 
   Без своего слова команда не выполняется: `ping needs requires: network in the script`.
 - **Программы, запущенные сценарием,** получают из того, что просят, только объявленное сценарием (`sysinfo`, `file`,
