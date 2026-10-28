@@ -1,6 +1,6 @@
 # 550-ASR-0007 — Joining a Wi-Fi network, tested: in QEMU on every gate, and on the MacBook Pro on request
 
-**Type:** assurance · **Owner:** `ASR` · **Priority:** P1 · **Status:** open · **Blocked by:** `APP`: a join without a screen and a start script (asked on `internal-dev-messages`, `APP/2026-10-14…-ASR-wifi-join-without-a-screen-and-a-start-script.md`); `NET`: the `net` suite's join check · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
+**Type:** assurance · **Owner:** `ASR` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — (APP's join without a screen and start script, and NET's `net` suite join check, are in `main`) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
 
 ## Problem
 
@@ -31,6 +31,52 @@ The maintainer asked for the join to be tested without typing (2026-10-14).
 - **QEMU.** The `net` suite joins `MIND-TEST` and gets its address on every gate run, and refuses a wrong passphrase with its reason.
 - **MacBook Pro.** With `--wifijoin` and no typing, one boot logs a WPA2 join, the address DHCP gave, and a gateway that answers `ping`.
 - **The passphrase** appears in no log line, commit or message. A test only reads it from `data/wifijoin.txt`, a file on the maintainer's own disk, kept in plain text as the proprietary files are kept (AGENTS.md, section 3).
+
+## Progress
+
+- **2026-10-14: the tools track's two parts are planned** as 550-APP-0078 (`wifi join`, `wifi status`) and 000-APP-0079 (the start script). It proposed the boot volume's root for `autorun.msh` instead of `data/`: a script under `data/`, where programs may write, would run at every boot with the shell's authority (MC-3.11). Taken: `build-and-write.sh --wifijoin` writes the root's `autorun.msh`.
+- **`tests/hardware/wifijoin.msh`** (on `claude/ASR-DRV` and `fast-test` until its gate):
+  - it reads the network's name from `data/wifijoin.txt`;
+  - it waits up to 60 s for the station, then runs `wifi join "<name>" --passphrase-file data/wifijoin.txt`;
+  - after a join it waits up to 30 s for a card's address and pings its gateway;
+  - it notes each step on the screen and in the system log, and ends with `*** WIFI JOIN Complete. Data collected ***`.
+  
+  Its `requires:` is `file wifi network log`. It is written against 550-APP-0078's planned lines: until that is in an image, `wifi join` fails and the script logs why.
+
+- **2026-10-20: both of APP's parts and the QEMU half are in `main`.**
+  - APP's `wifi join --passphrase-file` (550-APP-0078) and the root's `autorun.msh` (000-APP-0079) are in `main`. `tests/hardware/wifijoin.msh` uses them as they are: the command line, `JOINED`, and the exit status.
+  - NET's `net` suite checks over `wlansim`: the join, a wrong passphrase refused, the lease 10.0.4.15 and a ping of 10.0.4.1, 802.11b's rates alone, and a remembered network joined again. That is this task's QEMU half.
+  - **Left:** the MacBook Pro's run. `build-and-write.sh --wifijoin` writes `data/wifijoin.txt` and `autorun.msh` after the image, and the log ends with `*** WIFI JOIN Complete. Data collected ***`.
+
+- **2026-10-20: the MacBook Pro joined CoolNet2** (`fast-test` 832c9080, the Wi-Fi firmware copied after the write). The maintainer joined by hand from `wm`'s Settings, Wi-Fi; the log was read over MIND Link (800-LNK-0003):
+  - `[WLAN] JOINING CoolNet2 ON CHANNEL 8` at 256.782 s, `Joined` at 256.823 s (WPA2), the network kept by `keystore`;
+  - `[NETSTACK] DHCP 192.168.2.236/24 GATEWAY 192.168.2.1 DNS 8.8.8.8 ON CARD 2` at 260.434 s, and the default route on it;
+  - no transmit fault from `bcm_wifi` in the log, and the passphrase nowhere in it.
+- **Left:** the scripted run (`tests/hardware/wifijoin.msh` as `autorun.msh`, `build-and-write.sh --wifijoin`), with its ping of the gateway and its end marker.
+
+- **2026-10-21: a remembered network joined at start, with no passphrase on the disk.**
+  - `tests/hardware/wifijoin.msh` joins without `--passphrase-file` when `data/wifijoin.txt` holds the network's name alone, as a network `keystore` remembers. The shell's own parser takes the script (a host check, `script::parse`).
+  - The maintainer's `build-and-write.sh --keep-wifi` provides that case:
+    - before the write, it saves `system/keystore/` (`wifi.kept`, `device.key`, `wifi.country`) from the disk into `~/.config/mind/keystore`, mode 600;
+    - after the write, it puts them back, with that one-line file and the script as `autorun.msh`;
+    - so a rewritten MacBook Pro rejoins CoolNet2 by itself.
+  - Saved from the MacBook Pro's disk on 2026-10-21.
+
+- **2026-10-21: the MacBook Pro rejoined CoolNet2 by itself** (`fast-test` d2daa430, `build-and-write.sh --keep-wifi`, no typing):
+  - `[SHELL] AUTORUN /autorun.msh`; `WIFI JOIN: THE NETWORK "CoolNet2" (REMEMBERED BY KEYSTORE)`;
+  - **the join:** `wlan` had no scan yet and answered NOT FOUND; `wifi join` then scanned once (APP's 550-APP-0098), heard CoolNet2 among 15 access points and joined, `TRUE AFTER 1745 MS`;
+  - **the address:** `DHCP 192.168.2.236/24 GATEWAY 192.168.2.1` on card 2, the default route on it, `ADDRESS AFTER 1002 MS`;
+  - **the gateway:** `PING: 3 SENT, 3 RECEIVED, 0% LOST`; `wifi status` at -45 dBm;
+  - `*** WIFI JOIN Complete. Data collected ***`, then `[SHELL] AUTORUN ENDED OK`;
+  - the passphrase appears nowhere in the log (checked against the maintainer's file, not printed).
+
+  This meets the MacBook Pro criterion for a network `keystore` remembers. A join from `data/wifijoin.txt`'s passphrase (`--wifijoin`) has run in QEMU only.
+
+- **2026-10-21: the join is tried up to five times, 3 s apart.**
+  - After the first update through the link (351-KRN-0141), the boot's one scan did not hear CoolNet2, and `wifijoin.msh` gave up: `WIFI JOIN: FALSE`.
+  - A `wifi join CoolNet2` over the link a minute later joined at once.
+  - Now the script tries again, and says how many tries it took.
+  - `tests/wifijoin_host.rs` runs the script in the shell's own interpreter, against a host that answers as the Mac does: a join on the third try, a give-up after five, a join at once. It is in `scripts/host_tests.sh`.
 
 ## Related
 

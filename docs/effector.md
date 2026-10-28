@@ -1,6 +1,6 @@
 # Remote build and test machines through Effector
 
-**Version:** 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
+**Version:** 1.3 (2026-10-23): renewing a reservation extends its command's run time, and a run has an hour after the reservation ends (rule 3); 1.2 (2026-10-23): a reservation's lease is no limit; an operation still ends at its `timeout_seconds` until the service stops cutting commands; work in parts of an hour or two, the maintainer's word (rule 3); 1.1 (2026-10-23): 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
 
 The maintainer lends agents real machines for builds and tests through **Effector**, a service that runs commands on registered computers.
 
@@ -19,6 +19,7 @@ The maintainer lends agents real machines for builds and tests through **Effecto
 | `DESKTOP-i7-930-wsl-u24` | Ubuntu 24.04.5 under WSL2 on Windows 10 22H2, Intel Core i7-930 (4 cores, 8 threads, 2.8 GHz, SSE4.2, no AVX), 15 GB RAM for WSL, 955 GB free, no `/dev/kvm` | the agent runs as root: give `"run_as": "un"` for work | Builds, host tests, QEMU suites under TCG (x86 and aarch64), with CI's packages; runs that want memory. About 1.6 times i9's time. **No reboots**: it is WSL2. |
 | `DESKTOP-i7-930-wsl-u26` | Ubuntu 26.04.1 on the same machine | the agent's own, `un`: give **no `run_as`** | Rust only (rustup, the kernel track's clone): no C linker, QEMU or firmware until `setup_build_env.sh` runs as root there. |
 | `un-rizen_2a8b108d5593` (`un-rizen-service`) | Ubuntu 24.04.1 on the machine itself (no WSL; Linux 7.0), AMD Ryzen 9 5900HX (8 cores, 16 threads), 30 GB RAM, 97 GB free on NVMe, `/dev/kvm` | the agent runs as root, as a service: give `"run_as": "un"` for work | Builds, host tests, QEMU suites under TCG (x86 and aarch64), gates: **4 queues for every track and agent** (section 3, rule 1). **No reboots.** |
+| `x32-128_f5832ee52625` (`i9-128`) | Ubuntu 22.04.5 on the machine itself (Linux 6.8), Intel Core i9-13900K (24 cores, 32 threads), 125 GB RAM, 91 GB free of 916 GB, `/dev/kvm` | the agent's own, `gater`: give **no `run_as`**. Its commands run in `sh`: start a script with `bash -s`. Clones in `/home/gater/mind-core/<TRK>/`, `TMPDIR=/tmp/mind-<TRK>` | Builds, host tests, QEMU suites and gates (the maintainer, 2026-10-26), once `scripts/setup_build_env.sh` has run there as root: until then it has QEMU 6.2 for x86 only, no AAVMF and no Java. **No reboots.** **Not for gates now (2026-10-26):** gcc crashed while building QEMU at `-j32` (`internal compiler error: Illegal instruction`, segmentation faults in `cc1`), and the machine hung during the next such build and did not boot again. The maintainer checks the hardware; nothing runs there until they say it is stable. |
 
 - **What is installed on `PCU_585240b00e8a`** (and who did it is in section 6):
   - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`;
@@ -35,7 +36,7 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - Builds, host tests and single QEMU groups do run there.
   - Two x86 groups go to another machine, as measured on 2026-10-14 (the tools track's gate of eda1c74):
     - "x86: Secure Boot with our keys" stops at once with `No module named 'virt'`;
-    - "x86: reproducible build" builds the image twice and ran past an operation's hour. It took 7 minutes on i9 and 26 on `DESKTOP-i7-930-wsl-u24`.
+    - "x86: reproducible build" builds the image twice and ran past the hour its operation was given. It took 7 minutes on i9 and 26 on `DESKTOP-i7-930-wsl-u24`.
     - Send them to a machine with CI's packages: `i9`, `un-rizen-service` or `DESKTOP-i7-930-wsl-u24`.
 
 - **What is on `i9_4e6882212251`** (section 6):
@@ -113,7 +114,7 @@ An operation runs one shell script on a machine as a user:
 script = open("build_and_test.sh").read()   # POSIX sh; keep its output short (tail your logs)
 op = call("POST", "/api/v1/operations", {
     "agent_id": "PCU_585240b00e8a", "kind": "exec", "run_as": "un", "command": script,
-    "timeout_seconds": 3600,             # the execution limit: at most 3600
+    "timeout_seconds": 3600,             # this operation's own deadline, chosen by its sender (the API takes 1 to 3600)
     "sequential": True,                  # long or CPU-heavy work waits in the machine's queue
     "queue_ttl_seconds": 6 * 3600,       # how long it may wait behind other agents' work
     "idempotency_key": "KRN-351-KRN-0057-x86-20261010T0400",
@@ -162,11 +163,16 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
    - Set `queue_ttl_seconds` for the queue you see (`GET /api/v1/operations?agent_id=…&status=active`). The wait counts against it, and an operation that waits longer expires.
    - Short read-only checks (versions, free space, a log's tail) are not sequential. They still take a queue: with one queue they wait for the running operation.
 2. **Nothing outlives its operation.** No `nohup`, `&`, `setsid`, `screen`, `tmux` or `systemd-run` for work. A detached job runs outside the queue and collides with the next agent's build or test.
-3. **One operation runs at most an hour** (`timeout_seconds` ≤ 3600). Split longer work into operations that each fit, and queue them one after another: for example, one QEMU group or one build each.
+3. **Time** (the maintainer, 2026-10-23).
+   - **A queue reservation's 1 to 60 minutes is a lease, not a limit on the work.** It is there so that a reservation someone forgot frees itself. Renew it as often as the work needs: the service limits neither the total time nor the number of renewals.
+   - **Renewing a reservation extends the run time of the command sent under it** (with the reservation's session and PIN headers, the service's help), and after the reservation ends the run still has an hour to finish. So a long gate held under a reservation you renew is not cut.
+   - **An operation sent without a reservation ends at its `timeout_seconds`** (the API takes 1 to 3600): the server ends it with `agent did not acknowledge the operation before timeout_seconds elapsed`.
+   - **Split the work into parts of about an hour, two at most,** all the same: for example one QEMU group or one build each, queued one after another. On a slow machine a group that takes longer goes to a faster one, or into smaller parts.
+   - **A `timeout` says the part outran its time, not that the change is wrong.** Report it as such: which `timeout_seconds` the operation had and what it had done by then.
 4. **Each track works in its own directory:** `/home/un/mind-core/<TRK>/` (for example `/home/un/mind-core/NET/`), with its own clone and its own `target/` directories.
    - Never build in, clean or change another track's directory.
    - The kernel track's clone is still at `/home/un/mind-core/gcu_undocumented_func` and moves to `KRN/`.
-   - **Each operation exports `TMPDIR=/tmp/mind-<TRK>`** (`mkdir -p` it first). `scripts/ci_local.sh`, the test programs, the kernel variants, the logs and the QEMU suites' files then go there ([000-KRN-0092](../issues/000-KRN-0092-two-tracks-test-side-by-side.md)), so two tracks' runs on one machine share no file and no lock. Keep the path short: the suites put QEMU's control sockets under it, and a Unix socket's path must stay under 108 bytes. A test or script that still writes a fixed path under `/tmp` is a bug: report it to the track that owns it.
+   - **Each operation exports `TMPDIR=/tmp/mind-<TRK>`** (`mkdir -p` it first). `scripts/ci_local.sh`, the test programs, the kernel variants, the logs and the QEMU suites' files then go there ([000-KRN-0092](../issues-done/000-KRN-0092-two-tracks-test-side-by-side.done)), so two tracks' runs on one machine share no file and no lock. Keep the path short: the suites put QEMU's control sockets under it, and a Unix socket's path must stay under 108 bytes. A test or script that still writes a fixed path under `/tmp` is a bug: report it to the track that owns it.
 5. **Name your operations.**
    - `idempotency_key` starts with your track's code and is unique for each new submission.
    - `reason` names the track, the task and what runs (`"STO 300-STO-0002: the store suite on x86"`). The maintainer reads it on the dashboard.
@@ -189,6 +195,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 ## 4. Gates on a remote machine
 
 - **A gate run through Effector is a local gate** in the sense of [AGENTS.md](../AGENTS.md), section 4, when every group of `scripts/ci_local.sh` passes.
+- **The landing queue's gate** (AGENTS.md, section 4, since 2026-10-21) runs this way. `scripts/land.sh gate` spreads every group of `scripts/ci_local.sh --list` over the machines' lanes and runs a failed group once more, alone. It sends the key only from the file `$EFFECTOR_KEY_FILE` (section 2). The presets name its lanes: `full`, and `no-i9` while another track's gate loads i9.
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 
@@ -233,6 +240,8 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 ## 6. Changes made to the machines
 
 | Date | Machine | Change | By, for |
+| 2026-10-25 | `un-rizen_2a8b108d5593` | **A permission, no change made yet.** The kernel session may switch this machine to MIND Core: root only to set `BootNext` to the MIND Core stick with `scripts/boot_switch.py` (000-KRN-0124), then the reboot; the next boot returns to Linux. Only once the maintainer says the stick and `effector485` are ready. The second NVMe disk (04:00.0, someone else's Windows disk) is never written. Each run gets a row of its own here | the maintainer's word, for 213 (the network first) |
+| 2026-10-26 | `x32-128_f5832ee52625` | As `gater`, nothing as root: the kernel track's clone in `/home/gater/mind-core/KRN/gcu_undocumented_func`; rustup 1.29.2 in `~gater/.cargo` with the toolchain of `rust-toolchain.toml` (nightly-2026-10-02); `scripts/setup_build_env.sh` of e17e215b copied to `/home/gater/mind-core/setup_build_env.sh` (SHA-256 `acdc2543…`) for the maintainer to run as root: `sudo bash /home/gater/mind-core/setup_build_env.sh gater /home/gater/mind-core/KRN/gcu_undocumented_func`. It installs the missing packages (`qemu-system-arm`, `qemu-efi-aarch64`, `default-jre-headless`, `python3-virt-firmware` 24.1.1, QEMU's build dependencies), builds QEMU 8.2.2 from the signed qemu.org release into `/opt/qemu-8.2.2` (the signature check was tried as `gater` first: good) and adds `gater` to `kvm` | KRN, at the maintainer's request (gates on this machine) |
 |---|---|---|---|
 | 2026-10-09 | `PCU_585240b00e8a` | Build environment for `un`: `git`, `build-essential`, `curl`, `pkg-config`, QEMU 6.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), OVMF, AAVMF, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `ffmpeg`; rustup in `~un/.cargo`; the kernel track's clone | KRN, at the maintainer's request |
 | 2026-10-10 | `PCU_585240b00e8a` | The Ubuntu Cloud Archive (caracal) added for QEMU 8.2 and removed again: it has no QEMU for 22.04 | KRN, at the maintainer's request |

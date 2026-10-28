@@ -1,0 +1,29 @@
+{
+  "schema": "nrl.t12-evidence/0",
+  "date": "2026-10-26",
+  "tested_commit": "ad03d806baed5e14649d17f241b11a0d27c5ca33",
+  "toolchain": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "host_tests": 77,
+  "portable_builds": [
+    "nrl-repr and nrl-runtime for x86_64-unknown-none and aarch64-unknown-none-softfloat"
+  ],
+  "frozen_study_sha256": "868880faf141102a63ea0bf0ee11de6f388082ecb9df074e06ddb60003fd4f7a",
+  "promotion_basis": {
+    "report": "optimization-before-promotion-2026-10-26.json",
+    "reference_median_seconds": 0.00590199,
+    "prepared_median_seconds": 0.004099205,
+    "ratio": 0.6945462462660899,
+    "accepted": true
+  },
+  "post_promotion": {
+    "report": "optimization-after-promotion-2026-10-26.json",
+    "accepted": true,
+    "quality_pass": true,
+    "reference_median_seconds": 0.005860759,
+    "prepared_median_seconds": 0.004091047,
+    "ratio": 0.6980404756448781
+  },
+  "native_execution": false,
+  "scope": "First accepted scalar host optimization of full-sequence forward only; no native/device/generation/weight-compression gain inferred. Both observed runs retained.",
+  "gate": "NRL checks passed; full repository gate belongs to LANDING"
+}

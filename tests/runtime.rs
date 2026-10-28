@@ -29,6 +29,7 @@ mod context {
 mod frames {
     pub fn ready() -> bool { false }
     pub fn allocate(_: core::alloc::Layout) -> Option<core::ptr::NonNull<u8>> { None }
+    pub fn allocate_unzeroed(_: core::alloc::Layout) -> Option<core::ptr::NonNull<u8>> { None }
     pub unsafe fn free(_: core::ptr::NonNull<u8>, _: core::alloc::Layout) {}
     pub fn owns(_: *const u8) -> bool { false }
 }
@@ -44,6 +45,132 @@ mod task_state;
 mod user_heap;
 #[path = "../kernel/src/task_table.rs"]
 mod task_table;
+
+fn phys(kind: u32, start: u64, end: u64) -> abi::StatPhys {
+    assert_eq!(start % 4096, 0);
+    assert_eq!(end % 4096, 0);
+    abi::StatPhys { kind, index: 0, start, pages: (end - start) / 4096 }
+}
+
+#[test]
+fn realtek_probe_mapping_accepts_only_present_uncached_identity_leaves() {
+    let pdpt = memory::Region::new(4096, 4096).unwrap();
+    let pd = memory::Region::new(4096, 4096).unwrap();
+    let pt = memory::Region::new(4096, 4096).unwrap();
+    let physical = 0xfce0_0040u64;
+    unsafe {
+        let root = pdpt.ptr() as *mut u64;
+        let directory = pd.ptr() as *mut u64;
+        let leaves = pt.ptr() as *mut u64;
+        let pde = directory.add((physical >> 21 & 511) as usize);
+        let pte = leaves.add((physical >> 12 & 511) as usize);
+        let valid = || mmu::identity_device_u32_in(root, physical);
+        assert!(!valid(), "absent PDPT entry");
+        root.add(3).write(pd.ptr() as u64 | 3);
+        assert!(!valid(), "absent PDE");
+        pde.write(0xfce0_0083);
+        assert!(!valid(), "large write-back leaf");
+        pde.write(0xfce0_009b);
+        assert!(valid(), "large UC identity leaf");
+        pde.write(0xfcc0_009b);
+        assert!(!valid(), "large non-identity mapping");
+        pde.write(pt.ptr() as u64 | 3);
+        assert!(!valid(), "absent PTE");
+        pte.write(0xfce0_0003);
+        assert!(!valid(), "small write-back leaf");
+        pte.write(0xfce0_001b);
+        assert!(valid(), "small UC identity leaf");
+        pte.write(0xfce0_101b);
+        assert!(!valid(), "small non-identity mapping");
+        assert!(!mmu::identity_device_u32_in(root, physical + 1));
+        assert!(!mmu::identity_device_u32_in(root, 1 << 32));
+        assert!(!mmu::identity_device_u32_in(root, u64::MAX - 3));
+        root.add(3).write(0xc000_009b);
+        assert!(!valid(), "unexpected 1 GiB leaf is not dereferenced as a table");
+    }
+}
+
+#[test]
+fn identity_cache_keeps_ryzen_loader_ram_write_back_above_three_gib() {
+    // Adjacent types and addresses from the Ryzen report; the 64 MiB kernel arena is inside the loader-data range.
+    let map = [
+        phys(2, 0xC68F_B000, 0xC6D0_B000),
+        phys(7, 0xA20_F000, 0xC20A_B000),
+        phys(4, 0xC68F_6000, 0xC68F_B000),
+        phys(2, 0xC20A_B000, 0xC68F_6000),
+        phys(4, 0xC6D0_B000, 0xCA8F_C000),
+    ];
+    for address in (0xC200_0000..0xC6E0_0000).step_by(0x20_0000) {
+        let (entry, table) = mmu::identity_region(&map, address).unwrap();
+        assert!(table.is_none(), "adjacent RAM descriptors cover this whole region");
+        assert_eq!(entry, address | 0x83, "RAM at {address:x} must use PAT entry 0, supervisor writable");
+    }
+}
+
+#[test]
+fn identity_cache_splits_ram_mmio_and_unknown_pages_in_one_large_region() {
+    let start = 0xC800_0000;
+    let map = [
+        phys(7, start, start + 7 * 4096),
+        phys(11, start + 7 * 4096, start + 8 * 4096),
+        phys(2, start + 9 * 4096, start + 0x20_0000),
+    ];
+    let (entry, table) = mmu::identity_region(&map, start).unwrap();
+    let table = table.expect("a 4 KiB table is required at a RAM/device boundary");
+    assert_eq!(entry, table.ptr() as u64 | 3, "the table itself is cached and supervisor-only");
+    let leaves = unsafe { core::slice::from_raw_parts(table.ptr() as *const u64, 512) };
+    for (page, &leaf) in leaves.iter().enumerate() {
+        let cache = if matches!(page, 7 | 8) { 0x18 } else { 0 };
+        assert_eq!(leaf, (start + page as u64 * 4096) | 3 | cache, "page {page}");
+    }
+}
+
+#[test]
+fn identity_cache_never_assumes_low_addresses_are_ram() {
+    for start in [0, 0x8000_0000, 0xC000_0000, 0xFEE0_0000] {
+        for kind in [0, 8, 11, 12, 13, 14, u32::MAX] {
+            let (entry, table) = mmu::identity_region(&[phys(kind, start, start + 0x20_0000)], start).unwrap();
+            assert!(table.is_none());
+            assert_eq!(entry, start | 0x9B, "kind {kind} at {start:x}");
+        }
+        let (entry, table) = mmu::identity_region(&[], start).unwrap();
+        assert!(table.is_none());
+        assert_eq!(entry, start | 0x9B, "an absent descriptor is not RAM");
+    }
+}
+
+#[test]
+fn identity_cache_reserved_overlap_stays_uncached_regardless_of_descriptor_order() {
+    let start = 0xC800_0000;
+    let mut map = [phys(2, start, start + 0x20_0000), phys(0, start + 4096, start + 8192)];
+    for _ in 0..2 {
+        let (_, table) = mmu::identity_region(&map, start).unwrap();
+        let table = table.unwrap();
+        let leaves = unsafe { core::slice::from_raw_parts(table.ptr() as *const u64, 512) };
+        assert_eq!(leaves[0], start | 3);
+        assert_eq!(leaves[1], (start + 4096) | 0x1B);
+        assert_eq!(leaves[2], (start + 8192) | 3);
+        map.reverse();
+    }
+}
+
+#[test]
+fn identity_cache_device_remap_changes_large_and_small_leaves_not_table_pointer() {
+    let start = 0xC800_0000;
+    let (mut entry, table) = mmu::identity_region(&[phys(2, start, start + 0x20_0000)], start).unwrap();
+    assert!(table.is_none());
+    unsafe { mmu::uncache_identity(&mut entry, start as usize); }
+    assert_eq!(entry, start | 0x9B);
+    let (mut entry, table) = mmu::identity_region(&[phys(2, start, start + 4096)], start).unwrap();
+    let table = table.unwrap();
+    let pointer = entry;
+    unsafe { mmu::uncache_identity(&mut entry, start as usize); }
+    assert_eq!(entry, pointer, "PCD/PWT on a table pointer do not change the memory type of its leaves");
+    let leaves = unsafe { core::slice::from_raw_parts(table.ptr() as *const u64, 512) };
+    for (page, &leaf) in leaves.iter().enumerate() {
+        assert_eq!(leaf, (start + page as u64 * 4096) | 0x1B);
+    }
+}
 
 #[test]
 fn real_program_instances_have_fresh_bss_and_rebased_private_pointers() {
@@ -112,6 +239,22 @@ fn rejects_corrupt_headers_segments_and_entries_without_panicking() {
     }
     let image = elf::Image::parse(&data).unwrap();
     assert!(image.load(&mut [0; 16], 0x100000).is_err());
+}
+
+#[test]
+fn the_stack_is_what_pt_gnu_stack_asks_within_its_bounds() {
+    // 262-KRN-0164: no PT_GNU_STACK gives the least; memstack asks 4 MiB; whole pages; more than the most is refused.
+    assert_eq!(elf::Image::parse(&std::fs::read("usb_root/app.elf").unwrap()).unwrap().stack, abi::STACK_MIN_BYTES);
+    let data = std::fs::read("usb_root/memstack.elf").unwrap();
+    assert_eq!(elf::Image::parse(&data).unwrap().stack, 4 << 20);
+    let (table, count) = (u64::from_le_bytes(data[32..40].try_into().unwrap()) as usize, u16::from_le_bytes([data[56], data[57]]) as usize);
+    let header = (0..count).map(|i| table + i * 56).find(|&at| data[at..at + 4] == 0x6474_e551u32.to_le_bytes()).unwrap();
+    for (asked, stack) in [(0, Some(abi::STACK_MIN_BYTES)), (5000, Some(abi::STACK_MIN_BYTES)), ((1 << 20) + 1, Some((1 << 20) + 4096)),
+                           (abi::STACK_MAX_BYTES, Some(abi::STACK_MAX_BYTES)), (abi::STACK_MAX_BYTES + 1, None), (usize::MAX, None)] {
+        let mut changed = data.clone();
+        changed[header + 40..header + 48].copy_from_slice(&(asked as u64).to_le_bytes());
+        assert_eq!(elf::Image::parse(&changed).ok().map(|image| image.stack), stack, "{asked}");
+    }
 }
 
 #[test]
@@ -216,21 +359,40 @@ fn a_task_slot_kept_across_a_shrink_reads_as_empty() {
 }
 
 #[test]
+fn absolute_pointer_events_carry_horizontal_steps() {
+    // 211-KRN-0150: across steps from -8 to 7 in an absolute event, the rest unchanged; an older event reads 0.
+    use abi::*;
+    for across in -8..=7 {
+        let event = pointer_absolute_scroll(POINTER_LEFT, 4095, 17, -3, across);
+        assert_eq!((pointer_absolute_fields(event), pointer_across(event)), (Some((POINTER_LEFT, 4095, 17, -3)), across));
+    }
+    assert_eq!(pointer_absolute_scroll(0, 1, 2, 0, 99), pointer_absolute_scroll(0, 1, 2, 0, 7), "clamped");
+    let older = pointer_absolute(POINTER_RIGHT, 100, 200, 5);
+    assert_eq!((pointer_across(older), event_byte(older)), (0, 0));
+    assert_eq!(pointer_across(pointer_scroll(0, 1, 1, 0, -4)), -4, "a relative event as before");
+}
+
+#[test]
 fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
     // 211-KRN-0058: SLOT_SHELL and SLOT_CLIPBOARD below SLOT_DYNAMIC, each named slot once, the loader's own kept.
     use abi::*;
     let named = [SLOT_INIT, SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE,
         SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_AUTHORITY, SLOT_KEYBOARD, SLOT_DISPLAY, SLOT_NET, SLOT_SOCKET,
         SLOT_NETWORK, SLOT_NETPOLICY, SLOT_TLS, SLOT_WINDOWS, SLOT_WINDOW_MANAGER, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE,
-        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY];
+        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS];
     let mut seen = std::collections::BTreeSet::new();
     for slot in named {
         assert!((1..SLOT_DYNAMIC).contains(&slot), "slot {} is not a fixed one", slot);
         assert!(seen.insert(slot), "slot {} is named twice", slot);
     }
     assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
-    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_DYNAMIC, ABI_VERSION), (30, 31, 32, 33, 8));
-    for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
+    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS, SLOT_DYNAMIC, ABI_VERSION),
+        (30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 21));
+    for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY, SLOT_WIFI, SLOT_NET, SLOT_SSH] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_UPDATE), "the updater's client is the shell's alone");
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_MODE), "the mode client is the shell's alone");
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_COMMANDS), "the shell's own command endpoint is no program's");
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_APPS), "the gateway's scope of data/apps/ is no program's (750-KRN-0169)");
     for slot in [SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS] { assert!(!LAUNCH_SLOTS.contains(&slot), "{} stays the loader's", slot); }
     assert!(LAUNCH_SLOTS.iter().all(|&slot| slot < SLOT_DYNAMIC));
     assert!(CAP_SLOTS - SLOT_DYNAMIC >= 64, "dynamic slots left in the initial capability space");

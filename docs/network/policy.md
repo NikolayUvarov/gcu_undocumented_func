@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.3 (2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.4 (2026-10-21: a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 
@@ -26,7 +26,7 @@ One line per rule, `#` starts a comment:
 - **A term** is 0 to 4294967295 seconds (about 136 years). It runs from the moment the broker makes the grant, on the stack's monotonic clock, and nothing renews it. A term of 0 gives a grant that has already ended.
 - **A volume** is 0 to 18446744073709551615 bytes (2^64 − 1). It counts every byte the grant's sockets send and receive together, payload only, over the grant's life.
 - **When either runs out,** the stack closes the grant's sockets and refuses its requests (`[NETSTACK] GRANT n ENDED, k SOCKETS CLOSED`), and the broker removes the grant (`[NETPOLICY] EXPIRED …`).
-- **A long-running service** (a client of one server for as long as the machine runs) gets its own line with a long term and a large volume, for example `effector 203.0.113.7 tcp 443 4294967295 1099511627776`. Its grant then lasts as long as the line says, or until its process ends, `netrevoke` ends it, or `netstack` or the system restarts.
+- **A long-running service** (a client of one server for as long as the machine runs) gets its own line with a long term and a large volume, for example `effector 203.0.113.7 tcp 443 4294967295 1099511627776`. Its grant then lasts as long as the line says, or until `netrevoke` ends it, or `netstack` or the system restarts. A program the shell starts loses its grant when its process ends; a boot service `init` starts keeps the same grant across its restarts, as `init` keeps its plan, so a restart renews neither its term nor its volume. With two lines for one program, the smaller volume is the budget of both (EFF's restarted session, 2026-10-22).
 - **What a grant reports** of its term (`netgrants`, `idl/netpolicy.wit` `left-ms`, `idl/socket.wit` `policy-usage`) is in milliseconds as a u32, so a term longer than 49.7 days shows as 4294967 s left until it comes within that.
 
 ### The default card
@@ -47,7 +47,9 @@ netpolicy remove <line>        # asks, then removes every equal line
 ```
 
 - **The shell asks first.** It prints `ADD THE NETWORK POLICY LINE "…"? (Y/N)` and waits for a key on the keyboard or the serial line, which programs cannot type into. With no answer in a minute, or `N`, nothing changes. A script that runs `netpolicy add` gets the same question.
-- **Only the shell holds a client of the broker.** `init` lends it to the shell only, and the shell never lends it to a program. `idl/netpolicy.wit` 1.1 adds `lines`, `add` and `remove` to it.
+- **Only a client with no badge may change the policy** or revoke a grant (`idl/netpolicy.wit` 1.1 adds `lines`, `add` and `remove`). `init` lends that client to the shell, which asks first and never lends it to a program.
+- **A launcher's client may only launch** (`idl/netpolicy.wit` 1.2, `mind::network::BADGE_LAUNCH`, 800-NET-0038). It asks for grants for the programs it starts and reads the lines and the grants. `add`, `remove` and `revoke` are refused (`denied`) and logged: `[NETPOLICY] ADD REFUSED FOR PID n: A LAUNCH-ONLY CLIENT`. So is a client with any other badge. A grant it asks for is logged with `, ASKED BY A LAUNCH-ONLY CLIENT`.
+- **`link` in its developer mode** is to hold such a client, as it has no user to ask (800-KRN-0139). Until `init` mints it with the badge (800-KRN-0142), `link` holds the shell's kind.
 - **The broker checks every line.** It refuses a line it does not understand (`Invalid`), and a comment in an added line.
 - **A change is stored whole.** It is written beside the old file, which is then replaced. A cut between the two leaves the new text in `netpolicy.new`, which the broker reads in that case.
 - **Every change is logged:** `[NETPOLICY] POLICY CHANGED BY PID n: ADDED …`, or `REMOVED … (k LINES)`. So is a refused one: `CHANGE REFUSED FOR PID n: NOT A POLICY LINE: …`.

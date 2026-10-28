@@ -35,6 +35,14 @@ fn ps2_extended_navigation_keys_and_fake_shifts() {
 }
 
 #[test]
+fn ps2_print_screen_through_its_fake_shift() {
+    // 000-KRN-0149: E0 2A E0 37 is PrintScreen; its release E0 B7 E0 AA and the fake shift say nothing.
+    let (events, decoder) = ps2(&[0xE0, 0x2A, 0xE0, 0x37, 0xE0, 0xB7, 0xE0, 0xAA]);
+    assert_eq!(events, vec![key(KEY_PRINT_SCREEN, 0)]);
+    assert_eq!(decoder.mods(), 0, "no shift is left held");
+}
+
+#[test]
 fn ps2_function_keys_specials_and_modifiers() {
     let (events, _) = ps2(&[0x3B, 0x44, 0x57, 0x58, 0x01, 0x0E, 0x0F, 0x1C, 0x1D, 0xE0, 0x4D, 0x9D, 0x38, 0x3D, 0xB8, 0xE0, 0x1D, 0x2E, 0xE0, 0x9D]);
     assert_eq!(events, vec![key(KEY_F1, 0), key(KEY_F1 + 9, 0), key((KEY_F1 + 10), 0), key((KEY_F1 + 11), 0),

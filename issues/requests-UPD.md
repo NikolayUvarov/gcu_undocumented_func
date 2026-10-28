@@ -1,49 +1,29 @@
-# Requests for the update and provenance track (UPD), not numbered yet
+# Requests for the update track (UPD), not numbered yet
 
-**Owner:** update and provenance track · **Status:** open (the updater's checks in a parser of their own became [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), 2026-10-14) · **Recorded by:** the Effector agent track (EFF), 2026-10-09
+**Owner:** update track (the kernel session) · **Status:** open (1 request waiting, 2026-10-28) · **Recorded by:** the tools track (APP), 2026-10-28
 
-The update and provenance track numbers its own tasks (`NNN-UPD-MMMM`), so requests from other tracks wait here. The track turns each into a task and removes it from this file, and the file goes when it is empty.
+The update track numbers its own tasks (`NNN-UPD-MMMM`), so requests from other tracks wait here. The update track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
-## A client of `updater` for the Effector gateway (750)
+## The updater refuses every call that lends a buffer: `check`, `status`, `metadata` (for 351-APP-0029)
 
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
+Recorded by the tools track (APP), 2026-10-28, from the `update` suite on x86 (QEMU, TCG, 4 CPUs) with the shell's `update` command of [351-APP-0029](351-APP-0029-update-in-the-shell.md) (on `claude/wizardly-franklin-kec1a9`, c56a11ef).
 
-### Problem
+- **What happens.** After the trial boot is confirmed, the shell's `update` (which calls `status`) gets an error from `wire::call_buffer`, and prints `UPDATE: THE UPDATER DOES NOT ANSWER`. The calls without a buffer (`fetch`, `apply`, `rollback`) were not reached.
+- **Why, as read from the code.**
+  - `updater/src/main.rs` line 556 receives with `Endpoint::SERVICE.recv_timeout(0, wait)` and decodes with `api::decode(&request, 0)`. No capability slot is given, so a lent buffer is never received.
+  - `wire::take_buffer` then refuses the call (`!request.cap_received` gives `Reject::Invalid`). `check`, `status` and `metadata` lend a buffer (`idl/update.wit`: they return records), so all three are refused.
+  - `tls`, `init` and `netpolicy` receive into a fixed slot, `RECEIVED` (9), and decode with it.
+  - Nothing called the updater before: `docs/update/updater.md`, "Not provided yet", says no program holds its client, and its suites drive it only through the automatic policy.
+- **What is asked.** Receive into a fixed free slot and decode with it, as those services do:
 
-The Effector server asks an agent to update itself. On MIND Core that can only mean a system update through `updater` (351): the agent is part of the signed image. The gateway `effector_gw` needs to ask for it, and it must not be able to change what is installed by any other path (MC-8.5, MC-7.5).
+  ```rust
+  const RECEIVED: usize = 9; // the buffer of an idl/update.wit call (or another slot free in the updater)
+  let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };
+  let _ = match api::decode(&request, RECEIVED) {
+  ```
 
-### Plan (a proposal; the update track decides)
-
-- `idl/update.wit` 1.0 (351-UPD-0007, done) gets a client badge for the gateway that may call `check`, `fetch` and `status`, and `apply` and `rollback` only if `init`'s arm allows them; `init`'s part is a kernel task.
-- The badge cannot change the channel, the trusted keys or the minimum version. Those stay with the owner's configuration and the shell's `update` command.
-- `status` gives the versions of the running, staged, trial and last-known-good releases, and the last error, in a form the gateway can report.
-
-### Acceptance criteria
-
-In the `updater` suite, a client with the gateway's badge checks, fetches and stages a test release. It is refused when it tries to change the channel. Without `apply` in its arm it cannot activate the release.
-
-## Signed application packages: format, key role, verification (750)
-
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
-
-### Problem
-
-The Effector server installs software by sending a package. MIND Core signs its system image, but it has no format for an application installed at run time, and no key role that may sign one. The loader does not verify applications (profile: "Not met"). The gateway (750-EFF-0008) must not install code on the strength of TLS alone (MC-9.2, MC-9.8).
-
-### Plan (a proposal; the update track decides)
-
-- **The package manifest:**
-  - the format of `MANIFEST` (file, SHA-256, `.mind_request`) for one application, with name and version;
-  - an Ed25519 signature, as `MANIFEST.SIG`.
-- **The key role.** "Application package" as a key role in 351-UPD-0009:
-  - separate from the release key;
-  - which keys the owner trusts is a line of the gateway's policy.
-- **Tooling and checks:**
-  - a host tool that builds and signs a package (beside `scripts/release.py`);
-  - a verification routine shared by the gateway and the loader.
-- **The loader's part.** The loader checks an installed application against its recorded manifest before running it. That part is a kernel task (requests-KRN, when this format exists).
-
-### Acceptance criteria
-
-- The host tool signs a test package, and the routine accepts it.
-- The routine refuses a package with a changed file, a wrong key or a lower version than one already installed, in host tests.
+- **What then shows it.** The `update` suite's checks of 351-APP-0029, which the tools track adds back with the command once this is in `main`:
+  - `update` (`status` and `metadata`) before and after the trial;
+  - `update check`'s refusal;
+  - a declined `rollback` and `apply`.
+- **Why it matters.** It is the first client of the updater on the platform, and `metadata` (351-UPD-0025) has never run through `idl/update.wit`. 351-APP-0029 waits for this request.

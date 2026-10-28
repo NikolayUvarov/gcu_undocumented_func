@@ -1,0 +1,57 @@
+# 800-LNK-0001 — The link protocol: framed, checked, master and slave, for half-duplex lines — done
+
+**Type:** protocol and library · **Owner:** `LNK` · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** [800](../issues/800-mind-link.md) · **Constitution:** MC-2.4, MC-11.4, MC-12.1
+
+## Problem
+
+The link's ends must agree on one protocol over any byte stream: an RS-485 line, a CDC-ACM port, a vendor bulk pipe. An RS-485 line is half-duplex, so the two ends must never send at once, and noise must not corrupt a file unseen.
+
+## Plan
+
+- **`linkproto/`, a `no_std` Rust crate with no dependency.** MIND Core's end and the host tool share it. `docs/link/protocol.md` describes it in words, for a third implementation.
+- **Frames:**
+  - COBS-encoded, separated by a zero byte;
+  - a header: version 1, channel, type, sequence, acknowledgement, length;
+  - a payload of up to 1 KiB, sized down for slow lines;
+  - CRC-32C.
+
+  A bad frame is dropped and sent again. A decoder checks every length before it reads (MC-2.4).
+- **Master and slave.**
+  - The master starts every exchange. The slave answers within a deadline and never sends unasked, so a half-duplex line never has two senders.
+  - What the slave has to say (console output, log lines) waits for the master's next poll.
+  - On full-duplex transports the rule stays, for simplicity.
+- **Channels:**
+  - 0, control: hello, versions, roles, capabilities, the frame size;
+  - 1, console: bytes both ways;
+  - 2, files: put, get, list and stat, by offset, so an interrupted transfer resumes. A whole file is checked by SHA-256 at the end;
+  - 3, log: the system log as it is written;
+  - 4, input: keyboard and mouse events, for the multi-device to play.
+- **Reliability:** each frame acknowledged before the next (stop and wait), retried a bounded number of times, then the exchange fails with its reason.
+- **Host tests:** frames with noise, truncation, duplication and loss; a transfer through a lossy fake line; the decoder fuzzed like the IDL decoders (500-ASR-0001).
+
+## Acceptance criteria
+
+- **The crate's host tests pass**, including a 1 MiB file through a fake line that drops, flips and repeats bytes, with its SHA-256 checked at the end.
+- **The fuzzer** finds no panic in 100 000 inputs.
+- **`docs/link/protocol.md`** exists in English and Russian.
+
+## Related
+
+[800](../issues/800-mind-link.md), [800-LNK-0003](../issues/800-LNK-0003-the-link-service-on-mind-core.md), [800-LNK-0004](../issues/800-LNK-0004-mindlink-the-host-tool.md).
+
+## Resolution
+
+Done on 2026-10-20 on the branch `claude/LNK-link`:
+- **The crate [linkproto](../linkproto/src/lib.rs):** `no_std`, no dependency, built for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat` as well as the host. SHA-256 is libmind's own module, shared by path.
+  - `cobs`, `crc` (CRC-32C) and `frame`: the frame and a decoder that checks the version, every length and the CRC before it takes a frame, and drops an overlong run.
+  - `endpoint`: `Master` (stop and wait, bounded tries, its own echo and stale answers ignored, the first sequence number from the clock) and `Slave` (a repeated request answered again from its last answer, not carried out twice; a turn-round hook for half-duplex converters).
+  - `app`: `Client` (hello, put, get, stat, delete, list, log, console) and `FileService` over a `Files` store. Names are single components. An interrupted put resumes from what the slave holds, the master hashing that part from its own copy. The master's `max_payload` bounds every answer.
+- **How it differs from the plan:** the header carries `flags` where the plan had an acknowledgement. In stop and wait the answer, paired by `seq`, is the acknowledgement.
+- **The description:** [docs/link/protocol.md](../docs/link/protocol.md), in Russian [protocol_RU.md](../docs/link/protocol_RU.md).
+- **The host tests, [linkproto/tests/link.rs](../linkproto/tests/link.rs):** 14 tests, run by `scripts/host_tests.sh`.
+  - COBS at the block edges, the CRC-32C check value, and every single damaged byte of a frame caught.
+  - 1 MiB put and got back through a simulated line that loses 3 % of writes, repeats 2 % and changes or drops bytes, starting near the sequence numbers' wrap. SHA-256 checked, and each chunk written once on the slave.
+  - An echoing line, a dead line, an interrupted put resumed, refusals, stat and delete, a small master payload.
+  - **The fuzz:** 100 000 damaged frames through the decoder (none taken for a good one) and 100 000 random requests to the service, with no panic.
+
+These are evidence for the simulated line only (MC-12.1). A real line's evidence belongs to 800-LNK-0002, 0003 and 0004.

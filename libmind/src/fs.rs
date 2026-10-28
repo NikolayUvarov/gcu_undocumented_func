@@ -29,6 +29,9 @@ pub const BADGE_USER: u16 = 1;
 /// the directory's badge may open, read or write `system/keystore` and `system/netpolicy`; nobody else may open them.
 pub const BADGE_KEYSTORE: u16 = 2;
 pub const BADGE_NETPOLICY: u16 = 3;
+/// The Effector agent's private directories, `system/effector` and `system/effector_gw` (750-KRN-0119), on the same rule.
+pub const BADGE_EFFECTOR: u16 = 6;
+pub const BADGE_EFFECTOR_GW: u16 = 7;
 /// Badge of the updater's client (351-UPD-0008): besides reading, it may fill the slot the system did not boot from
 /// (`MIND/A` or `MIND/B`) and write the boot records `MIND/BOOT0` and `MIND/BOOT1` whole, in place; nothing else.
 pub const BADGE_UPDATE: u16 = 4;
@@ -238,6 +241,17 @@ impl File {
         Ok(done)
     }
     pub fn read(&mut self, buffer: &mut [u8]) -> Result<usize> { let got = self.read_at(self.position, buffer)?; self.position += got; Ok(got) }
+    /// Reads from `offset` into the memory object `target` (a capability with the write and grant rights) in one call, as
+    /// much as fits or as the file has; returns the bytes. vfs_server gets a copy of a child of `target` (writable, so with
+    /// the grant right: a writable child without it may only be moved), revoked once it answers (`vfs.wit` 2.4 `fill`,
+    /// 262-KRN-0162).
+    pub fn fill(&self, offset: u64, target: usize) -> Result<u64> {
+        let lent = crate::ipc::mint(target, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0)?;
+        let result = call(vfs::fill(endpoint(), self.handle, offset, lent));
+        let _ = crate::ipc::revoke(lent);
+        let _ = crate::ipc::drop_cap(lent);
+        result
+    }
     /// Writes at `offset` without changing the current position; the file grows.
     pub fn write_at(&mut self, offset: usize, data: &[u8]) -> Result<usize> {
         let mut done = 0;

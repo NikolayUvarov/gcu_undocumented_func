@@ -1,0 +1,23 @@
+{
+  "card_sha256": "f67b71c3ffe761795b9428222444bfc1ec447d45cb13b00821b7e6c1ceecf7c5",
+  "checksums": {
+    "LICENSE-CDLA-Sharing-1.0.txt": "6419d7a7245cb8a9da6e3dd925d05d824ea0268e3527095f68dec091f84f75da",
+    "SOURCE_README.md": "f67b71c3ffe761795b9428222444bfc1ec447d45cb13b00821b7e6c1ceecf7c5",
+    "adaptation.json": "39e99e17576e4009b775b7e5ceef02d59f03b41a30fb38b68cbd71c5f96ff985",
+    "corpus.json": "5c3d3b8cf520a7ce52fa91b7a147a577410f698f941ad78a61d02da8fc9c72b4",
+    "study.json": "42d80d1eb2498a173f3a5cff4c5c7d2e3b28dddb3cd9794c47c5d0b8b935577e"
+  },
+  "corpus_id": "25250ff6d3f6814d353f2d9b1ba130fce942c6bcc159e2e86f53a7dbc7aa1dfa",
+  "dataset": "https://huggingface.co/datasets/roneneldan/TinyStories",
+  "frozen_before_evaluation": true,
+  "licence": "CDLA-Sharing-1.0",
+  "licence_text_sha256": "6419d7a7245cb8a9da6e3dd925d05d824ea0268e3527095f68dec091f84f75da",
+  "licence_text_source": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/CDLA-Sharing-1.0.txt",
+  "licence_url": "https://cdla.dev/sharing-1-0/",
+  "revision": "f54c09fd23315a6f9c86f9dc80f725de7d8f9c64",
+  "schema": "nrl.expanded-data-source/0",
+  "selection": "SHA-256 order, 48 distinct normalized prefixes, 384 source UTF-8 bytes at character boundaries, 24/12/12 split",
+  "source_bytes": 19447282,
+  "source_file": "TinyStories-valid.txt",
+  "source_sha256": "94e431816c4cce81ff71e4408ff8d3bda9a42e8d2663986697c3954288cb38b4"
+}

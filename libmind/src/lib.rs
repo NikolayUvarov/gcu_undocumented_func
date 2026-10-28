@@ -20,7 +20,10 @@ pub mod cid;
 pub mod control;
 pub mod dag;
 pub mod debug;
+pub mod deadline;
 pub mod dev;
+pub mod display;
+pub mod effector;
 pub mod fs;
 pub mod firmware;
 pub mod gfx;
@@ -30,6 +33,7 @@ pub mod hid;
 pub mod http;
 pub mod idl;
 pub mod input;
+pub mod io;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;
@@ -70,6 +74,8 @@ pub mod jpeg;
 pub mod jpegdec;
 #[cfg(feature = "alloc")]
 pub mod inflate;
+#[cfg(feature = "alloc")]
+pub mod zip;
 #[cfg(feature = "alloc")]
 pub mod png;
 #[cfg(feature = "alloc")]

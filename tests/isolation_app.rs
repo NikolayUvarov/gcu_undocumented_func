@@ -63,8 +63,11 @@ unsafe fn child(mb: *mut SyscallMailbox) {
             if got_cap != 1 || address >= abi::ERR_FIRST { fail(); }
             let value = core::ptr::read_volatile(address as *const usize);
             if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, if mode == 3 { value } else { 6 }, 0]) != 0 { fail(); }
-            // Mode 5 keeps reading a lease until the owner revokes it (a page fault ends the task).
-            if mode == 5 { loop { core::ptr::read_volatile(address as *const usize); } }
+            // Mode 5 keeps reading a lease until the owner revokes it, then reads zeros of its own (000-KRN-0152) and says so.
+            if mode == 5 {
+                while core::ptr::read_volatile(address as *const usize) != 0 {}
+                if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 9, 0]) != 0 { fail(); }
+            }
         }
         6 => {}
         // Whether a capability came with the reply (a refused move delivers none).
@@ -74,6 +77,21 @@ unsafe fn child(mb: *mut SyscallMailbox) {
         8 => {
             let refused = ipc(mb, abi::SYSCALL_CAP_MINT, abi::SLOT_INIT, abi::CAP_WRITE as usize, [0, 0, 0x44, 0]) == abi::ERR_INVALID;
             if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, if refused { 8 } else { 9 }, 0]) != 0 { fail(); }
+        }
+        // Mode 20 (000-KRN-0104): mints from the endpoint it got, dropping each, until its owner's revocation removes it;
+        // then sends how many it made and how many were refused while the revocation ran.
+        20 => {
+            if got_cap != 1 || ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 6, 0]) != 0 { fail(); }
+            let (mut made, mut refused) = (0usize, 0usize);
+            loop {
+                (*mb).msg = [0; 4];
+                match call(mb, abi::SYSCALL_CAP_MINT, 2, abi::CAP_WRITE as usize) {
+                    abi::ERR_REVOKING => refused += 1,
+                    error if error >= abi::ERR_FIRST => break,
+                    copy => { made += 1; call(mb, abi::SYSCALL_CAP_DROP, copy, 0); }
+                }
+            }
+            if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 10, made << 32 | refused]) != 0 { fail(); }
         }
         _ => fail(),
     }
@@ -85,6 +103,12 @@ unsafe fn greet(mb: *mut SyscallMailbox, endpoint: usize, mode: usize, cap: usiz
 }
 unsafe fn print(mb: *mut SyscallMailbox, message: &[u8]) {
     call(mb, 3, message.as_ptr() as usize, message.len());
+}
+// `value` in decimal.
+unsafe fn print_number(mb: *mut SyscallMailbox, mut value: usize) {
+    let (mut digits, mut at) = ([0u8; 20], 20);
+    loop { at -= 1; digits[at] = b'0' + (value % 10) as u8; value /= 10; if value == 0 { break; } }
+    print(mb, &digits[at..]);
 }
 
 // The request note `mind::request!` writes: a block store client that may only get (REQUEST_BLOCKSTORE_READ, 300-KRN-0024)
@@ -148,27 +172,39 @@ pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 let _ = core::ptr::read_volatile(block as *const u64);
             }
             b'l' => {
-                // A lease whose capability was dropped after mapping still ends when the owner revokes.
+                // A lease whose capability was dropped after mapping still ends when the owner revokes: zeros of its own.
                 let mint = |handle: usize, mask: u8| { (*mb).msg = [0; 4]; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
-                let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
+                let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                let memory = call(mb, abi::SYSCALL_MEM_SHARE, block, 0);
                 let lease = mint(memory, abi::CAP_READ | abi::CAP_WRITE);
                 let address = call(mb, abi::SYSCALL_MEM_MAP, lease, 0);
                 core::ptr::write_volatile(address as *mut u64, 42);
                 call(mb, abi::SYSCALL_CAP_DROP, lease, 0);
                 call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0);
-                let _ = core::ptr::read_volatile(address as *const u64);
+                if core::ptr::read_volatile(address as *const u64) != 0 || core::ptr::read_volatile(block as *const u64) != 42 { asm!("ud2", options(noreturn)); }
+                print(mb, b"DROPPED LEASE REVOKED: ZEROS OF ITS OWN\r\n");
+                return;
             }
             b'm' | b'v' => {
-                // 'm': a read-only mint maps read-only, so a write faults. 'v': revoking a lease unmaps it, so a read faults.
+                // 'm': a read-only mint maps read-only, so a write faults. 'v': a revoked lease leaves one zeroed page of the
+                // task's own in its place (000-KRN-0152): reads give zeros, writes land there, the owner's page keeps its data.
                 let mint = |handle: usize, mask: u8| { (*mb).msg = [0; 4]; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
-                let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
+                let block = call(mb, abi::SYSCALL_ALLOC, 8192, 0);
+                let memory = call(mb, abi::SYSCALL_MEM_SHARE, block, 0);
                 let lease = mint(memory, if mode == b'm' { abi::CAP_READ } else { abi::CAP_READ | abi::CAP_WRITE });
                 let address = call(mb, abi::SYSCALL_MEM_MAP, lease, 0);
                 let _ = core::ptr::read_volatile(address as *const u64);
                 if mode == b'm' { core::ptr::write_volatile(address as *mut u64, 42); }
                 core::ptr::write_volatile(address as *mut u64, 42);
                 if call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0) != 1 { asm!("ud2", options(noreturn)); }
-                let _ = core::ptr::read_volatile(address as *const u64);
+                let (first, second) = (address as *mut u64, (address + 4096) as *mut u64);
+                if core::ptr::read_volatile(first) != 0 || core::ptr::read_volatile(second) != 0 { asm!("ud2", options(noreturn)); }
+                core::ptr::write_volatile(second, 9);
+                if core::ptr::read_volatile(first) != 9 || core::ptr::read_volatile(block as *const u64) != 42 { asm!("ud2", options(noreturn)); }
+                core::ptr::write_volatile(block as *mut u64, 43);
+                if core::ptr::read_volatile(first) != 9 { asm!("ud2", options(noreturn)); }
+                print(mb, b"REVOKED LEASE: ZEROS OF ITS OWN, THE OWNER'S PAGE UNCHANGED\r\n");
+                return;
             }
             b'w' => {
                 core::ptr::write_volatile(0x100000 as *mut u64, 42);
@@ -531,17 +567,44 @@ pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 print(mb, b"REVOKE PENDING OK\r\n");
                 return;
             }
+            b'R' => {
+                // 000-KRN-0104: a child mints from its copy of an endpoint while the owner revokes the endpoint's 3001
+                // children. The walk goes in steps with the lock let go between them; a mint the child makes meanwhile
+                // is refused with ERR_REVOKING, and once its copy is gone a mint finds nothing.
+                let root = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 20, root, abi::CAP_WRITE as usize); // the root's first child: the walk removes it last
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 6 { fail(); }
+                for _ in 0..3000 {
+                    (*mb).msg = [0; 4];
+                    if call(mb, abi::SYSCALL_CAP_MINT, root, abi::CAP_WRITE as usize) >= abi::ERR_FIRST { fail(); }
+                }
+                // 3002 when the walk began while the child held a copy it had just made and not yet dropped.
+                let removed = call(mb, abi::SYSCALL_CAP_REVOKE, root, 0);
+                if removed >= abi::ERR_FIRST { fail(); }
+                let steps = (*mb).arg2;
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 10 { fail(); }
+                let (made, refused) = ((*mb).msg[3] >> 32, (*mb).msg[3] & 0xFFFF_FFFF);
+                print(mb, b"REVOKED "); print_number(mb, removed); print(mb, b" IN "); print_number(mb, steps); print(mb, b" STEPS; THE CHILD MADE ");
+                print_number(mb, made); print(mb, b" MINTS AND WAS REFUSED "); print_number(mb, refused); print(mb, b" WHILE THE WALK RAN\r\n");
+                return;
+            }
             b'x' => {
-                // A lease mapped by a child that keeps reading it ends at revoke: the child faults.
-                let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
+                // A lease mapped by a child that keeps reading it ends at revoke: the child reads zeros of its own, never the
+                // owner's page, and goes on (000-KRN-0152).
+                let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                core::ptr::write_volatile(block as *mut usize, 0x5A5A);
+                let memory = call(mb, abi::SYSCALL_MEM_SHARE, block, 0);
                 let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
                 spawn_child(mb, endpoint);
                 greet(mb, endpoint, 5, memory, 0);
                 if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 6 { fail(); }
                 sleep(mb, 100);
                 if call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0) != 1 { fail(); }
-                sleep(mb, 300);
-                print(mb, b"LEASE REVOKED\r\n");
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 9 { fail(); }
+                if core::ptr::read_volatile(block as *const usize) != 0x5A5A { fail(); }
+                print(mb, b"LEASE REVOKED: THE CHILD READS ZEROS OF ITS OWN\r\n");
                 return;
             }
             _ => {

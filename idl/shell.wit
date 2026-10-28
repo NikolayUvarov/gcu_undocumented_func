@@ -2,12 +2,13 @@
 /// authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
 /// (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
 /// asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3).
-package mind:shell@1.4.0;
+package mind:shell@1.9.0;
 
 interface shell {
     /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
     /// take from a client; the user said no in the shell's window, or did not answer; its window's session is busy
-    /// with a program; (1.2) a time the clock does not take.
+    /// with a program; (1.2) a time the clock does not take; (1.5) `refused` too for the station's client asked by any
+    /// client but the window manager the shell started.
     enum error { unavailable, no-memory, refused, declined, busy, invalid }
     /// Opens the shell's own window, as Ctrl+Alt+F5 does, unless it is open; answers its id in the window broker, for
     /// the manager to bring it to the front.
@@ -18,8 +19,8 @@ interface shell {
     /// be, after the user agrees there (shell/src/clients.rs). The shell's screen commands, scripts and programs are
     /// refused.
     run: func(line: string<240>) -> result<bytes<7000>, error>;
-    /// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, without a time zone, as `date set`
-    /// does (1.2, 000-APP-0055: wm's Settings). For the window manager the shell started, at once: setting it in its
+    /// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, as `date set` does (1.2,
+    /// 000-APP-0055: wm's Settings): local time, in the zone the clocks show (1.9, 000-APP-0099; the RTC keeps UTC). For the window manager the shell started, at once: setting it in its
     /// Settings is the user's choice (1.3, 000-APP-0060). For any other client, once the user agrees in the shell's
     /// window; a word call, so such a caller may stop waiting while the shell asks (`mind::idl::wire::with_timeout`).
     set-clock: func(date: u32, seconds: u32) -> result<_, error>;
@@ -27,4 +28,27 @@ interface shell {
     /// (1.4, 211-APP-0070): for a window manager whose launch had no room left for it (`REQUEST_BATTERY`); a word call,
     /// so it can carry the capability. `unavailable`: the shell holds none (no battery service).
     battery: func() -> result<borrow<endpoint>, error>;
+    /// A copy of the shell's client of the Wi-Fi station (`idl/wifi.wit`, with the change badge: it scans, joins, leaves
+    /// and forgets networks) (1.5, 550-APP-0033): for the window manager the shell started with its commands, whose
+    /// Settings start `wifi`; starting it there is the user's request to choose a network. `refused` for any other
+    /// client; `unavailable`: the shell holds none (no radio, so no station). A word call, so it can carry the capability.
+    wifi: func() -> result<borrow<endpoint>, error>;
+    /// How the boot went (1.6, 000-APP-0086): after a safe start, the notice the shell shows above its first prompt,
+    /// with the services the start left out and `svc start` for each; empty after a normal boot. For any client.
+    boot-notice: func() -> result<string<240>, error>;
+    /// One card as the network stack counts its frames (1.7, 000-APP-0096): its index, whether it is the Wi-Fi station
+    /// and the default card, and its frames sent and received since the stack started.
+    record card-counters { card: u8, wireless: bool, default: bool, sent: u64, received: u64 }
+    /// Every card's frames, the Wi-Fi station's too (1.7, 000-APP-0096): for the window manager the shell started, whose
+    /// `show = net` line gives the frames a second. It reads only and reaches nothing on the network. `refused` for any
+    /// other client; `unavailable`: no network stack.
+    net-counters: func() -> result<list<card-counters, 4>, error>;
+    /// Opens another window of the shell beside those open, each a session of its own (1.8, 000-APP-0097: a second
+    /// shell from the window manager's menu), and answers its id, as `window` does for the first. `busy` with 32 open;
+    /// `no-memory` or `unavailable` sooner when the shell's memory or the window broker has no room.
+    new-window: func() -> result<u32, error>;
+    /// Sets the time zone every clock shows, as `date zone` does, and keeps it in `data/clock.conf` (1.9, 000-APP-0099):
+    /// `minutes` east of UTC, or west with `west`, up to UTC-12:00 and UTC+14:00 (`invalid` beyond). For the window
+    /// manager the shell started, at once, as the clock; for any other client, once the user agrees in the shell's window.
+    set-zone: func(west: bool, minutes: u32) -> result<_, error>;
 }

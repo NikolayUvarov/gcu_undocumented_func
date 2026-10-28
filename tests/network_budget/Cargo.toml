@@ -1,0 +1,11 @@
+[package]
+name = "network-budget-tests"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "../network_budget_host.rs"
+
+[dependencies]
+smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-udp"] }

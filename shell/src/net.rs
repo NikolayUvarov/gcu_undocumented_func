@@ -104,28 +104,104 @@ pub fn ip(out: &mut impl Write, args: &[u8]) {
         Ok(Err(error)) => failed(out, "IP", error),
         Err(_) => { stack_failed(out); return }
     }
-    // Every card (issue 105): its address and the frames it carried.
-    if let Ok(Ok(interfaces)) = socket::interfaces(STACK) {
-        for i in interfaces.as_slice() {
-            let _ = write!(out, "CARD {} MAC ", i.card); mac(out, &i.mac.to_be_bytes()[2..]);
-            let _ = write!(out, " IP "); dotted(out, i.address); let _ = write!(out, "/{} GATEWAY ", i.prefix); dotted(out, i.gateway);
-            let _ = writeln!(out, " SENT={} RECEIVED={}", i.sent, i.received);
-        }
+    // Every card (issue 105): its address and the frames it carried, then its kind and whether it is the preferred and
+    // the default one (socket.wit 2.5, 550-APP-0085); a card the stack has a slot for but no driver yet, by its kind.
+    let cards = match socket::cards(STACK) { Ok(Ok(cards)) => cards, _ => Default::default() };
+    let interfaces = match socket::interfaces(STACK) { Ok(Ok(interfaces)) => interfaces, _ => Default::default() };
+    for i in interfaces.as_slice() {
+        let _ = write!(out, "CARD {} MAC ", i.card); mac(out, &i.mac.to_be_bytes()[2..]);
+        let _ = write!(out, " IP "); dotted(out, i.address); let _ = write!(out, "/{} GATEWAY ", i.prefix); dotted(out, i.gateway);
+        let _ = write!(out, " SENT={} RECEIVED={}", i.sent, i.received);
+        if let Some(card) = cards.as_slice().iter().find(|c| c.card == i.card) { state(out, card); }
+        let _ = writeln!(out);
+    }
+    for card in cards.as_slice().iter().filter(|c| !interfaces.as_slice().iter().any(|i| i.card == c.card)) {
+        let _ = write!(out, "CARD {}", card.card); state(out, card);
+        let _ = writeln!(out, "{}", if card.present { "" } else { " NOT THERE" });
     }
 }
 
-pub fn ping(out: &mut impl Write, args: &[u8]) {
-    let Some(host) = core::str::from_utf8(args).ok().and_then(|t| t.split_whitespace().next()) else { let _ = writeln!(out, "PING <HOST>"); return };
-    let Some(target) = address(out, host) else { return };
-    let mut received = 0;
-    for _ in 0..3 {
-        match socket::ping(STACK, target, 1000) {
-            Ok(Ok(us)) => { received += 1; let _ = write!(out, "REPLY FROM "); dotted(out, target); let _ = writeln!(out, ": TIME={} US", us); }
-            Ok(Err(error)) => failed(out, "PING", error),
+/// Every card's frames as the stack counts them, the Wi-Fi station's too, the default card marked (shell.wit 1.7,
+/// 000-APP-0096).
+pub fn card_counters() -> Result<mind::idl::codec::List<mind::idl::shell::CardCounters, 4>, mind::idl::shell::Error> {
+    let Ok(Ok(interfaces)) = socket::interfaces(STACK) else { return Err(mind::idl::shell::Error::Unavailable) };
+    let cards = match socket::cards(STACK) { Ok(Ok(cards)) => cards, _ => Default::default() };
+    // An empty answer once in the log, with the cards the stack knows, for a machine whose wm says NET: NO CARD.
+    static EMPTY_LOGGED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if interfaces.as_slice().is_empty() && !EMPTY_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        mind::println!("[SHELL] NET-COUNTERS: THE STACK LISTS NO INTERFACE ({} CARDS, {} UP)", cards.as_slice().len(), cards.as_slice().iter().filter(|c| c.up).count());
+    }
+    let mut list = mind::idl::codec::List::default();
+    for i in interfaces.as_slice() {
+        let card = cards.as_slice().iter().find(|c| c.card == i.card);
+        list.push(mind::idl::shell::CardCounters { card: i.card, wireless: card.is_some_and(|c| c.kind == socket::CardKind::Wireless),
+                                                    default: card.is_some_and(|c| c.default), sent: i.sent, received: i.received });
+    }
+    Ok(list)
+}
+
+// A card's kind, then DOWN, PREFERRED and DEFAULT where they apply.
+fn state(out: &mut impl Write, card: &socket::Card) {
+    let _ = write!(out, " {}", match card.kind { socket::CardKind::Wired => "WIRED", socket::CardKind::Wireless => "WI-FI" });
+    for (on, word) in [(card.present && !card.up, " DOWN"), (card.preferred, " PREFERRED"), (card.default, " DEFAULT")] {
+        if on { let _ = write!(out, "{}", word); }
+    }
+}
+
+// `ping [-c count] [-i seconds] [-w seconds] [-f] [-s bytes] [-p hex] host` (000-APP-0095): each line on the screen as
+// it comes, Esc or Ctrl+C stopping it, then the tally. `-s` and `-p` go through `ping-with` (socket.wit 2.6), whose answer
+// says the reply's size and whether its data are what was sent. A request the policy or the stack refuses for good ends it.
+pub fn ping(shell: &mut crate::Shell, args: &[u8]) {
+    let asked = match crate::ping::parse(core::str::from_utf8(args).unwrap_or("")) { Ok(asked) => asked, Err(usage) => { let _ = writeln!(shell.term, "{}", usage); return } };
+    let Some(target) = address(&mut shell.term, asked.host) else { return };
+    let (mut tally, mut dots, mut stopped) = (crate::ping::Tally::default(), false, false);
+    while asked.count == 0 || tally.sent < asked.count {
+        let started = mind::time::uptime_ms() as u64;
+        let out = &mut shell.term;
+        // The round trip, and with -s or -p the reply's data bytes and whether they are what was sent.
+        let echo = match asked.size {
+            Some(size) => socket::ping_with(STACK, target, asked.wait_ms, size, asked.pattern()).map(|r| r.map(|e| (e.time_us, Some((e.size, e.matched))))),
+            None => socket::ping(STACK, target, asked.wait_ms).map(|r| r.map(|us| (us, None))),
+        };
+        match echo {
+            Ok(Ok((us, data))) => {
+                tally.reply(us);
+                if let Some((_, false)) = data { tally.bad_data(); }
+                if !asked.fast {
+                    crate::ping::place(out, tally.sent, asked.count);
+                    let _ = write!(out, "REPLY FROM "); dotted(out, target);
+                    match data {
+                        Some((bytes, matched)) => { let _ = writeln!(out, ": {} BYTES, TIME={} US{}", bytes, us, if matched { "" } else { ", BAD DATA" }); }
+                        None => { let _ = writeln!(out, ": TIME={} US", us); }
+                    }
+                }
+            }
+            Ok(Err(Error::Timeout)) if asked.fast => { tally.lost(); dots = true; let _ = write!(out, "."); }
+            Ok(Err(error)) => {
+                tally.lost();
+                if core::mem::take(&mut dots) { let _ = writeln!(out); }
+                crate::ping::place(out, tally.sent, asked.count);
+                failed(out, "PING", error);
+                if matches!(error, Error::Denied | Error::Invalid) { break; }
+            }
+            // A stack older than socket.wit 2.6 rejects the call it does not know.
+            Err(mind::sys::Error::Invalid) if asked.sized() => { let _ = writeln!(out, "PING: THIS NETWORK STACK SENDS NO -S OR -P (IT IS OLDER THAN SOCKET.WIT 2.6)"); return; }
             Err(_) => { stack_failed(out); return; }
         }
+        // The wait for the next request, the screen kept up to date and Esc watched meanwhile.
+        let next = started + asked.interval_ms as u64;
+        loop {
+            shell.term.render(None);
+            if crate::msh::interrupted(shell) { stopped = true; break; }
+            let now = mind::time::uptime_ms() as u64;
+            if now >= next || asked.count != 0 && tally.sent >= asked.count { break; }
+            let _ = mind::time::sleep((next - now).min(10) as usize);
+        }
+        if stopped { break; }
     }
-    let _ = writeln!(out, "PING: 3 SENT, {} RECEIVED", received);
+    if dots { let _ = writeln!(shell.term); }
+    if stopped { let _ = writeln!(shell.term, "^C"); }
+    tally.line(&mut shell.term, stopped);
 }
 
 pub fn nslookup(out: &mut impl Write, args: &[u8]) {
@@ -220,6 +296,41 @@ pub fn grants(out: &mut impl Write) {
         Ok(list) => for g in list.as_slice() { let _ = writeln!(out, "GRANT {} {} RULES={} LEFT={} S USED={} BYTES", g.badge, g.program, g.rules, g.left_ms / 1000, g.used); },
         Err(_) => { let _ = writeln!(out, "NET: NO POLICY BROKER"); }
     }
+}
+
+// netstat [-i] (000-APP-0031): the stack's open sockets (socket.wit 2.4 `sockets`, every one for the operator), each
+// under the program whose grant opened it (netpolicy `list`), else its task's name; then the cards as `ip` shows them.
+// -i: the cards alone.
+pub fn netstat(out: &mut impl Write, args: &[u8]) {
+    let args = core::str::from_utf8(args).unwrap_or("").trim();
+    if !args.is_empty() && args != "-i" { let _ = writeln!(out, "NETSTAT [-I]"); return; }
+    if args.is_empty() {
+        let grants = netpolicy::list(BROKER).unwrap_or_default();
+        let (tasks, count) = crate::tasks();
+        let _ = writeln!(out, "{}", crate::netstat::HEADER);
+        let (mut start, mut shown) = (0u32, 0usize);
+        loop {
+            let page = match socket::sockets(STACK, start) {
+                Ok(Ok(page)) => page,
+                Ok(Err(error)) => { failed(out, "NETSTAT", error); return }
+                Err(_) => { stack_failed(out); return }
+            };
+            for s in page.as_slice() {
+                let grant = grants.as_slice().iter().find(|g| g.badge == s.badge).map(|g| g.program.as_str());
+                let task = tasks[..count].iter().find(|t| t.pid == s.pid).map(|t| crate::label(&t.name));
+                let program = grant.or(task).unwrap_or(if s.badge == mind::network::BADGE_OPERATOR { "shell" } else { "?" });
+                let protocol = match s.protocol { socket::Protocol::Tcp => "TCP", socket::Protocol::Udp => "UDP", socket::Protocol::Icmp => "ICMP" };
+                let row = crate::netstat::Row { protocol, local_port: s.local_port, remote: Some((s.remote_address, s.remote_port)), state: crate::netstat::state(s.state as usize),
+                                                sent: s.sent, received: s.received, program, pid: s.pid };
+                let _ = writeln!(out, "{}", crate::netstat::line(&row));
+            }
+            shown += page.len();
+            if page.len() < 32 { break; }
+            start += 32;
+        }
+        let _ = writeln!(out, "{} SOCKET(S)", shown);
+    }
+    ip(out, b"");
 }
 
 pub fn revoke(out: &mut impl Write, args: &[u8]) {

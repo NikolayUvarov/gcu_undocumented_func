@@ -1,0 +1,35 @@
+# 900-NRL-0001 — Inventory and reproduce the reference, and prepare differential tensors — done
+
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-25) · **Blocked by:** — · **Roadmap:** G; issue 900 T00 · **Constitution:** MC-5.1, MC-5.2, MC-8.5, MC-11.2, MC-11.8, MC-12.1, MC-12.2, MC-12.3
+
+## Problem
+
+Issue [900](../issues/900-neural-representation-lab.md) needs a reproducible, narrowly scoped first Rust numerical path. This task carries T00 of the starting plan accepted by the maintainer on 2026-10-25.
+
+## Plan
+
+1. Verify every archived manifest entry and the archive SHA-256; record the licence and numerical coverage.
+2. Run the unchanged reference tests in an isolated pinned CPU environment, recording actual results and skips.
+3. Generate deterministic tensors, outputs and gradients for a small dense and linear-spline gated block; record source and data hashes.
+4. Inventory current MIND Core APIs instead of retaining superseded limits in issue 900.
+
+## Acceptance criteria
+
+- [x] The unchanged archive and internal manifest validate, and their provenance is documented.
+- [x] A repeatable command and a pinned environment reproduce a recorded test result; unavailable checks stay explicit.
+- [x] Fixtures record the reference hash, settings, inputs, outputs and gradients; a repeated generation matches.
+- [x] The current ABI, memory, worker and service boundaries are recorded with source paths.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md).
+- [262](../issues/262-model-runtime-on-the-machines-full-hardware.md), APP's model service.
+- [NRL](../docs/nrl/README.md).
+
+## Resolution
+
+- `nrl/tools/check_reference.py` verifies the archive hash and all 54 manifest payload entries, extracts to a fresh directory and records an optional test run without overwriting existing data.
+- The unchanged Python suite ran on 2026-10-25: **64 passed, zero skipped**, including the five random tiny-Qwen integration cases. The full protocol and package versions are in `nrl/reports/reference-2026-10-25.json`; there was no pretrained-model download or evaluation.
+- `nrl/tools/generate_fixtures.py` generated and then byte-checked `nrl/tests/fixtures/f64-v0.json` against verified original source. Its SHA-256 is `21853060ca335db5c7fc8366ad62e1b56cb89c93f507cfc4dfc1bb847f0f4fa0`.
+- `docs/nrl/reference-inventory.md` records repeat commands, provenance, current ABI 20 APIs, and limits. `nrl/reference/requirements-cpu.lock` pins the environment actually run; it is not a wheel hash lock.
+- This completes T00 on the NRL branch. The code and data still require the project's code landing gate; no OS, hardware or native NRL execution is claimed.

@@ -4,12 +4,12 @@
 # with the licences and the voice model as on the x86 image. The network driver is built without its legacy (port I/O)
 # interface. With --fixtures, also the fault-test service in four variants (aarch64_root/fault-<case>.elf) for
 # tests/aarch64_smoke.py, the busy fixture (aarch64_root/fixture-busy_app.elf) for the busy and smp suites and the
-# updater's stand-in (aarch64_root/fixture-updater.elf) for the updater suite.
+# updater's stand-in (aarch64_root/fixture-updater.elf) for the updater suite, and the others the suites name.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/aarch64_root"
 TARGET=aarch64-unknown-none-softfloat
-X86_ONLY=" ata ps2_kbd audio_gw bcm_wifi " # crate directories: port I/O (docs/legacy.md); bcm_wifi: no aarch64 target has the chip
+X86_ONLY=" ata ps2_kbd audio_gw bcm_wifi rtl8168 rtw89_wifi " # crate directories: port I/O (docs/legacy.md); bcm_wifi: no aarch64 target has the chip
 mapfile -t CRATES < <(sed -n '/^USER_CRATES=(/,/^)/{s/^ *"\([^"]*\)"$/\1/p}' "$ROOT/02_build.sh")
 [[ ${#CRATES[@]} -gt 20 ]] || { echo "USER_CRATES not found in 02_build.sh" >&2; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT/EFI/BOOT" "$OUT/LICENSES" "$OUT/voice" "$OUT/diag"
@@ -62,9 +62,15 @@ if [[ "${1:-}" == --fixtures ]]; then
     # The updater's stand-in for the updater suite (351-KRN-0022).
     (cd "$ROOT/tests/updater_stub" && cargo build --release --target "$TARGET")
     cp "$ROOT/tests/updater_stub/target/$TARGET/release/updater_stub" "$OUT/fixture-updater.elf"
+    # The Effector gateway's stand-in for the modes suite (750-KRN-0120, 0121).
+    (cd "$ROOT/tests/gateway_stub" && cargo build --release --target "$TARGET")
+    cp "$ROOT/tests/gateway_stub/target/$TARGET/release/gateway_stub" "$OUT/fixture-gateway.elf"
     # The stand-in radio for the station (550-NET-0018).
     (cd "$ROOT/tests/wlansim" && cargo build --release --target "$TARGET")
     cp "$ROOT/tests/wlansim/target/$TARGET/release/wlansim" "$OUT/fixture-wlansim.elf"
+    # The kernel that takes only the next handoff version, for a refused trial (351-KRN-0167).
+    (cd "$ROOT/kernel" && cargo build --release --target "$TARGET" --features loader-abi-test --target-dir "$ROOT/kernel/target/loader-abi")
+    cp "$ROOT/kernel/target/loader-abi/$TARGET/release/kernel" "$OUT/fixture-kernel-loader-abi.elf"
 fi
 # The bootloader signed for Secure Boot if $MIND_SECURE_BOOT_KEYS names the keys (351-UPD-0012), then the boot
 # manifest and its signature over everything staged (350-UPD-0002).

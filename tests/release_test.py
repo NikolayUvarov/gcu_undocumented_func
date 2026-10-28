@@ -19,13 +19,13 @@ import sign_manifest as sm  # noqa: E402
 NOW = datetime.datetime(2026, 10, 8, tzinfo=datetime.timezone.utc)
 
 
-def volume(where, kernel):
+def volume(where, kernel, version=1):
     v = Path(where)
     (v / "EFI/BOOT").mkdir(parents=True)
     (v / "EFI/BOOT/BOOTX64.EFI").write_bytes(b"MZ loader")
     (v / "kernel.elf").write_bytes(kernel)
     (v / "shell.elf").write_bytes(b"\x7fELF the same in every release")
-    sm.sign_volume(v, sm.TEST_SEED, ("c" * 40, "nightly-x", "d" * 64))
+    sm.sign_volume(v, sm.TEST_SEED, ("c" * 40, "nightly-x", "d" * 64), version=version)
     return v
 
 
@@ -40,7 +40,7 @@ class Releases(unittest.TestCase):
         self.temp.cleanup()
 
     def staged(self, version, kernel=None):
-        v = volume(self.dir / f"volume{version}", kernel or f"\x7fELF kernel {version}".encode())
+        v = volume(self.dir / f"volume{version}", kernel or f"\x7fELF kernel {version}".encode(), version)
         return release.stage(version, self.dir / f"staged{version}", {"x86_64": v})
 
     def check(self, **kw):
@@ -52,9 +52,24 @@ class Releases(unittest.TestCase):
         c = json.loads(body)
         self.assertEqual((c["version"], c["minimum"], c["expires"]), (1, 1, "2026-11-07T00:00:00Z"))
         # Files are stored once, by content: a second release adds only what changed.
-        release.publish(self.staged(2), self.dest, minimum=1, now=NOW)
+        release.publish(self.staged(2), self.dest, now=NOW)
         self.assertIsNone(self.check())
         self.assertEqual(len(list((self.dest / "blobs").iterdir())), 4)
+        # 351-UPD-0024: the minimum stays as published unless raised, so release 1 stays a rollback's target.
+        self.assertEqual(json.loads((self.dest / "channels/stable").read_bytes().split(b"\n")[0])["minimum"], 1)
+        release.publish(self.staged(3), self.dest, minimum=3, now=NOW)
+        self.assertEqual(json.loads((self.dest / "channels/stable").read_bytes().split(b"\n")[0])["minimum"], 3)
+
+    def test_a_manifest_of_another_version_is_not_staged(self):
+        # 351-UPD-0024: the boot key vouches for the version the bootloader's floor reads.
+        v = volume(self.dir / "v7", b"\x7fELF kernel", 7)
+        with self.assertRaises(release.ReleaseError):
+            release.stage(8, self.dir / "out8", {"x86_64": v})
+        v0 = Path(self.dir / "v0")
+        volume(v0, b"\x7fELF kernel")
+        sm.sign_volume(v0, sm.TEST_SEED, ("c" * 40, "nightly-x", "d" * 64))
+        with self.assertRaises(release.ReleaseError):
+            release.stage(1, self.dir / "out0", {"x86_64": v0})
 
     def test_a_version_not_above_the_channel_is_refused(self):
         release.publish(self.staged(2), self.dest, now=NOW)
@@ -162,10 +177,16 @@ class Releases(unittest.TestCase):
 
     def test_the_built_volumes(self):
         # The volumes the build signed, if they are built: staged, published and verified as a release.
+        import shutil
         volumes = {a: ROOT / v for a, v in release.ARCHES.items() if (ROOT / v / "MANIFEST").exists()}
         if not volumes:
             self.skipTest("no built volume")
-        release.publish(release.stage(1, self.dir / "built", volumes), self.dest, now=NOW)
+        copies = {}
+        for a, v in volumes.items():  # signed again with the release's version, as scripts/link_update.py does
+            copies[a] = self.dir / f"built-{a}"
+            shutil.copytree(v, copies[a])
+            sm.sign_volume(copies[a], version=1)
+        release.publish(release.stage(1, self.dir / "built", copies), self.dest, now=NOW)
         self.assertIsNone(self.check())
 
 

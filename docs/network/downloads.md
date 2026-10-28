@@ -1,6 +1,6 @@
 # Downloads: `mind::http` and `download`
 
-**Version:** 0.4 (2026-10-14): calls with a deadline, a resume in the log (351-NET-0029); 0.3 (2026-10-09) · **Track:** `NET`, tasks [351-NET-0001](../../issues-done/351-NET-0001-http-downloads.done) and [351-NET-0002](../../issues-done/351-NET-0002-https-for-programs.done) (HTTPS) for main task [351](../../issues/351-self-update.md), and [109-NET-0009](../../issues-done/109-NET-0009-download-through-the-parser.done) (the head parsed in `parse`) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.6 (2026-10-20): `sftp://` through the SSH service (351-NET-0027); 0.5 (2026-10-20): the check at the end flushed, bounded and in the log (351-NET-0034); 0.4 (2026-10-14): calls with a deadline, a resume in the log (351-NET-0029); 0.3 (2026-10-09) · **Track:** `NET`, tasks [351-NET-0001](../../issues-done/351-NET-0001-http-downloads.done) and [351-NET-0002](../../issues-done/351-NET-0002-https-for-programs.done) (HTTPS) for main task [351](../../issues/351-self-update.md), and [109-NET-0009](../../issues-done/109-NET-0009-download-through-the-parser.done) (the head parsed in `parse`) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program fetches a file over HTTP/1.1 with the network its launcher lent it and writes it into a file it may write. A download cut midway, or one a program gave up on, goes on from where it stopped instead of starting again. This page describes what is built. The updater (351-UPD-0007) will use the same library for releases.
 
@@ -37,6 +37,7 @@ download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]
   - `REQUEST_FILE`: a client confined to the directory of `FILE`. It is writable on `ram:` and in `data/`, and read-only elsewhere.
   - `REQUEST_PARSE`: a client of the parser service (109-NET-0009). Without it `download` refuses (`NO PARSER SERVICE`) rather than parse a head in the process that holds the grant and the file.
   - `REQUEST_TLS`: the launcher's client of the TLS service, for `https://` (351-NET-0002). The shell lends it only with a flow grant, and to a script's program only if the script declares `tls` (351-APP-0017). Without it `download` refuses an `https://` URL (`HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT`).
+  - `REQUEST_SSH`: the launcher's client of the SSH service, for `sftp://` (351-NET-0027). The shell lends it only with a flow grant, without the right to badge (351-APP-0084). Without it `download` refuses an `sftp://` URL (`SFTP NEEDS AN SSH CLIENT, AND NONE WAS LENT`).
   - `REQUEST_CONSOLE`.
 - **What it does:**
   - It opens `FILE` without emptying it. If the file already has bytes, it asks from there (`DOWNLOAD: RESUMING`).
@@ -45,7 +46,9 @@ download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]
   - No call to the stack, the TLS service, its parser or the loader waits more than 60 s. A connection whose call gets no answer counts as one that did not answer, and a parser that does not answer ends the run with `HTTP: Parser` rather than hang it. The file's own writes keep no limit.
   - It writes the body in pieces of 64 KiB, and gives up with the bytes it has (`GAVE UP AFTER n CONNECTIONS AT m BYTES`). The next run goes on from there.
   - It stops at once on what asking again would not change: a status, a malformed answer, a file it cannot write.
-- **At the end** it reads the file back and prints its SHA-256. With `--sha256` it says whether that matches, and exits with status 1 if not.
+- **At the end** it flushes the file, reads it back and prints its SHA-256. With `--sha256` it says whether that matches, and exits with status 1 if not.
+  - The check logs its steps with their times: `DOWNLOAD: FLUSHED IN t MS`, then `DOWNLOAD: READ BACK n OF total BYTES IN t MS (r MS IN READS, THE LONGEST l MS)` after each 8 MiB and at the end. The time in reads is apart from the hashing's, so a slow file service shows apart from a slow program (351-NET-0034).
+  - A flush that fails ends the run (`CANNOT FLUSH`): the file is not known to be on the disk. A flush or a read that gets no answer in 60 s ends it too, with the step named (`THE FILE SERVICE DID NOT FLUSH …`, `… DID NOT ANSWER A READ OF FILE AT n …`).
 - **The grant's term and volume must cover the download.** When the term runs out, the stack closes the connection and the broker takes the grant back (`DOWNLOAD: NO NETWORK GRANT`). The next run gets a new grant and goes on from where the file ends.
 - **A policy line**, for example:
 
@@ -54,6 +57,19 @@ download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]
   ```
 
   The address may be a host name (`download updates.example.org tcp 443`). The broker looks it up when it makes the grant, at the file's `resolver` line or else the stack's DNS server, and the grant keeps that address (351-NET-0003).
+
+## `sftp://`
+
+```
+download FILE sftp://USER@HOST[:PORT]/PATH --pin HEX [--sha256 HEX] [--tries N]
+```
+
+- **The SSH service reads it** (`ssh_service/`, `idl/ssh.wit` 1.0). `download` lends the service a child of its flow grant, so the policy that applies to `download` applies to the connection (port 22 unless given). The service logs in as `USER` with the device key, whose signature `keystore` makes and logs for each login (`ssh-login`); the service never holds the private key.
+- **The server is known by its host key alone.** `--pin` is required: the SHA-256 of the server's ssh-ed25519 host key blob, as `ssh-keygen` writes it (the second field of `host_key.pub`, base64-decoded). A server with another key is refused before anything is signed for it (`DOWNLOAD: SFTP: CONNECT: HostKey`).
+- **Reading.** `download` asks the file's size, then reads it in pieces of 32 KiB from where `FILE` ends (`DOWNLOAD: ASKED FOR THE REST FROM BYTE n` on a resume). A `FILE` longer than the server's file starts again. A connection cut midway is resumed by another attempt, up to `--tries`; every call of an attempt waits at most 60 s, as for HTTP.
+- **Refusals.** A connection or a login the server refuses is tried again (`DOWNLOAD: CONNECT: Refused`), up to `--tries`. A missing file, a permission the server refuses or a protocol error ends the run (`DOWNLOAD: SFTP: OPEN: NotFound`, …).
+- **At the end** the same check as for HTTP: the file flushed, read back and its SHA-256 printed, against `--sha256` when given.
+- **Tested** in the `net` suite against OpenSSH's server, started on the host's loopback for the test with its own host key: a server without the device key refused, a wrong pin refused, a file of 300 008 bytes downloaded and matching, and `ALREADY COMPLETE` the second time.
 
 Plain HTTP gives neither confidentiality nor authenticity. For a release, authenticity comes from its signature, which the updater checks (351-UPD-0005, 0007), not from the transport.
 

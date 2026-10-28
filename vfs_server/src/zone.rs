@@ -1,14 +1,14 @@
 // What a handle may change (its zone), and the zone of each name below a directory by the client's badge; kept apart
 // from the server for the host tests (tests/vfs_zone_host.rs).
 use crate::fat::same_name;
-use super::{BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_UPDATE}; // libmind's (mind::fs)
+use super::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_UPDATE}; // libmind's (mind::fs)
 
 /// What a handle may change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Zone { ReadOnly, Writable, BootRoot, BootReadOnly, System, Hidden, Slots, Record }
 
 /// The private directories of the boot disk's `system/`, each with the only badge that may open, read or write it.
-pub const PRIVATE: [(&str, u16); 2] = [("keystore", BADGE_KEYSTORE), ("netpolicy", BADGE_NETPOLICY)];
+pub const PRIVATE: [(&str, u16); 4] = [("keystore", BADGE_KEYSTORE), ("netpolicy", BADGE_NETPOLICY), ("effector", BADGE_EFFECTOR), ("effector_gw", BADGE_EFFECTOR_GW)];
 
 /// A boot record's size: it is written whole, in place (docs/update/slots.md).
 pub const RECORD: u32 = 512;

@@ -23,7 +23,7 @@ use fat::{Node, Volume};
 use journal::Journal;
 use zone::{Zone, PRIVATE, RECORD};
 use mind::abi::*;
-use mind::fs::{BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_UPDATE, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
+use mind::fs::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_UPDATE, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
 use mind::idl::codec::Text;
 use mind::idl::vfs::{self, Error, Request};
 use mind::idl::wire::Call;
@@ -46,6 +46,7 @@ struct Scope { badge: u16, volume: usize, node: Node, name: String, zone: Zone, 
 struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16, journal: Option<(usize, Journal)>, inactive: Option<&'static str> }
 
 const SCOPES: usize = 8;
+const FILL_WINDOW: usize = 64 << 20; // `fill` maps the lent object this much at a time, within the shared-mapping limit
 const SCOPE_UNUSED_MS: u64 = 60_000; // a scope nobody took up ends after a minute
 // Badges of scoped clients start here (below: applications 0, the user 1).
 const SCOPE_BADGE_FIRST: u16 = 0x100;
@@ -388,6 +389,30 @@ impl Server {
                     Ok(())
                 })();
                 vfs::reply_format(call, result)
+            }
+            Request::Fill { file, offset, target } => {
+                // The lent object is mapped a window at a time (a child capability of each part), so vfs_server never
+                // holds more of it than one window and the bytes stay the client's (262-KRN-0162).
+                let result = (|| {
+                    let h = self.get(file, sender, badge)?;
+                    let (volume, node) = (h.volume, h.node);
+                    if node.is_dir() { return Err(Error::IsDirectory); }
+                    let size = mind::mem::size(target).ok_or(Error::Invalid)?;
+                    let mut done = 0;
+                    while done < size {
+                        let Ok(at) = u32::try_from(offset + done as u64) else { break };
+                        let window = (size - done).min(FILL_WINDOW);
+                        let part = ipc::mint(target, CAP_READ | CAP_WRITE, done, window).map_err(|_| Error::Denied)?;
+                        let read = mind::mem::Mapping::new(part).map_err(|_| Error::Denied)
+                            .and_then(|mut map| self.volumes[volume].volume.read(&node, at, map.as_mut_slice()).map_err(error));
+                        let _ = ipc::drop_cap(part);
+                        let n = read?;
+                        done += n;
+                        if n < window { break; }
+                    }
+                    Ok(done as u64)
+                })();
+                vfs::reply_fill(call, result)
             }
             Request::Flush { handle } => {
                 let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.flush().map_err(error));

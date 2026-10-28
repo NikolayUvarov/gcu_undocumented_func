@@ -1,10 +1,12 @@
 # 750-EFF-0012 — A run against the real Effector server, recorded per configuration
 
-**Type:** evidence · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** 0006–0008; the Effector server's task 75, part A; [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core) (a server to run against); [550](550-network-on-real-hardware.md) for the real-hardware part · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
+**Type:** evidence · **Owner:** `EFF` track · **Priority:** P2 · **Status:** open · **Blocked by:** 0006–0008; deployment and agent/live acceptance in `sst-test-deploy: issues/81-mindcore-01-agent-and-live-acceptance.task.md`, and its `issues/81-mindcore-02-package-metadata.task.md` for the signed-package checks; [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core) (a server to run against); [550](550-network-on-real-hardware.md) for the real-hardware part · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
 
 ## Problem
 
 The test server of 0002 follows the contract as read. Compatibility with the real server is a separate claim, and it holds only for the server builds and the configurations it was checked on (MC-12.9).
+
+The local server-only platform boundary is recorded in external `issues-done/81-mindcore-server-platform-boundary.task.md.done`. Its prepared change has not been deployed; it neither implements a MIND runtime agent nor closes the package metadata/signature requirements of 0008. Historical external task 75 is unrelated console work and is not a dependency of this run.
 
 ## Plan
 
@@ -29,3 +31,83 @@ The test server of 0002 follows the contract as read. Compatibility with the rea
 ## Related
 
 [750-EFF-0001](750-EFF-0001-protocol-contract.md), [750-EFF-0002](750-EFF-0002-test-server.md), [501](501-effector.md), [550](550-network-on-real-hardware.md), [docs/profile/evidence.md](../docs/profile/evidence.md).
+
+## Progress — 2026-10-22: the first live session, against `hesere.uz`
+
+The maintainer named the server, `https://hesere.uz/effector`.
+- **The server.** It runs `security.mode=disabled`, said Effector's agent, so its agents carry no token. Contract 1.1 adds `token none` for that case.
+- **The run.** `tests/qemu_smoke.py --suites effector-live`, x86_64 QEMU on the maintainer's laptop (LEG9), user networking.
+  - **The agent:** `effector` from branch `claude/EFF-effector-agent`, agent ID `mind-qemu-x64-01`.
+  - **The server:** `1.2.0.227`, commit `3c2f179e81f0`, which includes task 81's MIND boundary.
+  - **The pins:** leaf `473d2d9f…bbe0` and SPKI `6df4cafe…a0bf` of the Let's Encrypt certificate valid until 2027-01-07.
+- **Seen, for 121 s:**
+  - TLS 1.3 to `37.140.216.52:443`, pinned;
+  - no heartbeat or poll refused;
+  - the server's polls said the agent waits for the owner's activation;
+  - a shutdown heartbeat at the end.
+- **Not seen yet:**
+  - the endpoint as the server lists it;
+  - activation;
+  - any command;
+  - ten minutes online;
+  - aarch64 or hardware.
+- **The pins change when Let's Encrypt renews the certificate,** if the key changes with it. A next pin is needed in `effector.conf` before then, or the agent refuses the server.
+
+## Progress — 2026-10-22: the MacBook Pro, against `hesere.uz`
+
+The first run on real hardware.
+
+**The setup:**
+- **The machine:** `fast-test` 85fefd4 (ABI 16, with 0119), `--slots --link-dev`, release b509a30.
+- **Wi-Fi:** the BCM4331 on CoolNet2.
+- **Through the link:** the owner's files were put under `data/link/effector/`. The owner then ran `setup.msh` at the keyboard: the files moved to `data/effector/`, `netpolicy add` was answered Y, and `data/mode.conf` was written (maintenance), then a restart.
+- **The shell faulted** right after `netpolicy add` in the script. That is APP's, reported. The owner wrote the mode and restarted by hand.
+
+**Seen:**
+- **The services:**
+  - `[INIT] MODE: MAINTENANCE`;
+  - `init` started `effector_gw` (PID 37), then `effector` (PID 38);
+  - the flow was granted, and the token was moved into `system/effector`;
+  - agent `mind_4cd67c61c5c9496b` connected, pinned, to `hesere.uz` 227 at 10 s.
+- **The server:** it listed `mind-macbook-pro` online. The owner activated it.
+- **A `screenshot` command reached the agent** and was answered `denied`.
+- **The connection:**
+  - its ACK failed three times on transport errors;
+  - the server ended both screenshot requests with `timeout` ("agent did not acknowledge");
+  - in about 290 s there were 27 heartbeat, 4 poll and 1 ACK transport errors, and 32 new connections;
+  - meanwhile `bcm_wifi` counted a fifth to two fifths of its frames lost, at 1 to 2 Mbit/s, 802.11b only (DRV, reported).
+- **The gateway:** it held no `data/effector/policy`, so every action would answer `no-policy`.
+
+**Not met:**
+- a stable session on this machine;
+- an ACK through;
+- ten minutes online.
+
+## Progress — 2026-10-23, the MacBook Pro on a stick from `fast-test` 0d73c076 (ABI 17)
+
+- **The configuration:** the maintenance mode written with the disk; `effector.conf` with `token none` and the owner's policy (`screen on`, `log ring`, `log boot`, `collect log:/`, `collect data/media/`, `deliver data/inbox/`, `max-bytes 2097152`) put in place by the owner's script over the link; Wi-Fi BCM4331 at 11 Mbit/s CCK. The rewrite wiped `system/effector`, so the agent made a new ID, `mind_353abc18de2dbd0e`, activated by the owner as `mind-mbp2`.
+- **The gateway's grants as `init` gave them:** SYSINFO LIFECYCLE LOG READER WRITER PRIVATE DISPLAY.
+- **Telemetry on `hesere.uz`** (`GET /api/v1/monitoring`, 02:28 UTC): `Intel(R) Core(TM) i7-3615QM CPU @ 2.30GHz`, 8 CPUs, 5.8% busy, 8 160 358 400 bytes of memory, the boot, `ram` and `log` volumes, card 2 wireless with its MAC, 47 services with their PIDs, processor time and memory; the server counted the agent's traffic by `X-Effector-Agent-ID`.
+- **A screenshot asked through the server's API** (operation `20261023022853.806949911_000330`): `completed` in 4 s, a 1280x800 PNG of 124 829 bytes, SHA-256 `e39c9096…`, which the downloaded artifact matches; it shows the machine's console.
+- **Still seen:** about one transport error in 10–15 s on this Wi-Fi (DRV's 802.11b losses); requests and the ACK went through on reconnects.
+
+## Progress — 2026-10-23, two slot updates over the link, no rewrite
+
+- **How.** The MacBook took two releases through `scripts/link_update.py` over `effector485`, each with a trial restart that `init` confirmed: slot B at 04:40 UTC, slot A at 05:11.
+  - The release tree is this branch plus the commits of the other tracks on the stick's `fast-test` 0d73c076 (LNK, DRV, APP).
+  - Against the stick, only the agent and the gateway differ.
+- **`data/` and `system/` stayed.** The agent kept its ID and the owner's settings.
+- **What hesere 232 shows since:** telemetry, `load` in every heartbeat (19.5% of 8 cores), `busy:false` with `free_slots:1` when idle.
+- **`performance_measure`** completed in 50 s and is saved as the endpoint's measurement (750-EFF-0016).
+- **Still open on the server side:** file transfer for MIND is off on hesere (`mindcore_directories` empty). It is Effector task 81-mindcore-04.
+
+## Progress — 2026-10-24, the new stick and a slot update on it
+
+- **The stick:** the maintainer wrote it from `fast-test` cede9ec0, ABI 19, with 351-KRN-0166's separate handoff version. It booted slot A in the maintenance mode, and Wi-Fi joined.
+- **The rewrite wiped `data/effector`** again. The owner's settings, policy, `agent_id` and `start.msh` are in `data/link/effector/` for the owner to put in place. The agent keeps `mind_353abc18de2dbd0e` (750-EFF-0006's owner agent ID).
+- **The slot path works on the new stick.**
+  - Release 202610240755: its code equals the stick's, built from the tracks' commits on it, not from `fast-test`.
+  - It went in through `scripts/link_update.py` over `effector485`, under an `effector485` lease (800-LNK-0021).
+  - Slot B booted on trial, `init` confirmed it, and the updater recorded it: "SLOT B CONFIRMED ON THE DISK", sequence 4.
+- **Seen on the way:** a cancel of a queued operation at the daemon's operation limit poisoned its state mutex. The route saves, which prunes old operations, then reads by a stale index. Sent to LNK (`LNK/…-EFF-the-hang-is-a-panic-…`); a restart cleared it.
+- **Not tried yet:** a slot update whose kernel is of another ABI than the stick's loader, and 351-KRN-0167's restart into the fallback on a refused trial.

@@ -58,10 +58,10 @@ Whether such terms reach weights trained on the data is a legal question, and th
 
 ## 7. An Effector server for MIND Core
 
-Main task [750](../issues/750-effector-agent.md): MIND Core gets an agent for the maintainer's Effector fleet server. The server is the maintainer's own project, outside this repository; its side of the work is its task 75.
+Main task [750](../issues/750-effector-agent.md): MIND Core gets an agent for the maintainer's Effector fleet server. In the external `sst-test-deploy` project, `issues-done/81-mindcore-server-platform-boundary.task.md.done` records only the prepared local platform/configuration/path boundary; it has not been deployed. Active `issues/81-mindcore-01-agent-and-live-acceptance.task.md` covers deployment and real-agent checks. Signed-package metadata/non-shell entry points remain open in `issues/81-mindcore-02-package-metadata.task.md` and [750-EFF-0008](../issues/750-EFF-0008-application-packages.md). The historical external task 75 now concerns unrelated console work.
 
 - [x] Decide whether the subset of the Effector agent protocol that MIND Core implements may be published in this public repository, as task [750-EFF-0001](../issues/750-EFF-0001-protocol-contract.md) proposes. The subset is the routes, fields and actions the agent uses, without the server's internal weaknesses. **Decided by the maintainer, 2026-10-09:** yes, it may be published; supporting MIND Core is a requirement on the server.
-- [ ] For task [750-EFF-0012](../issues/750-EFF-0012-run-against-the-effector-server.md), provide a test Effector server the QEMU host can reach. Name its build: at least 1.2.0.127, and a build with task 75's part A for the full run. Give the session its HTTPS address, its certificate pin, an agent token for the test machines and an operator account. Keep the token and the account out of the repository.
+- [ ] For task [750-EFF-0012](../issues/750-EFF-0012-run-against-the-effector-server.md), provide a test Effector server the QEMU host can reach. Name its exact build and the contract reviewed against it; the run needs the deployed platform boundary from external task 81 and the signed-package metadata/non-shell entry points of 81-02 for its package checks. Task 81-01 records the remaining release and live-agent acceptance. Give the session its HTTPS address, its certificate pin verified through the owner's trust channel, a native AgentToken for the test machines and an operator account. Keep credentials out of the repository; an operator API key cannot replace AgentToken.
 - [ ] Say whether MIND Core endpoints may be registered on that server, and under which tag, so that they do not mix with the production terminals.
 
 ## 8. A boot and health indicator on an RP2040 board
@@ -145,7 +145,7 @@ The critique of 2026-10-14 ([issues-critica-done/01](../issues-critica-done/01_c
 - MC-3.6 does not ask for a revocation in one step, and MC-5.4 leaves the bound to the profile;
 - MC-3.5 already asks for "the fate of operations in progress".
 
-The gap is in the kernel and the profile, and [000-KRN-0104](../issues/000-KRN-0104-revocation-bounded-by-the-profile.md) takes it.
+The gap is in the kernel and the profile, and [000-KRN-0104](../issues-done/000-KRN-0104-revocation-bounded-by-the-profile.done) takes it.
 
 **RFC 001 0.5 (Marain; the `MRN` track is open, and the RFC goes through you):**
 
@@ -175,3 +175,21 @@ The maintainer's offer (2026-10-14): Effector drives a device that emulates a ke
 - [ ] **Wanted: the boot medium.** A USB disk the rig writes with the image under test and switches to the machine.
 - [ ] **Wanted: the serial line,** where the machine has COM1 or a USB-UART.
 - [ ] **Say that this machine may be rebooted and powered off by agents.** The work machines' "no reboots" rule stays as it is.
+
+## 11. Iain M. Banks's names in the project's identity
+
+MIND Core's story borrows from Iain M. Banks's Culture novels: the README's "Why MIND Core", the Minds, the language name Marain (RFC 001), and the repository's own name (`gcu_…`, a General Contact Unit). As a homage in a story this is common. As the core of a brand and a lexicon, which main task [850](../issues/850-the-cultural-code.md) considers, it is a question for a person, and perhaps a lawyer: the names belong to the author's estate.
+
+- [ ] Decide whether the project's public names (Marain, Mind, the ship classes, the Culture) stay, change, or stay only as acknowledged homage, and record the decision in [850](../issues/850-the-cultural-code.md).
+- [ ] If they change: RFC 001's name changes in a new revision, in both languages (`constitution/README.md`'s rules).
+
+## 12. A PinePhone to test on
+
+The phone track `MOB` ([TRACKS.md](../TRACKS.md), main task [100000](../issues/100000-a-phone-the-pinephone-first.md)) starts on the original PinePhone, and starts when one is at hand (the maintainer, 2026-10-25). Until then the track records the intention.
+
+- [ ] **A PinePhone,** from Pine64's store: the edition with 3 GB if there is a choice.
+- [ ] **Its serial console cable** for the headphone jack (Pine64 sells one), and two or three microSD cards.
+- [ ] **Tow-Boot** installed on the phone with its own installer, as Tow-Boot's documentation for the PinePhone says. Send back its version.
+- [ ] **The cable connected** to a machine Effector reaches, with the serial port's name, so that an agent reads the phone's boot log there ([docs/effector.md](../docs/effector.md)).
+
+Done when the phone answers on the serial console at 115200 with Tow-Boot's prompt, and the machine and the port are recorded in 100000.

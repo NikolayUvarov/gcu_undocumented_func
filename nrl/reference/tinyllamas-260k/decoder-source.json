@@ -1,0 +1,25 @@
+{
+  "schema": "nrl.decoder-source/0",
+  "sources": [
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/stories260K.bin",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ],
+      "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696"
+    },
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/tok512.bin",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ],
+      "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312"
+    }
+  ],
+  "tokenizer_sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+  "weights_sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696"
+}

@@ -27,6 +27,14 @@ impl Region {
         Ok(Self { ptr, layout, frames: true })
     }
 
+    // Task memory not zeroed yet, from the frame pool only: the caller zeroes it before any task can see it (262-KRN-0160).
+    pub fn task_unzeroed(size: usize, alignment: usize) -> Result<Self, &'static str> {
+        if !crate::frames::ready() { return Self::new(size, alignment); }
+        let layout = Layout::from_size_align(size.max(1), alignment).map_err(|_| "INVALID ALLOCATION SIZE")?;
+        let ptr = crate::frames::allocate_unzeroed(layout).ok_or("OUT OF MEMORY")?;
+        Ok(Self { ptr, layout, frames: true })
+    }
+
     pub fn ptr(&self) -> *mut u8 {
         self.ptr.as_ptr()
     }

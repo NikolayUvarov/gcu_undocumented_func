@@ -47,18 +47,18 @@ jobs:
       matrix:
         include:
           - name: boot, display, network, TLS, shell, memory, clock
-            args: --suites boot,display,net,tls,normal,memory,dzen
+            args: --suites boot,display,net,tls,effector,normal,memory,dzen
           - name: network benchmark (user networking and tap)
             args: --suites netbench
             tap: true
           - name: services, storage, audio
-            args: --suites services,ahci,audio,tts,listen,hda
+            args: --suites services,ahci,audio,tts,listen,hda,link,modes
           - name: scheduling, isolation, heap
             args: --suites busy,smp,isolation,heap
           - name: keys, shell, tools
             args: --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci
           - name: files and block writes
-            args: --suites vfs,edit,disk,block,store,storefaults,updater
+            args: --suites vfs,edit,disk,block,store,storefaults,updater,linkupdate
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
           # Every CPU the machine has, beyond the former 8 (issue 171).
@@ -66,7 +66,7 @@ jobs:
             args: --cpus 16 --suites normal
           # 6 GiB: the frame pool and task memory from the RAM above 4 GiB (issue 171).
           - name: RAM above 4 GiB
-            args: --memory 6G --suites normal,display,net,vfs
+            args: --memory 6G --suites normal,display,net,vfs,fill
           - name: one CPU
             args: --cpus 1 --suites smp,isolation,heap,services
           # A CPU with AVX: its state is saved per task with XSAVE (issue 153).
@@ -89,6 +89,9 @@ jobs:
           # The TSC's first measure 9% high: measured again on the ACPI PM timer, the clock keeps the host's time (000-KRN-0100).
           - name: TSC measured again
             args: --kernel /tmp/mind-tsc-skew-target/x86_64-unknown-none/release/kernel --suites clock
+          # Every CPU stopped for good: the ICH9's TCO timer resets the machine on q35, and the next boot says so (000-KRN-0076).
+          - name: the watchdog
+            args: --kernel /tmp/mind-watchdog-target/x86_64-unknown-none/release/kernel --suites watchdog
           - name: USB image
             usb: true
     name: QEMU (${{ matrix.name }})
@@ -155,9 +158,9 @@ jobs:
             # devicetree: virt without ACPI (210-KRN-0029); efivar: UEFI variables through AAVMF (351-KRN-0028)
             suites: normal,shell,bench,smp,busy,usb,devicetree,efivar
           - group: files, network and TLS
-            suites: vfs,store,storefaults,net,tls,updater
+            suites: vfs,store,storefaults,net,tls,effector,updater,linkupdate,modes
           - group: RAM, ACPI and PCI above 4 GiB
-            suites: normal,net
+            suites: normal,net,fill
             machine: virt,gic-version=3,highmem=on
             memory: 6G
           - group: GICv2 with GICv2m (a Raspberry Pi 4's interrupt controller)

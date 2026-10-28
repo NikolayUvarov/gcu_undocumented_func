@@ -1,0 +1,39 @@
+# 900-NRL-0012 — A real trained small decoder, tokenizer and dense language baseline — done
+
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — (prior work is on this branch) · **Roadmap:** G; 900 T06 and remaining T04 language identity/import · **Constitution:** MC-5.1, MC-8.5, MC-9.1, MC-11.2, MC-11.3, MC-11.8, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+
+## Problem
+
+T06 requires an actual trained language model, not a random tiny graph. Qwen is a proposed example; a smaller real decoder makes complete offline differential/state/tokenizer and later calibration/search runs reproducible in this host profile.
+
+## Plan
+
+1. Pin the MIT-declared Karpathy TinyStories-260K model/custom tokenizer and primary reference revisions/hashes; preserve licence and source declarations. No pickle/model-repository code is executed.
+2. Add an explicit bounded llama2.c-v0 float32 data reader and scalar f64 decoder: embeddings/tied head, RMSNorm, GQA, stored RoPE tables, causal attention, residuals and dense SiLU gated FFNs. Existing block/graph formats and limits are unchanged.
+3. Add the explicit byte-BPE tokenizer profile, source-bound KV state, context/trace budgets, data-only packages and small-layer replacement hooks for T07.
+4. Compare actual trained weights against independent PyTorch f64 and original-policy f32 calculations; compare full prefixes/cached decoding, tokenization and generation; reject malformed files, wrong states and budgets.
+5. Save a dense language baseline and repeat commands, distinguishing numerical parity from language quality, compression, other families and native execution.
+
+## Acceptance criteria
+
+- [x] Trained weights, tokenizer, licence/source and configuration identities are pinned and checked offline; no unsafe model code executes.
+- [x] Full decoder logits on actual weights match an independent oracle under the stated numerical policy; original float32 policy comparisons are separate.
+- [x] Prefill, sequential cache, uncached prefixes, state/model binding, context and token/trace limits are checked.
+- [x] Token IDs/decoding match independent primary-reference goldens for declared byte-BPE semantics; unsupported/corrupt inputs fail clearly.
+- [x] Package/replacement boundaries, source hashes, tied-weight counts, nonfinite/truncated/trailing inputs and no-overwrite rules are checked.
+- [x] Host suite and both portable rlibs pass with a dated dense baseline; T07–T10 and native limitations remain explicit.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md), T06, sections 4, 8, 10, 13–15.
+- [0011](../issues-done/900-NRL-0011-feed-forward-training-and-evaluation.done).
+- https://huggingface.co/karpathy/tinyllamas/tree/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K
+- https://github.com/karpathy/llama2.c/tree/350e04fe35433e6d2941dce5a1f53308f87058eb
+
+## Resolution
+
+Pinned the actual MIT-declared TinyStories-260K/custom tokenizer and unchanged primary C test reference with revisions, hashes and notices. Added a bounded data-only decoder/import package and explicit scalar f64 profile for GQA, stored RoPE, RMSNorm, residuals, gated SiLU FFNs and a correctly shared embedding/output head. Byte-BPE has independently checked UTF-8/whitespace/fallback semantics. Source-bound transactional cache steps, uncached prefixes, limits, corrupt files/packages, no-overwrite outputs and small-artifact replacement boundaries are tested without changing existing block/graph limits.
+
+At `63bdc538`, **57 Rust tests**, both portable release rlibs, all prior regressions and import/check/probe CLI passed on the NRL branch. Three actual-weight prompts match vectorized PyTorch f64 logits and FFN traces; original C float32 is checked under its separate tolerance. Nine tokenizer/decoding goldens match the primary C algorithm, and the complete oracle regenerates byte-identically. The real model has 260032 distinct parameters plus 4096 stored positional values. [Dated dense baseline](../nrl/reports/decoder-baseline-2026-10-26.json), [raw log](../nrl/reports/decoder-check-2026-10-26.txt), [contract](../nrl/specs/decoder-v0.md), [saved probe](../nrl/reports/decoder-probes-2026-10-26/0.json).
+
+T06 is complete for this declared small decoder profile. This is not Qwen/native/GPU support or held-out language/compression evidence. The user explicitly authorized continuing T07–T10 without waiting for landing. Calibration, resumable local training, general metrics/benchmarks, mixed plans/search and student-activation adaptation remain under 900 and are executed next.

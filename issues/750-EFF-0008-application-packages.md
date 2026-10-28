@@ -1,6 +1,6 @@
 # 750-EFF-0008 — Signed application packages: install, update and remove an application
 
-**Type:** service feature · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** [750-EFF-0005](750-EFF-0005-zip-reader.md), [750-EFF-0007](750-EFF-0007-gateway-service.md); [requests-UPD.md](requests-UPD.md) (signed application packages: format, key role, verification); [requests-KRN.md](requests-KRN.md) (a writable scoped `vfs` client; the loader's check of an installed application); the Effector server's package hash and non-shell entry point (its task 75, part B) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-3.11, MC-6.6
+**Type:** service feature · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open · **Blocked by:** [750-EFF-0005](../issues-done/750-EFF-0005-zip-reader.done), [750-EFF-0007](750-EFF-0007-gateway-service.md); [750-UPD-0019](750-UPD-0019-signed-application-packages.md) (signed application packages: the contract, key role, verification); [requests-KRN.md](requests-KRN.md) (a writable scoped `vfs` client; the loader's check of an installed application); the open Effector package metadata/non-shell entry-point requirement in `sst-test-deploy: issues/81-mindcore-02-package-metadata.task.md` · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-3.11, MC-6.6
 
 ## Problem
 
@@ -10,6 +10,7 @@
   - Applications are not verified when they are loaded.
   - Nothing an agent may write to holds programs.
 - **What must not happen.** A package from the network must not become running code on the strength of a TLS connection alone (MC-9.2, MC-9.8).
+- **External requirement still open.** The server must bind a command to exact package bytes with size/SHA-256 and select explicit MIND architecture/install/uninstall entries naming a signed payload, without a Windows/Linux or shell-script fallback. External task `81-mindcore-02-package-metadata.task.md` records that work and its joint acceptance. Task 81's local platform/configuration/path fix does not provide this package contract and has not been deployed; task 81-01's basic agent/live acceptance does not close it either.
 
 ## Plan
 
@@ -41,4 +42,4 @@
 
 ## Related
 
-[351](351-self-update.md), [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [750-EFF-0005](750-EFF-0005-zip-reader.md), [docs/profile/README.md](../docs/profile/README.md) (applications not verified: "Not met").
+[351](351-self-update.md), [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [750-EFF-0005](../issues-done/750-EFF-0005-zip-reader.done), [docs/profile/README.md](../docs/profile/README.md) (applications not verified: "Not met").

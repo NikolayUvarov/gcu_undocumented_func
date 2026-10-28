@@ -12,12 +12,13 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 9, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
 /// take from a client; the user said no in the shell's window, or did not answer; its window's session is busy
-/// with a program; (1.2) a time the clock does not take.
+/// with a program; (1.2) a time the clock does not take; (1.5) `refused` too for the station's client asked by any
+/// client but the window manager the shell started.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Error { #[default] Unavailable = 0, NoMemory = 1, Refused = 2, Declined = 3, Busy = 4, Invalid = 5 }
@@ -29,6 +30,16 @@ impl Wire for Error {
     const MAX: usize = 1;
     fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// One card as the network stack counts its frames (1.7, 000-APP-0096): its index, whether it is the Wi-Fi station
+/// and the default card, and its frames sent and received since the stack started.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CardCounters { pub card: u8, pub wireless: bool, pub default: bool, pub sent: u64, pub received: u64 }
+impl Wire for CardCounters {
+    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.card.encode(w)?; self.wireless.encode(w)?; self.default.encode(w)?; self.sent.encode(w)?; self.received.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { card: Wire::decode(r)?, wireless: Wire::decode(r)?, default: Wire::decode(r)?, sent: Wire::decode(r)?, received: Wire::decode(r)? }) }
 }
 
 /// Opens the shell's own window, as Ctrl+Alt+F5 does, unless it is open; answers its id in the window broker, for
@@ -60,8 +71,8 @@ pub fn run(endpoint: Endpoint, line: &str, out: &mut [u8]) -> Result<core::resul
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<7000>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
 }
 
-/// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, without a time zone, as `date set`
-/// does (1.2, 000-APP-0055: wm's Settings). For the window manager the shell started, at once: setting it in its
+/// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, as `date set` does (1.2,
+/// 000-APP-0055: wm's Settings): local time, in the zone the clocks show (1.9, 000-APP-0099; the RTC keeps UTC). For the window manager the shell started, at once: setting it in its
 /// Settings is the user's choice (1.3, 000-APP-0060). For any other client, once the user agrees in the shell's
 /// window; a word call, so such a caller may stop waiting while the shell asks (`mind::idl::wire::with_timeout`).
 pub fn set_clock(endpoint: Endpoint, date: u32, seconds: u32) -> Result<core::result::Result<(), Error>> {
@@ -84,6 +95,72 @@ pub fn battery(endpoint: Endpoint, receive: usize) -> Result<core::result::Resul
     }
 }
 
+/// A copy of the shell's client of the Wi-Fi station (`idl/wifi.wit`, with the change badge: it scans, joins, leaves
+/// and forgets networks) (1.5, 550-APP-0033): for the window manager the shell started with its commands, whose
+/// Settings start `wifi`; starting it there is the user's request to choose a network. `refused` for any other
+/// client; `unavailable`: the shell holds none (no radio, so no station). A word call, so it can carry the capability.
+pub fn wifi(endpoint: Endpoint, receive: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [5 | MAJOR << 8, 0];
+    let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
+    match wire::check_cap_reply(&reply, received, receive)? {
+        None => Ok(Ok(())),
+        Some(code) => Ok(Err(Error::from_code(wire::enum_code(code)?).ok_or(SysError::Invalid)?)),
+    }
+}
+
+/// How the boot went (1.6, 000-APP-0086): after a safe start, the notice the shell shows above its first prompt,
+/// with the services the start left out and `svc start` for each; empty after a normal boot. For any client.
+pub fn boot_notice(endpoint: Endpoint) -> Result<core::result::Result<Text<240>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 242, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Text<240> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Every card's frames, the Wi-Fi station's too (1.7, 000-APP-0096): for the window manager the shell started, whose
+/// `show = net` line gives the frames a second. It reads only and reaches nothing on the network. `refused` for any
+/// other client; `unavailable`: no network stack.
+pub fn net_counters(endpoint: Endpoint) -> Result<core::result::Result<List<CardCounters, 4>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 78, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<CardCounters, 4> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Opens another window of the shell beside those open, each a session of its own (1.8, 000-APP-0097: a second
+/// shell from the window manager's menu), and answers its id, as `window` does for the first. `busy` with 32 open;
+/// `no-memory` or `unavailable` sooner when the shell's memory or the window broker has no room.
+pub fn new_window(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>> {
+    let words = [8 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+}
+
+/// Sets the time zone every clock shows, as `date zone` does, and keeps it in `data/clock.conf` (1.9, 000-APP-0099):
+/// `minutes` east of UTC, or west with `west`, up to UTC-12:00 and UTC+14:00 (`invalid` beyond). For the window
+/// manager the shell started, at once, as the clock; for any other client, once the user agrees in the shell's window.
+pub fn set_zone(endpoint: Endpoint, west: bool, minutes: u32) -> Result<core::result::Result<(), Error>> {
+    let words = [9 | MAJOR << 8 | ((west) as usize) << 16 | ((minutes) as usize) << 17, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -91,6 +168,11 @@ pub enum Request {
     Run { line: Text<240> },
     SetClock { date: u32, seconds: u32 },
     Battery,
+    Wifi,
+    BootNotice,
+    NetCounters,
+    NewWindow,
+    SetZone { west: bool, minutes: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -120,6 +202,32 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Battery, Call::words(request, cap)))
         }
+        5 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Wifi, Call::words(request, cap)))
+        }
+        6 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 242, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::BootNotice, call))
+        }
+        7 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 78, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::NetCounters, call))
+        }
+        8 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::NewWindow, Call::words(request, cap)))
+        }
+        9 => {
+            wire::body(request, cap, [0x1ffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::SetZone { west: wire::field(&words, 0, 16, 1) != 0, minutes: wire::field(&words, 0, 17, 32) as u32 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -140,4 +248,25 @@ pub fn reply_set_clock(call: Call, value: core::result::Result<(), Error>) -> Re
 pub fn reply_battery(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish_cap(call, value, false)
+}
+/// `value` is the handle of the capability to send (copied).
+pub fn reply_wifi(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish_cap(call, value, false)
+}
+pub fn reply_boot_notice(call: Call, value: core::result::Result<&str, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_str::<240>(value, w))
+}
+pub fn reply_net_counters(call: Call, value: core::result::Result<&[CardCounters], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<CardCounters, 4>(value, w))
+}
+pub fn reply_new_window(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_set_zone(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

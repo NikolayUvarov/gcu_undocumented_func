@@ -710,6 +710,21 @@ impl<'a, D: Device> Store<'a, D> {
         head.latest().root().map(|root| (head.latest().version, root)).ok_or(Error::NotFound)
     }
 
+    /// The current names that start with `prefix` and sort after `after` (empty: from the first), in byte order, with
+    /// their versions and roots; a removed name is skipped (300-STO-0018).
+    pub fn names<'s>(&'s self, prefix: &[u8], after: &[u8]) -> Result<impl Iterator<Item = (&'s [u8], u64, Cid)> + 's, Error> {
+        let part = |s: &[u8]| s.len() <= NAME_MAX && (s.is_empty() || valid_name(s));
+        if !part(prefix) || !part(after) { return Err(Error::Invalid); }
+        let heads = &self.heads[..self.names];
+        // Names are kept sorted, so those with the prefix are one run.
+        let start = heads.partition_point(|h| h.name() < prefix).max(if after.is_empty() { 0 } else { heads.partition_point(|h| h.name() <= after) });
+        let prefix_len = prefix.len();
+        let mut first = [0u8; NAME_MAX];
+        first[..prefix_len].copy_from_slice(prefix);
+        Ok(heads[start..].iter().take_while(move |h| h.name().starts_with(&first[..prefix_len]))
+            .filter_map(|h| h.latest().root().map(|root| (h.name(), h.latest().version, root))))
+    }
+
     /// The versions of `name` the store keeps, newest first (a version without a root removed the name).
     pub fn history(&self, name: &[u8]) -> Result<&[Version], Error> {
         if !valid_name(name) { return Err(Error::Invalid); }

@@ -44,4 +44,4 @@ All 70 crates then fail, and the build reports them as failures of the code.
 
 ## Related
 
-[000-KRN-0020](../issues/000-KRN-0020-parallel-build.md) (the parallel build), [requests-KRN.md](../issues/requests-KRN.md).
+[000-KRN-0020](000-KRN-0020-parallel-build.done) (the parallel build), [requests-KRN.md](../issues/requests-KRN.md).

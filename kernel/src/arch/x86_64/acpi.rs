@@ -186,10 +186,12 @@ pub unsafe fn power_off() -> Result<usize, usize> {
 pub unsafe fn reboot() -> ! {
     core::arch::asm!("cli");
     crate::cpu::stop_others();
-    let reset = RESET.load(Ordering::Acquire);
-    if reset != 0 {
+    // Halted: a reset may keep the timer counting, through firmware that does not feed it (000-KRN-0076).
+    super::watchdog::stop();
+    let register = RESET.load(Ordering::Acquire);
+    if register != 0 {
         serial_print("MIND CORE KERNEL: REBOOT VIA ACPI RESET REGISTER\n");
-        let (space, value, address) = ((reset >> 56) as u8, (reset >> 48) as u8, reset & 0xFFFF_FFFF_FFFF);
+        let (space, value, address) = ((register >> 56) as u8, (register >> 48) as u8, register & 0xFFFF_FFFF_FFFF);
         match space {
             0 if address < WINDOW => core::ptr::write_volatile(address as *mut u8, value),
             1 => outb(address as u16, value),
@@ -199,6 +201,14 @@ pub unsafe fn reboot() -> ! {
         }
         pause();
     }
+    reset()
+}
+
+/// Nothing to read before the handoff is trusted: COM1 and the reset ports are fixed (351-KRN-0167).
+pub unsafe fn early(_rsdp: u64) {}
+
+/// Resets through what needs no table and no other CPU stopped: port 0xCF9, the 8042 controller, then a triple fault.
+pub unsafe fn reset() -> ! {
     serial_print("MIND CORE KERNEL: REBOOT VIA PORT 0xCF9\n");
     outb(0xCF9, 0x02); pause(); outb(0xCF9, 0x06); pause();
     serial_print("MIND CORE KERNEL: REBOOT VIA THE 8042 CONTROLLER\n");

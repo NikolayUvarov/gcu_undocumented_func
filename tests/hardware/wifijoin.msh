@@ -1,0 +1,84 @@
+#!msh
+requires: file wifi network log
+# tests/hardware/wifijoin.msh — 550-ASR-0007: joins the Wi-Fi network named in data/wifijoin.txt without typing, then
+# logs the address DHCP gave and a ping of the gateway. build-and-write.sh --wifijoin puts it at the boot volume's root
+# as autorun.msh, which the shell runs once at start (000-APP-0079), with data/wifijoin.txt: the network's name, then
+# its passphrase. The passphrase is read only by `wifi join` (550-APP-0078): this script prints and logs only the name.
+# A file with the name alone (build-and-write.sh --keep-wifi) joins a network keystore remembers, with no passphrase.
+
+# A line on the screen and in the system log.
+fn note(text) {
+    print(text)
+    log(text) or { nil }
+}
+
+# What `cmd` printed, or its failure's reason, each line noted; true when it did not fail.
+fn run(cmd) {
+    let result = capture(cmd)
+    let text = result or { "FAILED: {error}" }
+    for line in lines(text) { if trim(line) != "" { note("WIFI JOIN:   {line}") } }
+    return !is_err(result)
+}
+
+# The first card with an address: [the card's line, its gateway], or nil.
+fn address() {
+    let text = capture("ip") or { "" }
+    for line in lines(text) {
+        let w = words(line)
+        if len(w) > 6 && w[0] == "CARD" && w[4] == "IP" && !starts_with(w[5], "0.0.0.0") && w[6] == "GATEWAY" { return [trim(line), w[7]] }
+    }
+    return nil
+}
+
+note("WIFI JOIN: STARTED (tests/hardware/wifijoin.msh, 550-ASR-0007)")
+try {
+    let file = capture("cat data/wifijoin.txt") or { "" }
+    let name = ""
+    if len(lines(file)) > 0 { name = trim(lines(file)[0]) }
+    if name == "" { fail("no network named in data/wifijoin.txt") }
+    let second = ""
+    if len(lines(file)) > 1 { second = trim(lines(file)[1]) }
+    let remembered = second == ""
+    let join = "wifi join \"{name}\" --passphrase-file data/wifijoin.txt"
+    if remembered { join = "wifi join \"{name}\"" }
+    let mark = ""
+    if remembered { mark = " (REMEMBERED BY KEYSTORE)" }
+    note("WIFI JOIN: THE NETWORK \"{name}\"{mark}")
+
+    # The station: up to 60 s after the shell's start for wlan and its radio.
+    let begun = now()
+    while !run("wifi status") {
+        if now() - begun > 60000 { fail("no answer from the station in 60 s") }
+        sleep(2000)
+    }
+
+    # A scan at start may miss the network (the MacBook Pro, 2026-10-21): up to 5 tries, 3 s apart.
+    begun = now()
+    let joined = false
+    let tries = 0
+    while !joined && tries < 5 {
+        if tries > 0 { sleep(3000) }
+        tries = tries + 1
+        joined = run(join)
+    }
+    note("WIFI JOIN: {upper(str(joined))} AFTER {now() - begun} MS, {tries} TRIES")
+    if joined {
+        # The address DHCP gives: up to 30 s.
+        begun = now()
+        let found = address()
+        while found == nil && now() - begun < 30000 {
+            sleep(1000)
+            found = address()
+        }
+        if found == nil { note("WIFI JOIN: NO ADDRESS IN 30 S") } else {
+            note("WIFI JOIN: ADDRESS AFTER {now() - begun} MS: {found[0]}")
+            run("ping {found[1]}")
+        }
+    }
+    run("wifi status")
+} catch e {
+    note("WIFI JOIN: STOPPED: {e}")
+}
+# The maintainer's sign that the disk may go back: after a wait longer than the journal's save period.
+sleep(3000)
+note("*** WIFI JOIN Complete. Data collected ***")

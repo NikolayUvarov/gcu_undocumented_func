@@ -10,12 +10,15 @@ extern crate alloc;
 
 mod dns;
 mod policy;
+mod poll;
+mod turn;
 
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1};
+use mind::deadline::Deadline;
 use mind::idl::codec::List;
 use mind::idl::{net, socket, wire};
 use mind::ipc::{self, Endpoint};
@@ -40,16 +43,14 @@ const UDP_BUFFER: usize = 8192;
 const POLL_MS: u32 = 10;
 const FALLBACK_MS: u64 = 3000; // without a DHCP lease by then: QEMU user networking's static setup
 const ICMP_IDENT: u16 = 0x4D49;
+const PINGS: usize = 16; // echo requests waiting for their replies, all clients together
+const ECHO_MAX: u16 = 1472; // an echo's data bytes: one frame on a 1500-byte MTU (socket.wit 2.6)
 const EPHEMERAL: u16 = 49152;
 const SLOT_STATION: usize = 4; // the Wi-Fi station's client when one runs (550-NET-0018, 550-KRN-0097)
 const CARDS: usize = 3; // SLOT_DEV0, SLOT_DEV1 (one virtio_net instance per card) and the station, which answers once joined
 const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1, SLOT_STATION];
 const KINDS: [socket::CardKind; CARDS] = [socket::CardKind::Wired, socket::CardKind::Wired, socket::CardKind::Wireless];
 const NO_CARD: u8 = 255; // socket.wit 2.5 `prefer`: no preferred card
-// A card's call that takes longer fails, and the card is left alone for STALL_MS, so a driver or station that does
-// not answer cannot hold the stack (550-NET-0030).
-const CARD_MS: u32 = 2000;
-const STALL_MS: u64 = 5000;
 
 // Transmit checksum offload (issue 106, socket.wit `offload`): off until the operator turns it on; the benchmark
 // (docs/profile/network.md) showed no gain worth trusting the device with it by default.
@@ -58,40 +59,76 @@ static OFFLOAD: AtomicBool = AtomicBool::new(false);
 // Frames each card sent and received.
 static SENT: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
 static RECEIVED_FRAMES: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
-
 // A driver's frames as a smoltcp device: one IDL call per frame.
 // `offload`: the driver completes TCP and UDP checksums (it offers it and OFFLOAD is on). `ring`: the frame ring shared
 // with the driver (net.wit 1.2, issue 107), the lent capability and whether frames were queued since the last kick;
 // without one, every frame is a call.
-struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX], ring: Option<Shared>, queued: bool, kicked: u64 }
-struct Shared { _pages: Pages, cap: usize, ring: Ring }
+// `retry`: a ring to lend at the next kick, as the last attach had no time left to be sent; `silent`: a call had no
+// answer, said once until the driver answers again (000-NET-0044).
+struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX], ring: Option<Shared>, queued: bool, kicked: u64, deadline: Deadline,
+              retry: bool, silent: bool }
+// `answered`: the driver said it has the ring (its `attach` or a later kick answered `Ok`).
+struct Shared { _pages: Pages, cap: usize, ring: Ring, answered: bool }
 struct Rx<'a>(&'a [u8]);
-struct Tx<'a> { endpoint: Endpoint, index: usize, offload: bool, ring: Option<Ring>, queued: Option<&'a mut bool> }
+struct Tx<'a> { endpoint: Endpoint, index: usize, offload: bool, ring: Option<Ring>, queued: Option<&'a mut bool>, deadline: Deadline }
 
 impl Card {
-    // Lends the driver a fresh frame ring (at start, and after a driver restart lost the old one).
+    // Lends the driver a fresh frame ring (at start, and after the driver said it holds none: a restart lost the old
+    // one). A ring is revoked only when the driver said it does not hold it: it may map one whose `attach` had no answer
+    // in time, and its next access to a revoked ring faults (000-KRN-0129).
     fn attach(&mut self) {
         if let Some(old) = self.ring.take() { let _ = ipc::revoke(old.cap); let _ = ipc::drop_cap(old.cap); }
+        // An attach never sent cannot be held: with no time left in this turn no ring is lent, and the next kick lends one.
+        let Some(left) = self.deadline.remaining(now_ms()) else {
+            self.retry = true;
+            self.unanswered(format_args!("NO TIME LEFT IN ITS TURN TO LEND THE FRAME RING, AT THE NEXT"));
+            return;
+        };
+        self.retry = false;
         let Some(pages) = Pages::new(netring::BYTES) else { return };
         let ring = unsafe { Ring::new(pages.address() as *mut u8) };
         ring.reset();
         let Ok(cap) = pages.share() else { return };
-        match net::attach(self.endpoint, cap) {
-            Ok(Ok(_)) => { self.ring = Some(Shared { _pages: pages, cap, ring }); self.kicked = now_ms(); }
-            _ => { let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); }
+        match self.deadline.call(|| net::attach(self.endpoint, cap)) {
+            Ok(Ok(_)) => {
+                self.ring = Some(Shared { _pages: pages, cap, ring, answered: true }); self.kicked = now_ms(); self.silent = false;
+                mind::println!("[NETSTACK] CARD {}: FRAME RING ATTACHED", self.index);
+            }
+            // Refused: the driver holds no mapping of it.
+            Ok(Err(error)) => {
+                let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); self.silent = false;
+                mind::println!("[NETSTACK] CARD {}: FRAME RING REFUSED ({:?}): A CALL A FRAME", self.index, error);
+            }
+            // No answer in time: it stays lent, and the next kick (at once) says whether the driver has it.
+            Err(_) => {
+                self.ring = Some(Shared { _pages: pages, cap, ring, answered: false }); self.kicked = 0;
+                mind::println!("[NETSTACK] CARD {}: FRAME RING LENT, NO ANSWER IN {} MS", self.index, left);
+            }
         }
+    }
+
+    // A call without an answer, said once until the driver answers again (000-NET-0044).
+    fn unanswered(&mut self, what: core::fmt::Arguments) {
+        if !self.silent { self.silent = true; mind::println!("[NETSTACK] CARD {}: {}", self.index, what); }
     }
 
     // Wakes the driver for queued frames, and at least every 300 ms so it keeps serving the ring.
     fn kick(&mut self) {
-        let Some(shared) = self.ring.as_ref() else { return };
+        if self.ring.is_none() && self.retry { self.attach(); }
+        let Some(shared) = self.ring.as_mut() else { return };
         let now = now_ms();
         if !self.queued && !shared.ring.sending() && now - self.kicked < 300 { return; }
         self.queued = false; self.kicked = now;
-        match net::kick(self.endpoint) {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => { mind::println!("[NETSTACK] CARD {}: DRIVER WITHOUT OUR RING, ATTACHING AGAIN", self.index); self.attach(); }
-            Err(_) => {} // the driver is restarting
+        let left = self.deadline.remaining(now);
+        match self.deadline.call(|| net::kick(self.endpoint)) {
+            Ok(Ok(())) if !shared.answered => { shared.answered = true; self.silent = false; mind::println!("[NETSTACK] CARD {}: THE DRIVER HAS OUR RING (A LATE ANSWER)", self.index); }
+            Ok(Ok(())) => self.silent = false,
+            Ok(Err(_)) => { self.silent = false; mind::println!("[NETSTACK] CARD {}: DRIVER WITHOUT OUR RING, ATTACHING AGAIN", self.index); self.attach(); }
+            // The driver busy or restarting, or no time left in this turn: the frames wait in the ring.
+            Err(_) => match left {
+                Some(ms) => self.unanswered(format_args!("A KICK HAD NO ANSWER IN {} MS", ms)),
+                None => self.unanswered(format_args!("NO TIME LEFT IN ITS TURN TO KICK THE DRIVER")),
+            },
         }
     }
 }
@@ -145,11 +182,11 @@ impl smoltcp::phy::TxToken for Tx<'_> {
         }
         // TCP and UDP checksums are finished here: by the card with offload, else in software (smoltcp leaves them).
         let offloaded = match partial(&mut frame[..len]) {
-            Some((start, field, _)) if self.offload && matches!(net::send_partial(self.endpoint, &frame[..len], start as u16, field as u16), Ok(Ok(()))) => Some(true),
+            Some((start, field, _)) if self.offload && matches!(self.deadline.call(|| net::send_partial(self.endpoint, &frame[..len], start as u16, field as u16)), Ok(Ok(()))) => Some(true),
             Some((start, field, end)) => { complete(&mut frame[..len], start, field, end); None }
             None => None,
         };
-        let sent = offloaded.unwrap_or_else(|| matches!(net::send(self.endpoint, &frame[..len]), Ok(Ok(()))));
+        let sent = offloaded.unwrap_or_else(|| matches!(self.deadline.call(|| net::send(self.endpoint, &frame[..len])), Ok(Ok(()))));
         if sent { SENT[self.index].fetch_add(1, Ordering::Relaxed); }
         result
     }
@@ -158,18 +195,20 @@ impl Device for Card {
     type RxToken<'a> = Rx<'a>;
     type TxToken<'a> = Tx<'a>;
     fn receive(&mut self, _: Instant) -> Option<(Rx<'_>, Tx<'_>)> {
+        self.deadline.remaining(now_ms())?;
         let ring = self.ring.as_ref().map(|shared| shared.ring);
         let len = match ring {
-            // From the shared ring: no call (a slot the driver filled wrongly comes back empty and is skipped).
-            Some(ring) => loop { match ring.receive(&mut self.frame) { Some(frame) if frame.len == 0 => continue, Some(frame) => break frame.len, None => return None } },
-            None => match net::receive(self.endpoint, &mut self.frame) { Ok(Ok(len)) => len.min(FRAME_MAX), _ => return None },
+            // A malformed slot consumes one turn too; a peer cannot keep us skipping forever.
+            Some(ring) => match ring.receive(&mut self.frame) { Some(frame) if frame.len != 0 => frame.len, _ => return None },
+            None => match self.deadline.call(|| net::receive(self.endpoint, &mut self.frame)) { Ok(Ok(len)) => len.min(FRAME_MAX), _ => return None },
         };
         RECEIVED_FRAMES[self.index].fetch_add(1, Ordering::Relaxed);
-        Some((Rx(&self.frame[..len]), Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued) }))
+        Some((Rx(&self.frame[..len]), Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued), deadline: self.deadline }))
     }
     fn transmit(&mut self, _: Instant) -> Option<Tx<'_>> {
+        self.deadline.remaining(now_ms())?;
         let ring = self.ring.as_ref().map(|shared| shared.ring);
-        Some(Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued) })
+        Some(Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued), deadline: self.deadline })
     }
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
@@ -187,22 +226,34 @@ enum Kind { Udp, Tcp }
 #[derive(Clone, Copy)]
 struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64 }
 
+// An echo's data: 1 to 16 bytes repeated over it (socket.wit 2.6); `MINDCORE` by default, as `ping` sends.
+#[derive(Clone, Copy)]
+struct Pattern { bytes: [u8; 16], len: u8 }
+impl Pattern {
+    fn new(bytes: &[u8]) -> Self { let mut p = Self { bytes: [0; 16], len: bytes.len().min(16) as u8 }; p.bytes[..p.len as usize].copy_from_slice(&bytes[..p.len as usize]); p }
+    fn at(&self, index: usize) -> u8 { self.bytes[index % self.len as usize] }
+}
+impl Default for Pattern { fn default() -> Self { Self::new(b"MINDCORE") } }
+
 enum Waiting {
-    Ping { call: wire::Call, link: usize, sequence: u16, sent: u64, deadline: u64 },
+    // Each echo request has an ICMP socket of its own, gone with its reply or its deadline: one to a neighbour that
+    // never answers waits at the head of its own queue alone, not of the card's (000-NET-0039).
+    // `with`: a `ping-with` call, answered with the reply's size and whether its data are `pattern` over `size` bytes.
+    Ping { call: wire::Call, link: usize, handle: SocketHandle, ident: u16, sequence: u16, sent: u64, deadline: u64, with: bool, size: u16, pattern: Pattern },
     Resolve { call: wire::Call, link: usize, handle: SocketHandle, id: u16, deadline: u64 },
     Connect { call: wire::Call, index: usize, deadline: u64 },
 }
 
 // One interface: a card and its configuration, with the sockets that go out through it.
 struct Link {
-    card: Card, iface: Interface, sockets: SocketSet<'static>, dhcp: SocketHandle, icmp: SocketHandle,
+    card: Card, iface: Interface, sockets: SocketSet<'static>, dhcp: SocketHandle,
     mac: u64, address: Option<Ipv4Cidr>, gateway: Option<Ipv4Address>, dns: Option<Ipv4Address>, leased: bool, started: u64,
     // Whether the card says its link is up, and when that was last asked (550-NET-0023).
     up: bool, checked: u64,
 }
 
 struct Stack {
-    links: [Option<Link>; CARDS], tried: [u64; CARDS], stalled: [u64; CARDS],
+    links: [Option<Link>; CARDS], tried: [u64; CARDS], turn: turn::Turn<CARDS>,
     slots: [Option<Slot>; SOCKETS], generations: [u32; SOCKETS], waiting: Vec<Waiting>, closing: Vec<(usize, SocketHandle, u64)>,
     sequence: u16, next_port: u16,
     // The card the default route goes out through, as last logged.
@@ -218,24 +269,21 @@ fn text(address: Ipv4Address) -> [u8; 4] { address.octets() }
 
 impl Link {
     // The interface of card `index`, or None while its driver does not answer.
-    fn new(index: usize) -> Option<Self> {
+    fn new(index: usize, deadline: Deadline) -> Option<Self> {
         let endpoint = Endpoint(DRIVERS[index]);
-        let info = match net::info(endpoint) { Ok(Ok(info)) => info, _ => return None };
+        let info = match deadline.call(|| net::info(endpoint)) { Ok(Ok(info)) => info, _ => return None };
         let bytes = info.mac.to_be_bytes();
-        let offers = net::offloads(endpoint).is_ok_and(|o| o & 1 != 0);
-        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX], ring: None, queued: false, kicked: 0 };
+        let offers = deadline.call(|| net::offloads(endpoint)).is_ok_and(|o| o & 1 != 0);
+        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX], ring: None, queued: false, kicked: 0, deadline, retry: false, silent: false };
         card.attach();
         let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress([bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]])));
         config.random_seed = mind::time::rdtsc();
         let iface = Interface::new(config, &mut card, instant());
         let mut sockets = SocketSet::new(Vec::new());
         let dhcp = sockets.add(dhcpv4::Socket::new());
-        let mut echo = icmp::Socket::new(icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 8], vec![0; 4096]),
-                                         icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 8], vec![0; 4096]));
-        let _ = echo.bind(icmp::Endpoint::Ident(ICMP_IDENT));
-        let icmp = sockets.add(echo);
-        mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, if card.ring.is_some() { " (FRAME RING)" } else { "" }, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
-        Some(Self { card, iface, sockets, dhcp, icmp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms(),
+        let ring = match card.ring.as_ref() { Some(shared) if shared.answered => " (FRAME RING)", Some(_) => " (FRAME RING LENT, NO ANSWER YET)", None => "" };
+        mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, ring, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
+        Some(Self { card, iface, sockets, dhcp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms(),
                     up: info.link, checked: now_ms() })
     }
 
@@ -255,7 +303,8 @@ impl Link {
 
     // Runs the interface and applies DHCP results.
     fn poll(&mut self) {
-        let _ = self.iface.poll(instant(), &mut self.card, &mut self.sockets);
+        let deadline = self.card.deadline;
+        poll::interface(&mut self.iface, &mut self.card, &mut self.sockets, instant(), || deadline.remaining(now_ms()).is_some());
         self.card.kick();
         let event = self.sockets.get_mut::<dhcpv4::Socket>(self.dhcp).poll().map(|event| match event {
             dhcpv4::Event::Configured(config) => Some((config.address, config.router, config.dns_servers.first().copied())),
@@ -280,7 +329,7 @@ impl Link {
 
 impl Stack {
     fn new() -> Self {
-        Self { links: [const { None }; CARDS], tried: [0; CARDS], stalled: [0; CARDS], slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
+        Self { links: [const { None }; CARDS], tried: [0; CARDS], turn: turn::Turn::new(), slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
                sequence: 0, next_port: EPHEMERAL, default: None, preferred: None }
     }
 
@@ -327,9 +376,9 @@ impl Stack {
     // take another card, and its TCP connections are aborted so their owners learn at once. Up again: DHCP starts over.
     fn watch_link(&mut self, index: usize, now: u64) {
         let Some(link) = self.links[index].as_mut() else { return };
-        if now - link.checked < 1000 { return; }
+        if now - link.checked < 1000 || link.card.deadline.remaining(now).is_none() { return; }
         link.checked = now;
-        let up = match net::info(link.card.endpoint) {
+        let up = match link.card.deadline.call(|| net::info(link.card.endpoint)) {
             Ok(Ok(info)) => info.link,
             // No answer in time is not a link that went down: the card is asked again later.
             Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => return,
@@ -360,31 +409,35 @@ impl Stack {
 
     // Asks absent drivers again (every second), runs the interfaces, finishes waiting calls and frees closed sockets.
     fn poll(&mut self) {
-        let now = now_ms();
-        for index in 0..CARDS {
-            if now < self.stalled[index] { continue; }
-            let started = now_ms();
-            if self.links[index].is_none() && now - self.tried[index] >= 1000 { self.tried[index] = now; self.links[index] = Link::new(index); }
-            if let Some(link) = self.links[index].as_mut() { link.poll(); }
-            self.watch_link(index, now);
-            // A call that ran out of CARD_MS: the card is left alone for a while.
-            if now_ms() - started >= CARD_MS as u64 {
-                self.stalled[index] = now_ms() + STALL_MS;
-                mind::println!("[NETSTACK] CARD {} DID NOT ANSWER IN {} S: LEFT ALONE FOR {} S", index, CARD_MS / 1000, STALL_MS / 1000);
+        self.turn.begin(now_ms());
+        while let Some(visit) = self.turn.next(now_ms()) {
+            let (index, now) = (visit.index, visit.started_ms);
+            let deadline = Deadline::after(now, visit.remaining_ms);
+            if self.links[index].is_none() && now.saturating_sub(self.tried[index]) >= 1000 {
+                self.tried[index] = now; self.links[index] = Link::new(index, deadline);
             }
+            if let Some(link) = self.links[index].as_mut() { link.card.deadline = deadline; }
+            // Check link state before a busy receive queue can consume the remaining turn.
+            self.watch_link(index, now_ms());
+            if let Some(link) = self.links[index].as_mut() { link.poll(); }
+            self.turn.finish(now_ms());
         }
         let default = self.route(0);
         if default != self.default {
             self.default = default;
             match default { Some(card) => mind::println!("[NETSTACK] DEFAULT ROUTE: CARD {}", card), None => mind::println!("[NETSTACK] DEFAULT ROUTE: NONE") }
         }
+        let now = now_ms();
         self.finish_pings();
         let mut index = 0;
         while index < self.waiting.len() {
             if let Some(result) = self.check(index, now) {
                 let waiting = self.waiting.swap_remove(index);
                 let _ = match (waiting, result) {
-                    (Waiting::Ping { call, .. }, value) => socket::reply_ping(call, value),
+                    (Waiting::Ping { call, link, handle, with, .. }, value) => {
+                        self.link(link).sockets.remove(handle);
+                        if with { socket::reply_ping_with(call, value.map(|time_us| socket::Echo { time_us, size: 0, matched: false }).as_ref().map_err(|e| *e)) } else { socket::reply_ping(call, value) }
+                    }
                     (Waiting::Resolve { call, link, handle, .. }, value) => { self.link(link).sockets.remove(handle); socket::reply_resolve(call, value) }
                     (Waiting::Connect { call, index, .. }, value) => {
                         if value.is_err() { self.free(index); }
@@ -425,19 +478,27 @@ impl Stack {
         }
     }
 
+    // Each waiting echo request's socket: its reply ends it, and the socket goes.
     fn finish_pings(&mut self) {
-        let mut replies: Vec<(usize, u16)> = Vec::new();
-        for (index, link) in self.links.iter_mut().enumerate() {
-            let Some(link) = link.as_mut() else { continue };
-            let socket = link.sockets.get_mut::<icmp::Socket>(link.icmp);
-            while let Ok((data, _)) = socket.recv() {
-                if data.len() >= 8 && data[0] == 0 && u16::from_be_bytes([data[4], data[5]]) == ICMP_IDENT { replies.push((index, u16::from_be_bytes([data[6], data[7]]))); }
-            }
-        }
         let now = mind::time::monotonic_ns();
-        for (from, sequence) in replies {
-            if let Some(index) = self.waiting.iter().position(|w| matches!(w, Waiting::Ping { link, sequence: s, .. } if *s == sequence && *link == from)) {
-                if let Waiting::Ping { call, sent, .. } = self.waiting.swap_remove(index) { let _ = socket::reply_ping(call, Ok(((now - sent) / 1000) as u32)); }
+        let mut index = 0;
+        while index < self.waiting.len() {
+            let Waiting::Ping { link, handle, ident, sequence, size, pattern, .. } = self.waiting[index] else { index += 1; continue };
+            let socket = self.link(link).sockets.get_mut::<icmp::Socket>(handle);
+            // The reply's data bytes and whether they are what was sent.
+            let mut answered = None;
+            while let Ok((data, _)) = socket.recv() {
+                let field = |at: usize| u16::from_be_bytes([data[at], data[at + 1]]);
+                if data.len() >= 8 && data[0] == 0 && field(4) == ident && field(6) == sequence {
+                    let body = &data[8..];
+                    answered = Some((body.len() as u16, body.len() == size as usize && body.iter().enumerate().all(|(i, &b)| b == pattern.at(i))));
+                }
+            }
+            let Some((got, matched)) = answered else { index += 1; continue };
+            if let Waiting::Ping { call, link, handle, sent, with, .. } = self.waiting.swap_remove(index) {
+                self.link(link).sockets.remove(handle);
+                let time_us = ((now - sent) / 1000) as u32;
+                let _ = if with { socket::reply_ping_with(call, Ok(&socket::Echo { time_us, size: got, matched })) } else { socket::reply_ping(call, Ok(time_us)) };
             }
         }
     }
@@ -513,16 +574,25 @@ impl Stack {
         Ok(handle)
     }
 
-    fn ping(&mut self, address: u32, timeout: u32) -> Result<(usize, u16, u64), Error> {
+    // An echo request on a socket of its own, bound to an identifier of its own; returns the link, the socket, the
+    // identifier and sequence its reply carries, and its deadline.
+    fn ping(&mut self, address: u32, timeout: u32, size: u16, pattern: Pattern) -> Result<(usize, SocketHandle, u16, u16, u64), Error> {
+        if size > ECHO_MAX { return Err(Error::Invalid); }
         let link = self.route(address).ok_or(Error::NoNetwork)?;
+        if self.waiting.iter().filter(|w| matches!(w, Waiting::Ping { .. })).count() >= PINGS { return Err(Error::Again); }
         self.sequence = self.sequence.wrapping_add(1);
-        let mut packet = [0u8; 16];
-        packet[0] = 8; packet[4..6].copy_from_slice(&ICMP_IDENT.to_be_bytes()); packet[6..8].copy_from_slice(&self.sequence.to_be_bytes());
-        packet[8..16].copy_from_slice(b"MINDCORE");
+        let (ident, sequence) = (ICMP_IDENT.wrapping_add(self.sequence), self.sequence);
+        let length = 8 + size as usize;
+        let mut packet = vec![0u8; length];
+        packet[0] = 8; packet[4..6].copy_from_slice(&ident.to_be_bytes()); packet[6..8].copy_from_slice(&sequence.to_be_bytes());
+        for (i, byte) in packet[8..].iter_mut().enumerate() { *byte = pattern.at(i); }
         let sum = dns::checksum(&packet); packet[2..4].copy_from_slice(&sum.to_be_bytes());
-        let l = self.link(link);
-        l.sockets.get_mut::<icmp::Socket>(l.icmp).send_slice(&packet, ip(address)).map_err(|_| Error::Again)?;
-        Ok((link, self.sequence, now_ms() + timeout.clamp(100, 30_000) as u64))
+        let mut echo = icmp::Socket::new(icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 2], vec![0; 2 * length]),
+                                         icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 1], vec![0; length]));
+        echo.bind(icmp::Endpoint::Ident(ident)).map_err(|_| Error::Again)?;
+        echo.send_slice(&packet, ip(address)).map_err(|_| Error::Again)?;
+        let handle = self.link(link).sockets.add(echo);
+        Ok((link, handle, ident, sequence, now_ms() + timeout.clamp(100, 30_000) as u64))
     }
 
     fn resolve(&mut self, name: &str, server: u32, port: u16, timeout: u32) -> Result<(usize, SocketHandle, u16, u64), Error> {
@@ -578,10 +648,18 @@ impl Stack {
                 mind::println!("[NETSTACK] CHECKSUM OFFLOAD {} (CARDS {:#b})", if enable { "ON" } else { "OFF" }, cards);
                 socket::reply_offload(call, Ok(cards))
             }
-            socket::Request::Ping { address, timeout_ms } => match self.ping(address, timeout_ms) {
-                Ok((link, sequence, deadline)) => self.wait(call, |call| Waiting::Ping { call, link, sequence, sent: mind::time::monotonic_ns(), deadline }),
-                Err(error) => socket::reply_ping(call, Err(error)),
-            },
+            socket::Request::Ping { address, timeout_ms } => {
+                let result = self.echo(call, address, timeout_ms, 8, Pattern::default(), false);
+                if result.is_ok() { moved = (16, 16); }
+                result.map(drop)
+            }
+            socket::Request::PingWith { address, timeout_ms, size, pattern } => {
+                let pattern = if pattern.is_empty() { Pattern::default() } else { Pattern::new(pattern.as_slice()) };
+                let result = self.echo(call, address, timeout_ms, size, pattern, true);
+                // Its request's bytes and as many for the reply, counted when it is sent (socket.wit 2.6).
+                if result.is_ok() { moved = (8 + size as usize, 8 + size as usize); }
+                result.map(drop)
+            }
             socket::Request::Resolve { name, server, port, timeout_ms } => match self.resolve(name.as_str(), server, port, timeout_ms) {
                 Ok((link, handle, id, deadline)) => self.wait(call, |call| Waiting::Resolve { call, link, handle, id, deadline }),
                 Err(error) => socket::reply_resolve(call, Err(error)),
@@ -686,6 +764,19 @@ impl Stack {
         self.waiting.push(make(call));
         Ok(())
     }
+
+    // An echo request answered later (`ping`, or `ping-with` when `with`); its socket goes if the call cannot wait.
+    fn echo(&mut self, call: wire::Call, address: u32, timeout: u32, size: u16, pattern: Pattern, with: bool) -> mind::sys::Result<()> {
+        match self.ping(address, timeout, size, pattern) {
+            Ok((link, handle, ident, sequence, deadline)) => {
+                let waited = self.wait(call, |call| Waiting::Ping { call, link, handle, ident, sequence, sent: mind::time::monotonic_ns(), deadline, with, size, pattern });
+                if waited.is_err() { self.link(link).sockets.remove(handle); }
+                waited
+            }
+            Err(error) if with => socket::reply_ping_with(call, Err(error)),
+            Err(error) => socket::reply_ping(call, Err(error)),
+        }
+    }
 }
 
 mind::entry!(main);
@@ -696,9 +787,9 @@ fn main(_info: &'static BootInfo) {
     let mut reaped = 0u64;
     let mut policy = Policy::default();
     loop {
+        // One shared driver budget, then a client receive opportunity (550-NET-0032).
+        stack.poll();
         let now = now_ms();
-        // Every call to a card is bounded (550-NET-0030); the stack's replies to its clients are not calls.
-        wire::with_timeout(CARD_MS, || stack.poll());
         if now - reaped >= 1000 { reaped = now; stack.reap(); }
         // Grants that ran out of time or volume lose their flows.
         for badge in policy.ended(now) { let closed = stack.close_badge(badge); mind::println!("[NETSTACK] GRANT {} ENDED, {} SOCKETS CLOSED", badge, closed); }
@@ -737,7 +828,7 @@ fn main(_info: &'static BootInfo) {
             Access::Nothing => Err(Error::Denied),
             Access::Grant(grant) => match &decoded {
                 socket::Request::Config => Ok(()),
-                socket::Request::Ping { address, .. } => policy.allows(grant, Protocol::Icmp, *address, 0, now),
+                socket::Request::Ping { address, .. } | socket::Request::PingWith { address, .. } => policy.allows(grant, Protocol::Icmp, *address, 0, now),
                 socket::Request::Resolve { server, port, .. } => policy.allows(grant, Protocol::Udp, if *server != 0 { *server } else { dns }, if *port != 0 { *port } else { 53 }, now),
                 socket::Request::UdpOpen { .. } => policy.allows(grant, Protocol::Udp, 0, 0, now),
                 socket::Request::UdpSend { address, port, .. } => policy.allows(grant, Protocol::Udp, *address, *port, now),
@@ -753,7 +844,6 @@ fn main(_info: &'static BootInfo) {
                 let source = |address: u32, port: u16| grant.is_none_or(|g| policy.allows(g, Protocol::Udp, address, port, now).is_ok());
                 let (sent, received) = stack.handle(decoded, call, owner, &source);
                 if let Some(grant) = grant { policy.charge(grant, sent, received); }
-                stack.poll();
             }
         }
     }
@@ -764,6 +854,7 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
     match request {
         socket::Request::Config => socket::reply_config(call, Err(error)),
         socket::Request::Ping { .. } => socket::reply_ping(call, Err(error)),
+        socket::Request::PingWith { .. } => socket::reply_ping_with(call, Err(error)),
         socket::Request::Resolve { .. } => socket::reply_resolve(call, Err(error)),
         socket::Request::UdpOpen { .. } => socket::reply_udp_open(call, Err(error)),
         socket::Request::UdpSend { .. } => socket::reply_udp_send(call, Err(error)),

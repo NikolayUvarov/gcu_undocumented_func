@@ -4,6 +4,8 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 
 | Statement | Evidence |
 |---|---|
+| The x86 hardware report restricts Realtek chip-identity reads to RTL8168 TxConfig and RTL8852BE SYS_CFG1, on ungranted/non-mastering endpoints in D0 when a PM capability exists, with valid BAR2 and an existing uncached identity mapping; temporary memory decode is restored without clearing PCI Status flags (213-KRN-0113) | Eight host tests in `tests/realtek_probe_host.rs` exercise the production guard/restore flow using a PCI/MMIO fixture, including refusal paths and unavailable values. `tests/runtime.rs::realtek_probe_mapping_accepts_only_present_uncached_identity_leaves` checks actual large/small page-table walks. Host tests and x86 kernel release build passed, 2026-10-15. The coordinated kernel gate and actual Ryzen identity observation are pending; no NIC driver support follows from these tests. Hardware refusal to restore Command is reported explicitly. |
+| The x86 kernel's low identity map selects write-back PAT for firmware RAM, including the Ryzen loader arena above 3 GiB, and uncached PAT for reserved, unknown and device pages; mixed 2 MiB regions use 4 KiB leaves (213-KRN-0112) | Five `identity_cache_*` host regressions in `tests/runtime.rs` inspect the generated PDEs/PTEs, including the reported Ryzen loader-data ranges and device remapping. Passed on the host, 2026-10-15. The BSP's PAT/CR3 transition uses cache no-fill mode and cache/TLB flushes, restoring the firmware MTRR configuration; compiled-object inspection confirms no calls or explicit stack/data accesses in the critical sequence. Host tests do not execute this privileged transition. The kernel gate and a corrected Ryzen boot are pending; no hardware latency improvement is claimed. `StatPhys` does not carry UEFI cache attributes, so RAM type determines the PAT choice and firmware MTRRs still constrain the effective memory type. |
 | Ring 3 with IOPL 0; kernel memory not readable or writable; code RX, stack NX; privileged instructions fault; syscall pointers validated; a fault terminates only the task | QEMU `isolation` suite (`tests/isolation_app.rs` cases r, w, t, n, c, o, u, g, s, y, e, h, p) |
 | The kernel kept out of programs' pages (000-KRN-0039): with `-cpu max` x86 sets SMEP, SMAP and UMIP, a program's `sgdt` faults, and the probe kernel's read of a program's page and jump into it both fault; with `qemu64` none is offered and the boot line says so; aarch64 sets PAN (`-cpu max`), programs' pages being PXN already | `isolation` suite (case `U`, `protection_check`), CI group "x86: protection probes" (`protection-test` kernel), aarch64 `smp` suite; QEMU only, a real machine's line is in its hardware report |
 | A read-only memory mint maps read-only; a revoked lease is unmapped in its holder, also after the holder dropped the lease capability; a detached block leaves the address space | `isolation` suite, cases m, v, l, d |
@@ -18,10 +20,14 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | A model disk's models go into the block store (251-STO-0014): each one object named `models/<id>`, its files checked against the manifest's SHA-256 as they are read; a model is read back by name, also after the store restarted; a model whose file differs is not named | `vfs` suite (`disks_check`), x86 and aarch64 |
 | The block store's index is a hash table sized from its medium (251-STO-0013), its line logged; on the host, an object of 3 GiB with every chunk distinct goes into a store on a file and is found after a remount, with an index of 225 654 slots and the test process peaking at 16 732 KiB resident | `store` suite (x86, aarch64); `tests/blockstore_host.rs` (`a_three_gibibyte_object_fits`, ignored by default, run locally on 2026-10-10) |
 | The launch record in the running system (350-KRN-0023): init's `[INIT] LAUNCH: MANIFEST …` line equals the bootloader's `BOOT: MANIFEST …` serial line (digest, key, test key, images checked) | `boot` suite, `tests/aarch64_smoke.py` |
-| The boot volume and the trial (211-KRN-0012, 351-KRN-0014): with a FAT disk on IDE ahead of the boot disk on AHCI, `vfs_server` mounts the AHCI volume the bootloader named, holding its manifest; on aarch64, where `virtio_blk` drives only the first disk (the decoy), it mounts none as the boot volume and says so; a kernel built to expect another ABI stops before init with the reason on COM1 and the screen; slot B on trial (deadline 15 s in a test kernel) is confirmed by init and stays up past it, and booted from USB on EHCI (no driver, no boot volume) it is not confirmed, the kernel restarts at the deadline and slot A boots; a program's `BOOT_CONFIRM` is refused | `boot` suite (`--loader-abi-kernel`, `--trial-kernel`), `tests/aarch64_smoke.py`, `isolation` case `k` |
+| The boot volume and the trial (211-KRN-0012, 351-KRN-0014): with a FAT disk on IDE ahead of the boot disk on AHCI, `vfs_server` mounts the AHCI volume the bootloader named, holding its manifest; on aarch64, where `virtio_blk` drives only the first disk (the decoy), it mounts none as the boot volume and says so; a kernel built to expect another ABI stops before init with the reason on COM1 and the screen, and as slot B on trial restarts the machine so that slot A boots (x86 and aarch64, 351-KRN-0167); slot B on trial (deadline 15 s in a test kernel) is confirmed by init and stays up past it, and booted from USB on EHCI (no driver, no boot volume) it is not confirmed, the kernel restarts at the deadline and slot A boots; a program's `BOOT_CONFIRM` is refused | `boot` suite (`--loader-abi-kernel`, `--trial-kernel`), `tests/aarch64_smoke.py`, `isolation` case `k` |
 | The firmware's boot variables (351-KRN-0027): `efivar` without the user's consent is refused the privilege and says so; with it, it lists `BootCurrent`, `BootNext`, `BootOrder` and the boot entries OVMF holds; `efivar bootnext` to the firmware's shell entry makes the next boot start that shell once, and the boot after it starts MIND Core's entry again with `BootNext` gone; a program's `FIRMWARE_VARIABLE` without the privilege, or naming an endpoint, is refused | `boot` suite (x86, OVMF), `isolation` case `k` |
 | A `dbx` update from the running system (351-KRN-0028): with our test PK, KEK and db in OVMF's Secure Boot build, `efivar append dbx` with the signed bootloader's hash unsigned is refused by the firmware; signed with our KEK it is taken, and the next boot refuses that bootloader (`Access Denied`) | `tests/dbx_update_smoke.py` (x86) |
 | Slots A and B (351-UPD-0006), on a raw disk image with both slots: slot B staged with one try boots on trial with the try counted on the disk first, and boots as confirmed once its record is confirmed; staged again and not confirmed, it gives way to slot A at the next boot; with one byte of a service changed it is not loaded, A boots and B is left with no tries; a newer record torn by a cut write is ignored for the older one; `fsck.fat` finds the file system consistent after the bootloader's writes. The record's encoding, every single flipped bit refused, and the choice between two records | `boot` suite (`tests/boot_slots_check.py`); host tests `tests/boot_slots_host.rs` |
+| A slot's own loader (351-UPD-0010), on a raw disk image whose slot B holds the build's loader with bytes past its sections, listed in B's manifest: B boots through it on trial, its try counted once before it starts, and again once confirmed; a reset while it waits leaves the trial spent and slot A boots next; with a service of B damaged it returns and A boots at once, B with no tries; one not as B's manifest lists it is never started; a slot without one boots as before; with the build's loader in both slots none is started. The updater and the link stage release 6's loader into slot B, and its trial boots through it | `boot` suite (`own_loaders` in `tests/boot_slots_check.py`); the `update` and `linkupdate` checks |
+| The version floor (351-UPD-0024): under floor 6 a slot whose manifest names version 5 is not booted and the other slot boots, the trial's tries spent; at floor 5 it boots on trial; records of format 1 each named and not read, the disk booting as one without a valid record; release 6 raising the minimum to 6 raises the floor once it is confirmed, and a record booting release 5 then boots slot B; the floor in the record, every flipped bit refused, the newer record's floor counting and carried by the count-down, and the updater only raising it to a minimum the confirmed slot meets, no write of it lowering it | `boot` suite (`version_floor`), the `update` check; host tests `tests/boot_slots_host.rs`, `tests/updater_host.rs` |
+| Installed applications (750-KRN-0169): the version `data/apps/<name>/current` names runs, by its short and its versioned path, under the public test key the owner's policy trusts for its name; one byte of the program changed, its MANIFEST changed after signing, no key line for its name, a line naming another application, more requests than its file line, another version: not run, the loader's log saying why; the gateway's stand-in writes and reads back in its scope of `data/apps/` and is refused outside it, the owner's policy too | `qemu_smoke.py --suites modes` (`installed_apps_check`, `gateway_stub_check`) |
+| Revocation in steps (000-KRN-0104): kbench revokes 10, 100, 1000 and 10 000 nodes over four tasks; 10 000 take at least 40 steps of at most 256 nodes, as the kernel counts them, while another task's 10 ms sleeps end within 1 s (a step's time is printed, not checked); a child's mints from under a revocation of 3001 nodes are refused with `ERR_REVOKING` while it runs (four CPUs), and once its copy is gone a mint finds nothing; the model: the subtree never grows while it is walked, and nothing lives under a removed node once the walk ends | `qemu_smoke.py --suites smp` (`revocation_steps_check`), `--suites tools` (kbench's rows), `--suites isolation` (`revocation_refusal_check`); `scripts/model_check.sh` (`NoGrowth`, `Completion`; the configuration without the refusals fails `NoGrowth`) |
 | The update zone (351-UPD-0008, 351-KRN-0022): `vfs_server` names the slot that did not boot as its zone, none on a root volume; the updater's test stand-in, with the client `init` badged for the zone, writes a file in that slot and a boot record whole in place, and is refused a part of a record, the record made afresh, the running slot, `EFI/` and a new file in `MIND/`; the volume stays consistent. The clients of `vfs_server` that `init` hands out carry badges, readers `BADGE_READER` (`loader`'s, `tls`'s, `video_gw`'s and a program's checked, x86). What each badge may change below the boot root | `boot` suite (x86) and `tests/aarch64_smoke.py` (`tests/boot_slots_check.py`); `services` suite; host tests `tests/vfs_zone_host.rs` |
 | The updater (351-UPD-0007): on a slot image with release 5 in slot A, an expired channel, a bad signature, an older version and a changed boot file are refused with no boot record written; release 6 is fetched over HTTPS from a server trusted by its pinned key, its largest file cut and resumed with `Range`, checked, booted on trial through `init`'s restart (the bootloader loads release 6's manifest), and confirmed on the disk past the kernel's deadline; the records hold exactly the trial, the bootloader's count and the confirmation, and the volume is consistent. The records it writes, followed through the bootloader's choice | `updater` suite (its `update` check, x86 and aarch64); host tests `tests/updater_host.rs` |
 | Reproducible build (350-UPD-0001): two builds of one commit from fresh checkouts at the same path give identical files, the manifest and its signature included; at another path most programs differ (recorded condition: the checkout path) | `scripts/reproducible.sh` (local gate, x86) |
@@ -120,3 +126,63 @@ The full tables are in the resolutions of [176-KRN-0062](../../issues-done/176-K
 - A minted port sub-range (applications hold no ports).
 - That a holder of only the observe privilege cannot kill, focus or read logs (no such task exists before `sysmon`).
 - Playback reaching the audio output in the `listen` suite (QEMU's capture backend has no output file); the kernel's validation of `PLATFORM_CAP` arguments.
+
+
+The RTL8852BE initial-channel coexistence callbacks in
+[connection RFK notes](../../hwdocs/rtl8852be-connection-rfk.md) have ten additional
+Session model cases. All 62 Session cases passed on own source
+`bf6747f58975f9ba15b73d06948f3a32819d16cc`, after native build and raw
+publication `c38df1ddff7151af1e1ededf551f736c2f6b6766` (2026-10-16,
+0.29 s; no failures or ignored cases). They cover
+source host-state notifications, conditional measured A2DP time and exact normal
+MCC packets through the owned command/RX session. They do not establish hardware
+calibration, RFK transmission authority, a continuous coexistence service or WLAN
+connectivity; no profile guarantee is expanded by this slice.
+
+RTL8852BE private DPK source `40addff026369c01da5cc3f4f72654d19f99eb6f`
+passed all 14 focused production-engine models on its own branch after native
+build and raw publication `c38df1ddff7151af1e1ededf551f736c2f6b6766`
+(2026-10-16, 0.01 s; no failures or ignored cases). The earlier published source
+`2fc291a5` passed 13/14; that failure exposed post-STOP restoration and remains
+recorded in [DPK notes](../../hwdocs/rtl8852be-dpk.md). Both table-provenance
+Python cases and exact pinned-table regeneration passed on that first run;
+the correction changed neither table nor generator. This is host-model evidence,
+not physical RFK quality, transmission authority or working WLAN.
+
+
+The RTL8852BE [initial calibration provider](../../hwdocs/rtl8852be-calibration-policy.md)
+source `202bba961c512f6b16cf501c0158bf813189a402` passed fourteen focused
+models (2026-10-16, 0.03 s, no failures or ignores) after own native build and raw
+publication `882bd73575306964bb53e552cb2d073ae8f64ab3`, covering exact source/Board/policy binding,
+known-absent versus invalid platform input, actual PMAC units/rate limits, single-use
+permissions and the cumulative cold channel-RFK coordinator. All nine affected
+complete host harnesses also passed; their overlapping counts and unchanged
+private-firmware ignores are recorded in the provider notes. The native scoped
+input consumer and actual RF output/traffic remain
+unvalidated; no platform guarantee is expanded by the internal permission type.
+
+
+The private RTL8852BE [owned packet-mode continuation](../../hwdocs/rtl8852be-data-mode.md)
+passed thirteen cold-path cases and all thirteen affected complete host harnesses
+on own source `974088b104d11671cdcaadff8707a38f3fbf009e`, after build and raw
+publication `33fa88bff00df750b3265d4dacd9be72716f93a3` (2026-10-16).
+Counts, unchanged private-firmware ignore and the first 12/13 fixture failure
+are retained in the notes. Evidence covers the sealed startup/data transition,
+actual source scheduler/queue checks and modelled single-reader progress with
+counted Wi-Fi overflow. Continuous BTC processing, sequence reuse, native
+endpoint and actual RF traffic remain unvalidated; no platform guarantee is
+expanded by these host results.
+
+### RTL8852BE active filter continuation (2026-10-16)
+
+
+Active-filter source `96070fbe379eea198b13ff72664a68bb0ce64f65` passed all ten
+new cold cases and thirteen existing packet-mode cases as part of the complete
+data-mode harness after raw `4ea2d9eb93cf91c59491fc95de887ee01e081888` publication.
+The own-branch complete runs passed: data mode 264, BTC Session 241, station 263,
+post-MAC 241 and TX 241 (overlapping fixtures, not independent totals), with zero
+failures and the same one inherited private-firmware ignore in each. Execution
+was 1.07–1.21 seconds per harness on 2026-10-16; native compilation passed in
+1.55 seconds. The manifest `/tmp/rtw89-active-filter-validation-96070fbe.json`
+records exact source/publication, commands' results and per-harness log paths.
+These remain host-model observations, not physical radio or native-service evidence.

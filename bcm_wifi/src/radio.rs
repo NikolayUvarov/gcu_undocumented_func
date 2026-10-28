@@ -4,7 +4,8 @@
 // and its transmit status read back. Register facts come from the stage-4 and stage-5 fact sheets (b43 and brcmsmac,
 // described).
 use crate::stage3::Core;
-use core::sync::atomic::{fence, Ordering};
+use crate::txwait;
+use core::sync::atomic::{fence, AtomicU8, Ordering};
 use mind::abi::SLOT_MEM;
 use mind::dev::Dma;
 use mind::mem::Pages;
@@ -18,7 +19,7 @@ const IO_STATUS_DMA64: u32 = 1 << 12;
 const RX_ENABLE: u32 = 38 << 1 | 1 | 0x800; const TRANSLATION: u32 = 0x8000_0000;
 // MAC control: station, beacons of every network (filtered here), awake, PMQ discarded; AP, the keep-bad bits, power
 // save and discarding transmit status off.
-const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
+const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_KEEP_BAD: u32 = 1 << 23; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
 // The receive ring: 8 KiB-aligned (bit 12 of its address must stay clear on the BCM4331); 128 buffers of 2390 bytes.
 const RING_BYTES: usize = 8192; const SLOTS: usize = 128; const BUFFER: u32 = 2390; const STRIDE: usize = 2432; const OFFSET: usize = 38;
 // The transmit engine (engine 1: the BCM4331 sends everything there), the transmit status FIFO; slots hold a header and a frame.
@@ -32,16 +33,33 @@ const SOF: u32 = 1 << 31; const EOF: u32 = 1 << 30; const IOC: u32 = 1 << 29; co
 const TXC_ACK: u32 = 0x01; const TXC_START: u32 = 0x08;
 // The receive-match slots of the station's own address and of the network's BSSID; the template copy of both.
 const MATCH_CONTROL: usize = 0x420; const MATCH_DATA: usize = 0x422; const TEMPLATE_CONTROL: usize = 0x130; const TEMPLATE_DATA: usize = 0x134;
-// The gain table entry for transmitting (b43 uses 40; a higher entry is a lower gain), until 550-DRV-0028.
-pub const TX_GAIN: u16 = 80;
+// The gain table entry for transmitting, b43's: at entry 80 no access point acknowledged a frame (2026-10-13). A higher
+// entry is a lower gain; 550-DRV-0028 replaces the fixed entry.
+pub const TX_GAIN: u16 = 40;
 // The longest frame without FCS (idl/wlanhw.wit), the header that leads a received one, the frames kept for the station.
 pub const FRAME_MAX: usize = 2346; pub const RADIO_HEADER: usize = 8;
 const QUEUE: usize = 32; const QUEUE_STRIDE: usize = 2368;
 const STATUS_MS: usize = 100;
+// The cores a frame leaves through (PHY control bits 6 up, core 0 at bit 6): b43's cores 0 and 1, in SISO mode. Single
+// cores and CDD on three did no better on 2026-10-14.
+const TX_CORES: u16 = 0x00C0;
+// The cores whose front ends stay off: with core 2's on, OFDM frames from access points at -43 dBm were not received;
+// with it off they were, every one (2026-10-14, 550-DRV-0028). Its transmitter is not among TX_CORES.
+pub const CORES_OFF: u8 = 0b100;
+// The external LNA's control taken from the PHY and held off on every core, by the RF control override in PHY 0x84C,
+// 0x86C and 0x88C. Under the PHY's own control the receiver missed a fifth of an access point's beacons at -45 dBm and
+// lost 5% of data frames after 7 tries; held off, 5% and 2% (550-DRV-0039). Frames still go out under it. The levels
+// read are then about 20 dB lower, without the LNA's gain.
+pub const RF_CONTROL_HELD: u16 = 0x0400;
+const RF_CONTROL: [u16; 3] = [0x84C, 0x86C, 0x88C];
+// The cores the radio switches off when it comes up: CORES_OFF, or another set for a test (data/wifi-ofdm.txt, 550-DRV-0029).
+static CORES_OFF_AT_UP: AtomicU8 = AtomicU8::new(CORES_OFF);
+pub fn set_cores_off_at_up(mask: u8) { CORES_OFF_AT_UP.store(mask & 0b111, Ordering::Relaxed); }
+pub fn cores_off_at_up() -> u8 { CORES_OFF_AT_UP.load(Ordering::Relaxed) }
 
 // Why a call failed, as idl/wlanhw.wit names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { NoDevice, Empty, Invalid, Failed }
+pub enum Error { NoDevice, Busy, Empty, Invalid, Failed }
 
 // What passes: every beacon and probe response (a scan); frames to `own` (zero: the radio's address); group frames of
 // the network `bssid` (zero: none).
@@ -52,18 +70,59 @@ pub struct Filter { pub all_beacons: bool, pub bssid: [u8; 6], pub own: [u8; 6] 
 #[derive(Clone, Copy)]
 pub struct Sent { pub acked: bool, pub attempts: u8 }
 
-// What the receive side did since the radio came up.
+// What the receive side did since the radio came up. `frames`: by modulation (CCK, OFDM, HT) and outcome (good, bad
+// FCS, bad PLCP; bad ones reach the host only when kept, `keep`). The acknowledgements to us among the good frames
+// (control frames kept), and the per-core powers summed and the clipped count of good OFDM frames. OFDM frames good
+// and with a bad FCS (index 0 and 1) by rate (6 to 54 Mbit/s) and by MPDU length (up to 64, 65 to 256, longer), and the
+// powers and clipped count of those with a bad FCS: what tells a frame received badly from one not heard (550-DRV-0029).
+// A frame with a bad FCS weaker than BAD_FCS_FLOOR on every core is noise taken for a frame: only counted, in `ofdm_weak`.
+// The network's beacons heard, their summed signal and the interval they give in TU: against the beacons due, what the
+// receiving side missed; those missed between two heard, by their timestamps, in runs of 1, 2 to 4 and more. The good
+// CCK frames by signal (SIGNAL_BINS) and summed: how weak a sender is still heard. The polls that found the receive
+// ring out of buffers (550-DRV-0036). The good CCK frames whose receive header gave no level (no core's power byte
+// below 0), and the last such bytes: on the MacBook Pro for an hour on 2026-10-23, every frame, with reception sound.
 #[derive(Clone, Copy, Default)]
-pub struct Counts { pub queued: u32, pub filtered: u32, pub bad: u32, pub overflow: u32, pub dma_errors: u32 }
+pub struct Counts {
+    pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub frames: [[u32; 3]; 3], pub acks_cck: u32, pub acks_ofdm: u32,
+    pub ofdm_power: [i32; 3], pub ofdm_clipped: u32,
+    pub ofdm_rates: [[u32; 2]; 8], pub ofdm_lengths: [[u32; 2]; 3], pub bad_fcs_power: [i32; 3], pub bad_fcs_clipped: u32,
+    pub ofdm_weak: u32,
+    pub beacons: u32, pub beacon_power: i32, pub beacon_tu: u16, pub last_beacon: u64, pub missed: u32, pub missed_runs: [u32; 3],
+    pub cck_heard: u32, pub cck_power: i32, pub cck_bins: [u32; 5], pub ring_full: u32,
+    pub beacons_level: u32, pub no_level: u32, pub no_level_raw: [u8; 3],
+}
+// The signal bins' lower bounds in dBm: -50 and up, -60 to -51, -70 to -61, -80 to -71, below.
+pub const SIGNAL_BINS: [i8; 4] = [-50, -60, -70, -80];
+pub const BAD_FCS_FLOOR: i8 = -75;
+
+// A beacon of the network sent at `tsf`: the beacons missed since the last one heard.
+fn gaps(c: &mut Counts, tsf: u64) {
+    let last = core::mem::replace(&mut c.last_beacon, tsf);
+    let interval = c.beacon_tu as u64 * 1024;
+    if last == 0 || interval == 0 || tsf <= last || tsf - last > 10_000_000 { return; }
+    let gap = ((tsf - last + interval / 2) / interval) as u32;
+    if gap < 2 { return; }
+    c.missed += gap - 1;
+    c.missed_runs[if gap == 2 { 0 } else if gap <= 5 { 1 } else { 2 }] += 1;
+}
+
+// OFDM's rates in 500 kbit/s, in the order Counts keeps them.
+pub const OFDM_RATES: [u8; 8] = [12, 18, 24, 36, 48, 72, 96, 108];
 
 pub struct Radio<'a> {
     c: &'a Core<'a>,
-    dma: Dma, buffers: usize, next: usize, tx_ring: usize, tx_buffers: usize, tx_next: usize,
+    dma: Dma, buffers: usize, next: usize, tx_ring: usize, tx_buffers: usize, tx_next: usize, tx_generation: u8,
     pub mac: [u8; 6],
+    // The RF control overrides the PHY had before they were held, said once the start's lines are out (550-DRV-0039).
+    pub lna_was: Option<[u16; 3]>,
     channel: u8,
     filter: Filter,
     queue: Pages, head: usize, count: usize,
     retry: u16,
+    // MAC control bits a test adds: control frames, bad frames kept for the host.
+    mac_extra: u32,
+    // The cores' front-end words before a test switched one off.
+    afe_saved: Option<[(u16, u16); 3]>,
     staging: [u8; STRIDE],
     pub counts: Counts,
 }
@@ -78,6 +137,12 @@ fn rate_code(rate: u8) -> Option<(bool, u8, u16)> {
     })
 }
 
+// The rate a frame's retries go at, one step below `rate` (500 kb/s units), as b43 picks it: the header's fallback
+// fields (550-DRV-0038). On the MacBook Pro 11 Mbit/s lost half its frames where 5.5 lost one in fifteen.
+fn fallback(rate: u8) -> u8 {
+    match rate { 4 => 2, 11 => 4, 22 => 11, 12 => 11, 18 => 12, 24 => 18, 36 => 24, 48 => 36, 72 => 48, 96 => 72, 108 => 96, other => other }
+}
+
 // The received rate in 500 kb/s units from the frame type and the PLCP's first byte; 0 for HT or an unknown code.
 fn rx_rate(ofdm: bool, plcp0: u8) -> u8 {
     if ofdm {
@@ -86,6 +151,9 @@ fn rx_rate(ofdm: bool, plcp0: u8) -> u8 {
         match plcp0 { 0x0A => 2, 0x14 => 4, 0x37 => 11, 0x6E => 22, _ => 0 }
     }
 }
+
+// A core's front end as a word for the log: off when its bit is in `mask`.
+fn onoff(mask: u8, core: u8) -> &'static str { if mask >> core & 1 != 0 { "OFF" } else { "ON" } }
 
 // The PLCP header for `len` frame bytes (the FCS added) at `rate`.
 fn plcp(ofdm: bool, code: u8, rate: u8, len: usize) -> [u8; 6] {
@@ -118,8 +186,8 @@ impl<'a> Radio<'a> {
         }
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
-        let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, staging: [0; STRIDE], counts: Counts::default() };
+        let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, tx_generation: 0, mac, channel: 0, filter: Filter::default(),
+                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default(), lna_was: None };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -146,12 +214,36 @@ impl<'a> Radio<'a> {
         let mut stale = 0;
         while c.r32(TX_STATUS0) & 1 != 0 && stale < 64 { let _ = c.r32(TX_STATUS1); stale += 1; }
         r.addresses(&mac, &[0; 6]);
-        c.w32(MAC_CONTROL, (c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET);
+        c.w32(MAC_CONTROL, (c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | r.mac_extra);
         c.enable();
         mind::println!("[BCM] RADIO UP: RX RING AT {:#X} ({} SLOTS), TX RING AT {:#X} ({} SLOTS); GAIN ENTRY {} ({:08X}); {} STALE TRANSMIT STATUSES; RX STATUS {:08X}, ERROR {:08X}",
                        rx_address, SLOTS, tx_address, TX_SLOTS, TX_GAIN, entry, stale, c.r32(RX_STATUS), c.r32(RX_ERROR));
         if r.set_channel(1).is_err() { mind::println!("[BCM] CHANNEL 1 NOT SET"); }
+        let off = cores_off_at_up();
+        match r.cores_off(off) {
+            Ok(()) if off == CORES_OFF => mind::println!("[BCM] CORE 2'S FRONT END OFF: WITH IT ON, OFDM IS RECEIVED ONLY FROM STRONG SENDERS"),
+            Ok(()) => mind::println!("[BCM] FRONT ENDS OFF FOR A TEST: CORE 0 {}, CORE 1 {}, CORE 2 {}", onoff(off, 0), onoff(off, 1), onoff(off, 2)),
+            Err(_) => mind::println!("[BCM] FRONT ENDS NOT SWITCHED OFF (CORES {:03b})", off),
+        }
+        r.lna_was = Some(RF_CONTROL.map(|reg| c.phy(reg)));
+        r.rf_control(RF_CONTROL_HELD);
         Some(r)
+    }
+
+    // The line saying the LNA is held off, once: logd refuses a service's records past 64 a second, which the radio's start
+    // passes, so it waits for the first tally.
+    pub fn say_lna(&mut self) {
+        let Some(was) = self.lna_was.take() else { return };
+        let now = RF_CONTROL.map(|reg| self.c.phy(reg));
+        mind::println!("[BCM] THE EXTERNAL LNA HELD OFF: RF CONTROL {:04X} {:04X} {:04X} (THE PHY'S WAS {:04X} {:04X} {:04X}); WITH IT ON A FIFTH OF STRONG FRAMES WAS MISSED",
+                       now[0], now[1], now[2], was[0], was[1], was[2]);
+    }
+
+    // The three cores' RF control overrides set to `v`, with the MAC suspended.
+    pub fn rf_control(&self, v: u16) {
+        let suspended = self.c.suspend();
+        for reg in RF_CONTROL { self.c.phy_w(reg, v); }
+        if suspended { self.c.enable(); }
     }
 
     fn buffer(&self, slot: usize) -> usize { self.buffers + slot * STRIDE }
@@ -179,12 +271,16 @@ impl<'a> Radio<'a> {
         }
     }
 
+    // The channel set (0: none yet) and how many received frames wait.
+    pub fn channel(&self) -> u8 { self.channel }
+    pub fn waiting(&self) -> usize { self.count }
+
     // Tunes to a 2.4 GHz channel at 20 MHz with the MAC suspended meanwhile.
     pub fn set_channel(&mut self, ch: u8) -> Result<(), Error> {
         if !(1..=13).contains(&ch) { return Err(Error::Invalid); }
         if !self.c.suspend() { return Err(Error::Failed); }
         self.c.channel(ch as usize);
-        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET);
+        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
         self.c.enable();
         self.channel = ch;
         Ok(())
@@ -209,6 +305,29 @@ impl<'a> Radio<'a> {
         Ok(t)
     }
 
+    // Control frames, and frames with a bad FCS, passed to the host as well, for a test. Frames with a bad PLCP header
+    // are not: with them kept on the MacBook Pro the station heard no access point at all (550-DRV-0029, 2026-10-21).
+    pub fn keep(&mut self, control: bool, bad: bool) {
+        self.mac_extra = if control { MAC_KEEP_CONTROL } else { 0 } | if bad { MAC_KEEP_BAD } else { 0 };
+        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
+    }
+
+    // The cores whose analog front ends are off (a bitmap, core 0 first): every core's words as they were, then those
+    // in `mask` switched off as b43 switches the analog part off.
+    pub fn cores_off(&mut self, mask: u8) -> Result<(), Error> {
+        if mask == 0 && self.afe_saved.is_none() { return Ok(()); }
+        if !self.c.suspend() { return Err(Error::Failed); }
+        let saved = *self.afe_saved.get_or_insert_with(|| [0, 1, 2].map(|i| self.c.afe(i)));
+        for (i, words) in saved.into_iter().enumerate() { self.c.afe_restore(i as u16, words); }
+        for i in (0..3u16).filter(|&i| mask & 1 << i != 0) { self.c.afe_off(i); }
+        self.c.enable();
+        Ok(())
+    }
+
+    // What the MAC shows when it does not suspend: its control word, the interrupt reason, the microcode's status.
+    pub fn state(&self) -> (u32, u32, u16) { (self.c.r32(MAC_CONTROL), self.c.r32(IRQ_REASON), self.c.shm16(0x0040)) }
+
+
     // Whether the filter lets `f` (an MPDU without FCS) through: control frames never do.
     fn wanted(&self, f: &[u8]) -> bool {
         if f.len() < 10 { return false; }
@@ -222,20 +341,22 @@ impl<'a> Radio<'a> {
         bss == self.filter.bssid
     }
 
-    // Received frames moved from the ring into the queue, filtered; the engine's index set one short of its current slot.
+    // Received frames moved from the ring into the queue, filtered, while the queue has room: the rest wait in the ring.
+    // The engine's index is set one short of the first slot not yet taken.
     pub fn poll(&mut self) {
         fence(Ordering::SeqCst);
         let current = ((self.c.r32(RX_STATUS) & 0x1FFF) as usize / 16) % SLOTS;
-        while self.next != current {
+        while self.next != current && self.count < QUEUE {
             let slot = self.next;
             self.take_slot(slot);
             self.poison(slot);
             self.next = (slot + 1) % SLOTS;
         }
         fence(Ordering::SeqCst);
-        self.c.w32(RX_INDEX, (((current + SLOTS - 1) % SLOTS) * 16) as u32);
+        self.c.w32(RX_INDEX, (((self.next + SLOTS - 1) % SLOTS) * 16) as u32);
         let reason = self.c.r32(DMA0_REASON);
         if reason != 0 { self.c.w32(DMA0_REASON, reason); if reason & 0xDC00 != 0 { self.counts.dma_errors += 1; } }
+        if reason & 0x2000 != 0 { self.counts.ring_full += 1; }
     }
 
     // One completed buffer: its 24-byte receive header checked, the frame queued with the interface's header.
@@ -246,15 +367,53 @@ impl<'a> Radio<'a> {
         for w in 0..(OFFSET + length).div_ceil(4) { self.staging[4 * w..4 * w + 4].copy_from_slice(&self.dma.read32(b + 4 * w).to_le_bytes()); }
         let s = &self.staging;
         let (phy0, status) = (u16::from_le_bytes([s[4], s[5]]), u32::from_le_bytes([s[16], s[17], s[18], s[19]]));
-        // FCS error, decryption error, PLCP violation or header check failure: dropped.
-        if status & (1 | 1 << 4) != 0 || phy0 & 0x0300 != 0 { self.counts.bad += 1; return; }
+        if s[OFFSET..OFFSET + 8].iter().all(|&b| b == 0xFF) { self.counts.bad += 1; return; }
+        // Counted by modulation and outcome first; FCS error, decryption error, PLCP violation or header check failure: dropped.
+        let kind = match phy0 & 3 { 0 => 0, 1 => 1, _ => 2 };
+        let outcome = if status & 1 != 0 { 1 } else if phy0 & 0x0300 != 0 { 2 } else { 0 };
+        self.counts.frames[kind][outcome] += 1;
         let pad = if status & 4 != 0 { 2 } else { 0 };
+        // An OFDM frame whose PLCP header held: its rate and length, and its powers when its FCS failed.
+        let strong = [s[9], s[10], s[11]].iter().any(|&p| (BAD_FCS_FLOOR..0).contains(&(p as i8)));
+        if kind == 1 && outcome == 1 && !strong { self.counts.ofdm_weak += 1; }
+        else if kind == 1 && outcome < 2 && length >= pad + 6 + 4 {
+            let rate = rx_rate(true, s[OFFSET + pad]);
+            if let Some(i) = OFDM_RATES.iter().position(|&r| r == rate) { self.counts.ofdm_rates[i][outcome] += 1; }
+            let mpdu = length - pad - 6 - 4;
+            self.counts.ofdm_lengths[if mpdu <= 64 { 0 } else if mpdu <= 256 { 1 } else { 2 }][outcome] += 1;
+            if outcome == 1 {
+                for i in 0..3 { self.counts.bad_fcs_power[i] += s[9 + i] as i8 as i32; }
+                if phy0 & 0x000C != 0 { self.counts.bad_fcs_clipped += 1; }
+            }
+        }
+        if outcome != 0 || status & 1 << 4 != 0 { self.counts.bad += 1; return; }
         if length < pad + 6 + 4 + 10 { self.counts.bad += 1; return; }
         let (plcp0, start, end) = (s[OFFSET + pad], OFFSET + pad + 6, OFFSET + length - 4);
-        if s[OFFSET..OFFSET + 8].iter().all(|&b| b == 0xFF) { self.counts.bad += 1; return; }
-        if !self.wanted(&s[start..end]) { self.counts.filtered += 1; return; }
-        if self.count == QUEUE { self.counts.overflow += 1; return; }
+        let ofdm = kind == 1;
+        if ofdm {
+            for i in 0..3 { self.counts.ofdm_power[i] += s[9 + i] as i8 as i32; }
+            if phy0 & 0x000C != 0 { self.counts.ofdm_clipped += 1; }
+        }
+        let own = if self.filter.own == [0; 6] { self.mac } else { self.filter.own };
+        if s[start] == 0xD4 && s[start + 4..start + 10] == own { if ofdm { self.counts.acks_ofdm += 1 } else { self.counts.acks_cck += 1 } }
         let signal = [s[9], s[10], s[11]].map(|v| v as i8).into_iter().max().unwrap_or(0);
+        let heard = signal < 0 && signal > -128;
+        if !ofdm && heard {
+            self.counts.cck_heard += 1;
+            self.counts.cck_power += signal as i32;
+            self.counts.cck_bins[SIGNAL_BINS.iter().position(|&b| signal >= b).unwrap_or(4)] += 1;
+        } else if !ofdm {
+            self.counts.no_level += 1;
+            self.counts.no_level_raw = [s[9], s[10], s[11]];
+        }
+        let f = &s[start..end];
+        if f.len() >= 36 && f[0] == 0x80 && self.filter.bssid != [0; 6] && f[16..22] == self.filter.bssid {
+            self.counts.beacons += 1;
+            if heard { self.counts.beacons_level += 1; self.counts.beacon_power += signal as i32; }
+            self.counts.beacon_tu = u16::from_le_bytes([f[32], f[33]]);
+            gaps(&mut self.counts, u64::from_le_bytes(f[24..32].try_into().unwrap()));
+        }
+        if !self.wanted(&s[start..end]) { self.counts.filtered += 1; return; }
         let weakness = if signal < 0 && signal > -128 { signal.unsigned_abs() } else { 0 };
         let channel = match (u16::from_le_bytes([s[22], s[23]]) >> 3) as u8 { 0 => self.channel, ch => ch };
         let len = end - start;
@@ -295,17 +454,24 @@ impl<'a> Radio<'a> {
         }
         let unicast = frame[4] & 1 == 0;
         let p = plcp(ofdm, code, rate, frame.len());
+        // The slot is the engine's until it has moved past it (the audit's H12): with no room the queue is full.
+        let current = ((self.c.r32(TX_STATUS) & 0x1FFF) as usize / 16) % TX_SLOTS;
+        if !txwait::room(self.tx_next, current, TX_SLOTS) { return Err(Error::Busy); }
         let slot = self.tx_next;
         let mut header = [0u8; HEADER];
         header[0x00..0x04].copy_from_slice(&(TXC_START | if unicast { TXC_ACK } else { 0 }).to_le_bytes());
         header[0x04..0x06].copy_from_slice(&frame[0..2]);
-        header[0x08..0x0A].copy_from_slice(&(0x00C0u16 | ofdm as u16).to_le_bytes()); // antennas 0/1 automatic, no per-frame power
-        header[0x0A..0x0C].copy_from_slice(&control1.to_le_bytes()); header[0x0C..0x0E].copy_from_slice(&control1.to_le_bytes());
-        header[0x12] = code; header[0x14] = ofdm as u8; header[0x15] = self.channel;
+        header[0x08..0x0A].copy_from_slice(&(TX_CORES | ofdm as u16).to_le_bytes()); // no per-frame power
+        // The retries at the fallback rate: its PHY control word, its encoding (0x14) and its PLCP header (0x36).
+        let fb = fallback(rate);
+        let (fb_ofdm, fb_code, fb_control1) = rate_code(fb).unwrap_or((ofdm, code, control1));
+        header[0x0A..0x0C].copy_from_slice(&control1.to_le_bytes()); header[0x0C..0x0E].copy_from_slice(&fb_control1.to_le_bytes());
+        header[0x12] = code; header[0x14] = fb_ofdm as u8; header[0x15] = self.channel;
         header[0x26..0x2C].copy_from_slice(&frame[4..10]);
-        header[0x36..0x3C].copy_from_slice(&p);
+        header[0x36..0x3C].copy_from_slice(&plcp(fb_ofdm, fb_code, fb, frame.len()));
         header[0x3C..0x3E].copy_from_slice(&frame[2..4]);
-        let cookie = 0x2000u16 | slot as u16;
+        let cookie = txwait::cookie(self.tx_generation, slot);
+        self.tx_generation = self.tx_generation.wrapping_add(1);
         header[0x4C..0x4E].copy_from_slice(&cookie.to_le_bytes());
         header[0x70..0x76].copy_from_slice(&p);
         let at = self.tx_buffers + slot * TX_STRIDE;
@@ -320,28 +486,16 @@ impl<'a> Radio<'a> {
         self.tx_next = (slot + 1) % TX_SLOTS;
         fence(Ordering::SeqCst);
         self.c.w32(TX_INDEX, (self.tx_next * 16) as u32);
-        let status = self.status(cookie);
+        // The FIFO's next entry: its second register is read only after a valid first, and that read takes it.
+        let c = self.c;
+        let fifo = || { let first = c.r32(TX_STATUS0); (first != u32::MAX && first & 1 != 0).then(|| (first, c.r32(TX_STATUS1))) };
+        let end = mind::time::uptime_ms() + STATUS_MS;
+        let status = txwait::wait(fifo, cookie, mind::time::uptime_ms, end, || { self.poll(); mind::time::sleep(1); });
         self.c.w32(IRQ_REASON, IRQ_TX_STATUS);
         let word = status.ok_or(Error::Failed)?;
         let (count, suppressed) = ((word >> 12 & 0xF) as u8, word >> 2 & 7);
         if count == 0 || suppressed != 0 { return Err(Error::Failed); }
         Ok(Sent { acked: word & 2 != 0, attempts: count })
-    }
-
-    // The final status word for `cookie`, others skipped, polling the receive ring while waiting.
-    fn status(&mut self, cookie: u16) -> Option<u32> {
-        let end = mind::time::uptime_ms() + STATUS_MS;
-        loop {
-            let first = self.c.r32(TX_STATUS0);
-            if first != u32::MAX && first & 1 != 0 {
-                let _ = self.c.r32(TX_STATUS1);
-                if first & 0x40 == 0 && (first >> 16) as u16 == cookie { return Some(first & 0xFFFF); }
-                continue;
-            }
-            if mind::time::uptime_ms() >= end { return None; }
-            self.poll();
-            mind::time::sleep(1);
-        }
     }
 
     // Both engines stopped, the MAC suspended; the core is the caller's to reset.

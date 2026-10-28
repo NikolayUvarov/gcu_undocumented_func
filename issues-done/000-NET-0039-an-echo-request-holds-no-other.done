@@ -1,0 +1,46 @@
+# 000-NET-0039 — An echo request to a neighbour that never answers holds no other request — done
+
+**Type:** network (stack) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** — (for [000-APP-0095](000-APP-0095-ping-options.done)) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1
+
+From the tools track's request "An echo request to a neighbour that never answers may hold the card's ICMP queue (000-APP-0095)" in requests-NET.md (2026-10-20), which this task takes from that file.
+
+## Problem
+
+- **What the stack did.** `Stack::ping` queued each echo request on one ICMP socket per card, bound to one identifier.
+- **Why one request held the rest.** In smoltcp 0.14, `PacketBuffer::dequeue_with` (`storage/packet_buffer.rs`) leaves a packet at the head of the queue when its dispatch fails. A destination whose neighbour is not found fails with `NeighborPending` on every poll, ARP asked again once a second.
+- **So a request to an address on the card's own network that no host has stayed at the head for ever.** Every request after it, to any address, waited behind it. Once the 8 places were taken, `ping` answered `Again`.
+- **Reproduced** in this session's container (x86, QEMU, `main` 61e3d1d):
+  - `ping -c 3 10.0.2.200` lost all three;
+  - `ping -c 3 10.0.2.2` then lost all three too;
+  - the next `ping -c 3 10.0.2.2` ended `[3/3] PING: Again`.
+
+## Plan
+
+- **A socket per echo request.** Each one gets an ICMP socket of its own, bound to an identifier of its own (`ICMP_IDENT` plus its sequence), with room for one request and two replies.
+  - Its reply ends it, matched by identifier and sequence.
+  - Its deadline ends it too, and the socket goes either way, with whatever it still held.
+  - A request to a neighbour that never answers waits at the head of its own queue alone.
+- **A bound.** At most 16 echo requests wait at once, all clients together; one more is answered `Again`.
+- **A check in the `net` suite,** after `ping`'s options: `ping -c 3 10.0.2.200` loses all three, then `ping -c 3 10.0.2.2` gets all three.
+
+## Acceptance criteria
+
+- [x] The failure reproduced without the change (above).
+- [x] The `net` suite's check passes on x86 and aarch64.
+
+## Progress (2026-10-22)
+
+- **With the change,** same machine and scenario: `ping -c 3 10.0.2.200` lost all three, then `ping -c 3 10.0.2.2` got all three, twice in a row (about 11 ms each).
+
+## Resolution
+
+- **`netstack`** (c3c6f008): each echo request has an ICMP socket of its own, bound to `ICMP_IDENT` plus its sequence, removed on its reply or its deadline; at most 16 wait at once, all clients together, and one more is answered `Again`.
+- **The `net` suite** (`tests/qemu_smoke.py`, after `ping`'s options): `ping -c 3 10.0.2.200` loses all three, then `ping -c 3 10.0.2.2` gets all three.
+- **Runs:**
+  - x86, in this session's container: on c3c6f008, and on 4caf6024 with 000-NET-0040 (26 checks each);
+  - aarch64, on the maintainer's un-rizen through Effector: the group "aarch64: files, network and TLS" on 4caf6024 merged with `main` f7630021, with the same lines in its log.
+
+## Related
+
+- [000-APP-0095](000-APP-0095-ping-options.done): `ping`'s options.
+- requests-NET.md: an echo request's size and payload, the other request of 000-APP-0095.

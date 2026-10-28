@@ -6,13 +6,16 @@
 // (550-DRV-0023), on request, loads the microcode from the disk, starts it, reads its revision and resets the core.
 // Stage 3 sets up the radio; the radio module keeps it running for the station (550-DRV-0027), and stage 4 tests it.
 // Register facts come from Broadcom's published headers and the b43 specifications; no driver code is taken.
-use mind::abi::{BootInfo, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM};
+use core::sync::atomic::{AtomicUsize, Ordering};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM, SLOT_SERVICE};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 
 mod radio;
+mod serve;
 mod stage3;
 mod stage4;
 mod tables;
+mod txwait;
 
 // PCI configuration: the backplane addresses BAR0's first two 4 KiB windows show.
 const CFG_WINDOW: usize = 0x80; const CFG_WINDOW2: usize = 0xAC;
@@ -58,10 +61,18 @@ const SHM_UCODE: u32 = 0; const SHM_SHARED: u32 = 1; const SHM_SCRATCH: u32 = 2;
 // The microcode for core revision 29 that scripts/proprietary.sh puts on the disk; a b43 firmware file of type 'u'.
 const MICROCODE: &str = "data/firmware/b43/ucode29_mimo.fw";
 const MICROCODE_MAX: usize = 64 * 1024;
-// Stage 2 runs only when this file exists: it stopped the MacBook Pro once (2026-10-11), so it is a test the maintainer asks for.
+// The stages run as a test when this file exists (the maintainer's request), and the radio comes up for the station when
+// init gives bcm_wifi its service endpoint (550-DRV-0027); without either the core stays in reset.
 const STAGE2_FLAG: &str = "data/wifitest.txt";
+/// With this file, 802.11g is offered to the station (550-DRV-0037). `cores-off=<0 to 7>` in it switches off the front
+/// ends of the cores in that mask (core 0 is bit 0) instead of core 2's alone, for a test (550-DRV-0029).
+const OFDM_FLAG: &str = "data/wifi-ofdm.txt";
+const CORES_OFF_WORD: &[u8] = b"cores-off=";
 // Each step is logged, then waited for longer than the journal's save period, so a hang leaves its step as the last line.
 const STEP_MS: usize = 3000;
+// The wait after each step: STEP_MS in a test, none when the radio only comes up for the station.
+static STEP_WAIT: AtomicUsize = AtomicUsize::new(0);
+pub fn step_wait() -> usize { STEP_WAIT.load(Ordering::Relaxed) }
 // The BCM4331's 802.11 core is core 1 (ChipCommon 0, 802.11 1, PCIe 2).
 const CORE_80211: u32 = 1;
 
@@ -132,8 +143,31 @@ fn main(_info: &'static BootInfo) {
     let _ = WINDOW;
 
     let mac = sprom(&bar, capabilities);
-    if index == CORE_80211 { microcode(&bar, mac); }
+    if index == CORE_80211 {
+        let test = mind::fs::File::open(STAGE2_FLAG).is_ok();
+        let ofdm = mind::fs::File::open(OFDM_FLAG).ok();
+        serve::offer_ofdm(ofdm.is_some());
+        mind::println!("[BCM] 2.4 GHZ OFFERED TO THE STATION: {}", if ofdm.is_some() { "802.11G (data/wifi-ofdm.txt)" } else { "802.11B ONLY, CCK (data/wifi-ofdm.txt OFFERS 802.11G)" });
+        if let Some(mask) = ofdm.and_then(|f| cores_off(&f)) { radio::set_cores_off_at_up(mask); }
+        let serving = cap_info(SLOT_SERVICE).0 == CAP_KIND_ENDPOINT;
+        if test { STEP_WAIT.store(STEP_MS, Ordering::Relaxed); }
+        mind::println!("[BCM] TEST {} ({}), A STATION TO SERVE: {}", if test { "ASKED FOR" } else { "NOT ASKED FOR" }, STAGE2_FLAG, if serving { "YES" } else { "NO" });
+        // The station is answered during the test, so that it and the stack do not wait for the test's end.
+        if let (true, true, Some(own)) = (test, serving, mac) { serve::hold(own); mind::println!("[BCM] THE STATION IS ANSWERED BUSY UNTIL THE TEST ENDS"); }
+        microcode(&bar, mac, test, serving);
+        if test { test_done(); }
+        if serving { serve::absent(); }
+    }
     idle()
+}
+
+// The mask after `cores-off=` in the OFDM flag file, a digit 0 to 7, if it holds one.
+fn cores_off(file: &mind::fs::File) -> Option<u8> {
+    let mut text = [0u8; 128];
+    let n = file.read_at(0, &mut text).ok()?;
+    let text = &text[..n];
+    let at = text.windows(CORES_OFF_WORD.len()).position(|w| w == CORES_OFF_WORD)? + CORES_OFF_WORD.len();
+    match text.get(at) { Some(&d @ b'0'..=b'7') => Some(d - b'0'), _ => None }
 }
 
 // The SPROM, read where it may appear, its revision, CRC and MAC address logged.
@@ -156,6 +190,8 @@ fn sprom(bar: &Mmio, capabilities: u32) -> Option<[u8; 6]> {
                 let mac = [words[0x46] >> 8, words[0x46] & 0xFF, words[0x47] >> 8, words[0x47] & 0xFF, words[0x48] >> 8, words[0x48] & 0xFF];
                 mind::println!("[BCM] SPROM AT CHIPCOMMON+{:03X}: REVISION {}, CRC GOOD, MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, WORDS 0-3 {:04X} {:04X} {:04X} {:04X}",
                                at, revision, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], words[0], words[1], words[2], words[3]);
+                // Revision 9's board flags (bytes 0x84, 0x86), chains (0xA2) and front end (0xAE), as read; b43's HT path uses none.
+                mind::println!("[BCM] SPROM BYTES 84 {:04X}, 86 {:04X} (BOARD FLAGS), A2 {:04X} (CHAINS), AE {:04X} (FRONT END)", words[0x42], words[0x43], words[0x51], words[0x57]);
                 found = Some(mac.map(|b| b as u8));
             }
             None => mind::println!("[BCM] SPROM AT CHIPCOMMON+{:03X}: NOT VALID (FIRST WORDS {:04X} {:04X} {:04X} {:04X}, LAST {:04X}, CRC OF THE REST {:02X})",
@@ -167,6 +203,12 @@ fn sprom(bar: &Mmio, capabilities: u32) -> Option<[u8; 6]> {
         mind::println!("[BCM] CHIP CONTROL GIVEN BACK: {:08X}", bar.read32(CC + CC_CHIP_CONTROL));
     }
     if found.is_none() { mind::println!("[BCM] NO VALID SPROM"); }
+    // Chip control bit 2 (EXT_LNA_G) off, as the firmware leaves it: with it on, no network is heard (550-DRV-0036).
+    let before = bar.read32(CC + CC_CHIP_CONTROL);
+    if before & 1 << 2 != 0 {
+        bar.write32(CC + CC_CHIP_CONTROL, before & !(1 << 2));
+        mind::println!("[BCM] CHIP CONTROL BIT 2 (EXTERNAL LNA) OFF AGAIN: {:08X} -> {:08X}", before, bar.read32(CC + CC_CHIP_CONTROL));
+    }
     found
 }
 
@@ -212,10 +254,13 @@ fn shm_select(bar: &Mmio, routing: u32, offset: u32) { bar.write32(D11_SHM_CONTR
 
 // Stage 2 (550-DRV-0023): the microcode read from the disk, the core enabled, the microcode loaded and started; its
 // revision read back; then the processor stopped and the core put back into reset. No DMA is set up.
-fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 2, STEP {}: {}", n, what); mind::time::sleep(STEP_MS); }
+fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 2, STEP {}: {}", n, what); serve::pause(step_wait()); }
 
-fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
-    if mind::fs::File::open(STAGE2_FLAG).is_err() { mind::println!("[BCM] STAGE 2 NOT ASKED FOR ({} IS ABSENT): THE CORE STAYS IN RESET", STAGE2_FLAG); return; }
+// The maintainer's sign that the disk may go back: logged after a wait longer than the journal's save period.
+fn test_done() { serve::pause(STEP_MS); mind::println!("*** WIFI TEST Complete. Data collected ***"); }
+
+fn microcode(bar: &Mmio, mac: Option<[u8; 6]>, test: bool, serving: bool) {
+    if !test && !serving { mind::println!("[BCM] NO TEST AND NO STATION: THE CORE STAYS IN RESET"); return; }
     let Ok(file) = mind::fs::File::open(MICROCODE) else { mind::println!("[BCM] NO MICROCODE AT {} (FILE ACCESS OR scripts/proprietary.sh copy): STAGE 2 SKIPPED", MICROCODE); return };
     let Some(mut pages) = mind::mem::Pages::new(MICROCODE_MAX) else { mind::println!("[BCM] NO MEMORY FOR THE MICROCODE"); return };
     let buffer = pages.as_mut_slice();
@@ -310,8 +355,16 @@ fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
             let core = stage3::Core::new(bar);
             match mac {
                 Some(mac) => if stage3::run(&core, mac) {
-                    // The service's endpoint comes with init's start of the station (550-DRV-0027); until then the radio stops.
-                    if let Some(radio) = stage4::run(&core, mac) { mind::println!("[BCM] NO STATION TO SERVE YET: THE RADIO STOPS"); radio.stop(); }
+                    // The test's stages leave the radio running; for the station alone it comes straight up.
+                    let radio = if test { stage4::run(&core, mac) } else { radio::Radio::up(&core, mac) };
+                    if let Some(mut radio) = radio {
+                        if serving {
+                            if test { test_done(); }
+                            serve::run(&mut radio);
+                        }
+                        mind::println!("[BCM] NO STATION TO SERVE: THE RADIO STOPS");
+                        radio.stop();
+                    }
                 },
                 None => mind::println!("[BCM] NO MAC ADDRESS FROM THE SPROM: STAGES 3 AND 4 SKIPPED"),
             }

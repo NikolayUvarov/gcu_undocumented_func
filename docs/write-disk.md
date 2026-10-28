@@ -1,6 +1,6 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.3 (2026-10-08): the log partition · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the log partition) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
@@ -26,7 +26,7 @@ It builds everything and writes `dist/mind-core-usb.img` (568 MiB). Its MBR has 
 
 The script checks every file it packed and both partitions, and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
 
-With `--slots` the kernel, the services and the signed manifest go into slot A (`MIND/A/`), confirmed in `MIND/BOOT0`, so that the updater can fill slot B ([docs/update/updater.md](update/updater.md)). `--channel FILE` keeps a release's signed channel file in slot A, and then the updater knows the running version; its manifest must be this build's. `--update FILE` puts an `update.txt` at the root.
+With `--slots` the kernel, the services, the applications (351-UPD-0023) and the signed manifest go into slot A (`MIND/A/`), confirmed in `MIND/BOOT0`, so that the updater can fill slot B ([docs/update/updater.md](update/updater.md)). `--channel FILE` keeps a release's signed channel file in slot A, and then the updater knows the running version; its manifest must be this build's. `--update FILE` puts an `update.txt` at the root.
 
 Optional: boot exactly this image in QEMU first, as a USB stick:
 
@@ -88,6 +88,20 @@ The rest of a disk larger than the image stays unused.
 
 On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the image from Linux or Windows").
 
+**From WSL on Windows, in one step:** `scripts/build_and_write.sh <disk number>`.
+- It pulls `fast-test` (or builds `--commit <id>`), builds, and packs the image.
+- It opens an elevated PowerShell running `05_write_usb_windows.ps1`, which asks before it writes (`ERASE <number>`).
+- After the write it copies the proprietary files and the desktop pictures onto the disk, and the test files its options ask for: `--link-dev`, `--keep-wifi`, `--wifi-ofdm` and others, listed in the script's header.
+- **`--slots`** writes an image with boot slots and an `update.txt` that takes releases from `data/link/rel/`. After that one write, `scripts/link_update.py` updates the machine over the link (351-KRN-0141).
+- **`--mode=maintenance`** puts `data/mode.conf` with that one line on the disk, so `init` starts in the maintenance mode and runs the Effector agent's services (750-KRN-0143). `--mode=development` and `--mode=development,maintenance` work the same way.
+- **`link-console`** may stand beside them, with `--link-dev`: for example, `--mode=maintenance,link-console`. `init` then takes the link as the owner's console (800-KRN-0155, 800-LNK-0019). Without `dev` in `link.conf`, `init` leaves the word out, so the script refuses it without `--link-dev`. Only the disk's word turns it on or off: `mode` in the shell keeps it as it is.
+- **`--keep-effector`** keeps the Effector agent across the write. Before the write, `data/effector/` (its configuration and the owner's policy) and `system/effector/` (its ID, journal and token) are saved from the old disk into `~/.config/mind/effector`, mode 700 and 600. After the write they are put back and read back. With `--mode=maintenance` the agent then comes up as the same endpoint, with no step at the keyboard and no new activation on the server (800-LNK-0023). The files may hold the agent's token: never print or commit them.
+  - **Insert the old disk before the write,** with `--keep-wifi`, `--keep-effector` or `--keep-settings`: what it keeps is saved from it before the writer opens. If it is not there, the script asks for it and waits up to 10 minutes; Enter goes on without it, and what was saved before is put back.
+  - **Shut the machine down or reboot it before you take its disk out.** MIND Core's file service keeps recent changes in a cache, and a `rm` or `mv` reaches the disk only when the cache is flushed (a request to KRN, 2026-10-24). A disk pulled from a running machine may lack them, and then there is nothing to keep: on 2026-10-24 the Effector agent's `effector.conf` was lost this way. `sync` in the shell flushes it too.
+- **`--keep-settings`** keeps everything the owner set: `--keep-wifi` and `--keep-effector`, plus the rest of `data/` and `system/`. That covers the time zone (`data/clock.conf`), the desktop (`data/wm.conf` and its picture), `data/memory.conf`, `data/services.txt`, `data/mode.conf`, the installed apps and the owner's files. They are saved into `~/.config/mind/settings` and put back first, so an option given now (`--mode=` and the others) still wins (800-LNK-0024). Not kept: what the script puts itself (`data/firmware`, `data/wallpapers`, the test flags) and `data/link`.
+- `--list` shows the USB disks and their numbers.
+- It builds the repository it lives in, also when it is started through a symbolic link from outside that repository.
+
 ## 6. Boot the PC
 
 **Firmware settings** (in the setup screen, usually Del, F2 or F10 at power-on):
@@ -110,6 +124,27 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
 - **Starting it.** Attach the disk by USB, hold Option (⌥) at power-on and choose its `EFI Boot` entry.
   - Macs before the T2 chip have nothing to change in the firmware.
   - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
+- **Restarting into MIND Core.** The choice made with Option holds for that boot only. Any restart starts macOS again, `mindlink reboot` included: seen on the MacBook Pro on 2026-10-21.
+  - **To make the disk the default startup disk,** run this once in the Terminal of macOS Recovery, with the disk attached. macOS itself refuses it (below).
+    - macOS mounts only the log partition, `MIND LOG`. The boot partition is marked as the EFI system partition (type `0xEF`), which macOS leaves unmounted, so it is mounted by hand first.
+    - `MIND LOG`'s disk is the stick: `disk2`, say, and the boot partition is its first, `disk2s1`.
+
+    ```bash
+    diskutil info "/Volumes/MIND LOG" | grep "Part of Whole"     # the stick, e.g. disk2
+    sudo mkdir -p /Volumes/MINDCORE
+    sudo mount -t msdos /dev/disk2s1 /Volumes/MINDCORE           # its boot partition
+    sudo bless --mount /Volumes/MINDCORE --setBoot --file /Volumes/MINDCORE/EFI/BOOT/BOOTX64.EFI --shortform
+    bless --getBoot                                              # the device the firmware starts now
+    sudo umount /Volumes/MINDCORE
+    ```
+
+    `bless` records the disk in the firmware's settings (NVRAM). The Mac should then start it at every power-on and restart while it is attached, and macOS when it is not.
+  - **Where it works: macOS Recovery.** Hold Command-R at power-on, then Utilities, Terminal. It runs as root, so no `sudo`. The disk numbers there may differ: find the stick with `diskutil list`.
+    - **On the MacBook Pro on 2026-10-21 it worked from Recovery.**
+    - After it, `mindlink reboot` came back into MIND Core in about 9 s, with no key pressed, and the Wi-Fi joined again.
+  - **From macOS itself it is refused.** With the partition mounted, `bless` answered `Could not set boot device property: 0xe00002e2`. That is `kIOReturnNotPermitted`, from macOS's System Integrity Protection (from 10.11), and `bless --getBoot` still named macOS's volume.
+  - **A rewrite may lose it.** On 2026-10-21 the Mac started macOS after the disk was written again; on 2026-10-22 it started the disk. If it starts macOS, run the commands again from Recovery. A disk written with `--slots` (section 5) keeps the bootloader where it was, so the commands are the same. Updates through the link do not rewrite the disk. Since 351-UPD-0010 they do not need to for a new loader either: each release brings its own into its slot, and the loader at `EFI/BOOT/` starts it ([slots.md](update/slots.md)). A stick written before that task boots every slot with its own old loader, so it is written once more.
+  - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:
   - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done));
   - `vfs_server` mounts only FAT volumes in an MBR partition table, so it skips the internal disk's GPT.
@@ -172,3 +207,50 @@ For [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), whether 
 - the serial output, if you had a COM1 cable.
 
 The profile records the machine as a configuration of its own: what was run on it, with which firmware settings (MC-12.1).
+
+## 10. One boot of MIND Core from Linux, and back
+
+On a PC that runs Linux from its own disk, MIND Core can be started once from the stick without the firmware's boot menu ([000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md)). Every restart after that boot comes back to Linux. On the Ryzen, which runs Ubuntu, a run looks like this:
+
+```bash
+./05_write_usb_linux.sh --device /dev/disk/by-id/…   # section 5
+sudo scripts/boot_switch.py status                   # the boot entries, Linux's first, and the MIND Core disk
+sudo scripts/boot_switch.py once --reboot            # the next boot starts the stick, once
+# … the run in MIND Core; its reboot, a panic, the watchdog or a power cut brings Linux back …
+sudo scripts/boot_switch.py logs ~/mind-runs         # the MIND LOG volume copied, read-only
+```
+
+**How it works.** The firmware has two variables:
+- **`BootNext`** names the entry the next boot starts, and the firmware deletes it as that boot begins;
+- **`BootOrder`** names every boot after that.
+
+`once` sets `BootNext` to the stick's entry. If the stick has no entry, `once` makes one first with `efibootmgr --create-only`, labelled `MIND Core`. Nothing in the image or the bootloader changes.
+
+**What the script refuses**, saying why:
+- Linux's entry (`BootCurrent`) is not first in `BootOrder`: a restart would not come back. Put it first in the firmware's setup.
+- Linux was not started by UEFI.
+- No MIND Core disk is attached, or several are (name one with `--disk`).
+- The MIND Core disk is mounted.
+
+The script never writes `BootOrder`.
+
+**`logs`** copies the whole `MIND LOG` volume into a new directory, then says one of:
+- MIND Core booted since `once`, which new `BOOTNNNN.LOG` files it wrote, and whether `autorun.msh` ended;
+- it did not boot. The firmware may skip USB disks with Fast Boot on, or ignore `BootNext`; Secure Boot with Microsoft's keys refuses the bootloader (section 6).
+
+**An unattended run.** Put an `autorun.msh` at the stick's root after writing it. The shell runs it once at start ([docs/msh.md](msh.md)), and it can end with `reboot`. For example, `check` writes its full log to `log:`:
+
+```
+#!msh
+requires: files sysinfo log lifecycle
+check
+reboot
+```
+
+`diag/full.msh` copied as `autorun.msh`, with `reboot` added as its last line, does the full hardware run. A step that asks the user (the camera, the firmware's variables) waits for an answer, so leave such steps out of a run with no one at the machine.
+
+**A freeze.**
+- On an Intel PC, the chipset's watchdog restarts the machine within 30 s, and that restart is a boot into Linux.
+- On the Ryzen the AMD FCH's watchdog does the same ([213-KRN-0125](../issues/213-KRN-0125-the-amd-fch-watchdog.md)). It is checked against a model of its registers only, so the first runs show whether it holds: the boot line says `WATCHDOG: AMD FCH, A RESET AFTER 30 S ...` when it is armed. If it says `WATCHDOG: NONE`, a freeze waits for the power button.
+
+**Effector's machines.** On a machine Effector works on (the Ryzen is one), only the maintainer runs `once --reboot`, after checking that no operation is active ([docs/effector.md](effector.md)).

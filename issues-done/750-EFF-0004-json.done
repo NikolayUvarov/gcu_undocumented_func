@@ -1,0 +1,54 @@
+# 750-EFF-0004 — `mind::json`: a bounded JSON reader and writer — done
+
+**Type:** library (`libmind`) · **Owner:** `EFF` track · **Priority:** P1 · **Status:** done (2026-10-21) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-11.5, MC-11.11, MC-2.5
+
+## Problem
+
+The Effector server speaks JSON. The original survey found no reader or writer; since then [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done) added a bounded reader in `libmind/src/json.rs` and JSON decoding through `parse`. The bounded writer and agent-specific typed field checks remain. A general-purpose parser with recursion would be an untrusted-input parser without bounds (MC-11.5).
+
+Under the authority map ([docs/network/airlock.md](../docs/network/airlock.md)), JSON from the server is parsed in the `parse` service, not in the agent ([750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done)). This library is what that service would run. The agent itself only writes JSON.
+
+## Plan
+
+- **`libmind/src/json.rs` behind the `alloc` feature, `no_std`.**
+- **A pull reader** that yields tokens with explicit limits:
+  - nesting depth;
+  - string length;
+  - number of members;
+  - total input.
+- **Strict RFC 8259:**
+  - UTF-8 input;
+  - escapes, including `\u` surrogate pairs;
+  - numbers as integers within `i64`/`u64` (decimals refused when the caller asks for an integer).
+- **A small typed helper** to read the fields an object is expected to have and skip the rest, since the protocol says to ignore unknown fields.
+- **A writer** that escapes strings and never produces invalid UTF-8.
+- **Host tests** (`tests/json_host.rs`):
+  - the JSONTestSuite cases;
+  - deep nesting refused;
+  - long strings refused;
+  - duplicate keys handled as the contract says.
+- **A fuzz target for 500's harness.** It is an `ASR` task, written when this lands.
+
+## Acceptance criteria
+
+- The host tests pass in `scripts/ci_local.sh`.
+- Every limit has a test that hits it.
+- The library allocates only within the limits given by the caller.
+
+## Related
+
+[750](../issues/750-effector-agent.md), [500](../issues/500-fuzzing-abi-and-idl.md), [THIRD_PARTY.md](../THIRD_PARTY.md) (only if test data is imported).
+
+## Progress — 2026-10-15
+
+Reuse the existing reader and its `tests/json_host.rs`; do not introduce a competing network parser. `parse.wit` currently limits a decoded string to 512 bytes and a whole body to 16384. Native `exec_v1` puts its nested JSON in a single string, so full-sized remote scripts need a versioned parser extension or a bounded file/reference protocol. [Contract 1.0](../docs/effector/protocol.md) records this limit; it does not claim full command compatibility.
+
+## Resolution
+
+Done on 2026-10-21 by the `EFF` track. The plan's two halves landed in two places:
+
+- **Reading** is `mind::json` (`libmind/src/json.rs`), which NET extended into the parser service's `json` call for this agent ([750-NET-0021](750-NET-0021-json-in-the-parser-service.done)): the agent never parses the server's JSON itself (MC-11.11). Its host tests are NET's `tests/json_host.rs`. The agent's typed reading of those values (expected fields and types, duplicate keys refused, unknown fields skipped) is `effector/src/wire.rs` (750-EFF-0006).
+- **Writing** is `effector/src/json.rs`, in the agent's own crate, since only the agent writes JSON: objects, arrays, keys, strings, integers, booleans and null into a caller's buffer, no allocation; strings escaped (`"`, `\`, control characters as `\u00XX`), nesting at most 8, a body that does not fit refused (`Full`), a value out of order refused (`Order`).
+- **Tests:** `tests/effector_json_host.rs`, 6 host tests, every text read back by `mind::json::walk`: a heartbeat-shaped object, escapes round-tripped (control, Cyrillic, emoji), a result nested as a string in an ACK, numbers at their bounds, a body too large, order and nesting refused. In `scripts/host_tests.sh`.
+
+**Changed from the plan:** the writer is not in `libmind`, since only the agent writes JSON; the reader's fuzzing is 500's, which reaches it through the parser service's decoder.

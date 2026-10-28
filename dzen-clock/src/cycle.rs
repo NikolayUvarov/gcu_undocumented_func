@@ -44,16 +44,17 @@ impl OrbitMode {
     }
 }
 
-// One clockwise turn per 100,000 ms, starting toward the first hour corner.
+// One clockwise turn per 100,000 ms, starting toward `corner`: the active
+// hour's corner, at which the zero-second reference points (000-APP-0080).
 // Corners are 45 + 90*index degrees clockwise from twelve o'clock. Fixed
 // point quarter-sine samples (scale 10,000), interpolated between samples,
 // avoid a libm dependency in this no_std application.
-pub fn point_at(phase: usize, radius: usize) -> (isize, isize) {
+pub fn point_at(phase: usize, radius: usize, corner: usize) -> (isize, isize) {
     const SIN: [isize; 26] = [
         0, 628, 1253, 1874, 2487, 3090, 3681, 4258, 4818, 5358, 5878, 6374, 6845, 7290, 7705, 8090,
         8443, 8763, 9048, 9298, 9511, 9686, 9823, 9921, 9980, 10000,
     ];
-    let origin = 12_500 + crate::face::FIRST_CORNER * 25_000;
+    let origin = 12_500 + (corner % 4) * 25_000;
     let phase = (phase % 100_000 + origin) % 100_000;
     let part = phase % 25_000;
     let index = part / 1000;
@@ -96,17 +97,29 @@ mod tests {
 
     #[test]
     fn quarter_turns_and_wrap_are_clockwise() {
-        assert_eq!(point_at(0, 120), (84, 84));
-        assert_eq!(point_at(25000, 120), (-84, 84));
-        assert_eq!(point_at(50000, 120), (-84, -84));
-        assert_eq!(point_at(75000, 120), (84, -84));
-        assert_eq!(point_at(100000, 120), point_at(0, 120));
+        assert_eq!(point_at(0, 120, 1), (84, 84));
+        assert_eq!(point_at(25000, 120, 1), (-84, 84));
+        assert_eq!(point_at(50000, 120, 1), (-84, -84));
+        assert_eq!(point_at(75000, 120, 1), (84, -84));
+        assert_eq!(point_at(100000, 120, 1), point_at(0, 120, 1));
         for phase in (0..100000).step_by(100) {
-            let a = point_at(phase, 120);
-            let b = point_at(phase + 100, 120);
+            let a = point_at(phase, 120, 1);
+            let b = point_at(phase + 100, 120, 1);
             assert!(a.0 * b.1 - a.1 * b.0 >= 0);
             assert!((a.0 - b.0).abs() <= 2 && (a.1 - b.1).abs() <= 2);
         }
+    }
+
+    #[test]
+    fn zero_seconds_point_at_the_active_hours_corner() {
+        // Corners clockwise from the top right: the turn starts toward each, and a corner on is a quarter turn on.
+        for (corner, start) in [(0, (84, -84)), (1, (84, 84)), (2, (-84, 84)), (3, (-84, -84))] {
+            assert_eq!(point_at(0, 120, corner), start, "corner {}", corner);
+            for phase in (0..100000).step_by(500) {
+                assert_eq!(point_at(phase, 120, (corner + 1) % 4), point_at(phase + 25000, 120, corner));
+            }
+        }
+        assert_eq!(point_at(0, 120, 4), point_at(0, 120, 0));
     }
 
     #[test]
@@ -118,8 +131,8 @@ mod tests {
                 let radius = half * 3 / 4;
                 let length = (half / 24).max(1);
                 for (x, y) in [
-                    point_at(phase, radius - length),
-                    point_at(phase, radius + length),
+                    point_at(phase, radius - length, 1),
+                    point_at(phase, radius + length, 1),
                 ] {
                     // The tick endpoints enclose the orbit and smaller moving dot.
                     assert!(x * x + y * y > (indicator + 3).pow(2));

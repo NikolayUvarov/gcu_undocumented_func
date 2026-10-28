@@ -81,6 +81,7 @@ mod idl {
     #[path = "../../libmind/src/idl/block.rs"] pub mod block;
     #[path = "../../libmind/src/idl/blockstore.rs"] pub mod blockstore;
     #[path = "../../libmind/src/idl/display.rs"] pub mod display;
+    #[path = "../../libmind/src/idl/effector.rs"] pub mod effector;
     #[path = "../../libmind/src/idl/gpio.rs"] pub mod gpio;
     #[path = "../../libmind/src/idl/init.rs"] pub mod init;
     #[path = "../../libmind/src/idl/keyboard.rs"] pub mod keyboard;
@@ -91,6 +92,7 @@ mod idl {
     #[path = "../../libmind/src/idl/netpolicy.rs"] pub mod netpolicy;
     #[path = "../../libmind/src/idl/parse.rs"] pub mod parse;
     #[path = "../../libmind/src/idl/rtc.rs"] pub mod rtc;
+    #[path = "../../libmind/src/idl/serial.rs"] pub mod serial;
     #[path = "../../libmind/src/idl/shell.rs"] pub mod shell;
     #[path = "../../libmind/src/idl/socket.rs"] pub mod socket;
     #[path = "../../libmind/src/idl/ssh.rs"] pub mod ssh;
@@ -351,9 +353,9 @@ fn scribble() {
 #[test]
 fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
-        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
+        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), borrowed!(effector), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
-        owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
+        borrowed!(serial), owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
@@ -417,10 +419,11 @@ macro_rules! types {
 }
 types! {
     battery: Error Status;
-    blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update;
-    display: Error Mode;
+    blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
+    display: Error Mode RemoteState;
+    effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary Load Space Sample;
     gpio: Kind Pull Error Controller Pin;
-    init: Error Service;
+    init: Error Service Boot Mode ModeState Planned Configuration;
     keyboard: Layout SwitchKey State;
     keystore: Error Purpose Usage WifiNetwork;
     loader: Error Program Needs HelperKind;
@@ -428,20 +431,21 @@ types! {
     net: Error Info Counters;
     netpolicy: Error Grant;
     parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
-    rtc: Error;
-    shell: Error;
-    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;
+    rtc: Error Offset;
+    serial: Error Info;
+    shell: Error CardCounters;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo;
     ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;
     tpm: Error Info;
-    update: Error Offer State;
+    update: Error Offer State Metadata;
     vfs: Error Entry Volume Report;
     video: Error Camera Frame;
     voice: Action Order;
-    wifi: Security Error State Reason Network Status;
+    wifi: Security Error State Reason Network Status Standing Channel Country Countries CountryState CountryStatus;
     window: Error Kind Placement Info;
-    wlanhw: Error Info Filter Sent;
+    wlanhw: Error Info Filter Sent Limit;
 }
 
 /// libmind/src/idl, from the repository root where the host tests run.

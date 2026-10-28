@@ -1,6 +1,6 @@
 # 750-EFF-0009 — System update from the server, only through `updater`
 
-**Type:** service feature · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [750-EFF-0007](750-EFF-0007-gateway-service.md); [requests-UPD.md](requests-UPD.md) (a client of `updater` for the gateway) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-8.5, MC-9.3, MC-9.4, MC-9.9, MC-7.5
+**Type:** service feature · **Owner:** `EFF` track · **Priority:** P2 · **Status:** open · **Blocked by:** [750-EFF-0007](750-EFF-0007-gateway-service.md); [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md) (a client of `updater` for the gateway) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-8.5, MC-9.3, MC-9.4, MC-9.9, MC-7.5
 
 ## Problem
 

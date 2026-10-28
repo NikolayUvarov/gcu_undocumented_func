@@ -1,0 +1,80 @@
+{
+  "assessments": [
+    {
+      "actual_package_ratio": 1.1499904642993704,
+      "candidate": "pruned-layer0",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 0.6033466583380114
+    },
+    {
+      "actual_package_ratio": 1.1580633978472803,
+      "candidate": "spline-linear-layer0",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 0.5843146219840436
+    },
+    {
+      "actual_package_ratio": 1.1580718531483314,
+      "candidate": "spline-cubic-layer0",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 0.60240566405194
+    },
+    {
+      "actual_package_ratio": 1.0318248136780466,
+      "candidate": "svd-layer0",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 0.8042057000957592
+    },
+    {
+      "actual_package_ratio": 1.3070476813215823,
+      "candidate": "mixed-linear-pruned",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 1.3126563011898136
+    },
+    {
+      "actual_package_ratio": 1.188864180620262,
+      "candidate": "mixed-svd-cubic",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 1.568456277995907
+    },
+    {
+      "actual_package_ratio": 1.2978962271507233,
+      "candidate": "pruned64-layer0",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 0.46887325535574487
+    },
+    {
+      "actual_package_ratio": 1.3141322841244207,
+      "candidate": "linear64-layer0",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 0.470862970685211
+    },
+    {
+      "actual_package_ratio": 1.3077992636372262,
+      "candidate": "adamw",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 1.2871936739410899
+    },
+    {
+      "actual_package_ratio": 1.3076489471740975,
+      "candidate": "sgd",
+      "eligible": false,
+      "observed_nonoverlapping_timing_pass": true,
+      "validation_nll_increase": 1.3126432856446955
+    }
+  ],
+  "refusals": {},
+  "rule": "quality delta and actual package budgets; candidate p95 strictly below dense minimum; among eligible lowest median then NLL then plan ID; otherwise dense",
+  "schema": "nrl.expanded-selection/0",
+  "selected": "dense",
+  "selection_split": "validation",
+  "test_used_for_selection": false
+}

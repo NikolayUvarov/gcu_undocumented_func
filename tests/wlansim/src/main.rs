@@ -5,7 +5,12 @@
 // simulated here (its handshake from wpa::authenticator) with a small network behind it: it answers DHCP (10.0.4.15/24,
 // gateway and DNS 10.0.4.1), ARP for the gateway and ICMP echo to it. Like `bcm_wifi` today, the radio has no OFDM on
 // 2.4 GHz (550-NET-0028): it refuses a frame at an OFDM rate, and the access point logs the rates the station offers.
-// A test service: in no image but the tests'.
+// It takes a country's limits (wlanhw.wit 1.2, 550-NET-0035): then it tunes only to their channels and refuses a probe
+// request where the station may only listen. Until limits are first set it keeps 1.1's ways, as the station of stage A
+// sets none. With the test-only feature `slow` (550-NET-0030) it answers nothing for its first LATE_MS, and for
+// SILENT_MS after the station asks (ARP) for SILENT_ADDRESS. When the station asks for GONE_ADDRESS the access point
+// goes away (550-NET-0041): a deauthentication, then GONE_MS with no beacon and no answer, while the radio answers its
+// calls. A test service: in no image but the tests'.
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA, TYPE_MANAGEMENT};
 use mind::abi::BootInfo;
 use mind::idl::codec::List;
@@ -36,6 +41,16 @@ const BEACON_MS: u64 = 100;
 const FRAME_MAX: usize = 2346;
 // The rates the radio sends at, in 500 kb/s units: DSSS and CCK alone.
 const RATES: [u8; 4] = [2, 4, 11, 22];
+#[cfg(feature = "slow")]
+const LATE_MS: u64 = 60_000;
+#[cfg(feature = "slow")]
+const SILENT_MS: u64 = 20_000;
+#[cfg(feature = "slow")]
+const SILENT_ADDRESS: [u8; 4] = [10, 0, 4, 99];
+
+// The access point goes away for GONE_MS when the station asks (ARP) for GONE_ADDRESS: a network lost (550-NET-0041).
+const GONE_ADDRESS: [u8; 4] = [10, 0, 4, 98];
+const GONE_MS: u64 = 25_000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Expect { Nothing, Message2, Message4 }
@@ -58,11 +73,35 @@ struct Sim {
     group_pn: u64,
     // Whether a frame at a rate the radio lacks was refused (logged once).
     refused: bool,
+    // The country's limits (1.2): each channel and whether the station may only listen there; None before any.
+    limits: Option<Vec<(u8, bool)>>,
+    // Until when (uptime, ms) the radio answers nothing: set only with the feature `slow`.
+    silent_until: Option<u64>,
+    // Until when (uptime, ms) the access point is away: no beacon, no answer to the station.
+    gone_until: Option<u64>,
 }
 
 fn mac64(m: &Mac) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
 
 impl Sim {
+    // The channels it tunes to: those of the country's limits once set, else 1 to 13.
+    fn channels(&self) -> List<u8, 64> {
+        let mut channels = List::default();
+        match &self.limits { Some(limits) => for &(c, _) in limits { channels.push(c); }, None => for c in 1..=13 { channels.push(c); } }
+        channels
+    }
+
+    fn info(&self) -> wlanhw::Info {
+        wlanhw::Info { mac: mac64(&OWN), bands: mind::network::BAND_2GHZ, channels: self.channels(), frame_max: FRAME_MAX as u16, channel: self.channel }
+    }
+
+    // Whether the country's limits let `f` go out on the channel now: a probe request only where the station may send.
+    fn may_send(&self, f: &[u8]) -> bool {
+        let Some(limits) = &self.limits else { return true };
+        let probe = f.first().is_some_and(|&b| b == frame::PROBE_REQUEST << 4);
+        limits.iter().any(|&(c, listen)| c == self.channel && !(listen && probe))
+    }
+
     // A frame for the station, led by the radio header of wlanhw.wit, if the filter lets it through.
     fn hear(&mut self, f: &[u8]) {
         let Ok(h) = frame::header(f) else { return };
@@ -134,8 +173,18 @@ impl Sim {
         self.eapol(&m[..len]);
     }
 
+    // Whether the access point is away at `now`; it says so once it is back.
+    fn gone(&mut self, now: u64) -> bool {
+        let Some(until) = self.gone_until else { return false };
+        if now < until { return true; }
+        self.gone_until = None;
+        mind::println!("[WLANSIM] THE ACCESS POINT IS BACK");
+        false
+    }
+
     // What the access point does with a frame the station sent on its channel; whether it was acknowledged.
     fn station_sent(&mut self, f: &[u8]) -> bool {
+        if self.gone(mind::time::uptime_ms() as u64) { return false; }
         let Ok(h) = frame::header(f) else { return false };
         if h.kind == TYPE_MANAGEMENT {
             match h.subtype {
@@ -214,6 +263,23 @@ impl Sim {
 
     // The network behind the access point: DHCP, ARP for the gateway, ICMP echo to it.
     fn network(&mut self, source: &Mac, ethertype: u16, p: &[u8]) {
+        if ethertype == 0x0806 && p.len() >= 28 && p[6..8] == [0, 1] && p[24..28] == GONE_ADDRESS {
+            mind::println!("[WLANSIM] THE ACCESS POINT GOES AWAY FOR {} S: A DEAUTHENTICATION, THEN NO BEACON OR ANSWER", GONE_MS / 1000);
+            let mut r = self.header(frame::DEAUTHENTICATION, &OWN);
+            r.extend_from_slice(&3u16.to_le_bytes());
+            self.hear(&r);
+            self.associated = false;
+            self.tk = None;
+            self.expect = Expect::Nothing;
+            self.gone_until = Some(mind::time::uptime_ms() as u64 + GONE_MS);
+            return;
+        }
+        #[cfg(feature = "slow")]
+        if ethertype == 0x0806 && p.len() >= 28 && p[6..8] == [0, 1] && p[24..28] == SILENT_ADDRESS {
+            mind::println!("[WLANSIM] SILENT FOR {} S", SILENT_MS / 1000);
+            self.silent_until = Some(mind::time::uptime_ms() as u64 + SILENT_MS);
+            return;
+        }
         if ethertype == 0x0806 && p.len() >= 28 && p[6..8] == [0, 1] && p[24..28] == GATEWAY {
             let mut r = Vec::with_capacity(28);
             r.extend_from_slice(&[0, 1, 0x08, 0x00, 6, 4, 0, 2]);
@@ -281,6 +347,7 @@ impl Sim {
     }
 
     fn tick(&mut self, now: u64) {
+        if self.gone(now) { return; }
         if now >= self.beacon_at {
             self.beacon_at = now + BEACON_MS;
             if self.channel == CHANNEL { let b = self.announcement(frame::BEACON, &BROADCAST); self.hear(&b); }
@@ -332,11 +399,22 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut sim = Sim { channel: 0, filter: wlanhw::Filter::default(), queue: Vec::new(), waiters: Vec::new(), beacon_at: 0, sequence: 0,
                         associated: false, authenticator: None, expect: Expect::Nothing, tries: 0, tk: None, replay: Replay::default(), pn: 0,
-                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false };
+                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None, silent_until: None, gone_until: None };
     mind::println!("[WLANSIM] READY: {} ON CHANNEL {}", core::str::from_utf8(SSID).unwrap_or("?"), CHANNEL);
+    #[cfg(feature = "slow")]
+    {
+        mind::println!("[WLANSIM] SILENT FOR {} S: A RADIO THAT ANSWERS LATE", LATE_MS / 1000);
+        sim.silent_until = Some(mind::time::uptime_ms() as u64 + LATE_MS);
+    }
     let mut scratch = [0u8; wlanhw::REQUEST_MAX];
     let mut out = [0u8; FRAME_MAX + RADIO_HEADER];
     loop {
+        // Silent: requests wait in the queue, unanswered.
+        if let Some(until) = sim.silent_until {
+            if (mind::time::uptime_ms() as u64) < until { mind::time::sleep(POLL_MS as usize); continue; }
+            sim.silent_until = None;
+            mind::println!("[WLANSIM] ANSWERING AGAIN");
+        }
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
         sim.tick(mind::time::uptime_ms() as u64);
         if !sim.queue.is_empty() { for call in sim.waiters.drain(..) { let _ = wlanhw::reply_wait(call, sim.queue.len() as u32); } }
@@ -346,16 +424,16 @@ fn main(_info: &'static BootInfo) {
             Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; }
         };
         let _ = match request {
-            wlanhw::Request::Info => {
-                let mut channels = List::default();
-                for c in 1..=13 { channels.push(c); }
-                wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: mac64(&OWN), bands: mind::network::BAND_2GHZ, channels, frame_max: FRAME_MAX as u16, channel: sim.channel }))
-            }
-            wlanhw::Request::SetChannel { channel } if (1..=13).contains(&channel) => { sim.channel = channel; wlanhw::reply_set_channel(call, Ok(())) }
+            wlanhw::Request::Info => wlanhw::reply_info(call, Ok(&sim.info())),
+            wlanhw::Request::SetChannel { channel } if sim.channels().as_slice().contains(&channel) => { sim.channel = channel; wlanhw::reply_set_channel(call, Ok(())) }
             wlanhw::Request::SetChannel { .. } => wlanhw::reply_set_channel(call, Err(wlanhw::Error::Invalid)),
             wlanhw::Request::SetFilter { filter } => { sim.filter = filter; wlanhw::reply_set_filter(call, Ok(())) }
             wlanhw::Request::Send { rate, .. } if !RATES.contains(&rate) => {
                 if !sim.refused { mind::println!("[WLANSIM] REFUSED A FRAME AT RATE {} (500 KB/S UNITS)", rate); sim.refused = true; }
+                wlanhw::reply_send(call, Err(wlanhw::Error::Invalid))
+            }
+            wlanhw::Request::Send { frame: f, .. } if !sim.may_send(f) => {
+                mind::println!("[WLANSIM] REFUSED A FRAME ON CHANNEL {}: THE COUNTRY'S LIMITS DO NOT LET IT GO OUT", sim.channel);
                 wlanhw::reply_send(call, Err(wlanhw::Error::Invalid))
             }
             wlanhw::Request::Send { frame: f, attempts, .. } => {
@@ -378,6 +456,17 @@ fn main(_info: &'static BootInfo) {
             // No shared ring: frames go by `receive`.
             wlanhw::Request::Attach { ring } => { let _ = mind::ipc::drop_cap(ring); wlanhw::reply_attach(call, Err(wlanhw::Error::Invalid)) }
             wlanhw::Request::Kick => wlanhw::reply_kick(call, Err(wlanhw::Error::Invalid)),
+            // 1.2: the country's limits on 1 to 13, each channel once; it answers the channels they leave.
+            wlanhw::Request::SetCountry { code, limits, .. } => {
+                let list = limits.as_slice();
+                let twice = list.iter().enumerate().any(|(i, l)| list[..i].iter().any(|m| m.channel == l.channel));
+                let named = code.as_str().len() == 2 && code.as_str().bytes().all(|b| b.is_ascii_uppercase());
+                if twice || !named || list.iter().any(|l| !(1..=13).contains(&l.channel)) { wlanhw::reply_set_country(call, Err(wlanhw::Error::Invalid)) } else {
+                    sim.limits = Some(list.iter().map(|l| (l.channel, l.listen)).collect());
+                    mind::println!("[WLANSIM] COUNTRY {}: {} CHANNELS, {} TO LISTEN ON ONLY", code.as_str(), list.len(), list.iter().filter(|l| l.listen).count());
+                    wlanhw::reply_set_country(call, Ok(&sim.info()))
+                }
+            }
         };
     }
 }

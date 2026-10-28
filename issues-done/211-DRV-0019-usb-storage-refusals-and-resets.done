@@ -69,4 +69,4 @@ The second run showed a limit: "the same capacity" cannot tell a disk rewritten 
 
 ## Related
 
-[211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot log on `log:`), `usb_storage/src/main.rs`, `idl/block.wit`.
+[211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.done) (the boot log on `log:`), `usb_storage/src/main.rs`, `idl/block.wit`.

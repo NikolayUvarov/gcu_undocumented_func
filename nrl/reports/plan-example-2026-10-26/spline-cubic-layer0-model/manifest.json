@@ -1,0 +1,69 @@
+{
+  "schema": "nrl.decoder/0",
+  "adapter": "llama2c-f32-v0/0",
+  "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+  "config": {
+    "dim": 64,
+    "hidden": 172,
+    "layers": 5,
+    "heads": 8,
+    "kv_heads": 4,
+    "vocab": 512,
+    "context": 512,
+    "tied_head": true
+  },
+  "weights": {
+    "file": "weights.bin",
+    "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+    "bytes": 1056540
+  },
+  "tokenizer": {
+    "file": "tokenizer.bin",
+    "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+    "bytes": 6227
+  },
+  "patches": {
+    "0": {
+      "file": "block-0000.json",
+      "sha256": "c27048c8bfcccb4194395fd061fa4dc39a374e5dfdca7f096b6a887b8e3d2436",
+      "bytes": 166430
+    }
+  },
+  "sources": [
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/stories260K.bin",
+      "sha256": "b0a507e7ad0f626624f17112325e66691f9076d622e1d3274d103d00299f2696",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ]
+    },
+    {
+      "identifier": "https://huggingface.co/karpathy/tinyllamas/resolve/0bd21da7698eaf29a0d7de3992de8a46ef624add/stories260K/tok512.bin",
+      "sha256": "037cb335abb25d1fa9e8ecae30ed2a3a8ace9302862ebcdc05d51a6bbb10c312",
+      "licence": "MIT (publisher model card declaration)",
+      "notices": [
+        "Karpathy TinyStories-260K; pretrained weights and custom 512-token tokenizer.",
+        "Copyright (c) 2023 Andrej; MIT notice retained in nrl/reference/tinyllamas-260k/LICENSE."
+      ]
+    },
+    {
+      "identifier": "synthetic://nrl-original-language-documents-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL test sentences",
+      "notices": [
+        "Original independent miniature documents, one declared related group per document.",
+        "A reproducible test corpus, not a claim of representative language quality."
+      ]
+    },
+    {
+      "identifier": "derived://nrl-plan/spline-cubic-layer0/layer-0#a09ed13612f150dd31b8d3181e02badeb98db14838714309e9f4a38f1d405693",
+      "sha256": "a09ed13612f150dd31b8d3181e02badeb98db14838714309e9f4a38f1d405693",
+      "licence": "MIT OR Apache-2.0; original NRL test sentences",
+      "notices": [
+        "Rust train-only initializer and full-batch local SGD; validation selects; source weights/tokenizer notices retained."
+      ]
+    }
+  ]
+}

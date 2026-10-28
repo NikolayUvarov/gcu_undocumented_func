@@ -1,12 +1,12 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (`wlan` joining a remembered network by itself became [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), 2026-10-22; the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](../issues-done/351-NET-0022-tls-without-the-device-certificate.done), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](../issues-done/550-NET-0028-rates-the-radio-has.done), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done), and the country chosen from the whole regulatory catalogue [550-NET-0035](550-NET-0035-the-stations-country.md), 2026-10-20; the kernel track's note on the station's start is taken: the `net` suite's station checks are written, 2026-10-20; the stack revoking a frame ring the driver may already map (000-KRN-0129) became [000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md), 2026-10-20; a parser session that ends before its helper (109-KRN-0133) became [109-NET-0037](../issues-done/109-NET-0037-a-parser-session-waits-for-its-helper.done), 2026-10-21) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
 ## Several network interfaces (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** a card's link going down and coming back is [550-NET-0023](../issues-done/550-NET-0023-a-cards-link-down-and-up.done); the station is the stack's third card, in slot 4 ([550-NET-0018](550-NET-0018-the-station-service.md), with `init`'s part as 550-KRN-0097); the default card's rule, the user's choice through the policy and each card's kind are [550-NET-0025](../issues-done/550-NET-0025-the-default-card.done) (2026-10-12). Left: the USB Ethernet driver's card (550-DRV-0005) and its QEMU check, and which card a flow may use in the broker's grants (105's remainder).
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** a card's link going down and coming back is [550-NET-0023](../issues-done/550-NET-0023-a-cards-link-down-and-up.done); the station is the stack's third card, in slot 4 ([550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), with `init`'s part as 550-KRN-0097); the default card's rule, the user's choice through the policy and each card's kind are [550-NET-0025](../issues-done/550-NET-0025-the-default-card.done) (2026-10-12). Left: the USB Ethernet driver's card (550-DRV-0005) and its QEMU check, and which card a flow may use in the broker's grants (105's remainder).
 
 ### Problem
 
@@ -33,7 +33,7 @@ In QEMU with `virtio_net` and the USB Ethernet driver on `usb-net`, both cards g
 
 ## An 802.11 station and WPA2-PSK (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), the station's logic (scanning, joining, data) [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), the station service `wlan` with its configuration interface `idl/wifi.wit` 1.0 (agreed with the tools track) [550-NET-0018](550-NET-0018-the-station-service.md), and remembered networks kept by `keystore` [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md) (2026-10-12).
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), the station's logic (scanning, joining, data) [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), the station service `wlan` with its configuration interface `idl/wifi.wit` 1.0 (agreed with the tools track) [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), and remembered networks kept by `keystore` [550-NET-0024](../issues-done/550-NET-0024-remembered-wi-fi-networks.done) (2026-10-12).
 
 ### Problem
 
@@ -59,94 +59,3 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 ### Acceptance criteria
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
-
-## A notice: 109-NET-0010 is done by the kernel track (109)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12, at the maintainer's request ("109-NET-0010 задачу ожидаем исполнения от тебя").
-
-### What was done
-
-The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy`, and they reach `main` through the gate:
-
-- **109-KRN-0096 (the loader starts a helper):** `idl/loader.wit` 1.8 gains `helper(parse, served)`. The loader starts a copy of `parse` whose only capability is the caller's endpoint, with a bounded quota and a per-owner limit.
-- **109-NET-0010 itself:** `parse --session` answers on that endpoint alone and ends when its client does or after 30 s idle; `mind::parse::Session` owns such a copy, and `download` uses one, falling back to the shared service. The `net` suite's `session_parsers_check` shows two downloads with a parser each.
-
-### What is asked of the network track
-
-- **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
-- **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
-
-## Download complete-file recheck stalls in the 6G Intel gate
-
-**Requested by:** ASTRA auditor-fixer, 2026-10-16 · **Priority:** P1 ·
-**Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3.
-
-Please turn [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md)
-into a NET task. Exact candidate `ac1854f2`/main `bd7b5493`, Intel endpoint
-`i9_4e6882212251`, operation `20261015221739.924407850_000152`: the standard
-6 GiB group fails after the second `download` reports that its 30 MiB file
-is already complete. HTTP 416 is parsed; neither the expected SHA-256 line
-nor prompt arrives within the existing 300-second limit. The first resumed
-transfer and digest passed, as did the preceding memory checks.
-
-Instrument or otherwise identify the actual boundary (flush, each VFS read,
-hash progress, scheduling). Do not assume a RAM/NIC fault or quadratic FAT
-walk. `download` currently ignores the flush result before its disk rehash;
-handle that error explicitly. Route any required VFS/block changes to KRN.
-Keep the exact failed run, add a production regression for the established
-cause, and require the original complete-file/digest behavior to pass under
-its existing timeout. A later pass alone must not erase this failure or
-substitute for the physical network acceptance on the two laptops.
-
-## Wi-Fi country selection from the complete verified regulatory catalog
-
-**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's explicit
-request; for 213-DRV-0032 and roadmap D / 550; MC-2.3, MC-3.3, MC-6.1,
-MC-12.1, MC-12.3, MC-12.4, MC-12.7.
-
-The maintainer confirmed Uzbekistan (`UZ`) for both the original Intel MacBook
-and Ryzen and requested switching among **all countries in the verified
-regulatory database**, not a fixed shortlist. The current `wifi` 1.0 interface
-has scan/join/status/leave/forget but no country selection. Please number the
-station/interface task; ASTRA supplies the RTL8852BE catalogue/driver portion
-under DRV-0032, without editing NET's interface or station in passing.
-
-Available implementation: ASTRA source
-[`1e2cf1dd`](https://github.com/NikolayUvarov/gcu_undocumented_func/blob/1e2cf1dd3996ca3ed2a475e7ded4aff4fde6d8ae/hwdocs/rtl8852be-regulatory.md)
-provides all 181 source country/territory codes plus separate world `00`,
-1,016 rule references, source/license hashes and exact integer units. It is
-already in fast-test `94ab2a0b`; 9 Rust and 11 Python fixtures and deterministic
-regeneration passed after that publication. `regulatory::countries()` and
-`select()` are pure catalog operations, not a live configuration interface.
-The database supplies codes rather than translated country names. Preserve
-these boundaries when making the shared station contract and the APP list.
-
-- Use the pinned upstream wireless-regdb catalogue as frequency/EIRP evidence;
-  chip power-table groups are not regulatory permission. Preserve restrictions
-  and unsupported states. Catalogue all country entries, with bounded paging
-  if needed; treat world/unknown `00` distinctly from a selected country.
-- Add explicit current/pending/applied country state and authorized selection
-  through a new interface version and migration. Reuse the existing Wi-Fi
-  change badge or document a narrower right; read-only callers cannot change it.
-  Persist a two-letter code, not a row index that changes with database updates.
-- UZ is this deployment's operator-provided initial choice. Missing/invalid
-  state or a missing database country must not silently become DE/US/world or
-  permission to transmit. Database presence is not itself operator authority.
-- Derive scan/join channels from the intersection of country restrictions and
-  actual driver capability. Retain NO-IR, DFS, indoor/outdoor and modulation
-  constraints. Do not label all database bands as implemented hardware support.
-- Coordinate with KRN's scoped configuration and native endpoint work, APP's
-  selector and both radio owners. Changing country must invalidate old scan/
-  join decisions and avoid TX under an obsolete admission. Stop/restart and
-  re-admit when live reconfiguration is unavailable; expose applied versus
-  requested state and a bounded error if application fails.
-- Country selection must not replace board-locked restrictions, verified
-  platform/SAR limits or the EIRP-to-conducted-power/antenna relationship.
-
-Acceptance: every catalogued country is selectable as configuration; unknown
-codes, read-only mutation, stale scan/join state and failed application are
-covered. Radio limits and effective channels are honest on both MacBook and
-Ryzen; a configuration round trip is not evidence of physical networking.
-Related: [APP](requests-APP.md#wifi-country-and-channel-selector),
-[KRN](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission),
-[DRV](requests-DRV.md#bcm4331-applies-the-selected-country-and-channel-policy).

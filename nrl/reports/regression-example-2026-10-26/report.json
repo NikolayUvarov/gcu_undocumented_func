@@ -1,0 +1,83 @@
+{
+  "schema": "nrl.regression-report/0",
+  "training_record_sha256": "e4119639e56891369696f3e4e3a4179d0f0cdea5e0fbfcb29acd58f25d504801",
+  "initial_model_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+  "selected_model_id": "0cb40e71303b15daf2785215de8eed53a5528200c56eae4a11d8de03ed18d78c",
+  "dataset_id": "9df2970cca84d6229cf229b13f2fd2a14067afb493d3572462ca5de951eea1f4",
+  "run_id": "5b848b0276129dcd7394862a3a77138ec12e4674e5755dc22a135e893ea4ad3a",
+  "completed_epochs": 128,
+  "selected_epoch": 91,
+  "graph_forward_rows": 9272,
+  "baseline": {
+    "train": {
+      "rows": 32,
+      "values": 32,
+      "mse": 0.8938463732331189,
+      "mae": 0.7937839854111406,
+      "max_absolute_error": 1.7805437665782495,
+      "target_mean_energy": 0.8372690676251853,
+      "nmse": 1.067573624531966,
+      "near_zero_target_energy": false
+    },
+    "validation": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.8827004365972109,
+      "mae": 0.7897629310344827,
+      "max_absolute_error": 1.6261140583554377,
+      "target_mean_energy": 0.9839718583118153,
+      "nmse": 0.8970789450336982,
+      "near_zero_target_energy": false
+    },
+    "test": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.7019184889255535,
+      "mae": 0.6972513262599469,
+      "max_absolute_error": 1.4716843501326262,
+      "target_mean_energy": 0.7981728042834324,
+      "nmse": 0.8794066712855594,
+      "near_zero_target_energy": false
+    }
+  },
+  "selected": {
+    "train": {
+      "rows": 32,
+      "values": 32,
+      "mse": 0.016521970210151126,
+      "mae": 0.09326704525670351,
+      "max_absolute_error": 0.41760310339853257,
+      "target_mean_energy": 0.8372690676251853,
+      "nmse": 0.01973316685042927,
+      "near_zero_target_energy": false
+    },
+    "validation": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.011830794085379374,
+      "mae": 0.10017718474698684,
+      "max_absolute_error": 0.15083970738089936,
+      "target_mean_energy": 0.9839718583118153,
+      "nmse": 0.012023508584561835,
+      "near_zero_target_energy": false
+    },
+    "test": {
+      "rows": 8,
+      "values": 8,
+      "mse": 0.016083866958995992,
+      "mae": 0.10813677355215379,
+      "max_absolute_error": 0.1864177579774311,
+      "target_mean_energy": 0.7981728042834324,
+      "nmse": 0.020150858150868024,
+      "near_zero_target_energy": false
+    }
+  },
+  "native_execution": false,
+  "limitations": [
+    "regression only; full-batch scalar CPU f64",
+    "no optimizer resume, local calibration/distillation, classification or language task",
+    "source declarations retained; no authenticity or licence verification",
+    "logical training buffers and forward-row work counts exclude scratch, serialization, parsed objects and host overhead",
+    "metrics on supplied data only; no speed, memory, compression or native guarantee"
+  ]
+}

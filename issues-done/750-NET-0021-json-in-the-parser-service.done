@@ -30,7 +30,7 @@ Effector's commands and replies are JSON. Under MC-11.11 the process that holds 
 
 ## Related
 
-[docs/network/airlock.md](../docs/network/airlock.md), [109-NET-0008](109-NET-0008-parser-service.done), [750-EFF-0004](../issues/750-EFF-0004-json.md).
+[docs/network/airlock.md](../docs/network/airlock.md), [109-NET-0008](109-NET-0008-parser-service.done), [750-EFF-0004](750-EFF-0004-json.done).
 
 ## Resolution
 

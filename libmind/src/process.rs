@@ -133,21 +133,52 @@ pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize, quot
 
 /// `spawn_raw` with a screen, in front for `front`, the task that has the focus now; the focus returns to it when the
 /// new task ends. `Error::Other(ERR_FOCUS)` when `front` is not in front: nothing is started (issue 160).
-pub fn spawn_in_front(name: &[u8], image: Image, grants: &[Grant], quota: Quota, front: u64) -> Result<u64> {
+pub fn spawn_in_front(name: &[u8], image: Image, grants: &[Grant], quota: Quota, front: u64) -> Result<u64> { spawn_in_front_with(name, image, grants, 0, quota, front) }
+
+/// `spawn_in_front` with further `flags` (SPAWN_WORKERS).
+pub fn spawn_in_front_with(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> Result<u64> {
     if front >> 32 != 0 { return Err(crate::sys::Error::Other(ERR_FOCUS)); }
-    spawn_packed(name, image, grants, SPAWN_SCREEN | SPAWN_FOREGROUND, quota, front)
+    spawn_packed(name, image, grants, flags | SPAWN_SCREEN | SPAWN_FOREGROUND, quota, front)
+}
+
+/// `spawn_raw`, or `spawn_in_front` when `front` is not 0, with a text input (SPAWN_TEXT, 000-KRN-0094): the PID and the
+/// handle of the input's writer (`crate::io::Writer::new`), which stays with the caller.
+pub fn spawn_fed(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> Result<(u64, usize)> {
+    if front >> 32 != 0 { return Err(crate::sys::Error::Other(ERR_FOCUS)); }
+    let flags = flags | SPAWN_TEXT | if front != 0 { SPAWN_SCREEN | SPAWN_FOREGROUND } else { 0 };
+    let raw = spawn_call(name, image, grants, flags, quota, front);
+    check(raw.result).map(|pid| (pid as u64, raw.arg2))
 }
 
 fn spawn_packed(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> Result<u64> {
+    check(spawn_call(name, image, grants, flags, quota, front).result).map(|pid| pid as u64)
+}
+
+fn spawn_call(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> crate::sys::Raw {
     let (source, len) = match image { Image::Memory { cap, len } => (cap, len | (front as usize) << 32), Image::Boot(index) => (SPAWN_BOOT | index, (front as usize) << 32) };
     let packed = grants.len() | flags << 8 | (quota.tasks as usize) << 16 | (quota.endpoints as usize) << 32 | (quota.memory_mib as usize) << 48;
-    check(syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, packed]).result).map(|pid| pid as u64)
+    syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, packed])
 }
 
 pub fn alive(pid: u64) -> bool { call(SYSCALL_TASK_ALIVE, pid as usize, 0) == 1 }
 
 /// Sends the exit notice of `pid` (a task this process spawned) to `endpoint`, which this process can receive on.
 pub fn watch(pid: u64, endpoint: crate::ipc::Endpoint) -> Result<()> { crate::sys::check(crate::sys::call(SYSCALL_TASK_WATCH, pid as usize, endpoint.0)).map(drop) }
+
+/// Starts a worker (262-KRN-0163): a copy of this program on another CPU, holding exactly `grants` (copied or moved into
+/// its fixed slots), with `argument` in its `worker()`; `stack` bytes of stack, 0 for what the ELF asks. Only a program
+/// its launcher started with SPAWN_WORKERS may (`Error::Rights`); one live worker per online CPU (`Error::Other(ERR_LIMIT)`).
+/// The worker ends when this program ends; `watch` gives its exit notice.
+pub fn start_worker(argument: u64, stack: usize, grants: &[Grant]) -> Result<u64> {
+    check(syscall(SYSCALL_WORKER_START, argument as usize, stack, [0, 0, grants.as_ptr() as usize, grants.len()]).result).map(|pid| pid as u64)
+}
+
+/// In a worker: its index among its creator's workers (1, 2, …) and its argument word; None in any other task.
+pub fn worker() -> Option<(u64, u64)> {
+    let at = (crate::sys::info_address() + WORKER_OFFSET) as *const u64;
+    let (index, argument) = unsafe { (at.read_volatile(), at.add(1).read_volatile()) };
+    (index != 0).then_some((index, argument))
+}
 
 /// What a program may ask its launcher for (`request!`); the launcher decides, the request grants nothing (MC-3.11).
 pub const REQUEST_CONSOLE: u32 = 1; // no screen: output goes to the shell's console
@@ -171,11 +202,29 @@ pub const REQUEST_FIRMWARE: u32 = 65536; // the firmware variable privilege in S
 pub const BADGE_REBOOT: u16 = 1;
 /// The badge of the shell's lifecycle client: set, so no copy of it can be badged for `reboot` (a badge is set once).
 pub const BADGE_LIFECYCLE: u16 = 2;
+/// The badge of init's client that may turn either mode on or off (`init.wit` 1.5 `set-mode`): the shell's, in SLOT_MODE.
+pub const BADGE_MODE: u16 = 3;
+/// The badge of init's client that may only turn the maintenance mode on, with a reason: the Mind's, once it exists.
+pub const BADGE_MIND: u16 = 4;
+/// The badge of init's lifecycle client for link with `dev` in link.conf: `reboot`, and `replace` a service with an image
+/// from data/link/ (init.wit 1.6, 800-KRN-0144).
+pub const BADGE_DEVELOPER: u16 = 5;
+/// The badge of init's lifecycle client for the Effector gateway (init.wit 1.7, 750-KRN-0121): `run`, `stop` and `restart`
+/// of what the owner's policy (`mind::effector::POLICY_FILE`) allows alone; never `stop-task`, `reboot` or `replace`.
+pub const BADGE_NAMED: u16 = 6;
+/// The badge of the shell's command client init mints for link with `dev` in link.conf (800-KRN-0148): the shell takes
+/// that client's lines on the link's rule.
+pub const BADGE_SHELL_LINK: u16 = 1;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)
 pub const REQUEST_SHELL: u32 = 1048576; // a client of the shell's commands (idl/shell.wit) in SLOT_SHELL: a window manager (211-APP-0044)
 pub const REQUEST_BATTERY: u32 = 2097152; // the battery service's client in SLOT_BATTERY (211-KRN-0090, for 211-PRT-0008)
+pub const REQUEST_WIFI: u32 = 4194304; // the Wi-Fi station's configuration client in SLOT_WIFI (550-KRN-0097, for 550-APP-0033)
+pub const REQUEST_NET_COUNTERS: u32 = 8388608; // a network card's read-only client (BADGE_COUNTERS) in SLOT_NET (000-NET-0015, for 000-APP-0049)
+pub const REQUEST_SSH: u32 = 16777216; // the SSH service's client in SLOT_SSH, with a flow grant (351-KRN-0115, for 351-NET-0027)
+// The badge of a loader client that may only list, inspect and start helpers (loader.wit 1.10, 109-KRN-0117): the updater's.
+pub const BADGE_HELPERS_ONLY: u16 = 1;
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).

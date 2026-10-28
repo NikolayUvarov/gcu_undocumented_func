@@ -16,11 +16,13 @@ mod mind {
         pub const BADGE_NETPOLICY: u16 = 3;
         pub const BADGE_UPDATE: u16 = 4;
         pub const BADGE_READER: u16 = 5;
+        pub const BADGE_EFFECTOR: u16 = 6;
+        pub const BADGE_EFFECTOR_GW: u16 = 7;
     }
 }
 
 use fat::{Error, Sectors, Volume, SECTOR};
-use mind::fs::{BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_READER, BADGE_UPDATE, BADGE_USER};
+use mind::fs::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_READER, BADGE_UPDATE, BADGE_USER};
 use zone::{Zone, RECORD};
 
 const STAMP: u32 = ((2026 - 1980) << 9 | 10 << 5 | 9) << 16 | (12 << 11 | 34 << 5 | 28);
@@ -50,9 +52,23 @@ fn zone(path: &str, badge: u16, inactive: Option<&str>) -> Zone {
 #[test]
 fn the_badges_are_libminds() {
     let source = include_str!("../libmind/src/fs.rs");
-    for (name, value) in [("BADGE_USER", BADGE_USER), ("BADGE_KEYSTORE", BADGE_KEYSTORE), ("BADGE_NETPOLICY", BADGE_NETPOLICY), ("BADGE_UPDATE", BADGE_UPDATE), ("BADGE_READER", BADGE_READER)] {
+    for (name, value) in [("BADGE_USER", BADGE_USER), ("BADGE_KEYSTORE", BADGE_KEYSTORE), ("BADGE_NETPOLICY", BADGE_NETPOLICY), ("BADGE_UPDATE", BADGE_UPDATE), ("BADGE_READER", BADGE_READER),
+                          ("BADGE_EFFECTOR", BADGE_EFFECTOR), ("BADGE_EFFECTOR_GW", BADGE_EFFECTOR_GW)] {
         assert!(source.contains(&format!("pub const {}: u16 = {};", name, value)), "{} is not {} in libmind", name, value);
     }
+}
+
+// 750-KRN-0119: the Effector agent's two private directories, each its own badge's alone.
+#[test]
+fn each_effector_service_writes_its_own_private_directory_alone() {
+    assert_eq!(zone("system/effector", BADGE_EFFECTOR, None), Zone::Writable);
+    assert_eq!(zone("system/effector_gw", BADGE_EFFECTOR_GW, None), Zone::Writable);
+    for (path, badge) in [("system/effector", BADGE_EFFECTOR_GW), ("system/effector_gw", BADGE_EFFECTOR), ("system/keystore", BADGE_EFFECTOR),
+                          ("system/effector", BADGE_USER), ("system/effector", BADGE_READER)] {
+        assert_eq!(zone(path, badge, None), Zone::Hidden, "{path} for badge {badge}");
+    }
+    // The rest of the boot volume is only read, data/ included.
+    assert_eq!(zone("data/effector", BADGE_EFFECTOR, None), Zone::ReadOnly);
 }
 
 #[test]
@@ -65,7 +81,7 @@ fn the_updater_fills_the_slot_that_did_not_boot_and_writes_records() {
     assert_eq!(zone("MIND/BOOT0", BADGE_UPDATE, b), Zone::Record);
     assert_eq!(zone("MIND/boot1", BADGE_UPDATE, b), Zone::Record);
     // The running slot, anything else in MIND, the bootloader, the root's files and data/ stay read-only.
-    for path in ["MIND/A", "MIND/A/kernel.elf", "MIND/BOOT2", "MIND/C", "MIND/BOOT0/x", "EFI/BOOT/BOOTX64.EFI", "kernel.elf", "data", "data/x"] {
+    for path in ["MIND/A", "MIND/A/kernel.elf", "MIND/BOOT2", "MIND/C", "MIND/BOOT0/x", "MIND/FLOOR", "EFI/BOOT/BOOTX64.EFI", "kernel.elf", "data", "data/x"] {
         assert_eq!(zone(path, BADGE_UPDATE, b), Zone::ReadOnly, "{}", path);
     }
     // Private directories stay hidden from it.

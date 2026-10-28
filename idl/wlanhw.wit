@@ -14,7 +14,15 @@
 ///
 /// 1.1 (550-NET-0028): `info`'s `bands` bit 2 says the radio receives and sends OFDM on 2.4 GHz. A 1.0 radio leaves it
 /// clear, so the station keeps to 802.11b's rates there, which every 2.4 GHz radio has; the wire is unchanged.
-package mind:wlanhw@1.1.0;
+///
+/// 1.2 (550-NET-0035): the country's limits. The station hands the radio, for the country it runs under, each channel
+/// it may use with the most EIRP allowed there and whether it may only listen there; the radio applies them under its
+/// own limits (board, calibration, platform) and answers its `info` after, whose `channels` are then the only ones it
+/// tunes to. A radio whose limits failed receives on its channels and sends nothing. Until limits are first set it keeps
+/// 1.1's ways, so a station without the country catalogue (550-NET-0035, stage A) still joins; a station with one sets
+/// limits before it sends anything. A 1.1 radio rejects the call: the station then keeps to the channels alone and says
+/// the radio did not confirm.
+package mind:wlanhw@1.2.0;
 
 interface wlanhw {
     /// Why a request failed. `no-device`: the radio is not up; `busy`: the transmit queue is full; `empty`: no
@@ -53,4 +61,13 @@ interface wlanhw {
     attach: func(ring: borrow<memory>) -> result<u32, error>;
     /// The client took frames from the ring or still uses it. Error invalid: no ring is attached (attach again).
     kick: func() -> result<_, error>;
+
+    /// The country's limit on one channel (1.2): the most EIRP in dBm (rounded down), and whether the radio may only
+    /// listen there: it then sends there only what the station sends to an access point it heard (no probe request).
+    record limit { channel: u8, eirp: u8, listen: bool }
+    /// Applies country `code`'s limits (1.2): `dfs` is the catalogue's DFS region (0 unset, 1 FCC, 2 ETSI, 3 JP), `limits`
+    /// every channel the station may use, at most once each. Answers the radio's info after; its `channels` are those
+    /// left by the radio's own limits. `invalid`: a channel twice or not the radio's, or a code that is not two capital
+    /// letters; `failed`: the radio could not apply them, and it sends nothing until limits it can apply are set.
+    set-country: func(code: string<2>, dfs: u8, limits: list<limit, 64>) -> result<info, error>;
 }

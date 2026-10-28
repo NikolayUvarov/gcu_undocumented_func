@@ -332,6 +332,9 @@ fn main(_info: &'static BootInfo) {
                     _ => Err(net::Error::Invalid),
                 };
                 if let Some((_, r)) = ring.as_ref() { d.pump(r); }
+                // Test only (000-NET-0036): the answer comes after the stack's deadline, the ring already mapped.
+                #[cfg(feature = "late-attach")]
+                mind::time::sleep(400);
                 net::reply_attach(call, result)
             }
             (net::Request::Kick, Some(d)) => match ring.as_ref() {

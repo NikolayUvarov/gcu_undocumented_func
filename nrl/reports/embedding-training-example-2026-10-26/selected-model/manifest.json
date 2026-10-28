@@ -1,0 +1,50 @@
+{
+  "schema": "nrl.embedding/0",
+  "family": "nrl.mean-embedding",
+  "adapter_version": 0,
+  "preprocessor": "exact-ascii-whitespace/0",
+  "pooling": "arithmetic-mean/0",
+  "normalization": "l2-reject-norm-at-most-1e-12/0",
+  "state": "stateless",
+  "max_input_tokens": 32,
+  "table": {
+    "bytes": 1142,
+    "sha256": "892e51a4e6afc7ec1a4b2de02ccf02e703b894b50e4aaecfe0cc49178db57516"
+  },
+  "projection_model_id": "33e6188fbc05f8faed925cff12a578fdab794c8d12f036fb776b5e997d073939",
+  "sources": [
+    {
+      "identifier": "synthetic://nrl-original-token-embedding-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    },
+    {
+      "identifier": "synthetic://nrl-original-embedding-projection-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    },
+    {
+      "identifier": "synthetic://nrl-original-retrieval-data-v0",
+      "sha256": null,
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    },
+    {
+      "identifier": "nrl://embedding-training-v0#e47ad1eb805b38fdaf08251a4a16a122595d4c0e5f007013a7626aac6487950b",
+      "sha256": "e47ad1eb805b38fdaf08251a4a16a122595d4c0e5f007013a7626aac6487950b",
+      "licence": "MIT OR Apache-2.0; original NRL fixture",
+      "notices": [
+        "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+      ]
+    }
+  ],
+  "previous_projection_ids": []
+}

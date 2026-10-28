@@ -2,33 +2,9 @@
 
 **Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** open · **Recorded by:** the kernel track (KRN), 2026-10-09
 
-The request on transfers to a gone device became [211-DRV-0021](211-DRV-0021-a-gone-device-fails-at-once.md) (2026-10-09).
+The request on transfers to a gone device became [211-DRV-0021](211-DRV-0021-a-gone-device-fails-at-once.md) (2026-10-09). The network track's request that `bcm_wifi` names OFDM in `idl/wlanhw.wit` 1.1 became plan item 2 of [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) (2026-10-14). ASTRA's request that BCM4331's transmit status checks its deadline on every path (the audit's H12) is taken in [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md) (2026-10-20).
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. The drivers track turns each into a task and removes it from this file, and the file goes when it is empty.
-
-## BCM4331 transmit status must check its deadline on every path
-
-**Recorded by:** ASTRA auditor-fixer, 2026-10-16, for the maintainer's original
-MacBook network-stability report. **Priority:** P1. **Roadmap:** D / 550.
-**Constitution:** MC-6.1, MC-12.1, MC-12.3. Related owner task:
-[550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md).
-
-At owner branch `5623c9ba`, now integrated into ASTRA `ac1854f2`,
-`bcm_wifi/src/radio.rs::Radio::status` continues after every available
-intermediate or wrong-cookie TX status before reaching its 100 ms deadline
-check or RX poll. Continuously available statuses can bypass that bound;
-a final matching status is accepted even if the clock has passed the end.
-The radio service is synchronous, so its caller's IPC timeout does not stop
-this loop. [Audit and evidence boundary](../issues-audit/2026-10-16-bcm-tx-wait-audit.md).
-
-Please number and implement a bounded production wait on every path,
-preserving the existing status format and 100 ms budget. Exercise continuous
-unrelated/intermediate statuses, no status, success before the deadline and
-a matching status observed after it. Verify the transmit-slot ownership on
-timeout before allowing reuse; a missing TX result is not completion.
-Publish the built owner commit to fast-test before tests, and record the
-original MacBook's ping-under-load/recovery run separately. This finding
-does not yet establish the hardware cause of the reported packet loss.
 
 ## The MacBook Pro's speakers: more of 551's step 2 if the GPIO is not enough (551)
 
@@ -273,22 +249,6 @@ This is the Ryzen machine's request above, with one addition:
 - A request on a drive that never leaves BSY ends with `ERR_IO` within the stated time. A host test with a stand-in for the ports, or a QEMU disk made to stall, shows it.
 - No path in either driver indexes the DMA region or the buffer without a check of its own.
 
-## `bcm_wifi` names OFDM in `wlanhw.wit` 1.1 once it hears it (550-NET-0028)
-
-**Recorded by:** the network track (`NET`), 2026-10-14, answering the request "The station offers only the rates the radio can receive" (550-DRV-0028's findings).
-
-### Problem
-
-`idl/wlanhw.wit` 1.1 (550-NET-0028) gives `info`'s `bands` a bit 2, `mind::network::BAND_2GHZ_OFDM`: the radio receives and sends OFDM on 2.4 GHz. Without it, the station `wlan` offers and sends at 1, 2, 5.5 and 11 Mb/s alone there (802.11b). The wire is unchanged, and `bcm_wifi`'s `bands: 1` already reads as "no OFDM", so nothing in `bcm_wifi` has to change now.
-
-### Plan (a proposal; the drivers track decides)
-
-Once `bcm_wifi` receives OFDM, it sets `bands` to `BAND_2GHZ | BAND_2GHZ_OFDM`, and the station offers 802.11g's rates again. The drivers track's ffcf2b5 (in `fast-test`) reports OFDM received with core 2's front end off, so the bit may follow that commit. A radio that sends at a rate it cannot use answers `send` with `invalid`, as the interface says.
-
-### Acceptance criteria
-
-On the MacBook Pro, with the bit set, `wlan` logs `2.4 GHZ 802.11G`, joins a WPA2 network and sends at OFDM rates.
-
 ## BCM4331 applies the selected country and channel policy
 
 **Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's explicit
@@ -309,3 +269,90 @@ versioned radio interface or restart boundary rather than silently changing an
 existing wire contract. Preserve normal association, software WPA2 and the
 original MacBook path; validate actual hardware separately from policy fixtures.
 This request does not replace the preceding H12 deadline correction.
+
+## The regulatory catalogue as a crate of its own, and `wlanhw.wit` 1.2 for a country's limits (550-NET-0035)
+
+**Progress:** the drivers track agreed to both (2026-10-20). `wlanhw.wit` 1.2 and `wlansim`'s side are on the network branch; `bcm_wifi` answers `set-country` when the drivers track merges it.
+
+**Recorded by:** the network track (NET), 2026-10-20, for [550-NET-0035](550-NET-0035-the-stations-country.md) (the request above, and NET's in requests-NET.md). For the drivers track and for ASTRA, which wrote the catalogue under 213-DRV-0032.
+
+### Problem
+
+- **The station needs the catalogue itself.** The country is chosen in the station (`wifi.wit` 1.1), and the station decides where it may send (`wlanhw.wit` 1.0). It needs:
+  - the whole catalogue, to list every country;
+  - each country's rules, for its channels.
+- **Where the catalogue is now.** It sits inside `rtw89_wifi` (`src/regulatory.rs` and `src/regulatory_tables.rs`, ASTRA 1e2cf1dd, on `fast-test`, not on `main`). The station cannot use it there without taking in the driver.
+- **One copy only.** A second copy in the station could drift from the radios' copy.
+- **A new request breaks the radios' build.** `bcm_wifi/src/serve.rs` and `rtw89_wifi/src/service.rs` match every `wlanhw` request, so a new one breaks their build until they answer it.
+
+### Plan (a proposal; the drivers track and ASTRA decide)
+
+- **A crate `regdb/`** (`no_std`, no other dependency) holding `regulatory.rs` and its generated tables as they are. It comes with:
+  - the generator `scripts/rtw89_regdb.py`, renamed if you wish;
+  - the licence entry.
+
+  `rtw89_wifi`, `bcm_wifi` and `wlan` depend on it. The network track needs from it, beyond what it has:
+  - a rule's frequency range, widest channel and flags, readable from outside the crate (`Country::source_rules` gives them);
+  - the database's SHA-256 (`PROVENANCE`).
+- **`wlanhw.wit` 1.2: `set-country(code, dfs, limits)`.** The text is in 550-NET-0035; NET has it written and holds it back. For each channel the station may use:
+  - the most EIRP;
+  - whether it may only listen there.
+
+  The radio:
+  - applies them under its own limits (board, SPROM, calibration, platform);
+  - answers its `info`, whose `channels` are then the only ones it tunes to;
+  - with no limits set, or after a failure, receives and sends nothing.
+
+  `wlansim`'s side is NET's.
+- **The transition.** Each radio answers `set-country` in the same change that brings 1.2 into its branch. Until it really applies limits, it may answer `failed`: the station then sends nothing on it, which is the safe side.
+
+### Acceptance criteria
+
+- `regdb` is on `main`, with the host tests that 213-DRV-0032 has for the catalogue.
+- `bcm_wifi` and `rtw89_wifi` answer `set-country` under 1.2:
+  - in host tests: limits applied, a channel twice refused, a failure that leaves the radio silent;
+  - on hardware: each machine separately, as 213-DRV-0032 says.
+
+## `virtio_blk`: a request waits a whole tick (351-NET-0034)
+
+**Recorded by:** the network track (NET), 2026-10-20, from the timings [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done) added to `download`.
+
+### Problem
+
+- **What was measured.** On aarch64 (`virtio_blk` boot disk, QEMU TCG on un-rizen), `download` read an 8 MiB file back in 512 requests of 16 KiB. It took 5,080 ms, all of it in the file service's reads, about 10 ms each.
+- **Why.** `virtio_blk/src/main.rs`'s `wait` spins 1,000 times, then calls `mind::time::sleep(1)`. On aarch64 the tick is 10 ms (`kernel/src/arch/aarch64/interrupts.rs`, `TICK_MS`), so every request that QEMU has not finished within the spins costs a whole tick. Under TCG that is nearly every one.
+- **What it costs.** The file service reads at about 1.6 MB/s on aarch64. On x86 (1 ms tick, `ata` by PIO) the same check reads 30 MiB in about 5 s.
+- **The same pattern** is in `ahci`'s `wait`, already in this file ("`ata` and `ahci`: waits with a deadline").
+
+### Plan (a proposal; the drivers track decides)
+
+- Wait on the queue's interrupt, or poll the used ring against `monotonic_ns` with a short sleep only once a request is known to be slow.
+- Give each request a deadline in time, as the critique asks of `ata`.
+
+### Acceptance criteria
+
+- The `net` suite's `TIME: download's … check` lines on aarch64 show reads well under a tick each.
+- The `vfs` and `store` suites pass.
+
+## A block client bounded to a range, and what a flush reaches (for 307)
+
+Recorded by the storage track (STO), 2026-10-27, for [307](307-the-stores-own-partition.md).
+
+- **A client bounded to a range of sectors.** Each block driver (`nvme`, `ahci`, `usb_storage`, `virtio_blk`) serves a client limited to one partition's sectors. A request outside them is refused. `init` gives `blockstore` such a client for the `MIND STORE` partition (`requests-KRN.md`, same date).
+- **What a flush reaches, stated per driver:**
+  - NVMe FLUSH, ATA FLUSH CACHE EXT and SCSI SYNCHRONIZE CACHE sent when the client asks for one;
+  - a device that reports no write cache, or ignores a flush, named as such in the answer and the log (MC-12.1).
+- **Why.** The store reports `flushed` only when a device said its flush was done, and says so per machine in the profile.
+
+## `usb_host`'s table of client buffers is one short for `BADGE_BLUETOOTH` (700-DRV-0043, for 700-KRN-0176)
+
+**Recorded by:** the kernel track (KRN), 2026-10-28, from the `usb` suite on the kernel track's branch (`claude/youthful-mendel-mf1soy` eb3abb26), which puts `bt_hci` in the boot images with its `usb_host` client badged `BADGE_BLUETOOTH` ([700-KRN-0176](700-KRN-0176-bt-hci-boot-image-and-grant.md)).
+
+- **What happens.** `usb_host` panics as soon as `bt_hci` attaches its buffer: `usb_host(6) PANIC: index out of bounds: the len is 5 but the index is 5`. `init` restarts it, and it panics again at the next attach. The keyboards' reports stop and the suite fails (`AssertionError: ('code=Up mods=-', [])`), on x86 with 4 CPUs, every run.
+- **Why.** `Host::buffers` in `usb_host/src/main.rs` holds 5 entries, one per badge 0 to 4, and is indexed by the client's badge. 700-DRV-0043 made `BADGE_BLUETOOTH` 5 in `libmind/src/usb.rs` and `known()` accepts it, so the attach indexes past the end.
+- **What fixed it in a local run** (not committed: the code is the drivers track's):
+  - the table one entry longer, with its initialiser in `main`;
+  - the `usb` suite then passes on x86 with 4 CPUs, with no panic in the VM log and `bt_hci` waiting for a controller.
+  - A length taken from the highest badge would keep the next badge from doing the same.
+- **Nothing breaks on `main` without `bt_hci`.** No other client is badged 5, so 458735f2 lands in round 38 as it is.
+- **Asked:** the fix as a drivers-track task and a landing request. 700-KRN-0176 waits for it.

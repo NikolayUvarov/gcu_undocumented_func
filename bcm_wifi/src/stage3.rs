@@ -45,7 +45,7 @@ impl<'a> Core<'a> {
     fn us(&self, n: usize) { for _ in 0..n { let _ = self.r32(0x1500); } }
 
     pub(crate) fn phy(&self, reg: u16) -> u16 { self.phy_writes.set(0); self.w16(PHY_CONTROL, reg); self.r16(PHY_DATA) }
-    fn phy_w(&self, reg: u16, v: u16) {
+    pub(crate) fn phy_w(&self, reg: u16, v: u16) {
         if self.phy_writes.get() >= WRITES_IN_ROW { let _ = self.r16(PHY_VERSION); self.phy_writes.set(0); }
         self.phy_writes.set(self.phy_writes.get() + 1);
         self.w16(PHY_CONTROL, reg); self.w16(PHY_DATA, v);
@@ -122,19 +122,29 @@ impl<'a> Core<'a> {
         self.phy_clear(0xC01, 0xC000);
         self.w16(PSM_PHY_HEADER, header);
     }
+    // A core's analog front end: its control and override words (PHY 0x911 and 0x910, then + 4 per core).
+    pub(crate) fn afe(&self, core: u16) -> (u16, u16) { (self.phy(0x911 + 4 * core), self.phy(0x910 + 4 * core)) }
+    // A core's front end switched off as b43 switches the analog part off: the override first, then the control.
+    pub(crate) fn afe_off(&self, core: u16) { self.phy_w(0x910 + 4 * core, 0x07FF); self.phy_w(0x911 + 4 * core, 0x00FD); }
+    // A core's front end given back its words: the control first, then the override.
+    pub(crate) fn afe_restore(&self, core: u16, (control, over): (u16, u16)) { self.phy_w(0x911 + 4 * core, control); self.phy_w(0x910 + 4 * core, over); }
     fn analog_on(&self) { for (control, over) in [(0x911, 0x910), (0x915, 0x914), (0x919, 0x918)] { self.phy_w(control, 0x00CD); self.phy_w(over, 0x0000); } }
 
     // The fixed transmit gain the channel switch sets from entry `gain` of the gain table; the entry is returned.
     pub(crate) fn tx_power_fix(&self) -> u32 {
-        let mut t = 0;
-        for i in 0..3u16 {
-            t = self.table32_read(0x1A, 0x0C0 + self.gain.get());
-            self.phy_w(0x908, 0);
-            self.table16(7, 0x110 + i, &[(t >> 16) as u16]);
-            self.phy_w(0x072, 0x0D << 10 | (0x63 + 4 * i)); self.phy_w(0x073, (t & 0xFF) as u16);
-            self.phy_w(0x072, 0x0D << 10 | (0x73 + 4 * i)); self.phy_w(0x073, (t & 0xFF) as u16);
-        }
+        let t = self.table32_read(0x1A, 0x0C0 + self.gain.get());
+        self.tx_gain_set((t >> 16) as u16, (t & 0xFF) as u16);
         t
+    }
+
+    // A transmit gain from its parts, on every core: the radio's gain word (table 7) and the baseband multiplier (table 13).
+    pub(crate) fn tx_gain_set(&self, radio: u16, bbmult: u16) {
+        for i in 0..3u16 {
+            self.phy_w(0x908, 0);
+            self.table16(7, 0x110 + i, &[radio]);
+            self.phy_w(0x072, 0x0D << 10 | (0x63 + 4 * i)); self.phy_w(0x073, bbmult);
+            self.phy_w(0x072, 0x0D << 10 | (0x73 + 4 * i)); self.phy_w(0x073, bbmult);
+        }
     }
 
     // A 2.4 GHz channel at 20 MHz (1 to 13): the radio's synthesizer and per-core values, its calibration pulse, the
@@ -231,7 +241,7 @@ fn read_file(path: &str, buffer: &mut [u8]) -> Option<usize> {
     (n == file.size() && n < buffer.len()).then_some(n)
 }
 
-fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 3, STEP {}: {}", n, what); mind::time::sleep(crate::STEP_MS); }
+fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 3, STEP {}: {}", n, what); crate::serve::pause(crate::step_wait()); }
 
 // The stage, after the microcode answered; `mac` from the SPROM. True when it ran through with the MAC suspended at
 // the end; the core is left to the caller to reset.

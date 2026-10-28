@@ -1,0 +1,176 @@
+{
+  "schema": "nrl.evaluation/0",
+  "profile": {
+    "task": "embedding-retrieval/0",
+    "data_id": "8b2be3ffdd9289d9b7c867b89a5058d160c550af45bbc73be6ce9f9f4a1a105b",
+    "split": "test",
+    "baseline_id": "7307151f403dc1f64e1a91c174535671a88b0c5ff3584a6c0c552f7ae5386dd4",
+    "preprocessing": "exact-ascii-mean-projection-l2/0",
+    "geometry": [
+      32,
+      3
+    ],
+    "measurement": {
+      "schema": "nrl.measurement/0",
+      "warmups": 1,
+      "repeats": 3,
+      "max_forward_rows": 65536
+    }
+  },
+  "model_id": "b335eee4dbd9f29dd999841b116fcceaef2c6a67e876d69d34dd2762fe2c7d3f",
+  "environment": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logical_cpus": 24,
+    "executable_sha256": "d51b66fe6852f1f6db95d307cf72110da048a1c0541132f84ba6d618531bc43b",
+    "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+    "backend": "host-cpu-scalar-f64/0",
+    "runtime_threads": 1,
+    "debug_assertions": false
+  },
+  "work": {
+    "documents_or_batches": 8,
+    "rows_per_pass": 8,
+    "output_values_per_pass": 24,
+    "quality_passes": 1,
+    "warmup_passes": 1,
+    "timed_passes": 3,
+    "total_forward_rows": 40
+  },
+  "quality": {
+    "metric": "ndcg-loss-at-k",
+    "value": 0.04134029364352143,
+    "details": {
+      "direction": "lower loss is better; Recall/MRR/NDCG are higher-is-better",
+      "index_scope": "fixed document index shared across query splits; no fitting or selection",
+      "mrr": 1.0,
+      "ndcg_at_k": 0.9586597063564786,
+      "rankings": [
+        {
+          "ndcg_at_k": 1.0,
+          "query_id": "query-star",
+          "ranking": [
+            [
+              "space-star",
+              0.9978832184260854
+            ],
+            [
+              "space-moon",
+              0.9570133231709301
+            ],
+            [
+              "weather-snow",
+              0.34956887847557866
+            ],
+            [
+              "animal-dog",
+              0.261897860026014
+            ],
+            [
+              "weather-rain",
+              0.07255958270107984
+            ],
+            [
+              "animal-fox",
+              0.033894171887240115
+            ]
+          ],
+          "recall_at_k": 1.0,
+          "reciprocal_rank": 1.0
+        },
+        {
+          "ndcg_at_k": 0.9173194127129571,
+          "query_id": "query-sky",
+          "ranking": [
+            [
+              "space-moon",
+              0.9055262502577087
+            ],
+            [
+              "weather-snow",
+              0.8775244031197019
+            ],
+            [
+              "space-star",
+              0.7738015757416191
+            ],
+            [
+              "weather-rain",
+              0.7178976381580721
+            ],
+            [
+              "animal-dog",
+              0.4084560609214265
+            ],
+            [
+              "animal-fox",
+              0.11132625310602652
+            ]
+          ],
+          "recall_at_k": 0.5,
+          "reciprocal_rank": 1.0
+        }
+      ],
+      "recall_at_k": 0.75,
+      "ties": "descending f64 dot product, then lexical document ID",
+      "top_k": 2
+    }
+  },
+  "timing": {
+    "seconds": [
+      8.065e-6,
+      8.004e-6,
+      7.741e-6
+    ],
+    "minimum_seconds": 7.741e-6,
+    "median_seconds": 8.004e-6,
+    "p95_seconds": 8.065e-6,
+    "scope": "pretokenized stateless encoder forward only; pooling/projection/normalization included; ranking/quality/hash/load excluded"
+  },
+  "model_information": {
+    "adapter_version": 0,
+    "family": "nrl.mean-embedding",
+    "lookup_width": 3,
+    "max_input_tokens": 32,
+    "model_id": "b335eee4dbd9f29dd999841b116fcceaef2c6a67e876d69d34dd2762fe2c7d3f",
+    "native_execution": false,
+    "normalization": "l2-reject-norm-at-most-1e-12/0",
+    "numeric_values": 73,
+    "output_width": 3,
+    "package_bytes": 7433,
+    "pooling": "arithmetic-mean/0",
+    "preprocessor": "exact-ascii-whitespace/0",
+    "projection": {
+      "activation_values_per_row": 12,
+      "dependency_bytes": 0,
+      "family": "feed-forward",
+      "input_width": 3,
+      "kind": "standalone",
+      "local_objects": 2,
+      "model_id": "38adf04bd9a19742d8b9ccd67de8342d54a38dd875761229ac0b93c1ef648752",
+      "native_execution": false,
+      "nodes": 3,
+      "numeric_bytes": 296,
+      "numeric_values": 37,
+      "objects": 2,
+      "output_width": 3,
+      "package_bytes": 5315,
+      "schema": "nrl.model-info/0",
+      "tied_objects": [],
+      "total_required_package_bytes": 5315,
+      "trainable_values": 37
+    },
+    "schema": "nrl.embedding-info/0",
+    "state": "stateless",
+    "supported_tasks": [
+      "embedding-retrieval/0"
+    ],
+    "training_scope": "projection graph gradients exist; end-to-end lookup/pooling/normalization backward is unsupported",
+    "transform_scope": "existing checked projection objects only; lookup/pooling/normalization remain unchanged",
+    "vocabulary_size": 12
+  },
+  "process_peak_rss_bytes": 4521984,
+  "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+  "native_execution": false
+}

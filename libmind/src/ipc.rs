@@ -112,3 +112,10 @@ pub fn mint_badged(handle: usize, mask: u8, badge: u16) -> Result<usize> {
 /// Removes every capability derived from `handle` (copies, mints and their descendants) from all tasks; the capability
 /// itself stays. Returns the number removed; when it returns, none of them can be used any more.
 pub fn revoke(handle: usize) -> Result<usize> { check(call(SYSCALL_CAP_REVOKE, handle, 0)) }
+
+/// `revoke`, with the steps the kernel took and the longest of them in nanoseconds, the time it held its lock in one
+/// step (000-KRN-0104).
+pub fn revoke_measured(handle: usize) -> Result<(usize, usize, u64)> {
+    let raw = syscall(SYSCALL_CAP_REVOKE, handle, 0, [0; 4]);
+    check(raw.result).map(|removed| (removed, raw.arg2, raw.msg[0] as u64))
+}

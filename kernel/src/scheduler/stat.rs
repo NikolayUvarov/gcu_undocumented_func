@@ -145,7 +145,7 @@ impl Scheduler {
                 out.push(StatPhys { kind: PHYS_ARENA, index: 0, start: self.boot.heap_ptr as u64, pages: pages(self.boot.heap_len) });
                 out.push(StatPhys { kind: PHYS_FRAMEBUFFER, index: 0, start: self.boot.fb_ptr as u64, pages: pages(frame_bytes(&self.boot)) });
                 out.push(StatPhys { kind: PHYS_AP_TRAMPOLINE, index: 0, start: self.boot.ap_trampoline as u64, pages: 1 });
-                for (index, image) in self.boot.programs.iter().enumerate() { out.push(StatPhys { kind: PHYS_BOOT_IMAGE, index: index as u32, start: image.data as u64, pages: pages(image.len) }); }
+                for (index, image) in self.boot.images().enumerate() { out.push(StatPhys { kind: PHYS_BOOT_IMAGE, index: index as u32, start: image.data as u64, pages: pages(image.len) }); }
                 for (index, device) in self.devices.iter().enumerate() {
                     for bar in device.bars.iter().filter(|b| b.size != 0 && !b.io) { out.push(StatPhys { kind: PHYS_PCI_BAR, index: index as u32, start: bar.base, pages: pages(bar.size as usize) }); }
                 }
@@ -183,6 +183,7 @@ impl Scheduler {
                             Capability::Spawn => (CAP_KIND_SPAWN, 0, 0, 0), Capability::Reply(..) => (CAP_KIND_REPLY, 0, 0, 0),
                             Capability::Platform => (CAP_KIND_PLATFORM, 0, 0, 0), Capability::Control => (CAP_KIND_CONTROL, 0, 0, 0),
                             Capability::Restart => (CAP_KIND_RESTART, 0, 0, 0), Capability::Observe => (CAP_KIND_OBSERVE, 0, 0, 0), Capability::Escrow(kind) => (CAP_KIND_ESCROW, kind as u32, 0, 0), Capability::Firmware => (CAP_KIND_FIRMWARE, 0, 0, 0),
+                            Capability::Text(_, pid) => (CAP_KIND_TEXT, 0, pid, 0),
                         };
                         let generation = if index < SLOT_DYNAMIC { 0 } else { task.generations[index] };
                         out.push(StatCap { slot: index as u32, generation, kind: kind as u32, rights, size, badge, endpoint, node: task.nodes[index].id, parent: task.nodes[index].parent });
@@ -226,7 +227,7 @@ impl Scheduler {
                 let (holder, holders) = holder(&|c| *c == Capability::Interrupt(line));
                 let mut endpoints = [0u32; IRQ_SHARERS];
                 for (out, b) in endpoints.iter_mut().zip(self.irq_bind[line as usize].iter().flatten()) { *out = b.ep as u32; }
-                out.push(StatIrq { line: line as u32, endpoint: endpoints[0], masked: interrupts::irq_masked(line) as u32, holders,
+                out.push(StatIrq { line: line as u32, endpoint: endpoints[0], masked: (interrupts::irq_masked(line) || (line as usize).checked_sub(MSI_FIRST).is_some_and(|v| self.storms[v].masked)) as u32, holders,
                     holder, count: self.accounting.irqs[line as usize], endpoints });
             },
             STAT_DEVICES => for device in self.devices.iter() {

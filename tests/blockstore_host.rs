@@ -4,7 +4,7 @@
 //! the clients' rights by badge (libmind/src/blockstore.rs, issue 300-STO-0004); nodes stored only if they decode
 //! (issue 301-STO-0002); names published by compare-and-swap once their root's object is complete (302-STO-0001);
 //! collection by reachability with leases (303-STO-0001); pins with an owner and a quota, a name's history with explicit
-//! links, removing a name (303-STO-0002..0004).
+//! links, removing a name (303-STO-0002..0004); the current names listed by prefix, page by page (300-STO-0018).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -381,7 +381,7 @@ fn rights_come_from_the_badge() {
         assert_eq!(allowed(badge, Collect), put, "badge {badge:#x}");
         // Removing a name and pins are retention, as publishing is; history is reading; pins and usage are any client's.
         assert_eq!([allowed(badge, Unpublish), allowed(badge, Pin), allowed(badge, Unpin), allowed(badge, Commit)], [publish; 4], "badge {badge:#x}");
-        assert_eq!([allowed(badge, History), allowed(badge, Snapshot)], [get; 2], "badge {badge:#x}");
+        assert_eq!([allowed(badge, History), allowed(badge, Snapshot), allowed(badge, Names)], [get; 3], "badge {badge:#x}");
         assert_eq!([allowed(badge, Pins), allowed(badge, Usage)], [stat; 2], "badge {badge:#x}");
     }
 }
@@ -1010,6 +1010,59 @@ fn a_commit_changes_every_name_or_none() {
     let store = mount(&mut medium, &mut room).unwrap();
     assert_eq!([b"a", b"b", b"c"].map(|n| store.snapshot(n).unwrap()), [(2, Some(a2)), (2, None), (1, Some(b2))]);
     assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0));
+}
+
+// Every current name with `prefix`, asked for 16 at a time after the last one, as a client pages through them.
+fn paged(store: &Store<&mut Memory>, prefix: &[u8]) -> Result<(Vec<(String, u64)>, usize), Error> {
+    let (mut all, mut calls) = (Vec::<(String, u64)>::new(), 0);
+    loop {
+        let after = all.last().map(|(n, _)| n.clone().into_bytes()).unwrap_or_default();
+        let page: Vec<(String, u64)> = store.names(prefix, &after)?.take(16).map(|(n, v, _)| (String::from_utf8(n.to_vec()).unwrap(), v)).collect();
+        calls += 1;
+        let last = page.len() < 16;
+        all.extend(page);
+        if last { return Ok((all, calls)); }
+    }
+}
+
+#[test]
+fn names_are_listed_by_prefix_in_pages() {
+    let mut medium = Memory::new(512);
+    let mut room = Room::with_names(64, 64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let root = object(&mut store, 31, 100);
+    // Published out of order: the list comes in byte order whatever the order of publishing.
+    let names: Vec<String> = (0..20).rev().map(|k| format!("list/n{k:02}")).chain(["copy", "list", "lists", "list/n05/x", "z"].map(String::from)).collect();
+    for name in &names { assert_eq!(store.publish(name.as_bytes(), 0, &root, OWNER), Ok(1)); }
+    assert_eq!(store.publish(b"copy", 1, &root, OWNER), Ok(2));
+    assert_eq!(store.unpublish(b"z", 1, OWNER), Ok(2));
+    let mut listed: Vec<String> = (0..20).map(|k| format!("list/n{k:02}")).collect();
+    listed.insert(6, "list/n05/x".into());
+    let (all, calls) = paged(&store, b"list/").unwrap();
+    assert_eq!(all.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(), listed);
+    assert_eq!(calls, 2);
+    // Everything: the removed name is not listed, a name's current version is.
+    let (all, calls) = paged(&store, b"").unwrap();
+    assert_eq!(all.len(), 24);
+    assert_eq!((all[0].clone(), all[1].0.as_str(), all[23].0.as_str(), calls), (("copy".into(), 2), "list", "lists", 2));
+    // A page after a name that is not stored starts at the next one; one past the run of the prefix is empty.
+    let after: Vec<&[u8]> = store.names(b"list/n1", b"list/n12a").unwrap().map(|(n, _, _)| n).collect();
+    assert_eq!(after, [&b"list/n13"[..], b"list/n14", b"list/n15", b"list/n16", b"list/n17", b"list/n18", b"list/n19"]);
+    assert_eq!(store.names(b"list/n1", b"list/n19").unwrap().count(), 0);
+    assert_eq!(store.names(b"list/n1", b"a").unwrap().count(), 10);
+    assert_eq!(store.names(b"q", b"").unwrap().count(), 0);
+    // Fewer than 16 come in one call.
+    assert_eq!(paged(&store, b"list/n0").map(|(a, c)| (a.len(), c)), Ok((11, 1)));
+    // A prefix or a start with a byte no name has; one of 64 bytes is a name's whole length.
+    assert_eq!(store.names(b"a:b", b"").map(|n| n.count()).err(), Some(Error::Invalid));
+    assert_eq!(store.names(b"", b"a b").map(|n| n.count()).err(), Some(Error::Invalid));
+    assert_eq!(store.names(&[b'a'; NAME_MAX], b"").map(|n| n.count()), Ok(0));
+    assert_eq!(store.names(&[b'a'; NAME_MAX + 1], b"").map(|n| n.count()).err(), Some(Error::Invalid));
+    drop(store);
+    // A mount lists the same names.
+    let mut room = Room::with_names(64, 64);
+    let store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(paged(&store, b"list/").unwrap().0.into_iter().map(|(n, _)| n).collect::<Vec<_>>(), listed);
 }
 
 #[test]

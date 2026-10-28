@@ -95,4 +95,4 @@ The later steps of 174 are not this task: SMBIOS, the drivers' own devices (NVMe
 
 ## Related
 
-[174](../issues/174-full-use-of-pc-hardware.md), [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the log partition), [211-KRN-0021](211-KRN-0021-registers-inside-a-page.done).
+[174](../issues/174-full-use-of-pc-hardware.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [211-KRN-0021](211-KRN-0021-registers-inside-a-page.done).

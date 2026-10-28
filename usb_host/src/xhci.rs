@@ -15,6 +15,8 @@ const DCBAA: usize = 0x0000; const SCRATCH_ARRAY: usize = 0x0800; const COMMAND_
 const ERST: usize = 0x3000; const INPUT: usize = 0x4000; pub const SMALL: usize = 0x6000; const SCRATCH_PAGES: usize = 0x10000;
 const MAX_SCRATCH: usize = 32; pub const DATA: usize = 0x30000; const POOL: usize = 0x40000; const POOL_PAGES: usize = 64;
 pub const DMA_BYTES: usize = POOL + POOL_PAGES * PAGE;
+// Scratchpad pages beyond MAX_SCRATCH come from the pool (211-DRV-0040: the DEXP's controller asks 34), at most half of it.
+const POOL_SCRATCH: usize = POOL_PAGES / 2;
 
 pub const TYPE_NORMAL: u32 = 1; const TYPE_SETUP: u32 = 2; const TYPE_DATA: u32 = 3; const TYPE_STATUS: u32 = 4; const TYPE_LINK: u32 = 6;
 const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_DISABLE_SLOT: u32 = 10; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIGURE: u32 = 12;
@@ -37,7 +39,10 @@ struct Done { slot: u8, dci: u8, code: u32, residue: u32 }
 
 const QUEUE: usize = 8;
 /// An interrupt IN endpoint being polled and the reports it gave since they were last taken.
-pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool, reported: bool }
+// `lossless` (a bulk IN endpoint, 800-DRV-0034): a transfer goes back on the ring only while the queue has room for its
+// packet, so the device holds what does not fit (NAK) instead of the oldest report being dropped; `in_flight` counts the
+// transfers on the ring.
+pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool, reported: bool, lossless: bool, in_flight: usize }
 
 const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 
@@ -80,16 +85,22 @@ impl Xhci {
         mmio.write32(op, 2);
         if !wait(|| mmio.read32(op) & 2 == 0 && mmio.read32(op + 4) & 1 << 11 == 0) { return None; }
         let scratch = ((hcs2 >> 21 & 0x1F) << 5 | hcs2 >> 27) as usize;
-        if scratch > MAX_SCRATCH { mind::println!("[USB] {} SCRATCHPAD PAGES NEEDED, {} AVAILABLE", scratch, MAX_SCRATCH); return None; }
+        if scratch > MAX_SCRATCH + POOL_SCRATCH { mind::println!("[USB] {} SCRATCHPAD PAGES NEEDED, {} AVAILABLE", scratch, MAX_SCRATCH + POOL_SCRATCH); return None; }
         dma.zero(0, POOL);
-        for i in 0..scratch { let page = dma.physical(SCRATCH_PAGES + i * PAGE); dma.write64(SCRATCH_ARRAY + i * 8, page); }
+        let pooled = scratch.saturating_sub(MAX_SCRATCH);
+        for i in 0..scratch {
+            let offset = if i < MAX_SCRATCH { SCRATCH_PAGES + i * PAGE } else { POOL + (i - MAX_SCRATCH) * PAGE };
+            if i >= MAX_SCRATCH { dma.zero(offset, PAGE); }
+            let page = dma.physical(offset); dma.write64(SCRATCH_ARRAY + i * 8, page);
+        }
+        if pooled > 0 { mind::println!("[USB] {} SCRATCHPAD PAGES, {} OF THEM FROM THE POOL", scratch, pooled); }
         if scratch > 0 { let array = dma.physical(SCRATCH_ARRAY); dma.write64(DCBAA, array); }
         let slots = (hcs1 & 0xFF).min(16) as usize;
         mmio.write32(op + 0x38, slots as u32);
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize, slots,
             command: Ring { page: COMMAND_RING, trbs: RING_TRBS, index: 0, cycle: 1 }, event: Ring { page: EVENT_RING, trbs: RING_TRBS, index: 0, cycle: 1 },
-            free: u64::MAX, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], last: 0 };
+            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], last: 0 };
         xhci.link(xhci.command);
         xhci.mmio.write64(op + 0x18, xhci.dma.physical(COMMAND_RING) | 1);
         let event = xhci.dma.physical(EVENT_RING); xhci.dma.write64(ERST, event); xhci.dma.write32(ERST + 8, RING_TRBS as u32);
@@ -293,11 +304,14 @@ impl Xhci {
         let _ = self.command(dequeue, TYPE_SET_DEQUEUE << 10 | (dci as u32) << 16 | (slot as u32) << 24);
     }
 
-    /// Starts polling interrupt IN endpoint `dci` on its ring with `ARMED` transfers of up to a packet each.
-    pub fn arm(&mut self, slot: u8, dci: u8, ring: Ring, packet: u16) -> bool {
+    /// Starts polling IN endpoint `dci` (interrupt, or with `lossless` bulk) on its ring with `ARMED` transfers of up to a
+    /// packet each.
+    pub fn arm(&mut self, slot: u8, dci: u8, ring: Ring, packet: u16, lossless: bool) -> bool {
+        // Only a ring made for polling leaves room for the report buffers after its transfers.
+        if ring.trbs != INTERRUPT_TRBS { return false; }
         let Some(index) = self.interrupts.iter().position(Option::is_none) else { return false };
         let length = (packet as u32).min(REPORT_BYTES as u32).max(1);
-        self.interrupts[index] = Some(Interrupt { slot, dci, ring, length, queue: [[0; REPORT_BYTES]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false });
+        self.interrupts[index] = Some(Interrupt { slot, dci, ring, length, queue: [[0; REPORT_BYTES]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false, lossless, in_flight: ARMED });
         for _ in 0..ARMED { self.queue_report(index); }
         self.doorbell(slot, dci as u32);
         true
@@ -318,6 +332,7 @@ impl Xhci {
     // a transfer in its place; an error stops the endpoint (the device went away or stalled it).
     fn report(&mut self, index: usize, pointer: u64, status: u32) {
         let Some(interrupt) = self.interrupts[index].as_mut() else { return };
+        interrupt.in_flight = interrupt.in_flight.saturating_sub(1);
         let code = status >> 24;
         // The first report and a failure are logged: a keyboard that sends nothing shows which (211-DRV-0003).
         if !matches!(code, SUCCESS | SHORT_PACKET) { interrupt.failed = true; mind::println!("[USB] SLOT {} ENDPOINT {}: INTERRUPT TRANSFER FAILED (COMPLETION {})", interrupt.slot, interrupt.dci, code); return; }
@@ -337,6 +352,8 @@ impl Xhci {
         let bytes = self.dma.bytes(buffer, length);
         interrupt.queue[slot][..length].copy_from_slice(bytes);
         interrupt.lengths[slot] = length as u8;
+        if interrupt.lossless && interrupt.in_flight + interrupt.count >= QUEUE { return; }
+        interrupt.in_flight += 1;
         let (slot, dci) = (interrupt.slot, interrupt.dci);
         self.queue_report(index);
         self.doorbell(slot, dci as u32);
@@ -349,6 +366,13 @@ impl Xhci {
         for n in 0..count { let at = (interrupt.head + n) % QUEUE; each(&interrupt.queue[at][..interrupt.lengths[at] as usize]); }
         interrupt.head = (interrupt.head + count) % QUEUE; interrupt.count = 0;
         if interrupt.failed && count == 0 { return Err(()); }
+        // A lossless endpoint's transfers held back for want of room go on the ring again.
+        let (lossless, slot, dci, held) = (interrupt.lossless, interrupt.slot, interrupt.dci, ARMED.saturating_sub(interrupt.in_flight));
+        if lossless && held > 0 && !interrupt.failed {
+            for _ in 0..held { self.queue_report(index); }
+            if let Some(interrupt) = self.interrupts[index].as_mut() { interrupt.in_flight += held; }
+            self.doorbell(slot, dci as u32);
+        }
         Ok(count)
     }
 }

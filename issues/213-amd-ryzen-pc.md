@@ -23,7 +23,25 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
 1. The black screen first: [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md).
 2. Every xHCI controller: [213-KRN-0099](213-KRN-0099-a-usb-host-for-every-xhci.md) (`init`) with the drivers track's `usb_host`.
 3. The drivers track's part, asked in [requests-DRV.md](requests-DRV.md): the analog HDA codec, the RTL8168 Ethernet card, the second NVMe disk.
-4. Each run's evidence is for this machine and this build only (MC-12.1).
+4. Runs without a person at the machine: one boot of MIND Core from Ubuntu and back ([000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md)), and a restart after a freeze by the FCH's watchdog ([213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md)).
+5. Each run's evidence is for this machine and this build only (MC-12.1).
+
+## The next runs (the maintainer, 2026-10-25)
+
+- **The medium:** MIND Core boots from a USB stick the maintainer attaches. Linux stays on the first NVMe disk, and switching is by `BootNext` ([000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md)).
+- **The second NVMe disk (04:00.0) is someone else's Windows disk.**
+  - Nothing writes it, from Linux or from MIND Core.
+  - Its one possible use is to debug reading a Windows file system, read-only, should such a task be recorded.
+  - What the code does today: `vfs_server` mounts only the boot volume the bootloader named, the log partition on the same disk, a `MIND MODELS` volume read-only and the RAM disk. Another disk's sectors are read only to find the boot volume. The block store refuses a medium that is neither blank nor its own.
+- **The order:**
+  1. the network, Wi-Fi (RTL8852BE, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)) and the wired card (RTL8168, [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md));
+  2. the screen, the mouse and the keyboard, checked as they are now ([213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md) for the screen);
+  3. Bluetooth after these ([700](700-bluetooth.md)).
+- **Who:**
+  - `EFF`, and the session that debugged Wi-Fi on the MacBook Pro, connect `effector485` (MIND Link, [800](800-mind-link.md)) to this machine;
+  - that gives a path that does not depend on the network, to debug the wired and the wireless network for the Effector server's work;
+  - the maintainer says when it is ready.
+- **Switching to MIND Core** (the maintainer's word, 2026-10-25): the kernel session sets `BootNext` to the stick with `scripts/boot_switch.py` as root and reboots, and uses root for nothing else, once the maintainer says the stick and `effector485` are ready. Each run is recorded in docs/effector.md, section 6. While the machine runs MIND Core it runs no gate: the gates go to i9 and PCU.
 
 ## Acceptance criteria
 

@@ -1,0 +1,28 @@
+{
+  "schema": "nrl.generation-study/0",
+  "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+  "prompts": [
+    [
+      1,
+      403,
+      407,
+      269,
+      261,
+      280
+    ],
+    [
+      1,
+      403
+    ],
+    [
+      1
+    ]
+  ],
+  "max_new_tokens": 32,
+  "measurement": {
+    "schema": "nrl.measurement/0",
+    "warmups": 2,
+    "repeats": 7,
+    "max_forward_rows": 65536
+  }
+}

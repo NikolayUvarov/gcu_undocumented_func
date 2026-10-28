@@ -89,22 +89,34 @@ fn serial_print(text: &str) { serial_only(text); screen::print(text); klog::keep
 
 #[no_mangle]
 #[link_section = ".text._start"]
-pub extern "C" fn _start(info: &BootInfo) -> ! {
+pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
     unsafe {
         cpu::disable_interrupts();
         init_serial();
+        // Read the fixed ABI 10 prefix before any heap, firmware, memory-map or appended-image pointer is used.
+        let Some(version) = BootInfo::read_abi_version(raw_info) else {
+            serial_only("KERNEL STOPPED: INVALID BOOT INFORMATION POINTER.\n");
+            cpu::halt_here();
+        };
+        // The loader's handoff version, apart from the system calls' ABI (351-KRN-0166); the test kernel takes only a later one.
+        let (oldest, newest) = if cfg!(feature = "loader-abi-test") { (abi::BOOT_HANDOFF_VERSION + 1, abi::BOOT_HANDOFF_VERSION + 1) } else { (abi::BOOT_HANDOFF_OLDEST, abi::BOOT_HANDOFF_VERSION) };
+        if version < oldest || version > newest {
+            // Every handoff from ABI 10 on keeps that record in front: the screen, the ACPI root and the trial (351-KRN-0167).
+            let (trial, rsdp) = if version >= 10 { screen::init_early(raw_info); BootInfo::read_refused(raw_info) } else { (false, 0) };
+            acpi::early(rsdp);
+            let mut out = Fatal::begin();
+            let _ = core::fmt::Write::write_fmt(&mut out, format_args!("\nKERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION {}, THIS KERNEL TAKES {} TO {}. WRITE BOTH FROM ONE BUILD.\n", version, oldest, newest));
+            // On a trial the loader has counted the try: a restart boots the fallback instead of leaving the machine stopped.
+            if trial { let _ = core::fmt::Write::write_str(&mut out, "TRIAL: RESTARTING INTO THE FALLBACK\n"); acpi::reset(); }
+            cpu::halt_here();
+        }
+        let info = &*raw_info;
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         // The identity map first: the frame pool writes its lists into RAM above 4 GiB, which only it maps (issue 171).
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
         // Before anything else can stop the kernel: a PC without a serial port shows why on the screen.
         screen::init(info);
-        // A bootloader of another ABI fills BootInfo another way; its version is where every version keeps it (211-KRN-0012).
-        let own = if cfg!(feature = "loader-abi-test") { abi::ABI_VERSION + 1 } else { abi::ABI_VERSION };
-        if info.abi_version != own {
-            let _ = core::fmt::Write::write_fmt(&mut Fatal::begin(), format_args!("\nKERNEL STOPPED: THE BOOTLOADER IS OF ABI {}, THIS KERNEL OF ABI {}. WRITE BOTH FROM ONE BUILD.\n", info.abi_version, own));
-            cpu::halt_here();
-        }
         trial::start(&info.boot_slot);
         firmware::init(info.efi_runtime);
         firmware::device_tree(info.device_tree);
@@ -123,6 +135,17 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
         scheduler::reap();
         scheduler::idle();
     }
+}
+
+/// `HALT` (the shell's `stop`, 000-KRN-0110): the other CPUs stop first, so no task draws over the last lines, then the
+/// screen and COM1 say the system stopped.
+pub fn halt_asked() -> ! {
+    serial_only("MIND CORE KERNEL: STOPPING THE SYSTEM\n");
+    cpu::stop_others();
+    clock::spin_us(2_000); // a frame being copied to the screen ends before the lines go over it
+    screen::last("MIND CORE: STOPPING THE SYSTEM...\nMIND CORE: THE SYSTEM IS STOPPED. IT IS SAFE TO TURN THE MACHINE OFF.\n");
+    serial_only("MIND CORE KERNEL: THE SYSTEM IS STOPPED\n");
+    cpu::halt_all()
 }
 
 // Serial output without locks or allocation, also on the screen until a task takes it.

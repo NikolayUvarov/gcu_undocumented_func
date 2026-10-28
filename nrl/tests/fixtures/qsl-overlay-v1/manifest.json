@@ -1,0 +1,78 @@
+{
+  "format": "qwen-spline-lab-overlay-v1",
+  "base": {
+    "source": "synthetic://nrl-qsl-import-fixture",
+    "fingerprint": "synthetic-nrl-import-π",
+    "model_type": "synthetic-mlp",
+    "licence": "MIT; deterministic synthetic fixture, no pretrained weights"
+  },
+  "blocks": {
+    "0": {
+      "representation": "dense",
+      "hidden_size": 3,
+      "original_width": 4,
+      "width": 4,
+      "rank": 2,
+      "knots": 4
+    },
+    "1": {
+      "representation": "pruned",
+      "hidden_size": 3,
+      "original_width": 4,
+      "width": 2,
+      "rank": 2,
+      "knots": 4
+    },
+    "2": {
+      "representation": "spline-linear",
+      "hidden_size": 3,
+      "original_width": 4,
+      "width": 2,
+      "rank": 2,
+      "knots": 4
+    },
+    "3": {
+      "representation": "spline-cubic",
+      "hidden_size": 3,
+      "original_width": 4,
+      "width": 2,
+      "rank": 2,
+      "knots": 4
+    },
+    "4": {
+      "representation": "svd",
+      "hidden_size": 3,
+      "original_width": 4,
+      "width": 2,
+      "rank": 2,
+      "knots": 4
+    }
+  },
+  "weights_sha256": "a143520c8a7484076788ab78a17961db1baf7a19922fc96e20ffb63dc56d2098",
+  "patch_file_bytes": 2688,
+  "patch_storage_dtype": "float32",
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "packages": {
+      "torch": "2.10.0+cpu",
+      "numpy": "2.4.1",
+      "safetensors": "0.7.0",
+      "transformers": "4.57.6",
+      "huggingface-hub": "0.36.2",
+      "accelerate": "1.12.0"
+    },
+    "cuda_available": false,
+    "cuda_version": null,
+    "torch_threads": 1,
+    "cpu_logical_count": 24,
+    "cpu_processor": "x86_64",
+    "cuda_devices": [],
+    "gpu": null
+  },
+  "details": {
+    "fixture": true,
+    "archive_sha256": "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25"
+  },
+  "artifact_id": "edb573650f7b4d6ee5990ec4ea8409a9f24fe3a3359398cfbd5ea322b9fda584"
+}

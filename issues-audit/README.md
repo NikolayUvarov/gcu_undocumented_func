@@ -6,7 +6,7 @@ This folder keeps the code audits of MIND Core and their assessments. The mainta
 
 - `YYYY-MM-DD-baseline.md`: the state of the repository before an audit (what is done, against the Constitution's stages), with the commits it describes.
 - `YYYY-MM-DD-<scope>-audit.md`: an audit, with the commit it was made on.
-- `YYYY-MM-DD-validation.txt`: commands, per-suite outcomes and evidence limits for that audit.
+- `YYYY-MM-DD-<scope>-validation.md` (older records use `.txt`): commands, per-suite outcomes and evidence limits for that audit.
 - `repro/`: executable audit reproductions; their assertions establish the observed defect, not a successful fix.
 - `YYYY-MM-DD-<scope>-assessment.md`: the assessment of that audit. For each finding:
   - its verdict against the code at the audited commit: confirmed, partly confirmed, or not confirmed;
@@ -31,6 +31,13 @@ An audit's results are evidence of what was reviewed at that commit, not a proof
 
 | File | What |
 |---|---|
+| [2026-10-16-astra-x86-targeted.md](../docs/validation/2026-10-16-astra-x86-targeted.md) | Frozen c493 source: nine targeted host/TLC/x86 groups pass; retained failures, exact configurations and full-gate/physical limits |
+| [2026-10-16-hardware-test-readiness.md](2026-10-16-hardware-test-readiness.md) | Intel MacBook/Ryzen implementation boundaries, owner requests and separate physical acceptance |
+| [2026-10-16-rtl8168-deadline-audit.md](2026-10-16-rtl8168-deadline-audit.md) | RTL8168 per-read/global/PHY deadline correction and exact host evidence |
+| [2026-10-16-xtal-cleanup-audit.md](2026-10-16-xtal-cleanup-audit.md) | Shared XTAL helpers could overwrite an unfinished command during board cleanup; bounded preflight correction and regression scope |
+| [2026-10-16-network-validation.md](2026-10-16-network-validation.md) | Later ABI/Realtek validation subsets, retained TLS-fixture failure, MacBook/Ryzen hardware acceptance still open |
+| [2026-10-15-astra-validation.md](2026-10-15-astra-validation.md) | Exact ASTRA candidate, 24 passing host/x86 groups, deferred ARM and hardware limits |
+| [2026-10-15-hardware-audit.md](2026-10-15-hardware-audit.md) | Ryzen cache and NIC findings, bounded network work, UI reports, Effector prerequisites, task routing and separate hardware acceptance |
 | [2026-10-16-download-recheck-stall.md](2026-10-16-download-recheck-stall.md) | Intel 6 GiB gate stalls on the already-complete download recheck; exact failure, uncertain cause and NET investigation request |
 | [2026-10-16-bcm-tx-wait-audit.md](2026-10-16-bcm-tx-wait-audit.md) | BCM4331 TX status loop bypasses its deadline on intermediate/unrelated statuses; owner request and hardware evidence boundary |
 | [2026-10-09-baseline.md](2026-10-09-baseline.md) | The state of the repository before the first audit |

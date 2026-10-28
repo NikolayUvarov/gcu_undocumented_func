@@ -1,0 +1,14 @@
+[package]
+name = "linkproto"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# MIND Link's protocol (800-LNK-0001): no libmind, no allocation, no dependency, so MIND Core's `link` and the host's
+# `mindlink` share it and `cargo test` runs it on the host over a lossy simulated line.
+[dependencies]
+
+[profile.release]
+panic = "abort"
+opt-level = 3

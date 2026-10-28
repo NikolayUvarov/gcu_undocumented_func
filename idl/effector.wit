@@ -1,0 +1,128 @@
+/// The Effector gateway (`effector_gw`, 750-EFF-0003/0007, docs/effector/README.md): the only service that acts on
+/// the machine for the Effector fleet server. Its session client (`effector`, `BADGE_EFFECTOR_SESSION`) holds the
+/// network and parses nothing of the machine; the shell's owner client (`BADGE_EFFECTOR_OWNER`) reloads the policy and
+/// reads the audit. Every request is decided by the owner's policy (`data/effector/policy`), never by what the server
+/// asked (MC-3.8, MC-3.11), and is audited before it is answered (MC-10.3); a failed audit write refuses it (MC-10.6).
+/// Data leaves the machine only through `open-log`, `open-file` and `open-screen`, each named by the policy (MC-10.7).
+/// A transfer has one handle at a time; a request runs to its end before the next one is read.
+///
+/// 1.1 (750-EFF-0014): `sample`, the counters the session publishes as the server's telemetry: the processors' time,
+/// the program memory, the boot services' processes and the volumes' space. Like `status`, it carries no file, log or
+/// screen data and changes nothing.
+///
+/// 1.2 (750-EFF-0014): `load`, the one-minute load average the session reports in every heartbeat and poll, so the
+/// server holds the operations that ask for a load gate (Effector's ahelp, "Load gate for builds and gates").
+///
+/// 1.3 (750-EFF-0015): `connection`, what the session reports each heartbeat of its link to the server, so the gateway
+/// lights the agent's mark on the screen: grey unless connected and activated, then red or yellow by the policy.
+package mind:effector@1.3.0;
+
+interface effector {
+    /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
+    /// `not-found`: no such service, log source, file or handle; `busy`: a transfer or a request is already open;
+    /// `bounds`: a length, offset or size beyond what the policy or this interface allows; `digest`: the bytes do not
+    /// have the size or SHA-256 they were announced with; `exists`: the destination exists and replacing it was not
+    /// asked; `expired`: the deadline passed before the request ran; `audit`: the audit record could not be written, so
+    /// nothing was done; `io`: a file or service call failed; `signature`: a package not signed by a key the policy
+    /// trusts for its name; `older`: a package not above the installed version; `malformed`: a field the gateway
+    /// refuses (a path with `..`, an unknown action); `cancelled`: cancelled before it ended; `unsupported`: this build
+    /// does not do it yet; `no-policy`: no valid policy is loaded, so everything is denied.
+    enum error { denied, not-found, busy, bounds, digest, exists, expired, audit, io, signature, older, malformed, cancelled, unsupported, no-policy }
+
+    /// Who asked and why, as the server gave it, and until when it may still run. `command`: the server's command ID
+    /// (1–64 bytes of `[A-Za-z0-9._-]`); `initiator` and `reason`: the operator and the reason recorded with the
+    /// operation, cut to their bounds with `truncated` set; `deadline-ms`: the system's uptime in ms after which the
+    /// request is refused with `expired`.
+    record origin { command: string<64>, initiator: string<128>, reason: string<512>, truncated: bool, deadline-ms: u64 }
+
+    /// A boot service's state as `init` reports it.
+    enum service-state { running, stopped, quarantined, absent }
+    /// One boot service: its name and state.
+    record service { name: string<16>, state: service-state }
+    /// What the session reports in its heartbeat. `release`: the running release's version; `uptime-ms`;
+    /// `memory-used` and `memory-total` in bytes; `services`: the boot services; `policy`: a valid policy is loaded;
+    /// `busy`: a request or transfer is open; `journal-free`: how many more results the journal can keep.
+    record status { release: string<32>, uptime-ms: u64, memory-used: u64, memory-total: u64, services: list<service, 48>, policy: bool, busy: bool, journal-free: u16 }
+
+    /// What a boot service is asked to do.
+    enum service-action { start, stop, restart }
+
+    /// An open transfer out of the machine: its handle, its size in bytes, the SHA-256 of all of it (64 hex digits),
+    /// and whether the source was longer than the policy lets leave (then only the start is sent).
+    record transfer { handle: u32, size: u64, sha256: string<64>, truncated: bool }
+
+    /// What is done with a package. `install` and `reinstall` install the package's application (reinstall: also the
+    /// same version); `uninstall` removes the application the package names.
+    enum package-action { install, reinstall, uninstall }
+    /// A package's result: the application's name and version, and the version it replaced (empty: none).
+    record package-report { name: string<32>, version: string<32>, previous: string<32> }
+
+    /// What `update-check` found: the version offered (0: none newer), the running version, whether it was fetched
+    /// into the other slot, and whether the restart into it was asked of `init`.
+    record update-report { offered: u64, running: u64, staged: bool, restarting: bool }
+
+    /// A test script's result: its exit status, its time in ms, its output (cut to 4096 bytes with `truncated` set).
+    record run-report { status: u32, elapsed-ms: u32, output: string<4096>, truncated: bool }
+
+    /// The loaded policy, for the owner: its version, its SHA-256 (64 hex digits), its number of rules, and when it was
+    /// read (the system's uptime in ms).
+    record policy-summary { version: u16, sha256: string<64>, rules: u16, read-ms: u64 }
+
+    /// A boot service's process for telemetry (1.1): its state, its PID (0: none), its CPU time and when it started (ns
+    /// of uptime, which tells a restarted process from the old one), and its memory (image, stack, heap and screen).
+    record load { name: string<16>, state: service-state, pid: u64, run-ns: u64, started-ns: u64, memory: u64 }
+    /// A volume's size and free space in bytes (1.1): the boot volume (empty name), `ram`, `log`.
+    record space { name: string<16>, bytes: u64, free: u64 }
+    /// The counters of one telemetry sample (1.1): the online processors and their busy and idle time since boot (ns),
+    /// the uptime, the memory programs run in (the kernel's frame pool, bytes), the boot services and the volumes. The
+    /// session turns two samples into rates.
+    record sample { cpus: u16, busy-ns: u64, idle-ns: u64, uptime-ms: u64, memory-total: u64, memory-free: u64, services: list<load, 48>, volumes: list<space, 4> }
+
+    /// The machine's state for the heartbeat. Allowed to both clients; changes nothing.
+    status: func() -> status;
+    /// Starts, stops or restarts a boot service the policy names for that action. `init`, the shell and the agent's
+    /// own services are always refused.
+    service-control: func(origin: origin, name: string<16>, action: service-action) -> result<service-state, error>;
+    /// Opens a log source the policy names (`ring`: the system log; `boot`: the last boot's log on `log:`).
+    open-log: func(origin: origin, source: string<32>) -> result<transfer, error>;
+    /// Opens a file under a root the policy lets leave the machine. Never the agent's own directories.
+    open-file: func(origin: origin, path: string<256>) -> result<transfer, error>;
+    /// Captures the screen as a PNG, if the policy allows it.
+    open-screen: func(origin: origin) -> result<transfer, error>;
+    /// Reads up to 32768 bytes of an open transfer from `offset`; an empty answer is its end.
+    read: func(handle: u32, offset: u64) -> result<bytes<32768>, error>;
+    /// Closes an open transfer, out or in, without finishing it: a file being delivered is removed.
+    close: func(handle: u32) -> result<_, error>;
+    /// Starts delivering a file of `size` bytes and the announced SHA-256 to `path`, under the policy's delivery root.
+    deliver-begin: func(origin: origin, path: string<256>, size: u64, sha256: string<64>, replace: bool) -> result<u32, error>;
+    /// Starts receiving a package of `size` bytes and the announced SHA-256 for `action`, if the policy allows
+    /// packages.
+    package-begin: func(origin: origin, action: package-action, size: u64, sha256: string<64>) -> result<u32, error>;
+    /// Writes the next bytes of an incoming transfer at `offset`; bytes must come in order, without gaps.
+    write: func(handle: u32, offset: u64, data: bytes<32768>) -> result<_, error>;
+    /// Finishes a delivered file: checks its size and SHA-256, flushes it and gives it its name.
+    deliver-commit: func(handle: u32) -> result<_, error>;
+    /// Finishes a package: checks its size and SHA-256, then its signature and version, then does its action.
+    package-commit: func(handle: u32) -> result<package-report, error>;
+    /// Asks `updater` to check the owner's channel, to fetch a newer release if the policy allows it, and to apply it
+    /// if `apply` is set and the policy allows the restart.
+    update-check: func(origin: origin, apply: bool) -> result<update-report, error>;
+    /// Restarts the machine after `delay-ms` (at most 600000), if the policy allows it.
+    reboot: func(origin: origin, delay-ms: u32) -> result<_, error>;
+    /// Runs an `msh` script in the test account with at most the grants the policy allows tests (501), within
+    /// `timeout-ms`.
+    test-run: func(origin: origin, script: string<512>, timeout-ms: u32) -> result<run-report, error>;
+    /// Cancels the request with this command ID if it is still open; a request that ended is `not-found`.
+    cancel: func(command: string<64>) -> result<_, error>;
+    /// The owner only: reads `data/effector/policy` again. A policy that does not parse leaves none loaded.
+    reload-policy: func() -> result<policy-summary, error>;
+    /// The owner only: the last `count` audit lines (at most 16), newest last.
+    audit: func(count: u8) -> result<list<string<256>, 16>, error>;
+    /// The telemetry counters (1.1, after the 1.0 calls so their numbers stay). Allowed to both clients; changes nothing.
+    sample: func() -> sample;
+    /// The one-minute load average x 100 (runnable tasks, as `sysinfo.load` gives it; 1.2). Allowed to both clients.
+    load: func() -> u32;
+    /// The session's link to the server (1.3): connected, and activated by the server's owner. The session only; it
+    /// changes only the agent's mark on the screen.
+    connection: func(connected: bool, active: bool);
+}

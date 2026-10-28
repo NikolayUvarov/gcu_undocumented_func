@@ -1,14 +1,14 @@
 //! Host tests of the SSH client (351-NET-0026) against OpenSSH's server: sshd is started on 127.0.0.1 for the test,
-//! with its own host key, configuration and authorized key in a temporary directory, and stopped after it. Needs
-//! OpenSSH's server (`openssh-server`, /usr/sbin/sshd) and ssh-keygen.
+//! with its own host key, configuration and authorized key in a temporary directory, on a port it is seen to serve
+//! (another try on another port if it cannot), and stopped after it; its log goes into failures' messages. Needs
+//! OpenSSH's server (`MIND_SSHD`, default /usr/sbin/sshd) and ssh-keygen.
 use ssh::{Error, Io, Keys};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::Duration;
 
-const SSHD: &str = "/usr/sbin/sshd";
 const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn base64(data: &[u8]) -> String {
@@ -38,10 +38,27 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 
 fn random(out: &mut [u8]) -> bool { std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(out)).is_ok() }
 
+// The connection, keeping its last I/O error for a failure's message.
 struct Tcp(TcpStream);
+
+std::thread_local! { static IO_ERROR: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) }; }
+
+fn io_failed(e: std::io::Error) -> Error { IO_ERROR.with(|last| *last.borrow_mut() = e.to_string()); Error::Io }
+
+/// The last I/O error of this test's connections, and sshd's log.
+fn why(s: &Server) -> String { format!("I/O: {}; sshd: {}", IO_ERROR.with(|last| last.borrow().clone()), s.log()) }
+
 impl Io for Tcp {
-    fn send(&mut self, data: &[u8]) -> Result<(), Error> { self.0.write_all(data).map_err(|_| Error::Io) }
-    fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Error> { self.0.read(buffer).map_err(|_| Error::Io) }
+    fn send(&mut self, data: &[u8]) -> Result<(), Error> { self.0.write_all(data).map_err(io_failed) }
+    // A read a signal interrupts (another test's sshd or ssh-keygen ending) is read again: `read` does not retry it.
+    fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
+        loop {
+            match self.0.read(buffer) {
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                other => return other.map_err(io_failed),
+            }
+        }
+    }
 }
 
 struct Key(ed25519_dalek::SigningKey, usize);
@@ -62,15 +79,39 @@ fn blob(public: &[u8; 32]) -> Vec<u8> {
     b
 }
 
-/// sshd for one test: its directory, port and host key pin; stopped when dropped.
+/// sshd for one test: its directory, port and host key pin; stopped when dropped. Its log is in the directory.
 struct Server { child: Child, dir: PathBuf, port: u16, pin: [u8; 32] }
+
+impl Server {
+    /// What sshd logged, for a failure's message.
+    fn log(&self) -> String { std::fs::read_to_string(self.dir.join("sshd.log")).unwrap_or_default() }
+}
 
 impl Drop for Server {
     fn drop(&mut self) { let _ = self.child.kill(); let _ = self.child.wait(); let _ = std::fs::remove_dir_all(&self.dir); }
 }
 
+// Whether the sshd just started serves `port`: alive, and sending its banner there (a free port picked first can be
+// taken by another socket before sshd binds it, and sshd then ends; a busy machine starts it slowly).
+fn ready(child: &mut Child, port: u16) -> bool {
+    for _ in 0..600 {
+        if child.try_wait().ok().flatten().is_some() { return false; }
+        if let Ok(mut probe) = TcpStream::connect(("127.0.0.1", port)) {
+            let _ = probe.set_read_timeout(Some(Duration::from_secs(5)));
+            // The whole banner line, so the probe closes with nothing unread (no reset for sshd to log).
+            let mut banner = Vec::new();
+            let mut byte = [0u8; 1];
+            while banner.len() < 255 && probe.read_exact(&mut byte).is_ok() && byte[0] != b'\n' { banner.push(byte[0]); }
+            if banner.starts_with(b"SSH-2.0-") { return true; }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
 fn server(name: &str, client: &[u8; 32]) -> Server {
-    assert!(Path::new(SSHD).exists(), "OpenSSH's server is needed for these tests: install openssh-server ({} is missing)", SSHD);
+    let sshd = PathBuf::from(std::env::var_os("MIND_SSHD").filter(|path| !path.is_empty()).unwrap_or_else(|| "/usr/sbin/sshd".into()));
+    assert!(sshd.is_absolute() && sshd.is_file(), "OpenSSH's server is needed: install openssh-server or set MIND_SSHD to its absolute executable path (invalid: {})", sshd.display());
     let dir = std::env::temp_dir().join(format!("mind-ssh-{}-{}", name, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -83,20 +124,21 @@ fn server(name: &str, client: &[u8; 32]) -> Server {
     let mut pattern: Vec<u8> = (0..100_000u32).map(|i| (i * 7 + i / 251) as u8).collect();
     pattern.extend_from_slice(b"the end\n");
     std::fs::write(dir.join("release.bin"), &pattern).unwrap();
-    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let config = dir.join("sshd_config");
-    std::fs::write(&config, format!(
-        "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nPidFile {}\nAuthorizedKeysFile {}\nPasswordAuthentication no\n\
-         KbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nStrictModes no\nSubsystem sftp internal-sftp\nLogLevel ERROR\n",
-        host.display(), dir.join("sshd.pid").display(), dir.join("authorized_keys").display())).unwrap();
     // Run as root, sshd wants its privilege separation directory.
     if std::env::var("USER").as_deref() == Ok("root") || unsafe_is_root() { let _ = std::fs::create_dir_all("/run/sshd"); }
-    let child = Command::new(SSHD).args(["-D", "-e", "-f"]).arg(&config).spawn().expect("sshd");
-    for _ in 0..100 {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() { break; }
-        std::thread::sleep(Duration::from_millis(50));
+    let config = dir.join("sshd_config");
+    for _ in 0..5 {
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        std::fs::write(&config, format!(
+            "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nPidFile {}\nAuthorizedKeysFile {}\nPasswordAuthentication no\n\
+             KbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nStrictModes no\nSubsystem sftp internal-sftp\nLogLevel ERROR\n",
+            host.display(), dir.join("sshd.pid").display(), dir.join("authorized_keys").display())).unwrap();
+        let mut child = Command::new(&sshd).args(["-D", "-E"]).arg(dir.join("sshd.log")).arg("-f").arg(&config).spawn().expect("sshd");
+        if ready(&mut child, port) { return Server { child, dir, port, pin }; }
+        let _ = child.kill();
+        let _ = child.wait();
     }
-    Server { child, dir, port, pin }
+    panic!("sshd did not start: {}", std::fs::read_to_string(dir.join("sshd.log")).unwrap_or_default());
 }
 
 fn unsafe_is_root() -> bool { std::fs::metadata("/proc/self").map(|m| { use std::os::unix::fs::MetadataExt; m.uid() == 0 }).unwrap_or(false) }
@@ -108,7 +150,7 @@ fn user() -> String {
 
 fn tcp(port: u16) -> Tcp {
     let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
     Tcp(stream)
 }
 
@@ -116,7 +158,7 @@ fn tcp(port: u16) -> Tcp {
 fn reads_a_file_over_sftp() {
     let mut key = Key(ed25519_dalek::SigningKey::from_bytes(&[7; 32]), 0);
     let s = server("read", &key.public());
-    let mut session = ssh::connect(tcp(s.port), &user(), &s.pin, &mut key, random).expect("login");
+    let mut session = ssh::connect(tcp(s.port), &user(), &s.pin, &mut key, random).unwrap_or_else(|e| panic!("login: {:?}; {}", e, why(&s)));
     assert_eq!(session.host_key(), s.pin);
     assert_eq!(key.1, 1, "one signature for one login");
     let path = s.dir.join("release.bin");
@@ -146,10 +188,10 @@ fn refuses_another_host_key_and_another_login_key() {
     let s = server("refuse", &key.public());
     let mut wrong = s.pin;
     wrong[0] ^= 1;
-    assert_eq!(ssh::connect(tcp(s.port), &user(), &wrong, &mut key, random).err(), Some(Error::HostKey));
+    assert_eq!(ssh::connect(tcp(s.port), &user(), &wrong, &mut key, random).err(), Some(Error::HostKey), "{}", why(&s));
     assert_eq!(key.1, 0, "nothing signed for a server that is not the pinned one");
     let mut stranger = Key(ed25519_dalek::SigningKey::from_bytes(&[9; 32]), 0);
-    assert_eq!(ssh::connect(tcp(s.port), &user(), &s.pin, &mut stranger, random).err(), Some(Error::Refused));
+    assert_eq!(ssh::connect(tcp(s.port), &user(), &s.pin, &mut stranger, random).err(), Some(Error::Refused), "{}", why(&s));
 }
 
 struct Silent;
@@ -162,5 +204,5 @@ impl Keys for Silent {
 fn a_signer_that_gives_nothing_ends_the_login() {
     let key = Key(ed25519_dalek::SigningKey::from_bytes(&[7; 32]), 0);
     let s = server("nokey", &key.public());
-    assert_eq!(ssh::connect(tcp(s.port), &user(), &s.pin, &mut Silent, random).err(), Some(Error::NoKey));
+    assert_eq!(ssh::connect(tcp(s.port), &user(), &s.pin, &mut Silent, random).err(), Some(Error::NoKey), "{}", why(&s));
 }

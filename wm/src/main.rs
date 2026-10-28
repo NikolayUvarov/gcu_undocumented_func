@@ -29,18 +29,25 @@ use wm::menu::{self, Kind as ProgramKind};
 // REQUEST_CAMERA: the video gateway's client, passed on to camera (158-APP-0043; the shell lends it without a question).
 // REQUEST_SHELL: the shell's commands, for the menu's Shell item, the shell's own window (211-APP-0044).
 // REQUEST_BATTERY: the battery service's client, for the top bar's item and the background's line, passed on (211-APP-0070).
+// SLOT_WIFI: a copy of the shell's client of the Wi-Fi station (shell.wit 1.5), passed on to wifi from Settings (550-APP-0033).
 // 64 MiB: the desktop background's frame and picture (000-APP-0047, 000-APP-0050), up to 4 MiB each, and a picture's
 // file of up to 32 MiB as it is decoded, beside the rest.
-mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_BATTERY, memory: 64);
+mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_BATTERY | REQUEST_NET_COUNTERS, memory: 64);
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
-// How long wm waits for the shell to answer its menu's Shell item and to set the clock.
+// How long wm waits for the shell to answer its menu's Shell item; and to set the clock or the zone, which the shell may
+// answer only after a command it runs or the cards' counters (a slow network stack) end.
 const SHELL_MS: u32 = 2000;
+const SETTING_MS: u32 = 8000;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
+/// How long the shell may take to give the cards' counters, and how long it is not asked again after it did not: a
+/// loaded machine's shell answers in more than 50 ms (gate 25, PCU), a busy one (a long command) not at all.
+const NET_SHELL_MS: u32 = 250;
+const SHELL_QUIET_MS: usize = 5_000;
 // How often the battery is read: as often as its service reads it (idl/battery.wit).
 const BATTERY_MS: usize = 5000;
 // How long after the shell set the clock the background reads the RTC each second (000-APP-0055).
@@ -174,10 +181,13 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if needs.log { missing.push("log"); }
     if requests & mind::process::REQUEST_NETWORK != 0 { missing.push("network"); }
     if requests & mind::process::REQUEST_TLS != 0 { missing.push("tls"); }
+    if requests & mind::process::REQUEST_SSH != 0 { missing.push("ssh"); }
     if requests & mind::process::REQUEST_PARSE != 0 { missing.push("parse"); }
     if requests & mind::process::REQUEST_GPIO != 0 { if holds(SLOT_GPIO) && grant(SLOT_GPIO, SLOT_GPIO) { lent.push("gpio"); } else { missing.push("gpio"); } }
     if requests & mind::process::REQUEST_CAMERA != 0 { if holds(SLOT_CAMERA) && grant(SLOT_CAMERA, SLOT_CAMERA) { lent.push("camera"); } else { missing.push("camera"); } }
     if requests & mind::process::REQUEST_BATTERY != 0 { if holds(SLOT_BATTERY) && grant(SLOT_BATTERY, SLOT_BATTERY) { lent.push("battery"); } else { missing.push("battery"); } }
+    if requests & mind::process::REQUEST_WIFI != 0 { if holds(SLOT_WIFI) && grant(SLOT_WIFI, SLOT_WIFI) { lent.push("wifi"); } else { missing.push("wifi"); } }
+    if requests & mind::process::REQUEST_NET_COUNTERS != 0 { if holds(SLOT_NET) && grant(SLOT_NET, SLOT_NET) { lent.push("net-counters"); } else { missing.push("net-counters"); } }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
     let mut window = None;
     if let Some(id) = front.filter(|_| pass || display) {
@@ -412,17 +422,83 @@ fn save(config: &Config) -> bool {
     mind::fs::File::create(background::FILE).and_then(|mut file| file.write_at(0, text.as_bytes())).is_ok_and(|n| n == text.len())
 }
 
+// Why a call of the shell's got no answer, after `what`: no answer in time (a command holds the shell), or a call the
+// shell rejected as unknown, which a shell older than `since` (shell.wit) does, so wm and the shell are of two builds.
+fn shell_failed(what: &str, call: &str, since: &str, waited_ms: u32, error: mind::sys::Error) -> String {
+    match error {
+        mind::sys::Error::Other(mind::abi::ERR_TIMEOUT) => format!("{}: the shell did not answer in {} s (a command running in its window?)", what, waited_ms / 1000),
+        mind::sys::Error::Invalid => format!("{}: the shell does not know {}, so it is older than this wm (shell.wit {}): the two come from different builds", what, call, since),
+        error => format!("{}: the shell does not answer ({:?})", what, error),
+    }
+}
+
 // The CPUs' busy and idle time so far, summed (system information, as `load` reads it).
+// Why the net line has no new frames: the shell did not answer in time (the line stays), or no source gives them.
+enum NetMissing { Slow, Why(&'static str) }
+
+// The frames sent and received and where they come from: every card the stack counts, the Wi-Fi station's too, from
+// the shell (shell.wit 1.7, 000-APP-0096), else the card whose read-only client the shell lent (000-APP-0049).
+// The cards counted, and how many of them are Wi-Fi stations, are for the log.
+fn net_frames(ask_shell: bool) -> Result<(u64, u64, &'static str, Option<(usize, usize)>), NetMissing> {
+    let mut why = "NET: NO COUNTERS";
+    if holds(SLOT_SHELL) {
+        if !ask_shell { return Err(NetMissing::Slow); }
+        match mind::idl::wire::with_timeout(NET_SHELL_MS, || mind::idl::shell::net_counters(Endpoint(SLOT_SHELL))) {
+            Ok(Ok(cards)) if cards.is_empty() => return Err(NetMissing::Why("NET: NO CARD")),
+            Ok(Ok(cards)) => {
+                let (sent, received) = cards.as_slice().iter().fold((0u64, 0u64), |(s, r), c| (s.wrapping_add(c.sent), r.wrapping_add(c.received)));
+                let wireless = cards.as_slice().iter().filter(|c| c.wireless).count();
+                return Ok((sent, received, "EVERY CARD'S FRAMES", Some((cards.len(), wireless))));
+            }
+            Ok(Err(mind::idl::shell::Error::Unavailable)) => why = "NET: NO NETWORK STACK",
+            Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => return Err(NetMissing::Slow),
+            Ok(Err(_)) | Err(_) => {}
+        }
+    }
+    match holds(SLOT_NET).then(|| mind::idl::net::counters(Endpoint(SLOT_NET))) {
+        Some(Ok(c)) => Ok((c.sent, c.received, "THE CARD'S COUNTERS", None)),
+        _ => Err(NetMissing::Why(why)),
+    }
+}
+
 fn cpu_times() -> Option<(u64, u64)> {
     let list = mind::idl::sysinfo::cpus(Endpoint::SYSINFO, 0).ok()?.ok()?;
     Some(list.as_slice().iter().filter(|c| c.online).fold((0, 0), |(busy, idle), c| (busy + c.busy_ns, idle + c.idle_ns)))
 }
 
-// The background's pixels in the cells `cells` (indices in a grid `cols` wide, of `cell` pixels).
-fn paint(screen: &Screen, origin: (usize, usize), cell: (usize, usize), cols: usize, cells: impl Iterator<Item = usize>, backdrop: &Backdrop) {
+// The background's pixels in the cells `cells` (indices in a grid `cols` wide, of `cell` pixels, in order): neighbours
+// in a row as one rectangle, filled by runs of one colour (000-APP-0091). How many cells it painted.
+fn paint(screen: &Screen, origin: (usize, usize), cell: (usize, usize), cols: usize, cells: impl Iterator<Item = usize>, backdrop: &Backdrop) -> usize {
+    let mut fill = |x: usize, y: usize, w: usize, h: usize, colour: u32| screen.fill(x, y, w, h, colour);
+    let (mut painted, mut run): (usize, Option<(usize, usize)>) = (0, None); // the run of cells: its first and its length
+    let mut flush = |run: (usize, usize)| {
+        let (first, length) = run;
+        backdrop.blocks(origin.0 + first % cols * cell.0, origin.1 + first / cols * cell.1, length * cell.0, cell.1, &mut fill);
+    };
     for index in cells {
-        let (x, y) = (origin.0 + index % cols * cell.0, origin.1 + index / cols * cell.1);
-        for py in y..y + cell.1 { for px in x..x + cell.0 { screen.pixel(px, py, backdrop.pixel(px, py)); } }
+        painted += 1;
+        run = match run {
+            Some((first, length)) if first + length == index && index % cols != 0 => Some((first, length + 1)),
+            Some(done) => { flush(done); Some((index, 1)) }
+            None => Some((index, 1)),
+        };
+    }
+    if let Some(done) = run { flush(done); }
+    painted
+}
+
+// The background's frame time, logged at the first frame and then once a minute (000-APP-0091): what drawing it and
+// putting it on the screen took, on average and at most.
+#[derive(Default)]
+struct FrameTimes { frames: usize, total_ms: usize, worst_ms: usize, since: usize, logged: bool }
+impl FrameTimes {
+    fn add(&mut self, ms: usize, now: usize, backdrop: &Backdrop) {
+        if self.frames == 0 { self.since = now; }
+        (self.frames, self.total_ms, self.worst_ms) = (self.frames + 1, self.total_ms + ms, self.worst_ms.max(ms));
+        if self.logged && now < self.since + 60_000 { return; }
+        mind::println!("[WM] BACKGROUND FRAME {} MS ON AVERAGE, {} MS AT MOST, {} FRAMES IN {} S ({}X{} BLOCKS OF {} PX)", self.total_ms / self.frames, self.worst_ms,
+                       self.frames, (now - self.since) / 1000, backdrop.width, backdrop.height, backdrop.unit);
+        *self = FrameTimes { logged: true, ..FrameTimes::default() };
     }
 }
 
@@ -444,6 +520,13 @@ fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colou
 }
 
 mind::entry!(main);
+
+// The date page's clock as the clocks show it: local, and its zone (000-APP-0099).
+fn show_clock(settings: &mut wm::settings::Settings) {
+    let local = mind::rtc::local_date_time();
+    settings.set_now(local.map(|(date, _)| date), local.map(|(_, seconds)| seconds as usize));
+    settings.zone = mind::rtc::zone().minutes();
+}
 fn main(info: &'static BootInfo) {
     mind::about!("wm — window manager: programs in windows side by side (text and pixel windows), moved, resized and snapped.\nUsage: wm [program ...]   (wm fm fm clock dzen-clock; with arguments: wm fm data, edit ram:a.txt)\nAlt+Tab next window, Alt+arrows halves, Alt+1..4 quarters, Alt+Enter maximize, Alt+F full screen, Alt+L the windows,\nAlt+M move/resize, Alt+W close, Alt+R run, Alt+H keys, Alt+Q leave (the programs keep running), Alt+X close all.\nThe mouse drags titles and corners.");
     if !holds(SLOT_WINDOW) { mind::println!("[WM] NO WINDOW BROKER CLIENT: START WM FROM THE SHELL"); return; }
@@ -472,6 +555,7 @@ fn main(info: &'static BootInfo) {
     // The desktop's cells that showed the background when the screen was last drawn, the clock and the CPU's times.
     let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
     let mut last_pattern = mind::time::uptime_ms();
+    let mut frame_times = FrameTimes::default();
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
     let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
@@ -479,6 +563,24 @@ fn main(info: &'static BootInfo) {
     if !holds(SLOT_BATTERY) && holds(SLOT_SHELL) {
         let asked = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::battery(Endpoint(SLOT_SHELL), SLOT_BATTERY));
         mind::println!("[WM] BATTERY CLIENT FROM THE SHELL: {}", match asked { Ok(Ok(())) => "LENT", Ok(Err(_)) => "NONE (NO BATTERY SERVICE)", Err(_) => "NO ANSWER" });
+    }
+    // The Wi-Fi station's client, a copy of the shell's for its Settings' `wifi` (shell.wit 1.5, 550-APP-0033).
+    if !holds(SLOT_WIFI) && holds(SLOT_SHELL) {
+        let asked = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::wifi(Endpoint(SLOT_SHELL), SLOT_WIFI));
+        mind::println!("[WM] WI-FI CLIENT FROM THE SHELL: {}", match asked {
+            Ok(Ok(())) => "LENT", Ok(Err(mind::idl::shell::Error::Unavailable)) => "NONE (NO STATION)", Ok(Err(_)) => "REFUSED", Err(_) => "NO ANSWER" });
+    }
+    // A safe start told by the shell (shell.wit 1.6, 000-APP-0086): on the status line until another notice, a click
+    // opening the shell's window, where `svc start` starts what it left out.
+    if holds(SLOT_SHELL) {
+        if let Ok(Ok(notice)) = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::boot_notice(Endpoint(SLOT_SHELL))) {
+            if !notice.as_str().is_empty() {
+                let text = format!("{} (a click here opens the shell's window)", notice.as_str());
+                mind::println!("[WM] {}", text);
+                manager.wm.offer = Some((text.clone(), String::from(menu::SHELL)));
+                manager.wm.notice = Some(text);
+            }
+        }
     }
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.
@@ -500,6 +602,12 @@ fn main(info: &'static BootInfo) {
     // Where the pointer was drawn last, and its size then.
     let mut shown_pointer: Option<(usize, usize, (usize, usize))> = None;
     let (mut free, mut total): (Option<u64>, Option<u64>) = (None, None); // the free memory the background shows
+    // The frames as last read, and the traffic's line made from the two last samples (000-APP-0049); until when the
+    // shell is not asked again after it did not answer in time (000-APP-0096).
+    let (mut net_sample, mut net_text, mut net_logged): (Option<(u64, u64, u64)>, Option<String>, bool) = (None, None, false);
+    let mut net_why: Option<&'static str> = None; // the last reason without a rate the log named
+    let mut shell_quiet_until = 0usize;
+    let mut net_from: Option<&'static str> = None;
     let has_battery = holds(SLOT_BATTERY);
     let mut next_battery = 0;
     let mut buttons = 0u8;
@@ -538,12 +646,15 @@ fn main(info: &'static BootInfo) {
                 Action::Redraw => {}
                 Action::Close(id) => manager.close(id),
                 Action::Run(command) if command == menu::SHELL && holds(SLOT_SHELL) => {
-                    // The shell opens its own window (211-APP-0044); it may be busy with a command for a while.
-                    let answer = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::window(Endpoint(SLOT_SHELL)));
+                    // The shell opens another window of its own each time (211-APP-0044, shell.wit 1.8, 000-APP-0097);
+                    // it may be busy with a command for a while.
+                    let answer = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::new_window(Endpoint(SLOT_SHELL)));
                     let text = match answer {
                         Ok(Ok(id)) => { shell_window = Some(id); format!("The shell's window ({})", id) }
+                        Ok(Err(mind::idl::shell::Error::Busy)) => String::from("The shell has 32 windows open: close one to open another"),
+                        Ok(Err(mind::idl::shell::Error::NoMemory)) => String::from("The shell has no memory for another window: close one"),
                         Ok(Err(error)) => format!("The shell could not open its window: {:?}", error),
-                        Err(_) => String::from("The shell does not answer: it may be busy with a command (Ctrl+Alt+F5 opens its window too)"),
+                        Err(error) => shell_failed("No shell window", "new-window", "1.8", SHELL_MS, error) + " (Ctrl+Alt+F5 opens one too)",
                     };
                     mind::println!("[WM] SHELL WINDOW: {}", text);
                     manager.wm.notice = Some(text);
@@ -569,19 +680,41 @@ fn main(info: &'static BootInfo) {
                     let (y, mo, d) = mind::rtc::civil_from_days(date);
                     let when = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, seconds / 3600, seconds / 60 % 60, seconds % 60);
                     let text = if !holds(SLOT_SHELL) { String::from("Setting the clock needs the shell's commands, which wm does not hold") } else {
-                        match mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
                             Ok(Ok(())) => format!("The clock is set to {}", when),
                             Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", when),
                             Ok(Err(mind::idl::shell::Error::Unavailable)) => String::from("The clock is not set: the RTC service does not answer"),
                             Ok(Err(error)) => format!("The clock is not set ({:?})", error),
-                            Err(_) => String::from("The clock is not set: the shell does not answer"),
+                            Err(error) => shell_failed("The clock is not set", "set-clock", "1.2", SETTING_MS, error),
                         }
                     };
                     mind::println!("[WM] SET CLOCK {}: {}", when, text);
                     // The background reads the RTC anew for a while, and the page at once.
                     fresh_clock = mind::time::uptime_ms() + FRESH_MS;
                     if let Mode::Settings(settings) = &mut manager.wm.mode {
-                        settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                        show_clock(settings);
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                    last_sync = 0;
+                }
+                Action::SetZone { west, minutes } => {
+                    // The zone through the shell, at once as the clock (shell.wit 1.9, 000-APP-0099); every clock shows it
+                    // from its next reading of the RTC, this page and the background at once.
+                    let zone = wm::settings::zone_name(if west { -(minutes as i32) } else { minutes as i32 });
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the zone needs the shell's commands, which wm does not hold") } else {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_zone(Endpoint(SLOT_SHELL), west, minutes)) {
+                            Ok(Ok(())) => format!("The clocks show {} now, kept in data/clock.conf", zone),
+                            Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", zone),
+                            Ok(Err(error)) => format!("The zone is not set ({:?})", error),
+                            Err(error) => shell_failed("The zone is not set", "set-zone", "1.9", SETTING_MS, error),
+                        }
+                    };
+                    mind::println!("[WM] SET ZONE {}: {}", zone, text);
+                    fresh_clock = mind::time::uptime_ms() + FRESH_MS;
+                    clock = mind::rtc::Clock::new();
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        show_clock(settings);
                         settings.message = Some(text.clone());
                     }
                     manager.wm.notice = Some(text);
@@ -657,12 +790,13 @@ fn main(info: &'static BootInfo) {
         // The background: the pattern on as its speed asks, the time and the CPU load once a second; drawn again when
         // either came.
         let mut background_moved = false;
+        let mut frame_began = None; // when this loop began a frame of the background, for its frame time
         // Settings' date page shows the clock each second (000-APP-0055).
         if let Mode::Settings(settings) = &mut manager.wm.mode {
             if settings.page == wm::settings::DATE && now >= next_clock {
                 // The RTC itself, not the background's clock, which reads it once a minute: the shell may just have set it.
                 next_clock = now + INFO_MS;
-                settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                show_clock(settings);
                 relayout = true;
             }
         }
@@ -684,14 +818,40 @@ fn main(info: &'static BootInfo) {
                 }
                 // The frame pool's free memory (000-APP-0064), without the search for the arena's largest block.
                 // The pool's size too, for the memory gauge of the analog face (000-APP-0069).
+                // The traffic: every card's frames from the shell, the Wi-Fi station's too (shell.wit 1.7,
+                // 000-APP-0096), else the card the shell lent a read-only client of (BADGE_COUNTERS, 000-APP-0049).
+                if backdrop.config.net {
+                    match net_frames(now >= shell_quiet_until) {
+                        Ok((sent, received, from, cards)) => {
+                            let sample = (sent, received, now as u64);
+                            // A sample from another source starts the rate again.
+                            let before = net_sample.filter(|_| net_from == Some(from));
+                            let line = before.map_or_else(|| String::from("NET IN - OUT -"), |before| wm::background::net_line(before, sample));
+                            // The first rate in the log, for the suites: the background's pixels are not text.
+                            if before.is_some() && !net_logged {
+                                net_logged = true;
+                                let counted = cards.map_or_else(String::new, |(n, w)| format!(", {} CARDS, {} WI-FI", n, w));
+                                mind::println!("[WM] {} ({}{}, THE FIRST RATE)", line, from, counted);
+                            }
+                            (net_sample, net_text, net_from) = (Some(sample), Some(line), Some(from));
+                        }
+                        Err(NetMissing::Slow) => shell_quiet_until = now + SHELL_QUIET_MS,
+                        Err(NetMissing::Why(line)) => {
+                            // Each reason once in the log: the background's pixels are not text.
+                            if net_why != Some(line) { mind::println!("[WM] {} (THE BACKGROUND'S NET LINE)", line); net_why = Some(line); }
+                            (net_sample, net_text, net_from) = (None, Some(String::from(line)), None)
+                        }
+                    }
+                }
                 if backdrop.config.memory {
                     let pool = mind::idl::sysinfo::pool(Endpoint::SYSINFO).ok().and_then(|r| r.ok());
                     (free, total) = (pool.as_ref().map(|p| p.frames_free), pool.as_ref().map(|p| p.frames));
                 }
             }
-            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, battery: manager.wm.battery, net: None };
+            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, battery: manager.wm.battery, net: net_text.as_deref() };
             backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
             background_moved = true;
+            frame_began = Some(now);
         }
         if changed || relayout {
             let focused_cursor = manager.wm.desk.focus().and_then(|id| manager.live(id)).and_then(|l| l.surface.cursor());
@@ -718,8 +878,8 @@ fn main(info: &'static BootInfo) {
             // The background in the cells that just became the desktop's, those under the pointer, or all when it moved.
             if !cells.is_empty() {
                 let fresh = |i: &usize| cells[*i] && (background_moved || !shown_background.get(*i).copied().unwrap_or(false) || touched.contains(i));
-                paint(&screen, (x0, y0), cell, cols, (0..cells.len()).filter(fresh), &backdrop);
-            }
+                if paint(&screen, (x0, y0), cell, cols, (0..cells.len()).filter(fresh), &backdrop) == 0 { frame_began = None; }
+            } else { frame_began = None; }
             shown_background = cells;
             if relayout { pixels = manager.wm.desk.windows.iter().filter(|w| w.content == Content::Pixels).map(|w| w.id).collect(); }
             for id in pixels {
@@ -735,7 +895,11 @@ fn main(info: &'static BootInfo) {
             // Nothing else changed: the background's cells only, and the pointer over them again.
             paint(&screen, (x0, y0), cell, term.cols(), (0..shown_background.len()).filter(|&i| shown_background[i]), &backdrop);
             if let Some((sx, sy, size)) = shown_pointer { draw_pointer(&screen, sx, sy, size, backdrop.config.pointer_colour); }
-        }
-        mind::time::sleep(if busy { 5 } else { 30 });
+        } else { frame_began = None; }
+        let after = mind::time::uptime_ms();
+        if let Some(began) = frame_began { frame_times.add(after - began, after, &backdrop); }
+        // Until the pattern's next frame is due, 30 ms at most so that keys and the mouse are not kept waiting.
+        let wait = if busy { 5 } else if backdrop.moving() { next_pattern.saturating_sub(after).clamp(1, 30) } else { 30 };
+        mind::time::sleep(wait);
     }
 }

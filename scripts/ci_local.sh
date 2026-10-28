@@ -11,6 +11,7 @@
 #   --group TEXT  only the groups whose name contains TEXT (repeatable); a part's build runs only when named, so the
 #     groups after it use the tree's earlier build: a long part in steps of its own (docs/effector.md).
 # Logs: $CI_LOCAL_LOGS (default $TMPDIR/mind-ci-local), one file per group, one directory per branch.
+# SSH host tests: $MIND_SSHD selects an absolute server path (default /usr/sbin/sshd).
 # Temporary files: under $TMPDIR (default /tmp). Two runs with different TMPDIR share no file and no lock, so two tracks'
 #   runs can share a machine (000-KRN-0092, docs/effector.md).
 # Needs (Ubuntu 24.04): qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm,
@@ -68,14 +69,14 @@ HOST_GROUPS=(
 )
 X86_GROUPS=(
     "build (x86 test programs)|scripts/x86_fixtures.sh"
-    "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,normal,memory,dzen"
-    "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda"
+    "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,effector,normal,memory,dzen"
+    "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,link,modes"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
     "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci"
-    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater"
+    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater,linkupdate"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
     "x86: 16 CPUs|$X86 --cpus 16 --suites normal"
-    "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal,display,net,vfs"
+    "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal,display,net,vfs,fill"
     "x86: one CPU|$X86 --cpus 1 --suites smp,isolation,heap,services"
     "x86: AVX state|$X86 --cpu-model max --suites busy,smp"
     "x86: AVX state, one CPU|$X86 --cpu-model max --cpus 1 --suites busy,smp"
@@ -84,6 +85,7 @@ X86_GROUPS=(
     "x86: padded vector area|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation"
     "x86: protection probes|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation"
     "x86: TSC measured again|$X86 --kernel $MIND_TEST_OUT/mind-tsc-skew-target/x86_64-unknown-none/release/kernel --suites clock"
+    "x86: the watchdog|$X86 --kernel $MIND_TEST_OUT/mind-watchdog-target/x86_64-unknown-none/release/kernel --suites watchdog"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
     "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py && python3 tests/dbx_update_smoke.py"
     "x86: reproducible build|scripts/reproducible.sh"
@@ -93,8 +95,8 @@ A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
     "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,bench,smp,busy,usb,devicetree,efivar"
-    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls,updater"
-    "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net --machine virt,gic-version=3,highmem=on --memory 6G"
+    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls,effector,updater,linkupdate,modes"
+    "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net,fill --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
     "aarch64: NVMe boot disk|$A64 --suites vfs --disk nvme"
     "aarch64: 16 CPUs|$A64 --cpus 16 --suites normal"
@@ -124,7 +126,8 @@ cd "${TREE:-$ROOT}" || exit 2
 missing=()
 for tool in cargo rustup python3 mcopy mkfs.fat qemu-img swtpm; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 want host && { command -v java >/dev/null || missing+=(java); } # the models (TLC) only
-want host && { [[ -x /usr/sbin/sshd ]] || missing+=("sshd (openssh-server)"); } # the SSH client's host tests (351-NET-0026)
+SSHD_PATH=${MIND_SSHD:-/usr/sbin/sshd}
+want host && { [[ $SSHD_PATH == /* && -f $SSHD_PATH && -x $SSHD_PATH ]] || missing+=("sshd (openssh-server or MIND_SSHD: $SSHD_PATH)"); } # the SSH client's host tests (351-NET-0026)
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
 want aarch64 && { command -v qemu-system-aarch64 >/dev/null || missing+=(qemu-system-aarch64); [[ -f /usr/share/AAVMF/AAVMF_CODE.fd ]] || missing+=(AAVMF); }
 if [[ ${#missing[@]} -gt 0 ]]; then
@@ -132,7 +135,8 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     echo "sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm swtpm-tools default-jre-headless" >&2
     exit 2
 fi
-rustup toolchain install >/dev/null || exit 2
+# No self-update check: it needs the network, and a failed check would stop the run before any group (000-KRN-0135).
+rustup toolchain install --no-self-update >/dev/null || exit 2
 
 # Branches: each in its own worktree, merged with main unless --no-merge, then this script with --tree.
 safe() { tr -c 'A-Za-z0-9._\n-' '_' <<<"$1"; }

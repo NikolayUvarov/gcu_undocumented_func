@@ -3,9 +3,11 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 34;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "bcm_wifi", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "bcm_wifi.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tpm.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 44;
+// ABI 10's image array stays in the fixed prefix; later images are appended after all ABI 10 fields.
+pub const BOOT_PREFIX_IMAGES: usize = 36;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -35,16 +37,71 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles, 3 since senders wait in order without
 // ERR_BUSY (000-KRN-0010), 4 since BootInfo names the boot volume and the slot (211-KRN-0012, 351-KRN-0014) and
 // BOOT_CONFIRM ends a trial, 5 since SLOT_SHELL and SLOT_CLIPBOARD moved SLOT_DYNAMIC to 32 (211-KRN-0058) and bcm_wifi is a 33rd boot image
-// (550-KRN-0059), 6 since setting a badge needs CAP_BADGE (000-KRN-0073). The bootloader writes it into BootInfo, the
-// kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
-// for another one. Fields up to abi_version keep their places across versions, so each side finds the other's version
-// where it expects it.
-pub const ABI_VERSION: u32 = 8;
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
-    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32 }
+// (550-KRN-0059), 6 since setting a badge needs CAP_BADGE (000-KRN-0073), 10 since SLOT_WIFI moved SLOT_DYNAMIC to 34 and
+// the Wi-Fi station wlan and its stand-in radio wlansim are boot images, tpm and keystore before them (550-KRN-0097).
+// ABI 11 adds the two Realtek boot images and a non-mastering MMIO grant (213-KRN-0114). ABI 12 adds the SSH service
+// `ssh` after `tls` and moves SLOT_DYNAMIC to 36 for SLOT_SSH and SLOT_UPDATE (351-KRN-0115, 351-KRN-0116).
+// ABI 13 adds the link to another machine: `usb_serial` and `link` right after `vfs_server` (800-KRN-0128).
+// ABI 14 moves SLOT_DYNAMIC to 37 for SLOT_MODE, the shell's client of init that sets the machine's modes (750-KRN-0143).
+// ABI 15 moves it to 38 for SLOT_COMMANDS, the shell's command endpoint made by init, so that link may hold a client (800-KRN-0148);
+// it also adds KEY_PRINT_SCREEN (000-KRN-0149) and an absolute pointer event's horizontal wheel steps (211-KRN-0150).
+// ABI 16 adds the Effector agent's two boot images, `effector_gw` and `effector`, which run only in a mode (750-KRN-0119).
+// ABI 17: CAP_REVOKE leaves a borrower one zeroed page of its own at each page it mapped from the lease, so a late access
+// reads zeros and writes there instead of faulting (000-KRN-0152). ABI 18 adds workers: WORKER_START, SPAWN_WORKERS and
+// the info page's WORKER_OFFSET (262-KRN-0163). ABI 19: memory is mapped in 2 MiB and 1 GiB pages where both its
+// addresses allow, and ALLOC's arg2 takes ALLOC_SMALL_PAGES (262-KRN-0161). ABI 20 moves SLOT_DYNAMIC to 39 for SLOT_APPS,
+// the Effector gateway's writable scope of data/apps/ (750-KRN-0169), and CAP_REVOKE walks in steps, refusing a copy,
+// mint or transfer under its root with ERR_REVOKING meanwhile, a copy past DERIVE_DEPTH_MAX refused (000-KRN-0104).
+// ABI 21 adds the boot image `rtw88_wifi`, the RTL8821CE's driver, after `rtw89_wifi`, so that init starts it before
+// `wlan` (550-KRN-0172, for 550-DRV-0042).
+// The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
+// bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
+// version before dereferencing the full record.
+// This transition does not promise detection of ABI 9 or older layouts.
+pub const ABI_VERSION: u32 = 21;
+// The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
+// from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes the versions from
+// BOOT_HANDOFF_OLDEST to it. A change to BootInfo or BOOT_FILES sets both to one number above every ABI_VERSION so far
+// (MC-12.4). Handoff 21 (550-KRN-0172): a 44th image renumbers the images after it and moves every field after
+// extra_programs, so an older loader is refused by name; before the first release no older handoff is read (AGENTS.md, section 3).
+// Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
+// refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
+pub const BOOT_HANDOFF_VERSION: u32 = 21;
+pub const BOOT_HANDOFF_OLDEST: u32 = 21;
+pub const fn handoff_accepted(version: u32) -> bool { version >= BOOT_HANDOFF_OLDEST && version <= BOOT_HANDOFF_VERSION }
+// BootInfo.boot_flags: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init ignores
+// data/services.txt (173-KRN-0036).
+pub const BOOT_SAFE: u32 = 1;
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
+    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
+    pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
+    pub link_present: u32, pub link_words: [u8; LINK_WORDS_MAX], pub boot_flags: u32 }
+impl BootInfo {
+    pub fn image(&self, index: usize) -> Option<&ProgramImage> {
+        if index < BOOT_PREFIX_IMAGES { self.programs.get(index) } else { self.extra_programs.get(index - BOOT_PREFIX_IMAGES) }
+    }
+    pub fn images(&self) -> impl Iterator<Item = &ProgramImage> { self.programs.iter().chain(self.extra_programs.iter()) }
+    /// Reads only ABI 10's fixed version field; the caller supplies a readable ABI 10 or later prefix.
+    pub unsafe fn read_abi_version(info: *const Self) -> Option<u32> {
+        if info.is_null() || (info as usize) % core::mem::align_of::<Self>() != 0 { return None; }
+        Some(core::ptr::addr_of!((*info).abi_version).read())
+    }
+    /// What a kernel that refuses the handoff still reads (351-KRN-0167): whether the boot is a trial, and the ACPI root;
+    /// the caller supplies an ABI 10 or later record.
+    pub unsafe fn read_refused(info: *const Self) -> (bool, u64) {
+        (core::ptr::addr_of!((*info).boot_slot.trial).read() != 0, core::ptr::addr_of!((*info).acpi_rsdp).read())
+    }
+}
+// Both supported architectures have 64-bit pointers; changing this offset breaks the ABI 10 rejection path.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::offset_of!(BootInfo, abi_version) == 720);
 // BootInfo.photo_pause_s: seconds to wait for a photo of the screen, from data/pause.txt on the boot volume (at most
 // 60); 0, the default, waits for nothing (ABI 7, 211-KRN-0089).
 pub const PHOTO_PAUSE_MAX_S: u32 = 60;
+// BootInfo.link_present and link_words: whether the boot volume's root holds link.conf, and its words (NUL-padded), as
+// the bootloader read them through the firmware, so that a link to another machine starts even when MIND Core cannot
+// read its boot disk; init starts `usb_serial` and `link` only with the file (ABI 13, 800-KRN-0128).
+pub const LINK_WORDS_MAX: usize = 64;
 // BootInfo.efi_runtime: the address of the firmware's EFI_RUNTIME_SERVICES table, 0 without one; the kernel calls its
 // variable services in the identity map (no SetVirtualAddressMap) and gives tasks 0 (ABI 4, 351-KRN-0027).
 // BootInfo.device_tree: the flattened device tree in the firmware's configuration table (a board without ACPI: U-Boot on
@@ -98,7 +155,7 @@ pub const SYSCALL_PORT_OUT: usize = 18;
 pub const SYSCALL_IRQ_WAIT: usize = 19;
 pub const SYSCALL_INPUT_EVENT: usize = 20;
 // READ_INPUT: next input event word of the calling (focused) task, 0 if none. READ_KEY returns only the legacy byte
-// of the next event that has one.
+// of the next key event that has one (a pointer event's byte is its horizontal steps, ABI 15).
 pub const SYSCALL_READ_INPUT: usize = 50;
 // INPUT_POINTER: arg1 = 1 to receive pointer events (KEY_POINTER), 0 to stop; for the calling task only. Without it
 // the kernel drops pointer events instead of queueing them (issue 156).
@@ -153,8 +210,12 @@ pub const SYSCALL_CLOCK: usize = 44;
 // capability never carries it.
 pub const BADGE_MAX: usize = 0xFFFF;
 // CAP_MINT: arg1 = handle, arg2 = rights mask (endpoints and memory), msg[0] = offset, msg[1] = length (0: to the end) for port and
-// memory ranges -> handle of a child with no more authority. CAP_REVOKE: arg1 = handle -> number of descendants removed
-// from all tasks; the capability itself stays (MC-3.4-3.6).
+// memory ranges -> handle of a child with no more authority; one more than DERIVE_DEPTH_MAX derivations from its root, or
+// of a capability a revocation in progress covers (ERR_REVOKING), is refused. CAP_REVOKE: arg1 = handle -> number of
+// descendants removed from all tasks; the capability itself stays (MC-3.4-3.6). The walk visits only the descendants,
+// in steps of at most 256 of them, the kernel letting go of its lock between steps; it returns after the last, with
+// arg2 = the steps and msg[0] = the longest step in nanoseconds (000-KRN-0104, MC-5.4). While it runs, a copy, mint or
+// transfer of anything under the handle is refused with ERR_REVOKING.
 pub const SYSCALL_CAP_MINT: usize = 45;
 pub const SYSCALL_CAP_REVOKE: usize = 46;
 // MEM_DETACH: arg1 = start of a heap block no one else refers to -> handle of a memory object (read/write, no grant).
@@ -164,12 +225,12 @@ pub const SYSCALL_MEM_DETACH: usize = 47;
 // TASK_WATCH: arg1 = PID of a task the caller spawned, arg2 = endpoint handle with the read right. When the task ends,
 // a receive on that endpoint gets msg[1] = MSG_FLAG_EXIT, data = [PID, reason | lost notices << 32] (sender PID 0).
 pub const SYSCALL_TASK_WATCH: usize = 48;
-// DEVICE_STATE: arg1 = device index, arg2 = DEVICE_STOP or DEVICE_START (platform privilege, or a capability over one
-// of the device's BARs). STOP turns off I/O and memory decoding and bus mastering, so the device can no longer reach
-// memory by DMA (MC-6.3); START turns them on again for the next driver.
+// DEVICE_STATE: a platform privilege or an owned BAR authorizes checked Command transitions for the device index.
+// STOP disables decoding and mastering; START enables supported decoding and mastering; REGISTERS enables only MEM.
 pub const SYSCALL_DEVICE_STATE: usize = 49;
 pub const DEVICE_STOP: usize = 0;
 pub const DEVICE_START: usize = 1;
+pub const DEVICE_REGISTERS: usize = 2;
 // Why a task ended (a watch's notice, EXIT_STATUS): EXIT_NORMAL | code << 8 (EXIT's code, 0: success, issue 166),
 // EXIT_KILLED, or EXIT_FAULT | vector << 8.
 pub const EXIT_NORMAL: usize = 0;
@@ -210,6 +271,8 @@ pub const CAP_KIND_ESCROW: usize = 15;
 // Reading and writing the firmware's variables (FIRMWARE_VARIABLE): BootNext, BootOrder, Boot####; init gives it to
 // the shell, which lends it once the user agrees, and later to the updater (ABI 4, 351-KRN-0027).
 pub const CAP_KIND_FIRMWARE: usize = 16;
+// The writer of one task's text input (SPAWN_TEXT, TEXT_WRITE; ABI 9, 000-KRN-0094): CAP_INFO's arg2 is that task's PID.
+pub const CAP_KIND_TEXT: usize = 17;
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -223,6 +286,7 @@ pub const ERR_LIMIT: usize = usize::MAX - 7; // task limit reached
 pub const ERR_TIMEOUT: usize = usize::MAX - 8; // an IPC deadline passed; the operation left no trace
 pub const ERR_FOCUS: usize = usize::MAX - 9; // SPAWN_FOREGROUND from a task that does not have the focus (issue 160)
 pub const ERR_IO: usize = usize::MAX - 10; // services only: a drive did not answer or a medium could not be read (211-KRN-0050)
+pub const ERR_REVOKING: usize = usize::MAX - 11; // a copy, mint or transfer of a capability a revocation in progress covers (000-KRN-0104)
 pub const ERR_FIRST: usize = usize::MAX - 15;
 pub const RTC_UNAVAILABLE: usize = usize::MAX;
 
@@ -236,6 +300,8 @@ pub const CAP_BADGE: u8 = 1 << 4;
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
 pub const CAP_SLOTS: usize = 104;
 pub const CAP_SLOTS_MAX: usize = 4096;
+// Derivations from a root a capability may be (000-KRN-0104): a copy or mint deeper than this is refused with ERR_LIMIT.
+pub const DERIVE_DEPTH_MAX: usize = 64;
 
 // Application capability slots, filled by the spawner (loader) through the SPAWN grant list.
 pub const SLOT_INIT: usize = 1;
@@ -321,11 +387,29 @@ pub const SLOT_CLIPBOARD: usize = 31;
 // A client of the battery service (idl/battery.wit, 211-PRT-0008): the shell's, which it lends for REQUEST_BATTERY to
 // the program's same slot (ABI 8, 211-KRN-0090).
 pub const SLOT_BATTERY: usize = 32;
+// The Wi-Fi station's configuration client (idl/wifi.wit, with mind::network::BADGE_WIFI_CHANGE): the shell's, which it
+// lends for REQUEST_WIFI to the program's same slot (ABI 10, 550-KRN-0097, for 550-APP-0033).
+pub const SLOT_WIFI: usize = 33;
+// The SSH service's client (idl/ssh.wit): the shell's, with the right to badge, which it lends for REQUEST_SSH to the
+// program's same slot (ABI 12, 351-KRN-0115).
+pub const SLOT_SSH: usize = 34;
+// The updater's client (idl/update.wit): the shell's alone, for its `update` command; no program gets it (ABI 12, 351-KRN-0116).
+pub const SLOT_UPDATE: usize = 35;
+// init's client badged BADGE_MODE (init.wit 1.5 set-mode): the shell's alone, for its `mode` command; no program gets it
+// (ABI 14, 750-KRN-0143).
+pub const SLOT_MODE: usize = 36;
+// The shell's command endpoint (idl/shell.wit), made by init and kept across the shell's restarts: the shell serves it, and
+// init mints link's client of it in developer mode (ABI 15, 800-KRN-0148).
+pub const SLOT_COMMANDS: usize = 37;
+// The Effector gateway's writable scope of data/apps/, made by init at each of its starts, where it installs signed
+// application packages; no program gets it (ABI 20, 750-KRN-0169).
+pub const SLOT_APPS: usize = 38;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 33;
-// The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own.
-pub const LAUNCH_SLOTS: [usize; 17] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK,
-    SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY];
+pub const SLOT_DYNAMIC: usize = 39;
+// The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
+// carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
+pub const LAUNCH_SLOTS: [usize; 20] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
+    SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH];
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):
@@ -361,6 +445,12 @@ pub const MSG_FLAG_EXIT: usize = 4; // exit notice of a watched task (TASK_WATCH
 
 // HEAP_MAX_BYTES is the default memory quota of a task (SPAWN); blocks are heap blocks and mappings together.
 pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 64; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
+// ALLOC's arg2 holds flags: ALLOC_SMALL_PAGES maps the block in 4 KiB pages only, not 2 MiB and 1 GiB ones, as for a
+// measurement of what large pages give (262-KRN-0161, ABI 19). Any other bit refuses the call.
+pub const ALLOC_SMALL_PAGES: usize = 1;
+// A task's stack is what its ELF's PT_GNU_STACK asks (p_memsz, the linker's -z stack-size=), in whole pages, at least
+// STACK_MIN_BYTES; an ELF asking more than STACK_MAX_BYTES is refused. An unmapped guard page lies below it (262-KRN-0164).
+pub const STACK_MIN_BYTES: usize = 64 * 1024; pub const STACK_MAX_BYTES: usize = 8 * 1024 * 1024;
 // Separate limit for mapped foreign memory (frame, IPC buffers, shared read-only objects).
 pub const SHARED_MAX_BYTES: usize = 256 * 1024 * 1024;
 
@@ -386,6 +476,12 @@ pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take
 // ERR_FOCUS and nothing is created; when it ends in front the focus goes back to that task (issue 160). The spawner
 // (the loader) names the task it starts the program for.
 pub const SPAWN_FOREGROUND: usize = 4;
+// The task gets a text input (000-KRN-0094, ABI 9): its writer, a CAP_KIND_TEXT capability, goes to the spawner, its
+// handle in arg2 of the reply. Without the flag the task has none: TEXT_READ answers ERR_NOT_FOUND.
+pub const SPAWN_TEXT: usize = 8;
+// The kernel keeps the task's program (its ELF, or its boot image's index), charged with its image, so that the task may
+// start workers of it (WORKER_START, 262-KRN-0163, ABI 18). Without the flag WORKER_START answers ERR_RIGHTS.
+pub const SPAWN_WORKERS: usize = 16;
 pub const SPAWN_GRANTS_MAX: usize = 32; // 32 since ABI 4: the shell's grants grew (351-KRN-0027)
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
@@ -408,6 +504,7 @@ pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: a
 pub const PLATFORM_REPORT: usize = 11; // a read-only memory object with the hardware report's text, built now (174-KRN-0038)
 pub const PLATFORM_ACPI_TABLE: usize = 12; // index: a read-only copy of the n-th ACPI table of the report's list, ERR_NOT_FOUND past the last
 pub const PLATFORM_DEVICE_MSI: usize = 13; // device index: its MSI (one message), aimed by the kernel at an interrupt line 16..31 (550-KRN-0091)
+pub const PLATFORM_DEVICE_BAR_IDLE: usize = 14; // device index, memory BAR: MEM decode only, no I/O or DMA; verified readback
 pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
 pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
 pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
@@ -433,7 +530,7 @@ pub const NOTICE_FRONT: usize = 1 << 62; // issue 160
 
 // Input events: one word per key press or release, queued per task (64, oldest dropped). The kernel stores and routes
 // them; decoding and layouts live in ring 3 (ps2_kbd, the shell's UART decoder).
-// bits 0-7: legacy byte for READ_KEY (raw scancode or UART byte; 0: none) · 8-23: key (KEY_*; 0: not decoded) ·
+// bits 0-7: legacy byte for READ_KEY (raw scancode or UART byte; 0: none; in an absolute pointer event, its horizontal steps) · 8-23: key (KEY_*; 0: not decoded) ·
 // 24-31: modifiers (MOD_*) · 32: pressed · 40-63: Unicode character from the active layout (0: none).
 // INPUT_EVENT: arg1/arg2 = legacy bytes for an application / the focus owner, msg[0] = attention, msg[1]/msg[2] = full
 // event words for them (0: an event carrying only the byte).
@@ -444,6 +541,8 @@ pub const KEY_HOME: u16 = 10; pub const KEY_END: u16 = 11; pub const KEY_PAGE_UP
 pub const KEY_INSERT: u16 = 14; pub const KEY_DELETE: u16 = 15;
 pub const KEY_F1: u16 = 16; // F1..F12 = 16..27
 pub const KEY_SHIFT: u16 = 28; pub const KEY_CTRL: u16 = 29; pub const KEY_ALT: u16 = 30; pub const KEY_CAPS_LOCK: u16 = 31;
+// PrintScreen (E0 37 from a PC keyboard, HID usage 0x46), for a screenshot key (ABI 15, 000-KRN-0149).
+pub const KEY_PRINT_SCREEN: u16 = 33;
 // A pointer event (issue 156): the modifier byte holds the buttons (POINTER_*), the character field the movement:
 // bits 0-8 dx, 9-17 dy (both signed, dy grows downwards), 18-21 the wheel (signed, positive: towards the user).
 pub const KEY_POINTER: u16 = 32;
@@ -464,8 +563,11 @@ pub fn pointer_fields(event: usize) -> (u8, i32, i32, i32) {
 pub fn pointer_scroll(buttons: u8, dx: i32, dy: i32, wheel: i32, across: i32) -> usize {
     pointer_event(buttons, dx, dy, wheel) | (across.clamp(-8, 7) as usize & 0xF) << 34
 }
-/// The horizontal wheel steps of a relative pointer event (0 for an absolute one).
-pub fn pointer_across(event: usize) -> i32 { if event & POINTER_ABSOLUTE != 0 { 0 } else { (((event >> 34) & 0xF) as i32) << 28 >> 28 } }
+/// The horizontal wheel steps of a pointer event, relative or absolute (0 in an event made without them).
+pub fn pointer_across(event: usize) -> i32 {
+    let steps = if event & POINTER_ABSOLUTE != 0 { event & 0xF } else { (event >> 34) & 0xF };
+    (steps as i32) << 28 >> 28
+}
 // An absolute pointer event (issue 161): a pointer event with POINTER_ABSOLUTE set carries a position instead of the
 // movement — x in bits 0-11 and y in bits 12-23 of the character field — and the wheel in bits 34-37 (signed). In the
 // kernel's input queues the position is a share of the screen, 0 to POINTER_SCALE - 1 from the left and top edges (a
@@ -475,6 +577,11 @@ pub const POINTER_SCALE: usize = 4096;
 pub fn pointer_absolute(buttons: u8, x: usize, y: usize, wheel: i32) -> usize {
     let field = (x.min(POINTER_SCALE - 1) | y.min(POINTER_SCALE - 1) << 12) as u32;
     input_event(0, KEY_POINTER, buttons, true, field) | POINTER_ABSOLUTE | (wheel.clamp(-8, 7) as usize & 0xF) << 34
+}
+// An absolute event's horizontal wheel steps (211-KRN-0150): bits 0-3 of the byte field, signed, positive to the right;
+// zero in every event pointer_absolute makes, so its callers and pointer_absolute_fields are unchanged (ABI 15).
+pub fn pointer_absolute_scroll(buttons: u8, x: usize, y: usize, wheel: i32, across: i32) -> usize {
+    pointer_absolute(buttons, x, y, wheel) | (across.clamp(-8, 7) as usize & 0xF)
 }
 /// (buttons, x, y, wheel) of an absolute pointer event; None for any other event.
 pub fn pointer_absolute_fields(event: usize) -> Option<(u8, usize, usize, i32)> {
@@ -513,7 +620,7 @@ pub const SYSCALL_STAT: usize = 51;
 // SCHED_SET (the task's lifecycle owner, or process control): arg1 = PID, arg2 = budget in microseconds per period
 // (0: no limit), msg[0] = period in microseconds (>= 10 000), msg[1] = band (BAND_*, or BAND_KEEP; changing the band
 // needs process control or the platform/restart privilege). A task that spent its budget waits for its next period;
-// a ready task of band 0 always runs before one of band 1 (MC-5.1-5.5). Budgets are enforced at the 10 ms tick.
+// a ready task of band 0 always runs before one of band 1 (MC-5.1-5.5). Budgets are enforced at the end of each 10 ms slice.
 pub const SYSCALL_SCHED_SET: usize = 52;
 // DEVICE_CONFIG: arg1 = an MMIO or port capability over a BAR of a PCI function, arg2 = offset (< 256) -> the
 // configuration dword at that offset (aligned down to 4) of that function; read only (drivers find their capabilities).
@@ -540,6 +647,33 @@ pub const FIRMWARE_GET: usize = 0;
 pub const FIRMWARE_SET: usize = 1;
 pub const FIRMWARE_BUFFER: usize = 65536; // room for a signed dbx update (351-KRN-0028)
 pub const FIRMWARE_HEADER: usize = 26;
+// The mark of a run that has not ended well (000-KRN-0076): a firmware variable init sets at boot and clears a minute
+// after READY, and the kernel clears at a reboot or power-off a task asked for. Found at boot, the last run stopped early
+// (a freeze the watchdog reset, a cut power), and init starts safely. GUID {444E494D-4F43-4552-8076-52554E4D4152}.
+pub const RUN_MARK_GUID: [u8; 16] = [0x4D, 0x49, 0x4E, 0x44, 0x43, 0x4F, 0x52, 0x45, 0x80, 0x76, 0x52, 0x55, 0x4E, 0x4D, 0x41, 0x52];
+pub const RUN_MARK_NAME: &str = "MindCoreRun";
+// TEXT_WRITE (a CAP_KIND_TEXT writer in arg1; ABI 9, 000-KRN-0094): msg[0] = bytes, msg[1] = their length; appends what
+// fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With
+// TEXT_CLOSE in arg2 and every byte taken, the input ends after them. ERR_PEER when the task ended, ERR_INVALID once
+// closed, ERR_RIGHTS without the writer.
+pub const SYSCALL_TEXT_WRITE: usize = 62;
+// TEXT_READ (the task itself): arg1 = buffer, arg2 = its length → the bytes queued, up to it; 0 at the end, which comes
+// once the input was closed or no writer is left. With nothing queued yet it waits up to TEXT_WAIT_MS for bytes, a
+// close or any input event and answers ERR_BUSY: the caller asks again. ERR_NOT_FOUND for a task started without one.
+pub const SYSCALL_TEXT_READ: usize = 63;
+// WORKER_START (262-KRN-0163, ABI 18): arg1 = the worker's argument word, arg2 = its stack in bytes (0: what the
+// program's ELF asks; more than STACK_MAX_BYTES: ERR_INVALID), msg[2] = address of a Grant array, msg[3] = grant count
+// -> PID. The worker runs the caller's own program in an address space of its own, with exactly the granted
+// capabilities (copied or moved as at SPAWN; never a privilege), on another CPU while one is free. Only a task started
+// with SPAWN_WORKERS may (else ERR_RIGHTS); at most one live worker per online CPU, each counted in the caller's task
+// quota (ERR_LIMIT). Its image, stack and memory are charged to the caller; it ends when the caller ends.
+pub const SYSCALL_WORKER_START: usize = 64;
+// A worker's info page holds at WORKER_OFFSET its index (1, 2, ...; 0 in a task that is no worker), then its argument
+// word, a u64 each.
+pub const WORKER_OFFSET: usize = 3584;
+pub const TEXT_CLOSE: usize = 1;
+pub const TEXT_QUEUE: usize = 4096;
+pub const TEXT_WAIT_MS: u64 = 1000;
 pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;

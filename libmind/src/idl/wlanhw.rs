@@ -15,6 +15,14 @@
 //!
 //! 1.1 (550-NET-0028): `info`'s `bands` bit 2 says the radio receives and sends OFDM on 2.4 GHz. A 1.0 radio leaves it
 //! clear, so the station keeps to 802.11b's rates there, which every 2.4 GHz radio has; the wire is unchanged.
+//!
+//! 1.2 (550-NET-0035): the country's limits. The station hands the radio, for the country it runs under, each channel
+//! it may use with the most EIRP allowed there and whether it may only listen there; the radio applies them under its
+//! own limits (board, calibration, platform) and answers its `info` after, whose `channels` are then the only ones it
+//! tunes to. A radio whose limits failed receives on its channels and sends nothing. Until limits are first set it keeps
+//! 1.1's ways, so a station without the country catalogue (550-NET-0035, stage A) still joins; a station with one sets
+//! limits before it sends anything. A 1.1 radio rejects the call: the station then keeps to the channels alone and says
+//! the radio did not confirm.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -24,7 +32,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:wlanhw";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `no-device`: the radio is not up; `busy`: the transmit queue is full; `empty`: no
@@ -73,6 +81,16 @@ impl Wire for Sent {
     const MAX: usize = <bool as Wire>::MAX + <u8 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.acked.encode(w)?; self.attempts.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { acked: Wire::decode(r)?, attempts: Wire::decode(r)? }) }
+}
+
+/// The country's limit on one channel (1.2): the most EIRP in dBm (rounded down), and whether the radio may only
+/// listen there: it then sends there only what the station sends to an access point it heard (no probe request).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Limit { pub channel: u8, pub eirp: u8, pub listen: bool }
+impl Wire for Limit {
+    const MAX: usize = <u8 as Wire>::MAX + <u8 as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.channel.encode(w)?; self.eirp.encode(w)?; self.listen.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { channel: Wire::decode(r)?, eirp: Wire::decode(r)?, listen: Wire::decode(r)? }) }
 }
 
 pub fn info(endpoint: Endpoint) -> Result<core::result::Result<Info, Error>> {
@@ -171,6 +189,26 @@ pub fn kick(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
     Ok(Ok(()))
 }
 
+/// Applies country `code`'s limits (1.2): `dfs` is the catalogue's DFS region (0 unset, 1 FCC, 2 ETSI, 3 JP), `limits`
+/// every channel the station may use, at most once each. Answers the radio's info after; its `channels` are those
+/// left by the radio's own limits. `invalid`: a channel twice or not the radio's, or a code that is not two capital
+/// letters; `failed`: the radio could not apply them, and it sends nothing until limits it can apply are set.
+pub fn set_country(endpoint: Endpoint, code: &str, dfs: u8, limits: &[Limit]) -> Result<core::result::Result<Info, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<2>(code, &mut w).ok_or(SysError::Invalid)?;
+        dfs.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<Limit, 64>(limits, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 78, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Info as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 2350;
 
@@ -185,6 +223,7 @@ pub enum Request<'a> {
     Wait,
     Attach { ring: usize },
     Kick,
+    SetCountry { code: Text<2>, dfs: u8, limits: List<Limit, 64> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -243,6 +282,16 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Kick, Call::words(request, cap)))
         }
+        9 => {
+            let (call, length) = wire::take_buffer(request, cap, 78, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let code = <Text<2> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let dfs = <u8 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let limits = <List<Limit, 64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SetCountry { code, dfs, limits }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -277,4 +326,8 @@ pub fn reply_attach(call: Call, value: core::result::Result<u32, Error>) -> Resu
 pub fn reply_kick(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_set_country(call: Call, value: core::result::Result<&Info, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

@@ -1,17 +1,17 @@
 # 750-EFF-0001 — The Effector protocol subset the agent implements, as a versioned contract
 
-**Type:** contract (documentation) · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** — (publishing approved by the maintainer, 2026-10-09: [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-2.3, MC-12.4, MC-12.7, MC-12.3
+**Type:** contract (documentation) · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open · **Blocked by:** — (publishing approved by the maintainer, 2026-10-09: [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-2.3, MC-12.4, MC-12.7, MC-12.3
 
 ## Problem
 
-- **Not published.** The Effector server's agent protocol is not published as a contract. Its operator API has an OpenAPI file, but the agent routes (heartbeat, configuration, the command stream and poll, ACK, files, deployment) are described only by the server's code and its own agents.
+- **Original survey (2026-10-09): not published.** At that survey the agent routes were described only by the server and its agents. **Updated 2026-10-15:** the native protocol is now published at `/effector/agent-protocol` and included in the server OpenAPI. MIND still needs its own bounded, versioned subset and source attribution.
 - **Implicit rules.** Several of its rules are implicit:
   - the online window;
   - the character set of an agent ID;
   - which actions an agent may refuse;
   - how a result string becomes an operation's final state.
 - **Why that matters.** An agent written against such behaviour breaks silently when the server changes (MC-12.7).
-- **Source.** A detailed reading of the server at build 1.2.0.127 (commit `5d42b29`) exists in the Effector project, attached to its task 75.
+- **Source.** The original survey used build 1.2.0.127 (`5d42b29`). The current contract records source `a29dd0086bf278e3e913f9b5203a70c96a4abcec` and the separately observed live build 1.2.0.214 (`a65552484d69`). The old external task 75 link is stale; that number now describes unrelated console work.
 
 ## Plan
 
@@ -27,13 +27,13 @@
   - `os_version` `mindcore`;
   - `arch` `x64` or `arm64`;
   - the release version as `agent_version`.
-- **Path grammar for files:** the MIND Core volume paths the agent accepts (`data/…`, `log:/…`), agreed with the server's side (its task 75).
+- **Path grammar for files:** the MIND Core volume paths the agent accepts (`data/…`, `log:/…`). The local server boundary is recorded in `sst-test-deploy: issues-done/81-mindcore-server-platform-boundary.task.md.done`; deployment and real-agent checks remain in `issues/81-mindcore-01-agent-and-live-acceptance.task.md`. The prepared server change has not been deployed.
 - **Compatibility rules:**
   - unknown fields are ignored;
   - a missing required field is an error the agent reports;
   - a server contract the agent does not know is not guessed at;
   - a change to the subset is a new contract version.
-- **What the subset leaves out, and why:** shell actions, the console, Windows identities and plain HTTP.
+- **What the subset leaves out, and why:** legacy/unrestricted shell actions, the console, Windows identities and plain HTTP. A future `exec_v1` invocation of test-account msh is allowed only through the declared grants and gateway policy of 501; until implemented it returns `denied`, as contract 1.0 specifies.
 - **What stays out of this public document:** the server's internal weaknesses. They belong to the server's own project.
 
 ## Acceptance criteria
@@ -43,4 +43,10 @@
 
 ## Related
 
-[750](750-effector-agent.md), [750-EFF-0002](750-EFF-0002-test-server.md), [750-EFF-0003](750-EFF-0003-interface-and-policy.md), [docs/idl/README.md](../docs/idl/README.md).
+[750](750-effector-agent.md), [750-EFF-0002](750-EFF-0002-test-server.md), [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done), [docs/idl/README.md](../docs/idl/README.md).
+
+## Progress — 2026-10-15
+
+- [Contract 1.0](../docs/effector/protocol.md) now specifies routes, token versus operator credentials, TLS/pins, the base path, identity, timing, error handling, action mapping, journal/ACK rules and bounds with exact source/live revisions.
+- The [local fixture](../tests/effector_server.py) cites that contract; its 12 host tests pass on Linux. They are fixture evidence, not agent interoperability evidence.
+- The runtime services do not exist yet, so their required contract citations and their use of the contract remain with 0006/0007. This issue stays open until that final acceptance item is met; no acceptance criterion was removed.
