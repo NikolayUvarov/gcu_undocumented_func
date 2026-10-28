@@ -134,7 +134,7 @@
 
 ## Progress
 
-- **Stage 0** is [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md): the design page [docs/nn/runtime.md](../docs/nn/runtime.md) 0.1 (2026-10-28), for agreement with `NRL` and `KRN`, for NRL's first portable family (stateless feed-forward); `nnd` as a boot service is asked of `KRN` in [requests-KRN.md](requests-KRN.md#the-model-service-nnd-for-262-app-0112).
+- **Stage 0** is [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md): the design page [docs/nn/runtime.md](../docs/nn/runtime.md) 0.1 (2026-10-28), for agreement with `NRL` and `KRN`, for NRL's first portable family (stateless feed-forward); `nnd` as a boot service is `KRN`'s [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), and a wait on a shared word [262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md).
 
 ## Acceptance criteria
 
