@@ -6881,6 +6881,8 @@ def download_check(args, disk):
     big, small = os.urandom(size), os.urandom(200_000)
     (files / "big.bin").write_bytes(big)
     (files / "small.bin").write_bytes(small)
+    (files / "get.bin").write_bytes(os.urandom(300_000))  # get's file to save and resume (000-NET-0048)
+    (files / "get.txt").write_bytes(b"plain text over http\n")
     # The release server, the first response for each file cut short, and a malformed head for /bad.bin (test hooks).
     release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000}, raw={"/bad.bin": BAD_HEAD})
     port = release.server_address[1]
@@ -6893,17 +6895,20 @@ def download_check(args, disk):
     held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
     service = _service_server(certificates)
     api_stub = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # 000-NET-0047
+    api_other = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # another host for get's redirects
     _expired_certificate(certificates)
     expired, _ = _https_server(certificates, "expired")
     service_port, expired_port = service.server_address[1], expired.server_address[1]
     stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
     (disk / "data").mkdir(exist_ok=True)
+    (disk / "data" / "chat.json").write_text('{"model":"f","messages":[{"content":"from a file"}]}')  # get's JSON POST from a file
     sftp = _SftpServer.start()  # 351-NET-0027
     sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
                                         + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
                                         + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port))
-                                        + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n")
+                                        + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n"
+                                        + "".join(f"get 10.0.2.2 tcp {p} 600 {64 << 20}\n" for p in (port, tls_port, rogue_port, api_stub.server_address[1], api_other.server_address[1])))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -6928,6 +6933,7 @@ def download_check(args, disk):
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
         service_runs(vm, service_port)
         api_runs(vm, api_stub.server_address[1])
+        get_runs(vm, api_stub.server_address[1], api_other.server_address[1], secure, tls_port, rogue_port, port, files)
         pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
     finally:
         vm.close()
@@ -6935,7 +6941,7 @@ def download_check(args, disk):
         stall.go.set()
         if sftp:
             sftp.stop()
-        for server in (release, secure, rogue, held, stall, service, api_stub, expired):
+        for server in (release, secure, rogue, held, stall, service, api_stub, api_other, expired):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -7005,6 +7011,96 @@ def api_runs(vm, port):
           "upload, redirects by their rules (301, 302, 307, 308, 303 after a POST; a loop refused after 10, HTTPS to HTTP refused), "
           f"gzip and deflate bodies decoded as they came, a bomb stopped at {int(bomb[1])} bytes, {http_api_stub.EVENTS} "
           "Server-Sent Events in order, Retry-After in seconds and as a date", flush=True)
+
+
+def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, files):
+    """000-NET-0048: `get`, the console's wget and curl, against tests/http_api_stub.py and the release server over HTTPS:
+    a body to the console and to files (-o, -O), a download cut short and resumed with -c, a JSON POST, a multipart form
+    and a PUT of a file, redirects by their rules (--max-redirs, HTTPS to HTTP, credentials kept from another host), -f,
+    -I, -w, --max-time, plain HTTP only when asked, and curl's exit statuses for each failure."""
+    api = f"https://10.0.2.2:{port}/api"
+    data = (files / "get.bin").read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+
+    def get(arguments, timeout=120):
+        return vm.command(f"get {arguments}", timeout=timeout)
+
+    def status(arguments, timeout=120):
+        # The exit status as a script reads it (msh: `or` runs on a code other than 0).
+        out = vm.command(f'msh -c "get {arguments} or {{ print(error) }}"', timeout=timeout)
+        code = re.search(r"get exited with (\d+)", out)
+        return (int(code[1]) if code else 0), out
+
+    def echo(out):
+        found = re.search(r'\{"method".*\}', out)
+        assert found, out
+        return json.loads(found[0])
+    require(vm.command("help get"), "get [options] URL")
+    require(get(f"{api}/final?x=1"), "the end x=1")
+    # Files: the user's (ram: here), saved whole, by the URL's name, and checked by the shell's own SHA-256.
+    require(get(f"-o ram:get.bin https://10.0.2.2:{tls_port}/get.bin"), f"GET: {len(data)} BYTES IN ram:get.bin")
+    require(vm.command("sha256 ram:get.bin"), digest)
+    require(get(f"-O https://10.0.2.2:{tls_port}/get.bin?copy=2"), f"GET: {len(data)} BYTES IN ram:get.bin")
+    # Cut short after 120 000 bytes: a receive error, then -c asks for the rest by Range and the file is whole.
+    secure.cuts["/get.bin"] = 120_000
+    code, out = status(f"-o ram:cut.bin https://10.0.2.2:{tls_port}/get.bin")
+    assert code == 56 and "THE CONNECTION ENDED BEFORE THE WHOLE ANSWER" in out, out
+    secure.requests.clear()
+    require(get(f"-c -o ram:cut.bin https://10.0.2.2:{tls_port}/get.bin"), f"GET: {len(data)} BYTES IN ram:cut.bin")
+    asked = [r for r in secure.requests if r[0] == "/get.bin"]
+    assert len(asked) == 1 and re.fullmatch(r"bytes=\d+-", asked[0][1] or "") and int(asked[0][1][6:-1]) > 0, asked
+    require(vm.command("sha256 ram:cut.bin"), digest)
+    require(get(f"-c -o ram:cut.bin https://10.0.2.2:{tls_port}/get.bin"), "GET: ram:cut.bin ALREADY WHOLE")
+    # Bodies: JSON, a multipart form with the saved file (Python's parser reads it), a PUT of the file.
+    require(get(f"-H 'Content-Type: application/json' -d '{{\"model\":\"m\",\"messages\":[{{\"content\":\"olleh\"}}]}}' {api}/chat"),
+            '{"model":"m","content":"hello","bytes":')
+    require(get(f"-H 'Content-Type: application/json' -d @data/chat.json {api}/chat"), '{"model":"f","content":"elif a morf","bytes":')
+    upload = re.search(r'\{"parts".*\}', get(f"-F chat_id=42 -F document=@ram:get.bin {api}/upload"))
+    assert upload and json.loads(upload[0])["parts"] == {"chat_id": "42", "document": {"filename": "get.bin", "type": "application/octet-stream",
+                                                                                      "length": len(data), "sha256": digest}}, upload
+    answer = echo(get(f"-X PUT -H X-Token:7 -d @ram:cut.bin {api}/echo"))
+    assert (answer["method"], answer["length"], answer["sha256"], answer["token"], answer["type"]) == ("PUT", len(data), digest, "7", "application/x-www-form-urlencoded"), answer
+    # Redirects: a chain of 301, 308, 307 and 302; a bound; none; HTTPS to HTTP refused; a POST turned to GET by 303.
+    out = get(f"{api}/r/4")
+    for status_line in (f"GET: HTTP 301, ON TO {api}/r/3", f"GET: HTTP 308, ON TO {api}/r/2", f"GET: HTTP 307, ON TO {api}/r/1",
+                        f"GET: HTTP 302, ON TO {api}/final", "the end"):
+        require(out, status_line)
+    code, out = status(f"--max-redirs 2 {api}/r/4")
+    assert code == 47 and "MORE THAN 2 REDIRECTS" in out, out
+    require(get(f"--no-location {api}/r/1"), "moved")
+    code, out = status(f"{api}/down")
+    assert code == 47 and "FROM HTTPS TO HTTP" in out, out
+    require(get(f"-d x=1 {api}/see-other"), "the end from=post")
+    # Credentials go on to the same host only.
+    assert echo(get(f"-H 'Authorization: Bearer t0k' {api}/hop"))["authorization"] == "Bearer t0k"
+    assert echo(get(f"-H 'Authorization: Bearer t0k' {api}/elsewhere?{other_port}"))["authorization"] is None
+    # -f, -I, -w, a coded body saved decoded.
+    require(get(f"{api}/busy"), "busy")
+    code, out = status(f"-f {api}/busy")
+    assert code == 22 and "GET: HTTP 503" in out and "busy" not in out.replace("api/busy", ""), out
+    out = get(f"-I {api}/gzip")
+    assert re.search(r"HTTP 200\r?\nContent-Length: \d+\r?\nContent-Type: text/plain", out), out
+    require(get(f"-o ram:text.txt {api}/gzip"), f"GET: {len(http_api_stub.TEXT)} BYTES IN ram:text.txt")
+    assert re.search(r"GET: HTTP 200, 8 BYTES IN \d+ MS", get(f"-s -w -o ram:w.txt {api}/final")), "-w"
+    # Failures and their statuses: time, certificate, plain HTTP, a host the grant does not name, usage, URL.
+    code, out = status(f"-m 3 {api}/slow", timeout=60)
+    assert code == 28, out
+    code, out = status(f"https://10.0.2.2:{rogue_port}/small.bin")
+    assert code == 60 and "CERTIFICATE REFUSED" in out, out
+    code, out = status(f"http://10.0.2.2:{plain_port}/get.txt")
+    assert code == 1 and "ADD --insecure-http" in out, out
+    out = get(f"--insecure-http http://10.0.2.2:{plain_port}/get.txt")
+    require(out, f"GET: PLAIN HTTP TO 10.0.2.2:{plain_port}, NOT ENCRYPTED")
+    require(out, "plain text over http")
+    code, out = status("https://10.0.2.3/")
+    assert code == 7, out
+    for arguments, expected in (("-X DELETE https://h/", 2), (f"-O {api}/", 2), ("ftp://h/x", 3)):
+        code, out = status(arguments)
+        assert code == expected, (arguments, out)
+    print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
+          "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
+          "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I, -w, --max-time, plain HTTP only "
+          "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's", flush=True)
 
 
 def pinned_runs(vm, certificates, port, rogue_port, expired_port):

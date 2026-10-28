@@ -104,6 +104,7 @@ USER_CRATES=(
     "effector:effector:effector.elf"
     "effector_gw:effector_gw:effector_gw.elf"
     "download:download:download.elf"
+    "get:get:get.elf"
     "windows:windows:windows.elf"
     "wintest:wintest:wintest.elf"
     "wintest:winmgr:winmgr.elf"
