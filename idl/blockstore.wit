@@ -9,13 +9,13 @@
 /// listed by prefix, page by page (300-STO-0018, 1.4). A write says how far it reached, and 1.x is refused (307-STO-0019, 2.0).
 /// The records are sealed on the medium, and a volume key that does not open the superblock's check is refused (308-STO-0021, 2.1).
 /// Memory domains, each with a key of its own, worked in through a client of their own and forgotten by destroying the key
-/// (308-STO-0023, 2.2).
-package mind:blockstore@2.2.0;
+/// (308-STO-0023, 2.2). A scrub reads and checks every record, in idle steps and whole on request (309-STO-0025, 2.3).
+package mind:blockstore@2.3.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
-    /// (`mind::blockstore`: put and collect need BADGE_PUT; get, has, resolve, history, snapshot and names BADGE_GET;
-    /// publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins and usage any).
+    /// (`mind::blockstore`: put, collect and scrub need BADGE_PUT; get, has, resolve, history, snapshot and names
+    /// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any).
     /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
     /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
     /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
@@ -75,6 +75,10 @@ interface blockstore {
     /// A memory domain of the caller's owner: its number, and whether it is forgotten, until a collection has freed its
     /// records (2.2).
     record domain { id: u16, forgotten: bool }
+
+    /// What the last whole scrub found: the passes since the store started (0: none yet), the records read and checked,
+    /// those that did not open or are not whole, non-blank sectors outside every record, and how long ago it ended (2.3).
+    record scrubbed { passes: u32, records: u32, corrupt: u32, damaged: u64, ago-ms: u64 }
 
     /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
     /// stored is not written again. How far it reached is the medium's, in `stat`: a put is retained only by its lease
@@ -144,4 +148,12 @@ interface blockstore {
     domain-forget: func(id: u16) -> result<_, error>;
     /// The domains of the caller's owner (2.2).
     domains: func() -> result<list<domain, 32>, error>;
+
+    /// Reads and checks every record of the medium now, as a mount does, and returns what it found; the caller, and every
+    /// other client, waits for the whole medium (MC-5.1). Each record that does not open or is not whole is logged; nothing is written or
+    /// repaired. Between requests the store scrubs by itself, about 256 sectors at a time, a pass a day.
+    /// Errors: device (2.3).
+    scrub: func() -> result<scrubbed, error>;
+    /// What the last whole scrub found, by itself or asked for (2.3).
+    scrubbed: func() -> result<scrubbed, error>;
 }

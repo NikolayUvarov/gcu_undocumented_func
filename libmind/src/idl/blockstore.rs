@@ -10,7 +10,7 @@
 //! listed by prefix, page by page (300-STO-0018, 1.4). A write says how far it reached, and 1.x is refused (307-STO-0019, 2.0).
 //! The records are sealed on the medium, and a volume key that does not open the superblock's check is refused (308-STO-0021, 2.1).
 //! Memory domains, each with a key of its own, worked in through a client of their own and forgotten by destroying the key
-//! (308-STO-0023, 2.2).
+//! (308-STO-0023, 2.2). A scrub reads and checks every record, in idle steps and whole on request (309-STO-0025, 2.3).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -20,12 +20,12 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:blockstore";
-pub const VERSION: (u8, u8, u8) = (2, 2, 0);
+pub const VERSION: (u8, u8, u8) = (2, 3, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
-/// (`mind::blockstore`: put and collect need BADGE_PUT; get, has, resolve, history, snapshot and names BADGE_GET;
-/// publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins and usage any).
+/// (`mind::blockstore`: put, collect and scrub need BADGE_PUT; get, has, resolve, history, snapshot and names
+/// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any).
 /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
 /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
 /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
@@ -189,6 +189,16 @@ impl Wire for Domain {
     const MAX: usize = <u16 as Wire>::MAX + <bool as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.id.encode(w)?; self.forgotten.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { id: Wire::decode(r)?, forgotten: Wire::decode(r)? }) }
+}
+
+/// What the last whole scrub found: the passes since the store started (0: none yet), the records read and checked,
+/// those that did not open or are not whole, non-blank sectors outside every record, and how long ago it ended (2.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Scrubbed { pub passes: u32, pub records: u32, pub corrupt: u32, pub damaged: u64, pub ago_ms: u64 }
+impl Wire for Scrubbed {
+    const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.passes.encode(w)?; self.records.encode(w)?; self.corrupt.encode(w)?; self.damaged.encode(w)?; self.ago_ms.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { passes: Wire::decode(r)?, records: Wire::decode(r)?, corrupt: Wire::decode(r)?, damaged: Wire::decode(r)?, ago_ms: Wire::decode(r)? }) }
 }
 
 /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
@@ -495,6 +505,37 @@ pub fn domains(endpoint: Endpoint) -> Result<core::result::Result<List<Domain, 3
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Domain, 32> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Reads and checks every record of the medium now, as a mount does, and returns what it found; the caller, and every
+/// other client, waits for the whole medium (MC-5.1). Each record that does not open or is not whole is logged; nothing is written or
+/// repaired. Between requests the store scrubs by itself, about 256 sectors at a time, a pass a day.
+/// Errors: device (2.3).
+pub fn scrub(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 21 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 28, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Scrubbed as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// What the last whole scrub found, by itself or asked for (2.3).
+pub fn scrubbed(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 22 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 28, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Scrubbed as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 16387;
 
@@ -521,6 +562,8 @@ pub enum Request<'a> {
     DomainClient { id: u16 },
     DomainForget { id: u16 },
     Domains,
+    Scrub,
+    Scrubbed,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -675,6 +718,20 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Domains, call))
         }
+        21 => {
+            let (call, length) = wire::take_buffer(request, cap, 28, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Scrub, call))
+        }
+        22 => {
+            let (call, length) = wire::take_buffer(request, cap, 28, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Scrubbed, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -759,4 +816,12 @@ pub fn reply_domain_forget(call: Call, value: core::result::Result<(), Error>) -
 pub fn reply_domains(call: Call, value: core::result::Result<&[Domain], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<Domain, 32>(value, w))
+}
+pub fn reply_scrub(call: Call, value: core::result::Result<&Scrubbed, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_scrubbed(call: Call, value: core::result::Result<&Scrubbed, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

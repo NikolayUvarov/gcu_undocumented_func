@@ -5,7 +5,8 @@
 // changes several at once (304-STO-0007), pins objects, shows what the caller retains, collects, fills the store, and imports a model disk's
 // speech models (251-STO-0014, models.rs). A console program: it asks the shell for the store's client (REQUEST_BLOCKSTORE),
 // the user's files (REQUEST_FILES) and the parser service (REQUEST_PARSE, for a model disk's MANIFEST.json). Makes, lists
-// and forgets memory domains, and runs any command in one (`-d <id>`, 308-STO-0023).
+// and forgets memory domains, and runs any command in one (`-d <id>`, 308-STO-0023). Asks for a scrub and shows the last
+// one's findings (309-STO-0025).
 use core::sync::atomic::{AtomicUsize, Ordering};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ, SLOT_FILE};
 use mind::cid::{Cid, Codec};
@@ -168,7 +169,7 @@ fn domains(mut words: core::str::SplitWhitespace) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id>");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id>");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -328,6 +329,11 @@ fn main(_info: &'static BootInfo) {
             Ok(Err(e)) => mind::println!("blocks: collect: {:?}", e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
+        (Some(which @ ("scrub" | "scrubbed")), None, ..) => match if which == "scrub" { blockstore::scrub(store()) } else { blockstore::scrubbed(store()) } {
+            Ok(Ok(s)) => mind::println!("SCRUBBED {} RECORDS: {} CORRUPT, {} DAMAGED SECTORS; PASS {}, ENDED {} MS AGO", s.records, s.corrupt, s.damaged, s.passes, s.ago_ms),
+            Ok(Err(e)) => mind::println!("blocks: {}: {:?}", which, e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
         (Some("fill"), most, None, _) => {
             let Ok(most) = most.map_or(Ok(u64::MAX), |m| m.parse::<u64>()) else { mind::println!("blocks: fill [blocks]"); return };
             // Distinct blocks of CHUNK bytes until the store refuses one: what a full medium answers. The time makes
@@ -344,6 +350,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>"),
+        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file>"),
     }
 }

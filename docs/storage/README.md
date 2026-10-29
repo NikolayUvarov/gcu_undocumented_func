@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -60,7 +60,7 @@ On the platform, the QEMU `store` suite (x86 and aarch64, 300-STO-0003) stores a
 
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
 
-`blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 2.2 over a block client: `put` takes a content type (`raw` or `dag-cbor`, a node checked before it is stored) and bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. `init` starts it at boot over a RAM disk of its own, `ramdisk#1` ([300-KRN-0001](../../issues-done/300-KRN-0001-blockstore-at-boot.done)). The shell holds a client with every right (slot 25) and lends it for `REQUEST_BLOCKSTORE`. The `blocks` tool uses it.
+`blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 2.3 over a block client: `put` takes a content type (`raw` or `dag-cbor`, a node checked before it is stored) and bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. `init` starts it at boot over a RAM disk of its own, `ramdisk#1` ([300-KRN-0001](../../issues-done/300-KRN-0001-blockstore-at-boot.done)). The shell holds a client with every right (slot 25) and lends it for `REQUEST_BLOCKSTORE`. The `blocks` tool uses it.
 
 **Layout (version 4: sealed records, 308-STO-0021, and memory domains, 308-STO-0023):**
 
@@ -112,6 +112,35 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 - another key in the superblock, its digest made whole: the new instance is not mounted, logs `NOT MOUNTED: Key` and answers every request with `key`.
 
 This is damage to the medium's bytes between writes and reads, made by the test, not a failure of a real device. A torn write ends as one of the outcomes injected here (a frame whose seal does not open); a device stopping in the middle of a write is tested on the host only. The outcomes are those of the host tests for the same damage; they say nothing about other media or other kinds of fault (MC-12.1).
+
+## Scrub — run on the platform, on request (309-STO-0025)
+
+A damaged record is otherwise found only when it is read or when the store mounts. The scrub reads the medium from its first record to its end and checks each record as a mount does (MC-4.8):
+- each record is opened under its domain's key;
+- a block's bytes are matched to its CID, and a node to the schema;
+- a name, pin, commit or key record is checked by its digest;
+- a forgotten domain's records are not opened, since its key is gone: the next collection frees them;
+- a record of a domain with no key record is counted corrupt, as a mount counts it;
+- non-blank sectors outside every record are counted damaged.
+
+Nothing is written, and nothing is repaired: one copy cannot be repaired from itself ([309](../../issues/309-copies-scrub-and-repair.md)'s copies will). `stat`'s `corrupt` and `damaged` stay the mount's and the reads' counts; the scrub reports its own.
+
+**When it runs (MC-5.1).**
+- **Between requests.** After 20 ms without a request, the store checks the records of the next 256 sectors, ending a step at the end of the record or the 33-sector window it is in, then waits again; a request is always served first. A pass starts a day after the last one ended, the mount counting as one.
+- **On request.** `scrub` makes a whole pass at once, from the first record, on behalf of a client with the right to collect. That client waits for it, and so does every other: requests are served one at a time, as during a collection. A pass under way between requests is dropped.
+- **Writes during a pass.** A record written where the scrub has not reached yet is checked when it gets there. One written over the scrub's place, inside a blank run, moves the scrub to its end: its writer has just checked it, and its middle would otherwise read as damaged. A collection only makes sectors blank.
+
+**What it says.** Each record found corrupt is logged: `[BLOCKSTORE] SCRUB: BLOCK <cid> AT SECTOR <n> CORRUPT` when the index holds a block there, `SCRUB: RECORD AT SECTOR <n> CORRUPT` otherwise. Each whole pass logs `SCRUBBED <records> RECORDS: <c> CORRUPT, <d> DAMAGED SECTORS`, then `ASKED BY PID <pid>` or `BETWEEN REQUESTS`. `scrubbed` returns the last whole pass's findings, the passes since the store started and how long ago the last ended (`blockstore.wit` 2.3, a minor version: no earlier call changes). `blocks scrub` and `blocks scrubbed` show them.
+
+Evidence:
+- `tests/blockstore_host.rs`:
+  - a pass in steps of one sector finds what a whole pass finds;
+  - a damaged block, name record, key record and sector are found, the block named by its CID, and nothing is written;
+  - a forgotten domain's records are not counted corrupt, and an unknown domain's are counted as a mount counts them;
+  - a record written around the scrub's place is not read as damaged; without the move this test reads 2 damaged sectors.
+- QEMU `storefaults` suite: a byte changed in a chunk on the medium is found by `blocks scrub` before anything reads the chunk, logged with its CID and reported by `blocks scrubbed`.
+
+Not tested on the platform: the scrub between requests, whose first pass starts a day after the mount. Its steps are the host tests' steps; its pacing is not measured.
 
 ## Names — run on the platform (302, 303-STO-0003, 0004)
 
@@ -394,7 +423,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 |---|---|---|
 | [307](../../issues/307-the-stores-own-partition.md) | A partition of the store's own on real machines; durability classes `volatile`, `flushed`, `copied` (`blockstore.wit` 2.0) | first: until then nothing survives a reset on a real machine |
 | [308](../../issues/308-encryption-at-rest.md) | Sealed records, a key per memory domain, the volume key from the TPM or a passphrase | before any personal data |
-| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | after 307 |
+| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues/309-STO-0025-scrub.md)); copies and repair after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues/311-storefs-a-file-face.md) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
 | [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | after 308 |

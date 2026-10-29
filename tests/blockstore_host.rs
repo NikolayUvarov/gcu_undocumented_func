@@ -23,7 +23,7 @@ mod rights;
 use cid::{Cid, Codec};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use store::{hmac_sha256, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Pin, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, SECTOR, VOLUME};
+use store::{hmac_sha256, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Pin, Scrubbed, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, SECTOR, VOLUME};
 
 /// A stand-in for ChaCha20-Poly1305, since the host tests build without crates: a keystream of splitmix64 seeded by
 /// SHA-256(key, nonce), and a tag of two sums in the manner of FNV-1a, seeded by the key, over the nonce, the associated
@@ -500,8 +500,10 @@ fn rights_come_from_the_badge() {
     ] {
         let got = [allowed(badge, Put), allowed(badge, Get), allowed(badge, Has), allowed(badge, Stat), allowed(badge, Publish), allowed(badge, Resolve)];
         assert_eq!(got, [put, get, has, stat, publish, resolve], "badge {badge:#x}");
-        // A collection frees only what nothing retains, as a put that finds no room does: the put right.
-        assert_eq!(allowed(badge, Collect), put, "badge {badge:#x}");
+        // A collection frees only what nothing retains, as a put that finds no room does: the put right. A whole scrub
+        // reads the medium on the caller's behalf, as a collection does; its last report is any client's.
+        assert_eq!([allowed(badge, Collect), allowed(badge, Scrub)], [put; 2], "badge {badge:#x}");
+        assert_eq!(allowed(badge, Scrubbed), stat, "badge {badge:#x}");
         // Removing a name and pins are retention, as publishing is; history is reading; pins and usage are any client's.
         assert_eq!([allowed(badge, Unpublish), allowed(badge, Pin), allowed(badge, Unpin), allowed(badge, Commit)], [publish; 4], "badge {badge:#x}");
         assert_eq!([allowed(badge, History), allowed(badge, Snapshot), allowed(badge, Names)], [get; 3], "badge {badge:#x}");
@@ -1819,4 +1821,102 @@ fn a_domains_records_before_its_key_record_are_found() {
         assert!(cids.iter().all(|c| store.has(c)), "{count}");
         assert_eq!(store.resolve(b"last"), Ok((1, cids[count - 1])));
     }
+}
+
+// What a scrub of `store`'s medium finds in steps of `budget` sectors: its report, the records it reported (sector and
+// block) and the calls it took.
+fn scrub_all(store: &mut Store<&mut Memory>, budget: u64) -> (Scrubbed, Vec<(u64, Option<Cid>)>, usize) {
+    let (mut found, mut calls) = (Vec::new(), 0);
+    loop {
+        calls += 1;
+        if let Some(report) = store.scrub(budget, &mut |lba, cid| found.push((lba, cid))).unwrap() { return (report, found, calls); }
+    }
+}
+
+// The domains' key records on `medium`: the sector of each and the domain its record names.
+fn key_records(medium: &Memory) -> Vec<(u64, u16)> {
+    records(medium).into_iter().filter(|(lba, r)| frame_domain(medium, *lba) == 0xFFFF && r.is_some()).map(|(lba, r)| (lba, u16::from_le_bytes([r.as_ref().unwrap()[10], r.as_ref().unwrap()[11]]))).collect()
+}
+
+#[test]
+fn a_scrub_finds_damage_after_mounting_and_writes_nothing() {
+    let mut medium = Memory::new(512);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let cids: Vec<Cid> = (0..4).map(|i| store.put(Codec::Raw, &block(i, 1500)).unwrap()).collect();
+    store.publish(b"kept", 0, &cids[3], OWNER).unwrap();
+    let a = store.domain_create(OWNER).unwrap();
+    store.set_domain(a).unwrap();
+    store.put(Codec::Raw, &block(9, 700)).unwrap();
+    store.set_domain(VOLUME).unwrap();
+    let all = records(store.device()).len() as u32;
+    assert_eq!(scrub_all(&mut store, u64::MAX), (Scrubbed { records: all, corrupt: 0, damaged: 0 }, vec![], 1));
+    // After mounting: a byte of the second block's data, of the name record and of the key record changes, and a
+    // sector after the log is no longer blank.
+    let (name, key) = (find(store.device(), b"MIND-REF")[0], key_records(store.device())[0].0);
+    let (second, used) = (1 + record_sectors(1500) as u64, store.stats().used);
+    let m = store.device();
+    m.flip(second + 1, 100);
+    m.flip(name, 100);
+    m.flip(key, 100);
+    m.data[(used as usize + 3) * SECTOR] = 0xAB;
+    let (writes, flushes) = (m.writes.clone(), m.flushes);
+    let (report, mut found, _) = scrub_all(&mut store, u64::MAX);
+    assert_eq!(report, Scrubbed { records: all, corrupt: 3, damaged: 1 });
+    found.sort();
+    let mut expected = vec![(second, Some(cids[1])), (name, None), (key, None)];
+    expected.sort();
+    assert_eq!(found, expected, "each reported with its sector, a block with its CID");
+    // In steps of a sector it takes many calls, and finds the same.
+    let (stepped, mut again, calls) = scrub_all(&mut store, 1);
+    again.sort();
+    assert_eq!((stepped, again), (report, expected));
+    assert!(calls > 10);
+    let m = store.device();
+    assert_eq!((&m.writes, m.flushes), (&writes, flushes), "a scrub writes nothing");
+}
+
+#[test]
+fn a_scrub_counts_a_domains_records_as_a_mount_does() {
+    let mut medium = Memory::new(512);
+    let (a, b);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        (a, b) = (store.domain_create(OWNER).unwrap(), store.domain_create(OWNER).unwrap());
+        for d in [a, b] { store.set_domain(d).unwrap(); object(&mut store, d as usize, 20_000); }
+        store.domain_forget(a, OWNER).unwrap();
+        // A forgotten domain's records no longer open, and are not corrupt: the next collection frees them.
+        let all = records(store.device()).len() as u32;
+        assert!(frames(store.device()).iter().filter(|f| f.1 == a).count() > 1);
+        assert_eq!(scrub_all(&mut store, 64).0, Scrubbed { records: all, corrupt: 0, damaged: 0 });
+    }
+    // Without b's key record its domain is unknown: a mount and a scrub count its records corrupt, and the key record.
+    let key = key_records(&medium).into_iter().find(|k| k.1 == b).unwrap().0;
+    medium.flip(key, 200);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let corrupt = store.stats().corrupt;
+    assert_eq!(corrupt as usize, 1 + frames(store.device()).iter().filter(|f| f.1 == b).count());
+    assert_eq!(scrub_all(&mut store, u64::MAX).0.corrupt, corrupt);
+}
+
+#[test]
+fn a_record_written_around_the_scrub_is_not_read_as_damaged() {
+    let mut medium = Memory::new(256);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    // The first step reads a window of blank sectors and stops after it, inside the run the next puts go into.
+    assert_eq!(store.scrub(1, &mut |_, _| panic!("nothing is corrupt")).unwrap(), None);
+    assert!(store.scrubbing());
+    for i in 0..6 { store.put(Codec::Raw, &block(i, 3000)).unwrap(); }
+    // One record covers the scrub's place: the scrub goes on after it, reading none of it as damaged.
+    let (report, found, _) = scrub_all(&mut store, u64::MAX);
+    assert_eq!((report.corrupt, report.damaged, found), (0, 0, vec![]));
+    assert!(report.records < 6);
+    assert!(!store.scrubbing());
+    // A pass dropped in the middle: the next starts at the first record.
+    assert_eq!(store.scrub(1, &mut |_, _| panic!("nothing is corrupt")).unwrap(), None);
+    store.restart_scrub();
+    assert_eq!(scrub_all(&mut store, u64::MAX).0, Scrubbed { records: 6, corrupt: 0, damaged: 0 });
 }
