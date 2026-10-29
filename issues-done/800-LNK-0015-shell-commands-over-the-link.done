@@ -1,6 +1,6 @@
-# 800-LNK-0015 — The shell's commands over the link, in developer mode
+# 800-LNK-0015 — The shell's commands over the link, in developer mode — done
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-22) · **Blocked by:** `KRN`: a client of the shell for `link` with `dev`; `APP`: what the shell's `run` takes from that client (both asked on `internal-dev-messages`, 2026-10-22) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** done (2026-10-29) · **Blocked by:** — (`KRN`'s 800-KRN-0148 and `APP`'s 800-APP-0102 are in `main`) · **Main task:** [800](../issues/800-mind-link.md) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -29,11 +29,11 @@ The shell already runs a client's command line: `idl/shell.wit` `run(line) -> by
 ## Acceptance criteria
 
 - [x] **Host tests:** COMMAND through the lossy line (`linkproto`); `mindlink sh` against `serve --run`; `effector485`'s `shell` (2026-10-22, below).
-- [ ] **The QEMU `link` suite with `dev`:**
+- [x] **The QEMU `link` suite with `dev`:** (on `main`, x86, 4 CPUs, 2026-10-29)
   - `mindlink sh ip` shows the cards;
   - `mindlink sh ps` shows `link`;
   - a command the link's client may not run is refused with its reason;
-  - without `dev`, COMMAND answers UNSUPPORTED.
+  - without `dev`, COMMAND is refused (see the resolution: `not allowed`, not UNSUPPORTED).
 - [x] **On the MacBook Pro over RS-485:** `ip`, `netstat -i` and `ps` read from the development machine (2026-10-22, below). `dmesg` the shell takes from no client, and the link reads the system log itself.
 
 Evidence for the configurations named only (MC-12.1). What the link's client may run is the shell's decision. This task claims no more than the shell grants it (MC-3.11, MC-12.3).
@@ -68,6 +68,22 @@ Evidence for the configurations named only (MC-12.1). What the link's client may
   - `effector485`'s own log names each operation's whole command, under the same rule.
   - **The `link` suite** checks the whole `netpolicy add …` line, a run's arguments, and that `tpm seal`'s secret is not in the log.
 
+## Resolution
+
+Done on 2026-10-29 by the `LNK` track.
+- **What is in `main`:**
+  - the protocol's COMMAND, `mindlink sh` and `effector485`'s `shell`;
+  - `link`'s run of a line through the shell's client in developer mode (`KRN`'s 800-KRN-0148), whose rule is `APP`'s 800-APP-0102.
+- **The `link` QEMU suite on `main`** (5a09c53d with this commit's checks, x86, 4 CPUs) passes every point above:
+  - `sh ip` shows a card, and `sh ps` shows `link`;
+  - `sh netpolicy add …` is refused;
+  - the whole line is logged, with `tpm seal`'s secret left out.
+- **Without `dev` the line is refused as not allowed (DENIED), not UNSUPPORTED** as the criterion first said.
+  - `link` understands the request but its owner's `link.conf` refuses it, and it logs `[LINK] COMMAND … REFUSED, link.conf HAS NO "dev"`.
+  - The suite checks that answer and that line.
+  - `mindlink`'s text for that refusal now names `dev` for a shell line, beside `run` for a program, rather than only the rules for names.
+- **The MacBook Pro over RS-485** (2026-10-22): as recorded above. Evidence for that machine only (MC-12.1).
+
 ## Related
 
-[800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done), [800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), `idl/shell.wit`, `shell/src/clients.rs`, [docs/link/protocol.md](../docs/link/protocol.md).
+[800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done), [800-LNK-0009](800-LNK-0009-programs-started-for-the-master.done), [800-KRN-0139](../issues/800-KRN-0139-the-links-developer-mode.md), `idl/shell.wit`, `shell/src/clients.rs`, [docs/link/protocol.md](../docs/link/protocol.md).

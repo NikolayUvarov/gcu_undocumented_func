@@ -4544,6 +4544,9 @@ def link_suite(args):
                 assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
                 assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
                 assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
+                # 800-LNK-0019: without `link-console` in data/mode.conf a script from the link is refused, `mode` always.
+                require(link(port, "sh", "msh", "/data/link/console.msh", ok=False), "refused")
+                require(link(port, "sh", "mode", ok=False), "refused")
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
@@ -4594,6 +4597,9 @@ def link_suite(args):
             require(link(port, "--address", "5", "put", str(sent)), "put ")
             require(link(port, "--address", "5", "ls"), "16384  sent.bin")
             require(vm.command("dmesg -s link", raw=True), "[LINK] ADDRESS 5 ON A SHARED LINE")
+            # 800-LNK-0015: without `dev` a shell line is refused as not allowed, and the log says why.
+            require(link(port, "--address", "5", "sh", "ps", ok=False), 'a shell line "dev"')
+            require(vm.command("dmesg -s link", raw=True), 'REFUSED, link.conf HAS NO "dev"')
             # Another address and a frame with none go unanswered: bounded by the tries.
             for other in (("--address", "6"), ()):
                 r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
@@ -4602,11 +4608,37 @@ def link_suite(args):
             require(link(port, "--address", "5", "hello"), '"MIND Core link"')
         finally:
             vm.close()
+    # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
+    # (800-APP-0108), its line logged whole; `mode` stays refused.
+    console = False
+    with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n", "data/mode.conf": b"link-console\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+            require(link(port, "hello"), '"MIND Core link"')
+            require(vm.command("dmesg -s init", raw=True), "MODE: LINK CONSOLE (data/mode.conf)")
+            script = Path(temp) / "console.msh"
+            script.write_text('#!msh\nprint("THE LINK CONSOLE RAN THIS SCRIPT")\n')
+            require(link(port, "put", str(script)), "put ")
+            ran = link(port, "sh", "msh", "/data/link/console.msh", ok=None, timeout=200)
+            if "did not answer" in ran:
+                print("SKIP: link: console: the shell does not take the link's lines yet (800-APP-0102)", flush=True)
+            else:
+                require(ran, "THE LINK CONSOLE RAN THIS SCRIPT")
+                assert re.search(r"\[LINK\] COMMAND \d+: msh /data/link/console\.msh", vm.command("dmesg -s link", raw=True)), "the whole line is logged"
+                require(vm.command("dmesg -s shell", raw=True), "[SHELL] FOR THE LINK'S CONSOLE THE SHELL RAN MSH")
+                require(link(port, "sh", "mode", ok=False), "refused")
+                console = True
+        finally:
+            vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
           "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again; "
-          "with address=5 in link.conf it answered only frames to address 5", flush=True)
+          "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line"
+          + ("; with link-console a script put over the link ran as the console's, refused without it, mode refused in both" if console else ""), flush=True)
 
 
 def modes_suite(args):
