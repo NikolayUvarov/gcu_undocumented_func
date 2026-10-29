@@ -24,7 +24,7 @@ Appendix B.3: "encryption and key management are designed before confidential da
 
 ## Tasks
 
-- [308-STO-0021](308-STO-0021-sealed-records.md): sealed records, layout 3, ChaCha20-Poly1305; the key in the clear on the medium for now (no confidentiality yet).
+- [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done): sealed records, layout 3, ChaCha20-Poly1305; the key in the clear on the medium for now (no confidentiality yet). Done 2026-10-29.
 - [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.md): the volume key held by `keystore`, sealed by the TPM or unlocked by a passphrase, with a recovery key.
 - [308-STO-0023](308-STO-0023-memory-domains.md): memory domains, a key per domain, forgetting by destroying it.
 - [308-STO-0024](308-STO-0024-what-sealing-protects.md): the threat model and the profile.
