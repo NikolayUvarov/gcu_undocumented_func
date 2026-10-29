@@ -21,7 +21,7 @@ The maintainer (2026-10-27): `effector485` was built to close the question of wr
 
 1. **`KRN`: the grant.** In developer mode (`dev` in `link.conf`), `init` gives `link` a second scope, writable, of `data/firmware/`, in `SLOT_FILE`, and makes the directory when it is missing.
    - No new authority in kind: `dev` already lets the cable's holder start any service from an unverified image (`replace`).
-   - Each driver checks its firmware by size and SHA-256 before use, so a file from the cable is held to the same pin as one from the disk.
+   - `rtw88_wifi`, `rtw89_wifi` and `bt_hci` check their firmware by size and SHA-256 before use, so a file from the cable is held to the same pin as one from the disk. `bcm_wifi` only logs its microcode's SHA-256, whichever way the file came (KRN's remark, 2026-10-27).
    - Without `dev`, `link` reaches `data/link/` alone, as before.
 2. **`link`: the names.**
    - Names under `firmware/` go to that scope: `put`, `get`, `ls`, `stat`, `rm`, `mkdir`, `rmdir`, all logged as `[LINK] … firmware/…`.

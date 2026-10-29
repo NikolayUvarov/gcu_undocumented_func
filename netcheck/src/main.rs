@@ -10,14 +10,19 @@
 // sessions (ten parser sessions in a row, each with a helper of its own, with one endpoint left in the quota, 109-KRN-0133),
 // echo:A.B.C.D:SIZE:HEX (an echo of SIZE data bytes of the pattern HEX, its reply's size and data checked, socket.wit 2.6).
 // A console program; without a grant every network check reports NO GRANT.
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NET, SLOT_NETWORK};
-use mind::idl::{net, socket};
+// Its own secrets in keystore (REQUEST_SECRETS, 000-NET-0045): secret-put:NAME:FILE keeps the file's bytes as secret
+// NAME, secret-get:NAME prints its length and SHA-256 (never the value), secret-delete:NAME, secrets lists the names;
+// NO SECRETS CLIENT when the loader gave it none (a run by a path).
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NET, SLOT_NETWORK, SLOT_SECRETS};
+use mind::idl::{keystore, net, socket};
 use mind::ipc::Endpoint;
 use mind::http::Parser as _;
 use mind::mem::Pages;
 use mind::parse::Session;
+use mind::util::FixedBuf;
+use core::fmt::Write;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK);
+mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_SECRETS);
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 
@@ -170,8 +175,53 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
     })
 }
 
+// One check of the program's own secrets: true when `word` is one.
+fn secret(word: &str) -> bool {
+    let (kind, rest) = word.split_once(':').unwrap_or((word, ""));
+    if !matches!(kind, "secret-put" | "secret-get" | "secret-delete" | "secrets") { return false; }
+    let keys = mind::ipc::Endpoint(SLOT_SECRETS);
+    if mind::dev::cap_info(SLOT_SECRETS).0 != CAP_KIND_ENDPOINT { mind::println!("NETCHECK {} NO SECRETS CLIENT", word); return true; }
+    let shown = |result: mind::sys::Result<Result<FixedBuf<96>, keystore::Error>>| match result {
+        Ok(Ok(text)) => mind::println!("NETCHECK {} OK{}", word, text.as_str()),
+        Ok(Err(error)) => mind::println!("NETCHECK {} {:?}", word, error),
+        Err(error) => mind::println!("NETCHECK {} {:?}", word, error),
+    };
+    match kind {
+        "secret-put" => {
+            let (name, path) = rest.split_once(':').unwrap_or((rest, ""));
+            let (Ok(file), Some(mut value)) = (mind::fs::File::open(path), Pages::new(VALUE_MAX)) else { mind::println!("NETCHECK {} NO FILE", word); return true };
+            let n = file.read_at(0, &mut value.as_mut_slice()[..VALUE_MAX]).unwrap_or(0);
+            shown(keystore::secret_put(keys, name, &value.as_slice()[..n]).map(|r| r.map(|()| FixedBuf::new())));
+            wipe(value.as_mut_slice());
+        }
+        "secret-get" => {
+            let Some(mut value) = Pages::new(VALUE_MAX) else { mind::println!("NETCHECK {} NO MEMORY", word); return true };
+            let got = keystore::secret_get(keys, rest, &mut value.as_mut_slice()[..VALUE_MAX]);
+            shown(got.map(|r| r.map(|n| {
+                let mut text = FixedBuf::new();
+                let _ = write!(text, " {} BYTES SHA-256 ", n);
+                for byte in mind::sha256::digest(&value.as_slice()[..n]) { let _ = write!(text, "{:02x}", byte); }
+                text
+            })));
+            wipe(value.as_mut_slice());
+        }
+        "secret-delete" => shown(keystore::secret_delete(keys, rest).map(|r| r.map(|gone| { let mut t = FixedBuf::new(); let _ = write!(t, " {}", gone); t }))),
+        _ => shown(keystore::secret_list(keys).map(|r| r.map(|names| {
+            let mut text = FixedBuf::new();
+            for (i, name) in names.as_slice().iter().enumerate() { let _ = write!(text, "{}{}", if i == 0 { " " } else { "," }, name.as_str()); }
+            if names.as_slice().is_empty() { let _ = write!(text, " (NONE)"); }
+            text
+        }))),
+    }
+    true
+}
+
+const VALUE_MAX: usize = 16384; // keystore.wit's longest secret
+
+fn wipe(bytes: &mut [u8]) { for byte in bytes.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) }; } }
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX");
-    for word in mind::process::args_str().split_whitespace() { report(word, check(word)); }
+    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets");
+    for word in mind::process::args_str().split_whitespace() { if !secret(word) { report(word, check(word)); } }
 }

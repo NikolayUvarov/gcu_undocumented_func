@@ -16,6 +16,13 @@
 //! 1.3 (550-NET-0035): the Wi-Fi station's country, kept in the private directory beside its networks: a two-letter
 //! code, never a row of a catalogue. Only the station's badge reads or changes it; the station changes it only on a
 //! change client's word (wifi.wit 1.1 `set-country`).
+//!
+//! 1.4 (000-NET-0045): a program's secrets, a token, a password or an API key that its program alone reads. The loader
+//! asks for a client for each program it runs by its name (`secrets-client`, `secrets-name`, `secrets-adopt`: its badge
+//! `BADGE_KEY_LOADER` alone) and lends it in SLOT_SECRETS (000-KRN-0182). That client is answered only for the task the
+//! loader named, or the first that calls on it, and only about its program's secrets: no call names another program.
+//! They are kept in the private directory, one file per program, sealed (ChaCha20-Poly1305) under a key derived from
+//! the device key and the program's name; the log names a program and a secret, never a value.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -25,16 +32,16 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:keystore";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
-/// Why a request failed.
+/// Why a request failed. `missing` (1.4): no secret of that name is kept.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] Denied = 0, Budget = 1, Invalid = 2, NoKey = 3 }
+pub enum Error { #[default] Denied = 0, Budget = 1, Invalid = 2, NoKey = 3, Missing = 4 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Denied), 1 => Some(Self::Budget), 2 => Some(Self::Invalid), 3 => Some(Self::NoKey), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Denied), 1 => Some(Self::Budget), 2 => Some(Self::Invalid), 3 => Some(Self::NoKey), 4 => Some(Self::Missing), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
@@ -233,8 +240,108 @@ pub fn wifi_keep_country(endpoint: Endpoint, code: &str) -> Result<core::result:
     Ok(Ok(()))
 }
 
+/// A new client for one program's secrets (1.4, the loader's badge only), answered once `secrets-name` names its
+/// program; it ends with the task `secrets-adopt` names, or after a minute when no task took it up. `budget` when 64
+/// clients live.
+pub fn secrets_client(endpoint: Endpoint, receive: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [11 | MAJOR << 8, 0];
+    let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
+    match wire::check_cap_reply(&reply, received, receive)? {
+        None => Ok(Ok(())),
+        Some(code) => Ok(Err(Error::from_code(wire::enum_code(code)?).ok_or(SysError::Invalid)?)),
+    }
+}
+
+/// Names the program whose secrets client `client` (its badge) reaches: 1 to 16 lowercase letters, digits, `.`, `_` or
+/// `-`, as the loader names a task. Once, before any call on it, by the loader that asked for it.
+pub fn secrets_name(endpoint: Endpoint, client: u16, program: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        client.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<16>(program, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 12 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// Makes client `client` task `task`'s alone, as if that task had called on it first (only the loader that asked for it).
+pub fn secrets_adopt(endpoint: Endpoint, client: u16, task: u64) -> Result<core::result::Result<(), Error>> {
+    let words = [13 | MAJOR << 8 | ((client) as usize) << 16, ((task) as usize) << 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
+/// Keeps `value` (1 to 16384 bytes) as the caller's program's secret `name` (1 to 32 letters, digits, `.`, `_` or `-`),
+/// in place of one kept under the name; `budget` past 16 secrets or 65536 bytes of them for one program, `no-key`
+/// without the device key or when it could not be written (a secrets client only).
+pub fn secret_put(endpoint: Endpoint, name: &str, value: &[u8]) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<32>(name, &mut w).ok_or(SysError::Invalid)?;
+        codec::encode_bytes::<16384>(value, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 14 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// The caller's program's secret `name`; `missing` when none is kept (a secrets client only).
+pub fn secret_get(endpoint: Endpoint, name: &str, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
+    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<32>(name, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 15 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 16386, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<16384>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
+}
+
+/// Forgets the caller's program's secret `name`; false when none was kept (a secrets client only).
+pub fn secret_delete(endpoint: Endpoint, name: &str) -> Result<core::result::Result<bool, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<32>(name, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 16 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <bool as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The names of the caller's program's secrets, never their values (a secrets client only).
+pub fn secret_list(endpoint: Endpoint) -> Result<core::result::Result<List<Text<32>, 16>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 17 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 546, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Text<32>, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
-pub const REQUEST_MAX: usize = 259;
+pub const REQUEST_MAX: usize = 16420;
 
 /// A request to the `keystore` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,6 +356,13 @@ pub enum Request<'a> {
     PublicKey,
     WifiCountry,
     WifiKeepCountry { code: Text<2> },
+    SecretsClient,
+    SecretsName { client: u16, program: Text<16> },
+    SecretsAdopt { client: u16, task: u64 },
+    SecretPut { name: Text<32>, value: &'a [u8] },
+    SecretGet { name: Text<32> },
+    SecretDelete { name: Text<32> },
+    SecretList,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -340,6 +454,55 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::WifiKeepCountry { code }, call))
         }
+        11 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::SecretsClient, Call::words(request, cap)))
+        }
+        12 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let client = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let program = <Text<16> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SecretsName { client, program }, call))
+        }
+        13 => {
+            wire::body(request, cap, [0xffff0000, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
+            Ok((Request::SecretsAdopt { client: wire::field(&words, 0, 16, 16) as u16, task: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
+        }
+        14 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let value = codec::decode_bytes::<16384>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SecretPut { name, value }, call))
+        }
+        15 => {
+            let (call, length) = wire::take_buffer(request, cap, 16386, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SecretGet { name }, call))
+        }
+        16 => {
+            let (call, length) = wire::take_buffer(request, cap, 1, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SecretDelete { name }, call))
+        }
+        17 => {
+            let (call, length) = wire::take_buffer(request, cap, 546, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SecretList, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -383,4 +546,33 @@ pub fn reply_wifi_country(call: Call, value: core::result::Result<&str, Error>) 
 pub fn reply_wifi_keep_country(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
+}
+/// `value` is the handle of the capability to send (copied).
+pub fn reply_secrets_client(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish_cap(call, value, false)
+}
+pub fn reply_secrets_name(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_secrets_adopt(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_secret_put(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_secret_get(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_bytes::<16384>(value, w))
+}
+pub fn reply_secret_delete(call: Call, value: core::result::Result<bool, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_secret_list(call: Call, value: core::result::Result<&[Text<32>], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Text<32>, 16>(value, w))
 }

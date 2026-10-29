@@ -87,4 +87,4 @@ Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85, the gate gre
 
 ## Related
 
-[000-NET-0045](../issues/000-NET-0045-secrets-per-program-in-keystore.md), [750-KRN-0169](../issues-done/750-KRN-0169-the-loader-checks-an-installed-application.done), [253](../issues/253-telegram-and-whatsapp-text-client.md), [260](../issues/260-ai-agents-on-the-platform.md), [261](../issues/261-mail-client.md).
+[000-NET-0045](000-NET-0045-secrets-per-program-in-keystore.done), [750-KRN-0169](../issues-done/750-KRN-0169-the-loader-checks-an-installed-application.done), [253](../issues/253-telegram-and-whatsapp-text-client.md), [260](../issues/260-ai-agents-on-the-platform.md), [261](../issues/261-mail-client.md).
