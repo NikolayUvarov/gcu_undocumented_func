@@ -28,7 +28,7 @@ Two transports, one protocol:
    - [800-LNK-0007](800-LNK-0007-the-windows-end.md) Windows.
 3. **MIND Core as the master,** so it reaches Linux, Windows or another MIND Core too: [800-LNK-0008](800-LNK-0008-mind-core-as-the-master.md).
 4. **Work handed over the link without a person at the machine** (the maintainer's request, 2026-10-20):
-   - [800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md) programs started for the master, and their output;
+   - [800-LNK-0009](../issues-done/800-LNK-0009-programs-started-for-the-master.done) programs started for the master, and their output;
    - [800-LNK-0010](800-LNK-0010-directories-in-data-link.md) directories below `data/link/`;
    - [800-LNK-0011](800-LNK-0011-effector485.md) `effector485`, a small Effector over the link;
    - [800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done) the developer mode, `dev` in `link.conf`.
