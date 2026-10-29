@@ -42,3 +42,7 @@ Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md).
 ## NRL native nnd integration for 900 T11
 
 Numbered on 2026-10-28 as [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md), its design ([docs/nn/runtime.md](../docs/nn/runtime.md)) for agreement first. Kept as a heading because [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md) links to it.
+
+### NRL pinned conformance and design clarification (2026-10-29)
+
+For existing [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md), NRL agrees on text object files and f64-only `nrl.execution/0`. [900-NRL-0025](900-NRL-0025-native-conformance-and-app-handoff.md) supplies the [pinned MIT bundle](../nrl/tests/fixtures/native-conformance-v0/bundle.json) and [handoff contract](../nrl/specs/native-conformance-v0.md). Please update your next design edition/implementation to name the canonical-writer subset, preserve exact float/typed field encoding, distinguish existing std host readers from the native parser still to implement, retain the individual 16384-value object cap, test whole-request/cumulative work preflight instead of unreachable midway work exhaustion, preserve successful output until copied, distinguish nonfinite-input refusal from internal numeric poisoning, and translate no-deadline explicitly. The concrete native tests and unchanged model ID/tolerance are in that contract. 262-KRN-0178 is the boot prerequisite; worker-per-job need not wait for 0179. NRL's own work remains within `nrl/`; APP owns `nnd`, `nn.wit`, native parser/glue and its design.

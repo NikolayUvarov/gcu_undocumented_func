@@ -1,0 +1,120 @@
+{
+  "encoding": {
+    "client_payload": "IEEE-754 binary64 little endian, row major",
+    "float_roundtrip": true,
+    "object": "nrl.serde-json-pretty-object/0",
+    "serde_json": "1.0.151",
+    "zmij": "1.0.23"
+  },
+  "files": {
+    "LICENSE": {
+      "bytes": 1102,
+      "sha256": "77b184dc9c03f6536036138fa4cc27cf9ccf291d4b1e3ef91e7bd9ccc349f952"
+    },
+    "encoding-bits.json": {
+      "bytes": 539,
+      "sha256": "516bf2902b9829c6527c5b01fb07753ad8a34e1e13224b322be00ba62c8b97f7"
+    },
+    "expected.f64le": {
+      "bytes": 48,
+      "sha256": "5781a38d062ab1f732d59bd6b477efb82c7a0381520f2848747eb015da16b20a"
+    },
+    "input.f64le": {
+      "bytes": 72,
+      "sha256": "ef5255b83a48656dcd9b0c2ba23bd0d4af292e10cc2178b755305bd38f292c76"
+    },
+    "long-input.f64le": {
+      "bytes": 6144,
+      "sha256": "be92f78db83b56e6f9b9eb22392951d80b407aabcb5577e032cfbb2f52c82ed9"
+    },
+    "model/manifest.json": {
+      "bytes": 7051,
+      "sha256": "9c8d27e89a9393cfe0a902b4a4495454007a91afa52e70a84918e4fbb5157c4b"
+    },
+    "model/object-0000.json": {
+      "bytes": 1744,
+      "sha256": "44d56b16af69609ca92c2d18bd5a529d7f4962cbdebad60be3236593cbc65092"
+    },
+    "model/object-0001.json": {
+      "bytes": 2165,
+      "sha256": "4bc5b2eff085a6800bf11b24d9cdcc3b0dcb351d8946c439735c5a6fcac6db84"
+    },
+    "model/object-0002.json": {
+      "bytes": 1022,
+      "sha256": "56026d89342e9b90fe47403d4de90cded14e300caa3dfb6d3e4b693ace8d70eb"
+    },
+    "model/object-0003.json": {
+      "bytes": 2164,
+      "sha256": "d17be4c817118109045cdc8599afd232edcd74233bc6a2dcc72fea02ed15a2e0"
+    },
+    "model/object-0004.json": {
+      "bytes": 2130,
+      "sha256": "f3aab60084dc9433a669c086bf22a1ddb355fcf1dfc0bb907296e0866a314ed6"
+    },
+    "model/object-0005.json": {
+      "bytes": 287,
+      "sha256": "2e2f59dcf3d25d7c83701be48d51cbd0cf17881278a1b6ffb81347a4ceae67ea"
+    },
+    "model/object-0006.json": {
+      "bytes": 241,
+      "sha256": "5799e06064230cc10e6433b6d53df6fcd3df03b2bcb986fca8fd7c5a687e1e6a"
+    },
+    "numeric-input.f64le": {
+      "bytes": 24,
+      "sha256": "180384f3ebf0e2e315a6a3935f9fd2afd2498bce7937bca3856bac21da8880d3"
+    },
+    "object-encoding.json": {
+      "bytes": 404,
+      "sha256": "31505851b9d9a72ffbfdd1685c2d8e194245fc974c4d4f887ffedd5500ec04ca"
+    },
+    "reference.json": {
+      "bytes": 1747,
+      "sha256": "8414e5703e2ad1dc48fb9aa8beb33f22ce58535190ba2c6fa27906d947220fc3"
+    }
+  },
+  "geometry": {
+    "input_width": 3,
+    "long_rows": 256,
+    "max_batch_activation_values": 65536,
+    "max_batch_rows": 256,
+    "nodes": 15,
+    "numeric_values": 287,
+    "objects": 7,
+    "output_width": 2,
+    "rows": 3
+  },
+  "licence": "MIT",
+  "model_id": "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee",
+  "native_execution": false,
+  "reference": {
+    "absolute_tolerance": 1e-12,
+    "field": "original_output",
+    "finite_required": true,
+    "generator": "nrl/tools/generate_model_fixtures.py",
+    "producer": "independent explicit PyTorch",
+    "relative_tolerance": 1e-10,
+    "rule": "abs(actual-reference) <= absolute_tolerance + relative_tolerance*abs(reference)",
+    "torch": "2.10.0+cpu"
+  },
+  "runtime": {
+    "numeric_failure_work_units": 39,
+    "partial_interrupt_checkpoint": 20,
+    "partial_interrupt_rows": 2,
+    "partial_interrupt_work_units": 646,
+    "scratch_values": 30,
+    "three_row_checkpoints": 50,
+    "three_row_work_units": 1893,
+    "values_per_row": 47,
+    "version": 0,
+    "work_units_per_row": 631,
+    "workspace_bytes": 616,
+    "workspace_values": 77
+  },
+  "schema": "nrl.native-conformance/0",
+  "source_commit": "11547f61a75d6d1efb5c001439cfccb7cd3d3189",
+  "source_files": {
+    "nrl/tests/fixtures/model-v0/definition.json": "fdd5bb55fdaec6c736043f3656658625f5a0a35750a6077ceb27bbf88b1b7879",
+    "nrl/tests/fixtures/model-v0/expected.json": "8414e5703e2ad1dc48fb9aa8beb33f22ce58535190ba2c6fa27906d947220fc3",
+    "nrl/tests/fixtures/model-v0/input.json": "26c04d62e66b2ca926f710fdd41dff8f6de43802c27496593676c4702bc383f6"
+  }
+}
