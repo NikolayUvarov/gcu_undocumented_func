@@ -35,6 +35,8 @@ SIGNED = ("MANIFEST", "MANIFEST.SIG")
 VOICE = ("voice/model.bin", "voice/commands.txt")
 # The runs on real hardware (176-KRN-0087).
 DIAG = tuple(sorted(f"diag/{p.name}" for p in (ROOT / "diag").glob("*.msh")))
+# Mozilla's public roots, which tls reads (000-NET-0046); at the root, shared by the slots, and the owner's to change.
+ROOTS = ("tlsroots.pem",)
 SECTOR = 512
 # The log partition after the boot one (211-PRT-0006): FAT16 with an ordinary MBR type (0x0E, FAT16 LBA), which Windows,
 # macOS and Linux mount and write. vfs_server mounts it as log: by its label and saves each boot's system log there.
@@ -42,6 +44,11 @@ LOG_LABEL = b"MIND LOG   "
 LOG_SECTORS = 64 * 1024 * 1024 // SECTOR
 LOG_ALIGN = 2048  # 1 MiB
 LOG_SPC = 4  # 2 KiB clusters: about 32 700 of them
+# The block store's own partition after the log one (307-STO-0020): MBR type 0x7F (reserved for local and experimental
+# use), formatted as an empty store, so the store is known by its superblock, never taken because a disk is blank.
+STORE_TYPE = 0x7F
+STORE_SECTORS = 128 * 1024 * 1024 // SECTOR
+STORE_ALIGN = 2048  # 1 MiB
 LOG_README = (b"MIND CORE writes the system log of each boot here, as BOOTNNNN.LOG (the last 50 boots are kept),\r\n"
               b"the same boot's hardware report as HWNNNN.TXT, and the firmware's ACPI tables in the folder ACPI.\r\n"
               b"This partition is an ordinary FAT16 volume: read it on any computer, and send the logs with a report\r\n"
@@ -65,12 +72,12 @@ def applications(source):
 
 def files(arch, source=None):
     """The files of the image for `arch`: the bootloader, the kernel, its boot services, the applications, licences, voice,
-    the runs on real hardware."""
+    the runs on real hardware, the public root store."""
     spec = ARCHES[arch]
     source = Path(source or ROOT / spec["root"])
     names = listed(source)
     boot = tuple(name for name in BOOT_FILES if name not in spec["missing"] and (names is None or name in names))
-    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *DIAG, *SIGNED)
+    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *DIAG, *ROOTS, *SIGNED)
 
 
 def find_qemu_img(requested):
@@ -109,7 +116,7 @@ def read_payloads(source, arch="x86_64"):
         if not 0 < file.stat().st_size <= 4 * 1024 * 1024:
             raise ValueError(f"Invalid size of {file}: expected 1..4194304 bytes.")
         data = file.read_bytes()
-        if name in LICENSES or name in VOICE or name in DIAG or name in SIGNED:
+        if name in LICENSES or name in VOICE or name in DIAG or name in ROOTS or name in SIGNED:
             pass
         elif name.endswith(".elf"):
             if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != machine:
@@ -231,12 +238,53 @@ def add_log_partition(image, when):
         os.fsync(disk.fileno())
 
 
+def store_superblock():
+    """The block store's superblock with no volume key yet, as blockstore/src/store.rs reads it (superblock(None)): its
+    magic, its layout (read from that file), the sector size, key source 0, the SHA-256 of those 16 bytes, zeros where
+    the key and its check go, and the SHA-256 of the 140 bytes before it. The store makes the key at its first mount."""
+    layout = int(re.search(r"pub const LAYOUT: u16 = (\d+);", (ROOT / "blockstore/src/store.rs").read_text())[1])
+    head = b"MIND-STO" + struct.pack("<HHB", layout, SECTOR, 0) + bytes(3)
+    first = (head + hashlib.sha256(head).digest()).ljust(140, b"\0")
+    return (first + hashlib.sha256(first).digest()).ljust(SECTOR, b"\0")
+
+
+def add_store_partition(image):
+    """Appends the store's partition at the next MiB after the image and enters it in the MBR's third slot."""
+    size = image.stat().st_size
+    start = -(-size // SECTOR // STORE_ALIGN) * STORE_ALIGN
+    with image.open("r+b") as disk:
+        mbr = bytearray(disk.read(SECTOR))
+        if size % SECTOR or any(mbr[478:510]):
+            raise ValueError("Invalid USB image: not whole sectors, or a third partition already")
+        mbr[478:494] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", STORE_TYPE, b"\xfe\xff\xff", start, STORE_SECTORS)
+        disk.seek(0)
+        disk.write(mbr)
+        disk.seek(start * SECTOR)
+        disk.write(store_superblock())
+        disk.truncate((start + STORE_SECTORS) * SECTOR)  # the rest blank, as a formatted store leaves it
+        disk.flush()
+        os.fsync(disk.fileno())
+
+
+def check_store_partition(disk, mbr, image_size, log_end):
+    """The third MBR entry is the store's partition: type 0x7F after the log one, an empty store's superblock first."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(f"Invalid USB image: {message}")
+    require(mbr[482] == STORE_TYPE, "store partition type (0x7F)")
+    start, length = struct.unpack_from("<II", mbr, 486)
+    require(start >= log_end and start % STORE_ALIGN == 0 and length == STORE_SECTORS and (start + length) * SECTOR <= image_size,
+            "store partition placement")
+    disk.seek(start * SECTOR)
+    require(disk.read(SECTOR) == store_superblock(), "store partition's superblock")
+
+
 def check_log_partition(disk, mbr, image_size, boot_end):
     """The second MBR entry is the log partition: FAT16 LBA after the boot one, labelled MIND LOG."""
     def require(condition, message):
         if not condition:
             raise ValueError(f"Invalid USB image: {message}")
-    require(not any(mbr[478:510]), "more than two partitions")
+    require(not any(mbr[494:510]), "more than three partitions")
     require(mbr[466] == 0x0E, "log partition type (FAT16 LBA)")
     start, length = struct.unpack_from("<II", mbr, 470)
     require(start >= boot_end and start % LOG_ALIGN == 0 and length == LOG_SECTORS and (start + length) * SECTOR <= image_size,
@@ -264,6 +312,8 @@ def check_image(image, payloads, mark_esp=False):
         mbr = disk.read(SECTOR)
         require(len(mbr) == SECTOR and mbr[510:] == b"\x55\xaa", "MBR signature")
         require(not any(mbr[462:478]) or mbr[466] == 0x0E, "expected the boot partition and at most the log partition")
+        require(not any(mbr[478:494]) or (mbr[466] == 0x0E and mbr[482] == STORE_TYPE), "a third partition other than the store's")
+        require(not any(mbr[494:510]), "a fourth partition")
         require(mbr[450] in (0x04, 0x06, 0x0e, 0xef), "FAT16/ESP partition type")
         start, length = struct.unpack_from("<II", mbr, 454)
         require(start > 0 and length > 0 and (start + length) * SECTOR <= image.stat().st_size,
@@ -335,6 +385,9 @@ def check_image(image, payloads, mark_esp=False):
             require(actual == expected, f"contents of {name} do not match the build output")
         if any(mbr[462:478]):
             check_log_partition(disk, mbr, image.stat().st_size, start + length)
+        if any(mbr[478:494]):
+            log_start, log_length = struct.unpack_from("<II", mbr, 470)
+            check_store_partition(disk, mbr, image.stat().st_size, log_start + log_length)
         if mark_esp:
             disk.seek(450)
             disk.write(b"\xef")
@@ -343,7 +396,7 @@ def check_image(image, payloads, mark_esp=False):
 
 
 def pack(payloads, output, qemu_img, arch, force=False):
-    """The payloads packed into a raw image at `output` (MBR, FAT16 marked as the ESP, the log partition), checked
+    """The payloads packed into a raw image at `output` (MBR, FAT16 marked as the ESP, the log and store partitions), checked
     against them before it replaces anything; returns the image's SHA-256."""
     output.parent.mkdir(parents=True, exist_ok=True)
     # Stage ONLY boot files. Never include old test disks, image files or local
@@ -367,6 +420,7 @@ def pack(payloads, output, qemu_img, arch, force=False):
                         qemu_path(temporary, qemu_img)], check=True)
         check_image(temporary, payloads, mark_esp=True)
         add_log_partition(temporary, time.localtime())
+        add_store_partition(temporary)
         check_image(temporary, payloads)
         digest = hashlib.sha256()
         with temporary.open("rb") as disk:

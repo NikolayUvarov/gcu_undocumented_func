@@ -4,7 +4,9 @@
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
-The request on `bcm_wifi`'s DMA region and interrupt became [550-KRN-0091](550-KRN-0091-bcm-wifi-dma-and-its-interrupt.md) (2026-10-12).
+The request on `bcm_wifi`'s DMA region and interrupt became [550-KRN-0091](550-KRN-0091-bcm-wifi-dma-and-its-interrupt.md) (2026-10-12). NRL's request for its host checks in CI became [900-KRN-0174](900-KRN-0174-nrl-checks-in-ci.md) (2026-10-28).
+
+The store's own partition (STO, for 307) became [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md), and the model service `nnd` (APP, for 262-APP-0112) [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md) with the wait on a shared word [262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md) (2026-10-28).
 
 ## A PS/2 key press lost once on its way to `wm` (x86, after 000-KRN-0083)
 
@@ -54,44 +56,3 @@ kernel backlog. No change is sent to the kernel owner's branch. Physical
 MacBook/Ryzen evidence and the deferred ARM gate remain open.
 
 
-## NRL: add the first Rust numerical workspace to the host checks
-
-**From:** NRL / Codex, 2026-10-25 · **For:** [900](900-neural-representation-lab.md), 900-NRL-0003 and 0004 · **Owner to number:** KRN (CI/scripts).
-
-The first independent workspace is under `nrl/`, with portable crates and a host runner. Please add its explicit checks to the appropriate CI/host-test entry points when the NRL branch is integrated:
-
-- `cargo test --manifest-path nrl/Cargo.toml --locked` (includes stored-tensor and independent numerical-gradient tests; no Python or model download).
-- `cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target x86_64-unknown-none`.
-- The corresponding portable build for `aarch64-unknown-none-softfloat`, in a suitable build group.
-
-`bash nrl/tools/check.sh` combines those checks and a fresh host demonstration. The workspace is not discovered by the existing host scripts. NRL changes none of the owning track's build/CI scripts itself. A cross-built rlib is not a native OS test; an nnd smoke test remains later work with APP. The recorded first checks are in `nrl/reports/cpu-f64-2026-10-25.json`.
-
-## The store's own partition: media classified and a bounded grant (for 307)
-
-Recorded by the storage track (STO), 2026-10-27, for [307](307-the-stores-own-partition.md). `blockstore` then waits for the task number this request gets.
-
-- **What is asked:**
-  - `init` classifies the media of every block driver (`nvme`, `ahci`, `usb_storage`, `virtio_blk`), and finds a partition labelled `MIND STORE` of the store's own type, or the one the owner names in the configuration;
-  - it gives `blockstore` a client bounded to that partition's sectors, and `vfs_server` none of it.
-- **The rule:** on a real machine `init` never gives the store a disk because it is blank. A blank disk may be someone's new disk, and another system's disk is never written (the Ryzen's Windows disk, 213). The VirtIO rule of 300-KRN-0025 stays for QEMU.
-- **The client bounded to a range** is the drivers track's part (`requests-DRV.md`, same date). The grant and its wiring are yours.
-- **Also for [308](308-encryption-at-rest.md), later:** the TPM's registers for sealing (`PLATFORM_TPM`, 351-KRN-0043), which 351-NET-0006 waits for.
-
-## The model service `nnd` (for 262-APP-0112)
-
-Recorded by the tools track (APP), 2026-10-28, for [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md); the design is [docs/nn/runtime.md](../docs/nn/runtime.md), section 1. `nnd` then waits for the task number this request gets. Nothing here is needed before the design is agreed; it is recorded now so that its questions reach you with it.
-
-- **What is asked:**
-  - **`nnd` as a boot service** that `init` starts and keeps (`BOOT_SERVICES`; an ABI step).
-  - **Its grants:**
-    - a read-only VFS scope of `models:` and one of `data/models/`;
-    - `logd`;
-    - its own endpoint;
-    - no network, no lifecycle client, no device.
-  - **Its memory:** a quota the owner sets, with large pages, as `data/memory.conf` gives a program its MiB (262-KRN-0160).
-  - **`SPAWN_WORKERS`**, as the loader gives a program named in `data/memory.conf` (262-KRN-0163).
-  - **The shell's client of `nnd`** with `CAP_BADGE`, in a new slot, so the shell can lend each program that asks for a new `REQUEST_NN` bit a copy with a badge minted for that start alone. The badge is the client's identity in `nnd` (000-KRN-0073: only a handle with `CAP_BADGE` sets it).
-- **Two questions** (the design's questions 3 and 4):
-  - where a boot service's memory line and its right to workers come from: `data/memory.conf` read by `init`, or another place;
-  - whether a wait and wake on a shared word is planned. Without one, `nnd` starts a worker for each job, because a kept worker would have to spin.
-- **Why:** NRL's T11 (900-NRL-0017) closes only with a native run through `nnd`, and 262's stage 2 serves models to programs and the shell.

@@ -1,0 +1,87 @@
+{
+  "architecture": "x86_64",
+  "archive_sha256": "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
+  "cargo_lock_sha256": "e29d047c7f2a41ea9d39ccecb1e86209d87aaef7725c3cd3a11df12c96cb4914",
+  "checks": [
+    {
+      "loss_after": 0.09556269780699116,
+      "loss_before": 0.10231179736197876,
+      "max_reference_error": 2.7755575615628914e-17,
+      "representation": "dense",
+      "sample_count": 3
+    },
+    {
+      "loss_after": 0.12677966117930756,
+      "loss_before": 0.15264958541547757,
+      "max_reference_error": 5.551115123125783e-17,
+      "representation": "spline-linear",
+      "sample_count": 3
+    },
+    {
+      "loss_after": 94.91618022101002,
+      "loss_before": 95.02726876288641,
+      "max_reference_error": 2.842170943040401e-14,
+      "representation": "pruned",
+      "sample_count": 3
+    },
+    {
+      "loss_after": 0.12683170841336067,
+      "loss_before": 0.15287797802927358,
+      "max_reference_error": 5.551115123125783e-17,
+      "representation": "spline-cubic",
+      "sample_count": 3
+    },
+    {
+      "loss_after": 0.05414763909270817,
+      "loss_before": 0.05414836039695466,
+      "max_reference_error": 4.336808689942018e-19,
+      "representation": "svd",
+      "sample_count": 3
+    }
+  ],
+  "commands": [
+    "bash nrl/tools/check.sh",
+    "python nrl/tools/generate_fixtures.py --reference-root REF --output nrl/tests/fixtures/f64-v3.json --check"
+  ],
+  "elapsed_seconds": 0.000915039,
+  "fast_test_staging_commit": "4e349557",
+  "fixture_round_trips": 5,
+  "fixture_sha256": "c69d7d6fd1e520cd4a5a4d276d4d3b8ddcedede489af5298a96e90b2b27ebac4",
+  "log_sha256": "64935648af1df29d10d38f53f4d11359b04a83d1792ce5283dac2a84fd6803aa",
+  "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
+  "native_execution": false,
+  "os": "linux",
+  "portable_release_builds": [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat"
+  ],
+  "portable_scope": "rlibs only; not native execution",
+  "profile": "host-cpu-scalar-f64",
+  "recorded_date": "2026-10-26",
+  "rust_tests": {
+    "failed": 0,
+    "ignored": 0,
+    "passed": 25
+  },
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "schema": "nrl.demo-report/0",
+  "seed": 42,
+  "svd_initialization": {
+    "comparison": "normalized singular values, full-rank reconstruction and truncated Frobenius residuals versus torch.linalg.svd f64",
+    "external_matrix_cases": 9,
+    "factor_signs_or_degenerate_bases_compared": false,
+    "maximum_dimension": 64,
+    "maximum_sweeps": 128,
+    "method": "one-sided-jacobi-f64/0",
+    "relative_correlation_threshold": 1e-14
+  },
+  "task": "900-NRL-0007",
+  "test_location": "own NRL branch; no tests on fast-test",
+  "tested_commit": "d7dbbefa6fa046457acc5b1bf385766a3efd89ba",
+  "unimplemented": [
+    "biased/affine block conversion",
+    "model adapters",
+    "nnd integration"
+  ],
+  "version": "0.1.0"
+}

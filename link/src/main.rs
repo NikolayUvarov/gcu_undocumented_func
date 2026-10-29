@@ -9,18 +9,22 @@
 // of 2026-10-21): it also starts the built-in programs by name, lends them the network, the Wi-Fi station and the
 // system monitor where init granted it those, and restarts the machine on REBOOT. Everything from the line is checked by linkproto before use (MC-11.4);
 // hellos, files, programs and refusals are logged (MC-10.2).
+mod names;
+
 use linkproto::app::{FileService, Files, RunOutput, COMMAND_MAX, EXIT_UNKNOWN, RUN_ENDED, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::{Line, Service, Slave};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SHELL, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_DISPLAY, SLOT_FILE, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SHELL, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
 use mind::fs::{self, File};
-use mind::idl::{init as lifecycle, loader, netpolicy, serial, shell};
+use mind::idl::{display, init as lifecycle, loader, netpolicy, serial, shell};
 use mind::ipc::{self, Endpoint};
+use names::{hidden, DIR};
 
-const DIR: &str = "data/link";
-/// Where a put is written until its SHA-256 matches; left out of listings.
-const PART: &str = "data/link/link-part.tmp";
 const FIRST_BAUD: u32 = 115_200;
+// The screen's mark for the link (800-LNK-0020, the compositor's 800-KRN-0156): said every MARK_MS; a master heard in
+// the last PEER_MS is connected.
+const MARK_MS: u64 = 1000;
+const PEER_MS: u64 = 5000;
 /// The longest path `loader` takes (idl/loader.wit `begin`).
 const LOADER_PATH_MAX: usize = 64;
 
@@ -55,12 +59,6 @@ impl Line for Port {
     fn now_ms(&mut self) -> u64 { mind::time::uptime_ms() as u64 }
 }
 
-fn path<'a>(name: &str, out: &'a mut [u8; 320]) -> &'a str {
-    let mut n = 0;
-    for part in [DIR, "/", name] { out[n..n + part.len()].copy_from_slice(part.as_bytes()); n += part.len(); }
-    core::str::from_utf8(&out[..n]).unwrap_or(PART)
-}
-
 fn io(e: fs::Error) -> u8 {
     match e {
         fs::Error::NotFound => code::NOT_FOUND,
@@ -70,9 +68,6 @@ fn io(e: fs::Error) -> u8 {
         _ => code::IO,
     }
 }
-
-/// A listing's own entries, which FAT keeps in each directory, and the put in progress.
-fn hidden(name: &str, top: bool) -> bool { name == "." || name == ".." || top && name == "link-part.tmp" }
 
 /// Removes directory `top` and everything in it, without a heap: the first entry each time, a file removed, a directory
 /// entered, and each emptied directory removed on the way back up.
@@ -84,7 +79,7 @@ fn remove_tree(top: &str) -> Result<(), u8> {
         let current = core::str::from_utf8(&at[..len]).map_err(|_| code::IO)?;
         let mut first: Option<([u8; 255], usize, bool)> = None;
         fs::list(current, |e| {
-            if first.is_some() || hidden(e.name_str(), false) { return; }
+            if first.is_some() || hidden(e.name_str(), false, false) { return; }
             let mut name = [0u8; 255];
             let n = e.name.len().min(255);
             name[..n].copy_from_slice(&e.name[..n]);
@@ -400,7 +395,10 @@ fn programs() -> &'static mut Programs { unsafe { &mut *core::ptr::addr_of_mut!(
 
 /// The files of data/link/ and the system log. A put's data is gathered and written 16 KiB at a time, a get's read 16
 /// KiB ahead: each request carries at most 1 KiB, and a write to the volume costs far more than its bytes.
-struct Store { put: Option<(File, [u8; 255], usize)>, get: Option<File>, buffer: [u8; CHUNK], start: usize, len: usize, known: [Known; KNOWN] }
+/// `firmware` says which client is in use: data/link/'s, or data/firmware/'s (800-LNK-0027); a put and a get remember
+/// theirs, since a handle answers only through the client it was opened with.
+struct Store { put: Option<(File, [u8; 255], usize)>, get: Option<File>, buffer: [u8; CHUNK], start: usize, len: usize, known: [Known; KNOWN],
+               firmware: bool, put_firmware: bool, get_firmware: bool }
 
 /// The SHA-256 of files received here, so `stat` answers at once for them; the oldest is forgotten first.
 #[derive(Clone, Copy)]
@@ -411,6 +409,22 @@ const UNKNOWN: Known = Known { name: [0; 255], len: 0, size: 0, digest: [0; 32] 
 const CHUNK: usize = 16 * 1024;
 
 impl Store {
+    /// The client of `firmware`'s place in use: data/firmware/'s only where init granted it, in developer mode.
+    fn scope(&mut self, firmware: bool) -> Result<(), u8> {
+        if firmware && !holds(SLOT_FILE) { return Err(code::UNSUPPORTED); }
+        if firmware != self.firmware {
+            if firmware { fs::use_scope(Endpoint(SLOT_FILE), names::FIRMWARE) } else { fs::use_scope(Endpoint(SLOT_VFS), DIR) }
+            self.firmware = firmware;
+        }
+        Ok(())
+    }
+
+    /// `name`'s path, with its place's client in use.
+    fn place<'a>(&mut self, name: &str, out: &'a mut [u8; names::PATH_MAX]) -> Result<&'a str, u8> {
+        self.scope(names::firmware(name))?;
+        Ok(names::path(name, out))
+    }
+
     fn forget(&mut self, name: &str) {
         for k in self.known.iter_mut().filter(|k| &k.name[..k.len] == name.as_bytes()) { *k = UNKNOWN; }
     }
@@ -440,11 +454,14 @@ impl Files for Store {
         if size > u32::MAX as u64 { return Err(code::IO); }
         self.put = None;
         // A put into a directory that is missing would fail only at its end.
+        if !names::changeable(name) { return Err(code::DENIED); }
+        let mut buf = [0u8; names::PATH_MAX];
+        self.place(name, &mut buf)?;
         if let Some((parent, _)) = name.rsplit_once('/') {
-            let mut buf = [0u8; 320];
-            if !fs::metadata(path(parent, &mut buf)).is_ok_and(|m| m.is_dir) { return Err(code::NOT_FOUND); }
+            if !fs::metadata(names::path(parent, &mut buf)).is_ok_and(|m| m.is_dir) { return Err(code::NOT_FOUND); }
         }
-        let file = File::create(PART).map_err(io)?;
+        let file = File::create(names::part(name)).map_err(io)?;
+        self.put_firmware = names::firmware(name);
         (self.start, self.len) = (0, 0);
         let mut kept = [0u8; 255];
         kept[..name.len()].copy_from_slice(name.as_bytes());
@@ -455,6 +472,7 @@ impl Files for Store {
 
     fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<(), u8> {
         if self.put.is_none() || offset as usize != self.start + self.len { return Err(code::BAD_REQUEST); }
+        self.scope(self.put_firmware)?;
         let mut rest = data;
         while !rest.is_empty() {
             let n = rest.len().min(CHUNK - self.len);
@@ -467,32 +485,34 @@ impl Files for Store {
     }
 
     fn commit(&mut self, digest: &[u8; 32], matches: bool) -> Result<(), u8> {
+        self.scope(self.put_firmware)?;
         let drained = self.drain();
         let (file, kept, len) = self.put.take().ok_or(code::BAD_REQUEST)?;
         drained?;
         let name = core::str::from_utf8(&kept[..len]).map_err(|_| code::BAD_REQUEST)?;
         if !matches {
             drop(file);
-            let _ = fs::remove(PART);
+            let _ = fs::remove(names::part(name));
             mind::println!("[LINK] {}: SHA-256 DOES NOT MATCH, NOT KEPT", name);
             return Ok(());
         }
         file.flush().map_err(io)?;
         drop(file);
-        let mut buf = [0u8; 320];
-        let target = path(name, &mut buf);
+        let mut buf = [0u8; names::PATH_MAX];
+        let target = self.place(name, &mut buf)?;
         // A file of the same name is replaced.
         let _ = fs::remove(target);
         self.forget(name);
-        fs::rename(PART, target).map_err(io)?;
+        fs::rename(names::part(name), target).map_err(io)?;
         self.remember(name, self.start as u64, digest);
         mind::println!("[LINK] RECEIVED {}: SHA-256 {}", name, Hex(digest));
         Ok(())
     }
 
     fn open(&mut self, name: &str) -> Result<u64, u8> {
-        let mut buf = [0u8; 320];
-        let file = File::open(path(name, &mut buf)).map_err(io)?;
+        let mut buf = [0u8; names::PATH_MAX];
+        let file = File::open(self.place(name, &mut buf)?).map_err(io)?;
+        self.get_firmware = names::firmware(name);
         let size = file.size() as u64;
         mind::println!("[LINK] SENDING {} ({} BYTES)", name, size);
         self.get = Some(file);
@@ -501,6 +521,8 @@ impl Files for Store {
     }
 
     fn read_at(&mut self, offset: u64, out: &mut [u8]) -> Result<usize, u8> {
+        if self.get.is_none() { return Err(code::BAD_REQUEST); }
+        self.scope(self.get_firmware)?;
         let file = self.get.as_ref().ok_or(code::BAD_REQUEST)?;
         let offset = offset as usize;
         if offset < self.start || offset >= self.start + self.len {
@@ -514,8 +536,8 @@ impl Files for Store {
     }
 
     fn stat(&mut self, name: &str) -> Result<(u64, [u8; 32]), u8> {
-        let mut buf = [0u8; 320];
-        let file = File::open(path(name, &mut buf)).map_err(io)?;
+        let mut buf = [0u8; names::PATH_MAX];
+        let file = File::open(self.place(name, &mut buf)?).map_err(io)?;
         if let Some(k) = self.known.iter().find(|k| k.len > 0 && &k.name[..k.len] == name.as_bytes() && k.size == file.size() as u64) { return Ok((k.size, k.digest)); }
         let mut sha = mind::sha256::Sha256::new();
         let mut chunk = [0u8; 4096];
@@ -530,8 +552,9 @@ impl Files for Store {
     }
 
     fn delete(&mut self, name: &str) -> Result<(), u8> {
-        let mut buf = [0u8; 320];
-        fs::remove(path(name, &mut buf)).map_err(io)?;
+        if !names::changeable(name) { return Err(code::DENIED); }
+        let mut buf = [0u8; names::PATH_MAX];
+        fs::remove(self.place(name, &mut buf)?).map_err(io)?;
         self.forget(name);
         mind::println!("[LINK] DELETED {}", name);
         Ok(())
@@ -539,8 +562,9 @@ impl Files for Store {
 
     fn list(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> {
         let (mut used, mut index, mut next) = (0usize, 0u32, None);
+        self.scope(false)?;
         fs::list(DIR, |e| {
-            if e.is_dir || next.is_some() || hidden(e.name_str(), true) { return; }
+            if e.is_dir || next.is_some() || hidden(e.name_str(), true, false) { return; }
             index += 1;
             if index - 1 < cursor { return; }
             let mut line = Text::<300>::new();
@@ -553,8 +577,9 @@ impl Files for Store {
     }
 
     fn mkdir(&mut self, name: &str) -> Result<(), u8> {
-        let mut buf = [0u8; 320];
-        let target = path(name, &mut buf);
+        if !names::changeable(name) { return Err(code::DENIED); }
+        let mut buf = [0u8; names::PATH_MAX];
+        let target = self.place(name, &mut buf)?;
         if fs::metadata(target).is_ok_and(|m| !m.is_dir) { return Err(code::EXISTS); }
         fs::mkdir(target).map_err(io)?;
         mind::println!("[LINK] MADE {}/", name);
@@ -563,8 +588,11 @@ impl Files for Store {
 
     fn rename(&mut self, from: &str, to: &str, replace: bool) -> Result<(), u8> {
         if to.len() > from.len() && to.starts_with(from) && to.as_bytes()[from.len()] == b'/' { return Err(code::DENIED); }
-        let (mut a, mut b) = ([0u8; 320], [0u8; 320]);
-        let (source, target) = (path(from, &mut a), path(to, &mut b));
+        // Each place is its own client: a move between them is refused, and a put goes straight to its place.
+        if !names::one_place(from, to) { return Err(code::DENIED); }
+        let (mut a, mut b) = ([0u8; names::PATH_MAX], [0u8; names::PATH_MAX]);
+        let source = self.place(from, &mut a)?;
+        let target = names::path(to, &mut b);
         fs::metadata(source).map_err(io)?;
         match fs::metadata(target) {
             Ok(m) if m.is_dir || !replace => return Err(code::EXISTS),
@@ -578,8 +606,9 @@ impl Files for Store {
     }
 
     fn rmdir(&mut self, name: &str, recursive: bool) -> Result<(), u8> {
-        let mut buf = [0u8; 320];
-        let target = path(name, &mut buf);
+        if !names::changeable(name) { return Err(code::DENIED); }
+        let mut buf = [0u8; names::PATH_MAX];
+        let target = self.place(name, &mut buf)?;
         if !fs::metadata(target).map_err(io)?.is_dir { return Err(code::DENIED); }
         if recursive { remove_tree(target)?; } else { fs::remove(target).map_err(io)?; }
         self.known = [UNKNOWN; KNOWN];
@@ -588,11 +617,12 @@ impl Files for Store {
     }
 
     fn list_dir(&mut self, name: &str, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> {
-        let mut buf = [0u8; 320];
-        let (dir, top) = if name.is_empty() { (DIR, true) } else { (path(name, &mut buf), false) };
+        let mut buf = [0u8; names::PATH_MAX];
+        let firmware_held = holds(SLOT_FILE);
+        let (dir, top) = if name.is_empty() { self.scope(false)?; (DIR, true) } else { (self.place(name, &mut buf)?, name == names::FIRMWARE_NAME) };
         let (mut used, mut index, mut next) = (0usize, 0u32, None);
         fs::list(dir, |e| {
-            if next.is_some() || hidden(e.name_str(), top) { return; }
+            if next.is_some() || hidden(e.name_str(), top, firmware_held && name.is_empty()) { return; }
             index += 1;
             if index - 1 < cursor { return; }
             let mut line = Text::<300>::new();
@@ -602,21 +632,35 @@ impl Files for Store {
             out[used..used + line.len].copy_from_slice(line.bytes());
             used += line.len;
         }).map_err(io)?;
+        // data/firmware/ last at the top, where init granted it (800-LNK-0027).
+        if name.is_empty() && firmware_held && next.is_none() {
+            index += 1;
+            let line = b"firmware/\t0\n";
+            if index - 1 >= cursor {
+                if used + line.len() > out.len() { next = Some(index - 1); } else { out[used..used + line.len()].copy_from_slice(line); used += line.len(); }
+            }
+        }
         Ok((used, next))
     }
 
     fn run(&mut self, name: &str, args: &str) -> Result<(u32, u64), u8> {
-        let mut buf = [0u8; 320];
+        let mut buf = [0u8; names::PATH_MAX];
         // In the developer mode a plain name (`wifi`, `netcheck`) is a built-in program, which the loader finds by name.
         if programs().dev && !name.contains('/') && !name.contains('.') { return programs().start(name, args); }
-        programs().start(path(name, &mut buf), args)
+        // The loader starts programs from data/link/ alone.
+        if names::firmware(name) { return Err(code::DENIED); }
+        programs().start(names::path(name, &mut buf), args)
     }
 
     fn reboot(&mut self) -> Result<(), u8> { programs().reboot() }
 
     fn command(&mut self, line: &str) -> Result<u32, u8> { programs().command(line) }
 
-    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> { programs().replace(unit, path) }
+    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> {
+        // init reads a replacing image from data/link/ alone.
+        if names::firmware(path) { return Err(code::DENIED); }
+        programs().replace(unit, path)
+    }
 
     fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> { programs().output(run, cursor, out) }
 
@@ -664,7 +708,7 @@ impl core::fmt::Display for Hex<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { for b in self.0 { write!(f, "{:02x}", b)?; } Ok(()) }
 }
 
-static mut STORE: Store = Store { put: None, get: None, buffer: [0; CHUNK], start: 0, len: 0, known: [UNKNOWN; KNOWN] };
+static mut STORE: Store = Store { put: None, get: None, buffer: [0; CHUNK], start: 0, len: 0, known: [UNKNOWN; KNOWN], firmware: false, put_firmware: false, get_firmware: false };
 
 /// The service with each hello and refusal logged.
 struct Logged(FileService<&'static mut Store>);
@@ -680,9 +724,38 @@ impl Service for Logged {
     }
 }
 
+/// The link's mark on the screen (800-LNK-0020): grey with no master heard for PEER_MS, red while one is and `dev` lets
+/// it change the machine, yellow while it may only read. The compositor shows it a few seconds past the last call.
+struct Mark { requests: u32, heard: u64, next: u64, on: bool, said: Option<display::RemoteState> }
+impl Mark {
+    fn tick(&mut self, requests: u32, dev: bool) {
+        let now = mind::time::uptime_ms() as u64;
+        if requests != self.requests { (self.requests, self.heard) = (requests, now); }
+        if !self.on || now < self.next { return; }
+        self.next = now + MARK_MS;
+        let state = if self.heard == 0 || now - self.heard > PEER_MS { display::RemoteState::Unconnected }
+                    else if dev { display::RemoteState::Changing } else { display::RemoteState::Reading };
+        match display::remote(Endpoint(SLOT_DISPLAY), state) {
+            Ok(Ok(())) => if self.said != Some(state) { mind::println!("[LINK] MARK: {:?}", state); self.said = Some(state); },
+            // An older compositor, or no grant: said once, then not asked again.
+            other => { mind::println!("[LINK] NO MARK ON THE SCREEN: {:?}", other.map(|r| r.err())); self.on = false; }
+        }
+    }
+}
+
 /// The rate from the arguments (`baud=<rate>`), else 115200.
 fn baud() -> u32 {
     mind::process::args_str().split_ascii_whitespace().find_map(|w| w.strip_prefix("baud=")?.parse().ok()).unwrap_or(FIRST_BAUD)
+}
+
+/// This machine's address on a line shared by several (800-LNK-0026): `address=<1..247>` in link.conf. None, or one out
+/// of range (said once), is a line with one slave, answered in version 1 frames as before.
+fn address() -> u8 {
+    let Some(word) = mind::process::args_str().split_ascii_whitespace().find_map(|w| w.strip_prefix("address=")) else { return 0 };
+    match word.parse::<u8>() {
+        Ok(a) if (1..=linkproto::frame::ADDRESS_MAX).contains(&a) => a,
+        _ => { mind::println!("[LINK] address={} IS NOT 1 TO {}: SERVING A LINE OF ONE", word, linkproto::frame::ADDRESS_MAX); 0 }
+    }
 }
 
 /// Programs may be started only with the word `run` in link.conf; their output comes to an endpoint of link's.
@@ -693,8 +766,8 @@ fn prepare_programs() {
     p.allowed = p.dev || mind::process::args_str().split_ascii_whitespace().any(|w| w == "run");
     if p.dev {
         let has = |slot: usize, what: &'static str| if holds(slot) { what } else { "" };
-        mind::println!("[LINK] DEVELOPER MODE (link.conf: dev): BUILT-IN PROGRAMS BY NAME; FROM INIT:{}{}{}{}", has(SLOT_NETPOLICY, " NETWORK"),
-                       has(SLOT_WIFI, " WIFI"), has(SLOT_SYSINFO, " SYSINFO"), has(SLOT_LIFECYCLE, " REBOOT"));
+        mind::println!("[LINK] DEVELOPER MODE (link.conf: dev): BUILT-IN PROGRAMS BY NAME; FROM INIT:{}{}{}{}{}", has(SLOT_NETPOLICY, " NETWORK"),
+                       has(SLOT_WIFI, " WIFI"), has(SLOT_SYSINFO, " SYSINFO"), has(SLOT_LIFECYCLE, " REBOOT"), has(SLOT_FILE, " FIRMWARE (data/firmware/ AS firmware/)"));
     }
     p.next = (mind::time::rdtsc() as u32 & 0xFFFF_0000) | 1;
     if !p.allowed { return; }
@@ -729,9 +802,13 @@ fn main(_info: &'static BootInfo) {
     let mut service = Logged(FileService::new(store));
     service.0.set_name("MIND Core link");
     let mut slave = Slave::new(Port { endpoint, pending: [0; 4096], at: 0, len: 0 });
+    slave.address = address();
+    if slave.address != 0 { mind::println!("[LINK] ADDRESS {} ON A SHARED LINE: ONLY FRAMES TO IT ARE ANSWERED", slave.address); }
     let mut dropped = 0;
+    let mut mark = Mark { requests: 0, heard: 0, next: 0, on: holds(SLOT_DISPLAY), said: None };
     loop {
         if slave.serve(&mut service, 1000).is_err() { mind::time::sleep(100); }
+        mark.tick(slave.stats.requests, programs().dev);
         // A REBOOT is carried out once its answer has gone; the line has had time to turn round.
         let p = programs();
         // So is a COMMAND's line, whose output the master then reads.

@@ -15,6 +15,8 @@ const DCBAA: usize = 0x0000; const SCRATCH_ARRAY: usize = 0x0800; const COMMAND_
 const ERST: usize = 0x3000; const INPUT: usize = 0x4000; pub const SMALL: usize = 0x6000; const SCRATCH_PAGES: usize = 0x10000;
 const MAX_SCRATCH: usize = 32; pub const DATA: usize = 0x30000; const POOL: usize = 0x40000; const POOL_PAGES: usize = 64;
 pub const DMA_BYTES: usize = POOL + POOL_PAGES * PAGE;
+// Scratchpad pages beyond MAX_SCRATCH come from the pool (211-DRV-0040: the DEXP's controller asks 34), at most half of it.
+const POOL_SCRATCH: usize = POOL_PAGES / 2;
 
 pub const TYPE_NORMAL: u32 = 1; const TYPE_SETUP: u32 = 2; const TYPE_DATA: u32 = 3; const TYPE_STATUS: u32 = 4; const TYPE_LINK: u32 = 6;
 const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_DISABLE_SLOT: u32 = 10; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIGURE: u32 = 12;
@@ -83,16 +85,22 @@ impl Xhci {
         mmio.write32(op, 2);
         if !wait(|| mmio.read32(op) & 2 == 0 && mmio.read32(op + 4) & 1 << 11 == 0) { return None; }
         let scratch = ((hcs2 >> 21 & 0x1F) << 5 | hcs2 >> 27) as usize;
-        if scratch > MAX_SCRATCH { mind::println!("[USB] {} SCRATCHPAD PAGES NEEDED, {} AVAILABLE", scratch, MAX_SCRATCH); return None; }
+        if scratch > MAX_SCRATCH + POOL_SCRATCH { mind::println!("[USB] {} SCRATCHPAD PAGES NEEDED, {} AVAILABLE", scratch, MAX_SCRATCH + POOL_SCRATCH); return None; }
         dma.zero(0, POOL);
-        for i in 0..scratch { let page = dma.physical(SCRATCH_PAGES + i * PAGE); dma.write64(SCRATCH_ARRAY + i * 8, page); }
+        let pooled = scratch.saturating_sub(MAX_SCRATCH);
+        for i in 0..scratch {
+            let offset = if i < MAX_SCRATCH { SCRATCH_PAGES + i * PAGE } else { POOL + (i - MAX_SCRATCH) * PAGE };
+            if i >= MAX_SCRATCH { dma.zero(offset, PAGE); }
+            let page = dma.physical(offset); dma.write64(SCRATCH_ARRAY + i * 8, page);
+        }
+        if pooled > 0 { mind::println!("[USB] {} SCRATCHPAD PAGES, {} OF THEM FROM THE POOL", scratch, pooled); }
         if scratch > 0 { let array = dma.physical(SCRATCH_ARRAY); dma.write64(DCBAA, array); }
         let slots = (hcs1 & 0xFF).min(16) as usize;
         mmio.write32(op + 0x38, slots as u32);
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize, slots,
             command: Ring { page: COMMAND_RING, trbs: RING_TRBS, index: 0, cycle: 1 }, event: Ring { page: EVENT_RING, trbs: RING_TRBS, index: 0, cycle: 1 },
-            free: u64::MAX, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], last: 0 };
+            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], last: 0 };
         xhci.link(xhci.command);
         xhci.mmio.write64(op + 0x18, xhci.dma.physical(COMMAND_RING) | 1);
         let event = xhci.dma.physical(EVENT_RING); xhci.dma.write64(ERST, event); xhci.dma.write32(ERST + 8, RING_TRBS as u32);

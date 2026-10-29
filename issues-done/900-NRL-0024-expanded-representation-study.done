@@ -1,0 +1,27 @@
+# 900-NRL-0024: Expanded held-out representation study — done
+
+**Type:** implementation, `NRL` · **Owner:** Codex (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — · **Roadmap:** G; 900 T08, T09, T10 · **Constitution:** MC-5.2, MC-11.1, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+
+## Problem
+
+The maintainer requested the five autonomous extensions after the first T11 preparation and host T12/T13 results. Existing host evidence does not establish this extension or native execution.
+
+## Plan
+
+Freeze a larger licensed corpus and experiment policy before evaluation. Repeat representation/recovery comparisons on the real decoder, reporting actual quality, package sizes and host timings, with dense fallback.
+
+## Acceptance criteria
+
+- [x] Pinned data/source/licence/hashes and split boundaries; larger than miniature fixture; reproducible bounded CLI study; independent held-out reports; no unsupported quality/compression claim.
+- [x] Document the supported profile and limitations, run affected checks on the track branch, preserve reports, and submit an updated landing request.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md), T08, T09, T10.
+- [NRL](../nrl/README.md). Native T11 remains a separate APP dependency.
+
+## Resolution
+
+Pinned licensed TinyStories source revision/hash/card/full CDLA-Sharing-1.0 text and prominent modification notices. Committed 48 selected source-story prefixes and eight fixed plans before evaluation; added a no-download Rust-CLI orchestration/replay tool and expanded check mode. Saved ten candidate/control outcomes and validation-only dense fallback. Repeating on the final executable gives exact same model identities and numerical held-out results. This larger same-genre prefix study is not a broad benchmark and does not exclude unknown pretraining/semantic overlap.
+
+The final NRL profile passes on `b44fbc0d`: 95 host tests, four portable builds and all CLI cycles, including `--expanded`; new external oracles reproduce. [Evidence](../nrl/reports/five-extensions-2026-10-26.json). The full repository gate and code landing belong to the integrator; native T11 remains open.

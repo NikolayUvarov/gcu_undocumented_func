@@ -43,6 +43,7 @@ for licence in [root / "LICENSE-MIT", root / "LICENSE-APACHE", root / "THIRD_PAR
     put(f"LICENSES/{licence.name}", licence.read_bytes())
 put("voice/model.bin", b"model")
 put("voice/commands.txt", b"commands\n")
+put("tlsroots.pem", b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
 put("MANIFEST", "".join(f"file {name} 0\n" for name in ["kernel.elf", *boot]).encode())
 put("MANIFEST.SIG", b"signature")
 '''
@@ -76,6 +77,8 @@ def main():
         shutil.copyfile(args.packager, tree / "scripts/make_usb_image.py")
         (tree / "common").mkdir()
         shutil.copyfile(ROOT / "common/abi.rs", tree / "common/abi.rs")
+        (tree / "blockstore/src").mkdir(parents=True)  # the store's layout, for its partition's superblock (307-STO-0020)
+        shutil.copyfile(ROOT / "blockstore/src/store.rs", tree / "blockstore/src/store.rs")
         shutil.copytree(ROOT / "LICENSES", tree / "LICENSES")
         for name in ("LICENSE-MIT", "LICENSE-APACHE", "THIRD_PARTY.md"):
             shutil.copyfile(ROOT / name, tree / name)

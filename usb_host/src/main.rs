@@ -185,7 +185,8 @@ impl Host {
         };
         // The endpoints of the interfaces a class driver serves, a USB-serial converter's included (800-DRV-0034), and a
         // hub's status endpoint, in one Configure Endpoint.
-        let wanted = |info: &Interface| SERVED.contains(&info.class) || claims(mind::usb::BADGE_SERIAL, info) || (info.class == CLASS_HUB && hub.is_some());
+        let wanted = |info: &Interface| SERVED.contains(&info.class) || claims(mind::usb::BADGE_SERIAL, info) || mind::usb::is_bluetooth(info)
+            || (info.class == CLASS_HUB && hub.is_some());
         let mut planned = [(0u8, 0u32, 0u16, 0u8); MAX_RINGS];
         let (mut add, mut entries, mut rings, mut ring_count, mut status) = (1u32, 1u32, [(0u8, Ring::default()); MAX_RINGS], 0, None);
         for iface in interfaces[..count].iter().filter(|i| wanted(&i.info)) {
@@ -193,8 +194,8 @@ impl Host {
                 if !(endpoint.is_bulk() || endpoint.is_interrupt()) || ring_count == MAX_RINGS { continue; }
                 let (target, input) = (dci(endpoint.address), endpoint.is_in());
                 // An interrupt IN ring keeps its report buffers in its own page; so does a converter's bulk IN ring, which
-                // `reports` polls the same way (800-DRV-0034).
-                let polled = input && (endpoint.is_interrupt() || endpoint.is_bulk() && claims(mind::usb::BADGE_SERIAL, &iface.info));
+                // `reports` polls the same way (800-DRV-0034), and a Bluetooth controller's, its ACL data (700-DRV-0043).
+                let polled = input && (endpoint.is_interrupt() || endpoint.is_bulk() && (claims(mind::usb::BADGE_SERIAL, &iface.info) || mind::usb::is_bluetooth(&iface.info)));
                 let Some(ring) = self.xhci.ring(polled) else { break };
                 let kind = match (endpoint.is_bulk(), input) { (true, false) => EP_BULK_OUT, (true, true) => EP_BULK_IN, (false, false) => EP_INTERRUPT_OUT, (false, true) => EP_INTERRUPT_IN };
                 // The interval as 2^n units of 125 µs: frames (1 ms) at full and low speed, an exponent above.
@@ -415,6 +416,8 @@ impl Host {
             (0, 0) => request == 6 && request_type & 0x80 != 0, // GET_DESCRIPTOR from the device
             // A USB-serial converter is set up by vendor requests to the device (800-LNK-0002); it has no other interface.
             (2, 0) => mind::usb::is_serial(info.vendor, info.product),
+            // A Bluetooth controller's HCI command: a class request 0 to the device, host to device (700-DRV-0043).
+            (1, 0) => mind::usb::is_bluetooth(info) && request == 0 && request_type & 0x80 == 0,
             (0, 1) if request == 11 => false, // SET_INTERFACE: `select`, which knows the setting's endpoints
             (_, 1) => index as u8 == info.number,
             (_, 2) => info.endpoints().iter().any(|e| e.address == index as u8),

@@ -1,0 +1,10 @@
+{
+ "schema":"nrl.optimization-study/0",
+ "model_id":"fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+ "corpus_id":"554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+ "measurement":{"schema":"nrl.measurement/0","warmups":2,"repeats":7,"max_forward_rows":65536},
+ "calibration_rows":64,
+ "maximum_absolute_logit_difference":1e-12,
+ "maximum_absolute_nll_difference":1e-12,
+ "acceptance":"all split numerics/quality within fixed limits and prepared p95 strictly below reference minimum"
+}

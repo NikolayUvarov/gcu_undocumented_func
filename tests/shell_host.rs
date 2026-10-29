@@ -138,6 +138,24 @@ fn the_links_client_gets_at_once_what_a_program_is_asked_but_not_the_policy() {
 }
 
 #[test]
+fn the_links_console_gets_scripts_and_the_policy_but_never_mode() {
+    // 800-APP-0108, for 800-LNK-0019: in the owner's `link-console` mode the link's line is the console's after a yes.
+    use clients::{taken_by, Client, Taken};
+    let console = |line: &str| taken_by(line, Client::LinkConsole);
+    for line in ["msh /data/link/effector/start.msh", "msh diag.msh", "netpolicy add allow x", "netpolicy remove allow x", "netrevoke fetch", "netrevoke fetch > ram:x",
+                 "msh /diag/quick.msh > ram:out.txt"] { assert_eq!(console(line), Taken::Now, "{}", line); }
+    // Never, in this mode too: the machine's modes, code typed for `msh -c`, options, two files.
+    for line in ["mode", "mode maintenance on", "mode development off", "msh -c \"print(1)\"", "msh --check a.msh", "msh", "msh a.msh b.msh", "mode > ram:x"] {
+        assert_eq!(console(line), Taken::Refused, "{:?}", line);
+    }
+    // Every other line as for the link's client, and without the mode the rule is unchanged.
+    for line in ["ps", "kill 7", "reboot", "date set 2026-10-22 12:00", "ps > data/ps.txt", "fg 1", "keymap ru", "run fm", "fm", "let x = 1", "clear", "", "caps", "help kill"] {
+        assert_eq!(console(line), taken_by(line, Client::Link), "{:?}", line);
+    }
+    for line in ["msh /data/link/effector/start.msh", "netpolicy add allow x", "netrevoke fetch"] { assert_eq!(taken_by(line, Client::Link), Taken::Refused, "{}", line); }
+}
+
+#[test]
 fn a_line_splits_at_its_redirection() {
     // 000-APP-0074: `>` and `>>` after a command, one file at the end; `>` inside double quotes is text.
     use redirect::{split, Split};

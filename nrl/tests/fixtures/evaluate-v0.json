@@ -1,0 +1,28 @@
+{
+  "cases": [
+    {
+      "mean_nll": 0.06852259385827264,
+      "perplexity": 1.0709248210012636,
+      "predicted_tokens": 4,
+      "text": "Once upon a time",
+      "top1_accuracy": 1.0
+    },
+    {
+      "mean_nll": 3.615943734455324,
+      "perplexity": 37.186423480203196,
+      "predicted_tokens": 8,
+      "text": "A red fox.",
+      "top1_accuracy": 0.25
+    },
+    {
+      "mean_nll": 17.290308090949704,
+      "perplexity": 32291289.953635804,
+      "predicted_tokens": 7,
+      "text": "Hi \ud83e\udd8a",
+      "top1_accuracy": 0.14285714285714285
+    }
+  ],
+  "decoder_oracle_sha256": "8edeb0fb1a557f87ae1d62bd1c3c615948e905ac491d7234cf9be6dd122a0844",
+  "schema": "nrl.evaluation-oracle/0",
+  "torch": "2.10.0+cpu"
+}

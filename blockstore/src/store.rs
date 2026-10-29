@@ -3,12 +3,15 @@
 //! a block device; what no name retains and no lease protects is collected; several names change at once in one
 //! commit record (304-STO-0007). Nothing here depends on the kernel: the host tests build it too.
 //!
-//! Sector 0 holds the superblock. Records follow from sector 1, each starting on a sector. A block record is a header
-//! (magic, layout version, length, the block's CID, a digest of the header) and the block's bytes, padded to the
-//! sector; a `dag-cbor` block must be a node of `dag`. A name record is one sector: the name, its version and root,
-//! and a digest. Records are written only into blank sectors, so nothing stored is overwritten; a collection makes the
-//! sectors of what it frees blank again. Every block read is checked against its CID, and one that does not match is
-//! reported corrupt, never returned.
+//! Sector 0 holds the superblock and the volume key. Records follow from sector 1, each starting on a sector and sealed
+//! (308-STO-0021): a plain frame (magic, layout, domain, the sectors it covers, nonce, tag), then the record and the
+//! zeros up to the end of its last sector, encrypted and authenticated with ChaCha20-Poly1305 under the volume key, the
+//! frame and the record's first sector as associated data. Nothing but the frame is in the clear, and it does not say
+//! what kind of record it seals. A block record is a header (magic, layout version, length, the block's CID, a digest of the header) and
+//! the block's bytes; a `dag-cbor` block must be a node of `dag`. A name record is the name, its version and root, and
+//! a digest. Records are written only into blank sectors, so nothing stored is overwritten; a collection makes the
+//! sectors of what it frees blank again. Every block read is opened and checked against its CID, and one that does not
+//! open or match is reported corrupt, never returned.
 use crate::cid::{self, Cid, Codec};
 use crate::dag;
 use crate::sha256;
@@ -18,16 +21,26 @@ pub const SECTOR: usize = 512;
 pub const BLOCK_MAX: usize = 16384;
 /// Bytes of a record header.
 pub const HEADER: usize = 84;
+/// Bytes of a sealed record's frame: magic, layout, domain (u16), the sectors it covers (u32), nonce (12) and tag (16).
+pub const FRAME: usize = 44;
 /// Sectors of the largest record; the store's buffer holds one.
-pub const RECORD_SECTORS: usize = (HEADER + BLOCK_MAX).div_ceil(SECTOR);
+pub const RECORD_SECTORS: usize = sealed_sectors(HEADER + BLOCK_MAX);
 pub const BUFFER: usize = RECORD_SECTORS * SECTOR;
 /// The layout's version; another is refused, never read as this one (MC-4.13).
-pub const LAYOUT: u16 = 2;
+pub const LAYOUT: u16 = 3;
 const SUPER_MAGIC: &[u8; 8] = b"MIND-STO";
+// The superblock: magic, layout, sector size (u16), the key's source, zero, the SHA-256 of these 16 bytes; the volume
+// key; a check (32 zero bytes sealed under it, as nonce, ciphertext and tag); and the SHA-256 of the 140 bytes before.
+const SUPER: usize = 172;
+/// The key's sources: none yet (a superblock written by make_usb_image.py), or kept in the superblock in the clear.
+pub const KEY_NONE: u8 = 0;
+pub const KEY_CLEAR: u8 = 1;
+const FRAME_MAGIC: &[u8; 8] = b"MIND-SLD";
 const RECORD_MAGIC: &[u8; 8] = b"MIND-BLK";
 const NAME_MAGIC: &[u8; 8] = b"MIND-REF";
 // A record being freed: magic, layout, zero, the sectors it covers (u32), and the SHA-256 of these 16 bytes.
 const FREE_MAGIC: &[u8; 8] = b"MIND-DEL";
+const FREE_RECORD: usize = 48;
 /// How long a block no name retains is kept after its last put (or after a mount): the time a writer has to publish
 /// the root of what it is putting (MC-4.5: operations in progress).
 pub const LEASE_NS: u64 = 60_000_000_000;
@@ -59,6 +72,61 @@ pub trait Device {
     fn flush(&mut self) -> bool;
 }
 
+/// The cipher records are sealed with: ChaCha20-Poly1305 (RFC 8439) on the platform, a stand-in in the host tests.
+pub trait Crypto {
+    /// Encrypts `data` in place and returns the tag over `aad` and the ciphertext.
+    fn seal(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8]) -> [u8; 16];
+    /// Decrypts `data` in place if `tag` matches `aad` and the ciphertext; false, `data` unchanged, if not.
+    fn open(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8], tag: &[u8; 16]) -> bool;
+    /// Fills `out` with random bytes; false without a random source.
+    fn random(&self, out: &mut [u8]) -> bool;
+}
+
+/// HMAC-SHA-256 (RFC 2104) of the concatenated `parts` under a key of 32 bytes.
+pub fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
+    let mut pad = [0x36u8; 64];
+    for (p, k) in pad.iter_mut().zip(key) { *p ^= k; }
+    let mut inner = sha256::Sha256::new();
+    inner.update(&pad);
+    for part in parts { inner.update(part); }
+    let inner = inner.finish();
+    for p in pad.iter_mut() { *p ^= 0x36 ^ 0x5c; }
+    let mut outer = sha256::Sha256::new();
+    outer.update(&pad);
+    outer.update(&inner);
+    outer.finish()
+}
+
+// The keys a volume key gives: one seals records, one makes their nonces.
+struct Keys { seal: [u8; 32], nonce: [u8; 32] }
+impl Keys {
+    fn new(volume: &[u8; 32]) -> Self { Keys { seal: hmac_sha256(volume, &[b"MIND-STO seal"]), nonce: hmac_sha256(volume, &[b"MIND-STO nonce"]) } }
+    // Seals `data` in place; returns its nonce and tag. The nonce comes from the record and its associated data, so a
+    // write needs no random source; it repeats only for the same record at the same place, which seals the same way.
+    fn seal(&self, crypto: &dyn Crypto, aad: &[u8], data: &mut [u8]) -> ([u8; 12], [u8; 16]) {
+        let nonce: [u8; 12] = hmac_sha256(&self.nonce, &[aad, data])[..12].try_into().unwrap();
+        (nonce, crypto.seal(&self.seal, &nonce, aad, data))
+    }
+}
+
+/// Sectors of a sealed record of `len` bytes.
+pub const fn sealed_sectors(len: usize) -> usize { (FRAME + len).div_ceil(SECTOR) }
+
+// The sectors a frame covers, if the sector starts a frame of this layout.
+fn parse_frame(sector: &[u8]) -> Option<usize> {
+    if &sector[..8] != FRAME_MAGIC || u16::from_le_bytes([sector[8], sector[9]]) != LAYOUT { return None; }
+    let n = u32::from_le_bytes(sector[12..16].try_into().unwrap()) as usize;
+    (1..=RECORD_SECTORS).contains(&n).then_some(n)
+}
+
+// The associated data of a sealed record: its frame's first 16 bytes and its first sector, so a copy elsewhere fails.
+fn aad(frame: &[u8], lba: u64) -> [u8; 24] {
+    let mut a = [0u8; 24];
+    a[..16].copy_from_slice(&frame[..16]);
+    a[16..].copy_from_slice(&lba.to_le_bytes());
+    a
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     /// No block with this CID is stored.
@@ -76,11 +144,12 @@ pub enum Error {
     /// The medium is neither wholly blank nor a store (sector 0 holds no valid superblock): it belongs to something
     /// else and is left alone.
     Foreign,
-    /// A store of another layout version.
-    Layout,
-    /// A `dag-cbor` block that is not a node of `dag`'s schema (MC-4.2: the type is bound to the data); a block whose
-    /// bytes would start a sector with a record's magic; a name that is not 1 to NAME_MAX allowed bytes; a root whose
-    /// tree is out of shape.
+    /// A store of another layout version, the one found: this build reads only its own and converts none.
+    Layout(u16),
+    /// The superblock's key does not open its check, or comes from a source this build does not know: nothing is read.
+    Key,
+    /// A `dag-cbor` block that is not a node of `dag`'s schema (MC-4.2: the type is bound to the data); a name that is
+    /// not 1 to NAME_MAX allowed bytes; a root whose tree is out of shape.
     Invalid,
     /// The name's current version is not the one the publisher expected (MC-4.3): nothing was published.
     Conflict,
@@ -312,10 +381,14 @@ pub struct Store<'a, D: Device> {
     bytes: u64,
     corrupt: u32,
     damaged: u64,
+    crypto: &'a dyn Crypto,
+    keys: Keys,
+    // Whether this mount made the volume key, and from random bytes.
+    made: Option<bool>,
 }
 
-fn free_marker(sectors: u64) -> [u8; SECTOR] {
-    let mut r = [0u8; SECTOR];
+fn free_marker(sectors: u64) -> [u8; FREE_RECORD] {
+    let mut r = [0u8; FREE_RECORD];
     r[..8].copy_from_slice(FREE_MAGIC);
     r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
     r[12..16].copy_from_slice(&(sectors as u32).to_le_bytes());
@@ -336,7 +409,7 @@ fn parse_free(sector: &[u8]) -> Option<u64> {
 fn typed(codec: Codec, data: &[u8]) -> bool { codec == Codec::Raw || dag::decode(data).is_ok() }
 
 /// Sectors of the record of a block of `len` bytes.
-pub const fn record_sectors(len: usize) -> usize { (HEADER + len).div_ceil(SECTOR) }
+pub const fn record_sectors(len: usize) -> usize { sealed_sectors(HEADER + len) }
 
 fn header(cid: &Cid, len: usize) -> [u8; HEADER] {
     let mut h = [0u8; HEADER];
@@ -371,48 +444,93 @@ fn blank<D: Device>(dev: &mut D, buffer: &mut [u8; BUFFER]) -> Result<bool, Erro
     Ok(true)
 }
 
-fn superblock() -> [u8; SECTOR] {
+/// The superblock of this layout: with the volume key in the clear and its check, or (none) with no key yet.
+pub fn superblock(key: Option<(&[u8; 32], &dyn Crypto)>) -> [u8; SECTOR] {
     let mut s = [0u8; SECTOR];
     s[..8].copy_from_slice(SUPER_MAGIC);
     s[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
     s[10..12].copy_from_slice(&(SECTOR as u16).to_le_bytes());
+    s[12] = if key.is_some() { KEY_CLEAR } else { KEY_NONE };
     let check = sha256::digest(&s[..16]);
     s[16..48].copy_from_slice(&check);
+    if let Some((key, crypto)) = key {
+        s[48..80].copy_from_slice(key);
+        let aad = aad(&s, 0);
+        let (nonce, tag) = Keys::new(key).seal(crypto, &aad, &mut s[92..124]);
+        s[80..92].copy_from_slice(&nonce);
+        s[124..140].copy_from_slice(&tag);
+    }
+    let check = sha256::digest(&s[..140]);
+    s[140..SUPER].copy_from_slice(&check);
     s
 }
 
+// The volume key a superblock of this layout holds, once it opens the check; none if it has no key yet.
+fn key_of(s: &[u8], crypto: &dyn Crypto) -> Result<Option<[u8; 32]>, Error> {
+    match s[12] {
+        KEY_NONE if s[48..140].iter().all(|&b| b == 0) => Ok(None),
+        KEY_CLEAR => {
+            let key: [u8; 32] = s[48..80].try_into().unwrap();
+            let mut check: [u8; 32] = s[92..124].try_into().unwrap();
+            let opened = crypto.open(&Keys::new(&key).seal, s[80..92].try_into().unwrap(), &aad(s, 0), &mut check, s[124..140].try_into().unwrap());
+            if opened && check == [0; 32] { Ok(Some(key)) } else { Err(Error::Key) }
+        }
+        _ => Err(Error::Key),
+    }
+}
+
 impl<'a, D: Device> Store<'a, D> {
-    /// Mounts the store on `dev` at time `now` (ns): a blank medium is formatted (if writable), a store is scanned and
-    /// its blocks verified; anything else is refused. `index` bounds how many blocks it can hold, `heads` how many
-    /// names, `pins` how many pins, `holes` how many runs of blank sectors it uses. Every block starts a lease at `now`.
+    /// Mounts the store on `dev` at time `now` (ns), its records sealed with `crypto`: a blank medium is formatted (if
+    /// writable), a store is scanned and its blocks opened and verified; anything else is refused. A medium without a
+    /// volume key yet gets one. `index` bounds how many blocks it can hold, `heads` how many names, `pins` how many
+    /// pins, `holes` how many runs of blank sectors it uses. Every block starts a lease at `now`.
     #[allow(clippy::too_many_arguments)]
-    pub fn mount(mut dev: D, index: &'a mut [Entry], heads: &'a mut [Head], pins: &'a mut [Pin], holes: &'a mut [Extent],
-                 buffer: &'a mut [u8; BUFFER], scratch: &'a mut [u8; dag::CHUNK], now: u64) -> Result<Self, Error> {
+    pub fn mount(mut dev: D, crypto: &'a dyn Crypto, index: &'a mut [Entry], heads: &'a mut [Head], pins: &'a mut [Pin],
+                 holes: &'a mut [Extent], buffer: &'a mut [u8; BUFFER], scratch: &'a mut [u8; dag::CHUNK], now: u64) -> Result<Self, Error> {
         if dev.sectors() < 2 { return Err(Error::Full); }
         // An index entry names a record by a sector below 2^32 (2 TiB of 512-byte sectors).
         if dev.sectors() > 1 << 32 { return Err(Error::TooLarge); }
         if !dev.read(0, &mut buffer[..SECTOR]) { return Err(Error::Device); }
-        if buffer[..SECTOR].iter().all(|&b| b == 0) {
+        let s: [u8; SECTOR] = buffer[..SECTOR].try_into().unwrap();
+        let key = if s.iter().all(|&b| b == 0) {
             // Only a wholly blank medium is formatted: some file systems leave their first sectors zero.
             if !blank(&mut dev, buffer)? { return Err(Error::Foreign); }
-            if !dev.writable() { return Err(Error::ReadOnly); }
-            if !dev.write(0, &superblock()) || !dev.flush() { return Err(Error::Device); }
-        } else if &buffer[..8] != SUPER_MAGIC || buffer[16..48] != sha256::digest(&buffer[..16]) {
-            return Err(Error::Foreign);
-        } else if buffer[..16] != superblock()[..16] {
-            return Err(Error::Layout);
-        }
+            None
+        } else {
+            if &s[..8] != SUPER_MAGIC || s[16..48] != sha256::digest(&s[..16]) { return Err(Error::Foreign); }
+            let layout = u16::from_le_bytes([s[8], s[9]]);
+            if layout != LAYOUT { return Err(Error::Layout(layout)); }
+            if s[10..12] != (SECTOR as u16).to_le_bytes() || s[13..16] != [0; 3] || s[140..SUPER] != sha256::digest(&s[..140])
+                || s[SUPER..].iter().any(|&b| b != 0) { return Err(Error::Foreign); }
+            key_of(&s, crypto)?
+        };
+        let (key, made) = match key {
+            Some(key) => (key, None),
+            None => {
+                if !dev.writable() { return Err(Error::ReadOnly); }
+                let mut key = [0u8; 32];
+                let random = crypto.random(&mut key);
+                // Without a random source the key comes from the medium's size and the time: no weaker while it is kept
+                // in the clear (308-STO-0021).
+                if !random { key = hmac_sha256(&[0; 32], &[b"MIND-STO volume key", &dev.sectors().to_le_bytes(), &now.to_le_bytes()]); }
+                if !dev.write(0, &superblock(Some((&key, crypto)))) || !dev.flush() { return Err(Error::Device); }
+                (key, Some(random))
+            }
+        };
         let quota = dev.sectors() * SECTOR as u64 / 4 * 3;
         // Every slot starts empty: what a slice held before is not this medium's.
         index.fill(Entry::EMPTY);
         let mut store = Store {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
-            scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0,
+            scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made,
         };
         store.pass(false)?;
         store.size_retained();
         Ok(store)
     }
+
+    /// Whether this mount made the volume key (it found none), and from random bytes.
+    pub fn made(&self) -> Option<bool> { self.made }
 
     /// The time (ns, monotonic) the next requests happen at: leases are measured with it.
     pub fn set_time(&mut self, now: u64) { self.now = now; }
@@ -425,8 +543,9 @@ impl<'a, D: Device> Store<'a, D> {
     }
 
     // Reads the medium in windows of RECORD_SECTORS and finds the runs of blank sectors. Mounting (`sweep` false)
-    // reads every record whole, verifies it and builds the index and the names. A sweep frees the block records the
-    // index does not retain at that place and the name records that are not current; nothing else is written.
+    // opens every record, verifies it and builds the index and the names. A sweep frees the block records the index
+    // does not retain at that place, the name records that are not current and the records that do not open; nothing
+    // else is written.
     fn pass(&mut self, sweep: bool) -> Result<Collected, Error> {
         let sectors = self.dev.sectors();
         let mut freed = Collected::default();
@@ -441,103 +560,9 @@ impl<'a, D: Device> Store<'a, D> {
             while at < window {
                 let here = lba + at as u64;
                 let sector = &self.buffer[at * SECTOR..(at + 1) * SECTOR];
-                if let Some((cid, len)) = parse_header(sector).filter(|&(_, len)| here + record_sectors(len) as u64 <= sectors) {
-                    let n = record_sectors(len) as u64;
-                    let keep = if sweep {
-                        match self.position(&cid.to_bytes()) {
-                            Ok(i) if self.index[i].lba as u64 == here && self.retained(i) => true,
-                            // The indexed copy leaves the index before its sectors are erased, so a failure later in
-                            // the sweep never leaves an erased block acknowledged (audit A05, 175-STO-0012).
-                            Ok(i) if self.index[i].lba as u64 == here => { self.remove(i); false }
-                            _ => false,
-                        }
-                    } else {
-                        if self.verify(here, &cid, len)? && !self.contains(&cid) {
-                            if self.count == self.limit() { return Err(Error::Full); }
-                            self.insert(cid.to_bytes(), here, len);
-                        }
-                        true
-                    };
-                    if keep { self.occupied(&mut run, here, n); } else { self.erase(here, n)?; run.get_or_insert(here); freed.blocks += 1; freed.sectors += n; }
-                    next = here + n;
-                    break;
-                }
-                if let Some(count) = parse_txn(sector).filter(|&c| here + 1 + c as u64 <= sectors) {
-                    // A commit applies whole or not at all: its digest covers every entry (MC-4.10).
-                    let n = 1 + count as u64;
-                    if !self.dev.read(here, &mut self.buffer[..n as usize * SECTOR]) { return Err(Error::Device); }
-                    match self.commit_entries(count) {
-                        Some(entries) => {
-                            let entries = &entries[..count];
-                            let kept = if sweep {
-                                entries.iter().any(|(name, len, v)| self.find(&name[..*len]).is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)))
-                            } else {
-                                for (name, len, v) in entries { self.keep_version(&name[..*len], *v)?; }
-                                true
-                            };
-                            if kept { self.occupied(&mut run, here, n); } else {
-                                self.erase(here, n)?;
-                                run.get_or_insert(here);
-                                freed.names += count as u32;
-                                freed.sectors += n;
-                            }
-                            next = here + n;
-                        }
-                        None => {
-                            // A damaged commit: its header is counted, its entries are counted as the scan meets them.
-                            self.damaged += 1;
-                            self.occupied(&mut run, here, 1);
-                            next = here + 1;
-                        }
-                    }
-                    break;
-                }
-                if let Some((name, len, v)) = parse_name(sector) {
-                    let name = &name[..len];
-                    let head = self.find(name);
-                    if !sweep {
-                        match head {
-                            Ok(i) => self.heads[i].keep(v),
-                            Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, Head::new(name, v)); }
-                        }
-                    } else if !head.is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)) {
-                        // A version the name no longer keeps.
-                        self.erase(here, 1)?;
-                        run.get_or_insert(here);
-                        freed.names += 1;
-                        freed.sectors += 1;
-                        next = here + 1;
-                        break;
-                    }
-                    self.occupied(&mut run, here, 1);
-                    at += 1;
-                    continue;
-                }
-                if let Some(mut pin) = parse_pin(sector) {
-                    let held = self.pins[..self.pinned].iter().position(|p| p.id == pin.id);
-                    if !sweep {
-                        if held.is_none() {
-                            if self.pinned == self.pins.len() { return Err(Error::Full); }
-                            pin.lba = here;
-                            self.pins[self.pinned] = pin;
-                            self.pinned += 1;
-                            self.next_pin = self.next_pin.max(pin.id.wrapping_add(1));
-                        }
-                    } else if !held.is_some_and(|k| self.pins[k].lba == here) {
-                        self.erase(here, 1)?;
-                        run.get_or_insert(here);
-                        freed.sectors += 1;
-                        next = here + 1;
-                        break;
-                    }
-                    self.occupied(&mut run, here, 1);
-                    at += 1;
-                    continue;
-                }
-                if let Some(n) = parse_free(sector).filter(|&n| here + n <= sectors) {
-                    // A collection stopped in the middle of freeing this: finish it.
-                    if self.dev.writable() { self.erase(here, n)?; run.get_or_insert(here); } else { self.occupied(&mut run, here, n); }
-                    next = here + n;
+                if let Some(n) = parse_frame(sector).filter(|&n| here + n as u64 <= sectors) {
+                    // The record is read again whole to be opened, so the next window starts after it.
+                    next = here + self.record(here, n as u64, sweep, &mut run, &mut freed)?;
                     break;
                 }
                 if sector.iter().any(|&b| b != 0) {
@@ -561,6 +586,90 @@ impl<'a, D: Device> Store<'a, D> {
         }
         freed.free = self.holes[..self.runs].iter().map(|h| h.len).sum();
         Ok(freed)
+    }
+
+    // Opens the sealed record of `n` sectors at `here`: a mount indexes what it holds, a sweep keeps or frees it.
+    // Returns the sectors it covers (a free marker covers more than its own).
+    fn record(&mut self, here: u64, n: u64, sweep: bool, run: &mut Option<u64>, freed: &mut Collected) -> Result<u64, Error> {
+        // What does not open is read as zeros, which no record is.
+        let opened = self.open(here, n as usize)?;
+        let sector = &self.buffer[..SECTOR];
+        let one = opened && n == 1;
+        if let Some((cid, size)) = parse_header(sector).filter(|&(_, size)| opened && record_sectors(size) as u64 == n) {
+            let keep = if sweep {
+                match self.position(&cid.to_bytes()) {
+                    Ok(i) if self.index[i].lba as u64 == here && self.retained(i) => true,
+                    // The indexed copy leaves the index before its sectors are erased, so a failure later in the sweep
+                    // never leaves an erased block acknowledged (audit A05, 175-STO-0012).
+                    Ok(i) if self.index[i].lba as u64 == here => { self.remove(i); false }
+                    _ => false,
+                }
+            } else {
+                let whole = self.intact(&cid, size);
+                if !whole { self.corrupt += 1; }
+                if whole && !self.contains(&cid) {
+                    if self.count == self.limit() { return Err(Error::Full); }
+                    self.insert(cid.to_bytes(), here, size);
+                }
+                true
+            };
+            if !keep { freed.blocks += 1; }
+            return self.settle(keep, here, n, run, freed);
+        }
+        if let Some(count) = parse_txn(sector).filter(|&c| opened && sealed_sectors((1 + c) * SECTOR) as u64 == n) {
+            // A commit applies whole or not at all: its seal and its digest cover every entry (MC-4.10).
+            if let Some(entries) = self.commit_entries(count) {
+                let entries = &entries[..count];
+                let keep = if sweep {
+                    entries.iter().any(|(name, len, v)| self.find(&name[..*len]).is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)))
+                } else {
+                    for (name, len, v) in entries { self.keep_version(&name[..*len], *v)?; }
+                    true
+                };
+                if !keep { freed.names += count as u32; }
+                return self.settle(keep, here, n, run, freed);
+            }
+        }
+        if let Some((name, size, v)) = parse_name(sector).filter(|_| one) {
+            let name = &name[..size];
+            // A sweep frees a version the name no longer keeps.
+            let keep = if sweep { self.find(name).is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)) } else { self.keep_version(name, v)?; true };
+            if !keep { freed.names += 1; }
+            return self.settle(keep, here, n, run, freed);
+        }
+        if let Some(mut pin) = parse_pin(sector).filter(|_| one) {
+            let held = self.pins[..self.pinned].iter().position(|p| p.id == pin.id);
+            let keep = if sweep { held.is_some_and(|k| self.pins[k].lba == here) } else {
+                if held.is_none() {
+                    if self.pinned == self.pins.len() { return Err(Error::Full); }
+                    pin.lba = here;
+                    self.pins[self.pinned] = pin;
+                    self.pinned += 1;
+                    self.next_pin = self.next_pin.max(pin.id.wrapping_add(1));
+                }
+                true
+            };
+            return self.settle(keep, here, n, run, freed);
+        }
+        if let Some(m) = parse_free(sector).filter(|&m| one && here + m <= self.dev.sectors()) {
+            // A collection stopped in the middle of freeing this: finish it.
+            if self.dev.writable() { self.erase(here, m)?; run.get_or_insert(here); } else { self.occupied(run, here, m); }
+            return Ok(m);
+        }
+        // A frame whose seal does not open, or whose record is none of this layout: corrupt. A sweep frees it unless the
+        // index names its place, so a get still reports that block corrupt.
+        if !sweep || self.index.iter().any(|e| e.used() && e.lba as u64 == here) {
+            self.corrupt += 1;
+            return self.settle(true, here, n, run, freed);
+        }
+        freed.blocks += 1;
+        self.settle(false, here, n, run, freed)
+    }
+
+    // Keeps the `n` sectors of a record at `here` occupied, or frees them.
+    fn settle(&mut self, keep: bool, here: u64, n: u64, run: &mut Option<u64>, freed: &mut Collected) -> Result<u64, Error> {
+        if keep { self.occupied(run, here, n); } else { self.erase(here, n)?; run.get_or_insert(here); freed.sectors += n; }
+        Ok(n)
     }
 
     // A version found on the medium: the name keeps it among its newest.
@@ -607,7 +716,7 @@ impl<'a, D: Device> Store<'a, D> {
 
     // Frees `n` sectors at `lba`: a marker first, so a scan after a stop in the middle finishes it, then zeros.
     fn erase(&mut self, lba: u64, n: u64) -> Result<(), Error> {
-        if !self.dev.write(lba, &free_marker(n)) || !self.dev.flush() { return Err(Error::Device); }
+        self.write_record(lba, &free_marker(n))?;
         self.buffer.fill(0);
         let mut at = lba + 1;
         while at < lba + n {
@@ -639,14 +748,60 @@ impl<'a, D: Device> Store<'a, D> {
         self.find_room(n).ok_or(Error::Full)
     }
 
-    // Reads the record at `lba` into the buffer; whether its header names `cid` and `len` and its bytes match.
+    // Seals the record of `len` bytes at buffer[FRAME..], and the zeros after it to the end of its last sector, for its
+    // first sector `lba`; returns its sectors, ready to write.
+    fn seal(&mut self, lba: u64, len: usize) -> usize {
+        let n = sealed_sectors(len);
+        let b = &mut self.buffer[..n * SECTOR];
+        b[FRAME + len..].fill(0);
+        b[..8].copy_from_slice(FRAME_MAGIC);
+        b[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+        // The domain: 0, the volume's, until 308-STO-0023.
+        b[10..12].fill(0);
+        b[12..16].copy_from_slice(&(n as u32).to_le_bytes());
+        let aad = aad(b, lba);
+        let (nonce, tag) = self.keys.seal(self.crypto, &aad, &mut b[FRAME..]);
+        b[16..28].copy_from_slice(&nonce);
+        b[28..FRAME].copy_from_slice(&tag);
+        n
+    }
+
+    // Seals the record of `len` bytes at buffer[FRAME..] for `lba`, writes and flushes it.
+    fn write_sealed(&mut self, lba: u64, len: usize) -> Result<(), Error> {
+        let n = self.seal(lba, len);
+        if !self.dev.write(lba, &self.buffer[..n * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
+        Ok(())
+    }
+
+    fn write_record(&mut self, lba: u64, record: &[u8]) -> Result<(), Error> {
+        self.buffer[FRAME..FRAME + record.len()].copy_from_slice(record);
+        self.write_sealed(lba, record.len())
+    }
+
+    // Reads the `n` sectors at `lba` and opens the record they seal: it then starts the buffer, zeros after it. If the
+    // frame does not cover exactly them, is of another domain or does not open, the buffer is zeros and false returned.
+    fn open(&mut self, lba: u64, n: usize) -> Result<bool, Error> {
+        let b = &mut self.buffer[..n * SECTOR];
+        if !self.dev.read(lba, b) { return Err(Error::Device); }
+        let framed = parse_frame(b) == Some(n) && b[10..12] == [0, 0];
+        let (aad, nonce, tag) = (aad(b, lba), b[16..28].try_into().unwrap(), b[28..FRAME].try_into().unwrap());
+        if !framed || !self.crypto.open(&self.keys.seal, &nonce, &aad, &mut b[FRAME..], &tag) { b.fill(0); return Ok(false); }
+        b.copy_within(FRAME.., 0);
+        b[n * SECTOR - FRAME..].fill(0);
+        Ok(true)
+    }
+
+    // Opens the record at `lba`; whether it is the block `cid` of `len` bytes, whole. Its bytes then follow the header.
     fn verify(&mut self, lba: u64, cid: &Cid, len: usize) -> Result<bool, Error> {
-        let n = record_sectors(len);
-        if !self.dev.read(lba, &mut self.buffer[..n * SECTOR]) { return Err(Error::Device); }
-        let data = &self.buffer[HEADER..HEADER + len];
-        let whole = parse_header(&self.buffer[..SECTOR]) == Some((*cid, len)) && cid.matches(data) && typed(cid.codec(), data);
+        let whole = self.open(lba, record_sectors(len))? && self.intact(cid, len);
         if !whole { self.corrupt += 1; }
         Ok(whole)
+    }
+
+    // Whether the opened record in the buffer is the block `cid` of `len` bytes: its header names it, its bytes match.
+    fn intact(&self, cid: &Cid, len: usize) -> bool {
+        let data = &self.buffer[HEADER..HEADER + len];
+        parse_header(&self.buffer[..SECTOR]) == Some((*cid, len)) && cid.matches(data) && typed(cid.codec(), data)
     }
 
     // The slot holding `key`, or the empty slot where it would go (the number of slots when none is empty).
@@ -802,7 +957,7 @@ impl<'a, D: Device> Store<'a, D> {
         let previous = self.find(name).ok().and_then(|i| self.heads[i].latest().root());
         let v = Version { version: current + 1, owner, root: root.to_bytes(), points: true, size };
         self.claim(lba, 1);
-        if !self.dev.write(lba, &name_record(name, &v, previous)) || !self.dev.flush() { return Err(Error::Device); }
+        self.write_record(lba, &name_record(name, &v, previous)[..NAME_RECORD])?;
         match self.find(name) { Ok(i) => self.heads[i].keep(v), Err(i) => self.add(i, Head::new(name, v)) }
         Ok(v.version)
     }
@@ -821,7 +976,7 @@ impl<'a, D: Device> Store<'a, D> {
         let previous = self.heads[i].latest().root();
         let v = Version { version: expected + 1, owner, ..Version::EMPTY };
         self.claim(lba, 1);
-        if !self.dev.write(lba, &name_record(name, &v, previous)) || !self.dev.flush() { return Err(Error::Device); }
+        self.write_record(lba, &name_record(name, &v, previous)[..NAME_RECORD])?;
         self.heads[i].keep(v);
         Ok(v.version)
     }
@@ -848,7 +1003,8 @@ impl<'a, D: Device> Store<'a, D> {
         }
         if self.names + new > self.heads.len() { return Err(Error::Full); }
         // Room first: a collection it starts may free blocks whose lease ended, and the checks below see it.
-        let lba = self.room(1 + n as u64)?;
+        let size = (1 + n) * SECTOR;
+        let lba = self.room(sealed_sectors(size) as u64)?;
         let mut extra = [([0u8; cid::BYTES], 0u64); COMMIT_MAX];
         for (k, u) in updates.iter().enumerate() {
             if let Some(root) = u.root {
@@ -859,7 +1015,7 @@ impl<'a, D: Device> Store<'a, D> {
         // A removal adds a zero root of no size: it changes nothing.
         if self.retained_by(owner, &extra[..n]) > self.quota { return Err(Error::Quota); }
         let mut versions = [0u64; COMMIT_MAX];
-        let record = &mut self.buffer[..(1 + n) * SECTOR];
+        let record = &mut self.buffer[FRAME..FRAME + size];
         record.fill(0);
         record[..8].copy_from_slice(TXN_MAGIC);
         record[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
@@ -876,8 +1032,8 @@ impl<'a, D: Device> Store<'a, D> {
         }
         let check = txn_digest(record);
         record[16..48].copy_from_slice(&check);
-        self.claim(lba, 1 + n as u64);
-        if !self.dev.write(lba, &self.buffer[..(1 + n) * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
+        self.claim(lba, sealed_sectors(size) as u64);
+        self.write_sealed(lba, size)?;
         for (k, u) in updates.iter().enumerate() {
             let v = Version { version: versions[k], owner, root: u.root.map_or([0; cid::BYTES], |r| r.to_bytes()), points: u.root.is_some(), size: extra[k].1 };
             self.keep_version(u.name, v)?;
@@ -901,7 +1057,7 @@ impl<'a, D: Device> Store<'a, D> {
         if self.retained_by(owner, &[(root.to_bytes(), size)]) > self.quota { return Err(Error::Quota); }
         let pin = Pin { id: self.next_pin, owner, root: root.to_bytes(), lba, size };
         self.claim(lba, 1);
-        if !self.dev.write(lba, &pin_record(&pin)) || !self.dev.flush() { return Err(Error::Device); }
+        self.write_record(lba, &pin_record(&pin)[..PIN_RECORD])?;
         self.next_pin = self.next_pin.wrapping_add(1).max(1);
         self.pins[self.pinned] = pin;
         self.pinned += 1;
@@ -957,16 +1113,12 @@ impl<'a, D: Device> Store<'a, D> {
         if self.count == self.limit() { self.collect()?; }
         if self.count == self.limit() { return Err(Error::Full); }
         let lba = self.room(n)?;
-        let record = &mut self.buffer[..n as usize * SECTOR];
-        record.fill(0);
+        let record = &mut self.buffer[FRAME..FRAME + HEADER + data.len()];
         record[..HEADER].copy_from_slice(&header(&cid, data.len()));
-        record[HEADER..HEADER + data.len()].copy_from_slice(data);
-        // Only a header sector starts with a record's magic, so a scan that resumes after a damaged sector cannot take
-        // a client's bytes for a record of any kind.
-        if record.chunks(SECTOR).skip(1).any(|s| [RECORD_MAGIC, NAME_MAGIC, FREE_MAGIC, PIN_MAGIC, TXN_MAGIC].contains(&s[..8].try_into().unwrap())) { return Err(Error::Invalid); }
+        record[HEADER..].copy_from_slice(data);
         // The sectors are taken even if the write fails: they may hold part of it now, and are not written again.
         self.claim(lba, n);
-        if !self.dev.write(lba, &self.buffer[..n as usize * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
+        self.write_sealed(lba, HEADER + data.len())?;
         self.insert(cid.to_bytes(), lba, data.len());
         Ok(cid)
     }

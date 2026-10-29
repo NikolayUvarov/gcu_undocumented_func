@@ -56,6 +56,9 @@ options:  (before the command) --baud <rate>  serial rate (default 115200)
           --timeout <ms>              how long one try waits for an answer (default from the rate)
           --tries <n>                 tries for each request (default 8)
           --turnaround <us>           serve: pause before each answer, for RS-485 converters (default 500)
+          --address <n>               on a line shared by several machines (RS-485, 800-LNK-0026): the other end's
+                                      address, 1 to 247, from `address=<n>` in its link.conf; serve: this end's own.
+                                      Without it, a line with one machine, as before
           --payload <bytes>           the largest frame's payload, 64 to 1024 (default 1024): smaller for a noisy line,
                                       or for QEMU's emulated converter, whose buffer holds 384 bytes";
 
@@ -99,11 +102,11 @@ fn rate(bytes: u64, t: Duration) -> String {
     format!("{:.1} s, {:.1} KB/s", s, bytes as f64 / s / 1000.0)
 }
 
-struct Options { baud: u32, timeout: Option<u32>, tries: u32, turnaround_us: u64, payload: usize }
+struct Options { baud: u32, timeout: Option<u32>, tries: u32, turnaround_us: u64, payload: usize, address: u8 }
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let mut o = Options { baud: 115200, timeout: None, tries: 8, turnaround_us: 500, payload: linkproto::frame::MAX_PAYLOAD };
+    let mut o = Options { baud: 115200, timeout: None, tries: 8, turnaround_us: 500, payload: linkproto::frame::MAX_PAYLOAD, address: 0 };
     let num = |args: &mut Vec<String>, i: usize| -> u64 {
         let v = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or_else(|| die(format!("{} takes a number", args[i])));
         args.drain(i..i + 2);
@@ -118,6 +121,11 @@ fn main() {
             "--tries" => o.tries = num(&mut args, i).max(1) as u32,
             "--turnaround" => o.turnaround_us = num(&mut args, i),
             "--payload" => o.payload = num(&mut args, i) as usize,
+            "--address" => {
+                let a = num(&mut args, i);
+                if !(1..=linkproto::frame::ADDRESS_MAX as u64).contains(&a) { die(format!("--address is 1 to {}", linkproto::frame::ADDRESS_MAX)); }
+                o.address = a as u8;
+            }
             "-h" | "--help" => { println!("{USAGE}"); return; }
             _ => { i += 1; words += 1; }
         }
@@ -138,6 +146,7 @@ fn main() {
     let mut c = Client::new(port);
     c.master.timeout_ms = wait;
     c.master.tries = o.tries;
+    c.master.address = o.address;
     c.max_payload = o.payload;
     let mut theirs = [0u8; 64];
     let (hello, n) = c.hello("mindlink", &mut theirs).unwrap_or_else(|e| die(format!("{spec}: {}", explain(e))));
@@ -453,7 +462,8 @@ fn serve(mut port: port::Port, args: &[String], o: &Options) {
     let host = std::env::var("COMPUTERNAME").or_else(|_| fs::read_to_string("/proc/sys/kernel/hostname")).unwrap_or_default();
     service.set_name(&format!("mindlink serve on {}", host.trim()));
     let mut slave = Slave::new(port);
-    eprintln!("serving {} on {name}", dir.display());
+    slave.address = o.address;
+    eprintln!("serving {} on {name}{}", dir.display(), if o.address != 0 { format!(", address {} on a shared line", o.address) } else { String::new() });
     loop {
         if let Err(e) = slave.serve(&mut service, 1000) { die(explain(e)); }
         if slave.line.failed() {

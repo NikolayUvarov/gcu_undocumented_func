@@ -1,0 +1,174 @@
+{
+  "checks": [
+    "real-model train/validation pairs recomputed against exact teacher; no test activations",
+    "group/text/token leakage and source/shape/row bounds",
+    "pruned/linear/cubic/SVD initialization with common train-only channel map",
+    "train-only grid and full-parameter analytic SGD",
+    "independent channel map, four-step history and selected weights match PyTorch",
+    "serialized initial/current/best/config/order/step and explicit no-RNG SGD continue exactly",
+    "corrupt checkpoint hash, invalid config and existing outputs refused",
+    "independent calibrate/train/resume/export CLI cycle and decoder package loading"
+  ],
+  "commands": [
+    "bash nrl/tools/check.sh",
+    "generate_local_fixture.py --output nrl/tests/fixtures/local-v0/expected.json --check"
+  ],
+  "example_files_sha256": {
+    "calibration.json": "c1fec5ff4145ec13ab4be68a55224c6edb80f05d25df958d0bb8359b92aae65e",
+    "complete.json": "7ca3cc7fadca142ee631878318101511dbb253b789871334301e3bf2f195136a",
+    "partial.json": "4834ec78188bfb0b0b5e5a36e46eeba80bf4a0dc95eeffa38e57e996c0020d02",
+    "report.json": "4e6cb39d745d71578cad3152157ebc9438ee892f02c7743ec82fcf7fa5aab24d"
+  },
+  "external_oracle": "independent vectorized PyTorch trained-decoder traces, training-only energy ranking and four SGD steps",
+  "external_tolerance": "1e-12 + 1e-10*abs(reference)",
+  "fast_test_staging_commit": "66c0f18e0a86f68471c11d310464eeb8b9cd995b",
+  "frozen_next_study_profile_sha256": "da512b009bf26720d4014a02f252995fa6521d1446d45f059ad023748ee3fab2",
+  "full_repository_gate": "pending integrator landing; NRL check is explicit until KRN wiring lands",
+  "limitations": [
+    "small existing artifact and SVD limits remain; source dense block uses a separate bounded decoder inventory",
+    "source dense storage is retained; fewer effective parameters are not disk/RSS saving",
+    "local block metrics do not establish whole-model quality, speed, compression or native guarantees",
+    "frozen supplied document/group declarations do not infer unknown statistical relationships",
+    "resume equality is for the recorded host/executable/numerical profile",
+    "full task evaluation/benchmark, plans/search and student-input adaptation continue in T08-T10"
+  ],
+  "local_report": {
+    "calibration_id": "0c609cc9c0dc682223e3e1218d911ffba81934c54531483d14ceb088d622b6eb",
+    "checkpoint_id": "63693b91255875e2bb495ad6880e43d538f56aca5672da86b55d677669af6e22",
+    "completed_steps": 8,
+    "config_id": "2dde0621fa381c46c67eb763b4bd88b3db1c8be96261b6de88022680584ad496",
+    "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+    "exact_resume_profile": "same scalar f64 executable/host, stored data and full-batch order",
+    "initial": {
+      "step": 0,
+      "train": {
+        "mae": 0.12496723965840165,
+        "max_absolute_error": 0.8363327327156423,
+        "mse": 0.026536505415769854,
+        "near_zero_energy": false,
+        "nmse": 0.3069165516789124,
+        "outside_grid_fraction": 0.0,
+        "target_mean_energy": 0.08646163027249053,
+        "values": 4096
+      },
+      "validation": {
+        "mae": 0.1526682020904831,
+        "max_absolute_error": 1.7260110458310909,
+        "mse": 0.047289090717353204,
+        "near_zero_energy": false,
+        "nmse": 0.5765502441243293,
+        "outside_grid_fraction": 0.002717391304347826,
+        "target_mean_energy": 0.082020762629589,
+        "values": 2944
+      }
+    },
+    "layer": 0,
+    "native_execution": false,
+    "next_data_cursor": 0,
+    "optimizer": "full-batch-sgd/0",
+    "parameter_summary": {
+      "bias_values": 0,
+      "channels": 32,
+      "input_width": 64,
+      "kind": "gated",
+      "knots": 8,
+      "numeric_values": 6464,
+      "output_width": 64,
+      "rank": null,
+      "representation": "spline-linear",
+      "schema": "nrl.block/5",
+      "trainable_values": 6400
+    },
+    "retained_indices": [
+      12,
+      15,
+      20,
+      25,
+      40,
+      48,
+      52,
+      54,
+      60,
+      66,
+      70,
+      76,
+      78,
+      83,
+      99,
+      100,
+      112,
+      118,
+      121,
+      126,
+      127,
+      129,
+      130,
+      132,
+      134,
+      135,
+      136,
+      146,
+      160,
+      165,
+      167,
+      171
+    ],
+    "rng_state": "none; deterministic source initialization and supplied document/token order",
+    "schema": "nrl.local-report/0",
+    "selected": {
+      "step": 8,
+      "train": {
+        "mae": 0.12492316630884429,
+        "max_absolute_error": 0.8360578534604839,
+        "mse": 0.02652026558279305,
+        "near_zero_energy": false,
+        "nmse": 0.30672872462862866,
+        "outside_grid_fraction": 0.0,
+        "target_mean_energy": 0.08646163027249053,
+        "values": 4096
+      },
+      "validation": {
+        "mae": 0.1526451252004954,
+        "max_absolute_error": 1.7258405708071392,
+        "mse": 0.047279397185254195,
+        "near_zero_energy": false,
+        "nmse": 0.5764320602427335,
+        "outside_grid_fraction": 0.002717391304347826,
+        "target_mean_energy": 0.082020762629589,
+        "values": 2944
+      }
+    },
+    "selected_step": 8,
+    "source_hidden": 172,
+    "teacher_model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+    "transform": {
+      "knots": 8,
+      "rank": 0,
+      "representation": "spline-linear",
+      "schema": "nrl.transform/0",
+      "width": 32
+    }
+  },
+  "log_sha256": "27e50c5b067fc5bc7f4ad255c7128aef5e7224421b793e2d5ff7d98d7e2795b8",
+  "oracle_sha256": "6c43e7f9c7f2863843d17dd988c71f788365f8b2e80149fbfa691af6a0b9b697",
+  "portable_release_builds": [
+    "x86_64-unknown-none",
+    "aarch64-unknown-none-softfloat"
+  ],
+  "portable_scope": "rlibs only; not native execution",
+  "raw_log": "local-check-2026-10-26.txt",
+  "recorded_date": "2026-10-26",
+  "regeneration": "byte-identical",
+  "rust_tests": {
+    "failed": 0,
+    "ignored": 0,
+    "local_tests": 5,
+    "passed": 62
+  },
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "saved_example": "local-example-2026-10-26",
+  "schema": "nrl.local-check/0",
+  "task": "900-NRL-0013",
+  "test_location": "own NRL branch; no tests on fast-test",
+  "tested_commit": "04901a53b7272eba72b89e71cd5412018a816013"
+}

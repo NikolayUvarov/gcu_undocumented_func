@@ -20,6 +20,9 @@ The maintainer lends agents real machines for builds and tests through **Effecto
 | `DESKTOP-i7-930-wsl-u26` | Ubuntu 26.04.1 on the same machine | the agent's own, `un`: give **no `run_as`** | Rust only (rustup, the kernel track's clone): no C linker, QEMU or firmware until `setup_build_env.sh` runs as root there. |
 | `un-rizen_2a8b108d5593` (`un-rizen-service`) | Ubuntu 24.04.1 on the machine itself (no WSL; Linux 7.0), AMD Ryzen 9 5900HX (8 cores, 16 threads), 30 GB RAM, 97 GB free on NVMe, `/dev/kvm` | the agent runs as root, as a service: give `"run_as": "un"` for work | Builds, host tests, QEMU suites under TCG (x86 and aarch64), gates: **4 queues for every track and agent** (section 3, rule 1). **No reboots.** |
 | `x32-128_f5832ee52625` (`i9-128`) | Ubuntu 22.04.5 on the machine itself (Linux 6.8), Intel Core i9-13900K (24 cores, 32 threads), 125 GB RAM, 91 GB free of 916 GB, `/dev/kvm` | the agent's own, `gater`: give **no `run_as`**. Its commands run in `sh`: start a script with `bash -s`. Clones in `/home/gater/mind-core/<TRK>/`, `TMPDIR=/tmp/mind-<TRK>` | Builds, host tests, QEMU suites and gates (the maintainer, 2026-10-26), once `scripts/setup_build_env.sh` has run there as root: until then it has QEMU 6.2 for x86 only, no AAVMF and no Java. **No reboots.** **Not for gates now (2026-10-26):** gcc crashed while building QEMU at `-j32` (`internal compiler error: Illegal instruction`, segmentation faults in `cc1`), and the machine hung during the next such build and did not boot again. The maintainer checks the hardware; nothing runs there until they say it is stable. |
+| `acc-1_e9f12f8b0550` (`R-GATE-77`) | Ubuntu 22.04.3 on the machine itself (Linux 6.8), Intel Core i3-12100 (4 cores, 8 threads), 31 GB RAM, 198 GB free in `/home`, `/dev/kvm` | the agent's own, `un`: give **no `run_as`**. Its commands run in `sh`: no `set -o pipefail`, or start a script with `bash -s`. Clones in `/home/un/mind-core/<TRK>/`, `TMPDIR=/tmp/mind-<TRK>` | Builds, host tests, QEMU suites and gates, x86 and aarch64 (the maintainer, 2026-10-28): `parallel_limit` 2, the landing gate's lane `acc1`. Other accounts live on it: touch none of their files or services. **No reboots.** |
+| `acc-2_a01a5832facb` (`R-GATE-78`) | Ubuntu 22.04.3 on the machine itself (Linux 5.15), Intel Core i3-12100 (4 cores, 8 threads), 31 GB RAM, 331 GB free in `/home`, `/dev/kvm` | as on `acc-1` | as on `acc-1`; the landing gate's lane `acc2` |
+| `s64_ff4f6639826a` (`R-GATE-S64G`) | Fedora 27 (Linux 4.18), Intel Core i7-8700K (6 cores, 12 threads), 62 GB RAM, 77 GB free in `/home`, `/dev/kvm` | the agent's own, `un`: give no `run_as`; `sudo` asks for a password | **Not for gates now (the maintainer, 2026-10-28):** QEMU 2.10, Python 3.6, git 2.14, no C compiler, no containers. It needs a newer system before `scripts/setup_build_env.sh` (Ubuntu only) can prepare it. |
 
 - **What is installed on `PCU_585240b00e8a`** (and who did it is in section 6):
   - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`;
@@ -81,6 +84,34 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - "files and block writes".
 
   Run those three with no second group of your own beside them. Rerun one that failed under load once, with nothing of yours beside it, before you call it a fault in the code.
+- **What is on `acc-1_e9f12f8b0550` and `acc-2_a01a5832facb`**, the maintainer's gate machines of 2026-10-28 (section 6):
+  - everything `scripts/setup_build_env.sh` installs, from Ubuntu 22.04, as on PCU: QEMU 8.2.2 built from the signed qemu.org release in `/opt/qemu-8.2.2` (first in `PATH` through `/usr/local/bin`; Ubuntu's 6.2 stays in `/usr/bin`), OVMF and AAVMF 2022.02, `swtpm` 0.6.3, `sbsigntool` 0.9.4, `python3-virt-firmware` 24.1.1, OpenJDK 11, `build-essential`, Python 3.10;
+  - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`; `un` is in the `kvm` group from the agent's next start, and the suites run under TCG anyway;
+  - the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`. Another track clones its own into `/home/un/mind-core/<TRK>/` as `un` (rule 4): the toolchain in `~un/.rustup` is shared.
+- **Their packages are PCU's, not CI's** (Ubuntu 22.04: the firmware 2022.02, `swtpm` 0.6, Python 3.10, the plain qemu.org QEMU). Say so where you report a run: "acc-1 through Effector, Ubuntu 22.04, QEMU 8.2.2 (qemu.org), OVMF 2022.02, TCG".
+- **Measured on 2026-10-28** (`main` 0e006ca2, one lane on each machine, seconds; beside them un-rizen's: round 39's for the x86 groups, those of 2026-10-14 for the builds and aarch64):
+
+  | Group | `acc-1` or `acc-2` | un-rizen |
+  |---|---|---|
+  | build (x86) | 311 (acc-1) | 325 |
+  | build (x86 test programs) | 61 (acc-1) | 34 |
+  | build (aarch64) | 392 (acc-2) | 185 |
+  | x86: one CPU | 121 | 127 |
+  | x86: no PIT | 122 | 128 |
+  | x86: x2APIC | 182 | 189 |
+  | x86: scheduling, isolation, heap | 111 | 112 |
+  | aarch64: boot and fault containment | 173 (acc-2) | 93 |
+  | aarch64: NVMe boot disk | 82 (acc-2) | 102 |
+  | x86: keys, shell, tools | 1010 (acc-1) | 1047 |
+  | x86: files and block writes | 1047 (acc-2) | 1032 |
+  | x86: services, storage, audio | 561 (acc-2) | 541 |
+  | x86: RAM above 4 GiB | 1092 (acc-2) | 1079 |
+  | x86: reproducible build | 724 (acc-2) | 509 |
+
+  All these passed. The long x86 groups take about as long as on un-rizen, one lane on each machine.
+- **What fails there, because of Python 3.10:**
+  - the host tests: `scripts/models.py` and `tests/models_host.rs` read TOML with `tomllib` (Python 3.11). `scripts/ci_local.sh` now names it among the missing tools for the host part. Run the host part on un-rizen or i9;
+  - the Effector suites: `tests/effector_server.py` answers 400 to every POST without a query, as Python 3.10's `parse_qs` refuses an empty query in strict mode (`issues/requests-EFF.md`). The groups with them, x86 "boot, display, network, TLS, shell, memory, clock" and aarch64 "files, network and TLS", run elsewhere until EFF's fix.
 - **Setting up another machine.** `scripts/setup_build_env.sh` installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone. Run it once as root, for example from Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
 
 ## 2. The key
@@ -139,7 +170,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
   3. Section 1: what each machine has (the aarch64 tools, CI's packages or others), the user to give, and how fast it is.
 - **Which.** The machine that has what the work needs and the most room for it:
   - a free queue first: work queued behind other tracks' costs more than a slower machine that is free;
-  - among the free ones, the faster: today `un-rizen-service` (4 queues), then `i9` (5 queues, but shared and under WSL), then PCU (its QEMU work goes sequential), then `DESKTOP-i7-930-wsl-u24`;
+  - among the free ones, the faster: today `un-rizen-service` (4 queues), then `acc-1` and `acc-2` (2 queues each, x86 groups as fast as un-rizen's), then `i9` (5 queues, but shared and under WSL), then PCU (its QEMU work goes sequential), then `DESKTOP-i7-930-wsl-u24`;
   - a machine already loaded with other tracks' QEMU groups only when nothing else is free: under load a group runs past its timeouts, and its failure says nothing of the change (on 2026-10-14 i9 at a load of 39 took over an hour on a group that takes 16 minutes);
   - the parts of a gate may run on different machines, and every group must pass on the same commit.
 - **A machine missing from section 1** has a configuration nobody described: describe it there, with the maintainer, before its runs count as evidence.
@@ -195,7 +226,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 ## 4. Gates on a remote machine
 
 - **A gate run through Effector is a local gate** in the sense of [AGENTS.md](../AGENTS.md), section 4, when every group of `scripts/ci_local.sh` passes.
-- **The landing queue's gate** (AGENTS.md, section 4, since 2026-10-21) runs this way. `scripts/land.sh gate` spreads every group of `scripts/ci_local.sh --list` over the machines' lanes and runs a failed group once more, alone. It sends the key only from the file `$EFFECTOR_KEY_FILE` (section 2). The presets name its lanes: `full`, and `no-i9` while another track's gate loads i9.
+- **The landing queue's gate** (AGENTS.md, section 4, since 2026-10-21) runs this way. `scripts/land.sh gate` spreads every group of `scripts/ci_local.sh --list` over the machines' lanes and runs a failed group once more, alone. It sends the key only from the file `$EFFECTOR_KEY_FILE` (section 2). The presets name its lanes: `full`, and `no-i9` while another track's gate loads i9; `i9-on-rz`, which rounds 34 to 39 used while i9 was offline; `wide` since 2026-10-28, with `acc-1` and `acc-2` taking the long x86 groups, and `wide-no-i9` while i9 is busy.
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 
@@ -242,6 +273,8 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 | Date | Machine | Change | By, for |
 | 2026-10-25 | `un-rizen_2a8b108d5593` | **A permission, no change made yet.** The kernel session may switch this machine to MIND Core: root only to set `BootNext` to the MIND Core stick with `scripts/boot_switch.py` (000-KRN-0124), then the reboot; the next boot returns to Linux. Only once the maintainer says the stick and `effector485` are ready. The second NVMe disk (04:00.0, someone else's Windows disk) is never written. Each run gets a row of its own here | the maintainer's word, for 213 (the network first) |
 | 2026-10-26 | `x32-128_f5832ee52625` | As `gater`, nothing as root: the kernel track's clone in `/home/gater/mind-core/KRN/gcu_undocumented_func`; rustup 1.29.2 in `~gater/.cargo` with the toolchain of `rust-toolchain.toml` (nightly-2026-10-02); `scripts/setup_build_env.sh` of e17e215b copied to `/home/gater/mind-core/setup_build_env.sh` (SHA-256 `acdc2543…`) for the maintainer to run as root: `sudo bash /home/gater/mind-core/setup_build_env.sh gater /home/gater/mind-core/KRN/gcu_undocumented_func`. It installs the missing packages (`qemu-system-arm`, `qemu-efi-aarch64`, `default-jre-headless`, `python3-virt-firmware` 24.1.1, QEMU's build dependencies), builds QEMU 8.2.2 from the signed qemu.org release into `/opt/qemu-8.2.2` (the signature check was tried as `gater` first: good) and adds `gater` to `kvm` | KRN, at the maintainer's request (gates on this machine) |
+| 2026-10-28 | `acc-1_e9f12f8b0550`, `acc-2_a01a5832facb` | As `un`: the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`; rustup in `~un/.cargo` with the toolchain of `rust-toolchain.toml` (nightly-2026-10-02). As root, through `un`'s `sudo`: `scripts/setup_build_env.sh un <the clone>` of `main` 0e006ca2 (SHA-256 `39572de5…`), with `NEEDRESTART_SUSPEND=1` so that no service restarted. It installed `build-essential`, `pkg-config`, `qemu-system-arm`, `ovmf`, `qemu-efi-aarch64`, `swtpm`, `swtpm-tools`, `default-jre-headless`, `python3-virt-firmware` and QEMU's build dependencies, built QEMU 8.2.2 from the signed qemu.org release into `/opt/qemu-8.2.2` with links in `/usr/local/bin`, and added `un` to `kvm` | KRN, at the maintainer's request (gates on these machines) |
+| 2026-10-28 | `s64_ff4f6639826a` | Nothing: read-only questions (versions, free space) | KRN; out of gates until its system is newer (the maintainer) |
 |---|---|---|---|
 | 2026-10-09 | `PCU_585240b00e8a` | Build environment for `un`: `git`, `build-essential`, `curl`, `pkg-config`, QEMU 6.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), OVMF, AAVMF, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `ffmpeg`; rustup in `~un/.cargo`; the kernel track's clone | KRN, at the maintainer's request |
 | 2026-10-10 | `PCU_585240b00e8a` | The Ubuntu Cloud Archive (caracal) added for QEMU 8.2 and removed again: it has no QEMU for 22.04 | KRN, at the maintainer's request |

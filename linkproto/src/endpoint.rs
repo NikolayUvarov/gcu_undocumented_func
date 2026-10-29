@@ -77,6 +77,11 @@ pub trait Line {
     /// Before the slave answers: time for a half-duplex line to turn round (RS-485 converters switch direction after
     /// the last byte). Nothing by default.
     fn turnaround(&mut self) {}
+    /// Before a master's exchange: a line that several masters share, each in its own thread, is taken for the whole
+    /// exchange, so that their requests and answers never interleave (800-LNK-0026). Nothing by default.
+    fn claim(&mut self) {}
+    /// After a master's exchange: the line given back.
+    fn release(&mut self) {}
 }
 
 /// What counts of an end's traffic.
@@ -93,20 +98,30 @@ pub struct Master<L: Line> {
     pub timeout_ms: u32,
     pub tries: u32,
     pub stats: Stats,
+    /// The slave this master asks on a shared line (800-LNK-0026): 1 to `frame::ADDRESS_MAX` in version 2 frames, or 0
+    /// for a line with one slave (version 1, as before).
+    pub address: u8,
 }
 
 impl<L: Line> Master<L> {
     /// The first sequence number comes from the clock, so a restarted master's requests do not look like its old ones.
     pub fn new(mut line: L) -> Self {
         let seq = line.now_ms() as u16;
-        Self { line, decoder: Decoder::new(), seq, wire: [0; MAX_WIRE], chunk: [0; 256], timeout_ms: 500, tries: 8, stats: Stats::default() }
+        Self { line, decoder: Decoder::new(), seq, wire: [0; MAX_WIRE], chunk: [0; 256], timeout_ms: 500, tries: 8, stats: Stats::default(), address: 0 }
     }
 
     /// Sends a request and waits for its answer: the answer's payload in `reply`, and its length.
     pub fn call(&mut self, channel: u8, kind: u8, payload: &[u8], reply: &mut [u8]) -> Result<usize, Error> {
+        self.line.claim();
+        let r = self.exchange(channel, kind, payload, reply);
+        self.line.release();
+        r
+    }
+
+    fn exchange(&mut self, channel: u8, kind: u8, payload: &[u8], reply: &mut [u8]) -> Result<usize, Error> {
         self.seq = self.seq.wrapping_add(1);
         let seq = self.seq;
-        let n = frame::encode(&Header { channel, kind, flags: 0, seq }, payload, &mut self.wire).ok_or(Error::TooBig)?;
+        let n = frame::encode(&Header { address: self.address, channel, kind, flags: 0, seq }, payload, &mut self.wire).ok_or(Error::TooBig)?;
         self.stats.requests += 1;
         for attempt in 0..self.tries {
             if attempt > 0 { self.stats.retries += 1; }
@@ -119,8 +134,8 @@ impl<L: Line> Master<L> {
                 for i in 0..got {
                     let Some(h) = self.decoder.push(self.chunk[i]) else { continue };
                     // A request is this end's own echo (some RS-485 converters hear what they send); an answer to an earlier
-                    // request is stale.
-                    if h.kind & kind::REPLY == 0 || h.seq != seq || h.channel != channel { continue; }
+                    // request is stale; one from another slave's address is not this exchange's.
+                    if h.kind & kind::REPLY == 0 || h.seq != seq || h.channel != channel || h.address != self.address { continue; }
                     let p = self.decoder.payload();
                     if h.kind == kind::ERROR { return Err(Error::Refused(p.first().copied().unwrap_or(0))); }
                     if h.kind != kind | kind::REPLY { return Err(Error::Protocol); }
@@ -151,12 +166,15 @@ pub struct Slave<L: Line> {
     payload: [u8; MAX_PAYLOAD],
     reply: [u8; MAX_PAYLOAD],
     pub stats: Stats,
+    /// This slave's address on a shared line (800-LNK-0026): it answers only version 2 frames to it. 0, the default, is
+    /// a line with one slave: it answers only version 1 frames, so a master that addresses others never hears it.
+    pub address: u8,
 }
 
 impl<L: Line> Slave<L> {
     pub fn new(line: L) -> Self {
         Self { line, decoder: Decoder::new(), last: None, answer: [0; MAX_WIRE], answer_len: 0, chunk: [0; 256], payload: [0; MAX_PAYLOAD],
-               reply: [0; MAX_PAYLOAD], stats: Stats::default() }
+               reply: [0; MAX_PAYLOAD], stats: Stats::default(), address: 0 }
     }
 
     /// Reads what the line has, waiting at most `timeout_ms`, and answers each whole request; how many it answered.
@@ -165,8 +183,9 @@ impl<L: Line> Slave<L> {
         let mut answered = 0;
         for i in 0..got {
             let Some(h) = self.decoder.push(self.chunk[i]) else { continue };
-            // An answer is this end's own echo.
-            if h.kind & kind::REPLY != 0 { continue; }
+            // An answer is this end's own echo, or another slave's on a shared line; a request to another address is
+            // not this slave's.
+            if h.kind & kind::REPLY != 0 || h.address != self.address { continue; }
             self.stats.requests += 1;
             let p = self.decoder.payload();
             let id = (h.channel, h.kind, h.seq, crate::crc::crc32c(p));
@@ -180,7 +199,7 @@ impl<L: Line> Slave<L> {
                     Ok(n) => (h.kind | kind::REPLY, n.min(MAX_PAYLOAD)),
                     Err(code) => { self.reply[0] = code; (kind::ERROR, 1) }
                 };
-                self.answer_len = frame::encode(&Header { channel: h.channel, kind: k, flags: 0, seq: h.seq }, &self.reply[..n], &mut self.answer).ok_or(Error::TooBig)?;
+                self.answer_len = frame::encode(&Header { address: self.address, channel: h.channel, kind: k, flags: 0, seq: h.seq }, &self.reply[..n], &mut self.answer).ok_or(Error::TooBig)?;
                 self.last = Some(id);
             }
             self.line.turnaround();

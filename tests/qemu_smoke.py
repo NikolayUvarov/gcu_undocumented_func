@@ -38,6 +38,7 @@ import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
+import http_api_stub  # noqa: E402
 import release as release_tool  # noqa: E402
 import link_update  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
@@ -1820,7 +1821,8 @@ CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota hold
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
                "launch: stop and notice", "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "a replace refused", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "its own directory", "system/own/ hidden", "the boot", "the modes", "a mode change refused",
+               "a replace refused", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -1856,8 +1858,8 @@ def check_tool_check(vm):
 
 # bench's rows that every suite machine has (176-KRN-0064); data/ and log: are skipped where the disk has neither, the
 # camera is the gateway's synthetic source, audio_gw runs on x86 only.
-BENCH_ROWS = ["ram: write 2 MiB", "ram: read 2 MiB", "ram: 1 KiB file cycle", "vfs_server: attributes", "sysmon: memory figures",
-              "rtc: the time", "loader: inspect", "SHA-256 of 4 MiB", "SHA-256 of 64 bytes"]
+BENCH_ROWS = ["ram: write 2 MiB", "ram: read 2 MiB", "ram: 1 KiB file cycle", "own: 1 KiB file cycle", "vfs_server: attributes",
+              "sysmon: memory figures", "rtc: the time", "loader: inspect", "SHA-256 of 4 MiB", "SHA-256 of 64 bytes"]
 
 
 def bench_tool_check(vm):
@@ -1882,11 +1884,34 @@ def bench_tool_check(vm):
     require(vm.command("bench nosuch"), "bench: no group nosuch")
 
 
+def own_directory_check(vm):
+    """000-KRN-0170: a program run by its name finds what it wrote in its own directory on the next run; two names get
+    two directories (bench's file is not in check's); neither the user's files client nor a program's reaches them."""
+    def own_row():
+        output = vm.command("check files", timeout=120)
+        rows = {name.strip(): (mark, detail.strip()) for mark, name, detail in CHECK_ROW.findall(output.replace("\r", ""))}
+        mark, detail = rows.get("its own directory", ("?", ""))
+        found = re.match(r"run (\d+); it holds (.*)$", detail)
+        assert mark == "✓" and found, (rows.get("its own directory"), output[-2000:])
+        assert rows.get("system/own/ hidden", ("?",))[0] == "✓", rows
+        return int(found[1]), found[2].split()
+    first, held = own_row()
+    second, held = own_row()
+    assert second == first + 1 and held == ["runs.txt"], (first, second, held)
+    # The user's files client is refused there, as for any private directory (the same as `ls system/keystore`).
+    listing = vm.command("ls system/own")
+    require(listing, "DENIED")
+    assert "runs.txt" not in listing and "bench.txt" not in listing, listing
+    print(f"PASS: own directories: check's run {first} then {second} in system/own/check/, which holds only runs.txt after bench "
+          f"wrote its own; the shell's ls of system/own/ is refused (DENIED)", flush=True)
+
+
 def bench_suite(vm):
     """176: the utilities that check the system and measure it, from the shell, and the runs on real hardware."""
     check_tool_check(vm)
     kbench_check(vm)
     bench_tool_check(vm)
+    own_directory_check(vm)
     diag_check(vm)
 
 
@@ -3391,6 +3416,14 @@ def store_suite(vm):
     # 251-STO-0013: the index sized from the medium, its capacity what stat gives.
     require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
+    # 307-STO-0019: on the RAM disk nothing outlives a reset, and the store says so in its log, stat and each write.
+    require(logs, "DURABILITY=VOLATILE")
+    # 308-STO-0021: the blank medium got a volume key, and the store says its records are sealed under a key in the clear.
+    made = re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE (FROM \w+|WITHOUT \w+: DERIVED FROM THE MEDIUM AND THE TIME)", logs)
+    assert made, logs
+    print(f"INFO: the store's volume key: {made[0]}", flush=True)
+    require(logs, "SEALED, KEY IN THE CLEAR")
+    require(blocks("stat"), "DURABILITY=VOLATILE")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
     whole("pattern 4194305", f"PUT {root} SIZE 4194305")
@@ -3411,7 +3444,7 @@ def store_suite(vm):
     assert re.search(r"\[BLOCKSTORE\] REFUSED Put FOR PID \d+ \(BADGE 1\)", log) and re.search(r"\[BLOCKSTORE\] REFUSED Publish FOR PID \d+ \(BADGE 1\)", log), log
     require(blocks("resolve ro"), "blocks: resolve ro: NotFound")
     # Names: compare-and-swap on the version; only roots whose blocks are all stored.
-    require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1")
+    require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1 (VOLATILE)")
     require(blocks(f"publish obj {note}"), "blocks: publish obj: Conflict")
     require(blocks(f"publish obj {note} 1"), "PUBLISHED obj VERSION 2")
     require(blocks(f"resolve obj"), f"obj VERSION 2 ROOT {note}")
@@ -3430,7 +3463,10 @@ def store_suite(vm):
     # is checked whole after each restart (a check takes over a minute under TCG on aarch64).
     require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
     again = f"[BLOCKSTORE] READY BLOCKS={stat[1]} NAMES=1 SECTORS={stat[2]}/16384 CORRUPT=0 DAMAGED=0"
-    require(vm.service_logs("blockstore", again), again)
+    remounted = vm.service_logs("blockstore", again)
+    require(remounted, again)
+    # The key is found in the superblock: none is made again, and every record opens under it.
+    assert "VOLUME KEY MADE" not in remounted, remounted
     # 303-STO-0001: right after a mount every block's lease runs (60 s): no block goes; the earlier versions' name
     # records may. Before the long check below, which takes more than a lease under TCG on aarch64.
     first = blocks("collect")
@@ -3643,15 +3679,27 @@ def guest_ram(vm):
     return (0x4000_0000 if vm.args.arch == "aarch64" else 0), int(gibibytes(getattr(vm.args, "memory", None)) * (1 << 30))
 
 
-def poke(vm, needle, offset, port):
-    """Fault injection from the host (300-STO-0005): in every copy of `needle` in the guest's RAM, the byte `offset`
-    bytes after its start gets one bit flipped. The RAM is read with QMP pmemsave; the bytes are written through
-    QEMU's gdbstub in physical-memory mode, which stops the guest for the write. Returns how many copies changed."""
+def guest_dump(vm):
+    """The guest's RAM, read with QMP pmemsave."""
     base, size = guest_ram(vm)
     with tempfile.TemporaryDirectory() as temp:
         dump = Path(temp) / "ram"
         vm.hmp(f'pmemsave {base} {size} "{dump}"')
-        data = dump.read_bytes()
+        return dump.read_bytes()
+
+
+def poke(vm, needle, offset, port):
+    """Fault injection from the host (300-STO-0005): in every copy of `needle` in the guest's RAM, the byte `offset`
+    bytes after its start gets one bit flipped. Returns how many copies changed."""
+    return rewrite(vm, needle, lambda sector: sector[:offset] + bytes([sector[offset] ^ 0x10]) + sector[offset + 1:], port)
+
+
+def rewrite(vm, needle, edit, port):
+    """Every copy of `needle` in the guest's RAM gets the 512 bytes it starts replaced by `edit` of them. The RAM is read
+    with QMP pmemsave; the bytes are written through QEMU's gdbstub in physical-memory mode, which stops the guest for
+    the write. Returns how many copies changed."""
+    base, _ = guest_ram(vm)
+    data = guest_dump(vm)
     places, at = [], data.find(needle)
     while at >= 0:
         places.append(at)
@@ -3672,25 +3720,77 @@ def poke(vm, needle, offset, port):
                 pending += gdb.recv(4096)
         assert packet("Qqemu.PhyMemMode:1") == "OK"
         for at in places:
-            byte = data[at + offset] ^ 0x10
-            assert packet(f"M{base + at + offset:x},1:{byte:02x}") == "OK", "gdbstub refused the write"
+            old = data[at:at + 512]
+            for k, (was, now) in enumerate(zip(old, edit(old))):
+                if was != now:
+                    assert packet(f"M{base + at + k:x},1:{now:02x}") == "OK", "gdbstub refused the write"
         packet("D")
     return len(places)
 
 
-def record_header(chunk):
-    """A raw block's record header on the store's medium, up to its CID (layout 2, blockstore/src/store.rs)."""
-    import hashlib
+def chacha20(key, nonce, counter, data):
+    """ChaCha20 (RFC 8439, section 2.4) over `data` from block `counter`, written here for the storefaults suite."""
+    def rotl(v, c):
+        return ((v << c) & 0xffffffff) | (v >> (32 - c))
+    def quarter(s, a, b, c, d):
+        s[a] = (s[a] + s[b]) & 0xffffffff; s[d] = rotl(s[d] ^ s[a], 16)
+        s[c] = (s[c] + s[d]) & 0xffffffff; s[b] = rotl(s[b] ^ s[c], 12)
+        s[a] = (s[a] + s[b]) & 0xffffffff; s[d] = rotl(s[d] ^ s[a], 8)
+        s[c] = (s[c] + s[d]) & 0xffffffff; s[b] = rotl(s[b] ^ s[c], 7)
+    out = bytearray()
+    for k in range(0, len(data), 64):
+        state = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574, *struct.unpack("<8I", key), counter + k // 64, *struct.unpack("<3I", nonce)]
+        s = list(state)
+        for _ in range(10):
+            quarter(s, 0, 4, 8, 12); quarter(s, 1, 5, 9, 13); quarter(s, 2, 6, 10, 14); quarter(s, 3, 7, 11, 15)
+            quarter(s, 0, 5, 10, 15); quarter(s, 1, 6, 11, 12); quarter(s, 2, 7, 8, 13); quarter(s, 3, 4, 9, 14)
+        stream = struct.pack("<16I", *((a + b) & 0xffffffff for a, b in zip(s, state)))
+        out += bytes(x ^ y for x, y in zip(data[k:k + 64], stream))
+    return bytes(out)
+
+
+def sealed_record(vm, match):
+    """The frame (its first 44 bytes) of the block store's one sealed record in the guest's RAM whose first sector
+    `match` accepts once opened (308-STO-0021). The volume key is read from the superblock, where it is kept in the
+    clear for now; each frame's first sector is decrypted with it, its tag not checked."""
+    import hmac
+    # RFC 8439, 2.4.2: the cipher written here is ChaCha20.
+    sunscreen = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+    assert chacha20(bytes(range(32)), bytes(7) + b"\x4a" + bytes(4), 1, sunscreen)[:16].hex() == "6e2e359a2568f98041ba0728dd0d6981"
+    data = guest_dump(vm)
+    head = b"MIND-STO" + (3).to_bytes(2, "little") + (512).to_bytes(2, "little") + bytes([1])
+    keys, at = set(), data.find(head)
+    while at >= 0:
+        block = data[at:at + 172]
+        if hashlib.sha256(block[:140]).digest() == block[140:]:
+            keys.add(hmac.new(block[48:80], b"MIND-STO seal", hashlib.sha256).digest())
+        at = data.find(head, at + 1)
+    assert len(keys) == 1, f"{len(keys)} volume keys in the guest's RAM"
+    key = keys.pop()
+    found, at = set(), data.find(b"MIND-SLD\x03\x00")
+    while at >= 0:
+        frame = data[at:at + 44]
+        if match(chacha20(key, frame[16:28], 1, data[at + 44:at + 512])):
+            found.add(frame)
+        at = data.find(b"MIND-SLD\x03\x00", at + 1)
+    assert len(found) == 1, f"{len(found)} records match"
+    return found.pop()
+
+
+def block_record(chunk):
+    """Whether an opened first sector is the record of the raw block `chunk` (blockstore/src/store.rs, layout 3)."""
     cid = bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(chunk).digest()
-    return b"MIND-BLK" + (2).to_bytes(2, "little") + bytes(2) + len(chunk).to_bytes(4, "little") + cid
+    return lambda opened: opened[:8] == b"MIND-BLK" and opened[16:52] == cid
 
 
 def store_faults_suite(vm):
     """300-STO-0005: damage on the block store's own medium, injected from the host into the RAM disk's bytes in guest
     memory (no program can reach that medium). A flipped byte in a chunk is refused when read and when mounting; a
     collection refuses while a name's object lacks it; a put of the same bytes repairs it and a collection frees the
-    damaged copy. A damaged name record is reported, and the version before it stands. A damaged record header loses
-    that record alone: its sectors are counted damaged, and the records after it are found."""
+    damaged copy. A damaged name record is reported, and the version before it stands. A damaged frame loses that
+    record alone: its sectors are counted damaged, and the records after it are found. The records are sealed
+    (308-STO-0021): the host finds each by opening frames with the key the superblock holds, and a changed byte of a
+    sealed record makes it corrupt. A key that does not open the superblock's check is refused at mount."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
@@ -3703,8 +3803,9 @@ def store_faults_suite(vm):
     require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
     require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
     require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1")
-    # A byte of the third chunk, 100 bytes into its data: refused when read, and the name's object is no longer whole.
-    assert poke(vm, record_header(chunk(2)), 84 + 100, GDB_PORT) >= 1
+    # A byte of the third chunk, 100 bytes into its data: its seal no longer opens, so it is refused when read, and the
+    # name's object is no longer whole.
+    assert poke(vm, sealed_record(vm, block_record(chunk(2))), 44 + 84 + 100, GDB_PORT) >= 1
     require(blocks(f"check {root} pattern"), "blocks: check: Corrupt (the store: Corrupt)")
     require(vm.service_logs("blockstore", "[BLOCKSTORE] CORRUPT"), f"[BLOCKSTORE] CORRUPT {cid_raw(chunk(2))}")
     require(blocks("stat"), "CORRUPT=1 DAMAGED=0")
@@ -3715,33 +3816,33 @@ def store_faults_suite(vm):
     assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
     require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
     # A byte of the fifth chunk, found when a new instance mounts the medium.
-    assert poke(vm, record_header(chunk(4)), 84 + 100, GDB_PORT) >= 1
+    assert poke(vm, sealed_record(vm, block_record(chunk(4))), 44 + 84 + 100, GDB_PORT) >= 1
     require(restart(), "CORRUPT=1 DAMAGED=0")
     require(blocks(f"check {root} pattern"), "blocks: check: NotFound")
     require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
-    # A damaged name record: the second version's. A new instance counts its sector damaged; the first version stands.
+    # A damaged name record: the second version's. A new instance counts it corrupt, with the fifth chunk's copy; the
+    # first version stands.
     require(vm.command("write ram:v2.txt second"), "WROTE 7 BYTES")
     second = cid_raw(b"second\n")
     require(blocks("put ram:v2.txt"), f"PUT {second} SIZE 7")
     require(blocks(f"publish obj {second} 1"), "PUBLISHED obj VERSION 2")
     import base64
     second_bytes = base64.b32decode(second[1:].upper() + "=" * (-len(second[1:]) % 8))
-    name_record = b"MIND-REF" + (2).to_bytes(2, "little") + (3).to_bytes(2, "little") + (2).to_bytes(8, "little") + second_bytes
-    assert poke(vm, name_record, 100, GDB_PORT) >= 1
-    require(restart(), "DAMAGED=1")
+    name_record = b"MIND-REF" + (3).to_bytes(2, "little") + (3).to_bytes(2, "little") + (2).to_bytes(8, "little") + second_bytes
+    assert poke(vm, sealed_record(vm, lambda opened: opened.startswith(name_record)), 44 + 100, GDB_PORT) >= 1
+    require(restart(), "CORRUPT=2 DAMAGED=0")
     require(blocks("resolve obj"), f"obj VERSION 1 ROOT {root}")
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
-    # A damaged header, in the second chunk's CID: that record is lost whole, its 33 sectors counted damaged with the
-    # name record's one; the chunks after it are found. A collection first frees the fifth chunk's corrupt copy.
+    # A damaged frame, in the second chunk's magic: that record is lost whole, its 33 sectors counted damaged; the chunks
+    # after it are found. A collection first frees the fifth chunk's corrupt copy and the corrupt name record.
     assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
-    assert poke(vm, record_header(chunk(1)), 30, GDB_PORT) >= 1
-    require(restart(), f"CORRUPT=0 DAMAGED={1 + (84 + 16384 + 511) // 512}")
+    assert poke(vm, sealed_record(vm, block_record(chunk(1))), 2, GDB_PORT) >= 1
+    require(restart(), f"CORRUPT=0 DAMAGED={(44 + 84 + 16384 + 511) // 512}")
     require(blocks(f"check {root} pattern"), "blocks: check: NotFound")
     require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
-    # A damaged commit (304-STO-0007): a byte of its first entry; a new instance applies none of it, and counts its
-    # header and both entries damaged.
+    # A damaged commit (304-STO-0007): a byte of its header; a new instance applies none of it, and counts it corrupt.
     for path, text in (("ram:c1.txt", "first change"), ("ram:c2.txt", "second change")):
         require(vm.command(f"write {path} {text}"), f"WROTE {len(text) + 1} BYTES")
         require(blocks(f"put {path}"), f"PUT {cid_raw(text.encode() + bytes([10]))} SIZE {len(text) + 1}")
@@ -3749,15 +3850,15 @@ def store_faults_suite(vm):
     done = blocks(f"commit obj 1 {first} aux 0 {other}")
     for line in ("COMMITTED obj VERSION 2", "COMMITTED aux VERSION 1"):
         require(done, line)
-    txn = b"MIND-TXN" + (2).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(4)
-    assert poke(vm, txn, 512 + 100, GDB_PORT) >= 1
-    require(restart(), f"CORRUPT=0 DAMAGED={34 + 3}")
+    txn = b"MIND-TXN" + (3).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(4)
+    assert poke(vm, sealed_record(vm, lambda opened: opened.startswith(txn)), 44 + 100, GDB_PORT) >= 1
+    require(restart(), "CORRUPT=1 DAMAGED=33")
     snap = blocks("snapshot obj aux")
     for line in (f"obj VERSION 1 ROOT {root}", "aux NONE"):
         require(snap, line)
     print("PASS: block store damage injected on its medium: a chunk refused when read and when mounting, a collection "
           "refused meanwhile, a put repairs it; a damaged name record reported, the version before it stands; a damaged "
-          "header loses its record alone; a damaged commit changes no name", flush=True)
+          "frame loses its record alone; a damaged commit changes no name; every record found by opening its seal", flush=True)
     # 305-STO-0008: a crash. init restarts the killed store within its budget, and the new instance mounts the medium.
     old = vm.services()["blockstore"]
     starts = int(re.search(r"^blockstore\s+\d+\s+(\d+)", vm.command("svc", raw=True), re.M)[1])
@@ -3768,12 +3869,21 @@ def store_faults_suite(vm):
         time.sleep(.25)
     else:
         raise AssertionError("init did not restart the block store")
-    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "CORRUPT=0 DAMAGED=37")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "CORRUPT=1 DAMAGED=33")
     assert re.search(fr"^blockstore\s+\d+\s+{starts + 1}\s+running", vm.command("svc", raw=True), re.M)
     require(blocks("snapshot obj"), f"obj VERSION 1 ROOT {root}")
+    # Another key in the superblock, its digest made whole: it does not open the check, and the store says so to every
+    # request (308-STO-0021).
+    superblock = b"MIND-STO" + (3).to_bytes(2, "little") + (512).to_bytes(2, "little")
+    def other_key(sector):
+        changed = sector[:50] + bytes([sector[50] ^ 0x10]) + sector[51:140]
+        return changed + hashlib.sha256(changed).digest() + sector[172:]
+    assert rewrite(vm, superblock, other_key, GDB_PORT) >= 1
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "NOT MOUNTED"), "[BLOCKSTORE] NOT MOUNTED: Key")
+    require(blocks("stat"), "blocks: stat: Key")
     # A medium it cannot mount (sector 0's digest damaged): the store stays up and answers every request with the
     # reason, and the system, started from the boot volume, goes on without it (MC-6.8, Appendix B.4).
-    superblock = b"MIND-STO" + (2).to_bytes(2, "little") + (512).to_bytes(2, "little")
     assert poke(vm, superblock, 20, GDB_PORT) >= 1
     require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
     require(vm.service_logs("blockstore", "NOT MOUNTED"), "[BLOCKSTORE] NOT MOUNTED: Foreign")
@@ -4309,12 +4419,16 @@ def link_suite(args):
             own = {ep for slot, ep in caps_held if servers.get(ep) == pids["link"]}
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
             # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
-            # init's reboot client, the policy broker, the Wi-Fi station and the shell's commands (800-KRN-0148).
+            # init's reboot client, the policy broker, the Wi-Fi station, the shell's commands (800-KRN-0148) and a writable
+            # scope of data/firmware/ in slot 7 (800-KRN-0173).
             base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"]), (15, pids["compositor"])]
             developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0)),  # 0: no station runs
-                         (30, pids.get("shell"))}
+                         (30, pids.get("shell")), (7, pids["vfs_server"])}
             assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
             assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
+            assert (7, pids["vfs_server"]) in granted, caps
+            require(vm.command("dmesg -s init", raw=True), "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; data/firmware/ TO WRITE")
+            assert re.search(r"\bfirmware\b", vm.command("ls data", raw=True)), "init made data/firmware/"
             # 800-KRN-0148: link's slot 30 is a client badged BADGE_SHELL_LINK (1) of the endpoint the shell serves in slot 37.
             commands = re.search(r"^SLOT=37 GEN=0 KIND=1 .*EP=(\d+)", vm.command(f"stat caps {pids['shell']}", raw=True), re.M)
             shell_client = re.search(r"^SLOT=30 GEN=0 KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
@@ -4342,6 +4456,23 @@ def link_suite(args):
             assert "c/" in top and "a/" not in top, top
             for bad in ("../x", "a/../../x", "/x"):
                 require(link(port, "mkdir", bad, ok=False), "not allowed")
+
+            # 800-LNK-0027 (init's 800-KRN-0173): with `dev`, `firmware/` is data/firmware/. A put lands there, `ls` names
+            # the place, and a move between the two places, or of the place itself, is refused.
+            link(port, "mkdir", "firmware/test")
+            link(port, "put", str(sent), "firmware/test/fw.bin")
+            require(link(port, "ls"), "-  firmware/")
+            require(link(port, "ls", "firmware/test"), "65536  fw.bin")
+            require(link(port, "stat", "firmware/test/fw.bin"), hashlib.sha256(sent.read_bytes()).hexdigest())
+            require(vm.command("ls data/firmware/test", raw=True), "fw.bin")
+            require(link(port, "get", "firmware/test/fw.bin", str(back)), "got firmware/test/fw.bin")
+            assert back.read_bytes() == sent.read_bytes(), "the firmware file came back changed"
+            require(link(port, "mv", "firmware/test/fw.bin", "fw.bin", ok=False), "not allowed")
+            require(link(port, "rmdir", "firmware", "-r", ok=False), "not allowed")
+            require(link(port, "run", "firmware/test/fw.bin", ok=False), "not allowed")
+            link(port, "rm", "firmware/test/fw.bin")
+            link(port, "rmdir", "firmware/test")
+            require(vm.command("dmesg -s link", raw=True), "[LINK] RECEIVED firmware/test/fw.bin")
 
             # 800-LNK-0009: a program from data/link/ started for the master, its output read to its end.
             program = Path(temp) / "mt.elf"
@@ -4420,6 +4551,20 @@ def link_suite(args):
                 require(link(port, "replace", "rtc", "--back"), "from its boot image")
                 assert "BACK TO ITS BOOT IMAGE" in vm.command("dmesg -s init", raw=True).upper()
                 require(link(port, "replace", "logd", str(rtc), ok=False), "not allowed")
+            # 800-LNK-0020: the link's mark on the screen (the compositor's 800-KRN-0156): red while a master is heard and
+            # dev lets it change the machine, grey once it has been quiet for 5 s, red again at its next request.
+            marked = vm.command("dmesg -s link", raw=True)
+            if "[LINK] MARK:" not in marked:
+                print("SKIP: link: no mark on the screen yet (display.wit 1.2, 800-KRN-0156)", flush=True)
+            else:
+                require(marked, "[LINK] MARK: Changing")
+                require(vm.command("dmesg -s compositor", raw=True), "REMOTE MARK Link: Changing")
+                time.sleep(8)
+                require(vm.command("dmesg -s link", raw=True), "[LINK] MARK: Unconnected")
+                require(vm.command("dmesg -s compositor", raw=True), "REMOTE MARK Link: Unconnected")
+                link(port, "hello")
+                time.sleep(2)
+                assert vm.command("dmesg -s link", raw=True).count("[LINK] MARK: Changing") >= 2, "red again"
             missing = [p for p in ("NETWORK", "WIFI", "SYSINFO", "REBOOT") if p not in powers]
             if missing:
                 print(f"SKIP: link: dev: init grants link no {', '.join(missing)} yet (LNK's request to KRN of 2026-10-21)", flush=True)
@@ -4431,10 +4576,32 @@ def link_suite(args):
                 require(link(port, "reboot", ok=False), "does not serve this")
         finally:
             vm.close()
+    # 800-LNK-0026: with `address=5` link answers only frames to its address, so it can share an RS-485 line.
+    with tempfile.TemporaryDirectory(prefix="smoke-link-address-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 address=5\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+            require(link(port, "--address", "5", "hello"), '"MIND Core link"')
+            sent = Path(temp) / "sent.bin"
+            sent.write_bytes(os.urandom(16 * 1024))
+            require(link(port, "--address", "5", "put", str(sent)), "put ")
+            require(link(port, "--address", "5", "ls"), "16384  sent.bin")
+            require(vm.command("dmesg -s link", raw=True), "[LINK] ADDRESS 5 ON A SHARED LINE")
+            # Another address and a frame with none go unanswered: bounded by the tries.
+            for other in (("--address", "6"), ()):
+                r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
+                                   capture_output=True, text=True, timeout=60)
+                assert r.returncode != 0, ("answered", other, r.stdout + r.stderr)
+            require(link(port, "--address", "5", "hello"), '"MIND Core link"')
+        finally:
+            vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
-          "the developer mode started a built-in program by name", flush=True)
+          "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again; "
+          "with address=5 in link.conf it answered only frames to address 5", flush=True)
 
 
 def modes_suite(args):
@@ -4688,7 +4855,9 @@ def gateway_stub_check(args):
             vm.send("mode maintenance on the modes suite\n")
             require(vm.expect("(Y/N)", timeout=10), "TURN THE MAINTENANCE MODE ON?")
             vm.send_bytes(b"y")
-            require(vm.expect("MIND> ", timeout=30), "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")
+            shown = vm.expect("MIND> ", timeout=30)
+            require(shown, "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")
+            require(shown, "LINK CONSOLE: ON (DATA/MODE.CONF, DEV IN LINK.CONF)")  # the shell shows the link's console (800-APP-0108)
             kept = vm.command("cat data/mode.conf", raw=True)
             for word in ("development", "maintenance", "link-console"):
                 assert re.search(rf"^{word}$", kept.replace("\r", ""), re.M), (word, kept)
@@ -4710,14 +4879,15 @@ def installed_apps_check(args):
     the owner's policy trusting that key for some names. The version `current` names runs, by its short path and its
     versioned one; the loader refuses, logging why, a program with one byte changed, a MANIFEST changed after it was
     signed, a name the policy has no key line for, one whose line names another application, a program that asks for
-    more than its file line says, and a version `current` does not name. The names are one letter and the program `m`:
-    the shell's `run` takes 16 bytes. Not shown: an install by the gateway."""
+    more than its file line says, and a version `current` does not name. The names are one letter and the program `m`;
+    `memtest`'s runs by paths longer than a program's name, which the shell's `run` takes up to 63 bytes (750-APP-0109),
+    and a longer one the shell refuses. Not shown: an install by the gateway."""
     import app_package
     arch = "aarch64" if args.arch == "aarch64" else "x86_64"
     program = (ROOT / IMAGE / "memtest.elf").read_bytes()
     public = sign_manifest.public_key(app_package.TEST_SEED)
     # a: trusted, two versions; b: one byte changed; c: MANIFEST changed; d: no key line; e: the line names z; f: more requests.
-    lines = "".join(f"package-key {n} {public.hex()}\n" for n in ("a", "b", "c", "f", "z"))
+    lines = "".join(f"package-key {n} {public.hex()}\n" for n in ("a", "b", "c", "f", "z", "memtest"))
     extra = {"data/effector/policy": f"effector-policy 1\nagent off\n{lines}".encode()}
     with tempfile.TemporaryDirectory(prefix="smoke-apps-", dir=ROOT / IMAGE) as temp:
         def package(name, version, change=None):
@@ -4740,13 +4910,13 @@ def installed_apps_check(args):
             for path in where.iterdir():
                 extra[f"data/apps/{name}/{version}/{path.name}"] = path.read_bytes()
             extra[f"data/apps/{name}/current"] = f"{version}\n".encode()
-        package("a", 1); package("a", 2)
+        package("a", 1); package("a", 2); package("memtest", 1)
         for name, change in (("b", "byte"), ("c", "manifest"), ("d", None), ("e", None), ("f", "requests")):
             package(name, 1, change)
         image, _, _ = raw_fat_image(Path(temp), extra=extra)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
         try:
-            for path in ("data/apps/a/m", "data/apps/a/2/m"):
+            for path in ("data/apps/a/m", "data/apps/a/2/m", "data/apps/memtest/m", "data/apps/memtest/1/m"):
                 started = re.search(r"STARTED PID=(\d+)", vm.command(f"run {path} naps 300 &"))
                 assert started, (path, vm.command("dmesg -s loader", raw=True)[-1500:])
                 require(vm.program_logs(int(started[1]), "NAPS", tries=60), "[MEMTEST] NAPS")
@@ -4759,6 +4929,9 @@ def installed_apps_check(args):
             log = vm.command("dmesg -s loader", raw=True)
             for path, why in refusals.items():
                 require(log, f"[LOADER] {path}: NOT RUN: {why}")
+            # 750-APP-0109: a path past the loader's 63 bytes is refused by the shell; a name past 16 still is.
+            require(vm.command(f"run data/apps/{'x' * 52}/m"), "PROGRAM PATH TOO LONG (63 BYTES AT MOST)")
+            require(vm.command("run abcdefghijklmnopq"), "PROGRAM NAME TOO LONG")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
@@ -4766,7 +4939,7 @@ def installed_apps_check(args):
     print("PASS: installed applications (750-KRN-0169): the version data/apps/<name>/current names runs under a key the "
           "owner's policy trusts for its name; one byte of the program changed, its MANIFEST changed after signing, no key "
           "line for the name, a line naming another application, more requests than its file line, another version: not "
-          "run, the loader's log saying why", flush=True)
+          "run, the loader's log saying why; the shell's `run` takes an installed application's path up to 63 bytes (750-APP-0109)", flush=True)
 
 
 def services_config_check(args):
@@ -6045,7 +6218,7 @@ def linkupdate_suite(args):
         port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
         link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
         require(link.run("hello").stdout, '"MIND Core link"')
-        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33); slot 15
+        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (7, 10, 11, 19, 30, 33); slot 15
         # is the compositor's client for its mark (800-KRN-0156).
         pids = vm.services()
         caps = vm.command(f"stat caps {pids['link']}", raw=True)
@@ -6768,13 +6941,14 @@ def download_check(args, disk):
     port = release.server_address[1]
     # The same files over HTTPS: the test CA's server (in tlsroots.pem), and one from a CA nobody trusts.
     _certificates(certificates)
-    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    _roots_with_test_ca(certificates, disk)
     secure = serve_release.serve(files, certificates / "server.pem", certificates / "server.key", cuts={"/big.bin": cut})
     rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
     stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
     service = _service_server(certificates)
+    api_stub = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # 000-NET-0047
     _expired_certificate(certificates)
     expired, _ = _https_server(certificates, "expired")
     service_port, expired_port = service.server_address[1], expired.server_address[1]
@@ -6783,7 +6957,8 @@ def download_check(args, disk):
     sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
                                         + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
-                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port)))
+                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port))
+                                        + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n")
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -6807,6 +6982,7 @@ def download_check(args, disk):
         parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
         service_runs(vm, service_port)
+        api_runs(vm, api_stub.server_address[1])
         pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
     finally:
         vm.close()
@@ -6814,7 +6990,7 @@ def download_check(args, disk):
         stall.go.set()
         if sftp:
             sftp.stop()
-        for server in (release, secure, rogue, held, stall, service, expired):
+        for server in (release, secure, rogue, held, stall, service, api_stub, expired):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -6849,6 +7025,41 @@ def service_runs(vm, port):
     require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
     print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
           "nesting refused and logged with the client's PID", flush=True)
+
+
+def api_runs(vm, port):
+    """000-NET-0047: HTTP for API clients against tests/http_api_stub.py over HTTPS with the test CA: a JSON POST, a
+    multipart upload checked by Python's own parser, a chunked upload, redirect chains by their rules, gzip and deflate
+    bodies decoded as they come and a bomb stopped at 1 MiB, 1000 Server-Sent Events in order, Retry-After in both forms."""
+    vm.send(f"webcheck https://10.0.2.2:{port}/ --api\n")
+    out = vm.expect("MIND> ", timeout=900, after="WEBCHECK DONE")
+    data = bytes(i * 7 % 251 for i in range(100_000))
+    require(out, 'WEBCHECK API JSON 200 application/json {"model":"mind-test","content":"DNIM morf olleh","bytes":')
+    require(out, f"WEBCHECK API FILE SHA256 {hashlib.sha256(data).hexdigest()}")
+    multipart = re.search(r"WEBCHECK API MULTIPART 200 (\d+) BYTES (\{.*\})", out)
+    assert multipart, out
+    answer = json.loads(multipart[2])
+    assert answer["length"] == int(multipart[1]) and answer["parts"] == {
+        "chat_id": "42", "document": {"filename": "data.bin", "type": "application/octet-stream", "length": 100_000, "sha256": hashlib.sha256(data).hexdigest()}}, answer
+    require(out, f'WEBCHECK API STREAMED 200 {{"chunked":true,"length":50000,"sha256":"{hashlib.sha256(data[:50_000]).hexdigest()}"}}')
+    for line in ("WEBCHECK API REDIRECT 301 GET TO /api/r/3", "WEBCHECK API REDIRECT 308 GET TO /api/r/2", "WEBCHECK API REDIRECT 307 GET TO /api/r/1",
+                 "WEBCHECK API REDIRECT 302 GET TO /api/final", "WEBCHECK API REDIRECTS 4 THEN 200 the end ",
+                 "WEBCHECK API REDIRECT 303 GET TO /api/final?from=post", "WEBCHECK API SEE OTHER 1 THEN 200 the end from=post",
+                 "WEBCHECK API REDIRECT 302 GET TO /api/loop?10", "WEBCHECK API LOOP Err(Redirect)", "WEBCHECK API DOWN Err(Redirect)"):
+        require(out, line)
+    assert "/api/loop?11" not in out, out
+    for name, coding in (("gzip", "Gzip"), ("deflate", "Deflate")):
+        require(out, f"WEBCHECK API {name} {coding} ")
+        require(out, f"BYTES DECODED Ok({len(http_api_stub.TEXT)}) SHA256 {http_api_stub.TEXT_SHA256}")
+    bomb = re.search(r"WEBCHECK API BOMB Err\(TooLarge\) AFTER (\d+) BYTES", out)
+    assert bomb and int(bomb[1]) <= 1 << 20, out
+    require(out, f"WEBCHECK API EVENTS text/event-stream {http_api_stub.EVENTS} DELTAS IN ORDER true DONE true LAST ID {http_api_stub.EVENTS - 1} RETRY Some(3000)")
+    require(out, "WEBCHECK API busy 503 RETRY-AFTER Some(Seconds(7))")
+    require(out, "WEBCHECK API limited 429 RETRY-AFTER Some(Date(1445412480))")
+    print("PASS: HTTP for API clients over HTTPS: a JSON POST, a multipart upload of a field and a 100 000-byte file, a chunked "
+          "upload, redirects by their rules (301, 302, 307, 308, 303 after a POST; a loop refused after 10, HTTPS to HTTP refused), "
+          f"gzip and deflate bodies decoded as they came, a bomb stopped at {int(bomb[1])} bytes, {http_api_stub.EVENTS} "
+          "Server-Sent Events in order, Retry-After in seconds and as a date", flush=True)
 
 
 def pinned_runs(vm, certificates, port, rogue_port, expired_port):
@@ -7786,6 +7997,14 @@ def slow_radio_check(args):
           f"silent, the station joined once it answered, scanning by itself first; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
+def _roots_with_test_ca(certificates, disk):
+    # Mozilla's public roots as the image ships them (000-NET-0046), with the test CA added as an owner adds a root:
+    # the suites check that tls takes the whole store; returns how many roots it holds.
+    store = (ROOT / "third_party/roots/cacert.pem").read_bytes() + b"\n" + (certificates / "ca.pem").read_bytes()
+    (disk / "tlsroots.pem").write_bytes(store)
+    return store.count(b"-----BEGIN CERTIFICATE-----")
+
+
 def _certificates(directory):
     # A test CA (RSA) and a server certificate it signs (ECDSA P-256) for mind.test and 10.0.2.2; a second CA nobody
     # trusts and a server certificate from it for the same names.
@@ -8203,7 +8422,7 @@ def tls_suite(args, disk):
     # one; without RDRAND both services fail closed.
     certificates = Path(tempfile.mkdtemp(prefix="mind-tls-"))
     _certificates(certificates)
-    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    roots = _roots_with_test_ca(certificates, disk)
     good, _ = _https_server(certificates, "server")
     rogue, _ = _https_server(certificates, "rogue")
     asking, asking_context = _https_server(certificates, "server")
@@ -8226,7 +8445,7 @@ def tls_suite(args, disk):
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
     try:
         require(vm.service_logs("keystore", "DEVICE KEY READY"), "[KEYSTORE] DEVICE KEY READY: MIND ")
-        require(vm.service_logs("tls", "[TLS] READY"), f"[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM tlsroots.pem, RANDOM FROM {entropy}")
+        require(vm.service_logs("tls", "[TLS] READY"), f"[TLS] READY: TLS 1.3 CLIENT, {roots} ROOTS FROM tlsroots.pem, RANDOM FROM {entropy}")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
         page = vm.command(f"https 10.0.2.2:{ports['good']} /secure mind.test")
         for line in ("HTTPS: mind.test VERIFIED, TLS 1.3 SUITE", "HTTP/1.0 200 OK", "hello from the host: /secure to nobody"):
@@ -9323,7 +9542,9 @@ def wm_suite(vm):
                 keys("esc")
 
         def tidy():
-            # The windows the entry opened, closed (a program that ended keeps its window until then).
+            # The windows the entry opened, closed (a program that ended keeps its window until then). Alt+W closes
+            # the window in front, which may be one the entry opened after the state was read (round 39's gate, KRN's
+            # note of 2026-10-28): whichever wm closes must be one of the entry's, and the loop goes on until none is left.
             for _ in range(30):
                 extra = [w for w in state()[2] if w not in base]
                 if not extra:
@@ -9331,9 +9552,12 @@ def wm_suite(vm):
                 window = extra[-1]
                 if state()[1] != window:
                     front(window)
-                keys("alt-w", text=f"CLOSE {window}")
-                until(f"GONE {window}")
-                while window in state()[2]:
+                vm.hmp("sendkey alt-w")
+                vm.serial(enter=False)
+                closed = int(re.findall(r"CLOSE (\d+)", wait("CLOSE "))[-1])
+                assert closed not in base, (closed, base, state())
+                until(f"GONE {closed}")
+                while closed in state()[2]:
                     wait()
             raise AssertionError(state())
 
@@ -10359,7 +10583,9 @@ def store_disk_check(args, disk):
             assert "FROM VIRTIO" not in vm.command("dmesg -s vfs_server", raw=True)
             put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
             assert put, vm.output
-            require(vm.command("blocks stat", raw=True), "SECTORS=")
+            # 307-STO-0019: a write on a disk reaches its driver's flush, and the store says so.
+            require(vm.command("blocks stat", raw=True), "DURABILITY=FLUSHED")
+            require(vm.command(f"blocks publish disk {put[1]}", raw=True), "PUBLISHED disk VERSION 1 (FLUSHED)")
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
@@ -10368,9 +10594,11 @@ def store_disk_check(args, disk):
             stat = vm.command("blocks stat", raw=True)
             assert re.search(r"BLOCKS=[1-9]\d* .*SECTORS=\d+/65536", stat), stat
             require(vm.command(f"blocks check {put[1]} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+            require(vm.command("blocks resolve disk", raw=True), f"disk VERSION 1 ROOT {put[1]}")
         finally:
             vm.close()
-    print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot", flush=True)
+    print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot; "
+          "its writes report FLUSHED, and a name published there is found after the reboot", flush=True)
     # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
     with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
         big = Path(temp) / "store.img"
@@ -10635,9 +10863,14 @@ def boot_suite(args, disk):
                      r"MIND CORE BOOT: GOP 0: \d+x\d+ STRIDE \d+ BLT ONLY FB 0x0+ CONSOLE\n",
                      r"MIND CORE BOOT: USING GOP 1: \d+x\d+ STRIDE \d+ BGR FB 0x[0-9A-F]{16}\n", r"MIND CORE BOOT: \d+ CPUS; EXITING BOOT SERVICES\n"):
             assert re.search(line, log), (line, log[-3000:])
+        # 211-PRT-0011: the output's EDID (or its absence) and the mode the loader set or kept, each named.
+        edid = re.search(r"MIND CORE BOOT: (GOP 1: (?:NO EDID|EDID \((?:ACTIVE|DISCOVERED), \d+ BYTES\)[^\n]*))\n", log)
+        mode = re.search(r"MIND CORE BOOT: (\d+ MODES; (?:SET|KEPT THE FIRMWARE'S) \d+x\d+: [^\n]+)\n", log)
+        assert edid and mode, log[-3000:]
     finally:
         vm.close()
-    print("PASS: bootloader takes the GOP of a console output with a linear framebuffer, not the first listed; its progress lines show on the console", flush=True)
+    print(f"PASS: bootloader takes the GOP of a console output with a linear framebuffer, not the first listed; its progress lines show on the console; "
+          f"{edid[1]}; {mode[1]}", flush=True)
     # 351-UPD-0006: slots A and B on a raw disk, where the bootloader counts a trial's tries and falls back.
     def boot_image(image, until):
         vm = VM(args, str(image), raw=True, snapshot=False, prompt=False)
@@ -10718,7 +10951,7 @@ def boot_suite(args, disk):
         sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         handoff = int(re.search(r"pub const BOOT_HANDOFF_VERSION: u32 = (\d+);", (ROOT / "common/abi.rs").read_text())[1])
-        line = f"KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION {handoff}, THIS KERNEL TAKES {handoff + 1} TO {handoff + 1}. WRITE BOTH FROM ONE BUILD."
+        line = f"KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION {handoff}, THIS KERNEL TAKES {handoff + 1}. WRITE BOTH FROM ONE BUILD."
         try:
             out = vm.expect(line, timeout=60)
             assert "INIT STARTED" not in out, out[-2000:]

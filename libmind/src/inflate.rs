@@ -1,6 +1,8 @@
 //! DEFLATE (RFC 1951) and its zlib wrapper (RFC 1950), decompressed as a stream: what comes out is handed to a sink a
 //! piece at a time, so a large picture is never held whole (000-APP-0050's PNG backgrounds). Only a 32 KiB window
-//! of the output is kept for back-references. No system calls: host-tested in tests/image_host.rs.
+//! of the output is kept for back-references. No system calls: host-tested in tests/image_host.rs. The input may also
+//! come from a reader asked for more as the stream needs it, and gzip (RFC 1952) is read too: an HTTP body's content
+//! coding (000-NET-0047, tests/http_coding_host.rs).
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -14,10 +16,13 @@ const ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 
 /// Why a stream could not be decompressed.
 pub type Error = &'static str;
 
-// The input: one or more pieces read as one stream (a PNG's IDAT chunks), least significant bit first.
-struct Bits<'a> { parts: &'a [&'a [u8]], part: usize, at: usize, bit: u32, held: u32 }
+/// Where a stream's bytes come from, one at a time; None at its end.
+pub trait Input { fn byte(&mut self) -> Option<u8>; }
 
-impl Bits<'_> {
+// One or more pieces read as one stream (a PNG's IDAT chunks).
+struct Parts<'a> { parts: &'a [&'a [u8]], part: usize, at: usize }
+
+impl Input for Parts<'_> {
     fn byte(&mut self) -> Option<u8> {
         while self.part < self.parts.len() {
             if let Some(&byte) = self.parts[self.part].get(self.at) { self.at += 1; return Some(byte); }
@@ -26,6 +31,13 @@ impl Bits<'_> {
         }
         None
     }
+}
+
+// The input read least significant bit first.
+struct Bits<'a> { input: &'a mut dyn Input, bit: u32, held: u32 }
+
+impl Bits<'_> {
+    fn byte(&mut self) -> Option<u8> { self.input.byte() }
     fn need(&mut self, n: u32) -> Result<(), Error> {
         while self.held < n {
             let byte = self.byte().ok_or("the stream ends early")?;
@@ -94,7 +106,12 @@ impl Out<'_> {
 
 /// Decompresses a raw DEFLATE stream, handing the bytes to `sink` in pieces (`sink` returns false to stop early).
 pub fn inflate(data: &[u8], sink: &mut dyn FnMut(&[u8]) -> bool) -> Result<(), Error> {
-    deflate(&mut Bits { parts: &[data], part: 0, at: 0, bit: 0, held: 0 }, sink).map(|_| ())
+    deflate(&mut Bits { input: &mut Parts { parts: &[data], part: 0, at: 0 }, bit: 0, held: 0 }, sink).map(|_| ())
+}
+
+/// A raw DEFLATE stream read from `input` as it needs bytes; true when it was read to its end (`sink` did not stop it).
+pub fn inflate_from(input: &mut dyn Input, sink: &mut dyn FnMut(&[u8]) -> bool) -> Result<bool, Error> {
+    deflate(&mut Bits { input, bit: 0, held: 0 }, sink)
 }
 
 // The blocks of a stream; true when it was read to its end (the sink did not stop it).
@@ -167,7 +184,12 @@ pub fn zlib(data: &[u8], sink: &mut dyn FnMut(&[u8]) -> bool) -> Result<(), Erro
 
 /// A zlib stream held in several pieces, one after another (a PNG's IDAT chunks), without joining them.
 pub fn zlib_parts(parts: &[&[u8]], sink: &mut dyn FnMut(&[u8]) -> bool) -> Result<(), Error> {
-    let mut bits = Bits { parts, part: 0, at: 0, bit: 0, held: 0 };
+    zlib_from(&mut Parts { parts, part: 0, at: 0 }, sink).map(|_| ())
+}
+
+/// A zlib stream read from `input` as it needs bytes; true when it was read to its end and its checksum matched.
+pub fn zlib_from(input: &mut dyn Input, sink: &mut dyn FnMut(&[u8]) -> bool) -> Result<bool, Error> {
+    let mut bits = Bits { input, bit: 0, held: 0 };
     let header = (bits.take(8)? as u16) << 8 | bits.take(8)? as u16;
     if header >> 8 & 0x0F != 8 || header % 31 != 0 || header & 0x20 != 0 { return Err("not a zlib stream"); }
     let (mut a, mut b) = (1u32, 0u32);
@@ -181,5 +203,60 @@ pub fn zlib_parts(parts: &[&[u8]], sink: &mut dyn FnMut(&[u8]) -> bool) -> Resul
         for _ in 0..4 { check = check << 8 | bits.take(8).map_err(|_| "the checksum is missing")?; }
         if check != (b << 16 | a) { return Err("the checksum does not match"); }
     }
-    Ok(())
+    Ok(whole)
+}
+
+/// Whether two bytes begin a zlib stream (RFC 1950 2.2): DEFLATE, a window of at most 32 KiB, the check bits right, no
+/// preset dictionary. A raw DEFLATE stream can begin so only by chance.
+pub fn zlib_header(first: u8, second: u8) -> bool {
+    let header = (first as u16) << 8 | second as u16;
+    first & 0x0F == 8 && first >> 4 <= 7 && header % 31 == 0 && second & 0x20 == 0
+}
+
+// CRC-32 (ISO 3309, as gzip uses it), a byte at a time.
+fn crc32(mut crc: u32, data: &[u8]) -> u32 {
+    crc = !crc;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 { crc = if crc & 1 != 0 { crc >> 1 ^ 0xEDB8_8320 } else { crc >> 1 }; }
+    }
+    !crc
+}
+
+/// A gzip member (RFC 1952) read from `input` as it needs bytes: its header (with any extra field, name, comment and
+/// header CRC), DEFLATE, then the CRC-32 and the length of the output, both checked when the whole stream was read.
+/// True when it was; a second member after the first is not read.
+pub fn gzip_from(input: &mut dyn Input, sink: &mut dyn FnMut(&[u8]) -> bool) -> Result<bool, Error> {
+    let mut bits = Bits { input, bit: 0, held: 0 };
+    let byte = |bits: &mut Bits| bits.take(8).map(|b| b as u8).map_err(|_| "the gzip header ends early");
+    let header = [byte(&mut bits)?, byte(&mut bits)?, byte(&mut bits)?, byte(&mut bits)?];
+    if header[..3] != [0x1F, 0x8B, 8] || header[3] & 0xE0 != 0 { return Err("not a gzip stream"); }
+    let flags = header[3];
+    for _ in 0..6 { byte(&mut bits)?; } // the time, the extra flags, the system
+    if flags & 4 != 0 {
+        let length = byte(&mut bits)? as usize | (byte(&mut bits)? as usize) << 8;
+        for _ in 0..length { byte(&mut bits)?; }
+    }
+    for flag in [8, 16] {
+        // A file name, then a comment, each ending with a zero byte.
+        if flags & flag != 0 { while byte(&mut bits)? != 0 {} }
+    }
+    if flags & 2 != 0 { byte(&mut bits)?; byte(&mut bits)?; }
+    let (mut crc, mut length) = (0u32, 0u32);
+    let whole = deflate(&mut bits, &mut |piece| {
+        crc = crc32(crc, piece);
+        length = length.wrapping_add(piece.len() as u32);
+        sink(piece)
+    })?;
+    if whole {
+        bits.align();
+        let mut word = || -> Result<u32, Error> {
+            let mut value = 0u32;
+            for shift in [0, 8, 16, 24] { value |= bits.take(8).map_err(|_| "the gzip trailer is missing")? << shift; }
+            Ok(value)
+        };
+        if word()? != crc { return Err("the CRC-32 does not match"); }
+        if word()? != length { return Err("the length does not match"); }
+    }
+    Ok(whole)
 }

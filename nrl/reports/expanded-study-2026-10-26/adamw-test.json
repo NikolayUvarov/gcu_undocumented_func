@@ -1,0 +1,79 @@
+{
+  "schema": "nrl.evaluation/0",
+  "profile": {
+    "task": "language-next-token/0",
+    "data_id": "25250ff6d3f6814d353f2d9b1ba130fce942c6bcc159e2e86f53a7dbc7aa1dfa",
+    "split": "test",
+    "baseline_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+    "preprocessing": "byte-bpe-bos-shifted-no-eos/0",
+    "geometry": [
+      512,
+      512
+    ],
+    "measurement": null
+  },
+  "model_id": "d0ba690bd798335341d556c4c36df970b483de2cd430ebbc3211f4d7855f325f",
+  "environment": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logical_cpus": 24,
+    "executable_sha256": "f68b43e7f0ffb1d28ab238ed4eff789c3357d957775ad0255483f0d680217451",
+    "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+    "backend": "host-cpu-scalar-f64/0",
+    "runtime_threads": 1,
+    "debug_assertions": false
+  },
+  "work": {
+    "documents_or_batches": 12,
+    "rows_per_pass": 2195,
+    "output_values_per_pass": 1123840,
+    "quality_passes": 1,
+    "warmup_passes": 0,
+    "timed_passes": 0,
+    "total_forward_rows": 2195
+  },
+  "quality": {
+    "metric": "mean-nll",
+    "value": 2.8237835914285156,
+    "details": {
+      "maximum_token_nll": 19.6207794305464,
+      "p95_token_nll": 7.15976018363481,
+      "perplexity": 16.840447657175325,
+      "predicted_tokens": 2195,
+      "state": "fresh causal cache per document",
+      "top1_accuracy": 0.33439635535307516
+    }
+  },
+  "timing": null,
+  "model_information": {
+    "adapter": "llama2c-f32-v0/0",
+    "base_parameter_values": 260032,
+    "config": {
+      "context": 512,
+      "dim": 64,
+      "heads": 8,
+      "hidden": 172,
+      "kv_heads": 4,
+      "layers": 5,
+      "tied_head": true,
+      "vocab": 512
+    },
+    "effective_numeric_values": 210688,
+    "effective_parameter_values": 206528,
+    "model_id": "d0ba690bd798335341d556c4c36df970b483de2cd430ebbc3211f4d7855f325f",
+    "native_execution": false,
+    "numerical_policy": "cpu-scalar-f64-source-f32-stored-rope/0",
+    "package_bytes": 1392049,
+    "patch_layers": [
+      0,
+      2
+    ],
+    "retained_numeric_values": 276736,
+    "retains_original_dense_weights": true,
+    "schema": "nrl.decoder-info/0"
+  },
+  "process_peak_rss_bytes": 13795328,
+  "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+  "native_execution": false
+}
