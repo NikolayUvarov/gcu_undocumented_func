@@ -74,20 +74,3 @@ tasks/owner handling it, the agreed contract location/version and the first
 build available for joint acceptance. Keep the binding outcome in the tasks
 and this request on main. Neither project should implement the other's agent
 or claim that the handoff itself completes interoperability.
-
-## From NET: name a request's method with `Method::name()` (000-NET-0047)
-
-**Recorded by:** the network track (NET, the kernel session), 2026-10-28, for [000-NET-0047](000-NET-0047-http-for-api-clients.md).
-
-- **What is asked.** `effector/src/main.rs` (line 269 at `main` c8fe8d03) names a failed request's method with a `match` over every case of `mind::http::Method`: `Get`, `Post` and `Put`. Use `method.name()` instead, which `libmind` makes public with 000-NET-0047.
-- **Why.** 000-NET-0047 adds `Head`, `Patch` and `Delete`, which API clients send. A new case breaks an exhaustive `match` outside `libmind`, so the cases wait until the agent no longer has one.
-- **Nothing else changes for the agent.** `request`, `Response::read` and `finish` keep their signatures; `Response` gains `head`, the whole response head.
-
-## From KRN: the fixture's empty query under Python 3.10 (the new gate machines)
-
-**Recorded by:** the kernel track (KRN, the landing queue's integrator), 2026-10-28, for the maintainer's gate machines `acc-1` and `acc-2` ([docs/effector.md](../docs/effector.md), section 1).
-
-- **What fails.** `tests/effector_server.py` line 165 (at `main` 0e006ca2) parses every request's query with `urllib.parse.parse_qs(parts.query, strict_parsing=True, max_num_fields=16)`. Python 3.10 raises `ValueError("bad query field: ''")` for an empty query; 3.11 and later return `{}`. The fixture then answers every POST without a query, the heartbeat first, with 400 (`bad query field: ''`).
-- **Where it shows.** On `acc-1` (Ubuntu 22.04, Python 3.10) the group "x86: boot, display, network, TLS, shell, memory, clock" failed in `effector_suite` at `EFFECTOR: ACK cmd-3 denied ACCEPTED`, the agent's log showing `HEARTBEAT ANSWERED 400`. `python3.10 tests/effector_server_test.py` fails 12 of its 13 tests in the same way; with 3.12 all pass.
-- **What is asked.** Parse only a query that is there, for example `parse_qs(parts.query, strict_parsing=True, max_num_fields=16) if parts.query else {}`, so that the fixture runs on Python 3.10 as on CI's 3.12. Nothing in the agent changes.
-- **Meanwhile.** The landing gate keeps the groups that run the Effector suites (x86 "boot, display, network, TLS, shell, memory, clock", aarch64 "files, network and TLS") on machines with Python 3.11 or later.
