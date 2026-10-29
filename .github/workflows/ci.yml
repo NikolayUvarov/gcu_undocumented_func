@@ -57,8 +57,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: boot, display, network, TLS, shell, memory, clock
-            args: --suites boot,display,net,tls,effector,normal,memory,dzen
+          # The long groups are split so that none runs much past 15 minutes on the landing gate's machines (2026-10-29).
+          - name: boot, display, shell, memory, clock
+            args: --suites boot,display,normal,memory,dzen
+          - name: network, TLS and Effector
+            args: --suites net,tls,effector
           - name: network benchmark (user networking and tap)
             args: --suites netbench
             tap: true
@@ -67,9 +70,13 @@ jobs:
           - name: scheduling, isolation, heap
             args: --suites busy,smp,isolation,heap
           - name: keys, shell, tools
-            args: --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci
+            args: --suites keys,shell,tools,bench,windows,tablet,usb,ehci
+          - name: the window manager
+            args: --suites wm
           - name: files and block writes
-            args: --suites vfs,edit,disk,block,store,storefaults,updater,linkupdate
+            args: --suites vfs,edit,disk,block,store,storefaults
+          - name: the updater and an update through the link
+            args: --suites updater,linkupdate
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
           # Every CPU the machine has, beyond the former 8 (issue 171).
@@ -168,10 +175,20 @@ jobs:
           - group: programs, shell and four CPUs
             # devicetree: virt without ACPI (210-KRN-0029); efivar: UEFI variables through AAVMF (351-KRN-0028)
             suites: normal,shell,bench,smp,busy,usb,devicetree,efivar
-          - group: files, network and TLS
-            suites: vfs,store,storefaults,net,tls,effector,updater,linkupdate,modes
+          - group: files and the block store
+            suites: vfs,store,storefaults
+          - group: network, TLS and Effector
+            suites: net,tls,effector
+          - group: the updater and the modes
+            suites: updater,modes
+          - group: an update through the link
+            suites: linkupdate
           - group: RAM, ACPI and PCI above 4 GiB
-            suites: normal,net,fill
+            suites: normal,fill
+            machine: virt,gic-version=3,highmem=on
+            memory: 6G
+          - group: network above 4 GiB
+            suites: net
             machine: virt,gic-version=3,highmem=on
             memory: 6G
           - group: GICv2 with GICv2m (a Raspberry Pi 4's interrupt controller)

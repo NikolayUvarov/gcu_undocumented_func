@@ -227,6 +227,23 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 
 - **Гейт через Effector — это локальный гейт** в смысле [AGENTS.md](../AGENTS.md), раздел 4, если прошли все группы `scripts/ci_local.sh`.
 - **Гейт очереди посадки** (AGENTS.md, раздел 4, с 2026-10-21) идёт так же. `scripts/land.sh gate` раскладывает все группы `scripts/ci_local.sh --list` по очередям машин и запускает упавшую группу ещё раз, одну. Ключ он берёт только из файла `$EFFECTOR_KEY_FILE` (раздел 2). Очереди называют предустановки: `full`, и `no-i9`, пока i9 нагружен гейтом другого трека; `i9-on-rz`, которой гейтились раунды 34–39, пока i9 был выключен; `wide` с 2026-10-28, где длинные группы x86 идут на `acc-1` и `acc-2`, и `wide-no-i9`, пока i9 занят.
+- **Пул** (`--preset pool`, или `pool-no-i9`, пока i9 занят; с 2026-10-29, по просьбе сопровождающего). Ни у одной очереди нет списка.
+  - **Очереди:** i9, `acc-1`, `acc-2`, три клона на `un-rizen-service` и PCU.
+  - **Что берёт каждая:** освободившись, самую длинную из оставшихся групп, которую может выполнить. Часть host идёт только на `un-rizen-service`, i9 не берёт групп aarch64, PCU берёт только группы aarch64.
+  - **Сборки:** очередь собирает образ части, когда впервые берёт её группу.
+  - **Оценки** — секунды из таблицы ниже, затем собственные записи гейта о тех же группах; `--dry-run` печатает расписание, которое они дают.
+  - **Гейт, запущенный снова** на том же кандидате, даёт каждой очереди те же группы в том же порядке (`$LAND_WORK/gate-<commit>-taken.json`), и Effector отвечает уже готовыми результатами.
+- **Длинные группы разбиты** (2026-10-29), чтобы ни одна не шла заметно дольше 15 минут. Каждый набор замерен отдельно на `3e07edb8`, в секундах:
+
+| Группа прежде | Её наборы по отдельности | Группы теперь |
+|---|---|---|
+| x86: boot, display, network, TLS, shell, memory, clock (1489, `un-rizen-service`) | boot 432, display 56, net 545, tls 101, effector 193, normal 100, memory 23, dzen 39 | x86: boot, display, shell, memory, clock; x86: network, TLS and Effector |
+| x86: keys, shell, tools (1023, `acc-1`) | wm 662; keys, shell, tools, bench, windows, tablet, usb, ehci вместе 361 | x86: keys, shell, tools; x86: the window manager |
+| x86: files and block writes (1091, `acc-2`) | vfs 120, edit 24, disk 29, block 20, store 146, storefaults 58, updater 174, linkupdate 520 | x86: files and block writes; x86: the updater and an update through the link |
+| aarch64: files, network and TLS (2640, `un-rizen-service`) | vfs 151, store 164, storefaults 65, net 482, tls 98, effector 209, updater 371, linkupdate 899, modes 201 | aarch64: files and the block store; aarch64: network, TLS and Effector; aarch64: the updater and the modes; aarch64: an update through the link |
+| aarch64: RAM, ACPI and PCI above 4 GiB (1394, PCU) | normal 476, net 550, fill 368 | aarch64: RAM, ACPI and PCI above 4 GiB; aarch64: network above 4 GiB |
+
+- **Что это даёт** в симуляции с этими оценками: около 49 минут на семи очередях против 64–70 в раундах 41–43 с постоянными списками. Тесты занимают в сумме около 233 минут, и каждая очередь сначала собирает свои образы. Следующий шаг — больше очередей, например `x32-128`, когда он станет стабильным.
 - **Указывайте, где он шёл:** «локальный гейт на PCU через Effector», и называйте конфигурацию из раздела 1.
 - **Пока полный гейт там не помещается** (раздел 1), удалённая машина добавляет доказательства рядом с гейтом и не заменяет его.
 
