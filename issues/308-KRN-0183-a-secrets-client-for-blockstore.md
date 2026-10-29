@@ -12,21 +12,29 @@
 
 ## Plan
 
-- **`keystore.wit`, its next minor version (1.5):**
-  - a service's secrets client, minted only for `init`'s own badge at `keystore` (`BADGE_KEY_INIT`), for a service `init` names;
-  - kept apart from programs': `system/keystore/services/<name>.kept`, and the sealing key's label names a service, so neither a program's name nor a file copied between the two directories opens it.
-  - The calls on the client are 1.4's (`secret-put`, `secret-get`, `secret-delete`, `secret-list`).
+**Changed on 2026-10-29, before any code: a badge, not a call.** The plan first had `init` ask `keystore` for a service's client with a badge of its own (`BADGE_KEY_INIT`) and a new call. A client badged for the service does the same with less: the Wi-Fi station and the SSH service already reach their part of `keystore` that way (`BADGE_KEY_STATION`, `BADGE_KEY_SSH`), only `init` mints badged clients of `keystore`, and nothing has to be asked at boot.
+
+- **`keystore.wit` 1.5** (no new call):
+  - on a client badged `BADGE_KEY_BLOCKSTORE` (5, `mind::network`), the secrets calls of 1.4 (`secret-put`, `secret-get`, `secret-delete`, `secret-list`) are about the block store's own secrets;
+  - they are kept apart, in `system/keystore/services/blockstore.kept`, sealed under a key whose label names a service (`MIND keystore: a service's secrets`), so neither a program's name nor a file copied between the two directories opens them;
+  - the same budget as a program's: 16 secrets, 65536 bytes.
 - **`init`:**
-  - holds a `keystore` client badged `BADGE_KEY_INIT`, apart from the loader's `BADGE_KEY_LOADER`;
-  - after `keystore` is ready, asks for `blockstore`'s client and puts it in `blockstore`'s slot 3, before `blockstore` mounts;
-  - when `keystore` gives none, starts `blockstore` without it and logs why (MC-6.8): the store depends on `keystore`, never the other way round.
-- **Docs:** `idl/keystore.wit`, `docs/profile/bootstrap.md` (`blockstore`'s slot 3, `init`'s client), the profile's MC-11.9 row.
+  - lends `blockstore` that client in its slot 3 when `keystore` runs; else it starts the store without it and logs why (MC-6.8): the store depends on `keystore`, never the other way round;
+  - starts `blockstore` right after `keystore` (`services::LATE`, init's start order; `BOOT_SERVICES` and the ABI are unchanged), and `services.txt` cannot put `keystore` after it;
+  - a restarted store gets a new client the same way.
+- **Docs:** `idl/keystore.wit`, `docs/profile/bootstrap.md` (`blockstore`'s slot 3, `keystore`'s row), the profile's MC-11.9 row.
 
 ## Acceptance criteria
 
-- **Host tests:** a service's name and a program's name never meet (the paths, the sealing label).
-- **QEMU, x86 and aarch64:** `blockstore` holds a secrets client from `init` at boot; a secret it keeps through it is read back after a reboot; a program named `blockstore` run from `data/apps/` gets a program's client that does not see it.
-- **The other suites** pass. The storage track's suites check the rest once the store uses the client (308-STO-0022).
+- **Host tests:**
+  - a service's and a program's secrets never meet: other directories, other labels, other keys for the same name, and a program's key as 1.4 made it (`tests/secrets_host.rs`);
+  - `blockstore` right after `keystore` in init's start order, the other images in `BOOT_SERVICES`' order, `after keystore blockstore` refused, the store left on when `keystore` is off (`tests/services_host.rs`).
+- **QEMU** (`tls` suite, `device_key_check`, a raw image booted three times with a blank store disk):
+  - `blockstore` holds `keystore`'s client badged 5 in slot 3;
+  - the volume key of its disk is kept by `keystore` as the store's secret, not on the medium, and read back at the next boot, when the store mounts its disk with it;
+  - a program named `blockstore` (`netcheck` by that name) gets a program's client that finds none of it, and does not open the store's file copied under its name;
+  - under a new device key the store's file opens no more.
+- **The other suites** pass. The storage track's suites check the rest (308-STO-0022).
 
 ## Related
 

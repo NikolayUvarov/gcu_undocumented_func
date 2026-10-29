@@ -8795,13 +8795,19 @@ def device_key_check(args, cpu):
         return
     with tempfile.TemporaryDirectory(prefix="smoke-key-", dir=ROOT / IMAGE) as temp:
         # 000-NET-0045: netcheck's secret from a file; netpeer, the same program by another name; a copy run by a path.
+        # 308-KRN-0183: netcheck by the block store's name too, and a blank store disk, whose volume key the store keeps.
         netcheck = (ROOT / IMAGE / "netcheck.elf").read_bytes()
-        image, start, fs_sectors = raw_fat_image(Path(temp), extra={"secret.txt": SECRET, "netpeer.elf": netcheck, "tmp/netcheck.elf": netcheck})
+        image, start, fs_sectors = raw_fat_image(Path(temp), extra={"secret.txt": SECRET, "netpeer.elf": netcheck, "tmp/netcheck.elf": netcheck,
+                                                                    "blockstore.elf": netcheck})
         part = f"{image}@@{start * 512}"
+        store = Path(temp) / "store.img"
+        with store.open("wb") as f:
+            f.truncate(32 << 20)
 
         def boot():
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
-                    extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+                    extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
+                           "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"])
             try:
                 log = vm.service_logs("keystore", "PUBLIC KEY")
                 name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
@@ -8827,13 +8833,16 @@ def device_key_check(args, cpu):
             # 108: a change of the network policy is kept on the disk too.
             require(policy_answer(vm, "netpolicy add kept 10.0.2.2 tcp 7", "y"), "NETPOLICY: ADDED 1 LINE(S)")
             secrets_first_boot(vm)
+            volume = service_secrets_first_boot(vm)
         finally:
             vm.close()
         kept = secrets_file(part, Path(temp), "netcheck")
+        service_secrets_file(part, Path(temp))
         vm, log, second = boot()
         try:
             require(vm.command("netpolicy"), "kept 10.0.2.2 tcp 7")
             secrets_second_boot(vm)
+            service_secrets_second_boot(vm, volume)
         finally:
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key (ON DISK, NOT SEALED)")
@@ -8842,7 +8851,11 @@ def device_key_check(args, cpu):
         damaged.write_bytes(b"MINDKEY1" + bytes(64))
         subprocess.run(["mcopy", "-o", "-i", part, str(damaged), "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
         vm, log, third = boot()
-        vm.close()
+        try:
+            # The store's volume key was sealed under the old device key: it opens no more (308-KRN-0183).
+            require(service_log(vm, "keystore", "SECRETS OF SERVICE blockstore"), "[KEYSTORE] SECRETS OF SERVICE blockstore DO NOT OPEN UNDER THIS DEVICE KEY AND NAME: NOT READ")
+        finally:
+            vm.close()
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
         assert third != first, (first, third)
         fsck_volume(image, start, fs_sectors)
@@ -8852,6 +8865,58 @@ def device_key_check(args, cpu):
           f"after a reboot (SHA-256 checked); netpeer, the same program by another name, finds none, nor opens netcheck's file "
           f"copied under its name; a copy run by a path gets no secrets client; the file ({kept} bytes) is sealed, and the value "
           "is in no log line and no command line", flush=True)
+    print(f"PASS: the block store's own secrets in keystore (308-KRN-0183): its client from init in slot 3 (BADGE_KEY_BLOCKSTORE), "
+          f"the volume key of its blank disk kept as {volume} and read back at the next boot, not on the medium; a program named "
+          "blockstore sees none of it, nor opens the store's file copied under its name; under a new device key it opens no more", flush=True)
+
+
+def service_log(vm, name, until, tries=120):
+    """The system log's lines of service `name` (not drained, unlike `logs`), once `until` is among them."""
+    text = ""
+    for _ in range(tries):
+        text = vm.command(f"dmesg -s {name}", raw=True, timeout=60)
+        if until in text:
+            break
+        time.sleep(.5)
+    return text
+
+
+def service_secrets_first_boot(vm):
+    """308-KRN-0183: the block store holds keystore's client badged BADGE_KEY_BLOCKSTORE in slot 3, and keystore keeps
+    the volume key of its blank disk as the service's secret; the program `blockstore` (netcheck by that name) has a
+    program's client, which sees none of it. Returns the secret's name."""
+    real = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    caps = vm.command(f"stat caps {real['blockstore']}", raw=True)
+    held = [(int(badge), servers.get(int(ep))) for badge, ep in re.findall(r"^SLOT=3 GEN=\d+ KIND=1 RIGHTS=\d+ SIZE=0 BADGE=(\d+) EP=(\d+)", caps, re.M)]
+    assert held == [(5, real["keystore"])], (held, caps)
+    log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+    assert re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE FROM \w+, KEPT BY KEYSTORE, NOT ON THE MEDIUM", log), log
+    require(log, "SEALED, KEY KEPT BY KEYSTORE")
+    kept = re.search(r"\[KEYSTORE\] SECRET (volume-[0-9a-f]{16}) OF SERVICE blockstore KEPT FOR PID (\d+)", service_log(vm, "keystore", "OF SERVICE blockstore"))
+    assert kept and int(kept[2]) == real["blockstore"], vm.command("dmesg -s keystore", raw=True)
+    require_all(vm.command(f"blockstore secret-get:{kept[1]} secrets"), f"NETCHECK secret-get:{kept[1]} Missing", "NETCHECK secrets OK (NONE)")
+    return kept[1]
+
+
+def service_secrets_file(part, temp):
+    """The block store's sealed file read from the disk on the host, then copied under the program `blockstore`'s
+    name, as which it must not open."""
+    out = temp / "blockstore-service.kept"
+    subprocess.run(["mcopy", "-o", "-i", part, "::/system/keystore/services/blockstore.kept", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
+    assert out.read_bytes()[:8] == b"MINDSEC1", out.read_bytes()[:64]
+    subprocess.run(["mcopy", "-o", "-i", part, str(out), "::/system/keystore/secrets/blockstore.kept"], env=MTOOLS_ENV, check=True, capture_output=True)
+
+
+def service_secrets_second_boot(vm, volume):
+    """After the reboot: the store mounts its disk with the key keystore kept; the program `blockstore` does not open
+    the store's file copied under its name."""
+    log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+    require(log, "SEALED, KEY KEPT BY KEYSTORE")
+    assert "VOLUME KEY MADE" not in log, log
+    require(service_log(vm, "keystore", f"SECRET {volume} OF SERVICE blockstore READ"), f"[KEYSTORE] SECRET {volume} OF SERVICE blockstore READ BY PID")
+    require(vm.command(f"blockstore secret-get:{volume}"), f"NETCHECK secret-get:{volume} NoKey")
+    require(service_log(vm, "keystore", "SECRETS OF blockstore DO"), "[KEYSTORE] SECRETS OF blockstore DO NOT OPEN UNDER THIS DEVICE KEY AND NAME: NOT READ")
 
 
 # 000-NET-0045: a secret that must appear in no log line, no command line and not in the clear on the disk.

@@ -23,6 +23,11 @@
 //! loader named, or the first that calls on it, and only about its program's secrets: no call names another program.
 //! They are kept in the private directory, one file per program, sealed (ChaCha20-Poly1305) under a key derived from
 //! the device key and the program's name; the log names a program and a secret, never a value.
+//!
+//! 1.5 (308-KRN-0183): a boot service's secrets. init lends `blockstore` a client badged `BADGE_KEY_BLOCKSTORE`
+//! (`mind::network`), on which the secrets calls are about that service's own secrets: its volume keys (308-STO-0022).
+//! No program reaches them, whatever its name: they are kept apart, one file per service in `system/keystore/services/`,
+//! sealed under a key whose label names a service, so a program's file copied there opens no more than under another name.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -32,7 +37,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:keystore";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `missing` (1.4): no secret of that name is kept.
@@ -280,7 +285,7 @@ pub fn secrets_adopt(endpoint: Endpoint, client: u16, task: u64) -> Result<core:
 
 /// Keeps `value` (1 to 16384 bytes) as the caller's program's secret `name` (1 to 32 letters, digits, `.`, `_` or `-`),
 /// in place of one kept under the name; `budget` past 16 secrets or 65536 bytes of them for one program, `no-key`
-/// without the device key or when it could not be written (a secrets client only).
+/// without the device key or when it could not be written (a secrets client, or a boot service's (1.5), only).
 pub fn secret_put(endpoint: Endpoint, name: &str, value: &[u8]) -> Result<core::result::Result<(), Error>> {
     let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
     let length = {
@@ -296,7 +301,7 @@ pub fn secret_put(endpoint: Endpoint, name: &str, value: &[u8]) -> Result<core::
     Ok(Ok(()))
 }
 
-/// The caller's program's secret `name`; `missing` when none is kept (a secrets client only).
+/// The caller's program's secret `name`; `missing` when none is kept (a secrets client, or a boot service's (1.5), only).
 pub fn secret_get(endpoint: Endpoint, name: &str, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
     let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
     let length = {
@@ -311,7 +316,7 @@ pub fn secret_get(endpoint: Endpoint, name: &str, out: &mut [u8]) -> Result<core
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<16384>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
 }
 
-/// Forgets the caller's program's secret `name`; false when none was kept (a secrets client only).
+/// Forgets the caller's program's secret `name`; false when none was kept (a secrets client, or a boot service's (1.5), only).
 pub fn secret_delete(endpoint: Endpoint, name: &str) -> Result<core::result::Result<bool, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
@@ -326,7 +331,7 @@ pub fn secret_delete(endpoint: Endpoint, name: &str) -> Result<core::result::Res
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <bool as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-/// The names of the caller's program's secrets, never their values (a secrets client only).
+/// The names of the caller's program's secrets, never their values (a secrets client, or a boot service's (1.5), only).
 pub fn secret_list(endpoint: Endpoint) -> Result<core::result::Result<List<Text<32>, 16>, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
