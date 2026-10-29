@@ -8,13 +8,14 @@ use services::*;
 
 const N: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
 
-// The units in init's boot order: init, then each image followed by its further instances.
+// The units in init's boot order: init, then each image in start order (services::LATE moved) followed by its further
+// instances.
 fn units() -> [&'static str; N] {
     let mut units = ["init"; N];
     let mut p = 1;
-    for image in BOOT_SERVICES.iter().skip(1) {
+    for image in start_images(&BOOT_SERVICES).map(|i| BOOT_SERVICES[i]) {
         units[p] = image; p += 1;
-        for instance in SERVICE_INSTANCES.iter().filter(|i| base(i) == *image) { units[p] = instance; p += 1; }
+        for instance in SERVICE_INSTANCES.iter().filter(|i| base(i) == image) { units[p] = instance; p += 1; }
     }
     assert_eq!(p, N);
     units
@@ -52,6 +53,25 @@ fn the_rules_name_real_services_in_their_boot_order() {
     // Everything before vfs_server is essential: init cannot read the file before it.
     for name in &units[..=at(&units, "vfs_server")] { assert!(!configurable(name), "{name}"); }
     for name in ["init", "logd", "compositor", "loader", "shell", "link", "effector_gw", "effector", "tpm"] { assert!(!configurable(name), "{name}"); }
+}
+
+#[test]
+fn the_block_store_starts_right_after_keystore() {
+    // 308-KRN-0183: its secrets client is keystore's; every image once, the others in BOOT_SERVICES' order.
+    let units = units();
+    assert_eq!(at(&units, "blockstore"), at(&units, "keystore") + 1);
+    let rest: Vec<_> = units.iter().copied().filter(|u| !u.contains('#') && *u != "blockstore").collect();
+    assert_eq!(rest, BOOT_SERVICES.iter().copied().filter(|u| *u != "blockstore").collect::<Vec<_>>());
+    // A file cannot put keystore after it, and turning keystore off leaves the store on, without the client.
+    let (plan, refused) = parsed("after keystore blockstore
+");
+    assert_eq!(refused, [(1, "CONTRADICTS INIT: THE OTHER NEEDS IT FIRST", "after keystore blockstore".to_string())]);
+    assert_eq!(plan.after[at(&units, "keystore")], None);
+    let (plan, _) = parsed("disable keystore
+");
+    assert!(!plan.off[at(&units, "blockstore")] && plan.needs[at(&units, "blockstore")].is_none());
+    let order = order(&plan);
+    assert!(order.iter().position(|u| *u == "keystore") < order.iter().position(|u| *u == "blockstore"));
 }
 
 #[test]

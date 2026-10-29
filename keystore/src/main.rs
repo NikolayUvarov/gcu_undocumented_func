@@ -7,7 +7,8 @@
 // idl/keystore.wit: the certificate and the public key to anyone; signatures only to the signer's badge (the TLS
 // service) for TLS and to the SSH service's badge for SSH logins (1.2), only for data of the form the purpose names, and
 // within each one's budget per boot; the Wi-Fi station's remembered networks (1.1, wifi.rs) and its country (1.3) only to the station's badge;
-// each program's secrets (1.4, secrets.rs) only to the client the loader got for that program. Holds: an RTC client (slot 2) for the certificate's start
+// each program's secrets (1.4, secrets.rs) only to the client the loader got for that program, and the block store's own
+// (1.5) only to the client init badged for it. Holds: an RTC client (slot 2) for the certificate's start
 // date, a VFS client with its own badge (slot 3) for `system/keystore`, the TPM service's client with the seal badge
 // (slot 4).
 extern crate alloc;
@@ -58,12 +59,12 @@ impl Keys {
         Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, ssh_logins: 0, wifi, secrets: secrets::Clients::new() }
     }
 
-    // A secrets client's call (1.4): `f` gets the device key's seed (wiped after) and the caller's program; `denied` to
-    // any other client, `no-key` without the device key.
-    fn secret<T>(&mut self, badge: u16, pid: u64, f: impl FnOnce(&[u8; 32], &str) -> Result<T, Error>) -> Result<T, Error> {
-        let program = self.secrets.program(badge, pid)?;
+    // A secrets client's call (1.4), or a boot service's (1.5): `f` gets the device key's seed (wiped after) and whose
+    // secrets they are; `denied` to any other client, `no-key` without the device key.
+    fn secret<T>(&mut self, badge: u16, pid: u64, f: impl FnOnce(&[u8; 32], &secrets::Owner) -> Result<T, Error>) -> Result<T, Error> {
+        let owner = self.secrets.owner(badge, pid)?;
         let mut seed = self.key.as_ref().map(SigningKey::to_bytes).ok_or(Error::NoKey)?;
-        let result = f(&seed, program.as_str());
+        let result = f(&seed, &owner);
         stored::wipe(&mut seed);
         result
     }
@@ -251,25 +252,25 @@ fn main(_info: &'static BootInfo) {
                 keystore::reply_secrets_name(call, keys.secrets.name(request.badge, request.sender, client, program.as_str()))
             }
             Ok((keystore::Request::SecretsAdopt { client, task }, call)) => keystore::reply_secrets_adopt(call, keys.secrets.adopt(request.badge, request.sender, client, task)),
-            // A program's calls on its secrets client: about its own secrets alone.
+            // A program's calls on its secrets client, or the block store's on its own: about the caller's own secrets alone.
             Ok((keystore::Request::SecretPut { name, value }, call)) => {
                 carried = true;
-                let result = keys.secret(request.badge, request.sender, |seed, program| secrets::put(seed, program, request.sender, name.as_str(), value));
+                let result = keys.secret(request.badge, request.sender, |seed, owner| secrets::put(seed, owner, request.sender, name.as_str(), value));
                 keystore::reply_secret_put(call, result)
             }
             Ok((keystore::Request::SecretGet { name }, call)) => {
-                let mut result = keys.secret(request.badge, request.sender, |seed, program| secrets::get(seed, program, request.sender, name.as_str()));
+                let mut result = keys.secret(request.badge, request.sender, |seed, owner| secrets::get(seed, owner, request.sender, name.as_str()));
                 let reply = keystore::reply_secret_get(call, result.as_deref().map_err(|e| *e));
                 if let Ok(value) = result.as_mut() { stored::wipe(value); }
                 reply
             }
             Ok((keystore::Request::SecretDelete { name }, call)) => {
-                let result = keys.secret(request.badge, request.sender, |seed, program| secrets::delete(seed, program, request.sender, name.as_str()));
+                let result = keys.secret(request.badge, request.sender, |seed, owner| secrets::delete(seed, owner, request.sender, name.as_str()));
                 keystore::reply_secret_delete(call, result)
             }
             Ok((keystore::Request::SecretList, call)) => {
                 let mut list = List::default();
-                let result = keys.secret(request.badge, request.sender, |seed, program| secrets::list(seed, program, &mut list));
+                let result = keys.secret(request.badge, request.sender, |seed, owner| secrets::list(seed, owner, &mut list));
                 keystore::reply_secret_list(call, result.map(|_| list.as_slice()))
             }
         };

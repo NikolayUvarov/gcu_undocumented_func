@@ -319,6 +319,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [109-NET-0051](../issues-done/109-NET-0051-an-exited-parser-never-hides-the-shared-one.done) | The tests' service table never takes an exited row for a live service (APP's request) | `parser_check` reads the shared parser whether or not a download's exited one is still listed; the x86 group "network, TLS and Effector" passed whole with it |
 | [550-DRV-0039](../issues-done/550-DRV-0039-the-external-lna-held-off.done) | `bcm_wifi` holds the BCM4331's external LNA off | the MacBook Pro, in turn: 93–95% of beacons heard against 66% under the PHY's control, no more data lost; levels read now about 17–20 dB lower |
 | [173-APP-0092](../issues-done/173-APP-0092-svc-boot.done) | `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (requested by KRN for 173) | `svc boot` shows this boot's plan and what data/services.txt changes next; the edits judged by init's own parser; the `tools` suite disables tts, reboots and finds it off; done (2026-10-29) |
 | [900-NRL-0025](../issues-done/900-NRL-0025-native-conformance-and-app-handoff.done) | Pinned native conformance package and nnd design handoff | MIT model, independent f64 reference/tolerance, exact encoding vectors, 16 host scenarios; 99 tests/four builds; APP/KRN replies delivered; native T11 remains open |
