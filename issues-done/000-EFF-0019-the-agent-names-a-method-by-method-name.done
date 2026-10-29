@@ -1,0 +1,24 @@
+# 000-EFF-0019 — The agent names a failed request's method by `Method::name()` — done
+
+**Type:** service · **Owner:** `EFF` · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** — (for `NET`'s [000-NET-0047](../issues/000-NET-0047-http-for-api-clients.md)) · **Constitution:** MC-12.4
+
+## Problem
+
+`NET`'s request (`issues/requests-EFF.md`, 2026-10-28):
+- `effector/src/main.rs` named a failed request's method with a `match` over every case of `mind::http::Method`.
+- 000-NET-0047 adds `Head`, `Patch` and `Delete`, and a new case would break that `match` outside `libmind`.
+
+## Plan
+
+Name the method with `method.name()`, which `libmind` already makes public.
+
+## Acceptance criteria
+
+- [x] The agent builds with `method.name()` and names the method as before (`effector`, x86, 2026-10-29).
+
+## Resolution
+
+Done on 2026-10-29 by the `EFF` track.
+- **The change:** the log line of a failed request in `effector/src/main.rs` calls `method.name()`. It prints the same words: `GET`, `POST`, `PUT`.
+- **The request** is taken out of `issues/requests-EFF.md`.
+- **What it frees:** `NET` may add the new cases in 000-NET-0047.

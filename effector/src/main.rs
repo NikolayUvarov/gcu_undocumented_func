@@ -267,7 +267,7 @@ impl Agent {
             let all = [("Content-Type", content_type), ("X-Effector-Agent-ID", agent_id.as_str()), ("Authorization", authorization.as_str())];
             let headers = if send_token { &all[..] } else { &all[..2] };
             let sent = connection.request(method, &url, headers, body, &mut parser, false);
-            let mut response = match sent { Ok(r) => r, Err(e) => { mind::println!("EFFECTOR: {} {}: {:?}", match method { Method::Get => "GET", Method::Post => "POST", Method::Put => "PUT" }, route, e); return None; } };
+            let mut response = match sent { Ok(r) => r, Err(e) => { mind::println!("EFFECTOR: {} {}: {:?}", method.name(), route, e); return None; } };
             let status = response.status;
             let mut chunk = [0u8; 2048];
             loop {
