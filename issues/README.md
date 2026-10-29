@@ -19,8 +19,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [900-NRL-0025](900-NRL-0025-native-conformance-and-app-handoff.md) | Pinned native conformance package and nnd design handoff | `NRL` / Codex | P1 | — for host handoff; native part in 0017 | G / 900 T11 |
-| [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md) | Portable session executor and native nnd integration | `NRL` / Codex | P1 | APP nnd/IDL request for native part | G / 900 T11 |
+| [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md) | Portable session executor and native nnd integration | `NRL` / Codex | P1 | 262-APP-0112; 262-KRN-0178; named-target native suite | G / 900 T11 |
 | [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) | Realtek boot images, non-mastering BAR grants and retained-DMA firmware diagnostic | `KRN` / ASTRA auditor-fixer | P1 | x86 and hardware checks | H / 213 |
 | [000-ASR-0010](000-ASR-0010-owned-tcp-refusal-fixture.md) | Reserve a non-listening TCP endpoint for the exact QEMU connection-refused assertion | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
 | [000-ASR-0011](000-ASR-0011-monotonic-tsc-reference.md) | Compare guest elapsed time against the host monotonic clock | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
@@ -314,6 +313,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [900-NRL-0025](../issues-done/900-NRL-0025-native-conformance-and-app-handoff.done) | Pinned native conformance package and nnd design handoff | MIT model, independent f64 reference/tolerance, exact encoding vectors, 16 host scenarios; 99 tests/four builds; APP/KRN replies delivered; native T11 remains open |
 | [309-STO-0025](../issues-done/309-STO-0025-scrub.done) | Scrub: every record read and checked within a budget | every record checked as a mount does, nothing written; between requests about 256 sectors a step and a pass a day, whole on request (`blockstore.wit` 2.3); a damaged chunk found before any read on x86 and aarch64; the scrub between requests not run on the platform (round 43) |
 | [308-STO-0023](../issues-done/308-STO-0023-memory-domains.done) | Memory domains: a key per domain, and forgetting by destroying it | layout 4; a random key per domain in a key record under the volume key; forgetting writes a tombstone and erases the key record, the next collection frees the records (`blockstore.wit` 2.2); aarch64 `store` and x86 `boot` with `+rdrand`; with 308-KRN-0184 (round 43) |
 | [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done) | `blockstore` holds its endpoint with `CAP_BADGE`, to mint its memory domains' clients (round 43, with 308-STO-0023) | done (2026-10-29) |

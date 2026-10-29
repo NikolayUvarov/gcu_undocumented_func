@@ -72,5 +72,18 @@
     "KRN boot grants and badged client (262-KRN-0178)",
     "Named-target native suite including two-client and lifecycle isolation, quotas, controlled cancellation and memory release (900-NRL-0017)"
   ],
-  "handoff": "Pinned payloads and design clarifications ready; APP/KRN message references will be recorded in the issue resolution."
+  "handoff": {
+    "branch_commit": "9cb4c346d284747f1c1dd10fe70d97ce986f5477",
+    "messages": {
+      "APP": {
+        "path": "APP/2026-10-29T1459Z-NRL-text-f64-agreed-pinned-native-conformance-package.md",
+        "commit": "eaa3fc0913f29fa875838c4f4430fa27ed0cb134"
+      },
+      "KRN": {
+        "path": "KRN/2026-10-29T1459Z-NRL-nnd-format-agreement-and-client-identity-lifetime.md",
+        "commit": "93568a172ad8dff961b800c5780a266724b321fe"
+      }
+    },
+    "native_acceptance": "still open"
+  }
 }
