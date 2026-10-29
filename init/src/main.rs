@@ -546,7 +546,8 @@ impl Init {
             "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL),
             // The block store over a RAM disk of its own: its only block client (block::serve has one buffer for all).
             "blockstore" => {
-                grants.add(SLOT_SERVICE, self.server(&mut minted, "blockstore")?, ALL);
+                // It badges its memory domains' clients from 0x100 up, below them init's (308-STO-0023, 308-KRN-0184).
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "blockstore")?, ALL | CAP_BADGE);
                 // Its own disk when there is one, else the RAM disk whose contents never outlive the boot (300-KRN-0025).
                 let disk = match self.store_disk() { Some(disk) => disk, None if self.running(service_index("ramdisk#1")) => "ramdisk#1", None => return Err(Error::NotFound) };
                 grants.add(SLOT_DEV0, self.badged(&mut minted, disk, mind::block::BADGE_WRITE)?, CLIENT);
