@@ -1,0 +1,52 @@
+# 211-APP-0090 — Horizontal scrolling from a trackpad — done
+
+**Type:** tools (`wm`, `view`, `edit`, `fm`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-10-28), but for the run on the MacBook Pro (below) · **Blocked by:** — (the across field is in `main` with ABI 15: [211-KRN-0150](211-KRN-0150-an-across-field-in-absolute-pointer-events.done), `pointer_across`) · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-12.4
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, in `requests-APP.md`, for [211-DRV-0018](../issues/211-DRV-0018-macbook-trackpad-gestures.md), at the maintainer's request. Numbered by the tools track on 2026-10-20, at the maintainer's word.
+
+## Problem
+
+`usb_hid` reads the MacBook Pro trackpad's fingers. A three-finger swipe up or down turns the wheel; one left or right turns a horizontal wheel, which nothing reads:
+
+- relative pointer events carry it in bits 34–37 (`pointer_across`);
+- an absolute pointer event, the kind a window gets, carries the wheel in those bits and has no field for it (`common/abi.rs`, `pointer_absolute`), so `wm` cannot pass it on.
+
+## Plan
+
+- **The kernel track's part:** an across field in absolute pointer events (`common/abi.rs`, an ABI change), asked in requests-KRN.md.
+- **Then the tools track:**
+  - `mind::input::Pointer` gains `across`;
+  - `wm` passes it to the window under the pointer, as the wheel;
+  - `view`, `edit`, `fm` and the text windows scroll sideways by it where their content is wider than the window.
+
+## Acceptance criteria
+
+- A host test of `wm`'s routing passes a horizontal step to the window under the pointer.
+- `view` scrolls a wide image sideways by it.
+- On the MacBook Pro a three-finger swipe left or right moves a wide image in `view`.
+
+## Related
+
+[211-DRV-0018](../issues/211-DRV-0018-macbook-trackpad-gestures.md) (the trackpad's gestures).
+
+## Resolution
+
+Done on `claude/wizardly-franklin-kec1a9`, for the landing queue.
+
+- **`mind::input::Pointer`** (`libmind/src/input.rs`) gains `across`: the horizontal steps of the event, relative or absolute, read with `pointer_across` (211-KRN-0150).
+- **`mind::window::pointer_at`** (`libmind/src/window.rs`) takes them, and makes the window's event with `pointer_absolute_scroll`.
+- **`wm`:**
+  - `Wm::pointer_scroll` takes the steps (`pointer` stays as it was, with none);
+  - they go where the wheel goes: to the window under the pointer without raising it, or to the window holding the mouse, and nowhere when the pointer is over no content or a mode is open;
+  - `Action::Pointer` carries them;
+  - the log line says `ACROSS=`.
+- **`view`** (`view/src/main.rs`): a step left or right is ← or →, which move unwrapped text eight columns (`mind::tui::viewer`).
+- **Not done here:**
+  - `edit` and `fm`. `edit` keeps its left column on its cursor, so a sideways scroll would have to move the cursor; `fm`'s panels have nothing wider than the window;
+  - a source in QEMU: only `usb_hid`'s trackpad sets the field, and no QEMU device gives it, so no suite shows it end to end.
+- **Tests:**
+  - `tests/wm_host.rs`: the routing, a step left and right to the window under the pointer, nothing over no content, no raise;
+  - `tests/window_host.rs`: `pointer_at` keeps the steps;
+  - x86 build clean.
+- **Left: the MacBook Pro.** A three-finger swipe left or right should move a wide text in `view`. That is for the maintainer's run, and its result is not claimed here (MC-12.1).
+- **Docs:** `docs/tools/README.md` and `README_RU.md` (`view`, `wm`'s mouse).

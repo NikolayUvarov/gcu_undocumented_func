@@ -4,7 +4,9 @@
 //! the clients' rights by badge (libmind/src/blockstore.rs, issue 300-STO-0004); nodes stored only if they decode
 //! (issue 301-STO-0002); names published by compare-and-swap once their root's object is complete (302-STO-0001);
 //! collection by reachability with leases (303-STO-0001); pins with an owner and a quota, a name's history with explicit
-//! links, removing a name (303-STO-0002..0004); the current names listed by prefix, page by page (300-STO-0018).
+//! links, removing a name (303-STO-0002..0004); the current names listed by prefix, page by page (300-STO-0018); sealed
+//! records: nothing of a block, a CID or a name in the clear, a changed or moved record refused, a wrong key refused at
+//! mount (308-STO-0021).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -19,7 +21,111 @@ mod rights;
 
 use cid::{Cid, Codec};
 use std::collections::HashMap;
-use store::{record_sectors, Collected, Device, Entry, Error, Extent, Head, Pin, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, HEADER, HISTORY, LEASE_NS, NAME_MAX, SECTOR};
+use std::sync::atomic::{AtomicU64, Ordering};
+use store::{hmac_sha256, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Pin, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, SECTOR};
+
+/// A stand-in for ChaCha20-Poly1305, since the host tests build without crates: a keystream of splitmix64 seeded by
+/// SHA-256(key, nonce), and a tag of two sums in the manner of FNV-1a, seeded by the key, over the nonce, the associated
+/// data and the ciphertext, which any one changed byte changes. Not a cipher: enough to show what is sealed and what is
+/// refused. The platform's cipher is the RustCrypto crate, tested by its own project.
+struct Sealer { random: bool }
+static SEALER: Sealer = Sealer { random: true };
+static NO_RANDOM: Sealer = Sealer { random: false };
+static RANDOM: AtomicU64 = AtomicU64::new(1);
+fn keystream(key: &[u8; 32], nonce: &[u8; 12], data: &mut [u8]) {
+    let mut h = sha256::Sha256::new();
+    h.update(key);
+    h.update(nonce);
+    let mut x = u64::from_le_bytes(h.finish()[..8].try_into().unwrap());
+    for chunk in data.chunks_mut(8) {
+        x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        for (b, k) in chunk.iter_mut().zip((z ^ (z >> 31)).to_le_bytes()) { *b ^= k; }
+    }
+}
+fn tag(key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &[u8]) -> [u8; 16] {
+    let (mut a, mut b) = (u64::from_le_bytes(key[..8].try_into().unwrap()), u64::from_le_bytes(key[8..16].try_into().unwrap()));
+    for &byte in nonce.iter().chain(aad).chain(data) {
+        a = (a ^ byte as u64).wrapping_mul(0x100_0000_01b3);
+        b = (b.rotate_left(7) ^ byte as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+    let mut t = [0u8; 16];
+    t[..8].copy_from_slice(&a.to_le_bytes());
+    t[8..].copy_from_slice(&b.to_le_bytes());
+    t
+}
+impl Crypto for Sealer {
+    fn seal(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8]) -> [u8; 16] {
+        keystream(key, nonce, data);
+        tag(key, nonce, aad, data)
+    }
+    fn open(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8], t: &[u8; 16]) -> bool {
+        if tag(key, nonce, aad, data) != *t { return false; }
+        keystream(key, nonce, data);
+        true
+    }
+    fn random(&self, out: &mut [u8]) -> bool {
+        if !self.random { return false; }
+        for chunk in out.chunks_mut(32) { chunk.copy_from_slice(&sha256::digest(&RANDOM.fetch_add(1, Ordering::Relaxed).to_le_bytes())[..chunk.len()]); }
+        true
+    }
+}
+
+// The format again, written here from docs/storage rather than taken from store.rs: the keys a superblock's volume key
+// gives, and a record's associated data.
+fn keys(superblock: &[u8]) -> ([u8; 32], [u8; 32]) {
+    let volume: [u8; 32] = superblock[48..80].try_into().unwrap();
+    (hmac_sha256(&volume, &[b"MIND-STO seal"]), hmac_sha256(&volume, &[b"MIND-STO nonce"]))
+}
+fn aad(frame: &[u8], lba: u64) -> Vec<u8> { [&frame[..16], &lba.to_le_bytes()[..]].concat() }
+
+/// The record sealed in `bytes` (from its frame on) for sector `lba`, opened under the key in `superblock`: the bytes of
+/// its sectors after the frame, or none if no frame starts there or it does not open.
+fn unseal(superblock: &[u8], lba: u64, bytes: &[u8]) -> Option<Vec<u8>> {
+    if &bytes[..8] != b"MIND-SLD" || bytes[8..10] != LAYOUT.to_le_bytes() { return None; }
+    let n = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let mut data = bytes.get(FRAME..n * SECTOR)?.to_vec();
+    SEALER.open(&keys(superblock).0, bytes[16..28].try_into().unwrap(), &aad(bytes, lba), &mut data, bytes[28..44].try_into().unwrap()).then_some(data)
+}
+
+/// Every record on the medium that opens, by its first sector, and every frame that does not (none).
+fn records(medium: &Memory) -> Vec<(u64, Option<Vec<u8>>)> {
+    let mut found = Vec::new();
+    let mut lba = 1;
+    while lba < medium.writes.len() {
+        let at = lba * SECTOR;
+        let n = u32::from_le_bytes(medium.data[at + 12..at + 16].try_into().unwrap()) as usize;
+        if medium.data[at..at + 8] == *b"MIND-SLD" && n >= 1 && lba + n <= medium.writes.len() {
+            found.push((lba as u64, unseal(&medium.data[..SECTOR], lba as u64, &medium.data[at..])));
+            lba += n;
+        } else {
+            lba += 1;
+        }
+    }
+    found
+}
+
+/// The first sector of each record that opens and starts with `magic`.
+fn find(medium: &Memory, magic: &[u8; 8]) -> Vec<u64> {
+    records(medium).into_iter().filter(|(_, r)| r.as_ref().is_some_and(|r| r.starts_with(magic))).map(|(lba, _)| lba).collect()
+}
+
+/// Seals `record` at `lba` as the store does, under the medium's key: how a test forges a record.
+fn plant(medium: &mut Memory, lba: u64, record: &[u8]) {
+    let n = sealed_sectors(record.len());
+    let mut b = vec![0u8; n * SECTOR];
+    b[..8].copy_from_slice(b"MIND-SLD");
+    b[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    b[12..16].copy_from_slice(&(n as u32).to_le_bytes());
+    b[FRAME..FRAME + record.len()].copy_from_slice(record);
+    let nonce = [lba as u8; 12];
+    let t = SEALER.seal(&keys(&medium.data[..SECTOR]).0, &nonce, &aad(&b, lba), &mut b[FRAME..]);
+    b[16..28].copy_from_slice(&nonce);
+    b[28..44].copy_from_slice(&t);
+    let at = lba as usize * SECTOR;
+    medium.data[at..at + n * SECTOR].copy_from_slice(&b);
+}
 
 /// A medium in memory that counts how often each sector was written.
 #[derive(Clone)]
@@ -45,9 +151,11 @@ impl Device for &mut Memory {
         self.written += 1;
         if self.fail_write_at == Some(self.written) { return false; }
         let at = lba as usize * SECTOR;
-        // A block, name, pin or commit record goes only into blank sectors: nothing stored is overwritten.
-        if [&b"MIND-BLK"[..], b"MIND-REF", b"MIND-PIN", b"MIND-TXN"].iter().any(|m| data.starts_with(m)) {
-            assert!(self.data[at..at + data.len()].iter().all(|&b| b == 0), "a record written over sectors that are not blank at {lba}");
+        // A record goes only into blank sectors, so nothing stored is overwritten; only a free marker goes over the
+        // record it frees.
+        if lba > 0 && data.starts_with(b"MIND-SLD") {
+            let marker = unseal(&self.data[..SECTOR], lba, data).is_some_and(|r| r.starts_with(b"MIND-DEL"));
+            assert!(marker || self.data[at..at + data.len()].iter().all(|&b| b == 0), "a record written over sectors that are not blank at {lba}");
         }
         self.data[at..at + data.len()].copy_from_slice(data);
         for s in 0..data.len() / SECTOR { self.writes[lba as usize + s] += 1; }
@@ -66,7 +174,11 @@ impl Room {
 }
 
 fn mount<'a>(medium: &'a mut Memory, room: &'a mut Room) -> Result<Store<'a, &'a mut Memory>, Error> {
-    Store::mount(medium, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, room.now)
+    mount_with(medium, room, &SEALER)
+}
+
+fn mount_with<'a>(medium: &'a mut Memory, room: &'a mut Room, crypto: &'a dyn Crypto) -> Result<Store<'a, &'a mut Memory>, Error> {
+    Store::mount(medium, crypto, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, room.now)
 }
 
 /// The badge the tests' publications and pins are made with (the shell's on the platform).
@@ -177,7 +289,7 @@ fn a_block_damaged_after_mounting_is_refused_when_read() {
     let mut store = mount(&mut medium, &mut room).unwrap();
     let a = store.put(Codec::Raw, &block(5, 600)).unwrap();
     // The last byte of the block, in its second sector.
-    let last = HEADER + 600 - 1;
+    let last = FRAME + HEADER + 600 - 1;
     store.device().flip(1 + (last / SECTOR) as u64, last % SECTOR);
     assert_eq!(get(&mut store, &a), Err(Error::Corrupt));
     assert!(!store.has(&a));
@@ -186,7 +298,7 @@ fn a_block_damaged_after_mounting_is_refused_when_read() {
 }
 
 #[test]
-fn a_damaged_header_loses_its_record_only() {
+fn a_damaged_frame_loses_its_record_only() {
     let mut medium = Memory::new(128);
     let mut cids = Vec::new();
     {
@@ -194,14 +306,17 @@ fn a_damaged_header_loses_its_record_only() {
         let mut store = mount(&mut medium, &mut room).unwrap();
         for i in 0..4 { cids.push(store.put(Codec::Raw, &block(i, 1500)).unwrap()); }
     }
-    // The second record's header: its CID.
-    medium.flip(1 + record_sectors(1500) as u64, 20);
+    // The second record's magic: no frame starts there, so its sectors are damaged; the third's nonce: its seal does
+    // not open, so it is corrupt.
+    medium.flip(1 + record_sectors(1500) as u64, 2);
+    medium.flip(1 + 2 * record_sectors(1500) as u64, 20);
     let mut room = Room::new(16);
     let mut store = mount(&mut medium, &mut room).unwrap();
     assert_eq!(get(&mut store, &cids[1]), Err(Error::NotFound));
-    for i in [0, 2, 3] { assert_eq!(get(&mut store, &cids[i]).unwrap(), block(i, 1500)); }
+    assert_eq!(get(&mut store, &cids[2]), Err(Error::NotFound));
+    for i in [0, 3] { assert_eq!(get(&mut store, &cids[i]).unwrap(), block(i, 1500)); }
     let stats = store.stats();
-    assert_eq!((stats.blocks, stats.damaged), (3, record_sectors(1500) as u64));
+    assert_eq!((stats.blocks, stats.damaged, stats.corrupt), (2, record_sectors(1500) as u64, 1));
     // New blocks go after the whole log.
     assert_eq!(stats.used, 1 + 4 * record_sectors(1500) as u64);
     store.put(Codec::Raw, b"after").unwrap();
@@ -241,7 +356,7 @@ fn a_full_medium_or_index_refuses_a_put() {
     assert_eq!(store.put(Codec::Raw, &block(3, 4000)), Err(Error::Full));
     assert_eq!(store.stats(), before);
     // What still fits is taken.
-    store.put(Codec::Raw, &block(4, SECTOR * 3 - HEADER)).unwrap();
+    store.put(Codec::Raw, &block(4, SECTOR * 3 - FRAME - HEADER)).unwrap();
     assert_eq!(store.put(Codec::Raw, b"x"), Err(Error::Full));
     assert_eq!(get(&mut store, &Cid::raw(&block(1, 4000))).unwrap(), block(1, 4000));
 
@@ -282,11 +397,14 @@ fn a_foreign_or_unknown_medium_is_left_alone() {
     let mut damaged = medium.clone();
     damaged.flip(0, 30);
     assert_eq!(mount(&mut damaged, &mut Room::new(4)).err(), Some(Error::Foreign));
+    // A store of layout 2, before records were sealed: refused by its version, never converted.
     let mut other = medium.clone();
-    other.data[8] = 3;
+    other.data[8] = 2;
     let check = sha256::digest(&other.data[..16]);
     other.data[16..48].copy_from_slice(&check);
-    assert_eq!(mount(&mut other, &mut Room::new(4)).err(), Some(Error::Layout));
+    let before = other.data.clone();
+    assert_eq!(mount(&mut other, &mut Room::new(4)).err(), Some(Error::Layout(2)));
+    assert_eq!(other.data, before);
 }
 
 #[test]
@@ -424,10 +542,11 @@ fn a_record_typed_as_a_node_that_does_not_decode_is_corrupt() {
         let mut store = mount(&mut medium, &mut room).unwrap();
         store.put(Codec::Raw, b"not a node").unwrap();
     }
-    let header = SECTOR;
-    medium.data[header + 17] = 0x71;
-    let check = sha256::digest(&medium.data[header..header + 52]);
-    medium.data[header + 52..header + 84].copy_from_slice(&check);
+    let mut record = records(&medium)[0].1.clone().unwrap();
+    record[17] = 0x71;
+    let check = sha256::digest(&record[..52]);
+    record[52..84].copy_from_slice(&check);
+    plant(&mut medium, 1, &record);
     let mut room = Room::new(4);
     let store = mount(&mut medium, &mut room).unwrap();
     assert_eq!((store.stats().blocks, store.stats().corrupt), (0, 1));
@@ -518,11 +637,12 @@ fn a_damaged_name_record_is_reported_and_the_version_before_stands() {
         store.publish(b"head", 1, &b, OWNER).unwrap();
     }
     // The last record is version 2's: two block records of one sector each, then versions 1 and 2.
-    medium.flip(4, 30);
+    assert_eq!(find(&medium, b"MIND-REF"), vec![3, 4]);
+    medium.flip(4, 300);
     let mut room = Room::new(8);
     let mut store = mount(&mut medium, &mut room).unwrap();
     assert_eq!(store.resolve(b"head"), Ok((1, a)));
-    assert_eq!(store.stats().damaged, 1);
+    assert_eq!((store.stats().corrupt, store.stats().damaged), (1, 0));
     // The next publication still goes after the damaged sector and takes the next version of what is current.
     assert_eq!(store.publish(b"head", 1, &b, OWNER), Ok(2));
 }
@@ -554,24 +674,31 @@ fn names_are_checked_and_bounded() {
 
 #[test]
 fn a_block_cannot_plant_a_record_for_a_scan_after_damage() {
-    // A record's second sector starts SECTOR - HEADER bytes into the block's data.
-    let at = SECTOR - HEADER;
+    // A record's second sector starts SECTOR - FRAME - HEADER bytes into the block's data: a client puts there the
+    // frame of a record it would like a scan to find once the record's own frame is damaged.
+    let at = SECTOR - FRAME - HEADER;
     let mut medium = Memory::new(128);
-    let mut room = Room::new(16);
-    let mut store = mount(&mut medium, &mut room).unwrap();
-    for magic in [&b"MIND-REF"[..], b"MIND-BLK", b"MIND-PIN", b"MIND-DEL", b"MIND-TXN"] {
-        for offset in [at, at + SECTOR] {
-            let mut data = vec![0u8; at + 2 * SECTOR];
-            data[offset..offset + 8].copy_from_slice(magic);
-            assert_eq!(store.put(Codec::Raw, &data), Err(Error::Invalid));
-        }
-        // Elsewhere the same bytes are plain data.
+    let a;
+    {
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
         let mut data = vec![0u8; at + 2 * SECTOR];
-        data[at + 1..at + 9].copy_from_slice(magic);
-        data[..8].copy_from_slice(magic);
-        assert!(store.put(Codec::Raw, &data).is_ok());
+        for offset in [at, at + SECTOR] {
+            data[offset..offset + 8].copy_from_slice(b"MIND-SLD");
+            data[offset + 8..offset + 10].copy_from_slice(&LAYOUT.to_le_bytes());
+            data[offset + 12] = 1;
+        }
+        a = store.put(Codec::Raw, &data).unwrap();
+        store.publish(b"after", 0, &a, OWNER).unwrap();
     }
-    assert_eq!(store.stats().used, 1 + 5 * record_sectors(at + 2 * SECTOR) as u64);
+    // The bytes are sealed: on the medium nothing of them starts a sector.
+    let n = record_sectors(at + 2 * SECTOR);
+    assert!((2..1 + n).all(|s| medium.data[s * SECTOR..s * SECTOR + 8] != *b"MIND-SLD"));
+    medium.flip(1, 0);
+    let mut room = Room::new(16);
+    let store = mount(&mut medium, &mut room).unwrap();
+    let stats = store.stats();
+    assert_eq!((stats.blocks, stats.names, stats.corrupt, stats.damaged), (0, 1, 0, n as u64));
 }
 
 // An object of `len` bytes written into the store; its root.
@@ -687,7 +814,7 @@ fn nothing_is_collected_while_a_name_lacks_a_block() {
     store.publish(b"obj", 0, &root, OWNER).unwrap();
     // A chunk of the object found corrupt leaves the index.
     let chunk = Cid::raw(&block(4, 40_000)[16384..32768]);
-    let lba = (1..512u64).find(|&s| { let at = s as usize * SECTOR; store.device().data[at..at + 8] == *b"MIND-BLK" && store.device().data[at + 16..at + 52] == chunk.to_bytes() }).unwrap();
+    let lba = records(store.device()).into_iter().find(|(_, r)| r.as_ref().is_some_and(|r| r.starts_with(b"MIND-BLK") && r[16..52] == chunk.to_bytes())).unwrap().0;
     store.device().flip(lba + 3, 7);
     assert_eq!(get(&mut store, &chunk), Err(Error::Corrupt));
     store.set_time(LEASE_NS);
@@ -717,13 +844,13 @@ fn a_collection_stopped_in_the_middle_is_finished_by_the_next_mount() {
     // Stopped after the marker over x's record: its data is still there.
     let n = record_sectors(2000) as u32;
     let at = 2 * SECTOR;
-    let mut marker = [0u8; SECTOR];
+    let mut marker = [0u8; 48];
     marker[..8].copy_from_slice(b"MIND-DEL");
-    marker[8] = 2;
+    marker[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
     marker[12..16].copy_from_slice(&n.to_le_bytes());
     let check = sha256::digest(&marker[..16]);
     marker[16..48].copy_from_slice(&check);
-    medium.data[at..at + SECTOR].copy_from_slice(&marker);
+    plant(&mut medium, 2, &marker);
     let mut room = Room::new(8);
     let store = mount(&mut medium, &mut room).unwrap();
     assert!(!store.has(&x));
@@ -949,7 +1076,7 @@ fn each_version_links_the_one_before() {
         assert_eq!(store.unpublish(b"doc", 2, OWNER), Ok(3));
     }
     // Each name record: version, root (none for the removal), the root before it (none for the first), owner.
-    let mut records: Vec<(u64, Vec<u8>, Vec<u8>, u16)> = medium.data.chunks(SECTOR).filter(|s| s.starts_with(b"MIND-REF"))
+    let mut records: Vec<(u64, Vec<u8>, Vec<u8>, u16)> = records(&medium).into_iter().filter_map(|(_, r)| r).filter(|s| s.starts_with(b"MIND-REF"))
         .map(|s| (u64::from_le_bytes(s[12..20].try_into().unwrap()), s[20..56].to_vec(), s[56..92].to_vec(), u16::from_le_bytes([s[158], s[159]])))
         .collect();
     records.sort();
@@ -1083,7 +1210,7 @@ fn a_commit_past_the_quota_changes_nothing() {
 #[test]
 fn a_damaged_or_torn_commit_changes_no_name() {
     // A byte of any sector of the record, or a write that stopped before its last sector: a mount applies none of it.
-    for case in 0..4 {
+    for case in 0..5 {
         let mut medium = Memory::new(512);
         let (a1, b1, at);
         {
@@ -1094,18 +1221,21 @@ fn a_damaged_or_torn_commit_changes_no_name() {
             let updates = [Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"b", expected: 1, root: Some(b2) }];
             store.commit(&updates, OWNER).unwrap();
         }
-        at = medium.data.chunks(SECTOR).position(|s| s.starts_with(b"MIND-TXN")).unwrap() as u64;
+        at = find(&medium, b"MIND-TXN")[0];
+        // Two entries: a header and two entry sectors, sealed in four.
+        let n = sealed_sectors(3 * SECTOR) as u64;
         match case {
             0 => medium.flip(at, 20),
             1 => medium.flip(at + 1, 30),
             2 => medium.flip(at + 2, 100),
-            _ => medium.data[(at + 2) as usize * SECTOR..(at + 3) as usize * SECTOR].fill(0),
+            3 => medium.data[(at + 3) as usize * SECTOR..(at + 4) as usize * SECTOR].fill(0),
+            _ => medium.flip(at, 0),
         }
         let mut room = Room::new(64);
         let store = mount(&mut medium, &mut room).unwrap();
         assert_eq!((store.resolve(b"a"), store.resolve(b"b")), (Ok((1, a1)), Ok((1, b1))), "case {case}");
-        // Every non-blank sector of the record is reported.
-        assert_eq!(store.stats().damaged, if case == 3 { 2 } else { 3 }, "case {case}");
+        // A record that does not open is corrupt; one whose frame is damaged leaves its sectors damaged.
+        assert_eq!((store.stats().corrupt, store.stats().damaged), if case == 4 { (0, n) } else { (1, 0) }, "case {case}");
     }
 }
 
@@ -1117,7 +1247,7 @@ fn a_commit_record_goes_once_no_name_keeps_its_versions() {
     let [_, _, a2, b2] = two_names(&mut store);
     let updates = [Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"b", expected: 1, root: Some(b2) }];
     store.commit(&updates, OWNER).unwrap();
-    let txn = |m: &Memory| m.data.chunks(SECTOR).filter(|s| s.starts_with(b"MIND-TXN")).count();
+    let txn = |m: &Memory| find(m, b"MIND-TXN").len();
     // a moves on HISTORY versions; b still keeps version 2: the record stays.
     for v in 2..2 + HISTORY as u64 { assert_eq!(store.publish(b"a", v, &a2, OWNER), Ok(v + 1)); }
     store.set_time(LEASE_NS);
@@ -1223,7 +1353,7 @@ fn a_medium_past_two_tebibytes_is_refused() {
         fn flush(&mut self) -> bool { true }
     }
     let mut room = Room::new(4);
-    let mounted = Store::mount(Huge, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0);
+    let mounted = Store::mount(Huge, &SEALER, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0);
     assert_eq!(mounted.err(), Some(Error::TooLarge));
 }
 
@@ -1295,7 +1425,7 @@ fn a_three_gibibyte_object_fits() {
     let (root, written) = {
         let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
         file.set_len(sectors * SECTOR as u64).unwrap();
-        let mut store = Store::mount(FileMedium { file, sectors }, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
+        let mut store = Store::mount(FileMedium { file, sectors }, &SEALER, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
         let mut builder = Box::new(dag::Builder::new());
         let mut buffer = vec![0u8; 1 << 20];
         let mut at = 0u64;
@@ -1310,7 +1440,7 @@ fn a_three_gibibyte_object_fits() {
         (root, store.stats())
     };
     let file = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
-    let mut store = Store::mount(FileMedium { file, sectors }, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
+    let mut store = Store::mount(FileMedium { file, sectors }, &SEALER, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
     assert_eq!(store.resolve(b"models/three-gib").map(|(_, cid)| cid), Ok(root));
     let mut chunk = [0u8; dag::CHUNK];
     let mut out = vec![0u8; 100_000];
@@ -1326,25 +1456,152 @@ fn a_three_gibibyte_object_fits() {
 }
 
 #[test]
-fn a_partition_holding_only_the_superblock_mounts_as_an_empty_store() {
-    // 307-STO-0020: the bytes scripts/make_usb_image.py writes first in the store's partition (store_superblock): the
-    // magic, layout 2, the sector size, the SHA-256 of those 16 bytes. A blank medium formatted by the store holds the same.
-    let mut head = Vec::from(&b"MIND-STO"[..]);
-    head.extend_from_slice(&2u16.to_le_bytes());
-    head.extend_from_slice(&(SECTOR as u16).to_le_bytes());
-    head.extend_from_slice(&[0; 4]);
-    let mut first = head.clone();
-    first.extend_from_slice(&sha256::digest(&head));
+fn a_partition_holding_only_the_superblock_mounts_and_gets_a_key() {
+    // 307-STO-0020, 308-STO-0021: what scripts/make_usb_image.py writes first in the store's partition (store_superblock):
+    // the magic, layout 3, the sector size, key source 0 (none yet), the SHA-256 of those 16 bytes, zeros where the key
+    // and its check go, and the SHA-256 of the 140 bytes before it.
+    let mut first = Vec::from(&b"MIND-STO"[..]);
+    first.extend_from_slice(&3u16.to_le_bytes());
+    first.extend_from_slice(&(SECTOR as u16).to_le_bytes());
+    first.extend_from_slice(&[KEY_NONE, 0, 0, 0]);
+    first.extend_from_slice(&sha256::digest(&first[..16]));
+    first.resize(140, 0);
+    first.extend_from_slice(&sha256::digest(&first[..140]));
     first.resize(SECTOR, 0);
-    let mut blank = Memory::new(256);
-    let mut room = Room::new(64);
-    drop(mount(&mut blank, &mut room).unwrap());
-    assert_eq!(&blank.data[..SECTOR], &first[..], "the store formats a blank medium as the image does");
+    assert_eq!(&superblock(None)[..], &first[..]);
+    // Read-only, it cannot get its key, and is not mounted.
     let mut medium = Memory::new(256);
     medium.data[..SECTOR].copy_from_slice(&first);
+    medium.writable = false;
+    assert_eq!(mount(&mut medium, &mut Room::new(64)).err(), Some(Error::ReadOnly));
+    medium.writable = true;
     let mut room = Room::new(64);
-    let stats = mount(&mut medium, &mut room).unwrap().stats();
+    let store = mount(&mut medium, &mut room).unwrap();
+    let stats = store.stats();
     assert_eq!((stats.blocks, stats.names, stats.used, stats.corrupt, stats.damaged), (0, 0, 1, 0, 0));
-    assert_eq!(medium.written, 0, "nothing written to mount it: it is a store already");
+    assert_eq!(store.made(), Some(true));
+    drop(store);
+    // The superblock alone was written: it now holds the key, and the next mount makes none.
+    assert_eq!((medium.written, medium.writes[0], medium.data[12]), (1, 1, KEY_CLEAR));
+    let mut room = Room::new(64);
+    assert_eq!(mount(&mut medium, &mut room).unwrap().made(), None);
 }
 
+#[test]
+fn nothing_of_a_block_a_cid_or_a_name_is_in_the_clear() {
+    let mut medium = Memory::new(256);
+    let secret: Vec<u8> = b"a sentence nobody should read off the disk ".repeat(20);
+    let (raw, root);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        raw = store.put(Codec::Raw, &secret).unwrap();
+        root = object(&mut store, 9, 20_000);
+        store.publish(b"diary/2026-10-28", 0, &raw, OWNER).unwrap();
+        store.pin(&root, OWNER).unwrap();
+        let updates = [Update { name: b"diary/today", expected: 0, root: Some(root) }, Update { name: b"diary/2026-10-28", expected: 1, root: None }];
+        store.commit(&updates, OWNER).unwrap();
+    }
+    let medium_has = |needle: &[u8]| medium.data.windows(needle.len()).any(|w| w == needle);
+    for needle in [&secret[..16], &raw.to_bytes()[..], &root.to_bytes()[..], &raw.to_bytes()[4..20], b"diary", b"MIND-BLK", b"MIND-REF", b"MIND-PIN", b"MIND-TXN", b"MIND-DEL"] {
+        assert!(!medium_has(needle), "{:?} is on the medium in the clear", String::from_utf8_lossy(needle));
+    }
+    assert!(medium_has(&block(9, 20_000)[..16]) == false);
+    // Every record opens, and the store reads them all back.
+    assert!(records(&medium).iter().all(|(_, r)| r.is_some()));
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((get(&mut store, &raw).unwrap(), store.resolve(b"diary/today")), (secret, Ok((1, root))));
+    assert_eq!(read_object(&mut store, &root), block(9, 20_000));
+    assert_eq!((store.stats().corrupt, store.stats().damaged, store.stats().pins), (0, 0, 1));
+}
+
+#[test]
+fn a_changed_or_moved_record_does_not_open() {
+    let mut medium = Memory::new(128);
+    let (a, b);
+    {
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        a = store.put(Codec::Raw, b"first").unwrap();
+        b = store.put(Codec::Raw, b"second").unwrap();
+    }
+    assert_eq!(find(&medium, b"MIND-BLK"), vec![1, 2]);
+    // One byte of each part of a frame or of the sealed bytes: the record no longer opens.
+    for byte in [8, 10, 13, 16, 30, FRAME, FRAME + 100, SECTOR - 1] {
+        let mut changed = medium.clone();
+        changed.flip(1, byte);
+        assert_eq!(unseal(&changed.data[..SECTOR], 1, &changed.data[SECTOR..]), None, "byte {byte}");
+        let mut room = Room::new(16);
+        let mut store = mount(&mut changed, &mut room).unwrap();
+        assert_eq!((get(&mut store, &a), get(&mut store, &b).is_ok()), (Err(Error::NotFound), true), "byte {byte}");
+        assert_eq!(store.stats().corrupt + store.stats().damaged as u32, 1, "byte {byte}");
+    }
+    // A's record copied over b's place, whole and unchanged: it does not open there, and neither block is offered twice.
+    let mut moved = medium.clone();
+    moved.data.copy_within(SECTOR..2 * SECTOR, 2 * SECTOR);
+    let mut room = Room::new(16);
+    let mut store = mount(&mut moved, &mut room).unwrap();
+    assert_eq!((get(&mut store, &a).unwrap(), get(&mut store, &b)), (b"first".to_vec(), Err(Error::NotFound)));
+    assert_eq!(store.stats().corrupt, 1);
+}
+
+#[test]
+fn a_wrong_key_is_refused_at_mount() {
+    let mut medium = Memory::new(64);
+    {
+        let mut room = Room::new(8);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        store.put(Codec::Raw, b"kept").unwrap();
+    }
+    // Another key in the superblock, its digests made whole: it does not open the check, and nothing is read or written.
+    let mut other = medium.clone();
+    other.flip(0, 50);
+    let check = sha256::digest(&other.data[..140]);
+    other.data[140..172].copy_from_slice(&check);
+    let before = other.data.clone();
+    assert_eq!(mount(&mut other, &mut Room::new(8)).err(), Some(Error::Key));
+    assert_eq!(other.data, before);
+    // The check changed instead, or a key source this build does not know.
+    let mut other = medium.clone();
+    other.flip(0, 100);
+    let check = sha256::digest(&other.data[..140]);
+    other.data[140..172].copy_from_slice(&check);
+    assert_eq!(mount(&mut other, &mut Room::new(8)).err(), Some(Error::Key));
+    let mut other = medium.clone();
+    other.data[12] = 7;
+    let check = sha256::digest(&other.data[..16]);
+    other.data[16..48].copy_from_slice(&check);
+    let check = sha256::digest(&other.data[..140]);
+    other.data[140..172].copy_from_slice(&check);
+    assert_eq!(mount(&mut other, &mut Room::new(8)).err(), Some(Error::Key));
+    // The key changed without its digest: a damaged superblock, left alone.
+    let mut other = medium.clone();
+    other.flip(0, 50);
+    assert_eq!(mount(&mut other, &mut Room::new(8)).err(), Some(Error::Foreign));
+}
+
+#[test]
+fn without_a_random_source_the_key_is_derived_and_said_so() {
+    let mut medium = Memory::new(64);
+    let mut room = Room::new(8);
+    let mut store = mount_with(&mut medium, &mut room, &NO_RANDOM).unwrap();
+    assert_eq!(store.made(), Some(false));
+    let a = store.put(Codec::Raw, b"kept").unwrap();
+    drop(store);
+    let mut room = Room::new(8);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((store.made(), get(&mut store, &a).unwrap()), (None, b"kept".to_vec()));
+}
+
+#[test]
+fn hmac_sha256_matches_rfc_4231() {
+    // Test cases 1 and 2: a key shorter than the block is padded with zeros, so padding it to 32 bytes changes nothing.
+    let mut key = [0u8; 32];
+    key[..20].fill(0x0b);
+    let hex = |d: [u8; 32]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    assert_eq!(hex(hmac_sha256(&key, &[b"Hi ", b"There"])), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+    let mut key = [0u8; 32];
+    key[..4].copy_from_slice(b"Jefe");
+    assert_eq!(hex(hmac_sha256(&key, &[b"what do ya want for nothing?"])), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+}

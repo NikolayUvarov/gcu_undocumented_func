@@ -4,11 +4,12 @@
 //! each checks what it reads: the other side may be broken or hostile. No file here depends on the kernel: host tests
 //! build it.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::abi::{pointer_absolute, pointer_absolute_fields};
+use crate::abi::{pointer_absolute_fields, pointer_absolute_scroll};
 
 /// A pointer event of a window (issue u001): the window manager queues an absolute pointer event (`common/abi.rs`,
-/// issue 161) whose position is the cell of the window's content.
-pub fn pointer_at(buttons: u8, x: usize, y: usize, wheel: i32) -> usize { pointer_absolute(buttons, x, y, wheel) }
+/// issue 161) whose position is the cell of the window's content, with the wheel's steps and the horizontal ones
+/// (211-KRN-0150, 211-APP-0090).
+pub fn pointer_at(buttons: u8, x: usize, y: usize, wheel: i32, across: i32) -> usize { pointer_absolute_scroll(buttons, x, y, wheel, across) }
 
 /// The cell a window pointer event names, if `word` is one.
 pub fn pointer_position(word: usize) -> Option<(usize, usize)> { pointer_absolute_fields(word).map(|(_, x, y, _)| (x, y)) }

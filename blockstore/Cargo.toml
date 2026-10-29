@@ -7,6 +7,8 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 [dependencies]
 libmind = { path = "../libmind" }
+# Seals the store's records (308-STO-0021).
+chacha20poly1305 = { version = "0.10", default-features = false }
 
 [profile.release]
 panic = "abort"

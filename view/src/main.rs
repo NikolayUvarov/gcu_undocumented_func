@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // view: text and hex viewer for a file on the disk (mind::tui::viewer). `view <path>`; F1 lists the keys.
-use mind::abi::{BootInfo, KEY_DOWN, KEY_F1, KEY_UP, POINTER_LEFT};
+use mind::abi::{BootInfo, KEY_DOWN, KEY_F1, KEY_LEFT, KEY_RIGHT, KEY_UP, POINTER_LEFT};
 use mind::fs::File;
 use mind::input::{KeyOrPointer, Pointer};
 use mind::keys::{self, Key};
@@ -17,10 +17,11 @@ impl Source for Disk {
 }
 
 // The key a mouse event stands for, and how many times (issue u013): a button of the key bar is its F-key, with the
-// modifiers held; the wheel moves three lines a step.
+// modifiers held; the wheel moves three lines a step, a horizontal step (a trackpad's swipe, 211-APP-0090) eight columns.
 fn pointer_key(p: &Pointer, pressed: bool, area: Rect, modifiers: u8) -> Option<(Key, u32)> {
     if pressed && p.y + 1 == area.bottom() { return Key::from_event(keys::event(KEY_F1 + fkey_at(area.w, p.x) - 1, 0, modifiers)).map(|key| (key, 1)); }
     if p.wheel != 0 { return Key::from_event(keys::event(if p.wheel < 0 { KEY_UP } else { KEY_DOWN }, 0, 0)).map(|key| (key, 3 * p.wheel.unsigned_abs())); }
+    if p.across != 0 { return Key::from_event(keys::event(if p.across < 0 { KEY_LEFT } else { KEY_RIGHT }, 0, 0)).map(|key| (key, p.across.unsigned_abs())); }
     None
 }
 
