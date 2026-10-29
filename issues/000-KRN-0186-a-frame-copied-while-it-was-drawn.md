@@ -33,7 +33,8 @@
   - it writes the framebuffer from the shadow after the release;
   - its watch line names the longest hold of each second.
 - **The kernel** (`kernel/src/scheduler.rs`):
-  - a task answered `COMPOSITOR_BUSY` is held as it starts its next wait, where its frame ends, and the compositor's next ask finds it so;
+  - a task answered `COMPOSITOR_BUSY` is held as it next starts to sleep or to wait for a message, where its frame ends, and the compositor's next ask finds it so;
+  - it is not held so at a call's reply. Round 48's gate (e99730b1) held it at any wait, and there `camera` got 1 picture in 30 frames of its 3 s recording, once, on `un-rizen` (`x86: RAM above 4 GiB`). Each of its file writes and frame reads waited for a copy. That did not happen again in this container. With the narrower rule, under four busy loops, `x86: protection probes` passed 5 runs of 5 and the `vfs` suite 2 of 2, `camera` included;
   - a hold with nothing to copy is released at once, and a change of focus releases it;
   - a hold also ends when the compositor waits or ends, which it does only after its copy;
   - the time bound is 1 s (`HOLD_NS`), against a compositor that neither releases nor waits, and the kernel logs a hold it ends so.

@@ -280,8 +280,9 @@ impl Scheduler {
         // Time since the last switch on this CPU goes to the task that ran or to idle.
         let now = crate::clock::now_ns(); let elapsed = now.saturating_sub(core::mem::replace(&mut self.accounting.last_switch[cpu], now));
         if current == 0 { self.accounting.idle_ns[cpu] += elapsed; } else { self.accounting.busy_ns[cpu] += elapsed; }
-        // The task the compositor found drawing is held as it starts to wait, at the end of its frame (000-KRN-0186).
-        if let Some((slot, pid, holder)) = self.wanted.filter(|&(slot, pid, _)| slot == current && self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && !matches!(t.state, State::Ready | State::Exited))) {
+        // The task the compositor found drawing is held as it starts to sleep or to wait for a message, where its frame
+        // ends; not at a call's reply, mid-frame, which a program that writes or reads as it draws makes often (000-KRN-0186).
+        if let Some((slot, pid, holder)) = self.wanted.filter(|&(slot, pid, _)| slot == current && self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && matches!(t.state, State::Sleeping(_) | State::BlockedRecv(_)))) {
             self.wanted = None; self.held = Some((slot, pid, now, holder));
         }
         // The compositor waits or ends only after its copy: its hold ends then if it was not released.
