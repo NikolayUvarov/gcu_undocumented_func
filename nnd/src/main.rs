@@ -22,6 +22,9 @@ use nnpkg::service::{self, Budget, Error, Outcome, Run, Service, State};
 use nnpkg::Refusal;
 use nrl_runtime::{Checkpoint, Control, Status};
 
+// No screen: run by hand (the shell, wm's menu) it says in a console that it is init's service, and ends.
+mind::request!(mind::process::REQUEST_CONSOLE);
+
 const RECEIVED: usize = 9; // where a request's capability lands
 const INPUT: usize = 9; // a worker's read-only bytes: the files to parse, or the model's description
 const OUTPUT: usize = 10; // a worker's answer, or the job's memory
