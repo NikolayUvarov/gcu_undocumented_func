@@ -228,7 +228,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 - **A gate run through Effector is a local gate** in the sense of [AGENTS.md](../AGENTS.md), section 4, when every group of `scripts/ci_local.sh` passes.
 - **The landing queue's gate** (AGENTS.md, section 4, since 2026-10-21) runs this way. `scripts/land.sh gate` spreads every group of `scripts/ci_local.sh --list` over the machines' lanes and runs a failed group once more, alone. It sends the key only from the file `$EFFECTOR_KEY_FILE` (section 2). The presets name its lanes: `full`, and `no-i9` while another track's gate loads i9; `i9-on-rz`, which rounds 34 to 39 used while i9 was offline; `wide` since 2026-10-28, with `acc-1` and `acc-2` taking the long x86 groups, and `wide-no-i9` while i9 is busy.
 - **The pool** (`--preset pool`, or `pool-no-i9` while i9 is busy; since 2026-10-29, the maintainer's ask). No lane holds a list.
-  - **The lanes:** i9, `acc-1`, `acc-2`, three clones on `un-rizen-service` and PCU.
+  - **The lanes:** i9, `acc-1`, `acc-2`, two clones on `un-rizen-service` and PCU. A third clone there slowed the groups by a third and failed `kbench`'s limit for a call and reply (round 44).
   - **What each takes:** as it frees, the longest group left that it can run. The host part runs on `un-rizen-service` only, i9 takes no aarch64 group, and PCU takes only aarch64 groups.
   - **Builds:** a lane builds a part's image the first time it takes one of its groups.
   - **The estimates** are the seconds below, then the gate's own records of the same groups; `--dry-run` prints the schedule they give.
@@ -243,7 +243,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 | aarch64: files, network and TLS (2640, `un-rizen-service`) | vfs 151, store 164, storefaults 65, net 482, tls 98, effector 209, updater 371, linkupdate 899, modes 201 | aarch64: files and the block store; aarch64: network, TLS and Effector; aarch64: the updater and the modes; aarch64: an update through the link |
 | aarch64: RAM, ACPI and PCI above 4 GiB (1394, PCU) | normal 476, net 550, fill 368 | aarch64: RAM, ACPI and PCI above 4 GiB; aarch64: network above 4 GiB |
 
-- **What it gives,** in simulation with these estimates: about 49 minutes with the seven lanes, against 64 to 70 for rounds 41 to 43 with fixed lists. The tests take about 233 minutes in all, and each lane builds its images first. More lanes are the next step, such as `x32-128` once it is stable.
+- **What it gives,** in simulation with these estimates: about 56 minutes with `pool`'s six lanes and 63 with `pool-no-i9`'s five, against 64 to 70 for rounds 41 to 43 with fixed lists (49 with a third lane on `un-rizen-service`, which its timing tests did not bear). The tests take about 233 minutes in all, and each lane builds its images first. More lanes are the next step, such as `x32-128` once it is stable.
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 

@@ -106,11 +106,18 @@ def test_a_pool_takes_the_longest_first():
 
 def test_a_pool_gives_a_failed_builds_groups_to_another_lane():
     class Effector:
-        def __init__(self): self.commands, self.lock = [], __import__("threading").Lock()
+        def __init__(self, wait=True):
+            threading = __import__("threading")
+            self.commands, self.lock, self.pcu_failed = [], threading.Lock(), threading.Event()
+            if not wait: self.pcu_failed.set()
         def run(self, machine, command, timeout, reason, key):
             group = command.split('--group "')[1].split('"')[0]
-            with self.lock: self.commands.append((reason.split(" on ")[-1], group))
-            failed = group == "=build (aarch64)" and reason.endswith(" on pcu")
+            lane = reason.split(" on ")[-1]
+            if lane == "acc1":  # acc1 holds one group while PCU takes the other and fails its build, whatever the threads' order
+                assert self.pcu_failed.wait(30), "PCU never failed its build"
+            with self.lock: self.commands.append((lane, group))
+            failed = group == "=build (aarch64)" and lane == "pcu"
+            if failed: self.pcu_failed.set()
             return "completed", 0, f"{'FAIL' if failed else 'PASS'}   5s       {group[1:]}\n"
     part_of = {"build (x86)": "host", "build (x86 test programs)": "x86", "build (aarch64)": "aarch64",
                "x86: a": "x86", "x86: b": "x86", "aarch64: c": "aarch64", "aarch64: d": "aarch64"}
@@ -127,7 +134,7 @@ def test_a_pool_gives_a_failed_builds_groups_to_another_lane():
         taken = json.loads(taken_path.read_text())
         assert sorted(taken["acc1"]) == sorted(g for _, g in queue) and not taken.get("pcu"), taken
         # Started again on the same candidate, each lane first takes what it took before, in order: the same keys.
-        again = land.Gate("a" * 40, "t", Effector(), pathlib.Path(os.devnull), exact=True)
+        again = land.Gate("a" * 40, "t", Effector(wait=False), pathlib.Path(os.devnull), exact=True)
         again.trees.update({"acc1", "pcu"})
         again.pool(["acc1", "pcu"], list(queue), part_of, {}, taken_path)
         assert [g for lane, g in again.effector.commands if lane == "acc1" and not g.startswith("=build")] == ["=" + g for g in taken["acc1"]]
