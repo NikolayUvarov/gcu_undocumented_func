@@ -4810,18 +4810,19 @@ def gateway_stub_check(args):
         try:
             def stub(line, timeout=60):
                 for _ in range(timeout):
-                    out = vm.command("dmesg -s effector_gw", raw=True)
+                    # Both starts' lines, about 11 KB: aarch64's console under TCG printed 8.9 KB in 8 s (round 41).
+                    out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
                     if line in out:
                         return out
                     time.sleep(1)
-                raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
+                raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True, timeout=60)[-1500:]))
             stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
                  "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             stub("[GATEWAY-STUB] APPS SCOPE: WRITE OK, READ BACK OK, REMOVE OK, OUTSIDE REFUSED")  # 750-KRN-0169
             stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
             stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link.conf (800-KRN-0155)
-            refusals = vm.command("dmesg -s init", raw=True)
+            refusals = vm.command("dmesg -s init", raw=True, timeout=60)
             for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"RUN REFUSED: PID \d+ \(BADGE 6\) MAY NOT RUN sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
@@ -4841,7 +4842,7 @@ def gateway_stub_check(args):
                 pixel = screen[at:at + 3]
                 if not seen or seen[-1] != pixel:
                     seen.append(pixel)
-                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True).rpartition("SCOPE START 2")[2]:
+                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True, timeout=60).rpartition("SCOPE START 2")[2]:
                     break
                 time.sleep(.3)
             time.sleep(4)
@@ -4881,7 +4882,7 @@ def gateway_stub_check(args):
             require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT AND LINK CONSOLE (data/mode.conf)")
             # The first start's files were written before the reboot, and its request was taken away before it asked.
             for _ in range(60):
-                out = vm.command("dmesg -s effector_gw", raw=True)
+                out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
                 if "[GATEWAY-STUB] REBOOT NOT ASKED" in out:
                     break
                 time.sleep(1)
@@ -4987,7 +4988,7 @@ def services_config_check(args):
     bootloader the file is not read, every service starts and `configuration` says `ignored`."""
     def plan_of(vm, source="READ"):
         for _ in range(90):
-            out = vm.command("dmesg -s effector_gw", raw=True)
+            out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
             if "[GATEWAY-STUB] PLAN END" in out:
                 break
             time.sleep(1)
