@@ -345,6 +345,15 @@ def pick(queue, lane, ready, seconds, broken=()):
     return max(able, key=lambda e: (seconds.get(e[1], DEFAULT_SECONDS), e[1]), default=None)
 
 
+def online_lanes(lanes, endpoints):
+    """`lanes` whose machine Effector lists as online, and {lane: last seen} for the others: a lane on a machine that is
+    off would wait in its queue for hours with its tree (round 47, acc-1 and acc-2 off since 20:07)."""
+    seen = {e.get("id") or e.get("agent_id"): e for e in endpoints}
+    off = {lane: seen.get(MACHINES[lane.split("-")[0]]["agent"], {}).get("last_seen", "never") for lane in lanes
+           if not seen.get(MACHINES[lane.split("-")[0]]["agent"], {}).get("online")}
+    return [lane for lane in lanes if lane not in off], off
+
+
 def simulate(lanes, queue, seconds):
     """{lane: [group]} and the minutes until the last ends, as a pool would run `queue` if every estimate held."""
     queue, free = list(queue), {lane: 0.0 for lane in lanes}
@@ -461,9 +470,13 @@ class Effector:
                     raise
             time.sleep(min(2 ** attempt, 60))  # a POST carries its idempotency key, so a repeat is safe
 
-    def run(self, machine, command, timeout, reason, key):
+    def endpoints(self):
+        reply = self.call("GET", "/api/v1/endpoints")
+        return reply.get("endpoints", []) if isinstance(reply, dict) else reply
+
+    def run(self, machine, command, timeout, reason, key, queue_ttl=6 * 3600):
         body = {"agent_id": machine["agent"], "kind": "exec", "command": command, "timeout_seconds": timeout, "reason": reason,
-                "idempotency_key": key, "queue_ttl_seconds": 6 * 3600, **({"run_as": machine["run_as"]} if machine["run_as"] else {})}
+                "idempotency_key": key, "queue_ttl_seconds": queue_ttl, **({"run_as": machine["run_as"]} if machine["run_as"] else {})}
         op = self.call("POST", "/api/v1/operations", body)
         oid = op.get("id") or op.get("operation_id")
         while op.get("status") not in self.FINAL:
@@ -493,9 +506,9 @@ class Gate:
         return (f"{machine['env']}\nexport TMPDIR={tmp} GIT_TERMINAL_PROMPT=0; mkdir -p \"$TMPDIR\"\n"
                 f". \"$HOME/.cargo/env\" 2>/dev/null\n")
 
-    def submit(self, machine, command, timeout, reason, key):
+    def submit(self, machine, command, timeout, reason, key, queue_ttl=6 * 3600):
         try:
-            return self.effector.run(machine, command, timeout, reason, key)
+            return self.effector.run(machine, command, timeout, reason, key, queue_ttl)
         except (Exception, SystemExit) as error:  # counted as a group not run, not as a pass
             return "error", None, str(error)
 
@@ -511,8 +524,9 @@ class Gate:
             f"git fetch -q origin && git checkout -q --detach {self.commit} || exit 4\n"
             # The volume roots the build fills are ignored by git: a file an earlier candidate built would stay in them.
             f"rm -rf usb_root aarch64_root\necho \"TREE $(git rev-parse HEAD)\"\n")
+        # A tree that waits half an hour leaves the lane out: its machine is off or another track holds it.
         status, code, output = self.submit(machine, command, 900, f"{TRACK} landing gate {self.tag}: the tree on {name}",
-                                           f"land-{self.tag}-{name}-tree")
+                                           f"land-{self.tag}-{name}-tree", queue_ttl=1800)
         ok = status == "completed" and code == 0 and f"TREE {self.commit}" in output
         self.log(f"{name}: tree {'ready' if ok else f'FAILED ({status}, exit {code})'}")
         if ok:
@@ -649,8 +663,12 @@ def cmd_gate(args):
         raise SystemExit(f"the candidate {commit[:12]} is not on origin: run `scripts/land.sh candidate --push`")
     tag = args.tag or "land-" + commit[:8]
     out = WORK / f"gate-{commit[:12]}.json"
-    gate = Gate(commit, tag, Effector(), out, exact)
+    effector = Effector()
+    gate = Gate(commit, tag, effector, out, exact)
     if layout is None:
+        pool_lanes, off = online_lanes(pool_lanes, effector.endpoints())
+        for lane, seen in off.items():
+            gate.log(f"{lane}: its machine is off (last seen {seen}); the other lanes take its groups")
         gate.pool(pool_lanes, queue, part_of, seconds, WORK / f"gate-{commit[:12]}-taken.json")
     else:
         threads = [threading.Thread(target=gate.lane_run, args=(lane, entries)) for lane, entries in layout.items()]
