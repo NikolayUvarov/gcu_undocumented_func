@@ -459,7 +459,7 @@ pub fn domain_create(endpoint: Endpoint) -> Result<core::result::Result<u16, Err
 /// A client whose every call works in domain `id` of the caller's owner, with the caller's rights: the domain's
 /// names, pins and blocks, sealed under its key. The same bytes in two domains are two blocks. The client ends when
 /// the domain is forgotten or the store restarts. Errors: not-found (no such live domain), rights (another owner's
-/// domain, or asked through a domain's client), full (2.2).
+/// domain, or asked through a domain's client), full (64 domain clients), device (the store could not mint one) (2.2).
 pub fn domain_client(endpoint: Endpoint, id: u16, receive: usize) -> Result<core::result::Result<(), Error>> {
     let words = [18 | MAJOR << 8 | ((id) as usize) << 16, 0];
     let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;

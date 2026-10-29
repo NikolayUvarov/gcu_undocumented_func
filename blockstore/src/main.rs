@@ -90,7 +90,11 @@ impl DomainClients {
         if let Some(c) = self.0.iter().flatten().find(|c| (c.domain, c.rights, c.owner) == (domain, rights, owner)) { return Ok(c.cap); }
         let slot = self.0.iter().position(Option::is_none).ok_or(Error::Full)?;
         let badge = FIRST_DOMAIN_CLIENT + slot as u16;
-        let cap = ipc::mint_badged(SLOT_SERVICE, CAP_WRITE | CAP_GRANT, badge).map_err(|_| Error::Full)?;
+        // Minting a badged client needs the badge right on the store's own endpoint (init's grant, requests-KRN.md).
+        let cap = ipc::mint_badged(SLOT_SERVICE, CAP_WRITE | CAP_GRANT, badge).map_err(|e| {
+            mind::println!("[BLOCKSTORE] NO CLIENT FOR DOMAIN {}: {:?}", domain, e);
+            Error::Device
+        })?;
         self.0[slot] = Some(DomainClient { badge, cap, domain, rights, owner });
         Ok(cap)
     }
