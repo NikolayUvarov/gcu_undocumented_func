@@ -8749,13 +8749,15 @@ def tls_suite(args, disk):
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
-        # loader's, badged BADGE_KEY_LOADER in its slot 8, asks only for programs' secrets clients (000-KRN-0182).
+        # loader's, badged BADGE_KEY_LOADER in its slot 8, asks only for programs' secrets clients (000-KRN-0182); the
+        # block store's, badged BADGE_KEY_BLOCKSTORE in its slot 3, reaches only its own secrets (308-KRN-0183).
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         real = vm.services()
         keystore = [ep for ep, server in servers.items() if server == real["keystore"]]
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
-        assert {"tls", "ssh", "loader"} <= set(holders) <= {"tls", "ssh", "wlan", "loader"}, holders
+        assert {"tls", "ssh", "loader", "blockstore"} <= set(holders) <= {"tls", "ssh", "wlan", "loader", "blockstore"}, holders
         assert re.search(fr"^SLOT=8 GEN=\d+ KIND=1 .*BADGE=4 EP={keystore[0]}\b", vm.command(f"stat caps {real['loader']}", raw=True), re.M)
+        assert re.search(fr"^SLOT=3 GEN=\d+ KIND=1 .*BADGE=5 EP={keystore[0]}\b", vm.command(f"stat caps {real['blockstore']}", raw=True), re.M)
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
         assert re.search(fr"^SLOT=4 GEN=\d+ KIND=1 .*BADGE=3 EP={keystore[0]}\b", vm.command(f"stat caps {real['ssh']}", raw=True), re.M)
         # The shell holds the SSH service's client in SLOT_SSH (34) and the updater's in SLOT_UPDATE (35), ABI 12.
