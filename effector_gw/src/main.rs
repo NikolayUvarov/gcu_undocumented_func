@@ -256,6 +256,11 @@ impl Machine for Host {
         if let Some(below) = self.below(path).map(String::from) { let _ = self.writer.remove(&temporary(&below)); }
     }
 
+    fn read_published(&mut self, path: &str, offset: u64, out: &mut [u8]) -> Result<usize, Fail> {
+        let below = String::from(self.below(path).ok_or(Fail::Denied)?);
+        self.writer.read(&below, offset, out)
+    }
+
     fn audit(&mut self, line: &str) -> bool {
         mind::println!("[EFFECTOR_GW] {}", line);
         let file = format!("{}/audit", GATEWAY_DIR);
@@ -448,7 +453,10 @@ fn main(_info: &'static BootInfo) {
                 wit::reply_deliver_begin(reply, gw.deliver_begin(m, badge, &origin(&o), path.as_str(), size, sha256.as_str(), replace).map_err(error)),
             wit::Request::PackageBegin { origin: o, size, .. } => wit::reply_package_begin(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "package-begin", Ask::Package("", size))))),
             wit::Request::Write { handle, offset, data } => wit::reply_write(reply, gw.write(m, badge, handle, offset, data).map_err(error)),
-            wit::Request::DeliverCommit { handle } => wit::reply_deliver_commit(reply, gw.deliver_commit(m, badge, handle).map_err(error)),
+            wit::Request::DeliverCommit { handle } => {
+                let delivered = gw.deliver_commit(m, badge, handle).map(|d| wit::Delivered { path: Text::new(&d.path).unwrap_or_default(), size: d.size, sha256: hex(&d.sha256) });
+                wit::reply_deliver_commit(reply, delivered.as_ref().map_err(|f| error(*f)))
+            }
             wit::Request::PackageCommit { .. } => wit::reply_package_commit(reply, Err(wit::Error::NotFound)),
             wit::Request::UpdateCheck { origin: o, apply } => {
                 let step = if apply { policy::Update::Apply } else { policy::Update::Check };

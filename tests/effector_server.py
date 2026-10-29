@@ -162,7 +162,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._error(401, "agent token required")
                 return
             self.route = parts.path[len(fixture.prefix):]
-            self.query = urllib.parse.parse_qs(parts.query, strict_parsing=True, max_num_fields=16)
+            self.query = urllib.parse.parse_qs(parts.query, strict_parsing=True, max_num_fields=16) if parts.query else {}
             if any(len(values) != 1 for key, values in self.query.items() if key != "capability"):
                 raise ValueError("duplicate query parameter")
             if self.command == "GET" and (self.headers.get("Content-Length", "0") != "0" or self.headers.get("Transfer-Encoding")):

@@ -12,7 +12,7 @@ Every record of the store is plain on its medium: blocks, CIDs, names, pins, com
 
 - **Layout 3 replaces layout 2,** which is refused by name, with no conversion code (AGENTS.md section 3).
 - **A sealed record:**
-  - a plain frame: magic, layout, domain (0 until [308-STO-0023](../issues/308-STO-0023-memory-domains.md)), the sectors the record covers, a nonce of 12 bytes and the tag;
+  - a plain frame: magic, layout, domain (0 until [308-STO-0023](308-STO-0023-memory-domains.done)), the sectors the record covers, a nonce of 12 bytes and the tag;
   - then the record of layout 2 (block, name, pin, commit or free marker) and the zeros up to the end of its last sector, sealed with ChaCha20-Poly1305 (RFC 8439) under the volume key.
   - Changed while building (2026-10-28):
     - **The nonce is derived, not random:** the first 12 bytes of an HMAC-SHA-256 of the associated data and the sealed bytes, under a key derived from the volume key (a synthetic nonce, as in SIV). The processor's random source is RDRAND or RNDR alone and fails closed (issue 103), and a qemu64 CPU and the i7-930 have neither: random nonces would leave the store unable to write there. A derived nonce repeats only for the same record at the same place, which seals to the same bytes.
@@ -41,7 +41,7 @@ Every record of the store is plain on its medium: blocks, CIDs, names, pins, com
 
 ## Related
 
-[308](../issues/308-encryption-at-rest.md), [308-STO-0022](../issues/308-STO-0022-the-volume-key-held-by-keystore.md), [308-STO-0023](../issues/308-STO-0023-memory-domains.md), [300-STO-0005](300-STO-0005-corruption-on-the-platform.done) (`storefaults`).
+[308](../issues/308-encryption-at-rest.md), [308-STO-0022](../issues/308-STO-0022-the-volume-key-held-by-keystore.md), [308-STO-0023](308-STO-0023-memory-domains.done), [300-STO-0005](300-STO-0005-corruption-on-the-platform.done) (`storefaults`).
 
 ## Resolution
 
