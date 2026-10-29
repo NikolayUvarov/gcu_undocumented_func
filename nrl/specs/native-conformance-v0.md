@@ -81,6 +81,7 @@ Clarifications for APP's design:
 3. Nonfinite client input should be rejected as malformed/preflight input. Runtime `Numeric` before computation leaves Ready/zero charges; finite-input internal numerical failure marks Failed. Do not poison every session merely because both map to one numerical error label.
 4. Native `deadline-ms = 0` meaning “no deadline” needs an explicit checked adapter conversion. Runtime `deadline_tick = 0` means immediate expiry; use a documented absolute no-deadline sentinel such as `u64::MAX`, check duration/absolute overflow and native monotonic clock semantics.
 5. 262-KRN-0178 boot grants/RO models/logd/quota/workers/fresh client badges are required for a genuine service test. 262-KRN-0179 shared-word wait is an optimization for later; the proposed worker-per-job stage need not wait for it.
+6. Before implementing badge-to-owner binding, APP/KRN must make badge reuse/lifetime explicit: a 16-bit badge must not identify a new client while an old delegated capability or retained model/session/job authority with that badge survives. Prevent reuse for that full lifetime, or retire the old authority through an authenticated lifecycle mechanism. A program's exit alone does not describe the lifetime of every service record. This is a design question for the owners, not a claim about an existing native implementation; include a client-exit/reuse case in native acceptance.
 
 ## Remaining native acceptance
 

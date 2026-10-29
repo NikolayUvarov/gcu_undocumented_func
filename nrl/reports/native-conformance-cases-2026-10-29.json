@@ -1,0 +1,138 @@
+{
+  "failed_output_cleared": true,
+  "host_scenarios": [
+    {
+      "case": "success",
+      "requests": 1,
+      "result": "Ok(())",
+      "rows": 3,
+      "status": "Ready",
+      "work_units": 1893
+    },
+    {
+      "case": "wrong-owner",
+      "requests": 0,
+      "result": "Err(Owner)",
+      "rows": 0,
+      "status": "Ready",
+      "work_units": 0
+    },
+    {
+      "case": "nonfinite-input",
+      "requests": 0,
+      "result": "Err(Numeric)",
+      "rows": 0,
+      "status": "Ready",
+      "work_units": 0
+    },
+    {
+      "case": "wrong-model",
+      "requests": 0,
+      "result": "Err(Model)",
+      "rows": 0,
+      "status": "Ready",
+      "work_units": 0
+    },
+    {
+      "case": "whole-request-work-preflight",
+      "requests": 0,
+      "result": "Err(Limit)",
+      "rows": 0,
+      "status": "Ready",
+      "work_units": 0
+    },
+    {
+      "case": "cumulative-rows",
+      "requests": 2,
+      "result": "Err(Limit)",
+      "rows": 3,
+      "status": "Ready",
+      "work_units": 1893
+    },
+    {
+      "case": "cumulative-work",
+      "requests": 2,
+      "result": "Err(Limit)",
+      "rows": 3,
+      "status": "Ready",
+      "work_units": 1893
+    },
+    {
+      "case": "request-limit",
+      "requests": 2,
+      "result": "Err(Limit)",
+      "rows": 3,
+      "status": "Ready",
+      "work_units": 1893
+    },
+    {
+      "case": "workspace-short",
+      "requests": 0,
+      "result": "Err(Limit)",
+      "rows": 0,
+      "status": "Ready",
+      "work_units": 0
+    },
+    {
+      "case": "batch-bound",
+      "requests": 0,
+      "result": "Err(Limit)",
+      "rows": 0,
+      "status": "Ready",
+      "work_units": 0
+    },
+    {
+      "case": "partial-cancel",
+      "requests": 1,
+      "result": "Err(Cancelled)",
+      "rows": 2,
+      "status": "Cancelled",
+      "work_units": 646
+    },
+    {
+      "case": "partial-deadline",
+      "requests": 1,
+      "result": "Err(Deadline)",
+      "rows": 2,
+      "status": "Cancelled",
+      "work_units": 646
+    },
+    {
+      "case": "partial-clock-reversal",
+      "requests": 1,
+      "result": "Err(Clock)",
+      "rows": 2,
+      "status": "Failed",
+      "work_units": 646
+    },
+    {
+      "case": "finite-input-numeric-poison",
+      "requests": 1,
+      "result": "Err(Numeric)",
+      "rows": 1,
+      "status": "Failed",
+      "work_units": 39
+    },
+    {
+      "case": "fresh-session-after-poison",
+      "requests": 1,
+      "result": "Ok(())",
+      "rows": 3,
+      "status": "Ready",
+      "work_units": 1893
+    },
+    {
+      "case": "zero-deadline-is-immediate",
+      "requests": 0,
+      "result": "Err(Deadline)",
+      "rows": 0,
+      "status": "Cancelled",
+      "work_units": 0
+    }
+  ],
+  "independent_reference_matched": true,
+  "model_id": "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee",
+  "native_execution": false,
+  "schema": "nrl.native-conformance-result/0",
+  "workspace_cleared": true
+}

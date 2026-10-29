@@ -251,4 +251,4 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- make-native-fixture /tmp/new-native-fixture
 ```
 
-The checker and exporter are host tools; native parser/service/IDL and named-target evidence remain APP/KRN work under 0017. Full checking regenerates the bundle byte for byte.
+The checker and exporter are host tools; native parser/service/IDL and named-target evidence remain APP/KRN work under 0017. **99 host tests**, four portable builds and all standard CLI cycles pass on `50caca7e`; the independent original PyTorch oracle regenerates exactly. Full checking regenerates the bundle byte for byte. [Evidence](reports/native-conformance-2026-10-29.json), [raw log](reports/native-conformance-check-2026-10-29.txt).

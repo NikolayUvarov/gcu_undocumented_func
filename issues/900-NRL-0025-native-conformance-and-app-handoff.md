@@ -25,3 +25,7 @@ APP answered the native request in 262-APP-0112 and docs/nn/runtime.md 0.2. It n
 - [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md), [900](900-neural-representation-lab.md).
 - [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md), [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), [262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md).
 - [APP design](../docs/nn/runtime.md) 0.2, [portable boundary](../nrl/specs/native-boundary-v0.md).
+
+## Progress (2026-10-29)
+
+Implementation `0a737f66`, checked with current main in `50caca7e`: **99 tests**, zero failures/ignored; four portable release builds; all standard CLI cycles, including a new export/check and exact bundle regeneration. Independent PyTorch regenerated the original six model fixtures unchanged. [Evidence](../nrl/reports/native-conformance-2026-10-29.json), [raw log](../nrl/reports/native-conformance-check-2026-10-29.txt), [16 scenario results](../nrl/reports/native-conformance-cases-2026-10-29.json). Source was built on the NRL branch and merged into fast-test before this affected-check run; no fast-test build/test was used as evidence. Native acceptance is unchanged. APP/KRN handoff delivery is the remaining step of this task.
