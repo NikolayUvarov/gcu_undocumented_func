@@ -10,7 +10,8 @@
                                               the integrator's resolution (git rerere) for the next `candidate`
   scripts/land.sh gate [--preset P] [--lanes L,...] [--rerun-lane L] [--dry-run]
                                               every group of scripts/ci_local.sh on the candidate, spread over the
-                                              Effector machines; a group that failed runs once more at the end
+                                              Effector machines; a group that failed runs once more at the end;
+                                              --preset pool (or pool-no-i9): each lane takes the next group as it frees
   scripts/land.sh push                        main := the candidate, after a green gate of that very commit; text that
                                               main gained meanwhile is merged in, by hand where it conflicts
   scripts/land.sh announce [--return REQUEST=REASON]...
@@ -211,72 +212,150 @@ MACHINES = {
 PRESETS = {
     # Gate g0141: i9 the long x86 groups, un-rizen the host part, the short x86 groups and most of aarch64.
     "full": {
-        "i9": ["x86: keys, shell, tools", "x86: boot, display, network, TLS, shell, memory, clock", "x86: files and block writes",
+        "i9": ["x86: keys, shell, tools", "x86: the window manager", "x86: boot, display, shell, memory, clock", "x86: network, TLS and Effector", "x86: files and block writes", "x86: the updater and an update through the link",
                "x86: services, storage, audio", "x86: scheduling, isolation, heap", "x86: NVMe boot disk", "x86: 16 CPUs",
                "x86: RAM above 4 GiB", "x86: reproducible build"],
         "rz": ["network driver without legacy", "host tests", "models (TLC)", "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT",
                "x86: x2APIC", "x86: padded vector area", "x86: protection probes", "x86: TSC measured again", "x86: the watchdog",
                "x86: USB image", "x86: Secure Boot with our keys"],
-        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files, network and TLS",
+        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files and the block store", "aarch64: network, TLS and Effector", "aarch64: the updater and the modes",
+                 "aarch64: an update through the link",
                  "aarch64: 16 CPUs"],
-        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
+        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: network above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
         "default": {"host": "rz", "x86": "i9", "aarch64": "rz-2"},
     },
     # Round 34: i9 offline since 2026-10-24 19:32 UTC; its groups run on a third clone on un-rizen, the other lanes as in "full".
     "i9-on-rz": {
-        "rz-3": ["x86: keys, shell, tools", "x86: boot, display, network, TLS, shell, memory, clock", "x86: files and block writes",
+        "rz-3": ["x86: keys, shell, tools", "x86: the window manager", "x86: boot, display, shell, memory, clock", "x86: network, TLS and Effector", "x86: files and block writes", "x86: the updater and an update through the link",
                  "x86: services, storage, audio", "x86: scheduling, isolation, heap", "x86: NVMe boot disk", "x86: 16 CPUs",
                  "x86: RAM above 4 GiB", "x86: reproducible build"],
         "rz": ["network driver without legacy", "host tests", "models (TLC)", "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT",
                "x86: x2APIC", "x86: padded vector area", "x86: protection probes", "x86: TSC measured again", "x86: the watchdog",
                "x86: USB image", "x86: Secure Boot with our keys"],
-        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files, network and TLS",
+        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files and the block store", "aarch64: network, TLS and Effector", "aarch64: the updater and the modes",
+                 "aarch64: an update through the link",
                  "aarch64: 16 CPUs"],
-        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
+        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: network above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
         "default": {"host": "rz", "x86": "rz-3", "aarch64": "rz-2"},
     },
     # 2026-10-28, with the maintainer's acc-1 and acc-2 (docs/effector.md, section 1): the long x86 groups there, one lane
     # each; i9 the group with the Effector suite (the fixture needs Python 3.11, they have 3.10: requests-EFF.md); the host
     # part (Python 3.11 for models.py) and the short x86 groups on un-rizen; aarch64 as in "full".
     "wide": {
-        "i9": ["x86: boot, display, network, TLS, shell, memory, clock"],
-        "acc1": ["x86: keys, shell, tools", "x86: RAM above 4 GiB", "x86: scheduling, isolation, heap"],
-        "acc2": ["x86: files and block writes", "x86: services, storage, audio", "x86: reproducible build", "x86: NVMe boot disk"],
+        "i9": ["x86: boot, display, shell, memory, clock", "x86: network, TLS and Effector"],
+        "acc1": ["x86: keys, shell, tools", "x86: the window manager", "x86: RAM above 4 GiB", "x86: scheduling, isolation, heap"],
+        "acc2": ["x86: files and block writes", "x86: the updater and an update through the link", "x86: services, storage, audio", "x86: reproducible build", "x86: NVMe boot disk"],
         "rz": ["network driver without legacy", "host tests", "models (TLC)", "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT",
                "x86: x2APIC", "x86: padded vector area", "x86: protection probes", "x86: TSC measured again", "x86: the watchdog",
                "x86: USB image", "x86: Secure Boot with our keys", "x86: 16 CPUs"],
-        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files, network and TLS",
+        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files and the block store", "aarch64: network, TLS and Effector", "aarch64: the updater and the modes",
+                 "aarch64: an update through the link",
                  "aarch64: 16 CPUs"],
-        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
+        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: network above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
         "default": {"host": "rz", "x86": "acc2", "aarch64": "rz-2"},
     },
     # "wide" while i9 is busy or offline: its group first on un-rizen's first lane.
     "wide-no-i9": {
-        "acc1": ["x86: keys, shell, tools", "x86: RAM above 4 GiB", "x86: scheduling, isolation, heap"],
-        "acc2": ["x86: files and block writes", "x86: services, storage, audio", "x86: reproducible build", "x86: NVMe boot disk"],
-        "rz": ["x86: boot, display, network, TLS, shell, memory, clock", "network driver without legacy", "host tests", "models (TLC)",
+        "acc1": ["x86: keys, shell, tools", "x86: the window manager", "x86: RAM above 4 GiB", "x86: scheduling, isolation, heap"],
+        "acc2": ["x86: files and block writes", "x86: the updater and an update through the link", "x86: services, storage, audio", "x86: reproducible build", "x86: NVMe boot disk"],
+        "rz": ["x86: boot, display, shell, memory, clock", "x86: network, TLS and Effector", "network driver without legacy", "host tests", "models (TLC)",
                "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT", "x86: x2APIC", "x86: padded vector area",
                "x86: protection probes", "x86: TSC measured again", "x86: the watchdog", "x86: USB image", "x86: Secure Boot with our keys",
                "x86: 16 CPUs"],
-        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files, network and TLS",
+        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files and the block store", "aarch64: network, TLS and Effector", "aarch64: the updater and the modes",
+                 "aarch64: an update through the link",
                  "aarch64: 16 CPUs"],
-        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
+        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: network above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
         "default": {"host": "rz", "x86": "acc2", "aarch64": "rz-2"},
     },
     # Gate g0142: while another track's gate loads i9, its groups go to un-rizen's two lanes.
     "no-i9": {
-        "rz": ["network driver without legacy", "host tests", "models (TLC)", "x86: keys, shell, tools",
-               "x86: boot, display, network, TLS, shell, memory, clock", "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT", "x86: x2APIC",
+        "rz": ["network driver without legacy", "host tests", "models (TLC)", "x86: keys, shell, tools", "x86: the window manager",
+               "x86: boot, display, shell, memory, clock", "x86: network, TLS and Effector", "x86: one CPU", "x86: AVX state", "x86: AVX state, one CPU", "x86: no PIT", "x86: x2APIC",
                "x86: padded vector area", "x86: protection probes", "x86: TSC measured again", "x86: the watchdog", "x86: USB image",
                "x86: Secure Boot with our keys"],
-        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files, network and TLS",
-                 "aarch64: 16 CPUs", "x86: files and block writes", "x86: services, storage, audio", "x86: scheduling, isolation, heap",
+        "rz-2": ["aarch64: boot and fault containment", "aarch64: programs, shell and four CPUs", "aarch64: files and the block store", "aarch64: network, TLS and Effector", "aarch64: the updater and the modes",
+                 "aarch64: an update through the link",
+                 "aarch64: 16 CPUs", "x86: files and block writes", "x86: the updater and an update through the link", "x86: services, storage, audio", "x86: scheduling, isolation, heap",
                  "x86: NVMe boot disk", "x86: 16 CPUs", "x86: RAM above 4 GiB", "x86: reproducible build"],
-        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
+        "pcu": ["aarch64: RAM, ACPI and PCI above 4 GiB", "aarch64: network above 4 GiB", "aarch64: GICv2 with GICv2m", "aarch64: NVMe boot disk"],
         "default": {"host": "rz", "x86": "rz", "aarch64": "rz-2"},
     },
 }
 BUILDS = {"x86": ["build (x86)", "build (x86 test programs)"], "aarch64": ["build (aarch64)"]}
+# A pool holds no list per lane: each lane, as it frees, takes the group worth the most to it from one queue, and builds
+# a part's image the first time it takes one of its groups (the maintainer's ask, 2026-10-29). The parts each machine
+# runs (docs/effector.md, section 1): the host part only on un-rizen (sshd and Python 3.11 for the host tests and the
+# models), aarch64 nowhere on i9 (WSL2), x86 nowhere on PCU (it gates aarch64 alone).
+POOL_PARTS = {"i9": {"x86"}, "rz": {"host", "x86", "aarch64"}, "acc1": {"x86", "aarch64"}, "acc2": {"x86", "aarch64"}, "pcu": {"aarch64"}}
+# Two lanes on un-rizen: with a third, round 44's kbench measured a call and reply at 7 ms against its 1 ms limit, and
+# the groups there ran a third longer than alone.
+POOLS = {
+    "pool": ["i9", "acc1", "acc2", "rz", "rz-2", "pcu"],
+    "pool-no-i9": ["acc1", "acc2", "rz", "rz-2", "pcu"],
+}
+BUILT_BY = {"host": "x86", "x86": "x86", "aarch64": "aarch64"}  # the image a part's groups read
+# A clean build of each image (and the x86 test programs), round 43; a machine not named here takes un-rizen's.
+BUILD_SECONDS = {"rz": {"x86": 515, "aarch64": 498}, "i9": {"x86": 280}, "acc1": {"x86": 320, "aarch64": 500},
+                 "acc2": {"x86": 380, "aarch64": 500}, "pcu": {"aarch64": 1268}}
+build_seconds = lambda lane, arch: BUILD_SECONDS.get(lane.split("-")[0], {}).get(arch, BUILD_SECONDS["rz"][arch])
+DEFAULT_SECONDS = 600
+# Seconds each group took in round 43's gate (un-rizen, acc-1, acc-2, PCU), and the groups split since then by their
+# suites, timed one by one on 2026-10-29 on the same machines. The gate's records of the same groups replace them.
+SECONDS = {
+    "network driver without legacy": 6, "host tests": 600, "models (TLC)": 298, "NRL checks": 102,
+    "x86: boot, display, shell, memory, clock": 650, "x86: network, TLS and Effector": 839, "x86: keys, shell, tools": 361,
+    "x86: the window manager": 662, "x86: files and block writes": 397, "x86: the updater and an update through the link": 694,
+    "x86: services, storage, audio": 561, "x86: scheduling, isolation, heap": 110, "x86: NVMe boot disk": 87,
+    "x86: 16 CPUs": 121, "x86: RAM above 4 GiB": 944, "x86: one CPU": 125, "x86: AVX state": 53,
+    "x86: AVX state, one CPU": 39, "x86: no PIT": 127, "x86: x2APIC": 190, "x86: padded vector area": 87,
+    "x86: protection probes": 35, "x86: TSC measured again": 49, "x86: the watchdog": 130, "x86: USB image": 85,
+    "x86: Secure Boot with our keys": 23, "x86: reproducible build": 743,
+    "aarch64: boot and fault containment": 205, "aarch64: programs, shell and four CPUs": 432,
+    "aarch64: files and the block store": 380, "aarch64: network, TLS and Effector": 789, "aarch64: the updater and the modes": 572,
+    "aarch64: an update through the link": 899, "aarch64: RAM, ACPI and PCI above 4 GiB": 844, "aarch64: network above 4 GiB": 550,
+    "aarch64: GICv2 with GICv2m": 804, "aarch64: NVMe boot disk": 164, "aarch64: 16 CPUs": 212,
+}
+
+
+def estimates(work, expected):
+    """{group: seconds}: SECONDS, then the passes recorded by each gate in $LAND_WORK of these very groups, oldest first
+    (a group that keeps its name after a split is not timed by its former suites)."""
+    seconds = dict(SECONDS)
+    for record in sorted(pathlib.Path(work).glob("gate-*.json"), key=lambda p: p.stat().st_mtime):
+        try:
+            data = json.loads(record.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or set(data.get("expected", [])) != set(expected):
+            continue
+        seconds.update({r["group"]: r["seconds"] for r in data.get("results", []) if r.get("state") == "PASS" and r.get("seconds")})
+    return seconds
+
+
+def pick(queue, lane, ready, seconds, broken=()):
+    """The (part, group) `lane` takes next from `queue`: the longest it can run, so the long groups start first and the
+    short ones fill the ends (in simulation this beat preferring a part already built, by 2 to 3 minutes). An image whose build failed on the lane (`broken`) leaves its groups to the other lanes."""
+    parts = POOL_PARTS[lane.split("-")[0]]
+    able = [entry for entry in queue if entry[0] in parts and BUILT_BY[entry[0]] not in broken]
+    return max(able, key=lambda e: (seconds.get(e[1], DEFAULT_SECONDS), e[1]), default=None)
+
+
+def simulate(lanes, queue, seconds):
+    """{lane: [group]} and the minutes until the last ends, as a pool would run `queue` if every estimate held."""
+    queue, free = list(queue), {lane: 0.0 for lane in lanes}
+    ready, taken = {lane: set() for lane in lanes}, {lane: [] for lane in lanes}
+    while queue:
+        lane = min((l for l in lanes if pick(queue, l, ready[l], seconds)), key=lambda l: (free[l], lanes.index(l)), default=None)
+        if lane is None:
+            break
+        part, group = pick(queue, lane, ready[lane], seconds)
+        queue.remove((part, group))
+        if BUILT_BY[part] not in ready[lane]:
+            ready[lane].add(BUILT_BY[part]); free[lane] += build_seconds(lane, BUILT_BY[part])
+        free[lane] += seconds.get(group, DEFAULT_SECONDS)
+        taken[lane].append(group)
+    return taken, round(max(free.values(), default=0) / 60), queue
 
 
 def ci_groups(tree):
@@ -394,9 +473,10 @@ class Effector:
 
 
 class Gate:
-    def __init__(self, commit, tag, effector, out):
+    def __init__(self, commit, tag, effector, out, exact=False):
         self.commit, self.tag, self.effector, self.out = commit, tag, effector, out
         self.results, self.lock, self.trees = [], threading.Lock(), set()
+        self.exact = exact  # the tree's ci_local.sh takes `--group =NAME` for that group alone
 
     def lane(self, name):
         machine, _, n = name.partition("-")
@@ -442,7 +522,7 @@ class Gate:
             f"cd {clone} || exit 3\n[ \"$(git rev-parse HEAD)\" = \"{self.commit}\" ] || {{ echo \"TREE MOVED\"; exit 5; }}\n"
             # Only the SSH client's host tests need sshd; a machine without it (i9) still runs the host part's other groups.
             + (f"[ -x \"${{MIND_SSHD:-/usr/sbin/sshd}}\" ] || export MIND_SSHD=/bin/true\n" if part == "host" and group != "host tests" else "")
-            + f"scripts/ci_local.sh --only {part} --group \"{group}\" > \"$TMPDIR/land-group.out\" 2>&1\n"
+            + f"scripts/ci_local.sh --only {part} --group \"{'=' if self.exact else ''}{group}\" > \"$TMPDIR/land-group.out\" 2>&1\n"
             f"grep -E '^(PASS|FAIL) +[0-9]+s ' \"$TMPDIR/land-group.out\"\n"
             f"mkdir -p {logs}; cp \"$TMPDIR/land-group.out\" \"$TMPDIR\"/mind-ci-local/*.log {logs}/ 2>/dev/null\n"
             f"if grep -q '^FAIL ' \"$TMPDIR/land-group.out\"; then f=$(ls \"$TMPDIR\"/mind-ci-local/01-*.log 2>/dev/null | head -1);"
@@ -467,7 +547,7 @@ class Gate:
             return
         broken = set()  # parts whose build failed here: their groups would test the clone's previous image
         builds = {b: part for part, names in BUILDS.items() for b in names}
-        for n, (part, group) in enumerate(runs_for(entries), start):
+        for n, (part, group) in enumerate(entries if self.exact else runs_for(entries), start):
             if part in broken or (group in builds and builds[group] in broken):
                 with self.lock:
                     self.results.append({"group": group, "state": "ERROR", "seconds": 0, "lane": name})
@@ -476,6 +556,55 @@ class Gate:
             rows = self.group(name, part, group, n)
             if group in builds and any(state != "PASS" for state, _, _ in rows):
                 broken.add(builds[group])
+
+    def pool(self, lanes, queue, part_of, seconds, taken_path):
+        """Each lane takes groups from the one queue until none it can run is left (`pick`). What each took is kept in
+        `taken_path`, so a gate started again on the same candidate gives each lane the same groups first, in the same
+        order: their operations' keys match, and Effector answers with the results it holds."""
+        taken = json.loads(taken_path.read_text()) if taken_path.exists() else {}
+        queue = [e for e in queue if not any(e[1] in groups for groups in taken.values())]
+        threads = [threading.Thread(target=self.pool_lane, args=(lane, queue, part_of, seconds, taken, taken_path)) for lane in lanes]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join()
+        for part, group in queue:  # no lane could run it, or every lane that could lost its tree
+            self.results.append({"group": group, "state": "ERROR", "seconds": 0, "lane": "-"})
+            self.log(f"not run, no lane took it: {group}")
+
+    def pool_lane(self, name, queue, part_of, seconds, taken, taken_path):
+        if name not in self.trees and not self.tree(name):
+            return  # its groups stay in the queue for the others
+        builds = {b: arch for arch, names in BUILDS.items() for b in names}
+        mine, ready, broken, n = list(taken.get(name, [])), set(), set(), 1
+        while True:
+            if mine:
+                group = mine.pop(0)
+                part = part_of[group]
+            else:
+                with self.lock:
+                    entry = pick(queue, name, ready, seconds, broken)
+                    if entry is None:
+                        return
+                    queue.remove(entry)
+                    part, group = entry
+                    taken.setdefault(name, []).append(group)
+                    taken_path.write_text(json.dumps(taken, indent=1))
+            arch = BUILT_BY[part]
+            if arch not in ready and arch not in broken:
+                for _, build in builds_for({part}, part_of):
+                    rows = self.group(name, part_of[build], build, n); n += 1
+                    if any(state != "PASS" for state, _, _ in rows):
+                        broken.add(arch)
+                        break
+                else:
+                    ready.add(arch)
+            if arch in broken:  # its groups here would test the clone's previous image: another lane takes this one
+                with self.lock:
+                    taken[name].remove(group)
+                    queue.append((part, group))
+                    taken_path.write_text(json.dumps(taken, indent=1))
+                self.log(f"{name}: its {arch} build failed here; {group} goes back to the queue")
+                continue
+            self.group(name, part, group, n); n += 1
 
     def save(self, expected, problems):
         self.out.write_text(json.dumps({"commit": self.commit, "tag": self.tag, "green": not problems, "problems": problems,
@@ -491,10 +620,22 @@ def cmd_gate(args):
     parts = ci_groups(tree)
     part_of = {group: part for part, groups in parts.items() for group in groups}
     lanes = args.lanes.split(",") if args.lanes else None
-    layout = plan(parts, args.preset, lanes)
     expected = [g for groups in parts.values() for g in groups]
-    for lane, entries in layout.items():
-        print(f"{lane}: " + "; ".join(g for _, g in runs_for(entries)))
+    exact = "--group =NAME" in (tree / "scripts/ci_local.sh").read_text()  # the candidate's own ci_local.sh
+    builds = {b for names in BUILDS.values() for b in names}
+    if args.preset in POOLS:
+        layout = None
+        pool_lanes = [lane for lane in POOLS[args.preset] if not lanes or lane in lanes]
+        queue = [(part_of[g], g) for g in expected if g not in builds]
+        seconds = estimates(WORK, expected)
+        taken, minutes, left = simulate(pool_lanes, queue, seconds)
+        for lane, groups in taken.items():
+            print(f"{lane} (estimated): " + "; ".join(groups))
+        print(f"pool {args.preset}: about {minutes} minutes if the estimates hold" + (f"; no lane runs {left}" if left else ""))
+    else:
+        layout = plan(parts, args.preset, lanes)
+        for lane, entries in layout.items():
+            print(f"{lane}: " + "; ".join(g for _, g in (entries if exact else runs_for(entries))))
     if args.dry_run:
         return
     published = state.get("published")
@@ -504,16 +645,21 @@ def cmd_gate(args):
         raise SystemExit(f"the candidate {commit[:12]} is not on origin: run `scripts/land.sh candidate --push`")
     tag = args.tag or "land-" + commit[:8]
     out = WORK / f"gate-{commit[:12]}.json"
-    gate = Gate(commit, tag, Effector(), out)
-    threads = [threading.Thread(target=gate.lane_run, args=(lane, entries)) for lane, entries in layout.items()]
-    for thread in threads: thread.start()
-    for thread in threads: thread.join()
+    gate = Gate(commit, tag, Effector(), out, exact)
+    if layout is None:
+        gate.pool(pool_lanes, queue, part_of, seconds, WORK / f"gate-{commit[:12]}-taken.json")
+    else:
+        threads = [threading.Thread(target=gate.lane_run, args=(lane, entries)) for lane, entries in layout.items()]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join()
     _, problems = verdict(expected, gate.results)
     # A group that failed runs once more, alone, before the gate is called red (docs/effector.md, section 1).
     again = [g for g in expected if any(p.startswith(g + ":") for p in problems)]
     for i, group in enumerate(again):
         part = part_of[group]
-        lane = args.rerun_lane or next((r["lane"] for r in gate.results if r["group"] == group), next(iter(layout)))
+        lanes_here = pool_lanes if layout is None else list(layout)
+        ran = next((r["lane"] for r in gate.results if r["group"] == group and r["lane"] in lanes_here), None)
+        lane = args.rerun_lane or ran or next(l for l in lanes_here if layout is not None or part in POOL_PARTS[l.split("-")[0]])
         built = {r["group"] for r in gate.results if r["lane"] == lane and r["state"] == "PASS"}
         gate.lane_run(lane, builds_for({part}, part_of, built) + [(part, group)], start=90 + 5 * i)
     green, problems = verdict(expected, gate.results)
@@ -615,7 +761,7 @@ def main(argv=None):
     candidate.add_argument("--exclude", action="append", default=[], metavar="BRANCH")
     candidate.add_argument("--push", action="store_true")
     gate = sub.add_parser("gate")
-    gate.add_argument("--preset", choices=sorted(PRESETS), default="full")
+    gate.add_argument("--preset", choices=sorted(PRESETS) + sorted(POOLS), default="full")
     gate.add_argument("--lanes", help="only these lanes, comma-separated (i9, rz, rz-2, pcu)")
     gate.add_argument("--rerun-lane", help="where a failed group runs again (default: where it failed)")
     gate.add_argument("--tag")
