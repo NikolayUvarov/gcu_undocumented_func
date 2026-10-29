@@ -62,6 +62,7 @@ static mut SCRATCH: [u8; nn::REQUEST_MAX] = [0; nn::REQUEST_MAX];
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("nnd — the model service: checked nrl.model/0 packages loaded read-only and run for programs within each session's budget (idl/nn.wit, docs/nn/runtime.md).\nA boot service of init (262-KRN-0178): run from the shell it has no endpoint to serve and ends.");
     match mind::process::worker() {
         Some((_, argument)) => match argument & 0xFF {
             MANIFEST | OBJECTS => parse(argument),
@@ -203,6 +204,9 @@ fn serve(cpus: u32) {
             Ok(request) if request.exit.is_some() => nnd.ended(request.exit.unwrap().pid),
             Ok(request) if request.is_call => nnd.answer(&request, scratch),
             Ok(request) if request.cap_received => { let _ = ipc::drop_cap(RECEIVED); }
+            Err(mind::sys::Error::Rights | mind::sys::Error::NotFound | mind::sys::Error::Invalid) => {
+                return mind::println!("[NND] NO ENDPOINT TO SERVE: NND IS A BOOT SERVICE OF INIT");
+            }
             _ => {}
         }
         nnd.start_jobs();

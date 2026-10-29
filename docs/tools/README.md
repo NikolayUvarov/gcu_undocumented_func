@@ -455,6 +455,22 @@ These are measurements of one machine in one configuration, not proofs (MC-12.1,
 - **What to send back.** The log volume: the run's directory, beside `bootNNNN.log`, `hwNNNN.txt` and the tools' own logs.
 - **Changing the quick run.** Its steps are this stage's. A step goes when its task no longer needs it, and a new task's step is added with the task named.
 
+### 4.14 `nnd` — the model service (262-APP-0112)
+
+The design is [docs/nn/runtime.md](../nn/runtime.md) 1.0; the interface is `idl/nn.wit` 1.0.
+
+- **What it is.** A boot service that loads `NRL`'s `nrl.model/0` packages read-only and runs them for programs, each client known by the badge the kernel stamps.
+- **The checks, in `nnpkg/`** (a `no_std` crate):
+  - a strict JSON reader;
+  - the typed description;
+  - the object writer profile `nrl.serde-json-pretty-object/0`;
+  - the model ID;
+  - `nrl-lab`'s checks;
+  - the clients' state: holds, sessions, budgets, jobs, retirement.
+- **Where its work runs.** A package is parsed in a worker that holds only its bytes. A job runs in a worker of its own.
+- **Its host tests** run on NRL's pinned bundle (`cargo test --manifest-path nnpkg/Cargo.toml`, in `scripts/host_tests.sh`).
+- **Not running yet.** `nnd` is built with the programs, but it runs only once `KRN` gives it its boot image and grants and the shell its badged client ([262-KRN-0178](../../issues/262-KRN-0178-nnd-as-a-boot-service.md)). No native run is claimed yet (MC-12.3).
+
 ## 5. Phases
 
 ```mermaid
