@@ -274,8 +274,9 @@ fn main(info: &'static BootInfo) {
                 Input::Key(event) => {
                     let Some(key) = Key::from_event(event.to_word()) else { continue };
                     if key.code() == mind::keys::Code::Tab { complete(&mut screen); dirty = true; continue; }
-                    if let Some(line) = screen.key(key, page) { pending = Some((line, false)); }
                     dirty = true;
+                    // One line at a time (000-APP-0113): the keys after its Enter wait in the queue until it has run.
+                    if let Some(line) = screen.key(key, page) { pending = Some((line, false)); break; }
                 }
                 Input::Pointer(p) if p.wheel != 0 => { screen.wheel(p.wheel); dirty = true; }
                 Input::Pointer(_) => {}
