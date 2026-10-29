@@ -68,6 +68,17 @@ pub fn edit<const N: usize>(text: &[u8], units: &[&str; N], change: Change, out:
     let mut why = None;
     services::parse(directive, units, |_, w, _| why = why.or(Some(w)));
     if let Some(why) = why { return Err(why); }
+    // A file that has the directive already, and no other line it replaces, stays as it is.
+    let lines = || text.split(|&b| b == b'\n').enumerate().filter(|(_, raw)| replaced(raw, change));
+    if let (1, Some((i, raw))) = (lines().count(), lines().next()) {
+        if words(raw) == words(directive) {
+            let mut mine = None;
+            let plan = services::parse(text, units, |l, w, t| if l == i + 1 { mine = Some(w) } else { refused(l, w, t) });
+            if let Some(why) = mine { return Err(why); }
+            out[..text.len()].copy_from_slice(text);
+            return Ok(Edited { len: text.len(), plan, changed: false });
+        }
+    }
     // The file's lines but those the change replaces.
     let mut len = 0;
     for raw in text.split(|&b| b == b'\n') {

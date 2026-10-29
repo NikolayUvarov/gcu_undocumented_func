@@ -37,10 +37,17 @@ fn disable_and_enable() {
     let (text, edited, refused) = edit("", Change::Disable("tts")).unwrap();
     assert_eq!(text, "disable tts\n");
     assert!(edited.changed && edited.plan.off[at("tts")] && refused.is_empty());
-    // Again: the same file, nothing to write.
+    // Again: the same file, nothing to write, even with the line before others.
     let (again, edited, _) = edit(&text, Change::Disable("tts")).unwrap();
     assert_eq!(again, text);
     assert!(!edited.changed);
+    let (again, edited, _) = edit("disable tts\nafter windows sysmon\n", Change::Disable("tts")).unwrap();
+    assert_eq!(again, "disable tts\nafter windows sysmon\n");
+    assert!(!edited.changed && edited.plan.off[at("tts")]);
+    let (_, edited, _) = edit("after windows sysmon\ndisable tts\n", Change::After("windows", "sysmon")).unwrap();
+    assert!(!edited.changed);
+    // A line init refuses is not kept as if it held.
+    assert_eq!(edit("after windows sysmon\nafter sysmon windows\n", Change::After("sysmon", "windows")).err(), Some("A CYCLE OF after"));
     // Enable takes the line out: the default is on.
     let (text, edited, _) = edit("# no speakers\ndisable tts\nafter windows sysmon\n", Change::Enable("tts")).unwrap();
     assert_eq!(text, "# no speakers\nafter windows sysmon\n");

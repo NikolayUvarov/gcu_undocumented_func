@@ -202,6 +202,8 @@ fn write(text: &[u8]) -> Result<(), mind::fs::Error> {
     if text.is_empty() {
         return match mind::fs::remove(services::FILE) { Err(mind::fs::Error::NotFound) => Ok(()), result => result };
     }
+    // A disk written without data/ gets it.
+    if let Some((parent, _)) = services::FILE.rsplit_once('/') { mind::fs::mkdir(parent)?; }
     let mut file = mind::fs::File::create(services::FILE)?;
     file.write_at(0, text)?;
     file.flush()

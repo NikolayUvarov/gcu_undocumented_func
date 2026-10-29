@@ -5099,6 +5099,10 @@ def svc_boot_check(args):
             for line in ("at the next boot, by data/services.txt as it is now:", "  tts enabled", "  windows after nothing of the file's"):
                 require(out, line)
             assert "PANIC" not in vm.log, vm.log[-2000:]
+            # Off as the vfs check turns it off, so the volume is checked clean.
+            vm.send("reboot -f --off\n")
+            vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF" if vm.arch == "aarch64" else "MIND CORE KERNEL: POWER OFF VIA ACPI S5", timeout=30)
+            vm.process.wait(timeout=30)
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-svc-boot-{args.cpus}cpu.log").write_text(vm.log)
