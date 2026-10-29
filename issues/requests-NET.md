@@ -59,3 +59,24 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 ### Acceptance criteria
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
+
+## The parser check takes a download's exited parser for the shared service (109)
+
+**Recorded by:** the tools track (APP), 2026-10-29, from its own run of the x86 `net` suite on its branch (`claude/wizardly-franklin-kec1a9` 505470eb, QEMU TCG, 4 CPUs, this session's container).
+
+### Problem
+
+`parser_check` in `tests/qemu_smoke.py` failed once, in `download_runs`: `stat caps 54` answered `ERROR: NO SUCH PID`. The `ps` it read just after `download data/bad.bin` listed both:
+- `23 parse IPC_WAIT`, the shared service;
+- `54 parse EXITED`, the download's own parser (109-NET-0010), not yet reaped.
+
+`vm.services()` maps each name to the last row, so it took 54 for `parse`. The same check passed twice earlier the same day on the same machine: it is a race with the reaping of the download's parser.
+
+### Plan
+
+- In `parser_check`, take the shared service's PID from a row that is not `EXITED`, or wait until a single `parse` row is left, as the `lifecycle_check` now waits for a stopped `tts` to be reaped (the tools track, 2026-10-29).
+- Or make `vm.services()` leave out `EXITED` rows, for every check that reads it.
+
+### Acceptance criteria
+
+`parser_check` reads the shared service's capabilities whether or not a download's parser is still listed.
