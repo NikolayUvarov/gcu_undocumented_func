@@ -1,12 +1,17 @@
 //! Flow grants (issue 102): what a client with a grant's badge may reach, for how long and how much. Registered only
-//! by the policy broker; the stack checks every request with a grant's badge against them.
+//! by the policy broker; the stack checks every request with a grant's badge against them. A rule of address 0, TCP
+//! only, reaches any public address on its port: a browsing grant (socket.wit 2.7, 000-NET-0049), whose every new host
+//! is logged.
 use alloc::vec::Vec;
 use mind::idl::socket::{self, Error, Protocol, Rule};
 use mind::network::{BADGE_GRANT_LAST, BADGE_OPERATOR, BADGE_POLICY};
 
 pub const GRANTS: usize = 64;
 
-pub struct Grant { pub badge: u16, rules: Vec<Rule>, expires: u64, budget: u64, pub sent: u64, pub received: u64, pub ended: bool }
+pub struct Grant { pub badge: u16, rules: Vec<Rule>, expires: u64, budget: u64, pub sent: u64, pub received: u64, pub ended: bool, hosts: Vec<u32> }
+
+// The public hosts a browsing grant has reached that the audit remembers; past them each new one is logged again.
+const HOSTS: usize = 256;
 
 pub enum Access { Operator, Policy, Grant(u16), Nothing }
 
@@ -19,10 +24,10 @@ pub struct Policy { grants: Vec<Grant> }
 
 impl Policy {
     pub fn set(&mut self, badge: u16, rules: &[Rule], seconds: u32, bytes: u64, now: u64) -> Result<(), Error> {
-        if !(1..=BADGE_GRANT_LAST).contains(&badge) || rules.iter().any(|r| r.address == 0) { return Err(Error::Invalid); }
+        if !(1..=BADGE_GRANT_LAST).contains(&badge) || rules.iter().any(|r| r.address == 0 && (r.protocol != Protocol::Tcp || r.port == 0)) { return Err(Error::Invalid); }
         self.grants.retain(|g| g.badge != badge);
         if self.grants.len() >= GRANTS { return Err(Error::Limit); }
-        self.grants.push(Grant { badge, rules: rules.to_vec(), expires: now + seconds as u64 * 1000, budget: bytes, sent: 0, received: 0, ended: false });
+        self.grants.push(Grant { badge, rules: rules.to_vec(), expires: now + seconds as u64 * 1000, budget: bytes, sent: 0, received: 0, ended: false, hosts: Vec::new() });
         Ok(())
     }
     pub fn drop(&mut self, badge: u16) -> bool { let before = self.grants.len(); self.grants.retain(|g| g.badge != badge); before != self.grants.len() }
@@ -38,8 +43,18 @@ impl Policy {
     /// Whether grant `badge` may reach `address`:`port` over `protocol` (port 0 asks for any rule of the protocol).
     pub fn allows(&self, badge: u16, protocol: Protocol, address: u32, port: u16, now: u64) -> Result<(), Error> {
         let grant = self.live(badge, now)?;
-        let matches = |r: &Rule| r.protocol == protocol && (address == 0 || r.address == address) && (r.port == 0 || port == 0 || r.port == port);
+        let public = address != 0 && mind::network::public(address);
+        let matches = |r: &Rule| r.protocol == protocol && (address == 0 || r.address == address || (r.address == 0 && public)) && (r.port == 0 || port == 0 || r.port == port);
         if grant.rules.iter().any(matches) { Ok(()) } else { Err(Error::Denied) }
+    }
+    /// A connection grant `badge` may make: one that only its browsing rule allows is logged for its first new host.
+    pub fn audit(&mut self, badge: u16, address: u32, port: u16) {
+        let Some(grant) = self.grants.iter_mut().find(|g| g.badge == badge) else { return };
+        if grant.rules.iter().any(|r| r.address == address) || grant.hosts.contains(&address) { return; }
+        if grant.hosts.len() == HOSTS { grant.hosts.remove(0); }
+        grant.hosts.push(address);
+        let [a, b, c, d] = address.to_be_bytes();
+        mind::println!("[NETSTACK] GRANT {} BROWSES A NEW PUBLIC HOST {}.{}.{}.{}:{} ({} SO FAR)", badge, a, b, c, d, port, grant.hosts.len());
     }
     /// Any request of a live grant (sockets it already holds).
     pub fn alive(&self, badge: u16, now: u64) -> Result<(), Error> { self.live(badge, now).map(drop) }

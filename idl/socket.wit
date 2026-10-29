@@ -30,7 +30,9 @@
 /// `pattern` repeated over them (1 to 16 bytes; empty: `MINDCORE`). Its answer gives the round trip, the reply's data
 /// size, and whether its data are what was sent. A grant's echo is counted in its volume, the request's bytes and as
 /// many for the reply, when it is sent; `ping` is counted the same way, 16 bytes each way.
-package mind:socket@2.6.0;
+/// 2.7 (000-NET-0049): a rule of address 0 reaches any public address (`mind::network::public`) on its port, TCP only
+/// and never port 0: the browsing grant; the stack logs each new host a grant reaches through it.
+package mind:socket@2.7.0;
 
 interface socket {
     /// Why a request failed.
@@ -39,7 +41,8 @@ interface socket {
     /// A protocol a rule allows.
     enum protocol { tcp, udp, icmp }
 
-    /// One destination a grant may reach: an address (never 0), a port (0: any; ICMP has none) and a protocol.
+    /// One destination a grant may reach: an address, a port (0: any; ICMP has none) and a protocol. Address 0 (2.7): any
+    /// public address, for TCP on one port only.
     record rule { address: u32, port: u16, protocol: protocol }
 
     /// A network interface: its card (0: the first driver instance), configuration (address 0: not configured yet),

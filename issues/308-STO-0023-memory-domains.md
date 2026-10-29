@@ -1,6 +1,6 @@
 # 308-STO-0023 — Memory domains: a key per domain, and forgetting by destroying it
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308-KRN-0184](308-KRN-0184-blockstore-badges-its-own-clients.md) (the store's endpoint with the badge right, from `init`), for the platform checks · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
 
 Split from [308](308-encryption-at-rest.md) (2026-10-28).
 

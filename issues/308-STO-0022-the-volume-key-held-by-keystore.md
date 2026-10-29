@@ -1,6 +1,6 @@
 # 308-STO-0022 — The volume key held by `keystore`: sealed by the TPM or unlocked by a passphrase, with a recovery key
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** the block store's secrets client from `init` and `keystore` ([requests-KRN.md](requests-KRN.md), "The block store's volume key kept by `keystore`", 2026-10-29) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [308-KRN-0183](308-KRN-0183-a-secrets-client-for-blockstore.md) (the block store's secrets client from `init` and `keystore`) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
 Split from [308](308-encryption-at-rest.md) (2026-10-28).
 
