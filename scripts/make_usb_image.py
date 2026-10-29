@@ -239,7 +239,7 @@ def add_log_partition(image, when):
 
 
 def store_superblock():
-    """The block store's superblock with no volume key yet, as blockstore/src/store.rs reads it (superblock(None)): its
+    """The block store's superblock with no volume key yet, as blockstore/src/store.rs reads it (superblock(None, None)): its
     magic, its layout (read from that file), the sector size, key source 0, the SHA-256 of those 16 bytes, zeros where
     the key and its check go, and the SHA-256 of the 140 bytes before it. The store makes the key at its first mount."""
     layout = int(re.search(r"pub const LAYOUT: u16 = (\d+);", (ROOT / "blockstore/src/store.rs").read_text())[1])
