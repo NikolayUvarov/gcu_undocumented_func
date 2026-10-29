@@ -38,4 +38,4 @@ The maintainer (2026-10-28): what is needed is not the agent's name but the mach
 
 ## Related
 
-[750-EFF-0017](750-EFF-0017-an-identity-of-the-machines-own.md), `800-LNK-0028`, `800-LNK-0015` (the shell over the link).
+[750-EFF-0017](../issues-done/750-EFF-0017-an-identity-of-the-machines-own.done), `800-LNK-0028`, `800-LNK-0015` (the shell over the link).

@@ -1,6 +1,6 @@
-# 750-EFF-0017 — An identity of the machine's own: an agent copied with a disk's settings to another machine gets a new ID
+# 750-EFF-0017 — An identity of the machine's own: an agent copied with a disk's settings to another machine gets a new ID — done
 
-**Type:** session · **Owner:** `EFF` · **Priority:** P1 · **Status:** in progress (2026-10-27) · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-10.2, MC-12.1, MC-12.3
+**Type:** session · **Owner:** `EFF` · **Priority:** P1 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-10.2, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -40,9 +40,20 @@ The maintainer (2026-10-27): the DEXP desktop's agent appeared on the server as 
 ## Acceptance criteria
 
 - [x] Host tests: the print and its rounding, the record read and written, a copied identity told apart, the hostname of the machine's own.
-- [ ] The `effector` QEMU suite passes, x86 and aarch64: a first start records the machine, and a record of another print gives a new agent ID.
+- [x] The `effector` QEMU suite passes, x86 and aarch64: a first start records the machine, and a record of another print gives a new agent ID (2026-10-29).
 - [x] On the DEXP, from a release (slot B, version 202610272251, 2026-10-27): the record is read as this machine's. The agent keeps `mind_09dca8b4def0f6e6` and reports `mind-n100`, since `effector.conf` still names `mind-macbook-pro`. Evidence for the DEXP only (MC-12.1).
+
+## Resolution
+
+Done on 2026-10-29 by the `EFF` track.
+- **The agent** (`effector/src/main.rs`, `effector/src/config.rs`) keeps a record of the machine it runs on, `system/effector/machine`: the processor's model and the memory rounded to a power of two, and the foreign hostname.
+  - A record with another print means the identity was copied with a disk's settings. The agent then takes a new ID and sets the old journal aside as `journal.foreign`.
+  - The owner's `agent_id`, if it names the old ID, is not taken again.
+- **The tests:**
+  - the host tests in `tests/effector_config_host.rs`;
+  - the `effector` QEMU suite on x86 (4 CPUs) and aarch64 (QEMU `virt`): it checks the first start's record, then boots a disk whose kept identity was recorded on another machine, and sees a new `mind_…` ID taken. The two runs took `mind_c3285003242f9802` and `mind_2ecf011f1f364548`.
+- **On the DEXP:** see the criterion above. It runs as `mind_09dca8b4def0f6e6`, online and activated on hesere since 2026-10-28. Evidence for the DEXP only (MC-12.1).
 
 ## Related
 
-[750-EFF-0014](750-EFF-0014-telemetry.md) (the processor's name, the gateway's sample), `800-LNK-0024` (`--keep-settings`, the link track).
+[750-EFF-0014](../issues/750-EFF-0014-telemetry.md) (the processor's name, the gateway's sample), `800-LNK-0024` (`--keep-settings`, the link track).

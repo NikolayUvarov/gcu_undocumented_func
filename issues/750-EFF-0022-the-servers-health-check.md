@@ -26,7 +26,7 @@ On hesere, `health_check` on either MIND machine is refused before it reaches th
 ## Acceptance criteria
 
 - [x] The wire host test: a command that exits 1 is `failed` with its status and `error` (2026-10-29).
-- [x] The `effector` QEMU suite on x86: `exec_v1` of `health` is answered `completed`, exit status 0, `stdout` starting `healthy: up` (4 CPUs, 2026-10-29; the agent logged `healthy: up 131 s, 28 services running`).
+- [x] The `effector` QEMU suite on x86: `exec_v1` of `health` is answered `completed`, exit status 0, `stdout` starting `healthy: up` (4 CPUs, 2026-10-29; the agent logged `healthy: up 131 s, 28 services running`). It passes on aarch64 too (QEMU `virt`, e13b48b7).
 - [ ] On both MIND machines, through hesere, once the server has the health command: `health_check` answers. Evidence for each machine only (MC-12.1).
 
 ## Related

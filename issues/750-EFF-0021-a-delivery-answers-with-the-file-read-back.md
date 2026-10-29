@@ -36,9 +36,9 @@ The maintainer (2026-10-29): both MIND machines are to be reachable through Effe
 ## Acceptance criteria
 
 - [x] Host tests: `tests/effector_gateway_host.rs` (the answer, a read-back that differs) and `tests/effector_wire_host.rs` (the result's JSON), 2026-10-29.
-- [ ] The `effector` QEMU suite on x86 and aarch64: the delivery's `stdout` is `delivered data/inbox/d.txt SIZE SHA256` with the file's own values.
-  - x86, 4 CPUs (98a23c3e, 2026-10-29): passes, with the line's size and SHA-256 checked.
-  - aarch64: not run yet.
+- [x] The `effector` QEMU suite on x86 and aarch64: the delivery's `stdout` is `delivered data/inbox/d.txt SIZE SHA256` with the file's own values.
+  - x86, 4 CPUs (98a23c3e and e13b48b7, 2026-10-29): passes, with the line's size and SHA-256 checked.
+  - aarch64 (QEMU `virt`, e13b48b7, 2026-10-29): passes.
 - [ ] On the MacBook Pro, through hesere: a `deliver_file` answers with the line, and the server's task is told. Evidence for that machine only (MC-12.1).
 
 ## Related
