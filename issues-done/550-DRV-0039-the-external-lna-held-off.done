@@ -1,10 +1,10 @@
-# 550-DRV-0039 — `bcm_wifi` holds the BCM4331's external LNA off: the receiver no longer misses a fifth of strong frames
+# 550-DRV-0039 — `bcm_wifi` holds the BCM4331's external LNA off: the receiver no longer misses a fifth of strong frames — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-10.2, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md), through [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-10.2, MC-12.1, MC-12.3
 
 ## Problem
 
-[550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md)'s counts on the MacBook Pro (2026-10-23) showed:
+[550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md)'s counts on the MacBook Pro (2026-10-23) showed:
 - **beacons missed in quiet periods:** the receiver missed 6% to 25% of the access point's beacons, mostly one by one, at a strong −44 to −46 dBm;
 - **a sharp floor:** it heard no frame weaker than about −61 dBm;
 - **episodes of interference:** about 80 s each, at 02:23 and 04:04 UTC. Frames went missing in runs while their level did not fall. They cost data frames even after 7 tries, and the Effector agent its connection.
@@ -74,9 +74,9 @@ The stick was `fast-test` 0d73c076, then EFF's release trees (slot B 31d66d3c, s
 
 ## Acceptance criteria
 
-- [ ] On the MacBook Pro, `bcm_wifi` logs the override held when the radio comes up. Over at least 20 minutes the network's beacons are heard at 90% or more in quiet periods, against 75% to 85% before.
-- [ ] Data frames lost after 7 tries are no more than under the PHY's control, measured over the same period in turn.
-- [ ] What the levels read now mean is written in this issue's resolution, and `NET` is told.
+- [x] On the MacBook Pro, `bcm_wifi` logs the override held when the radio comes up. Over at least 20 minutes the network's beacons are heard at 90% or more in quiet periods, against 75% to 85% before (2026-10-29: 93.7% over 77 minutes of every period, traffic included; below).
+- [x] Data frames lost after 7 tries are no more than under the PHY's control, measured over the same period in turn (2026-10-29, below).
+- [x] What the levels read now mean is written in this issue's resolution, and `NET` is told (2026-10-29).
 
 Evidence for the MacBook Pro's BCM4331 only (MC-12.1). Other boards with this chip may wire their front end otherwise.
 
@@ -102,6 +102,44 @@ Evidence for the MacBook Pro's BCM4331 only (MC-12.1). Other boards with this ch
   - **For an hour (3,004 to 6,784 s) no frame's level was read.** Every core's power byte was at or above 0, while reception was sound (about 630 good frames each 10 s, none lost). The beacons were not counted then, as their level was required.
 - **2026-10-23, the counts fixed.** A beacon now counts whether or not its level was read, and the mean is of those whose level was. The CCK line adds `NO LEVEL n (LAST xx xx xx)`, the raw bytes of the last such frame, so the next time shows what the receive header held.
 
+- **2026-10-29, release 202610290937 on the MacBook Pro** (`main` with `DRV`'s, `EFF`'s and `LNK`'s branches, slot B, confirmed). The logs were read through hesere.
+  - **The override:** `THE EXTERNAL LNA HELD OFF: RF CONTROL 0400 0400 0400 (THE PHY'S WAS 0000 0000 0000)` at 5.3 s.
+  - **The beacons, 77 minutes** (462 periods of 10 s, 13 to 4,624 s): 41,982 of 44,814 due were heard, **93.7%**.
+    - That counts every period, traffic included. The machine is hardly ever quiet now, since the Effector agent's heartbeats and telemetry run all the time; the three periods with at most 5 data frames sent heard 91.1%.
+    - 58 periods of 462 were below 90%.
+  - **The data, the same 77 minutes:** 11,043 frames sent, **1 lost after every try**, 1.78 tries a frame.
+  - **Left:**
+    - **the second criterion's comparison in turn,** the same period with the PHY's control. `bcm_wifi` has no switch for it: it needs a build without the override, put with `replace` over the cable and brought back with `--back`;
+    - **the resolution,** with what the levels mean, and `NET` told.
+
+## Resolution
+
+Done on 2026-10-29 by the `DRV` track. Evidence for the MacBook Pro's BCM4331 only (MC-12.1).
+
+**The comparison in turn,** on release 202610290937 (slot B):
+- the PHY's own control was a build of this `bcm_wifi` without the override, put with `replace` over the cable and brought back with `--back`;
+- the logs were read through hesere;
+- traffic as usual in every period: the Effector agent's heartbeats and telemetry.
+
+| Period | Beacons heard | Data lost after every try | Tries a frame | Mean beacon level |
+|---|---|---|---|---|
+| The override, before (0–16,588 s, 138 min) | 74,710 of 80,219, **93.1%** | 1 of 19,584 (0.005%) | 1.70 | −62.1 dBm |
+| The PHY's control (16,602–18,224 s, 26.5 min) | 10,166 of 15,425, **65.9%**; every period below 90% | 2 of 4,054 (0.049%) | 2.23 | −41.6 dBm |
+| The override, after (18,227 s on, 22.3 min) | 12,245 of 12,902, **94.9%** | 1 of 3,099 (0.032%) | 1.98 | −58.2 dBm |
+
+- **The beacons:** with the LNA held off, nearly every beacon is heard. Under the PHY's control a third is missed, more than the fifth seen on 2026-10-23.
+- **The losses:** no more with the override than without it.
+  - The counts are a few frames each, too few to call one setting better on losses alone.
+  - Retries are the clearer signal: fewer tries a frame with the override, before and after.
+
+**What the levels mean now.**
+- **The level read with the LNA held off is about 17 to 20 dB below the one read under the PHY's control,** at the same place within the same hour: −58 to −62 dBm against −42 dBm.
+- **The likely reason:** the PHY's level computation counts the external LNA's gain, which no longer applies. That is inferred, not measured against a reference.
+- **The readings are therefore relative to this setting.** A level from before 2026-10-23, or from another driver, is not comparable with one read now. The "strong −44 to −46 dBm" of this issue's problem reads about −62 to −66 dBm now.
+- **`NET` is told** on `internal-dev-messages` (2026-10-29), for any threshold the station keeps on levels.
+
+**Where:** `bcm_wifi/src/radio.rs` (`RF_CONTROL_HELD`, `say_lna`), in `main` since 2026-10-23.
+
 ## Related
 
-[550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), 550-KRN-0157.
+[550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0029](../issues/550-DRV-0029-bcm4331-receives-ofdm.md), [550-DRV-0028](../issues/550-DRV-0028-bcm4331-transmit-power.md), 550-KRN-0157.
