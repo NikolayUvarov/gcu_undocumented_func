@@ -48,6 +48,6 @@ The `tools` suite runs `svc disable tts`, reboots, and finds `tts` off in `svc b
     - `svc enable tts` and `svc reset` undo them;
     - the volume is clean after power-off.
 
-  It passed on x86 under QEMU TCG with 4 CPUs, in this session's container (before `svc start tts` was added to it). aarch64 has no `tools` suite, so its `modes` suite runs the same check, for main task 173's criteria on both architectures; that run is recorded with the landing request.
+  It passed on x86 under QEMU TCG with 4 CPUs, in this session's container (before `svc start tts` was added to it), and again on the tree merged with round 41. aarch64 has no `tools` suite, so its `modes` suite runs the same check, for main task 173's criteria on both architectures. There it passed under QEMU on i9 through Effector (the group `aarch64: files, network and TLS`, 9fd7b0aa).
 - **Docs:** `docs/tools/README.md` and `README_RU.md`; the program's `--help`.
 - **Not done here:** the check is not against `boot-plan`, as main task 173 first wrote it. `boot-plan` is this boot's result, while init's parser is what judges the next boot.
