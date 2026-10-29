@@ -78,6 +78,12 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
 - `-I` asks with GET and reads no body, and `-X` has no HEAD, PATCH or DELETE: `mind::http::Method` has GET, POST and
   PUT only (000-NET-0047; effector's exhaustive `match` on it is recorded in `requests-EFF.md`).
 
+## Progress (2026-10-29)
+
+In `main` at ef3faf0d (landing round 41, the request's commit 3f4fa0aa): `get` and its host tests (`tests/get_host.rs`), and the `net` suite's `get_runs` against `tests/http_api_stub.py`, passed in the round 41 gate on x86 and aarch64 (the `net` suite runs in "x86: boot, display, network, TLS, shell, memory, clock", "aarch64: files, network and TLS" and the other aarch64 groups).
+
+Still left: what the Progress section lists (`-u`, a host refused at run time, HEAD, PATCH and DELETE).
+
 ## Related
 
 [000-NET-0047](000-NET-0047-http-for-api-clients.md), [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md), [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done).

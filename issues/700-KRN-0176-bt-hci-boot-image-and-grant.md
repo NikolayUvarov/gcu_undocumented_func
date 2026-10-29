@@ -40,7 +40,7 @@ The DEXP's RTL8821CE has a Bluetooth half, `0BDA:C821`, on its xHCI.
   - The branch is back at ABI 22 and handoff 21 with 44 images, the layout `fast-test` carried with 000-KRN-0170.
   - The safe-start line's fix stays: it names every service left out.
 - **What comes back after DRV's fix.** d53bc153 as it was, and the `usb` suite as a criterion.
-  - [000-KRN-0182](000-KRN-0182-a-programs-secrets-client.md) took ABI 24 meanwhile, so this task comes back with **ABI 25 and handoff 25**, one above every ABI so far.
+  - [000-KRN-0182](../issues-done/000-KRN-0182-a-programs-secrets-client.done) took ABI 24 meanwhile, so this task comes back with **ABI 25 and handoff 25**, one above every ABI so far.
   - `fast-test` 5a8aaf1a's ABI 23 and handoff 23 are never used again.
 
 ## Acceptance criteria
