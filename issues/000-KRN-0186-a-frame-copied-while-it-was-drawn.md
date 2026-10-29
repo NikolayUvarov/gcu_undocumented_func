@@ -46,7 +46,10 @@
   - **The code of `d26de9fd`**, built for the runs: 18 runs in a row passed.
     - 8 of them carried temporary counters, sent to QEMU's debug port. Over each whole run (the boot and the suite) they counted 375 to 441 busy answers and 750 to 830 holds, 162 to 181 of them made at a task's next wait. Per run, 0 to 6 holds ended because the compositor waited before its next ask. None ended by the time bound, none of the copies was made without a hold, and the held task was never found running.
     - 10 had no counters.
-- **Left:** the acceptance runs on `un-rizen`, two lanes.
+- **The acceptance runs** (2026-10-29, `claude/youthful-mendel-mf1soy` 46efb7b5): `un-rizen`, both of the track's lanes at once.
+  - Each lane built the tree, then ran `x86: protection probes` ten times.
+  - All 20 runs passed. Each run took 423 to 436 screens, the guest paused for each, and frames reached 169 to 191.
+- **Left:** landing; then the issue closes.
 
 ## Acceptance criteria
 
