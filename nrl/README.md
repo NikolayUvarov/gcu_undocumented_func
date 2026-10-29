@@ -2,14 +2,16 @@
 
 NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). Host adapters cover bounded feed-forward graphs, a real trained TinyStories decoder and a mean-token embedding family. Five gated SiLU block representations (`dense`, `pruned`, `spline-linear`, `spline-cubic`, `svd`) share checked affine/gradient mathematics. Model packages, calibration/training, regression, language and two explicit retrieval profiles, measured plan/recovery experiments and a portable graph/session boundary are implemented. Native MIND Core service integration remains T11.
 
-## Current branch status (2026-10-26)
+## Current branch status (2026-10-29)
 
-T06–T10 are complete for the declared bounded host profiles. Five requested autonomous extensions, 900-NRL-0020–0024, add optimizer recovery, incremental generation, full embedding training, a complete supported-model QSL bridge and a larger licensed study. The complete `bash nrl/tools/check.sh --expanded` run passes on `b44fbc0d`: **95 host tests**, zero failures/skips, four portable release builds and all CLI cycles including the larger study. New independent fixtures regenerate exactly under the pinned reference environments. [Final evidence](reports/five-extensions-2026-10-26.json), [raw check log](reports/five-extensions-check-2026-10-26.txt). Native service integration and the full repository landing gate remain pending.
+T06–T10 are complete for the declared bounded host profiles. Five requested autonomous extensions, 900-NRL-0020–0024, add optimizer recovery, incremental generation, full embedding training, a complete supported-model QSL bridge and a larger licensed study. The complete `bash nrl/tools/check.sh --expanded` run passes on `b44fbc0d`: **95 host tests**, zero failures/skips, four portable release builds and all CLI cycles including the larger study. New independent fixtures regenerate exactly under the pinned reference environments. [Final evidence](reports/five-extensions-2026-10-26.json), [raw check log](reports/five-extensions-check-2026-10-26.txt). This source reached main on 2026-10-28. Native service integration remains pending; new changes still pass through the landing queue.
+
+900-NRL-0025 now supplies the pinned native-service handoff: unchanged MIT graph, independent f64 reference/tolerance, exact writer encoding vectors and 16 host runtime scenarios. **99 host tests**, four portable builds and all standard CLI cycles pass on `50caca7e`; independent PyTorch regeneration matches. [Current evidence](reports/native-conformance-2026-10-29.json), [contract](specs/native-conformance-v0.md). APP/KRN received the handoff; native T11 remains open.
 
 | Work | Current scope and outcome | Evidence |
 |---|---|---|
 | T06–T10 | Real trained decoder, resumable local fitting, shared metrics, measured mixed-plan search and student-input recovery | [Previous recovery](reports/recovery-2026-10-26.json) |
-| T11 — partial | Portable owner/model-bound graph sessions and budgets; native nnd/IDL/target integration awaits APP | [Native boundary](specs/native-boundary-v0.md) |
+| T11 — partial | Portable sessions/budgets; pinned MIT model, independent reference, exact encoding and host conformance scenarios for APP; native service/target evidence pending | [Native boundary](specs/native-boundary-v0.md), [handoff](specs/native-conformance-v0.md) |
 | T07/T10 extension | Shared AdamW, complete moments and exact checkpoint continuation; matched refreshed-input SGD comparison; dense fallback | [Saved optimizer comparison](reports/adamw-example-2026-10-26/summary.json) |
 | T12 host | Prepared full forward and incremental sessions; exact logits/tokens and rollback, including a late numerical failure | [Generation contract](specs/prepared-generation-v0.md), [paired study](reports/generation-before-promotion-2026-10-26.json) |
 | T13 extension | Analytic lookup/mean/projection/L2 backward, graded contrastive AdamW, validation selection, standalone export and explicit trained-table retrieval profile | [Saved training and metrics](reports/embedding-training-example-2026-10-26/summary.json) |
@@ -61,7 +63,7 @@ A cross-compiled library is not a native application run. APP owns issue 262's `
 
 Remaining broader work is listed in the current status above. Complete bounded host models, training and measured scalar execution gains now exist; accepted compression, universal imports, native integration and accelerators remain unestablished.
 
-CI scripts do not yet invoke this new workspace; the owning KRN track has a request to add the explicit checks. Until it lands, run them manually and include their result in the landing request.
+CI now invokes `nrl/tools/check.sh` in `.github/workflows/ci.yml` and the local host gate (900-KRN-0174). The recorded local gate passed; the KRN issue still tracks its requested CI-run record. Include the affected-check results in each landing request.
 
 The numbered implementation sections below preserve the state at each milestone; their historical next steps are superseded by the current status above.
 
@@ -241,3 +243,14 @@ QSL overlays can now bind to the exact supported Tinyllamas decoder, run the com
 ## Larger licensed study (900-NRL-0024)
 
 A frozen 48-story TinyStories prefix corpus (24/12/12), eight representation plans and paired refreshed AdamW/SGD recovery extend the miniature experiment. Data, selection method, licence, source revision and checksums are explicit. The runner saves validation measurements, independent held-out reports and a dense fallback without using test metrics for selection. [Data boundaries, licence and repeatable commands](specs/expanded-study-v0.md).
+
+## Pinned native-service handoff (900-NRL-0025)
+
+The [conformance bundle](tests/fixtures/native-conformance-v0/bundle.json) contains the unchanged MIT complete-graph model, independent PyTorch reference, little-endian f64 client payloads and golden object-encoding vectors. The [versioned handoff](specs/native-conformance-v0.md) specifies model identity, tolerance, reproducible quota/partial-interruption/numerical-failure scenarios and the APP design corrections.
+
+```bash
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-native-fixture nrl/tests/fixtures/native-conformance-v0
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- make-native-fixture /tmp/new-native-fixture
+```
+
+The checker and exporter are host tools; native parser/service/IDL and named-target evidence remain APP/KRN work under 0017. **99 host tests**, four portable builds and all standard CLI cycles pass on `50caca7e`; the independent original PyTorch oracle regenerates exactly. Full checking regenerates the bundle byte for byte. [Evidence](reports/native-conformance-2026-10-29.json), [raw log](reports/native-conformance-check-2026-10-29.txt).

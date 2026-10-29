@@ -1,0 +1,70 @@
+{
+  "kind": "gated",
+  "data": {
+    "descriptor": {
+      "kind": "gated-feed-forward/0",
+      "source_activation": "silu",
+      "dtype": "f64",
+      "layout": "row-major",
+      "state": "stateless",
+      "parameter_sharing": "independent"
+    },
+    "bias": {
+      "gate": [
+        0.2,
+        0.4
+      ],
+      "up": [
+        -0.1,
+        -0.2
+      ],
+      "down": [
+        0.7,
+        -0.4,
+        0.2
+      ]
+    },
+    "schema": "nrl.block/5",
+    "representation": "pruned",
+    "shape": [
+      3,
+      2,
+      3
+    ],
+    "gate": [
+      1.0,
+      0.0,
+      0.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "up": [
+      1.0,
+      0.0,
+      0.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "down": [
+      1.0,
+      1.0,
+      1.0,
+      -1.0,
+      0.5,
+      -0.5
+    ],
+    "spline": null,
+    "selection": {
+      "mapping": "known",
+      "original_channels": 4,
+      "indices": [
+        0,
+        3
+      ],
+      "method": "activation-energy-f64/1"
+    },
+    "factors": null
+  }
+}

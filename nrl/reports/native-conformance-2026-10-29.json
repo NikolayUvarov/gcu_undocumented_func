@@ -1,0 +1,89 @@
+{
+  "schema": "nrl.native-conformance-evidence/0",
+  "date": "2026-10-29",
+  "issue": "900-NRL-0025",
+  "implementation_commit": "0a737f668844dcae004d4908f4141cf7550938d3",
+  "tested_commit": "50caca7e87f2e761ee8eb88adbddcac87a78d02c",
+  "tested_branch": "codex/NRL-lab",
+  "main_in_tested_commit": "f685cefe37dfde5686ad238da166896d5dd25bc9",
+  "source_scope": "Code, tests, pinned inputs and check script at tested_commit; later narrative-only lifetime clarification does not alter executed inputs.",
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "check": {
+    "command": "bash nrl/tools/check.sh",
+    "exit_code": 0,
+    "elapsed_seconds": 115.47115683555603,
+    "tests_passed": 99,
+    "tests_failed": 0,
+    "tests_ignored": 0,
+    "portable_release_builds": [
+      {
+        "package": "nrl-repr",
+        "target": "x86_64-unknown-none",
+        "result": "pass"
+      },
+      {
+        "package": "nrl-repr",
+        "target": "aarch64-unknown-none-softfloat",
+        "result": "pass"
+      },
+      {
+        "package": "nrl-runtime",
+        "target": "x86_64-unknown-none",
+        "result": "pass"
+      },
+      {
+        "package": "nrl-runtime",
+        "target": "aarch64-unknown-none-softfloat",
+        "result": "pass"
+      }
+    ],
+    "cli_cycles": "All standard check.sh cycles, including committed bundle check, fresh regeneration/check and byte-for-byte directory comparison.",
+    "expanded_optional_study_rerun": false,
+    "raw_log": "native-conformance-check-2026-10-29.txt",
+    "raw_log_sha256": "572c1d0305636f299d24e9d4ec5ed8a2300dc355a703232f0ffaa579f47e8ee5"
+  },
+  "independent_reference_regeneration": {
+    "command": "/tmp/mind-nrl-python/bin/python nrl/tools/generate_model_fixtures.py --reference-root /tmp/mind-nrl-reference-run-1/qwen-spline-lab --output nrl/tests/fixtures/model-v0 --check",
+    "exit_code": 0,
+    "result": {
+      "check": true,
+      "files": 6,
+      "oracle_sha256": "8414e5703e2ad1dc48fb9aa8beb33f22ce58535190ba2c6fa27906d947220fc3"
+    }
+  },
+  "model_id": "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee",
+  "bundle": "../tests/fixtures/native-conformance-v0/bundle.json",
+  "bundle_index_sha256": "c9ab3fb39a4069b6971dd88602c4ce96cec058b37860d34e319b8ccd02348c92",
+  "host_scenarios": 16,
+  "scenario_report": "native-conformance-cases-2026-10-29.json",
+  "scenario_report_sha256": "4549565cd981bf367d5223f918e328eba5bc91f58481c69a2bd06b66bd1fd7a7",
+  "integrity_tests": [
+    "changed input/reference/object/index refused",
+    "extra inventory refused",
+    "symlink payload/directory refused",
+    "existing export directory refused",
+    "golden float bits preserved",
+    "noncanonical host-valid object accepted by general loader but refused by writer-profile checker"
+  ],
+  "native_execution": false,
+  "full_repository_gate": "pending integrator landing; affected NRL checks passed locally",
+  "remaining": [
+    "APP native parser/typed re-encoder/service/IDL and badge/worker/deadline/lifetime integration (262-APP-0112)",
+    "KRN boot grants and badged client (262-KRN-0178)",
+    "Named-target native suite including two-client and lifecycle isolation, quotas, controlled cancellation and memory release (900-NRL-0017)"
+  ],
+  "handoff": {
+    "branch_commit": "9cb4c346d284747f1c1dd10fe70d97ce986f5477",
+    "messages": {
+      "APP": {
+        "path": "APP/2026-10-29T1459Z-NRL-text-f64-agreed-pinned-native-conformance-package.md",
+        "commit": "eaa3fc0913f29fa875838c4f4430fa27ed0cb134"
+      },
+      "KRN": {
+        "path": "KRN/2026-10-29T1459Z-NRL-nnd-format-agreement-and-client-identity-lifetime.md",
+        "commit": "93568a172ad8dff961b800c5780a266724b321fe"
+      }
+    },
+    "native_acceptance": "still open"
+  }
+}

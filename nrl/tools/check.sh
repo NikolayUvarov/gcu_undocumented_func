@@ -83,6 +83,11 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-qs
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-qsl-decoder "$nrl_check_dir/decoder" "$nrl_check_dir/qsl-decoder-overlay" "$nrl_check_dir/qsl-decoder-standalone"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- probe-decoder "$nrl_check_dir/qsl-decoder-standalone" 'Once upon a time' "$nrl_check_dir/qsl-standalone-probe.json"
 
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-native-fixture nrl/tests/fixtures/native-conformance-v0
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- make-native-fixture "$nrl_check_dir/native-conformance"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-native-fixture "$nrl_check_dir/native-conformance"
+diff -r nrl/tests/fixtures/native-conformance-v0 "$nrl_check_dir/native-conformance"
+
 if [[ "${1:-}" == "--expanded" ]]; then
     python3 nrl/tools/run_expanded_study.py --executable nrl/target/release/nrl-lab --output "$nrl_check_dir/expanded"
 fi
