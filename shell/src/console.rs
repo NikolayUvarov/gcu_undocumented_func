@@ -14,6 +14,9 @@ pub use crate::ring::Position;
 const BACKGROUND: u32 = 0x001E1E2E;
 const FOREGROUND: u32 = 0x00A6E3A1;
 const MAX_COLS: usize = 256;
+/// What a capture keeps between its reader's calls (`|`, `>`, msh's `capture`): a shell command such as `cat` prints
+/// all of its output in one call (000-APP-0074).
+pub const CAPTURE_MAX: usize = 1 << 20;
 
 /// A ring's characters in pages of their own (none when there was no memory for them).
 pub struct Text(Option<Pages>);
@@ -92,7 +95,7 @@ impl Console {
 
     /// A byte of output: to the serial line as is (LF as CRLF), to the screen decoded as UTF-8.
     pub fn print_char(&mut self, byte: u8) {
-        if let Some(captured) = self.capture.as_mut() { if captured.len() < 64 * 1024 { captured.push(byte); } if !self.tee { return; } }
+        if let Some(captured) = self.capture.as_mut() { if captured.len() < CAPTURE_MAX { captured.push(byte); } if !self.tee { return; } }
         if byte == b'\n' { self.serial(b'\r'); }
         self.serial(byte);
         self.text.follow();

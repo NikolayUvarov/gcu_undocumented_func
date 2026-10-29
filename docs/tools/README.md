@@ -57,7 +57,7 @@ Priority: **P0** — requested, or needed by a requested tool; **P1** — next; 
 
 | Tool | Purpose | Needs | Priority |
 |---|---|---|---|
-| `svc` | Boot services: state, PID, restarts, devices held; start, stop, restart | init's lifecycle interface (roadmap C6) | P1 |
+| `svc` | Boot services: state, PID, restarts, devices held; start, stop, restart; which start at boot (`svc boot`, `enable`, `disable`, `after`, `reset`) | init's lifecycle interface (roadmap C6); `data/services.txt` (173) | P1 |
 | `reboot` | Reboot after flushing file systems (`stop` already halts); `reboot --off`, `poweroff` and `shutdown` turn the machine off: ACPI S5 on x86, PSCI on aarch64 (000-APP-0065) | Process control, VFS flush | P2 |
 | `keymap` | Keyboard layout (English, Russian) and the switch key | Input settings | P2 |
 | `screenshot` | Save the screen as BMP | Display read right from `compositor`, a file handle | P2 |
@@ -267,13 +267,32 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - A line that starts `ERROR: ` stays on the screen, and so does the shell's `STARTED` line. The shell says how many bytes went in (`312 BYTES WRITTEN TO ram:list.txt`).
 - The file is written through the shell's file client: `ram:`, `log:` and `data/`.
 - A client of the shell's commands (`console` in `wm`) is asked in the shell's window first, and a script needs `requires: files`.
-- `command | program` (`ps | grep wm`) gives what the command prints to the program as its text input (`loader.wit` 1.9 `commit-with-input`, [000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)). The command before it may be the shell's or a console program, which runs to its end first; the one after it is a program of the disk's, started in front, and the shell fills its input as it reads. `ERROR: ` lines of the command stay on the screen. One `|` a line; `grep` without a path reads its input. `<` is left.
+- `command | program` (`ps | grep wm`) gives what the command prints to the program as its text input (`loader.wit` 1.9 `commit-with-input`, [000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)). The command before it may be the shell's or a console program, which runs to its end first; the one after it is a program of the disk's, started in front, and the shell fills its input as it reads. `ERROR: ` lines of the command stay on the screen.
+  - **Several `|`** (`dmesg | grep SHELL | grep -c START`): each program runs to its end in turn, and what it prints is the next one's input. The whole line is checked before anything runs.
+  - **Programs that read their input** without a file named: `grep`, and `sha256`, which names it `-`.
+  - **`cat` into a pipe or a file** gives the whole file, up to the 1 MiB the shell keeps of a command's output, where the screen shows 16 KiB.
+- `program < file` (`grep wm < ram:ps.txt`) gives the file, taken from the current directory, to the program as its text input.
+  - The shell reads it whole first, 1 MiB at most.
+  - `<` comes before the line's first `|`: it is the first command's (`grep a < f | grep b`). Its command is a program of the disk's, as after `|`, and `> file` may follow it.
 
 **Its start in the system log** (213-APP-0075): `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S` once the shell has drawn its first frame, and `[SHELL] <STEP> TOOK <N> MS BEFORE THE FIRST FRAME` for a step before it that took longer than 5 s, naming what it called (the kernel, `logd`, the serial line, the keys and the commands typed, the drawing). With the compositor's `SCREEN IN FRONT` lines, `dmesg -s shell` tells a shell that never drew from one that waited (213-KRN-0098). A step that never returns leaves no line.
 
 **The start script** (000-APP-0079): `autorun.msh` at the boot volume's root runs once after the shell's first frame, in console 1, under its own `requires:` line; the system log has its SHA-256 and its end, and Esc stops it ([docs/msh.md](../msh.md)). The shell writes only `ram:`, `log:` and `data/`, so only whoever writes the disk can put one there (the maintainer's hardware tests, 550-ASR-0007).
 
 **A safe start** (000-APP-0086): after a run that did not end as asked (a freeze the watchdog reset, a cut power), `init` starts safely and leaves the radios, the camera, sound and speech stopped (000-KRN-0076). The shell finds init's lines in the boot's log and says so above its first prompt, `SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: audio_gw, tts, video_gw (svc start audio_gw, svc start tts, svc start video_gw)`, and logs the same line. `wm` shows it on its status line (`shell.wit` 1.6 `boot-notice`), where a click opens the shell's window. After a normal boot nothing is shown.
+
+**Which services start at boot** (173-APP-0092): `init` reads `data/services.txt` at boot (173-KRN-0035), and `svc` shows and edits it.
+- `svc boot`: how this boot went (its slot, whether it was on trial and confirmed, whether init read the file) and its plan, one row a service:
+  - the place init tried it at, and whether the file leaves it `enabled`, `disabled` or it is `essential`;
+  - the service it waited for (`after`), and why it did not start (`disabled`, `needs <service>`, `no device`, …).
+
+  The rows are followed by what the file as it is now changes at the next boot.
+- `svc disable <service>`, `svc enable <service>`, `svc after <service> <other>` edit the file through the user's files the shell lends. They take effect at the next boot.
+  - The file's other lines stay as they are. The directive the command replaces is taken out, and its own is appended.
+  - `enable` only takes the service's lines out, since a service is on unless the file turns it off.
+  - `svc start` still starts a disabled service; `disable` names what goes off with it, as it needs it.
+- **Refused where init would refuse,** by init's own parser: an essential service (`svc disable logd`), an unknown name, an order against init's own rules or a cycle. An instance (`virtio_net#1`) cannot be named either: `#` starts a comment in the file, and the image's name covers every instance.
+- `svc reset` removes the file: every service starts in its order at the next boot.
 
 **The network's commands**, on the stack's operator client the shell holds:
 

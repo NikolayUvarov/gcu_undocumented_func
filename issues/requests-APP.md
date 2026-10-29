@@ -17,7 +17,7 @@ Numbered on 2026-10-20:
 - screenshots and recordings for the project's page, for 000-KRN-0093: [000-APP-0089](000-APP-0089-screenshots-and-recordings-for-the-page.md);
 - horizontal scrolling from a trackpad, for 211-DRV-0018: [211-APP-0090](../issues-done/211-APP-0090-horizontal-scrolling.done), done 2026-10-28 on the across field of 211-KRN-0150;
 - `wm`'s moving background drawn by rows, with 000-KRN-0081: [000-APP-0091](000-APP-0091-wms-background-by-rows.md);
-- `svc boot`, `enable`, `disable`, `after`, `reset`, for 173: [173-APP-0092](173-APP-0092-svc-boot.md), waiting for 173-KRN-0035;
+- `svc boot`, `enable`, `disable`, `after`, `reset`, for 173: [173-APP-0092](../issues-done/173-APP-0092-svc-boot.done), done 2026-10-29;
 - the shell's `effector` command, for 750: [750-APP-0093](750-APP-0093-the-shells-effector-command.md), waiting for 750-EFF-0003 and 750-EFF-0006;
 - display output over several monitors, for 177: [177-APP-0094](177-APP-0094-wm-over-several-monitors.md), waiting for 177's steps 0–1.
 

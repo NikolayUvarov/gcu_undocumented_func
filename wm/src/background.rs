@@ -677,11 +677,35 @@ fn analog(frame: &mut [u32], width: usize, height: usize, (x, mut y): (usize, us
 }
 
 /// A card's traffic between two samples of its counters (frames sent, frames received, ms) as the background's line
-/// (000-APP-0049): `NET IN 30/S OUT 12/S`, thousands as `K` from 10 000 a second.
+/// (000-APP-0049): `NET IN 30/S OUT 12/S`, thousands as `K` from 10 000 a second. The nearest whole rate, and `<1` for
+/// frames fewer than one in two seconds: a ping a second over samples a little more than a second apart made 0/S.
 pub fn net_line(before: (u64, u64, u64), after: (u64, u64, u64)) -> String {
     let ms = after.2.saturating_sub(before.2).max(1);
-    let rate = |was: u64, now: u64| { let r = now.saturating_sub(was) * 1000 / ms; if r >= 10_000 { format!("{}K", r / 1000) } else { format!("{}", r) } };
+    let rate = |was: u64, now: u64| {
+        let frames = now.saturating_sub(was);
+        let r = (frames.saturating_mul(1000) + ms / 2) / ms;
+        if frames > 0 && r == 0 { String::from("<1") } else if r >= 10_000 { format!("{}K", r / 1000) } else { format!("{}", r) }
+    };
     format!("NET IN {}/S OUT {}/S", rate(before.1, after.1), rate(before.0, after.0))
+}
+
+/// The NET line's moves between still and traffic, for the log (000-APP-0049): the background's pixels are not text, and
+/// a suite sees `ping` move the line.
+#[derive(Default)]
+pub struct NetMoves { still: Option<bool>, logged: usize }
+
+impl NetMoves {
+    /// How many moves the log takes, so a busy network does not fill it.
+    pub const MOST: usize = 16;
+    /// What `line`, a rate, says of the line: `MOVED` when traffic starts, `STILL` when it stops; None when it stays as
+    /// it was, for the first rate, and past `MOST`.
+    pub fn next(&mut self, line: &str) -> Option<&'static str> {
+        let still = line == "NET IN 0/S OUT 0/S";
+        let was = self.still.replace(still);
+        if was.is_none_or(|was| was == still) || self.logged >= Self::MOST { return None; }
+        self.logged += 1;
+        Some(if still { "STILL" } else { "MOVED" })
+    }
 }
 
 /// Draws the information `config` asks for over `frame`, at its place: one column, each line from the block's left edge
