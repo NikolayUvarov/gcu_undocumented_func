@@ -47,4 +47,4 @@
 
 ## Related
 
-[100000](100000-a-phone-the-pinephone-first.md), [207](207-gpio-service.md), [000-NET-0045](000-NET-0045-secrets-per-program-in-keystore.md), [950](950-our-own-micro-messenger.md) (the console tools' manner).
+[100000](100000-a-phone-the-pinephone-first.md), [207](207-gpio-service.md), [000-NET-0045](../issues-done/000-NET-0045-secrets-per-program-in-keystore.done), [950](950-our-own-micro-messenger.md) (the console tools' manner).

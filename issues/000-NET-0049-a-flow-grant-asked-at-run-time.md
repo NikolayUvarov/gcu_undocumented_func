@@ -62,6 +62,12 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
   - a browsing grant reaches two hosts with an audit line each, and is refused a private address.
 - **Docs:** docs/network and the profile's MC-11.6 row.
 
+## Progress (2026-10-29)
+
+In `main` at ef3faf0d (landing round 41, the request's commit b4759726): `socket.wit` 2.7, `netpolicy`'s `browse` line, `netstack`'s log of each new host; the `net` suite's `browse_check` passed in the round 41 gate on x86 and aarch64.
+
+Still left: `ask(host, port, why)` and the user's answers, which need the shell's part from `APP`, and the browsing grant with the browser (255).
+
 ## Related
 
 [351-NET-0003](../issues-done/351-NET-0003-names-in-the-network-policy.done), [108](../issues-done/108-editable-network-policy.done), [255](255-text-web-browser.md), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md).
