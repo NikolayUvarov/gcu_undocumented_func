@@ -433,8 +433,9 @@ fn shell_failed(what: &str, call: &str, since: &str, waited_ms: u32, error: mind
 }
 
 // The CPUs' busy and idle time so far, summed (system information, as `load` reads it).
-// Why the net line has no new frames: the shell did not answer in time (the line stays), or no source gives them.
-enum NetMissing { Slow, Why(&'static str) }
+// Why the net line has no new frames: the shell did not answer in time, or is not asked while it was slow lately (the
+// line stays either way), or no source gives them.
+enum NetMissing { Slow, Quiet, Why(&'static str) }
 
 // The frames sent and received and where they come from: every card the stack counts, the Wi-Fi station's too, from
 // the shell (shell.wit 1.7, 000-APP-0096), else the card whose read-only client the shell lent (000-APP-0049).
@@ -442,7 +443,7 @@ enum NetMissing { Slow, Why(&'static str) }
 fn net_frames(ask_shell: bool) -> Result<(u64, u64, &'static str, Option<(usize, usize)>), NetMissing> {
     let mut why = "NET: NO COUNTERS";
     if holds(SLOT_SHELL) {
-        if !ask_shell { return Err(NetMissing::Slow); }
+        if !ask_shell { return Err(NetMissing::Quiet); }
         match mind::idl::wire::with_timeout(NET_SHELL_MS, || mind::idl::shell::net_counters(Endpoint(SLOT_SHELL))) {
             Ok(Ok(cards)) if cards.is_empty() => return Err(NetMissing::Why("NET: NO CARD")),
             Ok(Ok(cards)) => {
@@ -837,7 +838,10 @@ fn main(info: &'static BootInfo) {
                             if before.is_some() { if let Some(how) = net_moves.next(&line) { mind::println!("[WM] {} (THE LINE {})", line, how); } }
                             (net_sample, net_text, net_from) = (Some(sample), Some(line), Some(from));
                         }
+                        // Only a call that timed out starts the quiet time: one not made would make it last for ever, and
+                        // the line froze once the shell's window had opened (000-APP-0049).
                         Err(NetMissing::Slow) => shell_quiet_until = now + SHELL_QUIET_MS,
+                        Err(NetMissing::Quiet) => {}
                         Err(NetMissing::Why(line)) => {
                             // Each reason once in the log: the background's pixels are not text.
                             if net_why != Some(line) { mind::println!("[WM] {} (THE BACKGROUND'S NET LINE)", line); net_why = Some(line); }
