@@ -23,7 +23,7 @@ mod rights;
 use cid::{Cid, Codec};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use store::{hmac_sha256, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Pin, Scrubbed, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, SECTOR, VOLUME};
+use store::{hmac_sha256, kept_id, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Keeper, Pin, Scrubbed, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_KEPT, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, SECTOR, VOLUME};
 
 /// A stand-in for ChaCha20-Poly1305, since the host tests build without crates: a keystream of splitmix64 seeded by
 /// SHA-256(key, nonce), and a tag of two sums in the manner of FNV-1a, seeded by the key, over the nonce, the associated
@@ -183,7 +183,7 @@ fn mount<'a>(medium: &'a mut Memory, room: &'a mut Room) -> Result<Store<'a, &'a
 }
 
 fn mount_with<'a>(medium: &'a mut Memory, room: &'a mut Room, crypto: &'a dyn Crypto) -> Result<Store<'a, &'a mut Memory>, Error> {
-    Store::mount(medium, crypto, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, room.now)
+    Store::mount(medium, crypto, None, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, room.now)
 }
 
 /// The badge the tests' publications and pins are made with (the shell's on the platform).
@@ -1360,7 +1360,7 @@ fn a_medium_past_two_tebibytes_is_refused() {
         fn flush(&mut self) -> bool { true }
     }
     let mut room = Room::new(4);
-    let mounted = Store::mount(Huge, &SEALER, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0);
+    let mounted = Store::mount(Huge, &SEALER, None, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0);
     assert_eq!(mounted.err(), Some(Error::TooLarge));
 }
 
@@ -1432,7 +1432,7 @@ fn a_three_gibibyte_object_fits() {
     let (root, written) = {
         let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
         file.set_len(sectors * SECTOR as u64).unwrap();
-        let mut store = Store::mount(FileMedium { file, sectors }, &SEALER, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
+        let mut store = Store::mount(FileMedium { file, sectors }, &SEALER, None, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
         let mut builder = Box::new(dag::Builder::new());
         let mut buffer = vec![0u8; 1 << 20];
         let mut at = 0u64;
@@ -1447,7 +1447,7 @@ fn a_three_gibibyte_object_fits() {
         (root, store.stats())
     };
     let file = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
-    let mut store = Store::mount(FileMedium { file, sectors }, &SEALER, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
+    let mut store = Store::mount(FileMedium { file, sectors }, &SEALER, None, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
     assert_eq!(store.resolve(b"models/three-gib").map(|(_, cid)| cid), Ok(root));
     let mut chunk = [0u8; dag::CHUNK];
     let mut out = vec![0u8; 100_000];
@@ -1475,7 +1475,7 @@ fn a_partition_holding_only_the_superblock_mounts_and_gets_a_key() {
     first.resize(140, 0);
     first.extend_from_slice(&sha256::digest(&first[..140]));
     first.resize(SECTOR, 0);
-    assert_eq!(&superblock(None)[..], &first[..]);
+    assert_eq!(&superblock(None, None)[..], &first[..]);
     // Read-only, it cannot get its key, and is not mounted.
     let mut medium = Memory::new(256);
     medium.data[..SECTOR].copy_from_slice(&first);
@@ -1919,4 +1919,88 @@ fn a_record_written_around_the_scrub_is_not_read_as_damaged() {
     assert_eq!(store.scrub(1, &mut |_, _| panic!("nothing is corrupt")).unwrap(), None);
     store.restart_scrub();
     assert_eq!(scrub_all(&mut store, u64::MAX).0, Scrubbed { records: 6, corrupt: 0, damaged: 0 });
+}
+
+// A keeper of volume keys in memory, as `keystore` keeps the store's secrets on the platform (308-STO-0022); one that
+// refuses keeps nothing.
+#[derive(Default)]
+struct Vault { keys: HashMap<[u8; 8], [u8; 32]>, refuse: bool }
+impl Keeper for Vault {
+    fn put(&mut self, id: &[u8; 8], key: &[u8; 32]) -> bool { if !self.refuse { self.keys.insert(*id, *key); } !self.refuse }
+    fn get(&mut self, id: &[u8; 8]) -> Option<[u8; 32]> { self.keys.get(id).copied() }
+}
+
+fn mount_kept<'a>(medium: &'a mut Memory, room: &'a mut Room, crypto: &'a dyn Crypto, vault: Option<&'a mut Vault>) -> Result<Store<'a, &'a mut Memory>, Error> {
+    Store::mount(medium, crypto, vault.map(|v| v as &mut dyn Keeper), &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, room.now)
+}
+
+#[test]
+fn a_kept_volume_key_is_nowhere_on_the_medium() {
+    let mut medium = Memory::new(256);
+    let mut vault = Vault::default();
+    let cid;
+    {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+        assert_eq!((store.made(), store.key_source()), (Some(true), KEY_KEPT));
+        cid = store.put(Codec::Raw, &block(3, 2000)).unwrap();
+        store.publish(b"kept", 0, &cid, OWNER).unwrap();
+    }
+    // The superblock holds the id it is kept under and the check; the key is in no sector.
+    let (&id, &key) = vault.keys.iter().next().unwrap();
+    assert_eq!((medium.data[12], kept_id(&medium.data[..SECTOR])), (KEY_KEPT, Some(id)));
+    assert!(medium.data.windows(32).all(|w| w != key), "the key is not on the medium");
+    // With its keeper the store mounts and finds what it holds; the key is not made again.
+    let mut room = Room::new(64);
+    let mut store = mount_kept(&mut medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+    assert_eq!((store.made(), store.key_source()), (None, KEY_KEPT));
+    assert_eq!(get(&mut store, &cid).unwrap(), block(3, 2000));
+    assert_eq!(store.resolve(b"kept"), Ok((1, cid)));
+}
+
+#[test]
+fn a_medium_whose_keeper_has_not_its_key_is_not_mounted() {
+    let mut medium = Memory::new(256);
+    let mut vault = Vault::default();
+    drop(mount_kept(&mut medium, &mut Room::new(64), &SEALER, Some(&mut vault)).unwrap());
+    let before = (medium.data.clone(), medium.written);
+    // No keeper to ask, or another machine's that keeps nothing under its id: `kept`; another key under the id: `key`.
+    let id = *vault.keys.keys().next().unwrap();
+    assert_eq!(mount_kept(&mut medium, &mut Room::new(64), &SEALER, None).err(), Some(Error::Kept(id)));
+    assert_eq!(mount_kept(&mut medium, &mut Room::new(64), &SEALER, Some(&mut Vault::default())).err(), Some(Error::Kept(id)));
+    let mut other = Vault::default();
+    other.keys.insert(id, [7; 32]);
+    assert_eq!(mount_kept(&mut medium, &mut Room::new(64), &SEALER, Some(&mut other)).err(), Some(Error::Key));
+    assert_eq!((medium.data.clone(), medium.written), before, "nothing is written");
+}
+
+#[test]
+fn only_a_random_key_is_kept_and_only_by_a_keeper_that_keeps_it() {
+    // Without a random source the key is derived from the medium and the time: it stays in the superblock, in the clear,
+    // as one kept elsewhere could be found again without its keeper.
+    let mut medium = Memory::new(256);
+    let mut vault = Vault::default();
+    let mut room = Room::new(64);
+    let store = mount_kept(&mut medium, &mut room, &NO_RANDOM, Some(&mut vault)).unwrap();
+    assert_eq!((store.made(), store.key_source()), (Some(false), KEY_CLEAR));
+    drop(store);
+    assert!(vault.keys.is_empty());
+    // A keeper that refuses: the key goes in the clear, and the medium mounts without the keeper.
+    let mut medium = Memory::new(256);
+    let mut refusing = Vault { refuse: true, ..Vault::default() };
+    assert_eq!(mount_kept(&mut medium, &mut Room::new(64), &SEALER, Some(&mut refusing)).unwrap().key_source(), KEY_CLEAR);
+    assert_eq!(medium.data[12], KEY_CLEAR);
+    assert_eq!(mount_kept(&mut medium, &mut Room::new(64), &SEALER, None).unwrap().key_source(), KEY_CLEAR);
+}
+
+#[test]
+fn a_kept_superblock_with_bytes_where_the_key_would_be_is_refused() {
+    let mut medium = Memory::new(256);
+    let mut vault = Vault::default();
+    drop(mount_kept(&mut medium, &mut Room::new(64), &SEALER, Some(&mut vault)).unwrap());
+    // A byte after the id, its digests made whole again: not a superblock this build writes.
+    medium.data[60] = 1;
+    let digest = sha256::digest(&medium.data[..140]);
+    medium.data[140..172].copy_from_slice(&digest);
+    assert_eq!(mount_kept(&mut medium, &mut Room::new(64), &SEALER, Some(&mut vault)).err(), Some(Error::Key));
 }

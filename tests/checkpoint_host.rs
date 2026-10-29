@@ -58,7 +58,7 @@ impl checkpoint::Store for Local<'_> {
 }
 
 fn mount<'a>(medium: &'a mut Memory, room: &'a mut Room) -> Local<'a> {
-    Local(store::Store::mount(medium, &Tagged, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap())
+    Local(store::Store::mount(medium, &Tagged, None, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap())
 }
 
 // A state object of one block and a manifest for it, of contract "tally" 1, schema 1.

@@ -10,6 +10,7 @@ pub mod embedding;
 pub mod experiment;
 mod import_json;
 pub mod model;
+pub mod native_conformance;
 pub mod optimizer;
 pub mod qsl;
 pub mod qsl_model;

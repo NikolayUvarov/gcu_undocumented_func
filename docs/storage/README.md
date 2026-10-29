@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -206,6 +206,35 @@ Evidence: `tests/blockstore_host.rs` over a stand-in cipher (a keystream of spli
 The platform's cipher is the crate, tested by its own project. On the platform, the QEMU `store` suite (x86 and aarch64) puts, reads and names objects through sealed records, and finds them again after a restart without making a key again. The `storefaults` suite finds each record it damages by opening frames (above), and shows a wrong key refused.
 
 **Not provided:** confidentiality of the medium (the key is in the clear). What sealing protects and what it does not is in [the threat model](../profile/threat-model.md) (308-STO-0024).
+
+## The volume key kept by `keystore` — built; on the platform once `init` lends the client (308-STO-0022)
+
+A medium that outlives the machine's memory keeps no key: `keystore` keeps it as the store's own secret.
+- **Key source 2, kept.** The superblock holds an id of 8 random bytes where the key would be, zeros after it, and the check as before. The key is `blockstore`'s secret `volume-<id in hex>` in `keystore` (`keystore.wit` 1.4's `secret-put` and `secret-get`), sealed there under a key from the device key.
+- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take ([308-KRN-0183](../../issues/308-KRN-0183-a-secrets-client-for-blockstore.md), the kernel session's). Until it does, every medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
+- **Which key is kept.** At the first mount of a blank medium, or of a partition with no key yet:
+  - a RAM disk keeps its key in its superblock, as nothing of it outlives a reset and a restarted store must find it;
+  - any other medium's key is kept, if it is random and `keystore` keeps it;
+  - a key derived without a random source is never kept: it could be found again from the medium's size and the time. `keystore` itself has no device key without one;
+  - a key `keystore` refuses (no device key, 16 secrets already) stays in the clear, and the log says so.
+- **No conversion.** A medium whose key is in the clear keeps it there; one with a kept key never writes it out.
+- **Mounting a kept key's medium:**
+  - its key comes from `keystore` and must open the check;
+  - without the client, or when `keystore` keeps nothing under the id (another machine's medium, or a secret lost), it is not mounted: `key` on the wire, and the log names the secret (`NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS volume-…`);
+  - another key under the id does not open the check: `key`.
+- **The ready line** says `SEALED, KEY KEPT BY KEYSTORE` or `SEALED, KEY IN THE CLEAR`; a key made at this mount is logged with where it went and why.
+- **What it does not give:**
+  - the device key is kept on the boot volume in the clear until a TPM seals it (351-NET-0006). So a store disk alone opens nothing, but with the boot volume beside it, it opens. The stick's own store partition (307-STO-0020) is beside it;
+  - a recovery key and a passphrase are still to come, with `APP`;
+  - the key of a medium that is gone stays kept until deleted.
+
+Evidence, `tests/blockstore_host.rs` (a keeper in memory):
+- `a_kept_volume_key_is_nowhere_on_the_medium`: the key in no 32 bytes of the medium, and the store found again with its keeper;
+- `a_medium_whose_keeper_has_not_its_key_is_not_mounted`: no keeper, or one without the id, `kept`; another key under it, `key`; nothing written;
+- `only_a_random_key_is_kept_and_only_by_a_keeper_that_keeps_it`: a derived key and a refused one stay in the clear;
+- `a_kept_superblock_with_bytes_where_the_key_would_be_is_refused`.
+
+Not run on the platform: no secrets client is lent yet. The QEMU checks of [308-STO-0022](../../issues/308-STO-0022-the-volume-key-held-by-keystore.md) come with 308-KRN-0183.
 
 ## Memory domains — run on the platform (308-STO-0023)
 
