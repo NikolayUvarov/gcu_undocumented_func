@@ -61,7 +61,8 @@ X86="python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware $OVMF \
  --loader-abi-kernel $MIND_TEST_OUT/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel $MIND_TEST_OUT/mind-trial-target/x86_64-unknown-none/release/kernel --bar-kernel $MIND_TEST_OUT/mind-bar-target/x86_64-unknown-none/release/kernel"
 A64="python3 tests/qemu_smoke.py --arch aarch64"
 
-# Group name | command; a failed "build" step skips the rest of its part.
+# Group name | command; a failed "build" step skips the rest of its part. No group runs much past 15 minutes on un-rizen,
+# so the gate's lanes share them out evenly (suites timed one by one on 2026-10-29).
 HOST_GROUPS=(
     "build (x86)|./02_build.sh"
     "network driver without legacy|(cd virtio_net && cargo build --release --no-default-features --target-dir $TMP/virtio-net-modern-only)"
@@ -71,11 +72,14 @@ HOST_GROUPS=(
 )
 X86_GROUPS=(
     "build (x86 test programs)|scripts/x86_fixtures.sh"
-    "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,effector,normal,memory,dzen"
+    "x86: boot, display, shell, memory, clock|$X86 --suites boot,display,normal,memory,dzen"
+    "x86: network, TLS and Effector|$X86 --suites net,tls,effector"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,link,modes"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
-    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci"
-    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater,linkupdate"
+    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,tablet,usb,ehci"
+    "x86: the window manager|$X86 --suites wm"
+    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults"
+    "x86: the updater and an update through the link|$X86 --suites updater,linkupdate"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
     "x86: 16 CPUs|$X86 --cpus 16 --suites normal"
     "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal,display,net,vfs,fill"
@@ -97,8 +101,12 @@ A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
     "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,bench,smp,busy,usb,devicetree,efivar"
-    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls,effector,updater,linkupdate,modes"
-    "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net,fill --machine virt,gic-version=3,highmem=on --memory 6G"
+    "aarch64: files and the block store|$A64 --suites vfs,store,storefaults"
+    "aarch64: network, TLS and Effector|$A64 --suites net,tls,effector"
+    "aarch64: the updater and the modes|$A64 --suites updater,modes"
+    "aarch64: an update through the link|$A64 --suites linkupdate"
+    "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,fill --machine virt,gic-version=3,highmem=on --memory 6G"
+    "aarch64: network above 4 GiB|$A64 --suites net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
     "aarch64: NVMe boot disk|$A64 --suites vfs --disk nvme"
     "aarch64: 16 CPUs|$A64 --cpus 16 --suites normal"

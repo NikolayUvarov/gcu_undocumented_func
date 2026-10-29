@@ -96,10 +96,11 @@ def test_a_pool_takes_the_longest_first():
         assert sorted(g for gs in taken.values() for g in gs) == sorted(g for _, g in queue), pool  # each group once
         for lane, groups in taken.items():
             assert all(part_of[g] in land.POOL_PARTS[lane.split("-")[0]] for g in groups), (pool, lane, groups)
-    queue = [("x86", "a"), ("aarch64", "b")]
-    assert land.pick(queue, "acc1", {"x86"}, {"a": 100, "b": 400}) == ("x86", "a")  # b is not worth an aarch64 build
-    assert land.pick(queue, "acc1", {"x86"}, {"a": 100, "b": 900}) == ("aarch64", "b")
+    queue = [("x86", "a"), ("aarch64", "b"), ("host", "c")]
+    assert land.pick(queue, "acc1", {"x86"}, {"a": 100, "b": 400, "c": 900}) == ("aarch64", "b")  # the host part: un-rizen
+    assert land.pick(queue, "rz-3", {"x86"}, {"a": 100, "b": 400, "c": 900}) == ("host", "c")
     assert land.pick(queue, "pcu", set(), {"a": 900, "b": 1}) == ("aarch64", "b")  # PCU gates aarch64 alone
+    assert land.pick(queue, "acc2", set(), {"a": 900, "b": 1}, broken={"x86"}) == ("aarch64", "b")
     assert land.pick(queue, "i9", set(), {}, broken={"x86"}) is None
 
 
