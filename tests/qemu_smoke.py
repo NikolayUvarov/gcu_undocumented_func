@@ -5039,6 +5039,76 @@ def services_config_check(args):
           "starts in its order, and init says so (173-KRN-0036)", flush=True)
 
 
+def svc_boot_check(args):
+    """173-APP-0092: `svc` edits data/services.txt for the next boot, judged by init's own parser: an essential service,
+    an instance, an unknown name and an order against init's are refused; `svc disable tts` and `svc after windows sysmon`
+    write the file, `svc boot` names them for the next boot, and after a reboot tts is off in `svc boot` and does not run,
+    windows waited for sysmon; `svc enable tts` takes the line out and `svc reset` removes the file."""
+    if not raw_tools():
+        print("SKIP: svc boot needs mkfs.fat and mtools", flush=True)
+        return
+    def row(out, name):
+        # svc boot's columns: place, service, file, after, off at boot.
+        for line in out.splitlines():
+            if line[6:19].strip() == name and line[:5].strip().isdigit():
+                return int(line[:5]), line[20:30].strip(), line[31:44].strip(), line[45:].strip()
+        raise AssertionError(f"no row for {name}: {out[-3000:]}")
+    with tempfile.TemporaryDirectory(prefix="smoke-svc-boot-", dir=ROOT / IMAGE) as temp:
+        image, start, fs_sectors = raw_fat_image(Path(temp))
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True)
+        try:
+            out = vm.command("svc boot", raw=True)
+            require(out, "data/services.txt absent: every service in its order")
+            require(out, "PLACE SERVICE       FILE       AFTER         OFF AT BOOT")
+            require(out, "the next boot: as this one (data/services.txt has no change for it)")
+            assert row(out, "init")[:2] == (0, "essential") and row(out, "logd")[1] == "essential", out[-3000:]
+            assert row(out, "tts")[1:] == ("enabled", "", ""), row(out, "tts")
+            # Refused as init would refuse the line, and nothing written.
+            require(vm.command("svc disable logd"), "svc: disable logd: refused, as init would refuse it: ESSENTIAL: INIT ALWAYS STARTS IT")
+            require(vm.command("svc disable nosuchservice"), "svc: disable nosuchservice: refused, as init would refuse it: UNKNOWN SERVICE")
+            require(vm.command("svc disable virtio_net#1"), "refused, as init would refuse it: AN INSTANCE (NAME#N) CANNOT BE NAMED")
+            require(vm.command("svc after virtio_net netstack"), "svc: after virtio_net netstack: refused, as init would refuse it: CONTRADICTS INIT: THE OTHER NEEDS IT FIRST")
+            require(vm.command("svc reset"), "svc: no data/services.txt: every service starts in its order already")
+            require(vm.command("svc disable tts"), "tts off from the next boot (data/services.txt); svc start tts still starts it")
+            require(vm.command("svc after windows sysmon"), "windows starts after sysmon from the next boot (data/services.txt)")
+            require(vm.command("svc after sysmon windows"), "refused, as init would refuse it: A CYCLE OF after")
+            text = vm.command("cat data/services.txt", raw=True)
+            assert "disable tts" in text and "after windows sysmon" in text and "after sysmon windows" not in text, text
+            out = vm.command("svc boot", raw=True)
+            for line in ("at the next boot, by data/services.txt as it is now:", "  tts disabled", "  windows after sysmon"):
+                require(out, line)
+            assert "tts" in vm.services(), vm.services()
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=90)
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND> ", timeout=60)
+            # The second boot: init read the file.
+            out = vm.command("svc boot", raw=True)
+            require(out, "data/services.txt read")
+            require(out, "the next boot: as this one (data/services.txt has no change for it)")
+            assert row(out, "tts")[1:] == ("disabled", "", "disabled"), row(out, "tts")
+            assert row(out, "windows")[1:3] == ("enabled", "sysmon") and row(out, "sysmon")[0] < row(out, "windows")[0], (row(out, "windows"), row(out, "sysmon"))
+            assert "tts" not in vm.services(), vm.services()
+            require(vm.command("dmesg -s init", raw=True), "[INIT] tts OFF BY data/services.txt: PREPARED, `svc start tts` STARTS IT")
+            require(vm.command("svc disable tts"), "svc: data/services.txt has it already: nothing written")
+            require(vm.command("svc enable tts"), "tts on from the next boot (data/services.txt)")
+            text = vm.command("cat data/services.txt", raw=True)
+            assert "after windows sysmon" in text and "disable tts" not in text, text
+            require(vm.command("svc reset"), "data/services.txt removed: every service starts in its order from the next boot")
+            out = vm.command("svc boot", raw=True)
+            for line in ("at the next boot, by data/services.txt as it is now:", "  tts enabled", "  windows after nothing of the file's"):
+                require(out, line)
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-svc-boot-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+    print("PASS: svc boot (173-APP-0092): an essential service, an unknown one, an instance, an order against init's and a "
+          "cycle refused as init refuses them; svc disable tts and svc after windows sysmon written to data/services.txt and "
+          "named for the next boot; after a reboot tts off and not running, windows after sysmon; svc enable and svc reset "
+          "undo them", flush=True)
+
+
 def effector_grants_check(vm):
     """750-KRN-0119: in a mode init starts effector_gw, then effector, each with exactly the grants of `mind::effector`'s
     table: the gateway its endpoint, its private directory (BADGE_EFFECTOR_GW), the volumes to read, sysmon and the log to
@@ -11214,6 +11284,8 @@ def main():
             if suite == "efivar":  # aarch64 (AAVMF); on x86 the boot suite runs it
                 efivar_check(args, disk)
                 continue
+            if suite == "tools":  # its own raw disk, booted twice (173-APP-0092)
+                svc_boot_check(args)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096).
