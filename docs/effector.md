@@ -233,6 +233,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
   - **Builds:** a lane builds a part's image the first time it takes one of its groups.
   - **The estimates** are the seconds below, then the gate's own records of the same groups; `--dry-run` prints the schedule they give.
   - **A gate started again** on the same candidate gives each lane the groups it took before, in the same order (`$LAND_WORK/gate-<commit>-taken.json`), so Effector answers with the results it holds.
+  - **A machine that is off** gives no lane: the gate asks Effector which machines are online as it starts and logs the others. A lane's tree that waits half an hour in its queue leaves that lane out too (round 47: `acc-1` and `acc-2` went off at 20:07, and their trees waited in the queue).
 - **The long groups are split** (2026-10-29) so that none runs much past 15 minutes. Each suite was timed alone on `3e07edb8`, in seconds:
 
 | Group before | Its suites alone | The groups now |
