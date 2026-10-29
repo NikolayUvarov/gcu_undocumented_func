@@ -288,6 +288,9 @@ BUILDS = {"x86": ["build (x86)", "build (x86 test programs)"], "aarch64": ["buil
 # runs (docs/effector.md, section 1): the host part only on un-rizen (sshd and Python 3.11 for the host tests and the
 # models), aarch64 nowhere on i9 (WSL2), x86 nowhere on PCU (it gates aarch64 alone).
 POOL_PARTS = {"i9": {"x86"}, "rz": {"host", "x86", "aarch64"}, "acc1": {"x86", "aarch64"}, "acc2": {"x86", "aarch64"}, "pcu": {"aarch64"}}
+# Groups a machine cannot run though it runs their part: on PCU, 16 vCPUs keep an idle QEMU above the 16-CPU group's
+# limit of processor time (round 45; the fixed lists never gave it to PCU).
+NOT_ON = {"aarch64: 16 CPUs": {"pcu"}}
 # Two lanes on un-rizen: with a third, round 44's kbench measured a call and reply at 7 ms against its 1 ms limit, and
 # the groups there ran a third longer than alone.
 POOLS = {
@@ -336,8 +339,9 @@ def estimates(work, expected):
 def pick(queue, lane, ready, seconds, broken=()):
     """The (part, group) `lane` takes next from `queue`: the longest it can run, so the long groups start first and the
     short ones fill the ends (in simulation this beat preferring a part already built, by 2 to 3 minutes). An image whose build failed on the lane (`broken`) leaves its groups to the other lanes."""
-    parts = POOL_PARTS[lane.split("-")[0]]
-    able = [entry for entry in queue if entry[0] in parts and BUILT_BY[entry[0]] not in broken]
+    machine = lane.split("-")[0]
+    able = [entry for entry in queue if entry[0] in POOL_PARTS[machine] and BUILT_BY[entry[0]] not in broken
+            and machine not in NOT_ON.get(entry[1], ())]
     return max(able, key=lambda e: (seconds.get(e[1], DEFAULT_SECONDS), e[1]), default=None)
 
 
