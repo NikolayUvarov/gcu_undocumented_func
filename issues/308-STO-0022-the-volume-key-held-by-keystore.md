@@ -27,7 +27,7 @@ After [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done) the record
 
 ## Progress (2026-10-29)
 
-- **The store's side is built and host-tested,** against `keystore.wit` 1.4's `secret-put` and `secret-get` on a client in `blockstore`'s slot 3, as 308-KRN-0183 plans it.
+- **The store's side is in `main` ced25026 (landing round 44, from 8bf9fe31 and 3d7e2e95),** built and host-tested against `keystore.wit` 1.4's `secret-put` and `secret-get` on a client in `blockstore`'s slot 3, as 308-KRN-0183 plans it.
   - **Key source 2 (kept):** the superblock holds an 8-byte id and the check, never the key; the key is the secret `volume-<id in hex>`.
   - **Which media:** a RAM disk keeps its key in its superblock, as nothing of it outlives a reset and a restarted store must find it. Any other medium's key is kept when it is random and `keystore` keeps it.
   - **Not kept:** a derived key, as it could be found again from the medium's size and the time; and a key `keystore` refuses, which stays in the clear and is logged. A medium formatted with its key in the clear keeps it there: no conversion.

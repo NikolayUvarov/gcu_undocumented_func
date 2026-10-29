@@ -95,4 +95,4 @@
 
 ## Related
 
-[750](750-effector-agent.md) (the remote agent), [262](262-model-runtime-on-the-machines-full-hardware.md) (local models), [255](255-text-web-browser.md) (fetching), [800-APP-0102](800-APP-0102-the-shells-run-for-the-links-client.md) (what a lent client gets), [071](../issues-done/071-scoped-file-grants.done) (VFS scopes).
+[750](750-effector-agent.md) (the remote agent), [262](262-model-runtime-on-the-machines-full-hardware.md) (local models), [255](255-text-web-browser.md) (fetching), [800-APP-0102](../issues-done/800-APP-0102-the-shells-run-for-the-links-client.done) (what a lent client gets), [071](../issues-done/071-scoped-file-grants.done) (VFS scopes).
