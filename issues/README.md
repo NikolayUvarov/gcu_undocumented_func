@@ -19,6 +19,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [900-NRL-0025](900-NRL-0025-native-conformance-and-app-handoff.md) | Pinned native conformance package and nnd design handoff | `NRL` / Codex | P1 | — for host handoff; native part in 0017 | G / 900 T11 |
 | [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md) | Portable session executor and native nnd integration | `NRL` / Codex | P1 | APP nnd/IDL request for native part | G / 900 T11 |
 | [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) | Realtek boot images, non-mastering BAR grants and retained-DMA firmware diagnostic | `KRN` / ASTRA auditor-fixer | P1 | x86 and hardware checks | H / 213 |
 | [000-ASR-0010](000-ASR-0010-owned-tcp-refusal-fixture.md) | Reserve a non-listening TCP endpoint for the exact QEMU connection-refused assertion | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
