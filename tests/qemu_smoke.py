@@ -297,11 +297,8 @@ class VM:
             self.hmp(f"sendkey {key} 30")
             time.sleep(.06)
 
-    def screenshot(self, still=False):
-        # `still`: the guest paused while QEMU reads the screen, which it otherwise reads as the guest writes it.
+    def screenshot(self):
         path = ROOT / (self.disk + ".ppm")
-        if still:
-            self.qmp("stop")
         try:
             # Relative inside the tree (no drive letter for HMP on Windows); a disk elsewhere (/tmp) is named in full.
             self.hmp(f"screendump {(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path).as_posix()}")
@@ -310,8 +307,6 @@ class VM:
             (Path(tempfile.gettempdir()) / "mind-core-clock.ppm").write_bytes(data)
             return data
         finally:
-            if still:
-                self.qmp("cont")
             path.unlink(missing_ok=True)
 
     def close(self):
@@ -2825,14 +2820,13 @@ def isolation_suite(vm):
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
     # 000-KRN-0086: the compositor copies whole frames only. app2 numbers its frames in their colour and draws the bottom
     # half 3 ms before the top: a frame copied mid-drawing shows a bottom half newer than the top. The compositor's own
-    # copy runs from the top, so a screen caught during it may show the top newer. The guest is paused for each screen:
-    # QEMU reads it while the guest writes it otherwise, and a copy overtaking that read also shows the bottom newer.
+    # copy runs from the top, so a screen caught during it may show the top newer.
     vm.send("run app2\n")
     pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
     vm.send("F\n")
     seen, until = [], time.monotonic() + 4
     while time.monotonic() < until:
-        _, size, _, pixels = vm.screenshot(still=True).split(b"\n", 3)
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
         width, height = map(int, size.split())
         def number(y):
             r, g, b = pixels[(y * width + width // 2) * 3:][:3]
