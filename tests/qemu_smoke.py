@@ -8479,6 +8479,8 @@ def effector_suite(args, disk):
                      "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: FAILED {restart_id} restart_service: denied",
                      f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)
+        # 750-EFF-0017: the first start records this machine's print for the identity it keeps.
+        assert re.search(r"EFFECTOR: MACHINE .+ RECORDED FOR THE KEPT IDENTITY", out), out[-2000:]
         for command in (exec_id, unknown_id):
             result = server.operation(command)
             assert result and result["status"] == "denied" and result["result"]["error"] == "action_not_allowed", (command, result)
@@ -8552,6 +8554,23 @@ def effector_suite(args, disk):
         assert token not in vm.log and token not in session(), "the token reached the log"
         print("PASS: a server with another certificate refused before any request, the agent's mark grey meanwhile; the token "
               "never in the log", flush=True)
+        # 750-EFF-0017: a disk whose kept identity was recorded on another machine (its settings copied) gets a new agent
+        # ID, the old journal set aside; the owner's agent_id names the old ID, so it is not taken again.
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
+        kept = disk / "system" / "effector"
+        kept.mkdir(parents=True, exist_ok=True)
+        (kept / "agent_id").write_text(agent + "\n")
+        (kept / "token").write_text(token + "\n")
+        (kept / "machine").write_text("Another processor, 64 GiB\nmind-other\n")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+        out = until("IS ANOTHER MACHINE'S (Another processor, 64 GiB)")
+        require(out, f"EFFECTOR: THE KEPT IDENTITY {agent} IS ANOTHER MACHINE'S")
+        new = re.search(r"EFFECTOR: NEW AGENT ID (mind_[0-9a-f]{16})", out)
+        assert new, out[-2000:]
+        until(f"EFFECTOR: AGENT {new[1]} TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)")
+        print(f"PASS: a kept identity recorded on another machine: a new agent ID {new[1]}, not the owner's {agent}, its journal set "
+              "aside", flush=True)
     finally:
         stop_watch.set()
         vm.close()
