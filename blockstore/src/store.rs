@@ -3,7 +3,7 @@
 //! a block device; what no name retains and no lease protects is collected; several names change at once in one
 //! commit record (304-STO-0007). Nothing here depends on the kernel: the host tests build it too.
 //!
-//! Sector 0 holds the superblock and the volume key. Records follow from sector 1, each starting on a sector and sealed
+//! Sector 0 holds the superblock and the volume key, or only the id a keeper keeps it under (308-STO-0022). Records follow from sector 1, each starting on a sector and sealed
 //! (308-STO-0021): a plain frame (magic, layout, domain, the sectors it covers, nonce, tag), then the record and the
 //! zeros up to the end of its last sector, encrypted and authenticated with ChaCha20-Poly1305 under the volume key, the
 //! frame and the record's first sector as associated data. Nothing but the frame is in the clear, and it does not say
@@ -37,9 +37,11 @@ const SUPER_MAGIC: &[u8; 8] = b"MIND-STO";
 // The superblock: magic, layout, sector size (u16), the key's source, zero, the SHA-256 of these 16 bytes; the volume
 // key; a check (32 zero bytes sealed under it, as nonce, ciphertext and tag); and the SHA-256 of the 140 bytes before.
 const SUPER: usize = 172;
-/// The key's sources: none yet (a superblock written by make_usb_image.py), or kept in the superblock in the clear.
+/// The key's sources: none yet (a superblock written by make_usb_image.py), kept in the superblock in the clear, or
+/// kept by a keeper off the medium, the superblock holding only its id (308-STO-0022).
 pub const KEY_NONE: u8 = 0;
 pub const KEY_CLEAR: u8 = 1;
+pub const KEY_KEPT: u8 = 2;
 const FRAME_MAGIC: &[u8; 8] = b"MIND-SLD";
 const RECORD_MAGIC: &[u8; 8] = b"MIND-BLK";
 const NAME_MAGIC: &[u8; 8] = b"MIND-REF";
@@ -97,6 +99,14 @@ pub trait Crypto {
     fn open(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8], tag: &[u8; 16]) -> bool;
     /// Fills `out` with random bytes; false without a random source.
     fn random(&self, out: &mut [u8]) -> bool;
+}
+
+/// Where a volume key is kept off the medium (308-STO-0022): `keystore`'s secrets on the platform.
+pub trait Keeper {
+    /// Keeps `key` under `id`; false if it was not kept.
+    fn put(&mut self, id: &[u8; 8], key: &[u8; 32]) -> bool;
+    /// The key kept under `id`, if one is.
+    fn get(&mut self, id: &[u8; 8]) -> Option<[u8; 32]>;
 }
 
 /// HMAC-SHA-256 (RFC 2104) of the concatenated `parts` under a key of 32 bytes.
@@ -167,6 +177,9 @@ pub enum Error {
     Layout(u16),
     /// The superblock's key does not open its check, or comes from a source this build does not know: nothing is read.
     Key,
+    /// The volume key is kept off the medium under this id, and no keeper gave it: none to ask, or another machine's
+    /// medium.
+    Kept([u8; 8]),
     /// A `dag-cbor` block that is not a node of `dag`'s schema (MC-4.2: the type is bound to the data); a name that is
     /// not 1 to NAME_MAX allowed bytes; a root whose tree is out of shape.
     Invalid,
@@ -441,8 +454,9 @@ pub struct Store<'a, D: Device> {
     damaged: u64,
     crypto: &'a dyn Crypto,
     keys: Keys,
-    // Whether this mount made the volume key, and from random bytes.
+    // Whether this mount made the volume key, and from random bytes; and where the key is kept.
     made: Option<bool>,
+    source: u8,
     // The domain requests work in, and the domains the store keeps.
     domain: u16,
     domains: [Option<Domain>; DOMAINS],
@@ -515,17 +529,18 @@ fn blank<D: Device>(dev: &mut D, buffer: &mut [u8; BUFFER]) -> Result<bool, Erro
     Ok(true)
 }
 
-/// The superblock of this layout: with the volume key in the clear and its check, or (none) with no key yet.
-pub fn superblock(key: Option<(&[u8; 32], &dyn Crypto)>) -> [u8; SECTOR] {
+/// The superblock of this layout: with the volume key's check, and the key in the clear or (`kept`) only the id it is
+/// kept under; or (none) with no key yet.
+pub fn superblock(key: Option<(&[u8; 32], &dyn Crypto)>, kept: Option<&[u8; 8]>) -> [u8; SECTOR] {
     let mut s = [0u8; SECTOR];
     s[..8].copy_from_slice(SUPER_MAGIC);
     s[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
     s[10..12].copy_from_slice(&(SECTOR as u16).to_le_bytes());
-    s[12] = if key.is_some() { KEY_CLEAR } else { KEY_NONE };
+    s[12] = match (key, kept) { (None, _) => KEY_NONE, (Some(_), None) => KEY_CLEAR, (Some(_), Some(_)) => KEY_KEPT };
     let check = sha256::digest(&s[..16]);
     s[16..48].copy_from_slice(&check);
     if let Some((key, crypto)) = key {
-        s[48..80].copy_from_slice(key);
+        match kept { Some(id) => s[48..56].copy_from_slice(id), None => s[48..80].copy_from_slice(key) }
         let aad = aad(&s, 0);
         let (nonce, tag) = Keys::new(key).seal(crypto, &aad, &mut s[92..124]);
         s[80..92].copy_from_slice(&nonce);
@@ -536,28 +551,36 @@ pub fn superblock(key: Option<(&[u8; 32], &dyn Crypto)>) -> [u8; SECTOR] {
     s
 }
 
-// The volume key a superblock of this layout holds, once it opens the check; none if it has no key yet.
-fn key_of(s: &[u8], crypto: &dyn Crypto) -> Result<Option<[u8; 32]>, Error> {
-    match s[12] {
-        KEY_NONE if s[48..140].iter().all(|&b| b == 0) => Ok(None),
-        KEY_CLEAR => {
-            let key: [u8; 32] = s[48..80].try_into().unwrap();
-            let mut check: [u8; 32] = s[92..124].try_into().unwrap();
-            let opened = crypto.open(&Keys::new(&key).seal, s[80..92].try_into().unwrap(), &aad(s, 0), &mut check, s[124..140].try_into().unwrap());
-            if opened && check == [0; 32] { Ok(Some(key)) } else { Err(Error::Key) }
+// The volume key of a superblock of this layout, in it or from its keeper, once it opens the check; none if it has no
+// key yet.
+fn key_of(s: &[u8], crypto: &dyn Crypto, keeper: &mut Option<&mut dyn Keeper>) -> Result<Option<[u8; 32]>, Error> {
+    let key: [u8; 32] = match s[12] {
+        KEY_NONE if s[48..140].iter().all(|&b| b == 0) => return Ok(None),
+        KEY_CLEAR => s[48..80].try_into().unwrap(),
+        KEY_KEPT if s[56..80].iter().all(|&b| b == 0) => {
+            let id: [u8; 8] = s[48..56].try_into().unwrap();
+            keeper.as_mut().and_then(|k| k.get(&id)).ok_or(Error::Kept(id))?
         }
-        _ => Err(Error::Key),
-    }
+        _ => return Err(Error::Key),
+    };
+    let mut check: [u8; 32] = s[92..124].try_into().unwrap();
+    let opened = crypto.open(&Keys::new(&key).seal, s[80..92].try_into().unwrap(), &aad(s, 0), &mut check, s[124..140].try_into().unwrap());
+    if opened && check == [0; 32] { Ok(Some(key)) } else { Err(Error::Key) }
 }
+
+/// The id a superblock's key is kept under by its keeper, if it is kept so.
+#[cfg(test)]
+pub fn kept_id(s: &[u8]) -> Option<[u8; 8]> { (s[..8] == *SUPER_MAGIC && s[12] == KEY_KEPT).then(|| s[48..56].try_into().unwrap()) }
 
 impl<'a, D: Device> Store<'a, D> {
     /// Mounts the store on `dev` at time `now` (ns), its records sealed with `crypto`: a blank medium is formatted (if
     /// writable), a store is scanned and its blocks opened and verified; anything else is refused. A medium without a
-    /// volume key yet gets one. `index` bounds how many blocks it can hold, `heads` how many names, `pins` how many
-    /// pins, `holes` how many runs of blank sectors it uses. Every block starts a lease at `now`.
+    /// volume key yet gets one, kept by `keeper` when there is one and the key is random, else in the superblock. `index`
+    /// bounds how many blocks it can hold, `heads` how many names, `pins` how many pins, `holes` how many runs of blank
+    /// sectors it uses. Every block starts a lease at `now`.
     #[allow(clippy::too_many_arguments)]
-    pub fn mount(mut dev: D, crypto: &'a dyn Crypto, index: &'a mut [Entry], heads: &'a mut [Head], pins: &'a mut [Pin],
-                 holes: &'a mut [Extent], buffer: &'a mut [u8; BUFFER], scratch: &'a mut [u8; dag::CHUNK], now: u64) -> Result<Self, Error> {
+    pub fn mount(mut dev: D, crypto: &'a dyn Crypto, mut keeper: Option<&mut dyn Keeper>, index: &'a mut [Entry], heads: &'a mut [Head],
+                 pins: &'a mut [Pin], holes: &'a mut [Extent], buffer: &'a mut [u8; BUFFER], scratch: &'a mut [u8; dag::CHUNK], now: u64) -> Result<Self, Error> {
         if dev.sectors() < 2 { return Err(Error::Full); }
         // An index entry names a record by a sector below 2^32 (2 TiB of 512-byte sectors).
         if dev.sectors() > 1 << 32 { return Err(Error::TooLarge); }
@@ -573,10 +596,10 @@ impl<'a, D: Device> Store<'a, D> {
             if layout != LAYOUT { return Err(Error::Layout(layout)); }
             if s[10..12] != (SECTOR as u16).to_le_bytes() || s[13..16] != [0; 3] || s[140..SUPER] != sha256::digest(&s[..140])
                 || s[SUPER..].iter().any(|&b| b != 0) { return Err(Error::Foreign); }
-            key_of(&s, crypto)?
+            key_of(&s, crypto, &mut keeper)?
         };
-        let (key, made) = match key {
-            Some(key) => (key, None),
+        let (key, made, source) = match key {
+            Some(key) => (key, None, s[12]),
             None => {
                 if !dev.writable() { return Err(Error::ReadOnly); }
                 let mut key = [0u8; 32];
@@ -584,8 +607,11 @@ impl<'a, D: Device> Store<'a, D> {
                 // Without a random source the key comes from the medium's size and the time: no weaker while it is kept
                 // in the clear (308-STO-0021).
                 if !random { key = hmac_sha256(&[0; 32], &[b"MIND-STO volume key", &dev.sectors().to_le_bytes(), &now.to_le_bytes()]); }
-                if !dev.write(0, &superblock(Some((&key, crypto)))) || !dev.flush() { return Err(Error::Device); }
-                (key, Some(random))
+                // Only a random key is kept off the medium: a derived one could be found again without its keeper.
+                let mut id = [0u8; 8];
+                let kept = (random && crypto.random(&mut id) && keeper.as_mut().is_some_and(|k| k.put(&id, &key))).then_some(id);
+                if !dev.write(0, &superblock(Some((&key, crypto)), kept.as_ref())) || !dev.flush() { return Err(Error::Device); }
+                (key, Some(random), if kept.is_some() { KEY_KEPT } else { KEY_CLEAR })
             }
         };
         let quota = dev.sectors() * SECTOR as u64 / 4 * 3;
@@ -593,7 +619,7 @@ impl<'a, D: Device> Store<'a, D> {
         index.fill(Entry::EMPTY);
         let mut store = Store {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
-            scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made,
+            scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made, source,
             domain: VOLUME, domains: [None; DOMAINS], deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0,
             scrubbing: Scrubbed::default(),
         };
@@ -604,6 +630,9 @@ impl<'a, D: Device> Store<'a, D> {
 
     /// Whether this mount made the volume key (it found none), and from random bytes.
     pub fn made(&self) -> Option<bool> { self.made }
+
+    /// Where the volume key is kept: in the superblock in the clear (KEY_CLEAR) or by the keeper (KEY_KEPT).
+    pub fn key_source(&self) -> u8 { self.source }
 
     /// The time (ns, monotonic) the next requests happen at: leases are measured with it.
     pub fn set_time(&mut self, now: u64) { self.now = now; }

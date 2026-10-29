@@ -1,0 +1,39 @@
+# 900-NRL-0025: Pinned native conformance package and nnd design handoff — done
+
+**Type:** implementation, `NRL` · **Owner:** Codex (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-29) · **Blocked by:** — for the host fixture/handoff; native execution remains 900-NRL-0017 · **Roadmap:** G; 900 T11 · **Constitution:** MC-5.1, MC-5.2, MC-11.1, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+
+## Problem
+
+APP answered the native request in 262-APP-0112 and docs/nn/runtime.md 0.2. It needs a pinned MIT standalone model, independently computed reference outputs and an explicit tolerance. Its text/f64 decisions need NRL confirmation and precise serialization and runtime-accounting boundaries. Native nnd, parser workers and boot grants are not implemented yet.
+
+## Plan
+
+1. Export an unchanged supported complete feed-forward model from the already landed MIT fixtures, all five gated paths, shared objects and independent PyTorch reference. Include verified model/file identities and little-endian f64 client/reference payloads.
+2. Freeze the existing host writer encoding as a named export profile with golden f64 edge cases, while preserving the more general host model loader. Pin dtype/serializer/format versions; do not promise native readers exist.
+3. Exercise work preflight/cumulative charging, partial cancellation/deadline/clock failure, finite-input numerical poisoning and independent new sessions. Keep output/workspace cleanup semantics explicit and provide native-harness guidance without claiming native evidence.
+4. Verify offline regeneration/checking, integrity/refusal cases and the complete NRL profile. Send APP a concrete handoff, exact model ID, source/fixture commit, tolerance and design corrections through internal-dev-messages; notify KRN of the boot prerequisite scope.
+
+## Acceptance criteria
+
+- [x] A deterministic self-contained MIT test model, SHA-bound payloads, independent reference outputs and tolerance can be regenerated and checked offline.
+- [x] Writer encoding vectors cover float signs, integer-valued f64, subnormals, exponent formatting and finite extremes; unsupported/noncanonical encodings are explicitly scoped without weakening model-v0.
+- [x] Host runtime scenarios establish the documented preflight, charging, cleanup and terminal-state behavior and named failures.
+- [x] All affected tests/four portable builds and CLI cycles pass, provenance/status are updated, and APP receives the pinned handoff. Native acceptance of 0017 remains open.
+
+## Related
+
+- [900-NRL-0017](../issues/900-NRL-0017-native-runtime-and-nnd-integration.md), [900](../issues/900-neural-representation-lab.md).
+- [262-APP-0112](../issues/262-APP-0112-nnd-and-nn-wit-stage-0.md), [262-KRN-0178](../issues/262-KRN-0178-nnd-as-a-boot-service.md), [262-KRN-0179](../issues/262-KRN-0179-a-wait-on-a-shared-word.md).
+- [APP design](../docs/nn/runtime.md) 0.2, [portable boundary](../nrl/specs/native-boundary-v0.md).
+
+## Progress (2026-10-29)
+
+Implementation `0a737f66`, checked with current main in `50caca7e`: **99 tests**, zero failures/ignored; four portable release builds; all standard CLI cycles, including a new export/check and exact bundle regeneration. Independent PyTorch regenerated the original six model fixtures unchanged. [Evidence](../nrl/reports/native-conformance-2026-10-29.json), [raw log](../nrl/reports/native-conformance-check-2026-10-29.txt), [16 scenario results](../nrl/reports/native-conformance-cases-2026-10-29.json). Source was built on the NRL branch and merged into fast-test before this affected-check run; no fast-test build/test was used as evidence. Native acceptance is unchanged. APP/KRN handoff was subsequently delivered; see Resolution below.
+
+## Resolution
+
+Implemented the unchanged MIT full-graph model bundle and offline make/check commands, independent PyTorch-derived f64 payloads/tolerance, SHA-bound inventory, pinned float/typed-object encoding vectors and 16 deterministic runtime scenarios. The format profile names a writer subset without weakening the existing host reader or claiming a native parser. Work preflight/cumulative charges, partial interruption, output/workspace clearing, terminal poisoning, independent sessions and deadline mapping are explicit. All **99 host tests**, four portable release builds and standard CLI cycles pass on `50caca7e`; independent PyTorch regeneration matches exactly. Evidence is linked above.
+
+The checked handoff/evidence is published as `9cb4c346d284747f1c1dd10fe70d97ce986f5477`. APP received the text/f64 agreement, exact model ID/source/fixture commit/tolerance, design corrections and parser/lifetime ownership questions in [APP/2026-10-29T1459Z-NRL-text-f64-agreed-pinned-native-conformance-package.md](https://github.com/NikolayUvarov/gcu_undocumented_func/blob/internal-dev-messages/APP/2026-10-29T1459Z-NRL-text-f64-agreed-pinned-native-conformance-package.md) (`eaa3fc09`). KRN received the boot-prerequisite/lifetime notice in [KRN/2026-10-29T1459Z-NRL-nnd-format-agreement-and-client-identity-lifetime.md](https://github.com/NikolayUvarov/gcu_undocumented_func/blob/internal-dev-messages/KRN/2026-10-29T1459Z-NRL-nnd-format-agreement-and-client-identity-lifetime.md) (`93568a17`). Both messages are pushed on internal-dev-messages, one per commit. The binding request is in [requests-APP.md](../issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11).
+
+This task closes the NRL host acceptance-input/handoff work only. [900-NRL-0017](../issues/900-NRL-0017-native-runtime-and-nnd-integration.md) remains open for APP's service/parser/IDL, KRN's grants and named-target native budget/cancellation/isolation/failure/lifecycle evidence. No native acceptance or OS profile guarantee was added. The full repository gate remains the landing integrator's work.

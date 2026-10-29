@@ -3458,6 +3458,8 @@ def store_suite(vm):
     assert made, logs
     print(f"INFO: the store's volume key: {made[0]}", flush=True)
     require(logs, "SEALED, KEY IN THE CLEAR")
+    # 308-STO-0022: a RAM disk keeps its key in its superblock, and says why: nothing of it outlives a reset.
+    require(logs, made[0] + ", IN THE SUPERBLOCK: A RAM DISK OUTLIVES NO RESET")
     require(blocks("stat"), "DURABILITY=VOLATILE")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
