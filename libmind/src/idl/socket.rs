@@ -31,6 +31,8 @@
 //! `pattern` repeated over them (1 to 16 bytes; empty: `MINDCORE`). Its answer gives the round trip, the reply's data
 //! size, and whether its data are what was sent. A grant's echo is counted in its volume, the request's bytes and as
 //! many for the reply, when it is sent; `ping` is counted the same way, 16 bytes each way.
+//! 2.7 (000-NET-0049): a rule of address 0 reaches any public address (`mind::network::public`) on its port, TCP only
+//! and never port 0: the browsing grant; the stack logs each new host a grant reaches through it.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -40,7 +42,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 6, 0);
+pub const VERSION: (u8, u8, u8) = (2, 7, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -71,7 +73,8 @@ impl Wire for Protocol {
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
-/// One destination a grant may reach: an address (never 0), a port (0: any; ICMP has none) and a protocol.
+/// One destination a grant may reach: an address, a port (0: any; ICMP has none) and a protocol. Address 0 (2.7): any
+/// public address, for TCP on one port only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rule { pub address: u32, pub port: u16, pub protocol: Protocol }
 impl Wire for Rule {

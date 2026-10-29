@@ -54,12 +54,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // mint or transfer under its root with ERR_REVOKING meanwhile, a copy past DERIVE_DEPTH_MAX refused (000-KRN-0104).
 // ABI 21 adds the boot image `rtw88_wifi`, the RTL8821CE's driver, after `rtw89_wifi`, so that init starts it before
 // `wlan` (550-KRN-0172, for 550-DRV-0042). ABI 22 moves SLOT_DYNAMIC to 40 for SLOT_OWN, a program's own data
-// directory (000-KRN-0170).
+// directory (000-KRN-0170). ABI 24 moves it to 41 for SLOT_SECRETS, a program's client of its own secrets
+// (000-KRN-0182); 23 is never used, as a build of fast-test carried it with another layout.
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 22;
+pub const ABI_VERSION: u32 = 24;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -297,7 +298,7 @@ pub const CAP_KEEP: u8 = 1 << 3;
 pub const CAP_BADGE: u8 = 1 << 4;
 // Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX (issue 171), a bound on the
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
-pub const CAP_SLOTS: usize = 104;
+pub const CAP_SLOTS: usize = 105; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (000-KRN-0182)
 pub const CAP_SLOTS_MAX: usize = 4096;
 // Derivations from a root a capability may be (000-KRN-0104): a copy or mint deeper than this is refused with ERR_LIMIT.
 pub const DERIVE_DEPTH_MAX: usize = 64;
@@ -406,8 +407,11 @@ pub const SLOT_APPS: usize = 38;
 // A program's own data directory, `system/own/<name>/`, a writable scope the loader makes at each start of a program it
 // runs by its name from the booted slot, the volume's root or data/apps/; no other program reads it (ABI 22, 000-KRN-0170).
 pub const SLOT_OWN: usize = 39;
+// A program's client of the key service for its own secrets (idl/keystore.wit 1.4), which the loader asks for at each
+// start of a program it runs by its name, as for SLOT_OWN; no other program's secrets are reached (ABI 24, 000-KRN-0182).
+pub const SLOT_SECRETS: usize = 40;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 40;
+pub const SLOT_DYNAMIC: usize = 41;
 // The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
 // carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
 pub const LAUNCH_SLOTS: [usize; 20] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,

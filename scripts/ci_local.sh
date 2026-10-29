@@ -131,6 +131,7 @@ SSHD_PATH=${MIND_SSHD:-/usr/sbin/sshd}
 want host && { [[ $SSHD_PATH == /* && -f $SSHD_PATH && -x $SSHD_PATH ]] || missing+=("sshd (openssh-server or MIND_SSHD: $SSHD_PATH)"); } # the SSH client's host tests (351-NET-0026)
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
 want aarch64 && { command -v qemu-system-aarch64 >/dev/null || missing+=(qemu-system-aarch64); [[ -f /usr/share/AAVMF/AAVMF_CODE.fd ]] || missing+=(AAVMF); }
+want host && selected "host tests" && { python3 -c 'import tomllib' 2>/dev/null || missing+=("Python 3.11 or later (tomllib)"); } # scripts/models.py and tests/models_host.rs; "build (x86)" of the host part does not need it
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "Missing: ${missing[*]}" >&2
     echo "sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm swtpm-tools default-jre-headless" >&2

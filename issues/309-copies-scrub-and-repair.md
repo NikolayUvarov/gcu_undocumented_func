@@ -18,6 +18,10 @@ One copy on one medium: a damaged block is found when it is read (300-STO-0005) 
 - **Independence stated:** two partitions of one disk are not independent copies, and the store says so.
 - **Damage beyond a block:** a store that cannot be mounted rebuilt from its copy, with a tool that checks and says what it lost.
 
+## Tasks
+
+- [309-STO-0025](309-STO-0025-scrub.md): the scrub, which needs no second medium and does not wait for 307.
+
 ## Acceptance criteria
 
 - `storefaults` extended: damage in one copy found by the scrub and repaired from the other; a lost medium rebuilt.
