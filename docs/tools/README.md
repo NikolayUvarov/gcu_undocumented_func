@@ -469,7 +469,7 @@ The design is [docs/nn/runtime.md](../nn/runtime.md) 1.0; the interface is `idl/
   - the clients' state: holds, sessions, budgets, jobs, retirement.
 - **Where its work runs.** A package is parsed in a worker that holds only its bytes. A job runs in a worker of its own.
 - **Its host tests** run on NRL's pinned bundle (`cargo test --manifest-path nnpkg/Cargo.toml`, in `scripts/host_tests.sh`).
-- **Not running yet.** `nnd` is built with the programs, but it runs only once `KRN` gives it its boot image and grants and the shell its badged client ([262-KRN-0178](../../issues/262-KRN-0178-nnd-as-a-boot-service.md)). No native run is claimed yet (MC-12.3).
+- **Not running yet.** `nnd` is built with the programs, but it runs only once `KRN` gives it its boot image and grants and the shell its badged client ([262-KRN-0178](../../issues/262-KRN-0178-nnd-as-a-boot-service.md)). Run by hand (in the shell, or from `wm`'s menu, in `console`'s window), it says that it is `init`'s service and ends. No native run is claimed yet (MC-12.3).
 
 ## 5. Phases
 
