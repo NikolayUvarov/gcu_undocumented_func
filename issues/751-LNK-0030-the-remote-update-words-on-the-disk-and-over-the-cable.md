@@ -1,6 +1,6 @@
 # 751-LNK-0030 — The words `remote-update` and `link-remote-update`: on the disk as it is written, and over the cable only if the owner allowed it
 
-**Type:** tool, tests · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-29) · **Blocked by:** `KRN`: the words in `init` and `init.wit` 1.11; `APP`: the link's console taking `mode remote-update` only with `link-remote-update` (both asked on `internal-dev-messages`, 2026-10-29) · **Main task:** [751](751-system-updates-at-a-developers-request.md) · **Constitution:** MC-12.6, MC-7.5
+**Type:** tool, tests · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-29) · **Blocked by:** `KRN`: the words in `init` and `init.wit` 1.11; `APP`: the link's console taking `mode remote-update` only with `link-remote-update` (both asked on `internal-dev-messages`, 2026-10-29) · **Main task:** [751](751-system-updates-at-a-developers-request.md) · **Constitution:** MC-12.6, MC-7.5
 
 ## Problem
 
@@ -23,9 +23,17 @@
    - `docs/write-disk.md` (both languages): the words;
    - `docs/link/mindlink.md` (both languages): what the cable may switch and when.
 
+## Progress
+
+- **2026-10-29, the script's part:**
+  - `--mode=` takes `remote-update` (with `development` or `maintenance`) and `link-remote-update` (with `link-console`, which still needs `--link-dev`), and refuses them otherwise;
+  - `tests/build_and_write_args_test.py` checks the refusals with a stand-in `wslpath`, and no build or write starts;
+  - `docs/write-disk.md` (both languages) describes the words, and that `init` leaves them out until `KRN`'s part lands.
+- **Left:** the `link` suite's cases and the machine's run, after `KRN`'s and `APP`'s parts.
+
 ## Acceptance criteria
 
-- [ ] `build_and_write.sh`'s argument checks, run past parsing only.
+- [x] `build_and_write.sh`'s argument checks, run past parsing only (`tests/build_and_write_args_test.py`, 2026-10-29).
 - [ ] The `link` suite's three cases above pass on x86.
 - [ ] On the DEXP or the MacBook Pro, over the cable, with the owner's `link-remote-update`: `remote-update` turned on and off. Evidence for that machine only (MC-12.1).
 
