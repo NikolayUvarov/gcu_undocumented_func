@@ -29,4 +29,4 @@ In `main` at 3e07edb8 (landing round 43, the request's commit a26c6b4d), in the 
 
 ## Related
 
-[308-STO-0023](308-STO-0023-memory-domains.done), [308-KRN-0183](../issues/308-KRN-0183-a-secrets-client-for-blockstore.md) (the store's other grant from `init`).
+[308-STO-0023](308-STO-0023-memory-domains.done), [308-KRN-0183](308-KRN-0183-a-secrets-client-for-blockstore.done) (the store's other grant from `init`).

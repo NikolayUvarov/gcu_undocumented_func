@@ -1691,7 +1691,13 @@ def tools_suite(vm):
     vm.expect("EXITED. SHELL RESUMED.")
     time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command("view nothing.txt"), "PID=")
-    assert heap_used(vm) == baseline
+    # The ended view's task is reaped after its exit notice, as after the monitors and fm: up to 2 s.
+    for _ in range(20):
+        if heap_used(vm) == baseline:
+            break
+        time.sleep(.1)
+    used = heap_used(vm)
+    assert used == baseline, f"the kernel heap after view: {used} bytes used, {baseline} at the suite's start"
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
     fbank_check(vm)
     dictate_check(vm)
@@ -9988,6 +9994,23 @@ def wm_suite(vm):
                 return screen
         raise AssertionError((text, screen))
 
+    def keyboard_from_settings():
+        # The keyboard page (000-APP-0048, shell.wit 1.10): the layout read from the shell, → Russian set at once through
+        # it (no question, no window of the shell's), ← US again; the page stays open.
+        keys("alt-s", text="MODE=SETTINGS")
+        keys("down", "ret", text="SETTINGS=Keyboard:Layout")
+        screen_has("Layout      < US (QWERTY) >")
+        keys("right", text="[WM] SET KEYBOARD Russian")
+        until("THE SHELL SET THE KEYBOARD: Ru, CtrlOrAltShift AT ONCE")
+        screen_has("The keyboard: Russian")
+        keys("left", text="[WM] SET KEYBOARD US (QWERTY)")
+        until("THE SHELL SET THE KEYBOARD: Us, CtrlOrAltShift AT ONCE")
+        screen_has("Layout      < US (QWERTY) >")
+        assert last_state().startswith("MODE=SETTINGS"), last_state()
+        keys("esc", text="MODE=NORMAL")
+        print("PASS: wm settings: the keyboard page read the layout from the shell, set Russian and US again at once through "
+              "it, with no question and no window of the shell's", flush=True)
+
     def clock_from_settings():
         # The date and time page (000-APP-0055): the year one on, set by the shell at once for wm (000-APP-0060: no
         # question and no window of the shell's), shown on the page, which stays open; then back.
@@ -10222,10 +10245,14 @@ def wm_suite(vm):
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
             changed += 1
         keys("tab", text="SETTINGS=Background")
-        for page in ("Keyboard", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
-            keys(*["down"] * (3 if page == "Sound" else 1), text=f"SETTINGS={page}")
-            keys("ret")
-            screen_has(f"{page}: a page to read; nothing is set here yet")
+        # The keyboard page is entered (000-APP-0048, keyboard_from_settings); the sound page is to read (the screen page
+        # sets the scale, 000-APP-0061, scale_from_settings).
+        keys("down", text="SETTINGS=Keyboard")
+        keys("ret", text="SETTINGS=Keyboard:Layout")
+        keys("tab", text="SETTINGS=Keyboard")
+        keys(*["down"] * 3, text="SETTINGS=Sound")
+        keys("ret")
+        screen_has("Sound: a page to read; nothing is set here yet")
         # The network page (550-APP-0033) names what each row opens; Enter on Wi-Fi closes Settings and starts wifi in a
         # window, which says there is no station here.
         keys("up", text="SETTINGS=Network")
@@ -10493,6 +10520,7 @@ def wm_suite(vm):
     print("PASS: wm settings: Alt+S opens them; the background switched to an image's fallback and to none, the desktop "
           "follows at once, and data/wm.conf keeps it", flush=True)
     clock_from_settings()
+    keyboard_from_settings()
     every_entry_reacts()
     settings_react()
     full_screen_and_list(fm, clock, top)

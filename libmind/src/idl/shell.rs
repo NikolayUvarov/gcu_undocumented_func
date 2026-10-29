@@ -2,7 +2,8 @@
 //! What a window manager and its console ask of the shell (211-APP-0044). The shell alone holds the operator's
 //! authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
 //! (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
-//! asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3).
+//! asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3)
+//! and the keyboard's layout (1.10).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -12,7 +13,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 9, 0);
+pub const VERSION: (u8, u8, u8) = (1, 10, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -40,6 +41,42 @@ impl Wire for CardCounters {
     const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.card.encode(w)?; self.wireless.encode(w)?; self.default.encode(w)?; self.sent.encode(w)?; self.received.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { card: Wire::decode(r)?, wireless: Wire::decode(r)?, default: Wire::decode(r)?, sent: Wire::decode(r)?, received: Wire::decode(r)? }) }
+}
+
+/// The keyboard's layout and what switches it (1.10, 000-APP-0048: wm's Settings), as `keymap` and `keyboard.wit` name
+/// them: US or Russian; Ctrl+Shift or Alt+Shift, one of them, Caps Lock, or nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum KeyboardLayout { #[default] Us = 0, Ru = 1 }
+impl KeyboardLayout {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Us), 1 => Some(Self::Ru), _ => None } }
+}
+impl Wire for KeyboardLayout {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum LayoutSwitch { #[default] CtrlOrAltShift = 0, CtrlShift = 1, AltShift = 2, CapsLock = 3, None = 4 }
+impl LayoutSwitch {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::CtrlOrAltShift), 1 => Some(Self::CtrlShift), 2 => Some(Self::AltShift), 3 => Some(Self::CapsLock), 4 => Some(Self::None), _ => None } }
+}
+impl Wire for LayoutSwitch {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Keymap { pub layout: KeyboardLayout, pub switch: LayoutSwitch }
+impl Wire for Keymap {
+    const MAX: usize = <KeyboardLayout as Wire>::MAX + <LayoutSwitch as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.layout.encode(w)?; self.switch.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { layout: Wire::decode(r)?, switch: Wire::decode(r)? }) }
 }
 
 /// Opens the shell's own window, as Ctrl+Alt+F5 does, unless it is open; answers its id in the window broker, for
@@ -161,6 +198,37 @@ pub fn set_zone(endpoint: Endpoint, west: bool, minutes: u32) -> Result<core::re
     Ok(Ok(()))
 }
 
+/// The layout and its switch now, as `keymap` shows them (1.10). For any client: it only reads. `unavailable`: the
+/// shell holds no keyboard client.
+pub fn keymap(endpoint: Endpoint) -> Result<core::result::Result<Keymap, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 2, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Keymap as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Sets them, as `keymap <layout> --switch <key>` does (1.10): for the window manager the shell started, at once, as
+/// the clock (its Settings are the user's choice); `refused` for any other client.
+pub fn set_keymap(endpoint: Endpoint, keymap: &Keymap) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        keymap.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 11 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -173,6 +241,8 @@ pub enum Request {
     NetCounters,
     NewWindow,
     SetZone { west: bool, minutes: u32 },
+    Keymap,
+    SetKeymap { keymap: Keymap },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -228,6 +298,21 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x1ffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::SetZone { west: wire::field(&words, 0, 16, 1) != 0, minutes: wire::field(&words, 0, 17, 32) as u32 }, Call::words(request, cap)))
         }
+        10 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 2, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Keymap, call))
+        }
+        11 => {
+            let mut copy = [0u8; 2];
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let keymap = <Keymap as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SetKeymap { keymap }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -269,4 +354,12 @@ pub fn reply_new_window(call: Call, value: core::result::Result<u32, Error>) -> 
 pub fn reply_set_zone(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_keymap(call: Call, value: core::result::Result<&Keymap, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_set_keymap(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

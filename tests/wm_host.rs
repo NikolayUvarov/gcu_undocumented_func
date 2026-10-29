@@ -1558,7 +1558,7 @@ fn every_page_and_row_of_settings_reacts() {
         let mut s = Settings::new(&config, (160, 50));
         for _ in 0..page { s.key(key(KEY_DOWN), &config); }
         assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
-        if page == 0 || page == DATE || page == settings::SCREEN || page == settings::NETWORK { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
+        if page == 0 || page == DATE || page == settings::SCREEN || page == settings::NETWORK || page == settings::KEYBOARD { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
         assert!(s.on_pages && s.message.as_deref().is_some_and(|m| m.contains("a page to read")), "{}: {:?}", PAGES[page], s.message);
         assert!(s.page_text()[0].starts_with("To read:"), "{:?}", s.page_text());
         assert!(screen(&s).contains(&format!("{}: a page to read", PAGES[page])));
@@ -1571,6 +1571,32 @@ fn every_page_and_row_of_settings_reacts() {
         assert!(s.message.is_none() && s.page == 0);
         // Every line of the page fits its column.
         for line in s.page_text() { assert!(line.chars().count() <= 63, "{:?}", line); }
+    }
+    // The keyboard page (000-APP-0048, shell.wit 1.10): the layout and switch the shell answered, each stepped round by
+    // ← → Enter or a click and set at once; without the shell's answer, a line says why nothing is set.
+    {
+        use settings::{KEYBOARD, LAYOUTS, SWITCHES};
+        let mut s = Settings::new(&config, (160, 50));
+        for _ in 0..KEYBOARD { s.key(key(KEY_DOWN), &config); }
+        s.key(key(KEY_ENTER), &config);
+        assert!(!s.on_pages && s.page == KEYBOARD);
+        assert!(screen(&s).contains("Layout      < ? >"), "not read yet");
+        assert_eq!(s.key(key(KEY_RIGHT), &config), Outcome::Stay);
+        assert_eq!(s.message.as_deref(), Some("Setting the keyboard needs the shell's commands, which wm does not hold"));
+        s.shell = true;
+        s.key(key(KEY_RIGHT), &config);
+        assert_eq!(s.message.as_deref(), Some("The keyboard cannot be read through the shell"));
+        s.keymap = Some((0, 0));
+        assert!(screen(&s).contains(&format!("Layout      < {} >", LAYOUTS[0])) && screen(&s).contains(&format!("Switch      < {} >", SWITCHES[0])));
+        assert_eq!(s.key(key(KEY_RIGHT), &config), Outcome::SetKeymap { layout: 1, switch: 0 });
+        assert_eq!(s.key(key(KEY_LEFT), &config), Outcome::SetKeymap { layout: 1, switch: 0 }, "round: from US back to Russian");
+        s.key(key(KEY_DOWN), &config);
+        assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::SetKeymap { layout: 0, switch: 1 });
+        assert_eq!(s.key(key(KEY_LEFT), &config), Outcome::SetKeymap { layout: 0, switch: 4 }, "round: before the first, none");
+        let inner = s.area().inner();
+        assert_eq!(s.click(inner.x + 30, inner.y + 1, &config), Outcome::SetKeymap { layout: 1, switch: 0 });
+        assert_eq!(s.key_row, 0);
+        for line in screen(&s).lines() { assert!(!line.contains("To read:"), "{}", line); }
     }
     // The network page (550-APP-0033): each row starts what it opens, by Enter and by a click; ← goes back to the pages.
     for (row, (name, command, what)) in settings::NETWORK_ROWS.iter().enumerate() {

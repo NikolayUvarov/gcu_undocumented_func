@@ -211,7 +211,7 @@ The platform's cipher is the crate, tested by its own project. On the platform, 
 
 A medium that outlives the machine's memory keeps no key: `keystore` keeps it as the store's own secret.
 - **Key source 2, kept.** The superblock holds an id of 8 random bytes where the key would be, zeros after it, and the check as before. The key is `blockstore`'s secret `volume-<id in hex>` in `keystore` (`keystore.wit` 1.4's `secret-put` and `secret-get`), sealed there under a key from the device key.
-- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take ([308-KRN-0183](../../issues/308-KRN-0183-a-secrets-client-for-blockstore.md), the kernel session's). Until it does, every medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
+- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take ([308-KRN-0183](../../issues-done/308-KRN-0183-a-secrets-client-for-blockstore.done), the kernel session's). Until it does, every medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
 - **Which key is kept.** At the first mount of a blank medium, or of a partition with no key yet:
   - a RAM disk keeps its key in its superblock, as nothing of it outlives a reset and a restarted store must find it;
   - any other medium's key is kept, if it is random and `keystore` keeps it;

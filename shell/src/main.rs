@@ -320,6 +320,18 @@ impl Shell {
                         mind::println!("[SHELL] {}", kept);
                     }
                 }
+                commands::Request::Keymap => {
+                    // The layout and its switch, for any client: it only reads (shell.wit 1.10, 000-APP-0048).
+                    let _ = commands::reply_keymap(call, keymap::state().as_ref().ok_or(commands::Error::Unavailable));
+                }
+                commands::Request::SetKeymap { keymap: wanted } => {
+                    // At once for the window manager the shell started, as the clock: its Settings are the user's choice.
+                    let manager = self.managers.contains(&message.sender);
+                    let result = if !manager { Err(commands::Error::Refused) } else { keymap::set(wanted).ok_or(commands::Error::Unavailable) };
+                    let verdict = match &result { Ok(_) => "SET", Err(commands::Error::Refused) => "REFUSED", Err(_) => "COULD NOT SET" };
+                    self.note(format_args!("FOR PID {} THE SHELL {} THE KEYBOARD: {:?}, {:?}{}", message.sender, verdict, wanted.layout, wanted.switch, if manager { " AT ONCE: ITS WINDOW MANAGER'S SETTINGS" } else { "" }));
+                    let _ = commands::reply_set_keymap(call, result.map(drop));
+                }
                 commands::Request::Battery => {
                     // A copy of the shell's battery client (shell.wit 1.4, 211-APP-0070): the service only reads, and
                     // answers any client; for a window manager whose launch had no room for it.

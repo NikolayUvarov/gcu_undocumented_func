@@ -16,6 +16,7 @@ pub mod loader;
 pub mod log;
 pub mod net;
 pub mod netpolicy;
+pub mod nn;
 pub mod parse;
 pub mod rtc;
 pub mod serial;

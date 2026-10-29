@@ -1,0 +1,61 @@
+/// The model service (`nnd`, 262-APP-0112): it loads checked models read-only and runs them for its clients within
+/// each session's budget. A client is known by its badge, which the kernel stamps; a session answers only its owner.
+/// The design is docs/nn/runtime.md 1.0.
+package mind:nn@1.0.0;
+
+interface nn {
+    /// `not-found`: no such file, model, session or job; `digest`: a file or the model ID is not as given;
+    /// `malformed`: the parser refused the package, its answer does not encode again to its bytes, or an input row
+    /// is not finite (refused before it runs, nothing charged); `unsupported`: a family, profile, overlay or operator
+    /// this version does not run; `too-large`: past a bound of the profile or of the service; `no-memory`: the
+    /// service's quota is spent; `no-workers`: `data/memory.conf` gives the service no workers, so it parses and runs
+    /// nothing; `owner`: the session or job is another client's, or a call only the shell makes; `budget`: the
+    /// request would pass the session's budget, nothing run; `busy`: the model has sessions, or the caller's jobs
+    /// are at their bound; `pending`: the job has not ended within the wait; `cancelled`, `deadline`: the job was
+    /// stopped, its output cleared, the session ended; `numeric`: a value inside the model was not finite, the
+    /// session is poisoned; `poisoned`: the session ended before and takes no more jobs; `failed`: the worker ended
+    /// without an answer, or the clock went back, the session is poisoned.
+    enum error { not-found, digest, malformed, unsupported, too-large, no-memory, no-workers, owner, budget, busy, pending, cancelled, deadline, numeric, poisoned, failed }
+
+    /// A loaded model: its ID (SHA-256 of the canonical manifest), name, input and output widths, row limit per job,
+    /// bytes held, sessions open, and the licence the model disk's manifest records (empty: none recorded).
+    record model { id: list<u8, 32>, name: string<64>, inputs: u32, outputs: u32, rows-max: u32, bytes: u64, sessions: u32, licence: string<32> }
+
+    /// A session's budget: rows, work units (the runtime's declared accounting, not CPU cycles), jobs, bytes of
+    /// workspace and output, and a deadline in milliseconds from `open` on the monotonic clock (0: none).
+    record budget { rows: u64, work: u64, jobs: u32, memory: u64, deadline-ms: u64 }
+    /// What a session has used of it, and whether it has ended.
+    record usage { rows: u64, work: u64, jobs: u32, memory: u64, elapsed-ms: u64, ended: bool }
+
+    /// The service's view: its quota and what is used, workers live and possible, models, sessions and live badges.
+    record status { quota: u64, used: u64, workers: u32, workers-max: u32, models: u32, sessions: u32, badges: u32 }
+
+    /// Loads the standalone package at `path` (on `models:` or under `data/models/`), which must have model ID `id`.
+    load: func(path: string<96>, id: list<u8, 32>) -> result<model, error>;
+    /// The loaded models, 8 from `start`.
+    models: func(start: u32) -> list<model, 8>;
+    /// Drops the caller's hold of a model; its memory is freed once no hold and no session is left.
+    unload: func(id: list<u8, 32>) -> result<_, error>;
+
+    /// A session of the caller on a loaded model, with its budget: refused (`budget`, `no-memory`) when the service
+    /// cannot hold it, never over-committed.
+    open: func(id: list<u8, 32>, budget: budget) -> result<u32, error>;
+    /// A job of `rows` input rows, each the model's input width of little-endian f64: the service copies them and
+    /// answers the job's number at once.
+    submit: func(session: u32, rows: u32, input: bytes<61440>) -> result<u32, error>;
+    /// Waits up to `wait-ms` for the job; its output rows, each the model's output width of little-endian f64.
+    wait: func(job: u32, wait-ms: u32) -> result<bytes<61440>, error>;
+    /// Stops the job at its next checkpoint (between rows and nodes): `wait` then answers `cancelled`.
+    cancel: func(job: u32) -> result<_, error>;
+    /// The session's use of its budget.
+    usage: func(session: u32) -> result<usage, error>;
+    /// Ends the session and frees what it held.
+    close: func(session: u32) -> result<_, error>;
+
+    status: func() -> status;
+
+    /// The shell only (badge 0): drops every session, job and hold of `badge`, before the badge is reused.
+    retire: func(badge: u16) -> result<_, error>;
+    /// The shell only (badge 0), at its start: drops every badge's sessions, jobs and holds.
+    retire-all: func() -> result<_, error>;
+}

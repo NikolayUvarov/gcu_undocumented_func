@@ -98,6 +98,7 @@ USER_CRATES=(
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
     "parse:parse:parse.elf"
+    "nnd:nnd:nnd.elf"
     "tpm:tpm:tpm.elf"
     "netcheck:netcheck:netcheck.elf"
     "webcheck:webcheck:webcheck.elf"
