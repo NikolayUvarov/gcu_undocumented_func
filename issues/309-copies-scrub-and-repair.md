@@ -20,7 +20,7 @@ One copy on one medium: a damaged block is found when it is read (300-STO-0005) 
 
 ## Tasks
 
-- [309-STO-0025](309-STO-0025-scrub.md): the scrub, which needs no second medium and does not wait for 307.
+- [309-STO-0025](../issues-done/309-STO-0025-scrub.done): the scrub, which needs no second medium and does not wait for 307. Done 2026-10-29.
 
 ## Acceptance criteria
 

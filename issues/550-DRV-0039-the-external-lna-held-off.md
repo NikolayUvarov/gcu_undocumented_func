@@ -74,7 +74,7 @@ The stick was `fast-test` 0d73c076, then EFF's release trees (slot B 31d66d3c, s
 
 ## Acceptance criteria
 
-- [ ] On the MacBook Pro, `bcm_wifi` logs the override held when the radio comes up. Over at least 20 minutes the network's beacons are heard at 90% or more in quiet periods, against 75% to 85% before.
+- [x] On the MacBook Pro, `bcm_wifi` logs the override held when the radio comes up. Over at least 20 minutes the network's beacons are heard at 90% or more in quiet periods, against 75% to 85% before (2026-10-29: 93.7% over 77 minutes of every period, traffic included; below).
 - [ ] Data frames lost after 7 tries are no more than under the PHY's control, measured over the same period in turn.
 - [ ] What the levels read now mean is written in this issue's resolution, and `NET` is told.
 
@@ -101,6 +101,16 @@ Evidence for the MacBook Pro's BCM4331 only (MC-12.1). Other boards with this ch
     The Effector agent still logged 7 `Transport` errors, mostly sending its 6 KB telemetry at 1 Mbit/s within its 3 s limit. That is EFF's, as told on 2026-10-23 at 02:50.
   - **For an hour (3,004 to 6,784 s) no frame's level was read.** Every core's power byte was at or above 0, while reception was sound (about 630 good frames each 10 s, none lost). The beacons were not counted then, as their level was required.
 - **2026-10-23, the counts fixed.** A beacon now counts whether or not its level was read, and the mean is of those whose level was. The CCK line adds `NO LEVEL n (LAST xx xx xx)`, the raw bytes of the last such frame, so the next time shows what the receive header held.
+
+- **2026-10-29, release 202610290937 on the MacBook Pro** (`main` with `DRV`'s, `EFF`'s and `LNK`'s branches, slot B, confirmed). The logs were read through hesere.
+  - **The override:** `THE EXTERNAL LNA HELD OFF: RF CONTROL 0400 0400 0400 (THE PHY'S WAS 0000 0000 0000)` at 5.3 s.
+  - **The beacons, 77 minutes** (462 periods of 10 s, 13 to 4,624 s): 41,982 of 44,814 due were heard, **93.7%**.
+    - That counts every period, traffic included. The machine is hardly ever quiet now, since the Effector agent's heartbeats and telemetry run all the time; the three periods with at most 5 data frames sent heard 91.1%.
+    - 58 periods of 462 were below 90%.
+  - **The data, the same 77 minutes:** 11,043 frames sent, **1 lost after every try**, 1.78 tries a frame.
+  - **Left:**
+    - **the second criterion's comparison in turn,** the same period with the PHY's control. `bcm_wifi` has no switch for it: it needs a build without the override, put with `replace` over the cable and brought back with `--back`;
+    - **the resolution,** with what the levels mean, and `NET` told.
 
 ## Related
 
