@@ -228,3 +228,18 @@ fn an_exec_payload_gives_its_command() {
     assert_eq!(with_values(text, |v| exec_command(v).map(str::to_owned)), Ok("reboot".to_owned()));
     assert_eq!(with_values(r#"{"run_as":"service"}"#, |v| exec_command(v).err()), Some(Error::Missing));
 }
+
+#[test]
+fn a_completed_result_says_what_was_done() {
+    let mut buf = [0u8; 512];
+    let json = completed_result(&mut buf, "delivered data/inbox/d.txt 68000 4e0c").unwrap();
+    assert_eq!(core::str::from_utf8(json).unwrap(),
+        r#"{"status":"completed","exit_code":0,"stdout":"delivered data/inbox/d.txt 68000 4e0c","stderr":"","truncated":false,"run_as":"effector"}"#);
+    let json = completed_result(&mut buf, "a \"quoted\" name").unwrap();
+    assert!(core::str::from_utf8(json).unwrap().contains(r#""stdout":"a \"quoted\" name""#));
+    assert!(completed_result(&mut [0u8; 32], "too long for the buffer").is_err());
+    // A command that exits 1 fails, as the other agents report it (750-EFF-0022).
+    let json = exec_result(&mut buf, 1, "unhealthy: quarantined: wlan", "exit status 1").unwrap();
+    assert_eq!(core::str::from_utf8(json).unwrap(),
+        r#"{"status":"failed","exit_code":1,"stdout":"unhealthy: quarantined: wlan","stderr":"","truncated":false,"run_as":"effector","error":"exit status 1"}"#);
+}

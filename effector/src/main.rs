@@ -405,7 +405,7 @@ impl Agent {
         let body = wire::ack(&mut buf, ack.record.id.as_str(), json).ok()?.to_vec();
         let Some(status) = self.request(Method::Post, "/api/commands/ack", "", Some(&body)) else { return Some(Outcome::Retry) };
         let ok = status == 200 && self.answer(wire::ok_answer).is_ok();
-        mind::println!("EFFECTOR: ACK {} completed WITH ITS MEASUREMENT {}", ack.record.id.as_str(), if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
+        mind::println!("EFFECTOR: ACK {} completed WITH ITS RESULT {}", ack.record.id.as_str(), if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
         Some(session::outcome(status, ok))
     }
 
@@ -609,6 +609,8 @@ impl Agent {
             // The server's `exec` with the command `reboot`: the gateway's restart, under the owner's `reboot on`.
             "exec_v1" => {
                 let command = self.parsed(payload.as_bytes(), |v| wire::exec_command(v).map(String::from)).ok()?;
+                // The server's health check runs its program's health command, `health` for MIND (750-EFF-0022).
+                if command.trim() == "health" { return Some(self.health(id)); }
                 if command.trim() != "reboot" { return None; }
                 match gateway::reboot(GATEWAY, &o, REBOOT_DELAY_MS) {
                     Ok(Ok(())) => { mind::println!("EFFECTOR: {}: THE MACHINE RESTARTS IN {} S", id, REBOOT_DELAY_MS / 1000); Final::Completed }
@@ -621,6 +623,25 @@ impl Agent {
             "restart_service" => service(gateway::ServiceAction::Restart),
             _ => return None,
         })
+    }
+
+    /// The health check (750-EFF-0022), from the gateway's status: healthy when the owner's policy is loaded and no boot
+    /// service is quarantined; otherwise `failed`, exit status 1, naming why. Kept until the server takes it.
+    #[inline(never)]
+    fn health(&mut self, id: &str) -> session::Final {
+        use session::{Failure, Final};
+        let Ok(s) = gateway::status(GATEWAY) else { return Final::Failed(Failure::Unsupported) };
+        let services = s.services.as_slice();
+        let running = services.iter().filter(|v| v.state == gateway::ServiceState::Running).count();
+        let quarantined: Vec<&str> = services.iter().filter(|v| v.state == gateway::ServiceState::Quarantined).map(|v| v.name.as_str()).collect();
+        let healthy = s.policy && quarantined.is_empty();
+        let mut line = alloc::format!("{}: up {} s, {} services running", if healthy { "healthy" } else { "unhealthy" }, s.uptime_ms / 1000, running);
+        if !quarantined.is_empty() { line.push_str(&alloc::format!(", quarantined: {}", quarantined.join(" "))); }
+        if !s.policy { line.push_str(", no owner's policy loaded"); }
+        let mut buf = [0u8; 1024];
+        let kept = wire::exec_result(&mut buf, if healthy { 0 } else { 1 }, &line, "exit status 1").ok().is_some_and(|json| self.keep_result(id, json));
+        mind::println!("EFFECTOR: {}: {}", id, line);
+        if kept { Final::Reported } else { Final::Failed(Failure::Io) }
     }
 
     /// `collect_logs`: `ring` (the system log) and `boot` (the last boot's log) through `open-log`, any other path
@@ -718,8 +739,14 @@ impl Agent {
             (Some(200), None) => Ok(()),
             _ => Err(Failure::Upload),
         };
-        match result.and_then(|()| match gateway::deliver_commit(GATEWAY, handle) { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) }) {
-            Ok(()) => Final::Completed,
+        match result.and_then(|()| match gateway::deliver_commit(GATEWAY, handle) { Ok(Ok(d)) => Ok(d), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) }) {
+            Ok(d) => {
+                // The answer names the file as the gateway read it back (750-EFF-0021); delivered either way.
+                let stdout = alloc::format!("delivered {} {} {}", d.path.as_str(), d.size, d.sha256.as_str());
+                let mut buf = [0u8; 1024];
+                let kept = wire::completed_result(&mut buf, &stdout).ok().is_some_and(|json| self.keep_result(id, json));
+                if kept { Final::Reported } else { Final::Completed }
+            }
             Err(f) => { let _ = gateway::close(GATEWAY, handle); Final::Failed(f) }
         }
     }
