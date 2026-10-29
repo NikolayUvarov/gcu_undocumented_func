@@ -4569,6 +4569,9 @@ def link_suite(args):
                 assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
                 assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
                 assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
+                # 800-LNK-0019: without `link-console` in data/mode.conf a script from the link is refused, `mode` always.
+                require(link(port, "sh", "msh", "/data/link/console.msh", ok=False), "refused")
+                require(link(port, "sh", "mode", ok=False), "refused")
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
@@ -4619,6 +4622,9 @@ def link_suite(args):
             require(link(port, "--address", "5", "put", str(sent)), "put ")
             require(link(port, "--address", "5", "ls"), "16384  sent.bin")
             require(vm.command("dmesg -s link", raw=True), "[LINK] ADDRESS 5 ON A SHARED LINE")
+            # 800-LNK-0015: without `dev` a shell line is refused as not allowed, and the log says why.
+            require(link(port, "--address", "5", "sh", "ps", ok=False), 'a shell line "dev"')
+            require(vm.command("dmesg -s link", raw=True), 'REFUSED, link.conf HAS NO "dev"')
             # Another address and a frame with none go unanswered: bounded by the tries.
             for other in (("--address", "6"), ()):
                 r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
@@ -4627,11 +4633,37 @@ def link_suite(args):
             require(link(port, "--address", "5", "hello"), '"MIND Core link"')
         finally:
             vm.close()
+    # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
+    # (800-APP-0108), its line logged whole; `mode` stays refused.
+    console = False
+    with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n", "data/mode.conf": b"link-console\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+            require(link(port, "hello"), '"MIND Core link"')
+            require(vm.command("dmesg -s init", raw=True), "MODE: LINK CONSOLE (data/mode.conf)")
+            script = Path(temp) / "console.msh"
+            script.write_text('#!msh\nprint("THE LINK CONSOLE RAN THIS SCRIPT")\n')
+            require(link(port, "put", str(script)), "put ")
+            ran = link(port, "sh", "msh", "/data/link/console.msh", ok=None, timeout=200)
+            if "did not answer" in ran:
+                print("SKIP: link: console: the shell does not take the link's lines yet (800-APP-0102)", flush=True)
+            else:
+                require(ran, "THE LINK CONSOLE RAN THIS SCRIPT")
+                assert re.search(r"\[LINK\] COMMAND \d+: msh /data/link/console\.msh", vm.command("dmesg -s link", raw=True)), "the whole line is logged"
+                require(vm.command("dmesg -s shell", raw=True), "[SHELL] FOR THE LINK'S CONSOLE THE SHELL RAN MSH")
+                require(link(port, "sh", "mode", ok=False), "refused")
+                console = True
+        finally:
+            vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
           "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again; "
-          "with address=5 in link.conf it answered only frames to address 5", flush=True)
+          "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line"
+          + ("; with link-console a script put over the link ran as the console's, refused without it, mode refused in both" if console else ""), flush=True)
 
 
 def modes_suite(args):
@@ -4805,18 +4837,19 @@ def gateway_stub_check(args):
         try:
             def stub(line, timeout=60):
                 for _ in range(timeout):
-                    out = vm.command("dmesg -s effector_gw", raw=True)
+                    # Both starts' lines, about 11 KB: aarch64's console under TCG printed 8.9 KB in 8 s (round 41).
+                    out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
                     if line in out:
                         return out
                     time.sleep(1)
-                raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
+                raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True, timeout=60)[-1500:]))
             stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
                  "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             stub("[GATEWAY-STUB] APPS SCOPE: WRITE OK, READ BACK OK, REMOVE OK, OUTSIDE REFUSED")  # 750-KRN-0169
             stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
             stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link.conf (800-KRN-0155)
-            refusals = vm.command("dmesg -s init", raw=True)
+            refusals = vm.command("dmesg -s init", raw=True, timeout=60)
             for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"RUN REFUSED: PID \d+ \(BADGE 6\) MAY NOT RUN sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
@@ -4836,7 +4869,7 @@ def gateway_stub_check(args):
                 pixel = screen[at:at + 3]
                 if not seen or seen[-1] != pixel:
                     seen.append(pixel)
-                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True).rpartition("SCOPE START 2")[2]:
+                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True, timeout=60).rpartition("SCOPE START 2")[2]:
                     break
                 time.sleep(.3)
             time.sleep(4)
@@ -4876,7 +4909,7 @@ def gateway_stub_check(args):
             require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT AND LINK CONSOLE (data/mode.conf)")
             # The first start's files were written before the reboot, and its request was taken away before it asked.
             for _ in range(60):
-                out = vm.command("dmesg -s effector_gw", raw=True)
+                out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
                 if "[GATEWAY-STUB] REBOOT NOT ASKED" in out:
                     break
                 time.sleep(1)
@@ -4982,7 +5015,7 @@ def services_config_check(args):
     bootloader the file is not read, every service starts and `configuration` says `ignored`."""
     def plan_of(vm, source="READ"):
         for _ in range(90):
-            out = vm.command("dmesg -s effector_gw", raw=True)
+            out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
             if "[GATEWAY-STUB] PLAN END" in out:
                 break
             time.sleep(1)

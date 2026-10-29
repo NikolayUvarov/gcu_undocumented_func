@@ -1,0 +1,34 @@
+# 700-DRV-0044 — `usb_host`'s table of client buffers sized by the highest badge — done
+
+**Type:** driver · **Owner:** `DRV` · **Priority:** P0 (it blocked 700-KRN-0176) · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [700](../issues/700-bluetooth.md) · **Constitution:** MC-3.3, MC-12.1
+
+## Problem
+
+`KRN`'s request (`issues/requests-DRV.md`, 2026-10-28; `DRV/2026-10-28T0502Z-KRN-usb-host-panics-at-bt-hcis-attach.md`):
+- **What happened.** With `bt_hci` in the boot images (700-KRN-0176), `usb_host` panicked at its attach: `index out of bounds: the len is 5 but the index is 5`.
+  - `init` restarted it, and the next attach panicked it again.
+  - Keyboards stopped, and the `usb` suite failed.
+- **The cause.** `Host::buffers` had 5 entries, for badges 0 to 4, and is indexed by the client's badge. 700-DRV-0043 made `BADGE_BLUETOOTH` 5, and `known()` accepted it.
+
+## Plan
+
+- **`libmind/src/usb.rs`:**
+  - `ALL_BADGES` lists every class driver's badge;
+  - `known()` is a lookup in that list;
+  - `BADGES`, one past the highest, is computed from it, so a new badge added to the list sizes every table indexed by badge.
+- **`usb_host`:**
+  - `Host::buffers` has `BADGES` entries;
+  - a bulk OUT's source buffer is looked up with `get`, like every other use of the table.
+
+## Acceptance criteria
+
+- [x] `usb_host` builds for x86 and aarch64.
+- [x] The `usb` and `keys` QEMU suites pass on x86 with 4 CPUs, on the kernel track's branch with `bt_hci`'s boot image (eb3abb26 with this change): no panic, and `bt_hci` starts and waits.
+
+## Resolution
+
+Done on 2026-10-29 by the `DRV` track.
+- **The change** is in `libmind/src/usb.rs` and `usb_host/src/main.rs`, as planned.
+- **The test run:** `02_build.sh`, then `tests/qemu_smoke.py --cpus 4 --suites usb,keys`, on 700-KRN-0176's tree (`claude/youthful-mendel-mf1soy` eb3abb26) with this change applied. Both suites pass. The VM log has `[INIT] STARTED bt_hci` and no panic.
+- **Not run:** aarch64's QEMU suites with `bt_hci`. That is 700-KRN-0176's run once its image is back.
+- **The request** is taken out of `issues/requests-DRV.md`.
