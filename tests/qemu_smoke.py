@@ -165,8 +165,14 @@ class VM:
             time.sleep(wait)
 
     def services(self):
-        # Real service PIDs from the ps table (the harness does not translate its rows).
-        return {name: int(pid) for pid, name in re.findall(r"^(\d+) ([\w#-]+) ", self.command("ps", raw=True), re.M) if name in SERVICES}
+        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one.
+        found, live = {}, set()
+        for pid, name, state in re.findall(r"^(\d+) ([\w#-]+) (\S+)", self.command("ps", raw=True), re.M):
+            if name in SERVICES and (state != "EXITED" or name not in live):
+                found[name] = int(pid)
+                if state != "EXITED":
+                    live.add(name)
+        return found
 
     def service_logs(self, name, until=None):
         # Service log; with `until`, wait for the line (drivers initialize in parallel with the test).
