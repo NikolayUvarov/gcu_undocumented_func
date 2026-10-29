@@ -1,0 +1,15 @@
+[package]
+name = "nnpkg"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "nnd's checks of nrl.model/0 packages, its runtime views and its clients' state (262-APP-0112)"
+
+[dependencies]
+nrl-core = { path = "../nrl/crates/nrl-core" }
+nrl-repr = { path = "../nrl/crates/nrl-repr" }
+nrl-runtime = { path = "../nrl/crates/nrl-runtime" }
+zmij = { version = "=1.0.23", default-features = false } # the float text of NRL's writer, nrl.serde-json-pretty-object/0
+
+[dev-dependencies]
+serde_json = { version = "=1.0.151", features = ["float_roundtrip"] } # the writer the encoders are checked against
