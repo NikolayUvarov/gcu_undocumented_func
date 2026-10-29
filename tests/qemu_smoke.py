@@ -4268,6 +4268,11 @@ def lifecycle_check(vm):
     require(vm.command("svc stop shell"), "svc: stop shell: init and the shell cannot be stopped")
     require(vm.command("svc stop init"), "svc: stop init: init and the shell cannot be stopped")
     require(vm.command("svc stop tts"), "tts stopped")
+    # init answers once it stopped tts; ps may list it as EXITED until init has reaped it.
+    for _ in range(25):
+        if "tts" not in vm.services():
+            break
+        time.sleep(.2)
     assert "tts" not in vm.services()
     require(vm.command("svc stop tts"), "svc: stop tts: it does not run")
     require(vm.command("svc start tts"), "tts started: PID")
