@@ -13,7 +13,7 @@ use mind::idl::{blockstore, parse};
 use mind::ipc::Endpoint;
 use mind::sha256::Sha256;
 
-use crate::{report, Remote, STORE};
+use crate::{report, store, Remote};
 
 const PARSE: Endpoint = Endpoint(SLOT_PARSE);
 /// The most a model's files and its header may be.
@@ -145,8 +145,8 @@ fn import(only: Option<&str>, builder: &mut Builder, data: &mut [u8; CHUNK], rem
         let mut name = Out { buf: &mut [0u8; 64], len: 0 };
         if core::fmt::Write::write_fmt(&mut name, format_args!("models/{}", id)).is_err() { mind::println!("blocks: models: {}: the id is too long for a name", id); return; }
         let name = core::str::from_utf8(&name.buf[..name.len]).unwrap_or("");
-        let expected = match blockstore::resolve(STORE, name) { Ok(Ok(head)) => head.version, _ => 0 };
-        match blockstore::publish(STORE, name, expected, &root.to_bytes()) {
+        let expected = match blockstore::resolve(store(), name) { Ok(Ok(head)) => head.version, _ => 0 };
+        match blockstore::publish(store(), name, expected, &root.to_bytes()) {
             Ok(Ok(done)) => mind::println!("IMPORTED {}: {} FILES, {} BYTES, OBJECT {} ({} BYTES) AS {} VERSION {} ({})", id, n, bytes, root, size, name, done.version, mind::blockstore::class(done.durability as u8)),
             Ok(Err(e)) => { mind::println!("blocks: models: publish {}: {:?}", name, e); return; }
             Err(e) => { mind::println!("blocks: models: the store does not answer: {:?}", e); return; }
@@ -161,7 +161,7 @@ fn get(id: &str, path: &str, dest: &str, buffer: &mut [u8; CHUNK], data: &mut [u
     let mut name = Out { buf: &mut [0u8; 64], len: 0 };
     if core::fmt::Write::write_fmt(&mut name, format_args!("models/{}", id)).is_err() { return; }
     let name = core::str::from_utf8(&name.buf[..name.len]).unwrap_or("");
-    let root = match blockstore::resolve(STORE, name) {
+    let root = match blockstore::resolve(store(), name) {
         Ok(Ok(head)) => match Cid::from_bytes(head.root.as_slice()) { Ok(root) => root, Err(_) => { mind::println!("blocks: models: {} has no root", name); return } },
         Ok(Err(e)) => { mind::println!("blocks: models: {}: {:?}", name, e); return; }
         Err(e) => { mind::println!("blocks: models: the store does not answer: {:?}", e); return; }
