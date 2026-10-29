@@ -39,13 +39,13 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
 
 ## Progress (2026-10-29)
 
-- **Built** on the storage branch (86f68750), on top of 308-STO-0023's layout 4, so it lands with it, after [308-KRN-0184](308-KRN-0184-blockstore-badges-its-own-clients.md).
+- **Built** on the storage branch (86f68750), on top of 308-STO-0023's layout 4, so it lands with it, after [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done).
 - **A step** ends at the end of the record or the 33-sector window it is in, so a step covers about 256 sectors rather than at most 256.
 - **A whole pass on request** keeps every other client waiting too, as a collection does: requests are served one at a time.
 - **Tested:**
   - host tests, all four criteria; the test of a record written around the scrub reads 2 damaged sectors without the move;
-  - QEMU `store` and `storefaults` on x86, in this session's container;
-  - aarch64: not yet, as the landing gate held the remote machines.
+  - QEMU `store`, `storefaults`, `boot` and `vfs` on x86, in this session's container;
+  - QEMU `store`, `storefaults` and `vfs` on aarch64, on `i9_4e6882212251` through Effector (08155086).
 - **Not tested on the platform:** the scrub between requests, whose first pass starts a day after the mount.
 
 ## Related

@@ -1,6 +1,6 @@
-# 308-KRN-0184 — `blockstore` holds its endpoint with the badge right, to mint its domains' clients
+# 308-KRN-0184 — `blockstore` holds its endpoint with the badge right, to mint its domains' clients — done
 
-**Type:** `init` (grants) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [308](308-encryption-at-rest.md) (STO's), for [308-STO-0023](308-STO-0023-memory-domains.md) · **Constitution:** MC-3.1, MC-3.4, MC-12.4
+**Type:** `init` (grants) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [308](../issues/308-encryption-at-rest.md) (STO's), for [308-STO-0023](../issues/308-STO-0023-memory-domains.md) · **Constitution:** MC-3.1, MC-3.4, MC-12.4
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-29, "The block store's own endpoint with the badge right (STO, for 308-STO-0023)".
 
@@ -20,6 +20,13 @@
 - **Builds** x86 and aarch64; the `services` and `store` suites pass with the grant.
 - **The storage track's checks of domains pass** once its branch lands (`claude/relaxed-meitner-5bmhpz`): the `store` suite on aarch64, where RNDR gives the key, and the `boot` suite's store disk on x86 with `+rdrand`, a domain forgotten across a reboot.
 
+## Resolution
+
+In `main` at 3e07edb8 (landing round 43, the request's commit a26c6b4d), in the same round as STO's 308-STO-0023 (a43448d1), which needed it:
+- `init` grants `blockstore` its endpoint with `ALL | CAP_BADGE`; `docs/profile/bootstrap.md`'s row says the store mints its memory domains' clients from badge 0x100 up.
+- **Builds** x86 and aarch64, and the `services` and `store` suites: in this container (x86 `store`, `services`; aarch64 `store`) and in round 43's gate.
+- **The storage track's domain checks** passed in round 43's gate, every group of `scripts/ci_local.sh --list` on the candidate's tree: the aarch64 `store` suite's memory domains with keys from RNDR ("aarch64: files, network and TLS") and the x86 `boot` suite's store disk with `+rdrand`, a domain forgotten across a reboot ("x86: boot, display, network, TLS, shell, memory, clock").
+
 ## Related
 
-[308-STO-0023](308-STO-0023-memory-domains.md), [308-KRN-0183](308-KRN-0183-a-secrets-client-for-blockstore.md) (the store's other grant from `init`).
+[308-STO-0023](../issues/308-STO-0023-memory-domains.md), [308-KRN-0183](../issues/308-KRN-0183-a-secrets-client-for-blockstore.md) (the store's other grant from `init`).
