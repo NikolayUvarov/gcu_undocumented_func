@@ -288,9 +288,11 @@ BUILDS = {"x86": ["build (x86)", "build (x86 test programs)"], "aarch64": ["buil
 # runs (docs/effector.md, section 1): the host part only on un-rizen (sshd and Python 3.11 for the host tests and the
 # models), aarch64 nowhere on i9 (WSL2), x86 nowhere on PCU (it gates aarch64 alone).
 POOL_PARTS = {"i9": {"x86"}, "rz": {"host", "x86", "aarch64"}, "acc1": {"x86", "aarch64"}, "acc2": {"x86", "aarch64"}, "pcu": {"aarch64"}}
-POOLS = {  # un-rizen's three clones ran its lanes in rounds 34 to 39 ("i9-on-rz")
-    "pool": ["i9", "acc1", "acc2", "rz", "rz-2", "rz-3", "pcu"],
-    "pool-no-i9": ["acc1", "acc2", "rz", "rz-2", "rz-3", "pcu"],
+# Two lanes on un-rizen: with a third, round 44's kbench measured a call and reply at 7 ms against its 1 ms limit, and
+# the groups there ran a third longer than alone.
+POOLS = {
+    "pool": ["i9", "acc1", "acc2", "rz", "rz-2", "pcu"],
+    "pool-no-i9": ["acc1", "acc2", "rz", "rz-2", "pcu"],
 }
 BUILT_BY = {"host": "x86", "x86": "x86", "aarch64": "aarch64"}  # the image a part's groups read
 # A clean build of each image (and the x86 test programs), round 43; a machine not named here takes un-rizen's.
@@ -333,8 +335,7 @@ def estimates(work, expected):
 
 def pick(queue, lane, ready, seconds, broken=()):
     """The (part, group) `lane` takes next from `queue`: the longest it can run, so the long groups start first and the
-    short ones fill the ends (in simulation this beat preferring a part already built: 49 minutes against 52 with seven
-    lanes). An image whose build failed on the lane (`broken`) leaves its groups to the other lanes."""
+    short ones fill the ends (in simulation this beat preferring a part already built, by 2 to 3 minutes). An image whose build failed on the lane (`broken`) leaves its groups to the other lanes."""
     parts = POOL_PARTS[lane.split("-")[0]]
     able = [entry for entry in queue if entry[0] in parts and BUILT_BY[entry[0]] not in broken]
     return max(able, key=lambda e: (seconds.get(e[1], DEFAULT_SECONDS), e[1]), default=None)
