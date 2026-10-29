@@ -551,6 +551,11 @@ impl Init {
                 // Its own disk when there is one, else the RAM disk whose contents never outlive the boot (300-KRN-0025).
                 let disk = match self.store_disk() { Some(disk) => disk, None if self.running(service_index("ramdisk#1")) => "ramdisk#1", None => return Err(Error::NotFound) };
                 grants.add(SLOT_DEV0, self.badged(&mut minted, disk, mind::block::BADGE_WRITE)?, CLIENT);
+                // keystore's client for its own secrets, its volume keys (308-STO-0022), badged so that keystore answers
+                // it about the store's secrets alone (keystore.wit 1.5, 308-KRN-0183). Without keystore it keeps a key
+                // in the clear, and says so; keystore never needs the store.
+                if self.present("keystore") { grants.add(3, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_BLOCKSTORE)?, CLIENT); }
+                else { mind::println!("[INIT] BLOCKSTORE STARTS WITHOUT ITS SECRETS CLIENT: KEYSTORE DOES NOT RUN (MC-6.8)"); }
             }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
@@ -1505,10 +1510,10 @@ fn private_dir_of(name: &str) -> Option<(u16, &'static str)> {
     }
 }
 
-// Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
-// instances of an image follow its first one.
+// Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell) but for
+// services::LATE (blockstore after keystore); further instances of an image follow its first one.
 fn boot_order() -> impl Iterator<Item = usize> {
-    (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)))
+    services::start_images(&BOOT_SERVICES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)))
 }
 
 

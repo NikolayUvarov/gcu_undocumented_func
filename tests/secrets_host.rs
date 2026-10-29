@@ -1,11 +1,12 @@
 //! Host tests of a program's secrets as keystore keeps them before sealing (keystore/src/secret_file.rs, 000-NET-0045):
 //! the record read back as written, a name or value refused, the limits of count and bytes, and records the decoder
-//! refuses (cut short, a name twice, bytes after the end).
+//! refuses (cut short, a name twice, bytes after the end); and a boot service's secrets apart from every program's
+//! (1.5, 308-KRN-0183).
 extern crate alloc;
 #[path = "../keystore/src/secret_file.rs"]
 mod secret_file;
 
-use secret_file::{program_ok, Refused, Secrets, BYTES_MAX, NAME_MAX, PROGRAM_MAX, SECRETS, VALUE_MAX};
+use secret_file::{program_ok, Kind, Refused, Secrets, BYTES_MAX, NAME_MAX, PROGRAM_MAX, SECRETS, VALUE_MAX};
 
 #[test]
 fn a_record_reads_back_as_written() {
@@ -73,4 +74,20 @@ fn records_the_decoder_refuses() {
     assert_eq!(Secrets::decode(&empty).err(), Some(Refused::Damaged), "an empty value");
     let bad_name = [&[1u8, 1][..], b" ", &[1, 0], b"x"].concat();
     assert_eq!(Secrets::decode(&bad_name).err(), Some(Refused::Damaged), "a name refused");
+}
+
+#[test]
+fn a_services_secrets_never_meet_a_programs() {
+    // The program `blockstore` and the service `blockstore`: other directories, other labels, so other keys.
+    let seed = [7u8; 32];
+    assert_eq!((Kind::Program.dir(), Kind::Service.dir()), ("system/keystore/secrets", "system/keystore/services"));
+    assert!(!Kind::Service.dir().starts_with(&format!("{}/", Kind::Program.dir())) && !Kind::Program.dir().starts_with(&format!("{}/", Kind::Service.dir())));
+    assert_ne!(Kind::Program.label(), Kind::Service.label());
+    assert_ne!(Kind::Program.key_material(&seed, "blockstore"), Kind::Service.key_material(&seed, "blockstore"));
+    // A program's key is as 1.4 made it, so the files kept before still open.
+    assert_eq!(Kind::Program.key_material(&seed, "netcheck"), [&b"MIND keystore: a program's secrets\0"[..], &seed, b"netcheck"].concat());
+    // Neither label is the other's start, so no name makes one kind's material the other's.
+    let (a, b) = (Kind::Program.label(), Kind::Service.label());
+    assert!(!a.starts_with(b) && !b.starts_with(a));
+    assert!(program_ok(b"blockstore"));
 }

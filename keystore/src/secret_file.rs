@@ -1,6 +1,6 @@
-// A program's secrets as the key service keeps them (idl/keystore.wit 1.4, 000-NET-0045), before they are sealed: a
-// count, then each secret's name (its length, then its bytes) and value (its length, two bytes little-endian, then its
-// bytes), in the order they were first kept. secrets.rs seals this under the program's key; tests/secrets_host.rs
+// A program's or a boot service's secrets as the key service keeps them (idl/keystore.wit 1.4, 1.5), before they are
+// sealed: a count, then each secret's name (its length, then its bytes) and value (its length, two bytes little-endian,
+// then its bytes), in the order they were first kept. secrets.rs seals this under its owner's key; tests/secrets_host.rs
 // checks it on the host.
 use alloc::vec::Vec;
 
@@ -19,6 +19,18 @@ pub const PLAIN_MAX: usize = 1 + SECRETS * 3 + BYTES_MAX;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Refused { Name, Value, Full, Damaged }
+
+/// Whose secrets a file holds: a program's, by the name the loader gave its client, or a boot service's, by the badge
+/// init lent it (1.5, 308-KRN-0183). The two never meet: each has its directory and its key's label.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Kind { Program, Service }
+
+impl Kind {
+    pub fn dir(self) -> &'static str { match self { Self::Program => "system/keystore/secrets", Self::Service => "system/keystore/services" } }
+    pub fn label(self) -> &'static [u8] { match self { Self::Program => b"MIND keystore: a program's secrets\0", Self::Service => b"MIND keystore: a service's secrets\0" } }
+    /// What the file's key is the SHA-256 of: the label, the device key's seed and the name; the caller wipes it.
+    pub fn key_material(self, seed: &[u8; 32], name: &str) -> Vec<u8> { [self.label(), seed, name.as_bytes()].concat() }
+}
 
 pub fn name_ok(name: &[u8]) -> bool { (1..=NAME_MAX).contains(&name.len()) && name.iter().all(|&b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) }
 
