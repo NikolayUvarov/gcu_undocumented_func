@@ -22,6 +22,7 @@ const WORKERS_QUOTA: u16 = 255; // the task quota of a program named there: the 
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;
 const OWN_DIRS: usize = 7; // vfs_server's client badged BADGE_OWNERS: it alone opens system/own/ (000-KRN-0170)
 const OWN_ROOT: &str = "system/own"; // the programs' own directories, one by name
+const OWN_SECRETS: usize = 8; // keystore's client badged BADGE_KEY_LOADER: it asks for each program's secrets client (000-KRN-0182)
 const MAX_IMAGE: usize = 4 * 1024 * 1024;
 // Helpers (1.8, 109-KRN-0096): programs that serve one caller and hold nothing but its endpoint.
 const HELPER_MEMORY_MIB: u16 = 2;
@@ -191,7 +192,11 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
     // A program that asks for it (REQUEST_OWN), run by its name (the booted slot's or the root's) or installed in
     // data/apps/, owns system/own/<name>/; one run by any other path has no identity to own one by (000-KRN-0170).
     let asks = flags & mind::process::REQUEST_OWN != 0;
-    let own = if asks && (!name.contains(&b'/') || app.is_some()) { own_dir(task.as_str()) } else { None };    let cap = image.share()?;
+    let named = !name.contains(&b'/') || app.is_some();
+    let own = if asks && named { own_dir(task.as_str()) } else { None };
+    // So is a client of its own secrets in keystore (REQUEST_SECRETS, 000-KRN-0182).
+    let secrets = if flags & mind::process::REQUEST_SECRETS != 0 && named { secrets_client(task.as_str()) } else { None };
+    let cap = image.share()?;
     let client = CAP_WRITE | CAP_GRANT;
     let mut grants = [Grant::default(); SPAWN_GRANTS_MAX];
     let standard = [grant(SLOT_RTC, OWN_RTC, client), grant(SLOT_VFS, OWN_VFS, client), grant(SLOT_AUDIO, OWN_AUDIO, client),
@@ -203,6 +208,7 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
     // so what it prints reaches the system log and this boot's log file.
     if debug_mode() && !extra.iter().any(|&(child, _)| child as usize == SLOT_LOG) && count < grants.len() { grants[count] = grant(SLOT_LOG, SLOT_LOG, client); count += 1; }
     if let Some((handle, _)) = own.filter(|_| count < grants.len()) { grants[count] = grant_moved(SLOT_OWN, handle, u8::MAX); count += 1; }
+    if let Some((handle, _)) = secrets.filter(|_| count < grants.len()) { grants[count] = grant_moved(SLOT_SECRETS, handle, u8::MAX); count += 1; }
     // SPAWN takes `name\0arguments`.
     let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
     let args = &args[..args.len().min(ARGS_MAX)];
@@ -244,7 +250,34 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
             Err(_) => { let _ = ipc::drop_cap(handle); }
         }
     }
+    // The secrets client is the program's alone too, from its start.
+    if let Some((handle, badge)) = secrets {
+        match result {
+            Ok((pid, _)) => { if !matches!(mind::idl::keystore::secrets_adopt(Endpoint(OWN_SECRETS), badge, pid), Ok(Ok(()))) { mind::println!("[LOADER] {}: ITS SECRETS CLIENT NOT KEPT FOR PID {}", task.as_str(), pid); } }
+            Err(_) => { let _ = ipc::drop_cap(handle); }
+        }
+    }
     result
+}
+
+// A client of keystore for program `task`'s secrets, named for it, and its badge; None (logged) when keystore refuses.
+fn secrets_client(task: &str) -> Option<(usize, u16)> {
+    use mind::idl::keystore;
+    let keys = Endpoint(OWN_SECRETS);
+    let mut why = FixedBuf::<48>::new();
+    let made = (|| -> Option<(usize, u16)> {
+        match keystore::secrets_client(keys, RECEIVED_CAP) { Ok(Ok(())) => {} other => { let _ = write!(why, "THE CLIENT: {:?}", other); return None; } }
+        let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0);
+        let _ = ipc::drop_cap(RECEIVED_CAP);
+        let Ok(handle) = handle else { let _ = write!(why, "NO SLOT"); return None };
+        let badge = mind::dev::cap_info(handle).1 as u16;
+        match keystore::secrets_name(keys, badge, task) {
+            Ok(Ok(())) => Some((handle, badge)),
+            other => { let _ = ipc::drop_cap(handle); let _ = write!(why, "ITS NAME: {:?}", other); None }
+        }
+    })();
+    if made.is_none() { mind::println!("[LOADER] {}: NO SECRETS CLIENT ({})", task, why.as_str()); }
+    made
 }
 
 // A writable scope of system/own/<task>/, made if missing, and its badge; None (logged) when vfs_server refuses.

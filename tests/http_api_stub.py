@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """A stand-in for the APIs MIND Core's clients talk to (000-NET-0047), over HTTPS with the suites' test certificates:
 a JSON POST, a multipart upload, redirect chains, gzip and deflate bodies and a bomb, a stream of Server-Sent Events, a
-chunked upload, and Retry-After in both forms. `webcheck --api` checks each (tests/qemu_smoke.py, `api_runs`).
+chunked upload, and Retry-After in both forms. `webcheck --api` checks each (tests/qemu_smoke.py, `api_runs`). For `get`
+(000-NET-0048, `get_runs`): an echo of the request, a redirect to the same host and to another, and a slow answer.
 
 The bodies the guest decodes and the events it reads are made here from fixed rules, so the suite knows what to expect.
 """
@@ -14,6 +15,7 @@ import json
 import socketserver
 import ssl
 import threading
+import time
 import zlib
 
 # What /api/gzip and /api/deflate send, decoded: the suite compares the guest's SHA-256 with this.
@@ -50,9 +52,20 @@ class Api(http.server.BaseHTTPRequestHandler):
                 self.rfile.readline()
         return self.rfile.read(int(self.headers.get("Content-Length", 0)))
 
+    def _echo(self, data):
+        # What arrived: the method, the headers `get` sets or must not carry on, and the body's length and SHA-256.
+        self._json(200, {"method": self.command, "authorization": self.headers.get("Authorization"), "type": self.headers.get("Content-Type"),
+                         "token": self.headers.get("X-Token"), "length": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+
+    def do_PUT(self):
+        data = self._body()
+        self._echo(data) if self.path == "/api/echo" else self._send(404)
+
     def do_POST(self):
         data = self._body()
-        if self.path == "/api/chat":
+        if self.path == "/api/echo":
+            self._echo(data)
+        elif self.path == "/api/chat":
             request = json.loads(data)
             self._json(200, {"model": request.get("model"), "content": request["messages"][0]["content"][::-1], "bytes": len(data)})
         elif self.path == "/api/upload":
@@ -83,6 +96,16 @@ class Api(http.server.BaseHTTPRequestHandler):
             status = (301, 302, 307, 308)[left % 4]
             target = f"{left - 1}" if left > 1 else "/api/final"  # relative to /api/r/, then an absolute path
             self._send(status, b"moved", [("Location", target)])
+        elif path == "/api/echo":
+            self._echo(b"")
+        elif path == "/api/hop":
+            self._send(302, b"", [("Location", "/api/echo")])
+        elif path == "/api/elsewhere":
+            # Another host for the redirect rules: the stub at the port the query names.
+            self._send(302, b"", [("Location", f"https://10.0.2.2:{int(query)}/api/echo")])
+        elif path == "/api/slow":
+            time.sleep(8)
+            self._send(200, b"late")
         elif path == "/api/final":
             self._send(200, b"the end " + query.encode(), [("Content-Type", "text/plain")])
         elif path == "/api/loop":
