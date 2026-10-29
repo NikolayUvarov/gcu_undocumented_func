@@ -1,6 +1,6 @@
 # 000-APP-0049 — The network traffic on `wm`'s background
 
-**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open: in `main` since 835c31c8 (2026-10-20); the line moving while `ping` runs in the shell's window is checked (2026-10-29); the graph over the last minute is left · **Blocked by:** — (`REQUEST_NET_COUNTERS` and `SLOT_NET` with `CAP_BADGE`: ABI 10, 000-KRN-0109; the client: [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), `net.wit` 1.3) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open: in `main` since 835c31c8 (2026-10-20); the line moving while `ping` runs in the shell's window is checked (2026-10-29); the graph over the last minute is on the tools branch (2026-10-29) · **Blocked by:** — (`REQUEST_NET_COUNTERS` and `SLOT_NET` with `CAP_BADGE`: ABI 10, 000-KRN-0109; the client: [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), `net.wit` 1.3) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 Split from [000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done) on 2026-10-10: the background's `show = net` is there and says "NET: NO COUNTERS".
 
@@ -42,6 +42,15 @@ A card's counters (`net.wit` `counters`) are reached only through a full client 
   - **No sample while the shell is busy.** A command running in the shell, such as `ping`, stops it answering, and the sample after it spread its frames over the whole wait: five over six seconds made 0/S. The card client the shell lends (`BADGE_COUNTERS`) now stands in while the shell is quiet. It reaches the driver itself, and each source keeps its own last sample. The first rate in the log is still the shell's when the shell gives one.
 - **Passed:** the x86 `net` suite under QEMU TCG with 4 CPUs, in this session's container. The aarch64 run is recorded with the landing request.
 - **Left:** the graph over the last minute, and its scale's host test.
+
+## Progress (2026-10-29): the graph over the last minute
+
+- **What it draws** (`wm/src/background.rs`, the digits' face): under the NET line, a graph as wide as the CPU's, a bar for each of the last 60 samples, one a second, newest at the right. The frames received go up from its middle line and the frames sent go down from it.
+- **Its scale** (`net_scale`): the minute's largest rate either way, rounded up to 1, 2 or 5 times a power of ten, 1 frame a second at least. A line under the graph names it: `↑IN ↓OUT 0–5/S, 1 MIN`.
+- **Its samples** (`net_rates`): thousandths of frames a second between two samples of a source, so a ping a second over samples a little more than a second apart still shows. `wm` keeps a minute of them (`Backdrop::traffic_sample`) and drops them when it has no counters.
+- **The analog face** keeps the line alone.
+- **Host test:** `tests/wm_host.rs`, `the_net_graph_shows_the_last_minute_both_ways`. It covers the rates from two samples, the scale's steps, its line, and the bars: full and half heights both ways, the middle line, and nothing drawn outside the block.
+- **Left:** the landing in `main`; then this issue closes.
 
 ## Related
 
