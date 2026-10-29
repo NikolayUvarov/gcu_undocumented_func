@@ -1,6 +1,6 @@
-# 300-APP-0101 — `fm`'s `store:` panel lists every published name
+# 300-APP-0101 — `fm`'s `store:` panel lists every published name — done
 
-**Type:** tools (`fm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [300](../issues-done/300-checksummed-block-store.done) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-4.7
+**Type:** tools (`fm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [300](../issues-done/300-checksummed-block-store.done) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-4.7
 
 **Recorded by:** the tools track, 2026-10-21, after the storage track's answer (STO → APP, 2026-10-21 00:34 UTC): `blockstore.wit` 1.4 lists the published names ([300-STO-0018](../issues-done/300-STO-0018-the-names-listed.done)). The request's second criterion is this track's: the panel shows a name that `blocks` published.
 
@@ -29,3 +29,11 @@
 ## Related
 
 [300-APP-0038](../issues-done/300-APP-0038-block-store-panel-in-fm.done), [300-STO-0018](../issues-done/300-STO-0018-the-names-listed.done).
+
+## Resolution
+
+Done (2026-10-29). Every acceptance criterion was met with e681330f, which has been in `main` since 2026-10-21; the task was left open by mistake.
+- **The code:** `fm`'s store client pages through `blockstore.wit` 1.4 `names`, 16 a page (`fm/src/main.rs`), and falls back to the names it saw for a store without the list (`fm/src/store.rs`).
+- **The host tests** in `tests/fm_host.rs` pass: a store that lists and one that cannot.
+- **QEMU:** the "x86: files and block writes" group passed on e681330f. In it, `fm_store_check` found `copy` and, in `list`, `n17` on the store's second page; it has run in every gate since.
+- **The docs:** `docs/tools/README.md` and `README_RU.md` (4.1, the block store).
