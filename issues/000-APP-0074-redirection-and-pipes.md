@@ -89,10 +89,10 @@
   - the `find`/`grep` check:
     - `cat | grep | grep -c`, `ps | grep shell | grep -c shell`;
     - `grep hello < ram:a.txt`;
-    - `sha256 < tlsroots.pem` and `cat tlsroots.pem | sha256` against `sha256 tlsroots.pem`: 195 KiB whole through `<` and through `|`;
+    - `sha256 < docs/pipe.txt` and `cat docs/pipe.txt | sha256` against `sha256 docs/pipe.txt` and the host's digest: 156 KiB whole through `<` and through `|`; `grep -c` counts its 2048 lines through `<`;
     - the refusals.
 
-  `tlsroots.pem` stands in for `log:boot0001.log` in the stage 2 criterion: a log being written could change between two reads.
+  `docs/pipe.txt`, which the `tools` suite puts on its disk, stands in for `log:boot0001.log` in the stage 2 criterion: a log being written could change between two reads.
 - **Left:** the MacBook Pro's `dmesg -s battery > data/battery.txt`, the maintainer's run on the machine.
 
 ## Related

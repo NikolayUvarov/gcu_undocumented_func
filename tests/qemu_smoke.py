@@ -1613,6 +1613,7 @@ def msh_check(vm):
           "statements at the prompt keep variables and functions; --check and parse errors with line and column; a script from ram: asks first; Ctrl+Z stops a loop", flush=True)
 
 
+PIPE_TEXT = "".join(f"pipe line {i:05}: {'abcdefghij' * 6}\n" for i in range(2048))  # 156 KiB
 NOTES = "".join(f"Строка {i}: съешь же ещё этих мягких французских булок, да выпей чаю. Line {i}.\n" for i in range(1, 301))
 
 
@@ -2484,13 +2485,14 @@ def search_check(vm):
     assert piped("cat ram:a.txt | grep hello | grep -c world") == ["1"]
     assert piped("ps | grep shell | grep -c shell") == [str(len(found))], found
     require(vm.command("ps | grep shell | ls"), "| FEEDS A PROGRAM (GREP …), NOT THE SHELL'S LS")
-    # `<`: a file, from the current directory, as a program's text input; 195 KiB of it arrive whole, through `|` too.
+    # `<`: a file, from the current directory, as a program's text input; 156 KiB of it arrive whole, through `|` too.
     assert lines(vm.command("grep hello < ram:a.txt")) == ["hello world"]
     digest = lambda line: re.findall(r"^([0-9a-f]{64})  (\S+)", vm.command(line, raw=True, timeout=60), re.M)
-    whole = digest("sha256 tlsroots.pem")
-    assert len(whole) == 1 and whole[0][1] == "tlsroots.pem", whole
-    assert digest("sha256 < tlsroots.pem") == [(whole[0][0], "-")]
-    assert digest("cat tlsroots.pem | sha256") == [(whole[0][0], "-")]
+    expected = hashlib.sha256(PIPE_TEXT.encode()).hexdigest()
+    assert digest("sha256 docs/pipe.txt") == [(expected, "docs/pipe.txt")]
+    assert digest("sha256 < docs/pipe.txt") == [(expected, "-")]
+    assert digest("cat docs/pipe.txt | sha256") == [(expected, "-")]
+    assert lines(vm.command("grep -c line < docs/pipe.txt", timeout=30)) == ["2048"]
     assert digest("sha256 < ram:a.txt") == [(digest("sha256 ram:a.txt")[0][0], "-")]
     require(vm.command("sha256"), "USAGE: SHA256")
     require(vm.command("cat < ram:a.txt"), "< FEEDS A PROGRAM (GREP …), NOT THE SHELL'S CAT")
@@ -2502,7 +2504,7 @@ def search_check(vm):
     require(utf8("rm ram:docs/заметки.txt"), "OK")
     require(vm.command("rm ram:docs"), "OK")
     print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file; "
-          "a shell command's output piped into grep, through several | too; a file given to grep and sha256 with <, 195 KiB of it whole, and through |", flush=True)
+          "a shell command's output piped into grep, through several | too; a file given to grep and sha256 with <, 156 KiB of it whole, and through |", flush=True)
 
 
 def busy_suite(vm):
@@ -11265,6 +11267,8 @@ def main():
                 (disk / "capsobs.elf").write_bytes(elf)
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
+                # 156 KiB of text for `<` and `|` (000-APP-0074).
+                (disk / "docs/pipe.txt").write_text(PIPE_TEXT)
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite == "isolation":
