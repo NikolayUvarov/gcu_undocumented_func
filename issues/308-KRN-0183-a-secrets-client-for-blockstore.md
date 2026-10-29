@@ -8,7 +8,7 @@
 
 - **The store's volume key is in its superblock in the clear** ([308-STO-0021](../issues-done/308-STO-0021-sealed-records.done) sealed the records, not the key). Whoever reads the medium opens the records.
 - **`keystore` already keeps a program's secrets** (`keystore.wit` 1.4, [000-NET-0045](../issues-done/000-NET-0045-secrets-per-program-in-keystore.done)), but only for a program the loader runs by its name ([000-KRN-0182](../issues-done/000-KRN-0182-a-programs-secrets-client.done)). A boot service gets no such client.
-- **A program's name is not enough for a service.** A program called `blockstore` in `data/apps/` would get the client named `blockstore`, so the store's secrets need a namespace no loaded program reaches.
+- **A program's name is not enough for a service.** The loader already refuses to run a program by a boot service's name, so no program gets a client named `blockstore`. But a service's secrets kept as a program's would share their directory and their key's label with every program's, and one mistake in the loader's rule would open them; so they need a namespace of their own.
 
 ## Plan
 
@@ -32,7 +32,7 @@
 - **QEMU** (`tls` suite, `device_key_check`, a raw image booted three times with a blank store disk):
   - `blockstore` holds `keystore`'s client badged 5 in slot 3;
   - the volume key of its disk is kept by `keystore` as the store's secret, not on the medium, and read back at the next boot, when the store mounts its disk with it;
-  - a program named `blockstore` (`netcheck` by that name) gets a program's client that finds none of it, and does not open the store's file copied under its name;
+  - no program runs by the store's name (the loader refuses it), and another program's client (`netcopy`, `netcheck` by that name) finds none of the store's secrets and does not open the store's file copied under its own name;
   - under a new device key the store's file opens no more.
 - **The other suites** pass. The storage track's suites check the rest (308-STO-0022).
 
