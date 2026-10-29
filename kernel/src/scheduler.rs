@@ -190,6 +190,7 @@ struct Scheduler {
     next_node: u64, // capability identities are never reused
     next_wake: u64, next_expiry: u64, // the earliest sleep's end (ns) and IPC deadline (ms) set since the last pass, or MAX
     held: Option<(usize, u64, u64)>, // (slot, PID, since ns): the focused task kept from running while its frame is copied
+    wanted: Option<(usize, u64)>, // (slot, PID): the focused task the compositor found drawing, held at its next wait
     zeroing: [Option<Zeroing>; cpu::MAX], // each CPU's large block to zero once it lets go of the lock (262-KRN-0160)
     storms: [Storm; MSI_VECTORS],
 }
@@ -249,7 +250,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS] }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS] }); }
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
@@ -278,6 +279,10 @@ impl Scheduler {
         // Time since the last switch on this CPU goes to the task that ran or to idle.
         let now = crate::clock::now_ns(); let elapsed = now.saturating_sub(core::mem::replace(&mut self.accounting.last_switch[cpu], now));
         if current == 0 { self.accounting.idle_ns[cpu] += elapsed; } else { self.accounting.busy_ns[cpu] += elapsed; }
+        // The task the compositor found drawing is held as it starts to wait, at the end of its frame (000-KRN-0186).
+        if let Some((slot, pid)) = self.wanted.filter(|&(slot, pid)| slot == current && self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && !matches!(t.state, State::Ready | State::Exited))) {
+            self.wanted = None; self.held = Some((slot, pid, now));
+        }
         let fast = FAST_CALLS[cpu].swap(0, Ordering::Relaxed); self.accounting.interrupts[cpu] += fast;
         if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); task.run_ns += elapsed; task.consumed += elapsed; task.calls += fast; unsafe { context::save(sp, task.context.ptr() as usize); } }
         // Only this CPU's tasks: three passes over every task of every CPU held the lock long with many (171-KRN-0009).
@@ -405,6 +410,7 @@ impl Scheduler {
         if let Some(task) = self.tasks[self.foreground].as_mut() { task.input.clear(); }
         if let Some(task) = self.tasks[slot].as_mut() { task.input.clear(); }
         self.foreground = slot; self.dirty = true;
+        self.wanted = None; self.release_held();
     }
     fn push_notice(&mut self, value: usize) { if self.notice_count < self.notices.len() { self.notices[self.notice_count] = value; self.notice_count += 1; } }
     // Input event: the focus owner gets the `owner` byte, any other focused task the `app` byte; an attention key
@@ -1690,7 +1696,8 @@ impl Scheduler {
                         Some(t) => {
                             // A task that runs may be mid-frame: in frame mode its screen is copied once it waits, and it
                             // is held until the copy is done (000-KRN-0086).
-                            let drawing = request.arg2 == COMPOSITOR_FRAME && t.state == State::Ready;
+                            let held = self.held.is_some_and(|(slot, pid, _)| slot == focused && pid == t.pid);
+                            let drawing = request.arg2 == COMPOSITOR_FRAME && t.state == State::Ready && !held;
                             let source = t.screen.as_ref().unwrap().ptr() as usize;
                             // New capability only on screen change: the compositor keeps the mapping across frames.
                             // The compositor's first frame covers the whole screen: the kernel's boot lines and logs stop
@@ -1698,9 +1705,14 @@ impl Scheduler {
                             if source != self.composited {
                                 t.dirty = drawing; self.dirty = false;
                                 crate::screen::take(); self.composited = source; self.remove(slot, request.arg1); let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot), CAP_READ)); task.nodes[request.arg1] = self.root(); Ok(2)
-                            } else if drawing { Ok(if t.dirty || self.dirty { COMPOSITOR_BUSY } else { 0 }) } else {
+                            } else if drawing {
+                                // Held at its next wait, where a frame ends, and copied at the next pull (000-KRN-0186).
+                                if t.dirty || self.dirty { self.wanted = Some((focused, t.pid)); Ok(COMPOSITOR_BUSY) } else { Ok(0) }
+                            } else {
                                 let dirty = core::mem::take(&mut t.dirty) | core::mem::take(&mut self.dirty);
-                                if dirty && request.arg2 == COMPOSITOR_FRAME { self.held = Some((focused, t.pid, crate::clock::now_ns())); }
+                                self.wanted = None;
+                                if dirty && request.arg2 == COMPOSITOR_FRAME && !held { self.held = Some((focused, t.pid, crate::clock::now_ns())); }
+                                if !dirty && held { self.release_held(); self.wake_idle(cpu, false); }
                                 Ok(dirty as usize)
                             }
                         }

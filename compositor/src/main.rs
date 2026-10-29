@@ -130,16 +130,18 @@ fn main(info: &'static BootInfo) {
     let format = match info.pixel_format { PIXEL_BGR => "BGR", PIXEL_RGB => "RGB", PIXEL_BITMASK => "BIT MASKS", _ => "UNKNOWN" };
     say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN {}X{}, STRIDE {}, FORMAT {}", info.width, info.height, info.stride, format));
     loop {
-        // Whole frames only: a changed screen is copied while its task waits, and the task is held meanwhile; one
-        // whose task never waits is copied as it is after FORCE_MS (000-KRN-0086).
+        // Whole frames only: a changed screen is copied while its task waits, and the task is held meanwhile; a task
+        // found drawing is held at its next wait (000-KRN-0186); one that never waits is copied as it is after FORCE_MS
+        // (000-KRN-0086).
         let mut frame = compositor_pull_frame(SOURCE_SLOT).unwrap_or(Frame::Unchanged);
-        let mut held = frame == Frame::Dirty;
         if frame == Frame::Busy {
             let since = *busy.get_or_insert(mind::time::uptime_ms());
             if mind::time::uptime_ms() - since >= FORCE_MS { frame = compositor_pull(SOURCE_SLOT).unwrap_or(Frame::Unchanged); }
         } else {
             busy = None;
         }
+        // Released after any dirty copy: a task that waited after a busy answer is held even when FORCE_MS's pull finds it.
+        let mut held = frame == Frame::Dirty;
         if frame == Frame::NewSource {
             drop(source.take()); // unmap the old mapping first (shared memory quota)
             source = Mapping::new(SOURCE_SLOT).ok();
