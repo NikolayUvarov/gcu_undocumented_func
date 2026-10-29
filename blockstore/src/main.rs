@@ -6,11 +6,14 @@
 // logged. Leases are measured on the monotonic clock (303-STO-0001); a commit changes several names at once (304-STO-0007);
 // the current names are listed by prefix, 16 at a time (300-STO-0018); each write says how far it reached (307-STO-0019).
 // A medium it cannot mount leaves it running and answering every request with the reason (305-STO-0008). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
+// Records are sealed with ChaCha20-Poly1305 under a volume key kept, for now, in the clear in the superblock (308-STO-0021).
 mod store;
 
 // store.rs names these as crate::cid, crate::dag and crate::sha256, so the host tests build it from the libmind files.
 use mind::{cid, dag, sha256};
 
+use chacha20poly1305::aead::{AeadInPlace, KeyInit};
+use chacha20poly1305::ChaCha20Poly1305;
 use cid::Cid;
 use mind::abi::BootInfo;
 use mind::block::Device as Client;
@@ -19,7 +22,7 @@ use mind::idl::blockstore::{self, Collected, Committed, Durability, Error, Head 
 use mind::idl::codec::{List, Text};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
-use store::{slots_for, Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, SECTOR};
+use store::{slots_for, Crypto, Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, LAYOUT, SECTOR};
 
 const RECEIVED: usize = 9;
 /// The block client init grants.
@@ -54,6 +57,19 @@ impl Device for Medium {
     fn flush(&mut self) -> bool { self.0.flush().is_ok() }
 }
 
+/// ChaCha20-Poly1305 (RFC 8439) of the RustCrypto crate, and the processor's random source.
+struct Sealing;
+impl Crypto for Sealing {
+    fn seal(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8]) -> [u8; 16] {
+        // Fails only for data past 256 GiB.
+        ChaCha20Poly1305::new(key.into()).encrypt_in_place_detached(nonce.into(), aad, data).expect("a record fits the cipher").into()
+    }
+    fn open(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8], tag: &[u8; 16]) -> bool {
+        ChaCha20Poly1305::new(key.into()).decrypt_in_place_detached(nonce.into(), aad, data, tag.into()).is_ok()
+    }
+    fn random(&self, out: &mut [u8]) -> bool { mind::random::fill(out) }
+}
+
 fn error(e: store::Error) -> Error {
     match e {
         store::Error::NotFound => Error::NotFound,
@@ -66,7 +82,8 @@ fn error(e: store::Error) -> Error {
         store::Error::Incomplete => Error::Incomplete,
         store::Error::Quota => Error::Quota,
         store::Error::Rights => Error::Rights,
-        store::Error::Device | store::Error::Foreign | store::Error::Layout => Error::Device,
+        store::Error::Key => Error::Key,
+        store::Error::Device | store::Error::Foreign | store::Error::Layout(_) => Error::Device,
     }
 }
 
@@ -105,7 +122,7 @@ fn main(_info: &'static BootInfo) {
         Ok(client) => {
             if client.kind() != mind::block::KIND_RAM { durability = Durability::Flushed; }
             let index = index_for(client.sectors());
-            Store::mount(Medium(client), index, heads, pinned, runs, record, walk, mind::time::monotonic_ns())
+            Store::mount(Medium(client), &Sealing, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns())
         }
         Err(_) => Err(store::Error::Device),
     };
@@ -114,8 +131,19 @@ fn main(_info: &'static BootInfo) {
         Ok(mut store) => {
             store.renew(mind::time::monotonic_ns());
             let s = store.stats();
-            mind::println!("[BLOCKSTORE] READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={} DURABILITY={}", s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged, mind::blockstore::class(durability as u8));
+            match store.made() {
+                Some(true) => mind::println!("[BLOCKSTORE] VOLUME KEY MADE FROM {}", mind::random::SOURCE),
+                Some(false) => mind::println!("[BLOCKSTORE] VOLUME KEY MADE WITHOUT {}: DERIVED FROM THE MEDIUM AND THE TIME", mind::random::SOURCE),
+                None => {}
+            }
+            // The key is in the superblock: whoever reads the medium can open the records (308-STO-0022 moves it).
+            mind::println!("[BLOCKSTORE] READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={} DURABILITY={} SEALED, KEY IN THE CLEAR",
+                s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged, mind::blockstore::class(durability as u8));
             Ok(store)
+        }
+        Err(store::Error::Layout(found)) => {
+            mind::println!("[BLOCKSTORE] NOT MOUNTED: A STORE OF LAYOUT {}; THIS BUILD READS LAYOUT {} AND CONVERTS NONE", found, LAYOUT);
+            Err(Error::Device)
         }
         Err(e) => { mind::println!("[BLOCKSTORE] NOT MOUNTED: {:?}", e); Err(error(e)) }
     };
