@@ -35,4 +35,4 @@ On hesere, `health_check` on either MIND machine is refused before it reaches th
 
 ## Related
 
-[750-EFF-0021](750-EFF-0021-a-delivery-answers-with-the-file-read-back.md) (a result kept until the server takes it), [750-EFF-0014](750-EFF-0014-telemetry.md).
+[750-EFF-0021](../issues-done/750-EFF-0021-a-delivery-answers-with-the-file-read-back.done) (a result kept until the server takes it), [750-EFF-0014](750-EFF-0014-telemetry.md).
