@@ -1,0 +1,61 @@
+# 308-STO-0023 — Memory domains: a key per domain, and forgetting by destroying it — done
+
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [308](../issues/308-encryption-at-rest.md) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
+
+Split from [308](../issues/308-encryption-at-rest.md) (2026-10-28).
+
+## Problem
+
+With one volume key, nothing can be forgotten for sure: deleting a name leaves copies of its blocks until they are collected, and a copy of the medium keeps them. [308](../issues/308-encryption-at-rest.md) chose a key per memory domain, so a domain can be forgotten by destroying its key (MC-4.8).
+
+## Plan
+
+- **A domain** is a set of names and the blocks they retain, held by an owner (a badge; 312's journal and agents later). Its key is random and wrapped by the volume key, in a record of its own.
+- **A record's frame names its domain.** Its seal uses that domain's key.
+- **Deduplication stays within a domain:** the same bytes in two domains are two records. Otherwise one domain's forgetting would leave its blocks readable through the other's.
+- **Forgetting a domain:**
+  - its key record is replaced by a tombstone, and the key is gone from memory;
+  - its records no longer open, and a collection frees them;
+  - copies handed out before are outside this (MC-4.8), and that is said.
+- **Rights:** a client works in the domains its badge holds (MC-4.7). An interface change: `blockstore.wit` 3.0 or a minor version, as the design needs.
+
+## Decisions while building (2026-10-29)
+
+- **Layout 4,** with layout 3 refused by name: a build of layout 3 would read a domain's records as corrupt and free them.
+- **A key record** per domain (`MIND-KEY`: domain, state, owner, key), sealed under the volume key, its frame's domain 0xFFFF. A domain's records may lie before its key record. A mount scans once, and up to 64 such records wait to be opened at its end; past that it scans again, every key known. (A first version read the key records in a pass of their own, reading the medium twice. The aarch64 `vfs` suite's restart of the store on a disk holding a model then outran the command's wait.)
+- **Forgetting** writes a tombstone (the key record with state 2 and no key), then erases the key record. A mount that finds both erases the key record. A collection frees the domain's records, then the tombstone. A damaged key record leaves its domain unknown: its records are kept and counted corrupt, never freed.
+- **The interface is a minor version, `blockstore.wit` 2.2:** `domain-create`, `domain-client`, `domain-forget`, `domains` and the error `no-random`. Every earlier call keeps its form and works in the volume's domain, or in the domain of the client it comes through.
+  - A domain's client is minted by `blockstore` from its own endpoint, with a badge from 0x100 up and the asking client's rights; it ends when the domain is forgotten.
+  - So no client of another track changes (`fm` builds as it is). `init` only adds the badge right to the store's own endpoint, which minting needs (requests-KRN.md, 2026-10-29).
+- **The owner** is the badge, as for quotas: a domain is its creator's, and only that owner lends or forgets it.
+- **No domain without a random source.** A key derived from anything kept could not be destroyed. x86's qemu64 has no RDRAND, so the x86 `store` suite checks the refusal; the domains run in the aarch64 `store` suite (RNDR) and in the x86 store-disk check started with `+rdrand`.
+
+## Acceptance criteria
+
+- Host tests:
+  - two domains' records open only under their own keys;
+  - a forgotten domain's records are refused and then collected;
+  - another domain is unaffected.
+- QEMU: a domain forgotten across a reboot stays unreadable.
+
+## Related
+
+[308](../issues/308-encryption-at-rest.md), [303](303-retention-and-collection.done), [312](../issues/312-the-minds-memory.md).
+
+## Resolution
+
+Done in `main` 3e07edb8 (landing round 43, 2026-10-29), from `claude/relaxed-meitner-5bmhpz` a43448d1 (1e4cf805, 63899d4a, acab1b62, 1522fb74, d8fc3ee7), with `init`'s grant of [308-KRN-0184](308-KRN-0184-blockstore-badges-its-own-clients.done) in the same round.
+
+- **Layout 4** (`blockstore/src/store.rs`), layout 3 refused by name:
+  - each domain's names, pins and blocks are sealed under a random key of its own, kept in a key record sealed under the volume key;
+  - the index, the names and the pins are keyed by domain, so the same bytes in two domains are two blocks.
+- **Forgetting** writes a tombstone, erases the key record and takes the domain's names, pins and blocks out at once; the next collection frees its records, then the tombstone. A mount finishes a forget stopped between the two writes.
+- **`idl/blockstore.wit` 2.2,** a minor version: `domain-create`, `domain-client`, `domain-forget`, `domains`, the error `no-random`. A domain's client is minted by the store with a badge from 0x100 and the asking client's rights, and revoked when the domain is forgotten.
+- **`blocks`:** `-d <id>` runs a command in a domain; `domains`, `domain new`, `domain forget <id>`.
+- **No domain without a random source,** logged and answered `no-random`.
+- **Evidence:**
+  - `tests/blockstore_host.rs`: two domains open only under their own keys; a forgotten domain refused, then collected, the other whole; a forget stopped before its key record was erased finished by the next mount; a damaged key record keeps its domain's records; records before their key record found (10, and 70 with a second scan);
+  - QEMU `store` on aarch64 (keys from RNDR): two domains, one forgotten and its records collected; on x86's qemu64, none made and `no-random`;
+  - the `boot` suite's store disk on x86 with `+rdrand`: a domain forgotten before a reboot unreadable after it, then collected.
+  - Run by the round's gate on every group, and before it on this session's container (x86) and `i9_4e6882212251` (aarch64).
+- **Not provided:** forgetting against copies already read, or against a flash medium's spare blocks, which may keep an erased key record (MC-4.8); the volume key that wraps the domains' keys is still in the clear in the superblock until [308-STO-0022](../issues/308-STO-0022-the-volume-key-held-by-keystore.md).
