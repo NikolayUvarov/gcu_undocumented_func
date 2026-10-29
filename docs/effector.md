@@ -244,6 +244,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 | aarch64: RAM, ACPI and PCI above 4 GiB (1394, PCU) | normal 476, net 550, fill 368 | aarch64: RAM, ACPI and PCI above 4 GiB; aarch64: network above 4 GiB |
 
 - **What it gives,** in simulation with these estimates: about 56 minutes with `pool`'s six lanes and 63 with `pool-no-i9`'s five, against 64 to 70 for rounds 41 to 43 with fixed lists (49 with a third lane on `un-rizen-service`, which its timing tests did not bear). The tests take about 233 minutes in all, and each lane builds its images first. More lanes are the next step, such as `x32-128` once it is stable.
+- **What it gave** in round 44 (2026-10-29, candidate e6678d4a, `pool`): every group once in 41.5 minutes, the builds included; with the one group that failed run again alone, 48.5.
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 
