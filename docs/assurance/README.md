@@ -70,6 +70,13 @@ This is evidence of the inputs that were run, not a proof that no input breaks a
 
 `MIND_FUZZ_SEED` and `MIND_FUZZ_ITERATIONS` change the seed and the count for a longer search.
 
+## Threat models
+
+- **[The remote update's threats](remote-update-threats.md)** (751-ASR-0013, 0.1, 2026-10-29): a developer's release installed through Effector under the owner's `remote-update`.
+  - Each attack is listed with the check asked of its track and the test asked for it.
+  - The test keys' risk: on the development disks the path installs anyone's code.
+  - It is a design until 751's parts exist.
+
 ## Not modelled yet
 
 Endpoint queues and cancellation (MC-2.7), the reply capability's one use, quotas, the supervisor's restart path, checkpoints and fencing (Appendix D, later stages).
