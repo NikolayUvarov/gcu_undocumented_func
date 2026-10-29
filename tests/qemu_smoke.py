@@ -298,20 +298,24 @@ class VM:
             time.sleep(.06)
 
     def screenshot(self, still=False):
-        # `still`: the guest paused while QEMU reads the screen, which it otherwise reads as the guest writes it.
+        # `still`: the guest paused while QEMU reads the screen, which it otherwise reads as the guest writes it. QMP's
+        # own screendump then, so that the guest stops only for the dump, not for the monitor's typing pace.
         path = ROOT / (self.disk + ".ppm")
-        if still:
-            self.qmp("stop")
         try:
-            # Relative inside the tree (no drive letter for HMP on Windows); a disk elsewhere (/tmp) is named in full.
-            self.hmp(f"screendump {(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path).as_posix()}")
+            if still:
+                self.qmp("stop")
+                try:
+                    self.qmp("screendump", filename=str(path))
+                finally:
+                    self.qmp("cont")
+            else:
+                # Relative inside the tree (no drive letter for HMP on Windows); a disk elsewhere (/tmp) is named in full.
+                self.hmp(f"screendump {(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path).as_posix()}")
             data = path.read_bytes()
             # Retain a viewable artifact outside the build tree.
             (Path(tempfile.gettempdir()) / "mind-core-clock.ppm").write_bytes(data)
             return data
         finally:
-            if still:
-                self.qmp("cont")
             path.unlink(missing_ok=True)
 
     def close(self):
