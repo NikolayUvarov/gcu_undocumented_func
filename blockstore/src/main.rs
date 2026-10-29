@@ -7,6 +7,7 @@
 // the current names are listed by prefix, 16 at a time (300-STO-0018); each write says how far it reached (307-STO-0019).
 // A medium it cannot mount leaves it running and answering every request with the reason (305-STO-0008). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 // Records are sealed with ChaCha20-Poly1305 under a volume key kept, for now, in the clear in the superblock (308-STO-0021).
+// A memory domain's calls come through a client the store mints for it, and work under the domain's own key (308-STO-0023).
 mod store;
 
 // store.rs names these as crate::cid, crate::dag and crate::sha256, so the host tests build it from the libmind files.
@@ -15,14 +16,14 @@ use mind::{cid, dag, sha256};
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use cid::Cid;
-use mind::abi::BootInfo;
+use mind::abi::{BootInfo, CAP_GRANT, CAP_WRITE, SLOT_SERVICE};
 use mind::block::Device as Client;
-use mind::blockstore::{allowed, Operation};
+use mind::blockstore::{allowed, Operation, FIRST_DOMAIN_CLIENT};
 use mind::idl::blockstore::{self, Collected, Committed, Durability, Error, Head as Current, Kept, Named, PinTaken, Pinned, Published, Request, Stats, Usage};
 use mind::idl::codec::{List, Text};
 use mind::idl::wire;
-use mind::ipc::Endpoint;
-use store::{slots_for, Crypto, Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, LAYOUT, SECTOR};
+use mind::ipc::{self, Endpoint};
+use store::{slots_for, Crypto, Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, DOMAINS, LAYOUT, SECTOR, VOLUME};
 
 const RECEIVED: usize = 9;
 /// The block client init grants.
@@ -33,6 +34,8 @@ const NAMES: usize = 256;
 const HOLES: usize = 512;
 /// Pins the store holds.
 const PINS: usize = 64;
+/// Clients of memory domains the store keeps at once.
+const DOMAIN_CLIENTS: usize = 64;
 
 static mut HEADS: [Head; NAMES] = [Head::EMPTY; NAMES];
 static mut RUNS: [Extent; HOLES] = [Extent::EMPTY; HOLES];
@@ -70,6 +73,38 @@ impl Crypto for Sealing {
     fn random(&self, out: &mut [u8]) -> bool { mind::random::fill(out) }
 }
 
+// A client minted for a memory domain (308-STO-0023): its badge and handle, its domain, and the rights and owner of the
+// client that asked for it.
+#[derive(Clone, Copy)]
+struct DomainClient { badge: u16, cap: usize, domain: u16, rights: u16, owner: u16 }
+
+struct DomainClients([Option<DomainClient>; DOMAIN_CLIENTS]);
+impl DomainClients {
+    // The rights, owner and domain a request's badge carries; a domain badge the store did not mint carries no right.
+    fn of(&self, badge: u16) -> (u16, u16, u16) {
+        if badge < FIRST_DOMAIN_CLIENT { return (badge, badge, VOLUME); }
+        self.0.iter().flatten().find(|c| c.badge == badge).map_or((0, badge, VOLUME), |c| (c.rights, c.owner, c.domain))
+    }
+    // A client of `domain` with `rights` for `owner`: the one minted already, or a new one.
+    fn client(&mut self, domain: u16, rights: u16, owner: u16) -> Result<usize, Error> {
+        if let Some(c) = self.0.iter().flatten().find(|c| (c.domain, c.rights, c.owner) == (domain, rights, owner)) { return Ok(c.cap); }
+        let slot = self.0.iter().position(Option::is_none).ok_or(Error::Full)?;
+        let badge = FIRST_DOMAIN_CLIENT + slot as u16;
+        let cap = ipc::mint_badged(SLOT_SERVICE, CAP_WRITE | CAP_GRANT, badge).map_err(|_| Error::Full)?;
+        self.0[slot] = Some(DomainClient { badge, cap, domain, rights, owner });
+        Ok(cap)
+    }
+    // Every client of a forgotten domain revoked, wherever it was copied, and dropped.
+    fn forget(&mut self, domain: u16) {
+        for slot in self.0.iter_mut() {
+            let Some(c) = slot.filter(|c| c.domain == domain) else { continue };
+            let _ = ipc::revoke(c.cap);
+            let _ = ipc::drop_cap(c.cap);
+            *slot = None;
+        }
+    }
+}
+
 fn error(e: store::Error) -> Error {
     match e {
         store::Error::NotFound => Error::NotFound,
@@ -83,6 +118,7 @@ fn error(e: store::Error) -> Error {
         store::Error::Quota => Error::Quota,
         store::Error::Rights => Error::Rights,
         store::Error::Key => Error::Key,
+        store::Error::NoRandom => Error::NoRandom,
         store::Error::Device | store::Error::Foreign | store::Error::Layout(_) => Error::Device,
     }
 }
@@ -139,6 +175,10 @@ fn main(_info: &'static BootInfo) {
             // The key is in the superblock: whoever reads the medium can open the records (308-STO-0022 moves it).
             mind::println!("[BLOCKSTORE] READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={} DURABILITY={} SEALED, KEY IN THE CLEAR",
                 s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged, mind::blockstore::class(durability as u8));
+            for d in store.domains() {
+                if d.forgotten { mind::println!("[BLOCKSTORE] DOMAIN {} FORGOTTEN: {} RECORDS LEFT FOR THE NEXT COLLECTION", d.id, d.records); }
+                else { mind::println!("[BLOCKSTORE] DOMAIN {} OF BADGE {}: {} RECORDS", d.id, d.owner, d.records); }
+            }
             Ok(store)
         }
         Err(store::Error::Layout(found)) => {
@@ -147,14 +187,26 @@ fn main(_info: &'static BootInfo) {
         }
         Err(e) => { mind::println!("[BLOCKSTORE] NOT MOUNTED: {:?}", e); Err(error(e)) }
     };
+    let mut clients = DomainClients([None; DOMAIN_CLIENTS]);
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         if !request.is_call { continue; }
-        if let Ok(s) = store.as_mut() { s.set_time(mind::time::monotonic_ns()); }
         let (badge, pid) = (request.badge, request.sender);
+        let (mut rights, owner, domain) = clients.of(badge);
+        // Each call works in its client's domain; one that cannot (its domain is gone) may do nothing.
+        if let Ok(s) = store.as_mut() {
+            s.set_time(mind::time::monotonic_ns());
+            if s.set_domain(domain).is_err() { rights = 0; }
+        }
         let refused = |operation| {
-            if allowed(badge, operation) { return false; }
+            if allowed(rights, operation) { return false; }
             mind::println!("[BLOCKSTORE] REFUSED {:?} FOR PID {} (BADGE {})", operation, pid, badge);
+            true
+        };
+        // Domains are made, lent and forgotten only through a client of the volume.
+        let through_domain = |operation| {
+            if badge < FIRST_DOMAIN_CLIENT { return false; }
+            mind::println!("[BLOCKSTORE] REFUSED {:?} FOR PID {}: THROUGH DOMAIN {}'S CLIENT", operation, pid, domain);
             true
         };
         let _ = match blockstore::decode(&request, RECEIVED, scratch) {
@@ -175,6 +227,10 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Commit { .. }, call)) if refused(Operation::Commit) => blockstore::reply_commit(call, Err(Error::Rights)),
             Ok((Request::Snapshot { .. }, call)) if refused(Operation::Snapshot) => blockstore::reply_snapshot(call, Err(Error::Rights)),
             Ok((Request::Names { .. }, call)) if refused(Operation::Names) => blockstore::reply_names(call, Err(Error::Rights)),
+            Ok((Request::DomainCreate, call)) if refused(Operation::DomainCreate) || through_domain(Operation::DomainCreate) => blockstore::reply_domain_create(call, Err(Error::Rights)),
+            Ok((Request::DomainClient { .. }, call)) if refused(Operation::DomainClient) || through_domain(Operation::DomainClient) => blockstore::reply_domain_client(call, Err(Error::Rights)),
+            Ok((Request::DomainForget { .. }, call)) if refused(Operation::DomainForget) || through_domain(Operation::DomainForget) => blockstore::reply_domain_forget(call, Err(Error::Rights)),
+            Ok((Request::Domains, call)) if refused(Operation::Domains) || through_domain(Operation::Domains) => blockstore::reply_domains(call, Err(Error::Rights)),
             Ok((Request::Put { codec, data }, call)) => {
                 let codec = match codec { blockstore::Codec::Raw => cid::Codec::Raw, blockstore::Codec::DagCbor => cid::Codec::DagCbor };
                 let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(codec, data).map_err(error)).map(|c| c.to_bytes());
@@ -212,7 +268,7 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Publish { name, expected, root }, call)) => {
                 let version = parse(root).and_then(|root| {
                     let s = store.as_mut().map_err(|e| *e)?;
-                    let version = s.publish(name.as_str().as_bytes(), expected, &root, badge).map_err(error)?;
+                    let version = s.publish(name.as_str().as_bytes(), expected, &root, owner).map_err(error)?;
                     mind::println!("[BLOCKSTORE] PUBLISHED {} VERSION {} ROOT {} BY PID {}", name, version, root, pid);
                     Ok(Published { version, durability })
                 });
@@ -224,7 +280,7 @@ fn main(_info: &'static BootInfo) {
                 blockstore::reply_resolve(call, head.as_ref().map_err(|e| *e))
             }
             Ok((Request::Unpublish { name, expected }, call)) => {
-                let version = store.as_mut().map_err(|e| *e).and_then(|s| s.unpublish(name.as_str().as_bytes(), expected, badge).map_err(error));
+                let version = store.as_mut().map_err(|e| *e).and_then(|s| s.unpublish(name.as_str().as_bytes(), expected, owner).map_err(error));
                 if let Ok(v) = version { mind::println!("[BLOCKSTORE] REMOVED {} VERSION {} BY PID {}", name, v, pid); }
                 blockstore::reply_unpublish(call, version.map(|version| Published { version, durability }).as_ref().map_err(|e| *e))
             }
@@ -240,14 +296,14 @@ fn main(_info: &'static BootInfo) {
             }
             Ok((Request::Pin { root }, call)) => {
                 let id = parse(root).and_then(|root| {
-                    let id = store.as_mut().map_err(|e| *e)?.pin(&root, badge).map_err(error)?;
+                    let id = store.as_mut().map_err(|e| *e)?.pin(&root, owner).map_err(error)?;
                     mind::println!("[BLOCKSTORE] PINNED {} AS {} BY PID {} (BADGE {})", root, id, pid, badge);
                     Ok(PinTaken { id, durability })
                 });
                 blockstore::reply_pin(call, id.as_ref().map_err(|e| *e))
             }
             Ok((Request::Unpin { id }, call)) => {
-                let done = store.as_mut().map_err(|e| *e).and_then(|s| s.unpin(id, badge).map_err(error));
+                let done = store.as_mut().map_err(|e| *e).and_then(|s| s.unpin(id, owner).map_err(error));
                 if done.is_ok() { mind::println!("[BLOCKSTORE] UNPINNED {} BY PID {}", id, pid); }
                 blockstore::reply_unpin(call, done)
             }
@@ -255,7 +311,7 @@ fn main(_info: &'static BootInfo) {
                 let mut list = [Pinned::default(); 32];
                 let n = store.as_ref().map_err(|e| *e).map(|s| {
                     let mut n = 0;
-                    for (slot, p) in list.iter_mut().zip(s.pins(badge)) {
+                    for (slot, p) in list.iter_mut().zip(s.pins(owner)) {
                         *slot = Pinned { id: p.id, root: List::from_slice(&p.root().to_bytes()).unwrap_or_default(), size: p.size };
                         n += 1;
                     }
@@ -274,7 +330,7 @@ fn main(_info: &'static BootInfo) {
                 });
                 let versions = parsed.and_then(|()| {
                     let s = store.as_mut().map_err(|e| *e)?;
-                    let versions = s.commit(&changes[..updates.len()], badge).map_err(error)?;
+                    let versions = s.commit(&changes[..updates.len()], owner).map_err(error)?;
                     for (u, v) in updates.iter().zip(versions) {
                         match changes.iter().find(|c| c.name == u.name.as_str().as_bytes()).and_then(|c| c.root) {
                             Some(root) => mind::println!("[BLOCKSTORE] COMMITTED {} VERSION {} ROOT {} BY PID {}", u.name, v, root, pid),
@@ -312,10 +368,48 @@ fn main(_info: &'static BootInfo) {
             }
             Ok((Request::Usage, call)) => {
                 let usage = store.as_ref().map_err(|e| *e).map(|s| {
-                    let u = s.usage(badge);
+                    let u = s.usage(owner);
                     Usage { retained: u.retained, quota: u.quota, names: u.names, pins: u.pins }
                 });
                 blockstore::reply_usage(call, usage.as_ref().map_err(|e| *e))
+            }
+            Ok((Request::DomainCreate, call)) => {
+                let made = store.as_mut().map_err(|e| *e).and_then(|s| s.domain_create(owner).map_err(error));
+                match made {
+                    Ok(id) => mind::println!("[BLOCKSTORE] DOMAIN {} MADE FOR BADGE {} BY PID {}", id, owner, pid),
+                    Err(Error::NoRandom) => mind::println!("[BLOCKSTORE] NO DOMAIN FOR PID {}: NO {}, AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED", pid, mind::random::SOURCE),
+                    Err(_) => {}
+                }
+                blockstore::reply_domain_create(call, made)
+            }
+            Ok((Request::DomainClient { id }, call)) => {
+                let cap = store.as_ref().map_err(|e| *e).and_then(|s| match s.domains().find(|d| d.id == id && !d.forgotten) {
+                    None => Err(Error::NotFound),
+                    Some(d) if d.owner != owner => Err(Error::Rights),
+                    Some(_) => clients.client(id, rights, owner),
+                });
+                if cap.is_ok() { mind::println!("[BLOCKSTORE] DOMAIN {}'S CLIENT LENT TO PID {} (BADGE {})", id, pid, badge); }
+                blockstore::reply_domain_client(call, cap)
+            }
+            Ok((Request::DomainForget { id }, call)) => {
+                let done = store.as_mut().map_err(|e| *e).and_then(|s| s.domain_forget(id, owner).map_err(error));
+                if done.is_ok() {
+                    clients.forget(id);
+                    mind::println!("[BLOCKSTORE] DOMAIN {} FORGOTTEN BY PID {}: ITS KEY DESTROYED, ITS RECORDS LEFT FOR THE NEXT COLLECTION", id, pid);
+                }
+                blockstore::reply_domain_forget(call, done)
+            }
+            Ok((Request::Domains, call)) => {
+                let mut list = [blockstore::Domain::default(); DOMAINS];
+                let n = store.as_ref().map_err(|e| *e).map(|s| {
+                    let mut n = 0;
+                    for (slot, d) in list.iter_mut().zip(s.domains().filter(|d| d.owner == owner)) {
+                        *slot = blockstore::Domain { id: d.id, forgotten: d.forgotten };
+                        n += 1;
+                    }
+                    n
+                });
+                blockstore::reply_domains(call, n.map(|n| &list[..n]))
             }
         };
     }

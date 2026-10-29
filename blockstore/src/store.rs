@@ -12,6 +12,11 @@
 //! a digest. Records are written only into blank sectors, so nothing stored is overwritten; a collection makes the
 //! sectors of what it frees blank again. Every block read is opened and checked against its CID, and one that does not
 //! open or match is reported corrupt, never returned.
+//!
+//! Memory domains (308-STO-0023): a domain's records are sealed under a key of its own, random, kept in a key record
+//! sealed under the volume key. Names, pins and blocks belong to a domain; the same bytes in two domains are two
+//! records. Forgetting a domain writes a tombstone and erases its key record, so its records never open again, and the
+//! next collection frees them.
 use crate::cid::{self, Cid, Codec};
 use crate::dag;
 use crate::sha256;
@@ -27,7 +32,7 @@ pub const FRAME: usize = 44;
 pub const RECORD_SECTORS: usize = sealed_sectors(HEADER + BLOCK_MAX);
 pub const BUFFER: usize = RECORD_SECTORS * SECTOR;
 /// The layout's version; another is refused, never read as this one (MC-4.13).
-pub const LAYOUT: u16 = 3;
+pub const LAYOUT: u16 = 4;
 const SUPER_MAGIC: &[u8; 8] = b"MIND-STO";
 // The superblock: magic, layout, sector size (u16), the key's source, zero, the SHA-256 of these 16 bytes; the volume
 // key; a check (32 zero bytes sealed under it, as nonce, ciphertext and tag); and the SHA-256 of the 140 bytes before.
@@ -60,6 +65,18 @@ pub const HISTORY: usize = 4;
 const TXN_MAGIC: &[u8; 8] = b"MIND-TXN";
 /// Names one commit changes at most.
 pub const COMMIT_MAX: usize = 8;
+/// The volume's own domain: its records are sealed under keys from the volume key (308-STO-0023).
+pub const VOLUME: u16 = 0;
+// The frame's domain of the records that keep the domains' keys, sealed under the volume key.
+const KEYS: u16 = 0xFFFF;
+/// Domains a store keeps at most, live and forgotten together.
+pub const DOMAINS: usize = 32;
+// A domain's key record: magic, layout, the domain (u16), its state (u16), the owner (u16), zero (4), the key (32
+// bytes, zeros once forgotten), and the SHA-256 of these 52 bytes.
+const KEY_MAGIC: &[u8; 8] = b"MIND-KEY";
+const KEY_RECORD: usize = 52 + 32;
+const KEY_LIVE: u16 = 1;
+const KEY_GONE: u16 = 2;
 
 /// The medium under the store: sectors of SECTOR bytes, read and written up to RECORD_SECTORS at a time.
 pub trait Device {
@@ -97,9 +114,11 @@ pub fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
     outer.finish()
 }
 
-// The keys a volume key gives: one seals records, one makes their nonces.
+// The keys a volume or domain key gives: one seals records, one makes their nonces.
+#[derive(Clone, Copy)]
 struct Keys { seal: [u8; 32], nonce: [u8; 32] }
 impl Keys {
+    const NONE: Keys = Keys { seal: [0; 32], nonce: [0; 32] };
     fn new(volume: &[u8; 32]) -> Self { Keys { seal: hmac_sha256(volume, &[b"MIND-STO seal"]), nonce: hmac_sha256(volume, &[b"MIND-STO nonce"]) } }
     // Seals `data` in place; returns its nonce and tag. The nonce comes from the record and its associated data, so a
     // write needs no random source; it repeats only for the same record at the same place, which seals the same way.
@@ -158,8 +177,10 @@ pub enum Error {
     Incomplete,
     /// The owner would retain more than its quota (MC-4.11): nothing was published or pinned.
     Quota,
-    /// A pin of another owner.
+    /// A pin or a domain of another owner.
     Rights,
+    /// No random source for a domain's key: one derived from anything kept could not be destroyed (308-STO-0023).
+    NoRandom,
 }
 
 /// What the store holds.
@@ -196,11 +217,11 @@ pub struct Collected { pub blocks: u32, pub names: u32, pub sectors: u64, pub fr
 
 /// A slot of the index, a hash table with open addressing (251-STO-0013): when the block's lease began, where its
 /// record starts (a sector below 2^32), its length, whether the slot is used and whether the last collection found the
-/// block retained, and the CID's binary form. 56 bytes; all zeros is an empty slot.
+/// block retained, the CID's binary form and the block's domain. 56 bytes; all zeros is an empty slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Entry { lease: u64, lba: u32, len: u16, flags: u8, key: [u8; cid::BYTES] }
+pub struct Entry { lease: u64, lba: u32, len: u16, flags: u8, key: [u8; cid::BYTES], domain: u16 }
 impl Entry {
-    pub const EMPTY: Entry = Entry { lease: 0, lba: 0, len: 0, flags: 0, key: [0; cid::BYTES] };
+    pub const EMPTY: Entry = Entry { lease: 0, lba: 0, len: 0, flags: 0, key: [0; cid::BYTES], domain: VOLUME };
     fn used(&self) -> bool { self.flags & USED != 0 }
     fn live(&self) -> bool { self.flags & LIVE != 0 }
 }
@@ -211,9 +232,10 @@ const LIVE: u8 = 2;
 /// 4096 blocks, at most 2^20 slots. The service gives the store as many as its memory allows, down to the least.
 pub fn slots_for(sectors: u64) -> usize { ((sectors / 8).max(4096) * 8 / 7).min(1 << 20) as usize }
 
-// The slot a key starts its search at: its digest's first bytes are uniform, the codec tells raw and node apart.
-fn home(key: &[u8; cid::BYTES], slots: usize) -> usize {
-    let h = u64::from_le_bytes(key[4..12].try_into().unwrap()) ^ (key[1] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+// The slot a key starts its search at: its digest's first bytes are uniform, the codec and the domain tell copies apart.
+fn home(key: &[u8; cid::BYTES], domain: u16, slots: usize) -> usize {
+    let h = u64::from_le_bytes(key[4..12].try_into().unwrap()) ^ (key[1] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (domain as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
     (h % slots as u64) as usize
 }
 
@@ -231,13 +253,14 @@ impl Version {
     pub fn root(&self) -> Option<Cid> { self.points.then(|| Cid::from_bytes(&self.root).unwrap()) }
 }
 
-/// A name and the versions of it the store keeps, newest first: at most HISTORY, only the last once it is removed.
+/// A name of a domain and the versions of it the store keeps, newest first: at most HISTORY, only the last once it is
+/// removed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Head { name: [u8; NAME_MAX], len: u8, kept: [Version; HISTORY], count: u8 }
+pub struct Head { name: [u8; NAME_MAX], len: u8, kept: [Version; HISTORY], count: u8, domain: u16 }
 impl Head {
-    pub const EMPTY: Head = Head { name: [0; NAME_MAX], len: 0, kept: [Version::EMPTY; HISTORY], count: 0 };
-    fn new(name: &[u8], version: Version) -> Self {
-        let mut h = Head { len: name.len() as u8, ..Head::EMPTY };
+    pub const EMPTY: Head = Head { name: [0; NAME_MAX], len: 0, kept: [Version::EMPTY; HISTORY], count: 0, domain: VOLUME };
+    fn new(domain: u16, name: &[u8], version: Version) -> Self {
+        let mut h = Head { len: name.len() as u8, domain, ..Head::EMPTY };
         h.name[..name.len()].copy_from_slice(name);
         h.keep(version);
         h
@@ -261,11 +284,12 @@ impl Head {
     }
 }
 
-/// A pin: a retention obligation of an owner (a badge) on an object, until the owner unpins it (MC-4.11, Appendix B.3).
+/// A pin: a retention obligation of an owner (a badge) on an object of a domain, until the owner unpins it (MC-4.11,
+/// Appendix B.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pin { pub id: u32, pub owner: u16, root: [u8; cid::BYTES], lba: u64, pub size: u64 }
+pub struct Pin { pub id: u32, pub owner: u16, root: [u8; cid::BYTES], lba: u64, pub size: u64, domain: u16 }
 impl Pin {
-    pub const EMPTY: Pin = Pin { id: 0, owner: 0, root: [0; cid::BYTES], lba: 0, size: 0 };
+    pub const EMPTY: Pin = Pin { id: 0, owner: 0, root: [0; cid::BYTES], lba: 0, size: 0, domain: VOLUME };
     pub fn root(&self) -> Cid { Cid::from_bytes(&self.root).unwrap() }
 }
 
@@ -356,8 +380,37 @@ fn parse_pin(sector: &[u8]) -> Option<Pin> {
     if sector[PIN_RECORD..].iter().any(|&b| b != 0) { return None; }
     Cid::from_bytes(&sector[20..56]).ok()?;
     let id = u32::from_le_bytes(sector[12..16].try_into().unwrap());
-    Some(Pin { id, owner: u16::from_le_bytes([sector[16], sector[17]]), root: sector[20..56].try_into().unwrap(), lba: 0, size: 0 })
+    Some(Pin { id, owner: u16::from_le_bytes([sector[16], sector[17]]), root: sector[20..56].try_into().unwrap(), lba: 0, size: 0, domain: VOLUME })
 }
+
+fn key_record(domain: u16, state: u16, owner: u16, key: &[u8; 32]) -> [u8; KEY_RECORD] {
+    let mut r = [0u8; KEY_RECORD];
+    r[..8].copy_from_slice(KEY_MAGIC);
+    r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    r[10..12].copy_from_slice(&domain.to_le_bytes());
+    r[12..14].copy_from_slice(&state.to_le_bytes());
+    r[14..16].copy_from_slice(&owner.to_le_bytes());
+    r[20..52].copy_from_slice(key);
+    let check = sha256::digest(&r[..52]);
+    r[52..KEY_RECORD].copy_from_slice(&check);
+    r
+}
+
+// A domain's number, state, owner and key, if the sector is a whole key record of this layout.
+fn parse_key(sector: &[u8]) -> Option<(u16, u16, u16, [u8; 32])> {
+    if &sector[..8] != KEY_MAGIC || sector[52..KEY_RECORD] != sha256::digest(&sector[..52]) || sector[KEY_RECORD..].iter().any(|&b| b != 0) { return None; }
+    let field = |at: usize| u16::from_le_bytes([sector[at], sector[at + 1]]);
+    let (domain, state, owner) = (field(10), field(12), field(14));
+    let key: [u8; 32] = sector[20..52].try_into().unwrap();
+    let valid = field(8) == LAYOUT && sector[16..20] == [0; 4] && domain != VOLUME && domain != KEYS
+        && (state == KEY_LIVE || (state == KEY_GONE && key == [0; 32]));
+    valid.then_some((domain, state, owner, key))
+}
+
+/// A memory domain (308-STO-0023): its number, its owner (a badge), whether its key is forgotten, and how many of its
+/// records the last pass met; its keys and where its key record and tombstone lie.
+#[derive(Clone, Copy)]
+pub struct Domain { pub id: u16, pub owner: u16, pub forgotten: bool, pub records: u32, keys: Keys, key_at: u64, tomb_at: u64 }
 
 pub struct Store<'a, D: Device> {
     dev: D,
@@ -385,6 +438,9 @@ pub struct Store<'a, D: Device> {
     keys: Keys,
     // Whether this mount made the volume key, and from random bytes.
     made: Option<bool>,
+    // The domain requests work in, and the domains the store keeps.
+    domain: u16,
+    domains: [Option<Domain>; DOMAINS],
 }
 
 fn free_marker(sectors: u64) -> [u8; FREE_RECORD] {
@@ -523,7 +579,9 @@ impl<'a, D: Device> Store<'a, D> {
         let mut store = Store {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
             scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made,
+            domain: VOLUME, domains: [None; DOMAINS],
         };
+        store.pass_keys()?;
         store.pass(false)?;
         store.size_retained();
         Ok(store)
@@ -552,6 +610,7 @@ impl<'a, D: Device> Store<'a, D> {
         let (mut lba, mut run) = (1u64, None::<u64>);
         (self.runs, self.end, self.damaged) = (0, 1, 0);
         if sweep { self.corrupt = 0; }
+        for d in self.domains.iter_mut().flatten() { d.records = 0; }
         while lba < sectors {
             let window = (sectors - lba).min(RECORD_SECTORS as u64) as usize;
             if !self.dev.read(lba, &mut self.buffer[..window * SECTOR]) { return Err(Error::Device); }
@@ -562,7 +621,8 @@ impl<'a, D: Device> Store<'a, D> {
                 let sector = &self.buffer[at * SECTOR..(at + 1) * SECTOR];
                 if let Some(n) = parse_frame(sector).filter(|&n| here + n as u64 <= sectors) {
                     // The record is read again whole to be opened, so the next window starts after it.
-                    next = here + self.record(here, n as u64, sweep, &mut run, &mut freed)?;
+                    let domain = u16::from_le_bytes([sector[10], sector[11]]);
+                    next = here + self.record(here, n as u64, domain, sweep, &mut run, &mut freed)?;
                     break;
                 }
                 if sector.iter().any(|&b| b != 0) {
@@ -583,21 +643,110 @@ impl<'a, D: Device> Store<'a, D> {
             while i < self.index.len() {
                 if self.index[i].used() && !self.retained(i) { self.remove(i); } else { i += 1; }
             }
+            // A forgotten domain's records are all freed now: its tombstone goes, and its number may be given again.
+            for k in 0..DOMAINS {
+                let Some(d) = self.domains[k].filter(|d| d.forgotten) else { continue };
+                if d.tomb_at != 0 { self.erase(d.tomb_at, 1)?; self.release(d.tomb_at, 1); }
+                self.domains[k] = None;
+            }
         }
         freed.free = self.holes[..self.runs].iter().map(|h| h.len).sum();
         Ok(freed)
     }
 
+    // Reads the domains' key records before any other record is opened, since a domain's records may lie before its
+    // key. A domain with both a key record and a tombstone is forgotten, and its key record is erased (a forget that
+    // stopped in the middle).
+    fn pass_keys(&mut self) -> Result<(), Error> {
+        let sectors = self.dev.sectors();
+        let mut lba = 1u64;
+        while lba < sectors {
+            let window = (sectors - lba).min(RECORD_SECTORS as u64) as usize;
+            if !self.dev.read(lba, &mut self.buffer[..window * SECTOR]) { return Err(Error::Device); }
+            let mut at = 0;
+            let mut next = lba + window as u64;
+            while at < window {
+                let here = lba + at as u64;
+                let sector = &self.buffer[at * SECTOR..(at + 1) * SECTOR];
+                let Some(n) = parse_frame(sector).filter(|&n| here + n as u64 <= sectors) else { at += 1; continue };
+                if u16::from_le_bytes([sector[10], sector[11]]) == KEYS {
+                    // Opening it overwrites the window, so the next one starts after it.
+                    match self.open(here, n, KEYS)? {
+                        true if n == 1 => match parse_key(&self.buffer[..SECTOR]) {
+                            Some(key) => self.key_found(here, key)?,
+                            None => self.corrupt += 1,
+                        },
+                        _ => self.corrupt += 1,
+                    }
+                    next = here + n as u64;
+                    break;
+                }
+                if at + n >= window { next = here + n as u64; break; }
+                at += n;
+            }
+            lba = next;
+        }
+        for k in 0..DOMAINS {
+            let Some(d) = self.domains[k].as_mut().filter(|d| d.forgotten) else { continue };
+            d.keys = Keys::NONE;
+            let key_at = core::mem::take(&mut d.key_at);
+            if key_at != 0 && self.dev.writable() { self.erase(key_at, 1)?; }
+        }
+        Ok(())
+    }
+
+    // A key record or tombstone found at `lba`.
+    fn key_found(&mut self, lba: u64, (id, state, owner, key): (u16, u16, u16, [u8; 32])) -> Result<(), Error> {
+        let k = match self.slot_of(id) {
+            Some(k) => k,
+            None => {
+                let k = self.domains.iter().position(Option::is_none).ok_or(Error::Full)?;
+                self.domains[k] = Some(Domain { id, owner, forgotten: false, records: 0, keys: Keys::NONE, key_at: 0, tomb_at: 0 });
+                k
+            }
+        };
+        let d = self.domains[k].as_mut().unwrap();
+        if state == KEY_GONE { d.forgotten = true; d.tomb_at = lba; } else if d.key_at == 0 { d.keys = Keys::new(&key); d.key_at = lba; d.owner = owner; }
+        Ok(())
+    }
+
+    fn slot_of(&self, id: u16) -> Option<usize> { self.domains.iter().position(|d| d.is_some_and(|d| d.id == id)) }
+
+    // The keys the records of `domain` are sealed under: the volume's for its own and for the key records, a live
+    // domain's own; none for a forgotten or unknown one.
+    fn keys_for(&self, domain: u16) -> Option<Keys> {
+        match domain {
+            VOLUME | KEYS => Some(self.keys),
+            _ => self.slot_of(domain).and_then(|k| self.domains[k]).filter(|d| !d.forgotten).map(|d| d.keys),
+        }
+    }
+
     // Opens the sealed record of `n` sectors at `here`: a mount indexes what it holds, a sweep keeps or frees it.
     // Returns the sectors it covers (a free marker covers more than its own).
-    fn record(&mut self, here: u64, n: u64, sweep: bool, run: &mut Option<u64>, freed: &mut Collected) -> Result<u64, Error> {
+    fn record(&mut self, here: u64, n: u64, domain: u16, sweep: bool, run: &mut Option<u64>, freed: &mut Collected) -> Result<u64, Error> {
+        // The key records were read first (pass_keys); a sweep drops a forgotten domain's tombstone after it.
+        if domain == KEYS { self.occupied(run, here, n); return Ok(n); }
+        if domain != VOLUME {
+            let Some(k) = self.slot_of(domain) else {
+                // No key and no tombstone: its key record may only be damaged, so the record is kept, counted corrupt.
+                self.corrupt += 1;
+                return self.settle(true, here, n, run, freed);
+            };
+            let d = self.domains[k].as_mut().unwrap();
+            d.records += 1;
+            if d.forgotten {
+                // Its key is destroyed, so it never opens again: a sweep frees it.
+                if sweep { freed.blocks += 1; }
+                return self.settle(!sweep, here, n, run, freed);
+            }
+        }
         // What does not open is read as zeros, which no record is.
-        let opened = self.open(here, n as usize)?;
+        let opened = self.open(here, n as usize, domain)?;
         let sector = &self.buffer[..SECTOR];
         let one = opened && n == 1;
         if let Some((cid, size)) = parse_header(sector).filter(|&(_, size)| opened && record_sectors(size) as u64 == n) {
             let keep = if sweep {
-                match self.position(&cid.to_bytes()) {
+                match self.position(&cid.to_bytes(), domain) {
                     Ok(i) if self.index[i].lba as u64 == here && self.retained(i) => true,
                     // The indexed copy leaves the index before its sectors are erased, so a failure later in the sweep
                     // never leaves an erased block acknowledged (audit A05, 175-STO-0012).
@@ -607,9 +756,9 @@ impl<'a, D: Device> Store<'a, D> {
             } else {
                 let whole = self.intact(&cid, size);
                 if !whole { self.corrupt += 1; }
-                if whole && !self.contains(&cid) {
+                if whole && self.position(&cid.to_bytes(), domain).is_err() {
                     if self.count == self.limit() { return Err(Error::Full); }
-                    self.insert(cid.to_bytes(), here, size);
+                    self.insert(cid.to_bytes(), domain, here, size);
                 }
                 true
             };
@@ -621,9 +770,9 @@ impl<'a, D: Device> Store<'a, D> {
             if let Some(entries) = self.commit_entries(count) {
                 let entries = &entries[..count];
                 let keep = if sweep {
-                    entries.iter().any(|(name, len, v)| self.find(&name[..*len]).is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)))
+                    entries.iter().any(|(name, len, v)| self.find_in(domain, &name[..*len]).is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)))
                 } else {
-                    for (name, len, v) in entries { self.keep_version(&name[..*len], *v)?; }
+                    for (name, len, v) in entries { self.keep_version(domain, &name[..*len], *v)?; }
                     true
                 };
                 if !keep { freed.names += count as u32; }
@@ -633,11 +782,12 @@ impl<'a, D: Device> Store<'a, D> {
         if let Some((name, size, v)) = parse_name(sector).filter(|_| one) {
             let name = &name[..size];
             // A sweep frees a version the name no longer keeps.
-            let keep = if sweep { self.find(name).is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)) } else { self.keep_version(name, v)?; true };
+            let keep = if sweep { self.find_in(domain, name).is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)) } else { self.keep_version(domain, name, v)?; true };
             if !keep { freed.names += 1; }
             return self.settle(keep, here, n, run, freed);
         }
         if let Some(mut pin) = parse_pin(sector).filter(|_| one) {
+            pin.domain = domain;
             let held = self.pins[..self.pinned].iter().position(|p| p.id == pin.id);
             let keep = if sweep { held.is_some_and(|k| self.pins[k].lba == here) } else {
                 if held.is_none() {
@@ -651,7 +801,7 @@ impl<'a, D: Device> Store<'a, D> {
             };
             return self.settle(keep, here, n, run, freed);
         }
-        if let Some(m) = parse_free(sector).filter(|&m| one && here + m <= self.dev.sectors()) {
+        if let Some(m) = parse_free(sector).filter(|&m| one && domain == VOLUME && here + m <= self.dev.sectors()) {
             // A collection stopped in the middle of freeing this: finish it.
             if self.dev.writable() { self.erase(here, m)?; run.get_or_insert(here); } else { self.occupied(run, here, m); }
             return Ok(m);
@@ -673,10 +823,10 @@ impl<'a, D: Device> Store<'a, D> {
     }
 
     // A version found on the medium: the name keeps it among its newest.
-    fn keep_version(&mut self, name: &[u8], v: Version) -> Result<(), Error> {
-        match self.find(name) {
+    fn keep_version(&mut self, domain: u16, name: &[u8], v: Version) -> Result<(), Error> {
+        match self.find_in(domain, name) {
             Ok(i) => self.heads[i].keep(v),
-            Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, Head::new(name, v)); }
+            Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, Head::new(domain, name, v)); }
         }
         Ok(())
     }
@@ -716,7 +866,7 @@ impl<'a, D: Device> Store<'a, D> {
 
     // Frees `n` sectors at `lba`: a marker first, so a scan after a stop in the middle finishes it, then zeros.
     fn erase(&mut self, lba: u64, n: u64) -> Result<(), Error> {
-        self.write_record(lba, &free_marker(n))?;
+        self.write_record(lba, &free_marker(n), VOLUME)?;
         self.buffer.fill(0);
         let mut at = lba + 1;
         while at < lba + n {
@@ -748,44 +898,47 @@ impl<'a, D: Device> Store<'a, D> {
         self.find_room(n).ok_or(Error::Full)
     }
 
-    // Seals the record of `len` bytes at buffer[FRAME..], and the zeros after it to the end of its last sector, for its
-    // first sector `lba`; returns its sectors, ready to write.
-    fn seal(&mut self, lba: u64, len: usize) -> usize {
+    // Seals the record of `len` bytes at buffer[FRAME..], and the zeros after it to the end of its last sector, in
+    // `domain` for its first sector `lba`; returns its sectors, ready to write. `NotFound` for a domain without a key.
+    fn seal(&mut self, lba: u64, len: usize, domain: u16) -> Result<usize, Error> {
+        let keys = self.keys_for(domain).ok_or(Error::NotFound)?;
         let n = sealed_sectors(len);
         let b = &mut self.buffer[..n * SECTOR];
         b[FRAME + len..].fill(0);
         b[..8].copy_from_slice(FRAME_MAGIC);
         b[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
-        // The domain: 0, the volume's, until 308-STO-0023.
-        b[10..12].fill(0);
+        b[10..12].copy_from_slice(&domain.to_le_bytes());
         b[12..16].copy_from_slice(&(n as u32).to_le_bytes());
         let aad = aad(b, lba);
-        let (nonce, tag) = self.keys.seal(self.crypto, &aad, &mut b[FRAME..]);
+        let (nonce, tag) = keys.seal(self.crypto, &aad, &mut b[FRAME..]);
         b[16..28].copy_from_slice(&nonce);
         b[28..FRAME].copy_from_slice(&tag);
-        n
+        Ok(n)
     }
 
-    // Seals the record of `len` bytes at buffer[FRAME..] for `lba`, writes and flushes it.
-    fn write_sealed(&mut self, lba: u64, len: usize) -> Result<(), Error> {
-        let n = self.seal(lba, len);
+    // Seals the record of `len` bytes at buffer[FRAME..] in `domain` for `lba`, writes and flushes it.
+    fn write_sealed(&mut self, lba: u64, len: usize, domain: u16) -> Result<(), Error> {
+        let n = self.seal(lba, len, domain)?;
         if !self.dev.write(lba, &self.buffer[..n * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
         Ok(())
     }
 
-    fn write_record(&mut self, lba: u64, record: &[u8]) -> Result<(), Error> {
+    fn write_record(&mut self, lba: u64, record: &[u8], domain: u16) -> Result<(), Error> {
         self.buffer[FRAME..FRAME + record.len()].copy_from_slice(record);
-        self.write_sealed(lba, record.len())
+        self.write_sealed(lba, record.len(), domain)
     }
 
-    // Reads the `n` sectors at `lba` and opens the record they seal: it then starts the buffer, zeros after it. If the
-    // frame does not cover exactly them, is of another domain or does not open, the buffer is zeros and false returned.
-    fn open(&mut self, lba: u64, n: usize) -> Result<bool, Error> {
+    // Reads the `n` sectors at `lba` and opens the record they seal in `domain`: it then starts the buffer, zeros after
+    // it. If the frame does not cover exactly them, is of another domain or does not open, the buffer is zeros and false
+    // returned.
+    fn open(&mut self, lba: u64, n: usize, domain: u16) -> Result<bool, Error> {
+        let keys = self.keys_for(domain);
         let b = &mut self.buffer[..n * SECTOR];
         if !self.dev.read(lba, b) { return Err(Error::Device); }
-        let framed = parse_frame(b) == Some(n) && b[10..12] == [0, 0];
+        let framed = parse_frame(b) == Some(n) && b[10..12] == domain.to_le_bytes();
         let (aad, nonce, tag) = (aad(b, lba), b[16..28].try_into().unwrap(), b[28..FRAME].try_into().unwrap());
-        if !framed || !self.crypto.open(&self.keys.seal, &nonce, &aad, &mut b[FRAME..], &tag) { b.fill(0); return Ok(false); }
+        let opened = framed && keys.is_some_and(|k| self.crypto.open(&k.seal, &nonce, &aad, &mut b[FRAME..], &tag));
+        if !opened { b.fill(0); return Ok(false); }
         b.copy_within(FRAME.., 0);
         b[n * SECTOR - FRAME..].fill(0);
         Ok(true)
@@ -793,7 +946,7 @@ impl<'a, D: Device> Store<'a, D> {
 
     // Opens the record at `lba`; whether it is the block `cid` of `len` bytes, whole. Its bytes then follow the header.
     fn verify(&mut self, lba: u64, cid: &Cid, len: usize) -> Result<bool, Error> {
-        let whole = self.open(lba, record_sectors(len))? && self.intact(cid, len);
+        let whole = self.open(lba, record_sectors(len), self.domain)? && self.intact(cid, len);
         if !whole { self.corrupt += 1; }
         Ok(whole)
     }
@@ -804,15 +957,15 @@ impl<'a, D: Device> Store<'a, D> {
         parse_header(&self.buffer[..SECTOR]) == Some((*cid, len)) && cid.matches(data) && typed(cid.codec(), data)
     }
 
-    // The slot holding `key`, or the empty slot where it would go (the number of slots when none is empty).
-    fn position(&self, key: &[u8; cid::BYTES]) -> Result<usize, usize> {
+    // The slot holding `key` of `domain`, or the empty slot where it would go (the number of slots when none is empty).
+    fn position(&self, key: &[u8; cid::BYTES], domain: u16) -> Result<usize, usize> {
         let n = self.index.len();
         if n == 0 { return Err(0); }
-        let mut at = home(key, n);
+        let mut at = home(key, domain, n);
         for _ in 0..n {
             let e = &self.index[at];
             if !e.used() { return Err(at); }
-            if e.key == *key { return Ok(at); }
+            if e.key == *key && e.domain == domain { return Ok(at); }
             at = if at + 1 == n { 0 } else { at + 1 };
         }
         Err(n)
@@ -820,14 +973,14 @@ impl<'a, D: Device> Store<'a, D> {
     // The most blocks the index takes: every slot of a small one, seven eighths of a large one, so a search for a block
     // that is not there ends soon.
     fn limit(&self) -> usize { let n = self.index.len(); if n > 64 { n - n / 8 } else { n } }
-    fn contains(&self, cid: &Cid) -> bool { self.position(&cid.to_bytes()).is_ok() }
+    fn contains(&self, cid: &Cid) -> bool { self.position(&cid.to_bytes(), self.domain).is_ok() }
     // Whether a collection keeps the block: a name retains it, or its lease runs.
     fn retained(&self, i: usize) -> bool { self.index[i].live() || self.now < self.index[i].lease.saturating_add(LEASE_NS) }
 
     // Callers check first that the key is not there and that the index has room (`limit`).
-    fn insert(&mut self, key: [u8; cid::BYTES], lba: u64, len: usize) {
-        let at = self.position(&key).unwrap_err();
-        self.index[at] = Entry { lease: self.now, lba: lba as u32, len: len as u16, flags: USED, key };
+    fn insert(&mut self, key: [u8; cid::BYTES], domain: u16, lba: u64, len: usize) {
+        let at = self.position(&key, domain).unwrap_err();
+        self.index[at] = Entry { lease: self.now, lba: lba as u32, len: len as u16, flags: USED, key, domain };
         self.count += 1;
         self.bytes += len as u64;
     }
@@ -839,7 +992,7 @@ impl<'a, D: Device> Store<'a, D> {
         let n = self.index.len();
         let (mut hole, mut next) = (at, (at + 1) % n);
         while next != at && self.index[next].used() {
-            let home = home(&self.index[next].key, n);
+            let home = home(&self.index[next].key, self.index[next].domain, n);
             // The entry stays if its home lies cyclically after the hole, up to where it is.
             let stays = if hole < next { hole < home && home <= next } else { hole < home || home <= next };
             if !stays { self.index[hole] = self.index[next]; hole = next; }
@@ -850,7 +1003,13 @@ impl<'a, D: Device> Store<'a, D> {
 
     pub fn has(&self, cid: &Cid) -> bool { self.contains(cid) }
 
-    fn find(&self, name: &[u8]) -> Result<usize, usize> { self.heads[..self.names].binary_search_by(|h| h.name().cmp(name)) }
+    // A name of the domain requests work in, as find_in.
+    fn find(&self, name: &[u8]) -> Result<usize, usize> { self.find_in(self.domain, name) }
+
+    // The head of `name` in `domain`, or where it would go: heads are sorted by domain, then name.
+    fn find_in(&self, domain: u16, name: &[u8]) -> Result<usize, usize> {
+        self.heads[..self.names].binary_search_by(|h| (h.domain, h.name()).cmp(&(domain, name)))
+    }
 
     fn add(&mut self, at: usize, head: Head) {
         self.heads.copy_within(at..self.names, at + 1);
@@ -870,7 +1029,9 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn names<'s>(&'s self, prefix: &[u8], after: &[u8]) -> Result<impl Iterator<Item = (&'s [u8], u64, Cid)> + 's, Error> {
         let part = |s: &[u8]| s.len() <= NAME_MAX && (s.is_empty() || valid_name(s));
         if !part(prefix) || !part(after) { return Err(Error::Invalid); }
-        let heads = &self.heads[..self.names];
+        // A domain's names are one run of the heads, sorted by name.
+        let all = &self.heads[..self.names];
+        let heads = &all[all.partition_point(|h| h.domain < self.domain)..all.partition_point(|h| h.domain <= self.domain)];
         // Names are kept sorted, so those with the prefix are one run.
         let start = heads.partition_point(|h| h.name() < prefix).max(if after.is_empty() { 0 } else { heads.partition_point(|h| h.name() <= after) });
         let prefix_len = prefix.len();
@@ -899,27 +1060,37 @@ impl<'a, D: Device> Store<'a, D> {
         })
     }
 
-    // The size of every retained object, for the owners' accounts: read from each root once a mount is done.
+    // The size of every retained object, for the owners' accounts: read from each root, in its domain, once a mount is
+    // done.
     fn size_retained(&mut self) {
         let Some(scratch) = self.scratch.take() else { return };
+        let current = self.domain;
         for i in 0..self.names {
+            self.domain = self.heads[i].domain;
             for k in 0..self.heads[i].count as usize {
                 if let Some(root) = self.heads[i].kept[k].root() { self.heads[i].kept[k].size = dag::size(self, &root, scratch).unwrap_or(0); }
             }
         }
-        for i in 0..self.pinned { let root = self.pins[i].root(); self.pins[i].size = dag::size(self, &root, scratch).unwrap_or(0); }
+        for i in 0..self.pinned {
+            self.domain = self.pins[i].domain;
+            let root = self.pins[i].root();
+            self.pins[i].size = dag::size(self, &root, scratch).unwrap_or(0);
+        }
+        self.domain = current;
         self.scratch = Some(scratch);
     }
 
-    // The roots `owner` retains through its names' kept versions and its pins, with their objects' sizes.
-    fn owned(&self, owner: u16) -> impl Iterator<Item = ([u8; cid::BYTES], u64)> + '_ {
-        self.heads[..self.names].iter().flat_map(|h| h.retains()).filter(move |v| v.owner == owner).map(|v| (v.root, v.size))
-            .chain(self.pins[..self.pinned].iter().filter(move |p| p.owner == owner).map(|p| (p.root, p.size)))
+    // The roots `owner` retains through its names' kept versions and its pins, each with its domain, with their
+    // objects' sizes.
+    fn owned(&self, owner: u16) -> impl Iterator<Item = (Root, u64)> + '_ {
+        self.heads[..self.names].iter().flat_map(|h| { let d = h.domain; h.retains().map(move |v| (d, v)) })
+            .filter(move |(_, v)| v.owner == owner).map(|(d, v)| ((v.root, d), v.size))
+            .chain(self.pins[..self.pinned].iter().filter(move |p| p.owner == owner).map(|p| ((p.root, p.domain), p.size)))
     }
 
     // The bytes `owner` retains, each root counted once however many names and pins retain it; with the roots of
     // `extra` added unless it holds them already.
-    fn retained_by(&self, owner: u16, extra: &[([u8; cid::BYTES], u64)]) -> u64 {
+    fn retained_by(&self, owner: u16, extra: &[(Root, u64)]) -> u64 {
         let mut total = 0;
         for (k, (root, size)) in self.owned(owner).enumerate() {
             if !self.owned(owner).take(k).any(|(r, _)| r == root) { total += size; }
@@ -953,12 +1124,12 @@ impl<'a, D: Device> Store<'a, D> {
         // Room first: a collection it starts may free blocks of `root` whose lease ended, and the check below sees it.
         let lba = self.room(1)?;
         let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
-        if self.retained_by(owner, &[(root.to_bytes(), size)]) > self.quota { return Err(Error::Quota); }
+        if self.retained_by(owner, &[((root.to_bytes(), self.domain), size)]) > self.quota { return Err(Error::Quota); }
         let previous = self.find(name).ok().and_then(|i| self.heads[i].latest().root());
         let v = Version { version: current + 1, owner, root: root.to_bytes(), points: true, size };
         self.claim(lba, 1);
-        self.write_record(lba, &name_record(name, &v, previous)[..NAME_RECORD])?;
-        match self.find(name) { Ok(i) => self.heads[i].keep(v), Err(i) => self.add(i, Head::new(name, v)) }
+        self.write_record(lba, &name_record(name, &v, previous)[..NAME_RECORD], self.domain)?;
+        match self.find(name) { Ok(i) => self.heads[i].keep(v), Err(i) => self.add(i, Head::new(self.domain, name, v)) }
         Ok(v.version)
     }
 
@@ -976,7 +1147,7 @@ impl<'a, D: Device> Store<'a, D> {
         let previous = self.heads[i].latest().root();
         let v = Version { version: expected + 1, owner, ..Version::EMPTY };
         self.claim(lba, 1);
-        self.write_record(lba, &name_record(name, &v, previous)[..NAME_RECORD])?;
+        self.write_record(lba, &name_record(name, &v, previous)[..NAME_RECORD], self.domain)?;
         self.heads[i].keep(v);
         Ok(v.version)
     }
@@ -1005,23 +1176,24 @@ impl<'a, D: Device> Store<'a, D> {
         // Room first: a collection it starts may free blocks whose lease ended, and the checks below see it.
         let size = (1 + n) * SECTOR;
         let lba = self.room(sealed_sectors(size) as u64)?;
-        let mut extra = [([0u8; cid::BYTES], 0u64); COMMIT_MAX];
+        let mut extra = [(([0u8; cid::BYTES], self.domain), 0u64); COMMIT_MAX];
         for (k, u) in updates.iter().enumerate() {
             if let Some(root) = u.root {
                 let size = self.walk(&root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
-                extra[k] = (root.to_bytes(), size);
+                extra[k] = ((root.to_bytes(), self.domain), size);
             }
         }
         // A removal adds a zero root of no size: it changes nothing.
         if self.retained_by(owner, &extra[..n]) > self.quota { return Err(Error::Quota); }
         let mut versions = [0u64; COMMIT_MAX];
+        let domain = self.domain;
         let record = &mut self.buffer[FRAME..FRAME + size];
         record.fill(0);
         record[..8].copy_from_slice(TXN_MAGIC);
         record[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
         record[10..12].copy_from_slice(&(n as u16).to_le_bytes());
         for (k, u) in updates.iter().enumerate() {
-            let head = self.heads[..self.names].binary_search_by(|h| h.name().cmp(u.name)).ok().map(|i| &self.heads[i]);
+            let head = self.heads[..self.names].binary_search_by(|h| (h.domain, h.name()).cmp(&(domain, u.name))).ok().map(|i| &self.heads[i]);
             let previous = head.and_then(|h| h.latest().root());
             versions[k] = head.map_or(0, |h| h.latest().version) + 1;
             let v = Version { version: versions[k], owner, root: u.root.map_or([0; cid::BYTES], |r| r.to_bytes()), points: u.root.is_some(), size: extra[k].1 };
@@ -1033,10 +1205,10 @@ impl<'a, D: Device> Store<'a, D> {
         let check = txn_digest(record);
         record[16..48].copy_from_slice(&check);
         self.claim(lba, sealed_sectors(size) as u64);
-        self.write_sealed(lba, size)?;
+        self.write_sealed(lba, size, domain)?;
         for (k, u) in updates.iter().enumerate() {
             let v = Version { version: versions[k], owner, root: u.root.map_or([0; cid::BYTES], |r| r.to_bytes()), points: u.root.is_some(), size: extra[k].1 };
-            self.keep_version(u.name, v)?;
+            self.keep_version(domain, u.name, v)?;
         }
         Ok(versions)
     }
@@ -1054,10 +1226,10 @@ impl<'a, D: Device> Store<'a, D> {
         if self.pinned == self.pins.len() { return Err(Error::Full); }
         let lba = self.room(1)?;
         let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
-        if self.retained_by(owner, &[(root.to_bytes(), size)]) > self.quota { return Err(Error::Quota); }
-        let pin = Pin { id: self.next_pin, owner, root: root.to_bytes(), lba, size };
+        if self.retained_by(owner, &[((root.to_bytes(), self.domain), size)]) > self.quota { return Err(Error::Quota); }
+        let pin = Pin { id: self.next_pin, owner, root: root.to_bytes(), lba, size, domain: self.domain };
         self.claim(lba, 1);
-        self.write_record(lba, &pin_record(&pin)[..PIN_RECORD])?;
+        self.write_record(lba, &pin_record(&pin)[..PIN_RECORD], self.domain)?;
         self.next_pin = self.next_pin.wrapping_add(1).max(1);
         self.pins[self.pinned] = pin;
         self.pinned += 1;
@@ -1067,7 +1239,7 @@ impl<'a, D: Device> Store<'a, D> {
     /// Ends `owner`'s pin `id`: its record is freed at once; the object goes when nothing else retains it.
     pub fn unpin(&mut self, id: u32, owner: u16) -> Result<(), Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
-        let k = self.pins[..self.pinned].iter().position(|p| p.id == id).ok_or(Error::NotFound)?;
+        let k = self.pins[..self.pinned].iter().position(|p| p.id == id && p.domain == self.domain).ok_or(Error::NotFound)?;
         if self.pins[k].owner != owner { return Err(Error::Rights); }
         let lba = self.pins[k].lba;
         self.erase(lba, 1)?;
@@ -1077,8 +1249,8 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(())
     }
 
-    /// The pins of `owner`.
-    pub fn pins(&self, owner: u16) -> impl Iterator<Item = &Pin> { self.pins[..self.pinned].iter().filter(move |p| p.owner == owner) }
+    /// The pins of `owner` in the domain requests work in.
+    pub fn pins(&self, owner: u16) -> impl Iterator<Item = &Pin> { self.pins[..self.pinned].iter().filter(move |p| p.owner == owner && p.domain == self.domain) }
 
     /// Frees what no name retains, no pin holds and no lease protects: unretained blocks, other copies of a block
     /// (corrupt ones too), name versions a name no longer keeps (MC-4.5). Every retained object is walked first, every
@@ -1086,19 +1258,33 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn collect(&mut self) -> Result<Collected, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         for e in self.index.iter_mut() { e.flags &= !LIVE; }
-        let mark = |s: &mut Self, cid: &Cid| match s.position(&cid.to_bytes()) {
+        let current = self.domain;
+        let marked = self.mark();
+        self.domain = current;
+        marked?;
+        self.pass(true)
+    }
+
+    // Marks every block a name's kept version or a pin retains, each object walked in its own domain.
+    fn mark(&mut self) -> Result<(), Error> {
+        let mark = |s: &mut Self, cid: &Cid| match s.position(&cid.to_bytes(), s.domain) {
             Ok(k) => { s.index[k].flags |= LIVE; Ok(()) }
             Err(_) => Err(dag::Error::NotFound),
         };
         for i in 0..self.names {
+            self.domain = self.heads[i].domain;
             for k in 0..self.heads[i].count as usize {
                 let head = &self.heads[i];
                 if head.removed() { break; }
                 if let Some(root) = head.kept[k].root() { self.walk(&root, mark)?; }
             }
         }
-        for i in 0..self.pinned { let root = self.pins[i].root(); self.walk(&root, mark)?; }
-        self.pass(true)
+        for i in 0..self.pinned {
+            self.domain = self.pins[i].domain;
+            let root = self.pins[i].root();
+            self.walk(&root, mark)?;
+        }
+        Ok(())
     }
 
     /// Stores `data` as a block of type `codec` and returns its CID, once the device has flushed it. A node must decode
@@ -1107,7 +1293,7 @@ impl<'a, D: Device> Store<'a, D> {
         if data.len() > BLOCK_MAX { return Err(Error::TooLarge); }
         if !typed(codec, data) { return Err(Error::Invalid); }
         let cid = Cid::of(codec, data);
-        if let Ok(i) = self.position(&cid.to_bytes()) { self.index[i].lease = self.now; return Ok(cid); }
+        if let Ok(i) = self.position(&cid.to_bytes(), self.domain) { self.index[i].lease = self.now; return Ok(cid); }
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         let n = record_sectors(data.len()) as u64;
         if self.count == self.limit() { self.collect()?; }
@@ -1118,15 +1304,15 @@ impl<'a, D: Device> Store<'a, D> {
         record[HEADER..].copy_from_slice(data);
         // The sectors are taken even if the write fails: they may hold part of it now, and are not written again.
         self.claim(lba, n);
-        self.write_sealed(lba, HEADER + data.len())?;
-        self.insert(cid.to_bytes(), lba, data.len());
+        self.write_sealed(lba, HEADER + data.len(), self.domain)?;
+        self.insert(cid.to_bytes(), self.domain, lba, data.len());
         Ok(cid)
     }
 
     /// Copies the block named by `cid` into `out` and returns its length, only if its bytes match the CID. A corrupt
     /// block leaves the index, so a put of the same bytes stores them again.
     pub fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, Error> {
-        let at = self.position(&cid.to_bytes()).map_err(|_| Error::NotFound)?;
+        let at = self.position(&cid.to_bytes(), self.domain).map_err(|_| Error::NotFound)?;
         let Entry { lba, len, .. } = self.index[at];
         let (lba, len) = (lba as u64, len as usize);
         if out.len() < len { return Err(Error::TooLarge); }
@@ -1143,9 +1329,72 @@ impl<'a, D: Device> Store<'a, D> {
         }
     }
 
+    /// Makes a domain for `owner` (a badge), its key random and kept in a record sealed under the volume key; returns
+    /// its number. Without a random source none is made: a key derived from anything kept could not be destroyed.
+    pub fn domain_create(&mut self, owner: u16) -> Result<u16, Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let slot = self.domains.iter().position(Option::is_none).ok_or(Error::Full)?;
+        let id = self.domains().map(|d| d.id).max().unwrap_or(VOLUME) + 1;
+        if id == KEYS { return Err(Error::Full); }
+        let mut key = [0u8; 32];
+        if !self.crypto.random(&mut key) { return Err(Error::NoRandom); }
+        let lba = self.room(1)?;
+        self.claim(lba, 1);
+        let written = self.write_record(lba, &key_record(id, KEY_LIVE, owner, &key), KEYS);
+        let keys = Keys::new(&key);
+        key.fill(0);
+        written?;
+        self.domains[slot] = Some(Domain { id, owner, forgotten: false, records: 0, keys, key_at: lba, tomb_at: 0 });
+        Ok(id)
+    }
+
+    /// Forgets `owner`'s domain `id` (MC-4.8): a tombstone first, then its key record erased and its key wiped. Its
+    /// names, pins and blocks leave the store at once; its records never open again, and the next collection frees
+    /// them. Copies a client already read are outside this.
+    pub fn domain_forget(&mut self, id: u16, owner: u16) -> Result<(), Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let k = self.slot_of(id).filter(|&k| self.domains[k].is_some_and(|d| !d.forgotten)).ok_or(Error::NotFound)?;
+        if self.domains[k].is_some_and(|d| d.owner != owner) { return Err(Error::Rights); }
+        let lba = self.room(1)?;
+        self.claim(lba, 1);
+        self.write_record(lba, &key_record(id, KEY_GONE, owner, &[0; 32]), KEYS)?;
+        // Forgotten from here whatever follows: a mount that finds the tombstone erases the key record too.
+        let d = self.domains[k].as_mut().unwrap();
+        (d.forgotten, d.tomb_at, d.keys) = (true, lba, Keys::NONE);
+        let key_at = core::mem::take(&mut d.key_at);
+        self.drop_domain(id);
+        if self.domain == id { self.domain = VOLUME; }
+        if key_at != 0 { self.erase(key_at, 1)?; self.release(key_at, 1); }
+        Ok(())
+    }
+
+    // Takes a forgotten domain's names, pins and blocks out of the store's tables.
+    fn drop_domain(&mut self, id: u16) {
+        let mut k = 0;
+        while k < self.names { if self.heads[k].domain == id { self.heads.copy_within(k + 1..self.names, k); self.names -= 1; } else { k += 1; } }
+        let mut k = 0;
+        while k < self.pinned { if self.pins[k].domain == id { self.pins.copy_within(k + 1..self.pinned, k); self.pinned -= 1; } else { k += 1; } }
+        // A removal shifts later entries back, so the same slot is looked at again.
+        let mut i = 0;
+        while i < self.index.len() { if self.index[i].used() && self.index[i].domain == id { self.remove(i); } else { i += 1; } }
+    }
+
+    /// Works in domain `id` for the requests that follow (VOLUME: the volume's own); `NotFound` for one not live.
+    pub fn set_domain(&mut self, id: u16) -> Result<(), Error> {
+        if id == KEYS || self.keys_for(id).is_none() { return Err(Error::NotFound); }
+        self.domain = id;
+        Ok(())
+    }
+
+    /// The domains the store keeps, live and forgotten (a forgotten one until a collection has freed its records).
+    pub fn domains(&self) -> impl Iterator<Item = &Domain> { self.domains.iter().flatten() }
+
     #[cfg(test)]
     pub fn device(&mut self) -> &mut D { &mut self.dev }
 }
+
+// A root as an owner's account counts it: the CID and the domain it is in.
+type Root = ([u8; cid::BYTES], u16);
 
 // The store as the blocks of `dag`: reads go through `get`, so every block is checked against its CID.
 impl<D: Device> dag::Blocks for Store<'_, D> {

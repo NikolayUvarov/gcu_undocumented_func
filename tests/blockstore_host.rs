@@ -6,7 +6,8 @@
 //! collection by reachability with leases (303-STO-0001); pins with an owner and a quota, a name's history with explicit
 //! links, removing a name (303-STO-0002..0004); the current names listed by prefix, page by page (300-STO-0018); sealed
 //! records: nothing of a block, a CID or a name in the clear, a changed or moved record refused, a wrong key refused at
-//! mount (308-STO-0021).
+//! mount (308-STO-0021); memory domains, each under its own key, and a domain forgotten by destroying its key, its
+//! records then refused and collected (308-STO-0023).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -22,7 +23,7 @@ mod rights;
 use cid::{Cid, Codec};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use store::{hmac_sha256, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Pin, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, SECTOR};
+use store::{hmac_sha256, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Pin, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, SECTOR, VOLUME};
 
 /// A stand-in for ChaCha20-Poly1305, since the host tests build without crates: a keystream of splitmix64 seeded by
 /// SHA-256(key, nonce), and a tag of two sums in the manner of FNV-1a, seeded by the key, over the nonce, the associated
@@ -112,11 +113,15 @@ fn find(medium: &Memory, magic: &[u8; 8]) -> Vec<u64> {
 }
 
 /// Seals `record` at `lba` as the store does, under the medium's key: how a test forges a record.
-fn plant(medium: &mut Memory, lba: u64, record: &[u8]) {
+fn plant(medium: &mut Memory, lba: u64, record: &[u8]) { plant_in(medium, lba, record, VOLUME) }
+
+/// The same with the frame's domain `domain`; still under the volume key, as the domains' key records are (0xFFFF).
+fn plant_in(medium: &mut Memory, lba: u64, record: &[u8], domain: u16) {
     let n = sealed_sectors(record.len());
     let mut b = vec![0u8; n * SECTOR];
     b[..8].copy_from_slice(b"MIND-SLD");
     b[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    b[10..12].copy_from_slice(&domain.to_le_bytes());
     b[12..16].copy_from_slice(&(n as u32).to_le_bytes());
     b[FRAME..FRAME + record.len()].copy_from_slice(record);
     let nonce = [lba as u8; 12];
@@ -1458,10 +1463,10 @@ fn a_three_gibibyte_object_fits() {
 #[test]
 fn a_partition_holding_only_the_superblock_mounts_and_gets_a_key() {
     // 307-STO-0020, 308-STO-0021: what scripts/make_usb_image.py writes first in the store's partition (store_superblock):
-    // the magic, layout 3, the sector size, key source 0 (none yet), the SHA-256 of those 16 bytes, zeros where the key
+    // the magic, the layout, the sector size, key source 0 (none yet), the SHA-256 of those 16 bytes, zeros where the key
     // and its check go, and the SHA-256 of the 140 bytes before it.
     let mut first = Vec::from(&b"MIND-STO"[..]);
-    first.extend_from_slice(&3u16.to_le_bytes());
+    first.extend_from_slice(&LAYOUT.to_le_bytes());
     first.extend_from_slice(&(SECTOR as u16).to_le_bytes());
     first.extend_from_slice(&[KEY_NONE, 0, 0, 0]);
     first.extend_from_slice(&sha256::digest(&first[..16]));
@@ -1605,3 +1610,183 @@ fn hmac_sha256_matches_rfc_4231() {
     key[..4].copy_from_slice(b"Jefe");
     assert_eq!(hex(hmac_sha256(&key, &[b"what do ya want for nothing?"])), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
 }
+
+// The frame's domain of the record at `lba`.
+fn frame_domain(medium: &Memory, lba: u64) -> u16 { let at = lba as usize * SECTOR; u16::from_le_bytes([medium.data[at + 10], medium.data[at + 11]]) }
+
+// Every frame on the medium, by its first sector, with its domain.
+fn frames(medium: &Memory) -> Vec<(u64, u16)> { records(medium).into_iter().map(|(lba, _)| (lba, frame_domain(medium, lba))).collect() }
+
+#[test]
+fn two_domains_open_only_under_their_own_keys() {
+    let mut medium = Memory::new(512);
+    let data = block(4, 3000);
+    let (a, b, cid);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        (a, b) = (store.domain_create(OWNER).unwrap(), store.domain_create(OWNER).unwrap());
+        assert!(a != VOLUME && b != VOLUME && a != b);
+        // The same bytes in the volume and in each domain are three records; a name in one is not in the others.
+        cid = store.put(Codec::Raw, &data).unwrap();
+        for (domain, version) in [(a, 1), (b, 1)] {
+            store.set_domain(domain).unwrap();
+            assert!(!store.has(&cid), "a domain sees no other domain's block");
+            assert_eq!(store.put(Codec::Raw, &data), Ok(cid));
+            assert_eq!(store.publish(b"x", 0, &cid, OWNER), Ok(version));
+        }
+        store.set_domain(b).unwrap();
+        assert_eq!(store.publish(b"only-b", 0, &cid, OWNER), Ok(1));
+        store.set_domain(a).unwrap();
+        assert_eq!(store.resolve(b"only-b"), Err(Error::NotFound));
+        store.set_domain(VOLUME).unwrap();
+        assert_eq!(store.resolve(b"x"), Err(Error::NotFound));
+        assert_eq!(store.stats().blocks, 3);
+    }
+    // Each domain's records are framed as its own, and none of them opens under the volume key.
+    let domains: Vec<u16> = frames(&medium).iter().map(|f| f.1).collect();
+    assert_eq!((domains.iter().filter(|&&d| d == a).count(), domains.iter().filter(|&&d| d == b).count()), (2, 3));
+    assert!(records(&medium).iter().all(|(lba, r)| r.is_some() == [VOLUME, 0xFFFF].contains(&frame_domain(&medium, *lba))));
+    // A remount opens every one of them under its own key.
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((store.stats().blocks, store.stats().names, store.stats().corrupt), (3, 3, 0));
+    assert_eq!(store.domains().map(|d| (d.id, d.owner, d.forgotten)).collect::<Vec<_>>(), vec![(a, OWNER, false), (b, OWNER, false)]);
+    for domain in [VOLUME, a, b] {
+        store.set_domain(domain).unwrap();
+        assert_eq!(get(&mut store, &cid).unwrap(), data);
+    }
+    assert_eq!(store.resolve(b"only-b"), Ok((1, cid)));
+}
+
+#[test]
+fn a_forgotten_domain_is_refused_then_collected() {
+    let mut medium = Memory::new(512);
+    let (a, b, kept);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        (a, b) = (store.domain_create(OWNER).unwrap(), store.domain_create(OWNER).unwrap());
+        store.set_domain(a).unwrap();
+        let root = object(&mut store, 5, 40_000);
+        store.publish(b"diary", 0, &root, OWNER).unwrap();
+        store.pin(&root, OWNER).unwrap();
+        store.set_domain(b).unwrap();
+        kept = object(&mut store, 6, 20_000);
+        store.publish(b"diary", 0, &kept, OWNER).unwrap();
+        assert_eq!(store.domain_forget(a, OWNER + 1), Err(Error::Rights));
+        let before = store.stats();
+        store.domain_forget(a, OWNER).unwrap();
+        // Gone at once: its names, pins and blocks, and any call in it.
+        assert_eq!(store.set_domain(a), Err(Error::NotFound));
+        assert_eq!(store.domain_forget(a, OWNER), Err(Error::NotFound));
+        assert!(store.stats().blocks < before.blocks && store.stats().names == before.names - 1 && store.stats().pins == 0);
+        assert_eq!(store.resolve(b"diary").map(|(_, r)| r), Ok(kept));
+        assert_eq!(store.domains().map(|d| (d.id, d.forgotten)).collect::<Vec<_>>(), vec![(a, true), (b, false)]);
+    }
+    // On the medium its key record is gone; its tombstone and its records stay until a collection.
+    let keys: Vec<u64> = frames(&medium).iter().filter(|f| f.1 == 0xFFFF).map(|f| f.0).collect();
+    let opened: Vec<Vec<u8>> = keys.iter().map(|&lba| records(&medium).into_iter().find(|r| r.0 == lba).unwrap().1.unwrap()).collect();
+    assert_eq!(opened.iter().filter(|r| r[10..12] == a.to_le_bytes()).map(|r| u16::from_le_bytes([r[12], r[13]])).collect::<Vec<_>>(), vec![2], "the tombstone alone");
+    let a_records = frames(&medium).iter().filter(|f| f.1 == a).count();
+    assert!(a_records > 3);
+    let mut room = Room::new(64).at(LEASE_NS);
+    {
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        let forgotten = store.domains().find(|d| d.id == a).copied().unwrap();
+        assert!(forgotten.forgotten && forgotten.records as usize == a_records);
+        assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0), "a forgotten domain's records are neither corrupt nor damaged");
+        assert_eq!(store.set_domain(a), Err(Error::NotFound));
+        // The next collection frees them and the tombstone; the other domain is whole.
+        let collected = store.collect().unwrap();
+        assert!(collected.blocks as usize >= a_records);
+        assert_eq!(store.domains().map(|d| d.id).collect::<Vec<_>>(), vec![b]);
+        store.set_domain(b).unwrap();
+        assert_eq!(read_object(&mut store, &kept), block(6, 20_000));
+    }
+    assert!(frames(&medium).iter().all(|f| f.1 != a), "nothing of the forgotten domain is left");
+    let mut room = Room::new(64).at(LEASE_NS);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((store.stats().corrupt, store.stats().damaged, store.domains().count()), (0, 0, 1));
+    store.set_domain(b).unwrap();
+    assert_eq!(store.resolve(b"diary").map(|(_, r)| r), Ok(kept));
+}
+
+#[test]
+fn a_forget_stopped_before_its_key_record_was_erased_is_finished_by_the_next_mount() {
+    let mut medium = Memory::new(256);
+    let (a, end);
+    {
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        a = store.domain_create(OWNER).unwrap();
+        store.set_domain(a).unwrap();
+        store.put(Codec::Raw, b"in a").unwrap();
+        end = store.stats().used;
+    }
+    // A tombstone written, and the stop before the key record was erased.
+    let mut tomb = vec![0u8; 84];
+    tomb[..8].copy_from_slice(b"MIND-KEY");
+    tomb[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    tomb[10..12].copy_from_slice(&a.to_le_bytes());
+    tomb[12..14].copy_from_slice(&2u16.to_le_bytes());
+    tomb[14..16].copy_from_slice(&OWNER.to_le_bytes());
+    let check = sha256::digest(&tomb[..52]);
+    tomb[52..].copy_from_slice(&check);
+    plant_in(&mut medium, end, &tomb, 0xFFFF);
+    let mut room = Room::new(16);
+    let store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.domains().map(|d| (d.id, d.forgotten)).collect::<Vec<_>>(), vec![(a, true)]);
+    drop(store);
+    let live = records(&medium).into_iter().filter_map(|(_, r)| r).filter(|r| r.starts_with(b"MIND-KEY") && r[12..14] == 1u16.to_le_bytes()).count();
+    assert_eq!(live, 0, "the mount erased the key record");
+}
+
+#[test]
+fn a_domain_needs_a_random_key_and_an_owner() {
+    let mut medium = Memory::new(128);
+    {
+        let mut room = Room::new(8);
+        let mut store = mount_with(&mut medium, &mut room, &NO_RANDOM).unwrap();
+        assert_eq!(store.domain_create(OWNER), Err(Error::NoRandom));
+        assert_eq!(store.domains().count(), 0);
+    }
+    let mut room = Room::new(8);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let a = store.domain_create(OWNER).unwrap();
+    assert_eq!(store.set_domain(a + 1), Err(Error::NotFound));
+    assert_eq!(store.set_domain(0xFFFF), Err(Error::NotFound), "the key records' own frame domain is no domain");
+    assert_eq!(store.domain_forget(a, OWNER + 1), Err(Error::Rights));
+    drop(store);
+    medium.writable = false;
+    let mut room = Room::new(8);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((store.domain_create(OWNER), store.domain_forget(a, OWNER)), (Err(Error::ReadOnly), Err(Error::ReadOnly)));
+}
+
+#[test]
+fn a_damaged_key_record_keeps_its_domains_records() {
+    let mut medium = Memory::new(256);
+    let a;
+    {
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        a = store.domain_create(OWNER).unwrap();
+        store.set_domain(a).unwrap();
+        let cid = store.put(Codec::Raw, &block(2, 1000)).unwrap();
+        store.publish(b"kept", 0, &cid, OWNER).unwrap();
+    }
+    let key = frames(&medium).iter().find(|f| f.1 == 0xFFFF).unwrap().0;
+    medium.flip(key, 200);
+    let records_of_a = frames(&medium).iter().filter(|f| f.1 == a).count();
+    let mut room = Room::new(16).at(2 * LEASE_NS);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    // Without its key the domain is unknown: its records are counted corrupt, and no collection frees them, as the
+    // key record may only be damaged.
+    assert_eq!(store.stats().corrupt as usize, 1 + records_of_a);
+    assert_eq!(store.set_domain(a), Err(Error::NotFound));
+    store.collect().unwrap();
+    drop(store);
+    assert_eq!(frames(&medium).iter().filter(|f| f.1 == a).count(), records_of_a);
+}
+

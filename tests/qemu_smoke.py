@@ -3635,7 +3635,53 @@ def store_suite(vm):
     require(tally("effect fy.txt"), "EFFECT 2 DONE SAVED EPOCH 8")
     print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
           "effect cut short comes back pending and is reconciled before another begins", flush=True)
+    store_domains_check(vm)
     fm_store_check(vm)
+
+
+def store_domains_check(vm):
+    """308-STO-0023: memory domains on the store's RAM disk. Where the processor gives random numbers (RNDR on aarch64's
+    `max`), a domain is made; its blocks and names are its own, a domain's client makes no domain, and a forgotten
+    domain is gone at once, its records then collected, while another domain stands. Without a random source (x86's
+    qemu64), no domain is made, and the store says why."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    made = blocks("domain new")
+    if "NoRandom" in made:
+        require(made, "blocks: domain new: NoRandom")
+        require(vm.service_logs("blockstore", "NO DOMAIN FOR PID"), "AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED")
+        print("PASS: memory domains: none made without a random source, and the store says why", flush=True)
+        return
+    first = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
+    second = int(re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))[1])
+    require(vm.command("write ram:dom.txt in a domain"), "WROTE 12 BYTES")
+    note = cid_raw(b"in a domain\n")
+    require(blocks(f"-d {first} put ram:dom.txt"), f"PUT {note} SIZE 12")
+    require(blocks(f"-d {first} publish secret {note}"), "PUBLISHED secret VERSION 1")
+    # Seen neither from the volume nor from the other domain; read back in its own.
+    require(blocks("resolve secret"), "blocks: resolve secret: NotFound")
+    require(blocks(f"-d {second} resolve secret"), "blocks: resolve secret: NotFound")
+    require(blocks(f"-d {second} get {note} ram:x.txt"), "NotFound")
+    require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
+    require(vm.command("cat ram:back.txt"), "in a domain")
+    require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    out = blocks("domains")
+    for line in (f"DOMAIN {first} LIVE", f"DOMAIN {second} LIVE"):
+        require(out, line)
+    # The same bytes in the other domain are its own block; forgetting the first leaves it.
+    require(blocks(f"-d {second} put ram:dom.txt"), f"PUT {note} SIZE 12")
+    require(blocks(f"domain forget {first}"), f"DOMAIN {first} FORGOTTEN")
+    require(vm.service_logs("blockstore", "FORGOTTEN BY PID"), f"[BLOCKSTORE] DOMAIN {first} FORGOTTEN BY PID")
+    require(blocks(f"-d {first} resolve secret"), f"blocks: domain {first}: NotFound")
+    require(blocks("domains"), f"DOMAIN {first} FORGOTTEN")
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    out = blocks("domains")
+    assert f"DOMAIN {first} " not in out and f"DOMAIN {second} LIVE" in out, out
+    require(blocks(f"-d {second} get {note} ram:again.txt"), "GOT 12 BYTES")
+    print("PASS: memory domains: two made with keys from the processor; a domain's block and name are its own, its client "
+          "makes no domain; a forgotten domain is gone at once and its records collected, the other one whole", flush=True)
 
 
 def fm_store_check(vm):
@@ -3776,6 +3822,11 @@ def chacha20(key, nonce, counter, data):
     return bytes(out)
 
 
+def store_layout():
+    """The block store's layout version, read from blockstore/src/store.rs as make_usb_image.py reads it."""
+    return int(re.search(r"pub const LAYOUT: u16 = (\d+);", (ROOT / "blockstore/src/store.rs").read_text())[1])
+
+
 def sealed_record(vm, match):
     """The frame (its first 44 bytes) of the block store's one sealed record in the guest's RAM whose first sector
     `match` accepts once opened (308-STO-0021). The volume key is read from the superblock, where it is kept in the
@@ -3785,7 +3836,7 @@ def sealed_record(vm, match):
     sunscreen = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
     assert chacha20(bytes(range(32)), bytes(7) + b"\x4a" + bytes(4), 1, sunscreen)[:16].hex() == "6e2e359a2568f98041ba0728dd0d6981"
     data = guest_dump(vm)
-    head = b"MIND-STO" + (3).to_bytes(2, "little") + (512).to_bytes(2, "little") + bytes([1])
+    head = b"MIND-STO" + store_layout().to_bytes(2, "little") + (512).to_bytes(2, "little") + bytes([1])
     keys, at = set(), data.find(head)
     while at >= 0:
         block = data[at:at + 172]
@@ -3794,12 +3845,14 @@ def sealed_record(vm, match):
         at = data.find(head, at + 1)
     assert len(keys) == 1, f"{len(keys)} volume keys in the guest's RAM"
     key = keys.pop()
-    found, at = set(), data.find(b"MIND-SLD\x03\x00")
+    # The volume's own frames: the layout, then domain 0.
+    frame = b"MIND-SLD" + store_layout().to_bytes(2, "little") + bytes(2)
+    found, at = set(), data.find(frame)
     while at >= 0:
         frame = data[at:at + 44]
         if match(chacha20(key, frame[16:28], 1, data[at + 44:at + 512])):
             found.add(frame)
-        at = data.find(b"MIND-SLD\x03\x00", at + 1)
+        at = data.find(frame, at + 1)
     assert len(found) == 1, f"{len(found)} records match"
     return found.pop()
 
@@ -3856,7 +3909,7 @@ def store_faults_suite(vm):
     require(blocks(f"publish obj {second} 1"), "PUBLISHED obj VERSION 2")
     import base64
     second_bytes = base64.b32decode(second[1:].upper() + "=" * (-len(second[1:]) % 8))
-    name_record = b"MIND-REF" + (3).to_bytes(2, "little") + (3).to_bytes(2, "little") + (2).to_bytes(8, "little") + second_bytes
+    name_record = b"MIND-REF" + store_layout().to_bytes(2, "little") + (3).to_bytes(2, "little") + (2).to_bytes(8, "little") + second_bytes
     assert poke(vm, sealed_record(vm, lambda opened: opened.startswith(name_record)), 44 + 100, GDB_PORT) >= 1
     require(restart(), "CORRUPT=2 DAMAGED=0")
     require(blocks("resolve obj"), f"obj VERSION 1 ROOT {root}")
@@ -3877,7 +3930,7 @@ def store_faults_suite(vm):
     done = blocks(f"commit obj 1 {first} aux 0 {other}")
     for line in ("COMMITTED obj VERSION 2", "COMMITTED aux VERSION 1"):
         require(done, line)
-    txn = b"MIND-TXN" + (3).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(4)
+    txn = b"MIND-TXN" + store_layout().to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(4)
     assert poke(vm, sealed_record(vm, lambda opened: opened.startswith(txn)), 44 + 100, GDB_PORT) >= 1
     require(restart(), "CORRUPT=1 DAMAGED=33")
     snap = blocks("snapshot obj aux")
@@ -3901,7 +3954,7 @@ def store_faults_suite(vm):
     require(blocks("snapshot obj"), f"obj VERSION 1 ROOT {root}")
     # Another key in the superblock, its digest made whole: it does not open the check, and the store says so to every
     # request (308-STO-0021).
-    superblock = b"MIND-STO" + (3).to_bytes(2, "little") + (512).to_bytes(2, "little")
+    superblock = b"MIND-STO" + store_layout().to_bytes(2, "little") + (512).to_bytes(2, "little")
     def other_key(sector):
         changed = sector[:50] + bytes([sector[50] ^ 0x10]) + sector[51:140]
         return changed + hashlib.sha256(changed).digest() + sector[172:]
@@ -10782,7 +10835,9 @@ def store_disk_check(args, disk):
         blank = Path(temp) / "store.img"
         with blank.open("wb") as f:
             f.truncate(32 << 20)
-        extra = ("-drive", f"format=raw,file={blank},if=none,id=store", "-device", "virtio-blk-pci,drive=store")
+        # RDRAND for the memory domains' keys (308-STO-0023): qemu64 has none, and a domain's key must be random.
+        cpu = () if getattr(args, "arch", None) == "aarch64" else ("-cpu", "qemu64,+rdrand")
+        extra = ("-drive", f"format=raw,file={blank},if=none,id=store", "-device", "virtio-blk-pci,drive=store", *cpu)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
         try:
             require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (BLANK)")
@@ -10792,6 +10847,14 @@ def store_disk_check(args, disk):
             # 307-STO-0019: a write on a disk reaches its driver's flush, and the store says so.
             require(vm.command("blocks stat", raw=True), "DURABILITY=FLUSHED")
             require(vm.command(f"blocks publish disk {put[1]}", raw=True), "PUBLISHED disk VERSION 1 (FLUSHED)")
+            # 308-STO-0023: two memory domains on the disk, the first forgotten before the reboot.
+            first = int(re.search(r"DOMAIN (\d+) MADE", vm.command("blocks domain new", raw=True))[1])
+            second = int(re.search(r"DOMAIN (\d+) MADE", vm.command("blocks domain new", raw=True))[1])
+            gone = re.search(r"PUT (\S+) SIZE 3000", vm.command(f"blocks -d {first} pattern 3000", raw=True))[1]
+            require(vm.command(f"blocks -d {first} publish gone {gone}", raw=True), "PUBLISHED gone VERSION 1")
+            kept = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {second} pattern 4000", raw=True))[1]
+            require(vm.command(f"blocks -d {second} publish kept {kept}", raw=True), "PUBLISHED kept VERSION 1")
+            require(vm.command(f"blocks domain forget {first}", raw=True), f"DOMAIN {first} FORGOTTEN")
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
@@ -10801,10 +10864,21 @@ def store_disk_check(args, disk):
             assert re.search(r"BLOCKS=[1-9]\d* .*SECTORS=\d+/65536", stat), stat
             require(vm.command(f"blocks check {put[1]} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
             require(vm.command("blocks resolve disk", raw=True), f"disk VERSION 1 ROOT {put[1]}")
+            # The forgotten domain stays unreadable after the reboot, and its records go at the next collection; the
+            # other domain is whole.
+            mounted = vm.command("dmesg -s blockstore", raw=True)
+            require(mounted, f"[BLOCKSTORE] DOMAIN {first} FORGOTTEN:")
+            require(mounted, f"[BLOCKSTORE] DOMAIN {second} OF BADGE")
+            require(vm.command(f"blocks -d {first} resolve gone", raw=True), f"blocks: domain {first}: NotFound")
+            require(vm.command(f"blocks -d {second} check {kept} pattern", raw=True), "CHECKED 4000 BYTES = PATTERN")
+            assert re.search(r"COLLECTED [1-9]\d* BLOCKS", vm.command("blocks collect", raw=True))
+            domains = vm.command("blocks domains", raw=True)
+            assert f"DOMAIN {first} " not in domains and f"DOMAIN {second} LIVE" in domains, domains
         finally:
             vm.close()
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot; "
-          "its writes report FLUSHED, and a name published there is found after the reboot", flush=True)
+          "its writes report FLUSHED, and a name published there is found after the reboot; a memory domain forgotten before the "
+          "reboot stays unreadable after it and is collected, another one whole (308-STO-0023)", flush=True)
     # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
     with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
         big = Path(temp) / "store.img"
