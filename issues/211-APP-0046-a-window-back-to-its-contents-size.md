@@ -1,6 +1,6 @@
 # 211-APP-0046 — A window back to its content's size
 
-**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`clock` done in QEMU; the camera's part waits for the kernel track's camera change in `main`) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) (and [158](158-video-capture.md)) · **Roadmap:** track G · **Constitution:** MC-11.5
+**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`clock` and `camera` done in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) (and [158](158-video-capture.md)) · **Roadmap:** track G · **Constitution:** MC-11.5
 
 Numbered from the kernel track's request in `requests-APP.md` ("A window back to its content's size", 2026-10-10), at the maintainer's request after a run on the MacBook Pro: "the picture should stretch with the window, and the window should be able to take the size of its content, to get the original display back".
 
@@ -33,7 +33,14 @@ Numbered from the kernel track's request in `requests-APP.md` ("A window back to
 - **A limit:** a window `wm` takes over after it restarts has its size at that moment as its first size.
 - **Host tests:** `tests/wm_host.rs` covers the key, the bar item, the double click (and two slow clicks), the screen edge, full screen and a text window.
 - **The `wm` suite:** Alt+0 takes the clock from the left half back to 42 × 13, and it draws at 320 × 176 again. This passed in QEMU and in the local gate (2026-10-10).
-- **Waiting:** the camera's part waits for the kernel track's camera change to reach `main`.
+- **The camera's part** (2026-10-29), now that the kernel track's camera change (f760714) is in `main`, is `camera_fit` in the `wm` suite:
+  - the synthetic camera's window, 42 × 17 cells (320 × 240 inside), is snapped to the left half;
+  - `camera` draws its picture scaled to 624 × 736 with its aspect kept: 25 623 of the bars' points, against about 6 700 at its own size;
+  - Alt+0 gives the frame back to 42 × 17 where it stood, and `camera` draws at 320 × 240 again;
+  - the picture there is the test pattern pixel for pixel, for the frame its counter rows name (frame 38).
+
+  This passed under QEMU TCG with 4 CPUs on x86, in this session's container. No code changed for it: `wm`'s fit and `camera`'s scaling were already there.
+- **Left:** the FaceTime camera's window on the MacBook Pro, the maintainer's run.
 
 ## Related
 
