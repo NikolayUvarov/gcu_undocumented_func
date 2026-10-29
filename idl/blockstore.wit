@@ -135,7 +135,7 @@ interface blockstore {
     /// A client whose every call works in domain `id` of the caller's owner, with the caller's rights: the domain's
     /// names, pins and blocks, sealed under its key. The same bytes in two domains are two blocks. The client ends when
     /// the domain is forgotten or the store restarts. Errors: not-found (no such live domain), rights (another owner's
-    /// domain, or asked through a domain's client), full (2.2).
+    /// domain, or asked through a domain's client), full (64 domain clients), device (the store could not mint one) (2.2).
     domain-client: func(id: u16) -> result<borrow<endpoint>, error>;
     /// Forgets domain `id` of the caller's owner (MC-4.8): a tombstone is written, then its key record erased. Its
     /// names, pins and blocks are gone at once and its clients revoked; its records never open again, and the next

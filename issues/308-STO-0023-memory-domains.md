@@ -1,6 +1,6 @@
 # 308-STO-0023 — Memory domains: a key per domain, and forgetting by destroying it
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** the store's endpoint with the badge right, from `init` ([requests-KRN.md](requests-KRN.md), 2026-10-29), for the platform checks · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
 
 Split from [308](308-encryption-at-rest.md) (2026-10-28).
 
@@ -22,7 +22,7 @@ With one volume key, nothing can be forgotten for sure: deleting a name leaves c
 ## Decisions while building (2026-10-29)
 
 - **Layout 4,** with layout 3 refused by name: a build of layout 3 would read a domain's records as corrupt and free them.
-- **A key record** per domain (`MIND-KEY`: domain, state, owner, key), sealed under the volume key, its frame's domain 0xFFFF. A mount reads the key records first, since a domain's records may lie before its key, so it reads the medium twice.
+- **A key record** per domain (`MIND-KEY`: domain, state, owner, key), sealed under the volume key, its frame's domain 0xFFFF. A domain's records may lie before its key record. A mount scans once, and up to 64 such records wait to be opened at its end; past that it scans again, every key known. (A first version read the key records in a pass of their own, reading the medium twice. The aarch64 `vfs` suite's restart of the store on a disk holding a model then outran the command's wait.)
 - **Forgetting** writes a tombstone (the key record with state 2 and no key), then erases the key record. A mount that finds both erases the key record. A collection frees the domain's records, then the tombstone. A damaged key record leaves its domain unknown: its records are kept and counted corrupt, never freed.
 - **The interface is a minor version, `blockstore.wit` 2.2:** `domain-create`, `domain-client`, `domain-forget`, `domains` and the error `no-random`. Every earlier call keeps its form and works in the volume's domain, or in the domain of the client it comes through.
   - A domain's client is minted by `blockstore` from its own endpoint, with a badge from 0x100 up and the asking client's rights; it ends when the domain is forgotten.

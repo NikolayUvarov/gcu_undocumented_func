@@ -1790,3 +1790,33 @@ fn a_damaged_key_record_keeps_its_domains_records() {
     assert_eq!(frames(&medium).iter().filter(|f| f.1 == a).count(), records_of_a);
 }
 
+
+#[test]
+fn a_domains_records_before_its_key_record_are_found() {
+    // Volume blocks fill the first sectors and go at a collection; the domain's key record comes after them, and its
+    // blocks then go into the room before it. 10 wait for the key record at a mount; 70 are more than wait, so the
+    // mount scans once more.
+    for count in [10usize, 70] {
+        let mut medium = Memory::new(512);
+        let (a, cids);
+        {
+            let mut room = Room::new(256);
+            let mut store = mount(&mut medium, &mut room).unwrap();
+            for i in 0..count { store.put(Codec::Raw, &(i as u32).to_le_bytes()).unwrap(); }
+            a = store.domain_create(OWNER).unwrap();
+            store.set_time(LEASE_NS);
+            store.collect().unwrap();
+            store.set_domain(a).unwrap();
+            cids = (0..count).map(|i| store.put(Codec::Raw, &(1000 + i as u32).to_le_bytes()).unwrap()).collect::<Vec<_>>();
+            store.publish(b"last", 0, &cids[count - 1], OWNER).unwrap();
+        }
+        let key = frames(&medium).iter().find(|f| f.1 == 0xFFFF).unwrap().0;
+        assert!(frames(&medium).iter().filter(|f| f.1 == a && f.0 < key).count() >= count, "{count}: the domain's blocks lie before its key record");
+        let mut room = Room::new(256);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        assert_eq!((store.stats().blocks as usize, store.stats().corrupt), (count, 0), "{count}");
+        store.set_domain(a).unwrap();
+        assert!(cids.iter().all(|c| store.has(c)), "{count}");
+        assert_eq!(store.resolve(b"last"), Ok((1, cids[count - 1])));
+    }
+}

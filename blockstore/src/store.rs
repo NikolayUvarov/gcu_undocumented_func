@@ -441,7 +441,14 @@ pub struct Store<'a, D: Device> {
     // The domain requests work in, and the domains the store keeps.
     domain: u16,
     domains: [Option<Domain>; DOMAINS],
+    // Records a mount met before their domain's key record (sector, sectors, domain), and how many; more than fit make
+    // the mount scan once more, every key known.
+    deferred: [(u64, u64, u16); DEFERRED],
+    waiting: usize,
 }
+
+// Records of domains not yet met a mount keeps for later.
+const DEFERRED: usize = 64;
 
 fn free_marker(sectors: u64) -> [u8; FREE_RECORD] {
     let mut r = [0u8; FREE_RECORD];
@@ -579,10 +586,9 @@ impl<'a, D: Device> Store<'a, D> {
         let mut store = Store {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
             scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made,
-            domain: VOLUME, domains: [None; DOMAINS],
+            domain: VOLUME, domains: [None; DOMAINS], deferred: [(0, 0, 0); DEFERRED], waiting: 0,
         };
-        store.pass_keys()?;
-        store.pass(false)?;
+        store.mount_pass()?;
         store.size_retained();
         Ok(store)
     }
@@ -654,43 +660,28 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(freed)
     }
 
-    // Reads the domains' key records before any other record is opened, since a domain's records may lie before its
-    // key. A domain with both a key record and a tombstone is forgotten, and its key record is erased (a forget that
-    // stopped in the middle).
-    fn pass_keys(&mut self) -> Result<(), Error> {
-        let sectors = self.dev.sectors();
-        let mut lba = 1u64;
-        while lba < sectors {
-            let window = (sectors - lba).min(RECORD_SECTORS as u64) as usize;
-            if !self.dev.read(lba, &mut self.buffer[..window * SECTOR]) { return Err(Error::Device); }
-            let mut at = 0;
-            let mut next = lba + window as u64;
-            while at < window {
-                let here = lba + at as u64;
-                let sector = &self.buffer[at * SECTOR..(at + 1) * SECTOR];
-                let Some(n) = parse_frame(sector).filter(|&n| here + n as u64 <= sectors) else { at += 1; continue };
-                if u16::from_le_bytes([sector[10], sector[11]]) == KEYS {
-                    // Opening it overwrites the window, so the next one starts after it.
-                    match self.open(here, n, KEYS)? {
-                        true if n == 1 => match parse_key(&self.buffer[..SECTOR]) {
-                            Some(key) => self.key_found(here, key)?,
-                            None => self.corrupt += 1,
-                        },
-                        _ => self.corrupt += 1,
-                    }
-                    next = here + n as u64;
-                    break;
-                }
-                if at + n >= window { next = here + n as u64; break; }
-                at += n;
+    // The mount's scan. A domain's key record may lie after its records: those met before it wait, and are opened once
+    // the scan is done; if more wait than fit, the store is scanned once more, every key known by then. A domain
+    // forgotten whose key record is still there (a forget that stopped in the middle) has that record erased.
+    fn mount_pass(&mut self) -> Result<(), Error> {
+        self.waiting = 0;
+        self.pass(false)?;
+        if self.waiting > DEFERRED {
+            (self.count, self.bytes, self.names, self.pinned, self.next_pin, self.corrupt) = (0, 0, 0, 0, 1, 0);
+            self.index.fill(Entry::EMPTY);
+            self.waiting = usize::MAX;
+            self.pass(false)?;
+        } else {
+            for k in 0..self.waiting {
+                let (lba, n, domain) = self.deferred[k];
+                if self.slot_of(domain).is_some() { self.record(lba, n, domain, false, &mut None, &mut Collected::default())?; } else { self.corrupt += 1; }
             }
-            lba = next;
         }
+        self.waiting = 0;
         for k in 0..DOMAINS {
-            let Some(d) = self.domains[k].as_mut().filter(|d| d.forgotten) else { continue };
-            d.keys = Keys::NONE;
+            let Some(d) = self.domains[k].as_mut().filter(|d| d.forgotten && d.key_at != 0) else { continue };
             let key_at = core::mem::take(&mut d.key_at);
-            if key_at != 0 && self.dev.writable() { self.erase(key_at, 1)?; }
+            if self.dev.writable() { self.erase(key_at, 1)?; self.release(key_at, 1); }
         }
         Ok(())
     }
@@ -706,7 +697,15 @@ impl<'a, D: Device> Store<'a, D> {
             }
         };
         let d = self.domains[k].as_mut().unwrap();
-        if state == KEY_GONE { d.forgotten = true; d.tomb_at = lba; } else if d.key_at == 0 { d.keys = Keys::new(&key); d.key_at = lba; d.owner = owner; }
+        if state == KEY_GONE {
+            let was_live = !d.forgotten;
+            (d.forgotten, d.tomb_at, d.keys) = (true, lba, Keys::NONE);
+            // What the scan opened of it before the tombstone leaves the tables again.
+            if was_live { self.drop_domain(id); }
+        } else if d.key_at == 0 {
+            (d.key_at, d.owner) = (lba, owner);
+            if !d.forgotten { d.keys = Keys::new(&key); }
+        }
         Ok(())
     }
 
@@ -724,10 +723,25 @@ impl<'a, D: Device> Store<'a, D> {
     // Opens the sealed record of `n` sectors at `here`: a mount indexes what it holds, a sweep keeps or frees it.
     // Returns the sectors it covers (a free marker covers more than its own).
     fn record(&mut self, here: u64, n: u64, domain: u16, sweep: bool, run: &mut Option<u64>, freed: &mut Collected) -> Result<u64, Error> {
-        // The key records were read first (pass_keys); a sweep drops a forgotten domain's tombstone after it.
-        if domain == KEYS { self.occupied(run, here, n); return Ok(n); }
+        if domain == KEYS {
+            // A mount learns the domains from their key records; a sweep keeps them, and drops a forgotten domain's
+            // tombstone after it.
+            if !sweep {
+                match self.open(here, n as usize, KEYS)? {
+                    true if n == 1 => match parse_key(&self.buffer[..SECTOR]) { Some(key) => self.key_found(here, key)?, None => self.corrupt += 1 },
+                    _ => self.corrupt += 1,
+                }
+            }
+            return self.settle(true, here, n, run, freed);
+        }
         if domain != VOLUME {
             let Some(k) = self.slot_of(domain) else {
+                // Its key record may lie further on: the mount opens it then (mount_pass).
+                if !sweep && self.waiting != usize::MAX {
+                    if self.waiting < DEFERRED { self.deferred[self.waiting] = (here, n, domain); }
+                    self.waiting += 1;
+                    return self.settle(true, here, n, run, freed);
+                }
                 // No key and no tombstone: its key record may only be damaged, so the record is kept, counted corrupt.
                 self.corrupt += 1;
                 return self.settle(true, here, n, run, freed);

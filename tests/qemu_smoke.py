@@ -3846,13 +3846,13 @@ def sealed_record(vm, match):
     assert len(keys) == 1, f"{len(keys)} volume keys in the guest's RAM"
     key = keys.pop()
     # The volume's own frames: the layout, then domain 0.
-    frame = b"MIND-SLD" + store_layout().to_bytes(2, "little") + bytes(2)
-    found, at = set(), data.find(frame)
+    prefix = b"MIND-SLD" + store_layout().to_bytes(2, "little") + bytes(2)
+    found, at = set(), data.find(prefix)
     while at >= 0:
         frame = data[at:at + 44]
         if match(chacha20(key, frame[16:28], 1, data[at + 44:at + 512])):
             found.add(frame)
-        at = data.find(frame, at + 1)
+        at = data.find(prefix, at + 1)
     assert len(found) == 1, f"{len(found)} records match"
     return found.pop()
 
