@@ -21,6 +21,12 @@ const FILE: usize = 1;
 const PLACES: [Place; 5] = [Place::TopLeft, Place::TopRight, Place::Center, Place::BottomLeft, Place::BottomRight];
 // The speeds offered; the percentages go in fives.
 const SPEEDS: [u8; 10] = [1, 2, 3, 5, 8, 10, 15, 20, 30, 50];
+/// The keyboard page (000-APP-0048) and its rows: the layout and what switches it, set at once through the shell
+/// (`shell.wit` 1.10); the values in `keyboard.wit`'s order.
+pub const KEYBOARD: usize = 1;
+pub const KEYBOARD_ROWS: [&str; 2] = ["Layout", "Switch"];
+pub const LAYOUTS: [&str; 2] = ["US (QWERTY)", "Russian (ЙЦУКЕН)"];
+pub const SWITCHES: [&str; 5] = ["Ctrl+Shift or Alt+Shift", "Ctrl+Shift", "Alt+Shift", "Caps Lock", "none"];
 /// The date and time page, and its rows: the fields, then the button.
 pub const DATE: usize = 2;
 /// The screen page and its rows: wm's scale, the pointer's size and its colour (000-APP-0061).
@@ -57,6 +63,9 @@ pub struct Settings {
     pub page: usize, pub row: usize, pub on_pages: bool, pub file: InputLine, screen: (usize, usize),
     pub now: Option<((u32, u32, u32), u32)>, pub fields: [u32; 6], pub edited: bool, typed: Option<(u32, u32)>, pub clock_row: usize, pub zone: i32,
     pub message: Option<String>, pub shell: bool, pub screen_row: usize, pub pixels: (usize, usize), pub scale: u16, pub net_row: usize,
+    /// On the keyboard page: the layout and switch as the shell last answered (indices in `LAYOUTS` and `SWITCHES`;
+    /// None: not read), and its row.
+    pub keymap: Option<(usize, usize)>, pub key_row: usize,
     /// The picture's file chosen by browsing (000-APP-0072), and how a directory is read: its entries (name, directory).
     pub browser: Option<Browser>, pub lister: Lister,
 }
@@ -111,7 +120,7 @@ impl Browser {
 
 /// What a key or a click did.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, SetZone { west: bool, minutes: u32 }, Run(String) }
+pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, SetZone { west: bool, minutes: u32 }, SetKeymap { layout: usize, switch: usize }, Run(String) }
 
 /// A zone's name: `UTC`, `UTC+03:00`, `UTC-05:30`.
 pub fn zone_name(minutes: i32) -> String {
@@ -137,7 +146,7 @@ impl Settings {
         let mut file = InputLine::new();
         if let Some(name) = config.picture.file() { for ch in name.chars() { file.insert(ch); } }
         Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, zone: 0, message: None, shell: false,
-               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, browser: None, lister: no_files }
+               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, browser: None, lister: no_files }
     }
 
     /// The grid became `screen` cells at `scale` (000-APP-0061): the window is centred on it anew.
@@ -295,7 +304,7 @@ impl Settings {
     pub fn key(&mut self, key: Key, config: &Config) -> Outcome {
         if self.browser.is_some() { return self.browse_key(key, config); }
         if key.code() == Code::Esc || (key.alt() && key.letter() == Some('s')) { return Outcome::Close; }
-        let enterable = [0, DATE, NETWORK, SCREEN].contains(&self.page);
+        let enterable = [0, KEYBOARD, DATE, NETWORK, SCREEN].contains(&self.page);
         if key.code() == Code::Tab { self.on_pages = !self.on_pages || !enterable; return Outcome::Stay; }
         if self.on_pages {
             match key.code() {
@@ -308,6 +317,17 @@ impl Settings {
             return Outcome::Stay;
         }
         if self.page == DATE { return self.clock_key(key); }
+        if self.page == KEYBOARD {
+            let step = match key.code() {
+                Code::Up => { (self.key_row, self.message) = (0, None); return Outcome::Stay }
+                Code::Down => { (self.key_row, self.message) = (KEYBOARD_ROWS.len() - 1, None); return Outcome::Stay }
+                Code::Left => -1,
+                Code::Right | Code::Enter => 1,
+                Code::Char if key.char() == Some(' ') => 1,
+                _ => return Outcome::Stay,
+            };
+            return self.keymap_step(self.key_row, step);
+        }
         if self.page == NETWORK {
             match key.code() {
                 Code::Up => self.net_row = self.net_row.saturating_sub(1),
@@ -399,6 +419,23 @@ impl Settings {
         self.changed(&config, FILE, 0)
     }
 
+    // The keyboard page's row `row` stepped by `step` (round): set at once through the shell, which answers what it set.
+    fn keymap_step(&mut self, row: usize, step: i32) -> Outcome {
+        let Some((layout, switch)) = self.keymap else {
+            self.message = Some(String::from(if self.shell { "The keyboard cannot be read through the shell" } else { "Setting the keyboard needs the shell's commands, which wm does not hold" }));
+            return Outcome::Stay;
+        };
+        let round = |now: usize, n: usize| (now as i32 + step).rem_euclid(n as i32) as usize;
+        let (layout, switch) = if row == 0 { (round(layout, LAYOUTS.len()), switch) } else { (layout, round(switch, SWITCHES.len())) };
+        Outcome::SetKeymap { layout, switch }
+    }
+
+    /// The keyboard page's lines as shown: each row's name and value.
+    pub fn keymap_rows(&self) -> Vec<(&'static str, String)> {
+        let value = |names: &[&str], i: Option<usize>| i.and_then(|i| names.get(i)).map_or(String::from("< ? >"), |n| format!("< {} >", n));
+        Vec::from([(KEYBOARD_ROWS[0], value(&LAYOUTS, self.keymap.map(|k| k.0))), (KEYBOARD_ROWS[1], value(&SWITCHES, self.keymap.map(|k| k.1)))])
+    }
+
     // The network page's row: what it starts, Settings closed so its window is in front.
     fn network(&mut self) -> Outcome {
         let (name, command, _) = NETWORK_ROWS[self.net_row];
@@ -475,7 +512,12 @@ impl Settings {
             if self.file.as_str().trim().is_empty() { self.browse(); return Outcome::Stay; }
         }
         // A page to read says so.
-        if ![0, DATE, NETWORK, SCREEN].contains(&self.page) { self.to_read(); }
+        if ![0, KEYBOARD, DATE, NETWORK, SCREEN].contains(&self.page) { self.to_read(); }
+        // The keyboard page: a click on a row chooses it and steps it on.
+        if self.page == KEYBOARD && (1..=KEYBOARD_ROWS.len()).contains(&cy) {
+            (self.key_row, self.on_pages) = (cy - 1, false);
+            return self.keymap_step(self.key_row, 1);
+        }
         // The network page: a click on a row starts what it opens.
         if self.page == NETWORK && (1..=NETWORK_ROWS.len()).contains(&cy) {
             (self.net_row, self.on_pages) = (cy - 1, false);
@@ -568,6 +610,18 @@ impl Settings {
             let below = inner.y + 2 + SCREEN_ROWS.len();
             for (i, line) in lines.iter().enumerate() { grid.text_max(x, below + i, line, w, theme.dialog); }
             if let Some(message) = &self.message { grid.text_max(x, below + lines.len(), message, w, theme.accent); }
+        } else if self.page == KEYBOARD {
+            grid.text_max(x, inner.y, "The keyboard, set at once through the shell (keymap):", w, theme.dialog);
+            for (i, (name, value)) in self.keymap_rows().iter().enumerate() {
+                let chosen = !self.on_pages && self.key_row == i;
+                grid.text_padded(x, inner.y + 1 + i, &format!("{:<11} {}", name, value), w, if chosen { theme.selected } else { theme.dialog });
+            }
+            let lines = ["The switch changes the layout for the next keys; Caps Lock as",
+                         "the switch no longer locks capitals.",
+                         "In the shell: keymap us|ru --switch both|ctrl-shift|alt-shift|caps|none"];
+            let below = inner.y + 2 + KEYBOARD_ROWS.len();
+            for (i, line) in lines.iter().enumerate() { grid.text_max(x, below + i, line, w, theme.dialog); }
+            if let Some(message) = &self.message { grid.text_max(x, below + lines.len() + 1, message, w, theme.accent); }
         } else if self.page == NETWORK {
             grid.text_max(x, inner.y, "The network: each row opens what shows or sets it.", w, theme.dialog);
             for (i, (name, command, what)) in NETWORK_ROWS.iter().enumerate() {
@@ -600,7 +654,8 @@ impl Settings {
             if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + lines.len(), message, w, theme.accent); }
         }
         let help = if self.browser.is_some() { "↑↓: choose · Enter: open it or take the picture · Backspace: up · Esc: back" }
-            else if self.on_pages && ![0, DATE, NETWORK, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
+            else if self.on_pages && ![0, KEYBOARD, DATE, NETWORK, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
+            else if !self.on_pages && self.page == KEYBOARD { "↑↓: rows · ← → Enter Space: change, at once through the shell · Tab: pages · Esc: close" }
             else if !self.on_pages && self.page == NETWORK { "↑↓: rows · Enter: open it in a window · Tab: pages · Esc: close" }
             else if !self.on_pages && self.page == SCREEN { "↑↓: rows · ← → Enter Space: change, used at once · Tab: pages · Esc: close" }
             else if self.on_pages { "↑↓: page · Enter or →: its settings · Esc: close" } else if self.page == DATE { "↑↓: rows · ← → or digits: change · Enter: set the clock · Tab: pages · Esc: close" }
@@ -611,11 +666,7 @@ impl Settings {
 
     /// The pages to read: a first line that says so, then where the setting is made today.
     pub fn page_text(&self) -> Vec<String> {
-        let shell = ["in the shell's window, which Shell in the menu opens", "(a right click on the desktop, Alt+P), as Ctrl+Alt+F5 does."];
-        let lines: Vec<&str> = match self.page {
-            1 => Vec::from(["To read: the keyboard is set in the shell.", "The layout and its switch:", "  keymap us|ru [--switch both|ctrl-shift|alt-shift|caps|none]", shell[0], shell[1]]),
-            _ => Vec::from(["To read: the sound has no volume to set yet.", "audio.wit has none (asked of the drivers track for this page);", "beep and say play at the level they make."]),
-        };
+        let lines: Vec<&str> = Vec::from(["To read: the sound has no volume to set yet.", "audio.wit has none (asked of the drivers track for this page);", "beep and say play at the level they make."]);
         lines.iter().map(|s| String::from(*s)).collect()
     }
 }

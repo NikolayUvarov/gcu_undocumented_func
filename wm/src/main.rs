@@ -565,6 +565,7 @@ fn main(info: &'static BootInfo) {
     let mut last_pattern = mind::time::uptime_ms();
     let mut frame_times = FrameTimes::default();
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
+    let mut keymap_asked = false; // whether Settings' keyboard page asked the shell for the layout, this time it is open
     let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
     // The battery's client: lent at the launch where there was room, else a copy of the shell's (shell.wit 1.4).
@@ -706,6 +707,28 @@ fn main(info: &'static BootInfo) {
                     manager.wm.notice = Some(text);
                     last_sync = 0;
                 }
+                Action::SetKeymap { layout, switch } => {
+                    // The keyboard through the shell, at once as the clock (shell.wit 1.10, 000-APP-0048).
+                    use mind::idl::shell::{Keymap, KeyboardLayout, LayoutSwitch};
+                    let wanted = Keymap {
+                        layout: if layout == 1 { KeyboardLayout::Ru } else { KeyboardLayout::Us },
+                        switch: [LayoutSwitch::CtrlOrAltShift, LayoutSwitch::CtrlShift, LayoutSwitch::AltShift, LayoutSwitch::CapsLock, LayoutSwitch::None][switch.min(4)],
+                    };
+                    let name = format!("{}, switch {}", wm::settings::LAYOUTS[layout.min(1)], wm::settings::SWITCHES[switch.min(4)]);
+                    let (text, now) = if !holds(SLOT_SHELL) { (String::from("Setting the keyboard needs the shell's commands, which wm does not hold"), None) } else {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_keymap(Endpoint(SLOT_SHELL), &wanted)) {
+                            Ok(Ok(())) => (format!("The keyboard: {}", name), Some((layout, switch))),
+                            Ok(Err(error)) => (format!("The keyboard is not set ({:?})", error), None),
+                            Err(error) => (shell_failed("The keyboard is not set", "set-keymap", "1.10", SETTING_MS, error), None),
+                        }
+                    };
+                    mind::println!("[WM] SET KEYBOARD {}: {}", name, text);
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        if now.is_some() { settings.keymap = now; }
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                }
                 Action::SetZone { west, minutes } => {
                     // The zone through the shell, at once as the clock (shell.wit 1.9, 000-APP-0099); every clock shows it
                     // from its next reading of the RTC, this page and the background at once.
@@ -801,12 +824,22 @@ fn main(info: &'static BootInfo) {
         let mut frame_began = None; // when this loop began a frame of the background, for its frame time
         // Settings' date page shows the clock each second (000-APP-0055).
         if let Mode::Settings(settings) = &mut manager.wm.mode {
+            // The keyboard page, once shown, reads the layout and its switch from the shell (shell.wit 1.10).
+            if settings.page == wm::settings::KEYBOARD && settings.keymap.is_none() && holds(SLOT_SHELL) && !keymap_asked {
+                keymap_asked = true;
+                if let Ok(Ok(k)) = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::keymap(Endpoint(SLOT_SHELL))) {
+                    settings.keymap = Some((k.layout as usize, k.switch as usize));
+                    relayout = true;
+                }
+            }
             if settings.page == wm::settings::DATE && now >= next_clock {
                 // The RTC itself, not the background's clock, which reads it once a minute: the shell may just have set it.
                 next_clock = now + INFO_MS;
                 show_clock(settings);
                 relayout = true;
             }
+        } else {
+            keymap_asked = false;
         }
         let pattern_due = backdrop.moving() && now >= next_pattern;
         if backdrop.shown() && (pattern_due || now >= next_info) {
