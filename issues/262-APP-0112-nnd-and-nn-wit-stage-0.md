@@ -1,6 +1,6 @@
 # 262-APP-0112 — The model service `nnd` and `idl/nn.wit` 1.0: stage 0 of 262, for NRL's native integration
 
-**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md) 0.1, is waiting for agreement) · **Blocked by:** for code, `nnd` as a boot service with its grants ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), which waits for this design's agreement); a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job); `nrl-runtime` in `main`, with the native export and the test model (`NRL`, 900-NRL-0017 on `codex/NRL-lab`) · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md) 0.2: `KRN` answered its questions 3 and 4; `APP` settled 1 and 2, which `NRL` has not answered, and `NRL` may object) · **Blocked by:** for code, `nnd` as a boot service with its grants ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), which waits for this design's agreement); a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job); the test model and its reference outputs (`NRL`, 900-NRL-0017); `nrl-runtime` is in `main` since 2026-10-28 · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-28, from NRL's request `issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11` on `codex/NRL-lab` (41633c21) and its messages `APP/2026-10-26T1740Z-NRL-native-nnd-interface-and-smoke-harness.md` and `APP/2026-10-26T1828Z-NRL-runtime-v0-ready-native-integration-pending.md` on `internal-dev-messages`.
 
@@ -27,6 +27,11 @@
    - the native test.
 
    It is agreed with `NRL` (its questions 1 and 2) and `KRN` (questions 3 and 4) through messages. Their answers change the page into version 1.0.
+
+   **Progress (2026-10-29, the page at 0.2):**
+   - `KRN` answered questions 3 and 4 (2026-10-28): a line `nnd <MiB>` of `data/memory.conf` gives the quota and the workers; a worker per job until 262-KRN-0179.
+   - `NRL` has not answered questions 1 and 2 since 2026-10-28, so `APP` settled them: text floats, encoded again and compared byte for byte; f64 only.
+   - `APP` told `NRL` in a message that it may object. The page becomes 1.0 with `idl/nn.wit`.
 2. **`idl/nn.wit` 1.0 and its generated bindings,** as agreed.
 3. **`nnd`** (a new directory `nnd/`), linking `nrl-runtime` from `nrl/`:
    - load, with the hash, parser and re-encoding checks;
