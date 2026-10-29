@@ -67,7 +67,7 @@ pub fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).co
 fn refusal(c: u8) -> &'static str {
     match c {
         code::NOT_FOUND => "no such file or directory",
-        code::DENIED => "not allowed (a name's parts are joined by /, none is . or .., none holds \\ or :; on MIND Core a program needs \"run\" in link.conf)",
+        code::DENIED => "not allowed (a name's parts are joined by /, none is . or .., none holds \\ or :; on MIND Core a program needs \"run\" in link.conf, a shell line \"dev\")",
         code::IO => "the other end's storage failed",
         code::MISMATCH => "SHA-256 does not match: the file was not kept",
         code::BAD_REQUEST => "the other end did not take the request",
