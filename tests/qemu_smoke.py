@@ -8325,9 +8325,9 @@ def effector_suite(args, disk):
         (kept / "token").write_text(token + "\n")
         (kept / "machine").write_text("Another processor, 64 GiB\nmind-other\n")
         vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
-        out = until("IS ANOTHER MACHINE'S (Another processor, 64 GiB)")
-        require(out, f"EFFECTOR: THE KEPT IDENTITY {agent} IS ANOTHER MACHINE'S")
-        new = re.search(r"EFFECTOR: NEW AGENT ID (mind_[0-9a-f]{16})", out)
+        require(until("IS ANOTHER MACHINE'S (Another processor, 64 GiB)"), f"EFFECTOR: THE KEPT IDENTITY {agent} IS ANOTHER MACHINE'S")
+        # The new ID is logged once it is written to system/effector/agent_id, after the line above.
+        new = re.search(r"EFFECTOR: NEW AGENT ID (mind_[0-9a-f]{16})", until("EFFECTOR: NEW AGENT ID"))
         assert new, out[-2000:]
         until(f"EFFECTOR: AGENT {new[1]} TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)")
         print(f"PASS: a kept identity recorded on another machine: a new agent ID {new[1]}, not the owner's {agent}, its journal set "
