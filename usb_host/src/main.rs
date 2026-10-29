@@ -42,7 +42,7 @@ struct Device {
     interfaces: [Iface; MAX_INTERFACES], count: usize,
 }
 
-struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 5], root_failed: u64, scanned: u64, step: &'static str, root_tries: [u8; 64], ehci: &'static mut [Option<ehci::Bus>; 2] }
+struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; mind::usb::BADGES], root_failed: u64, scanned: u64, step: &'static str, root_tries: [u8; 64], ehci: &'static mut [Option<ehci::Bus>; 2] }
 
 // The EHCI buses live in static memory: a service has no heap, and its 64 KiB stack holds the xHCI host already.
 static mut EHCI_BUSES: [Option<ehci::Bus>; 2] = [const { None }; 2];
@@ -450,7 +450,7 @@ impl Host {
         let at = device.rings[..device.ring_count].iter().position(|r| r.0 == target).ok_or(Error::Invalid)?;
         let mut ring = device.rings[at].1;
         if !endpoint.is_in() {
-            let source = self.buffers[badge as usize].as_ref().ok_or(Error::NotFound)?.as_slice()[offset..offset + length].as_ptr();
+            let source = self.buffers.get(badge as usize).and_then(Option::as_ref).ok_or(Error::NotFound)?.as_slice()[offset..offset + length].as_ptr();
             self.xhci.dma.bytes(DATA, length).copy_from_slice(unsafe { core::slice::from_raw_parts(source, length) });
         }
         let data = self.xhci.physical(DATA);
@@ -704,7 +704,7 @@ fn main(_info: &'static BootInfo) {
         };
         match ehci::Ehci::init(mmio, dma) { Ok(hc) => buses[nth] = Some(ehci::Bus::new(hc, nth as u8)), Err(why) => mind::println!("[USB] EHCI {}: {}", nth, why) }
     }
-    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None, None, None], root_failed: 0, scanned: 0, step: "", root_tries: [0; 64], ehci: buses };
+    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: core::array::from_fn(|_| None), root_failed: 0, scanned: 0, step: "", root_tries: [0; 64], ehci: buses };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
     host.scan();

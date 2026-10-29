@@ -24,6 +24,7 @@ struct Fake {
     screen: Vec<u8>,
     screens: usize,
     reboots: usize,
+    published_differs: bool,
 }
 
 impl Machine for Fake {
@@ -58,6 +59,11 @@ impl Machine for Fake {
         Ok(())
     }
     fn discard_temporary(&mut self, path: &str) { self.temporary.remove(path); }
+    fn read_published(&mut self, path: &str, offset: u64, out: &mut [u8]) -> Result<usize, Fail> {
+        let n = self.read(path, offset, out)?;
+        if self.published_differs && offset == 0 && n > 0 { out[0] ^= 1; }
+        Ok(n)
+    }
     fn audit(&mut self, line: &str) -> bool { if self.audit_fails { return false; } self.audit.push(line.into()); true }
     fn policy_file(&mut self) -> Result<Vec<u8>, Fail> { self.policy.clone().ok_or(Fail::NotFound) }
     fn screen(&mut self, max: u64) -> Result<Vec<u8>, Fail> {
@@ -193,8 +199,11 @@ fn a_delivered_file_is_checked_before_it_is_published() {
     assert_eq!(g.write(&mut m, Badge::Session, h, 5, &body[..5]).err(), Some(Fail::Bounds), "bytes in order");
     for (i, piece) in body.chunks(CHUNK).enumerate() { g.write(&mut m, Badge::Session, h, (i * CHUNK) as u64, piece).unwrap(); }
     assert_eq!(g.write(&mut m, Badge::Session, h, body.len() as u64, b"more").err(), Some(Fail::Bounds), "no more than announced");
-    g.deliver_commit(&mut m, Badge::Session, h).unwrap();
+    let delivered = g.deliver_commit(&mut m, Badge::Session, h).unwrap();
     assert_eq!(m.files["data/inbox/a.bin"], body);
+    // The answer is the file as read back under its name (750-EFF-0021), its digest's head in the audit.
+    assert_eq!(delivered, Delivered { path: "data/inbox/a.bin".into(), size: body.len() as u64, sha256: sha256::digest(&body) });
+    assert!(m.audit.iter().any(|l| l.contains(&format!(" c3 deliver?data/inbox/a.bin?{}?bytes commit completed?{} ", body.len(), &sha[..16]))), "{:?}", m.audit);
     // The same name again without replacing: refused before a byte is taken.
     assert_eq!(g.deliver_begin(&mut m, Badge::Session, &origin("c4"), "data/inbox/a.bin", 4, &sha, false).err(), Some(Fail::Exists));
     // Bytes that do not match the announced hash are discarded, never published.
@@ -202,6 +211,19 @@ fn a_delivered_file_is_checked_before_it_is_published() {
     g.write(&mut m, Badge::Session, h, 0, b"evil").unwrap();
     assert_eq!(g.deliver_commit(&mut m, Badge::Session, h).err(), Some(Fail::Digest));
     assert!(!m.files.contains_key("data/inbox/b.bin") && m.temporary.is_empty());
+}
+
+#[test]
+fn a_delivered_file_that_reads_back_otherwise_is_a_digest_failure() {
+    let (mut g, mut m) = ready();
+    m.published_differs = true;
+    let body = b"read back with a bit flipped\n".repeat(10);
+    let sha: String = sha256::digest(&body).iter().map(|b| format!("{b:02x}")).collect();
+    let h = g.deliver_begin(&mut m, Badge::Session, &origin("c1"), "data/inbox/c.bin", body.len() as u64, &sha, false).unwrap();
+    g.write(&mut m, Badge::Session, h, 0, &body).unwrap();
+    assert_eq!(g.deliver_commit(&mut m, Badge::Session, h).err(), Some(Fail::Digest));
+    assert!(m.files.contains_key("data/inbox/c.bin"), "published before the read-back, so it stays");
+    assert!(m.audit.last().unwrap().contains(" c1 deliver?data/inbox/c.bin?290?bytes commit digest "), "{:?}", m.audit);
 }
 
 #[test]

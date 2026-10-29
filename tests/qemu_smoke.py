@@ -4604,6 +4604,9 @@ def link_suite(args):
                 assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
                 assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
                 assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
+                # 800-LNK-0019: without `link-console` in data/mode.conf a script from the link is refused, `mode` always.
+                require(link(port, "sh", "msh", "/data/link/console.msh", ok=False), "refused")
+                require(link(port, "sh", "mode", ok=False), "refused")
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
@@ -4654,6 +4657,9 @@ def link_suite(args):
             require(link(port, "--address", "5", "put", str(sent)), "put ")
             require(link(port, "--address", "5", "ls"), "16384  sent.bin")
             require(vm.command("dmesg -s link", raw=True), "[LINK] ADDRESS 5 ON A SHARED LINE")
+            # 800-LNK-0015: without `dev` a shell line is refused as not allowed, and the log says why.
+            require(link(port, "--address", "5", "sh", "ps", ok=False), 'a shell line "dev"')
+            require(vm.command("dmesg -s link", raw=True), 'REFUSED, link.conf HAS NO "dev"')
             # Another address and a frame with none go unanswered: bounded by the tries.
             for other in (("--address", "6"), ()):
                 r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
@@ -4662,11 +4668,37 @@ def link_suite(args):
             require(link(port, "--address", "5", "hello"), '"MIND Core link"')
         finally:
             vm.close()
+    # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
+    # (800-APP-0108), its line logged whole; `mode` stays refused.
+    console = False
+    with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n", "data/mode.conf": b"link-console\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+            require(link(port, "hello"), '"MIND Core link"')
+            require(vm.command("dmesg -s init", raw=True), "MODE: LINK CONSOLE (data/mode.conf)")
+            script = Path(temp) / "console.msh"
+            script.write_text('#!msh\nprint("THE LINK CONSOLE RAN THIS SCRIPT")\n')
+            require(link(port, "put", str(script)), "put ")
+            ran = link(port, "sh", "msh", "/data/link/console.msh", ok=None, timeout=200)
+            if "did not answer" in ran:
+                print("SKIP: link: console: the shell does not take the link's lines yet (800-APP-0102)", flush=True)
+            else:
+                require(ran, "THE LINK CONSOLE RAN THIS SCRIPT")
+                assert re.search(r"\[LINK\] COMMAND \d+: msh /data/link/console\.msh", vm.command("dmesg -s link", raw=True)), "the whole line is logged"
+                require(vm.command("dmesg -s shell", raw=True), "[SHELL] FOR THE LINK'S CONSOLE THE SHELL RAN MSH")
+                require(link(port, "sh", "mode", ok=False), "refused")
+                console = True
+        finally:
+            vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
           "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again; "
-          "with address=5 in link.conf it answered only frames to address 5", flush=True)
+          "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line"
+          + ("; with link-console a script put over the link ran as the console's, refused without it, mode refused in both" if console else ""), flush=True)
 
 
 def modes_suite(args):
@@ -4838,18 +4870,19 @@ def gateway_stub_check(args):
         try:
             def stub(line, timeout=60):
                 for _ in range(timeout):
-                    out = vm.command("dmesg -s effector_gw", raw=True)
+                    # Both starts' lines, about 11 KB: aarch64's console under TCG printed 8.9 KB in 8 s (round 41).
+                    out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
                     if line in out:
                         return out
                     time.sleep(1)
-                raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
+                raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True, timeout=60)[-1500:]))
             stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
                  "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             stub("[GATEWAY-STUB] APPS SCOPE: WRITE OK, READ BACK OK, REMOVE OK, OUTSIDE REFUSED")  # 750-KRN-0169
             stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
             stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link.conf (800-KRN-0155)
-            refusals = vm.command("dmesg -s init", raw=True)
+            refusals = vm.command("dmesg -s init", raw=True, timeout=60)
             for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"RUN REFUSED: PID \d+ \(BADGE 6\) MAY NOT RUN sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
@@ -4869,7 +4902,7 @@ def gateway_stub_check(args):
                 pixel = screen[at:at + 3]
                 if not seen or seen[-1] != pixel:
                     seen.append(pixel)
-                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True).rpartition("SCOPE START 2")[2]:
+                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True, timeout=60).rpartition("SCOPE START 2")[2]:
                     break
                 time.sleep(.3)
             time.sleep(4)
@@ -4909,7 +4942,7 @@ def gateway_stub_check(args):
             require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT AND LINK CONSOLE (data/mode.conf)")
             # The first start's files were written before the reboot, and its request was taken away before it asked.
             for _ in range(60):
-                out = vm.command("dmesg -s effector_gw", raw=True)
+                out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
                 if "[GATEWAY-STUB] REBOOT NOT ASKED" in out:
                     break
                 time.sleep(1)
@@ -5015,7 +5048,7 @@ def services_config_check(args):
     bootloader the file is not read, every service starts and `configuration` says `ignored`."""
     def plan_of(vm, source="READ"):
         for _ in range(90):
-            out = vm.command("dmesg -s effector_gw", raw=True)
+            out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
             if "[GATEWAY-STUB] PLAN END" in out:
                 break
             time.sleep(1)
@@ -8431,6 +8464,8 @@ def effector_suite(args, disk):
                      "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: FAILED {restart_id} restart_service: denied",
                      f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)
+        # 750-EFF-0017: the first start records this machine's print for the identity it keeps.
+        assert re.search(r"EFFECTOR: MACHINE .+ RECORDED FOR THE KEPT IDENTITY", out), out[-2000:]
         for command in (exec_id, unknown_id):
             result = server.operation(command)
             assert result and result["status"] == "denied" and result["result"]["error"] == "action_not_allowed", (command, result)
@@ -8475,12 +8510,12 @@ def effector_suite(args, disk):
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(12 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(13 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (12 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (13 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
@@ -8504,6 +8539,23 @@ def effector_suite(args, disk):
         assert token not in vm.log and token not in session(), "the token reached the log"
         print("PASS: a server with another certificate refused before any request, the agent's mark grey meanwhile; the token "
               "never in the log", flush=True)
+        # 750-EFF-0017: a disk whose kept identity was recorded on another machine (its settings copied) gets a new agent
+        # ID, the old journal set aside; the owner's agent_id names the old ID, so it is not taken again.
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
+        kept = disk / "system" / "effector"
+        kept.mkdir(parents=True, exist_ok=True)
+        (kept / "agent_id").write_text(agent + "\n")
+        (kept / "token").write_text(token + "\n")
+        (kept / "machine").write_text("Another processor, 64 GiB\nmind-other\n")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+        require(until("IS ANOTHER MACHINE'S (Another processor, 64 GiB)"), f"EFFECTOR: THE KEPT IDENTITY {agent} IS ANOTHER MACHINE'S")
+        # The new ID is logged once it is written to system/effector/agent_id, after the line above.
+        new = re.search(r"EFFECTOR: NEW AGENT ID (mind_[0-9a-f]{16})", until("EFFECTOR: NEW AGENT ID"))
+        assert new, out[-2000:]
+        until(f"EFFECTOR: AGENT {new[1]} TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)")
+        print(f"PASS: a kept identity recorded on another machine: a new agent ID {new[1]}, not the owner's {agent}, its journal set "
+              "aside", flush=True)
     finally:
         stop_watch.set()
         vm.close()
@@ -8538,9 +8590,12 @@ def effector_actions_check(vm, server, agent, until, beats):
     delivery = b"delivered by the Effector fixture\n" * 2000
     published = server.publish(delivery, command_id="deliver-1")
     server.queue(agent, "deliver_file", {"path": "data/inbox/d.txt", "max_bytes": 1048576, "timeout_seconds": 60, **published}, command_id="deliver-1")
-    until("EFFECTOR: ACK deliver-1 completed ACCEPTED")
+    until("EFFECTOR: ACK deliver-1 completed WITH ITS RESULT ACCEPTED")
     listing = vm.command("ls data/inbox", raw=True)
     assert re.search(rf"d\.txt +{len(delivery)}\b", listing) and "d.txt.part" not in listing, listing
+    # The answer names the file as the gateway read it back under its name (750-EFF-0021).
+    receipt = server.operation("deliver-1")["result"]["stdout"]
+    assert receipt == f"delivered data/inbox/d.txt {len(delivery)} {hashlib.sha256(delivery).hexdigest()}", receipt
     server.publish(b"x", command_id="deliver-2")
     server.queue(agent, "deliver_file", {"path": "data/elsewhere.txt", "max_bytes": 10, "size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, command_id="deliver-2")
     until("EFFECTOR: ACK deliver-2 failed ACCEPTED")
@@ -8551,6 +8606,11 @@ def effector_actions_check(vm, server, agent, until, beats):
     until(f"EFFECTOR: ACK {reboot_id} failed ACCEPTED")
     assert server.operation(reboot_id)["result"]["error"] == "denied", server.operation(reboot_id)
     require(vm.command("dmesg -s effector_gw", raw=True), f"{reboot_id} reboot?in?10000?ms denied refused")
+    # The server's health check runs `exec` of the program's health command, `health` (750-EFF-0022).
+    health_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
+    until(f"EFFECTOR: ACK {health_id} completed WITH ITS RESULT ACCEPTED")
+    health = server.operation(health_id)["result"]
+    assert health["status"] == "completed" and health["exit_code"] == 0 and health["stdout"].startswith("healthy: up "), health
     # A service the policy names restarted through init's lifecycle client (750-KRN-0121).
     sysmon_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
     until(f"EFFECTOR: ACK {sysmon_id} completed ACCEPTED")
@@ -8560,7 +8620,7 @@ def effector_actions_check(vm, server, agent, until, beats):
     # busy with it meanwhile; a result the server's AcceptPerformance takes.
     perf_id = server.queue(agent, "performance_measure", {"duration_seconds": 12, "timeout_seconds": 90})
     begun = time.monotonic()
-    out = until(f"EFFECTOR: ACK {perf_id} completed WITH ITS MEASUREMENT ACCEPTED", 120)
+    out = until(f"EFFECTOR: ACK {perf_id} completed WITH ITS RESULT ACCEPTED", 120)
     require(out, f"EFFECTOR: STARTED {perf_id} performance_measure (12 S)")
     r = server.operation(perf_id)["result"]
     assert r["status"] == "completed" and r["benchmark"] == "effector_bogomips_v1" and re.fullmatch(r"[0-9a-f]{16}", r["checksum"]), r

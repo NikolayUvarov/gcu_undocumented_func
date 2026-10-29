@@ -452,7 +452,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 |---|---|---|
 | [307](../../issues/307-the-stores-own-partition.md) | A partition of the store's own on real machines; durability classes `volatile`, `flushed`, `copied` (`blockstore.wit` 2.0) | first: until then nothing survives a reset on a real machine |
 | [308](../../issues/308-encryption-at-rest.md) | Sealed records, a key per memory domain, the volume key from the TPM or a passphrase | before any personal data |
-| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues/309-STO-0025-scrub.md)); copies and repair after 307 |
+| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)); copies and repair after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues/311-storefs-a-file-face.md) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
 | [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | after 308 |

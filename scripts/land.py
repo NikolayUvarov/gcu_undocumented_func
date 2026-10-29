@@ -498,7 +498,9 @@ def cmd_gate(args):
     if args.dry_run:
         return
     published = state.get("published")
-    if not published or git("ls-remote", "origin", published).split()[:1] != [commit]:
+    # The machines fetch the candidate by its hash: the branch holds it at its tip or under a later push (round 41).
+    if not published or git("fetch", "-q", "origin", published, check=False).returncode != 0 or \
+            git("merge-base", "--is-ancestor", commit, "FETCH_HEAD", check=False).returncode != 0:
         raise SystemExit(f"the candidate {commit[:12]} is not on origin: run `scripts/land.sh candidate --push`")
     tag = args.tag or "land-" + commit[:8]
     out = WORK / f"gate-{commit[:12]}.json"

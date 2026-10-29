@@ -21,8 +21,16 @@ pub fn is_serial(vendor: u16, product: u16) -> bool { SERIAL_DEVICES.contains(&(
 /// protocol 1. Its client sends HCI commands to the device as a whole, as the HCI's USB transport has them.
 pub const BADGE_BLUETOOTH: u16 = 5;
 pub fn is_bluetooth(info: &Interface) -> bool { (info.class, info.subclass, info.protocol) == (0xE0, 1, 1) }
+/// Every badge that names a class driver; a new badge is added here.
+pub const ALL_BADGES: [u16; 5] = [BADGE_HID, BADGE_STORAGE, BADGE_VIDEO, BADGE_SERIAL, BADGE_BLUETOOTH];
+/// Entries in a table indexed by badge: one past the highest (700-DRV-0044).
+pub const BADGES: usize = {
+    let (mut n, mut i) = (0, 0);
+    while i < ALL_BADGES.len() { if ALL_BADGES[i] as usize >= n { n = ALL_BADGES[i] as usize + 1; } i += 1; }
+    n
+};
 /// Whether `badge` names a class driver at all.
-pub fn known(badge: u16) -> bool { badge == BADGE_SERIAL || badge == BADGE_BLUETOOTH || class_of(badge).is_some() }
+pub fn known(badge: u16) -> bool { ALL_BADGES.contains(&badge) }
 /// Whether the client with `badge` may claim interface `info`: its class, for a converter its chip, for a Bluetooth
 /// controller its HCI interface.
 pub fn claims(badge: u16, info: &Interface) -> bool {

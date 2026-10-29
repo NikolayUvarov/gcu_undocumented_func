@@ -1,8 +1,8 @@
-# 309-STO-0025 — Scrub: every record read and checked within a budget
+# 309-STO-0025 — Scrub: every record read and checked within a budget — done
 
-**Type:** storage (`blockstore`, `idl/blockstore.wit`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.8, MC-5.1, MC-12.4
+**Type:** storage (`blockstore`, `idl/blockstore.wit`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [309](../issues/309-copies-scrub-and-repair.md) · **Constitution:** MC-4.8, MC-5.1, MC-12.4
 
-Split from [309](309-copies-scrub-and-repair.md) (2026-10-29). The scrub needs no second medium, so it does not wait for [307](307-the-stores-own-partition.md).
+Split from [309](../issues/309-copies-scrub-and-repair.md) (2026-10-29). The scrub needs no second medium, so it does not wait for [307](../issues/307-the-stores-own-partition.md).
 
 ## Problem
 
@@ -26,7 +26,7 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
   - each whole pass logs what it found;
   - `scrubbed` returns the last whole pass's findings.
 - **Interface:** `blockstore.wit` 2.3, a minor version: `scrub` and `scrubbed`, and the record `scrubbed`. `blocks scrub` asks for a pass, `blocks scrubbed` shows the last one.
-- **Not here:** repair. One copy cannot be repaired from itself: [309](309-copies-scrub-and-repair.md)'s copies do that.
+- **Not here:** repair. One copy cannot be repaired from itself: [309](../issues/309-copies-scrub-and-repair.md)'s copies do that.
 
 ## Acceptance criteria
 
@@ -39,7 +39,9 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
 
 ## Progress (2026-10-29)
 
-- **Built** on the storage branch (86f68750), on top of 308-STO-0023's layout 4, so it lands with it, after [308-KRN-0184](308-KRN-0184-blockstore-badges-its-own-clients.md).
+(Kept as written before the landing.)
+
+- **Built** on the storage branch (86f68750), on top of 308-STO-0023's layout 4, so it lands with it, after [308-KRN-0184](308-KRN-0184-blockstore-badges-its-own-clients.done).
 - **A step** ends at the end of the record or the 33-sector window it is in, so a step covers about 256 sectors rather than at most 256.
 - **A whole pass on request** keeps every other client waiting too, as a collection does: requests are served one at a time.
 - **Tested:**
@@ -50,4 +52,18 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
 
 ## Related
 
-[300-STO-0005](../issues-done/300-STO-0005-corruption-on-the-platform.done), [309](309-copies-scrub-and-repair.md), [docs/storage](../docs/storage/README.md).
+[300-STO-0005](300-STO-0005-corruption-on-the-platform.done), [309](../issues/309-copies-scrub-and-repair.md), [docs/storage](../docs/storage/README.md).
+
+## Resolution
+
+Done in `main` 3e07edb8 (landing round 43, 2026-10-29), from `claude/relaxed-meitner-5bmhpz` a43448d1 (86f68750), with 308-STO-0023.
+
+- **The scrub** (`blockstore/src/store.rs`): every record is read and checked as a mount checks it, and nothing is written or repaired. A record written over the scrub's place moves it to the record's end.
+- **Between requests** (`blockstore/src/main.rs`): a step of about 256 sectors after 20 ms without a request, a pass a day after the last one ended, the mount counting as one (MC-5.1).
+- **On request:** `idl/blockstore.wit` 2.3, a minor version, `scrub` (the right to collect; every client waits for the pass) and `scrubbed`; `blocks scrub` and `blocks scrubbed`.
+- **The log** names each corrupt record by its sector, and by its CID when the index holds a block there, and each whole pass's findings.
+- **Evidence:**
+  - `tests/blockstore_host.rs`: the four host criteria;
+  - QEMU `storefaults` on x86 and aarch64: a damaged chunk found by `blocks scrub` before any read and logged with its CID;
+  - run by the round's gate on every group.
+- **Not tested on the platform:** the scrub between requests, whose first pass starts a day after the mount. Repair is [309](../issues/309-copies-scrub-and-repair.md)'s copies.
