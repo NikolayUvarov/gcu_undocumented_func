@@ -3870,7 +3870,8 @@ def store_faults_suite(vm):
     damaged copy. A damaged name record is reported, and the version before it stands. A damaged frame loses that
     record alone: its sectors are counted damaged, and the records after it are found. The records are sealed
     (308-STO-0021): the host finds each by opening frames with the key the superblock holds, and a changed byte of a
-    sealed record makes it corrupt. A key that does not open the superblock's check is refused at mount."""
+    sealed record makes it corrupt. A key that does not open the superblock's check is refused at mount. A scrub finds a
+    damaged chunk before anything reads it, and names its CID (309-STO-0025)."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
@@ -3886,6 +3887,12 @@ def store_faults_suite(vm):
     # A byte of the third chunk, 100 bytes into its data: its seal no longer opens, so it is refused when read, and the
     # name's object is no longer whole.
     assert poke(vm, sealed_record(vm, block_record(chunk(2))), 44 + 84 + 100, GDB_PORT) >= 1
+    # 309-STO-0025: a scrub finds it before any read, logs it with its CID, and keeps what it found.
+    require(blocks("scrub"), "1 CORRUPT, 0 DAMAGED SECTORS; PASS 1,")
+    scrubbed = vm.service_logs("blockstore", "[BLOCKSTORE] SCRUBBED")
+    require(scrubbed, f"[BLOCKSTORE] SCRUB: BLOCK {cid_raw(chunk(2))} AT SECTOR")
+    require(scrubbed, "1 CORRUPT, 0 DAMAGED SECTORS, ASKED BY PID")
+    require(blocks("scrubbed"), "1 CORRUPT, 0 DAMAGED SECTORS; PASS 1,")
     require(blocks(f"check {root} pattern"), "blocks: check: Corrupt (the store: Corrupt)")
     require(vm.service_logs("blockstore", "[BLOCKSTORE] CORRUPT"), f"[BLOCKSTORE] CORRUPT {cid_raw(chunk(2))}")
     require(blocks("stat"), "CORRUPT=1 DAMAGED=0")
@@ -3936,8 +3943,8 @@ def store_faults_suite(vm):
     snap = blocks("snapshot obj aux")
     for line in (f"obj VERSION 1 ROOT {root}", "aux NONE"):
         require(snap, line)
-    print("PASS: block store damage injected on its medium: a chunk refused when read and when mounting, a collection "
-          "refused meanwhile, a put repairs it; a damaged name record reported, the version before it stands; a damaged "
+    print("PASS: block store damage injected on its medium: a chunk found by a scrub before any read, refused when read "
+          "and when mounting, a collection refused meanwhile, a put repairs it; a damaged name record reported, the version before it stands; a damaged "
           "frame loses its record alone; a damaged commit changes no name; every record found by opening its seal", flush=True)
     # 305-STO-0008: a crash. init restarts the killed store within its budget, and the new instance mounts the medium.
     old = vm.services()["blockstore"]

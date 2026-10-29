@@ -15,20 +15,21 @@ pub const FIRST_DOMAIN_CLIENT: u16 = 0x100;
 
 /// A request to the store, as its rights see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation { Put, Get, Has, Stat, Publish, Resolve, Collect, Unpublish, History, Pin, Unpin, Pins, Usage, Commit, Snapshot, Names, DomainCreate, DomainClient, DomainForget, Domains }
+pub enum Operation { Put, Get, Has, Stat, Publish, Resolve, Collect, Unpublish, History, Pin, Unpin, Pins, Usage, Commit, Snapshot, Names, DomainCreate, DomainClient, DomainForget, Domains, Scrub, Scrubbed }
 
 /// Whether a client whose capability carries `badge` may make `operation`; bits of later rights are ignored.
 pub fn allowed(badge: u16, operation: Operation) -> bool {
     match operation {
-        // A collection frees only what nothing retains, as a put that finds no room does.
-        Operation::Put | Operation::Collect => badge & BADGE_PUT != 0,
+        // A collection frees only what nothing retains, as a put that finds no room does. A whole scrub on request reads
+        // the medium on the caller's behalf, as a collection does (309-STO-0025).
+        Operation::Put | Operation::Collect | Operation::Scrub => badge & BADGE_PUT != 0,
         Operation::Get | Operation::Has | Operation::Resolve | Operation::History | Operation::Snapshot | Operation::Names => badge & BADGE_GET != 0,
         // Names and pins retain objects: retention is its own right, apart from reading and storing (MC-4.11).
         // Making and forgetting a memory domain is retention too (308-STO-0023).
         Operation::Publish | Operation::Unpublish | Operation::Commit | Operation::Pin | Operation::Unpin
             | Operation::DomainCreate | Operation::DomainForget => badge & BADGE_PUBLISH != 0,
         // A domain's client carries the rights of the client that asked for it.
-        Operation::Stat | Operation::Pins | Operation::Usage | Operation::DomainClient | Operation::Domains => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH) != 0,
+        Operation::Stat | Operation::Pins | Operation::Usage | Operation::DomainClient | Operation::Domains | Operation::Scrubbed => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH) != 0,
     }
 }
 

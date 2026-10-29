@@ -8,6 +8,7 @@
 // A medium it cannot mount leaves it running and answering every request with the reason (305-STO-0008). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 // Records are sealed with ChaCha20-Poly1305 under a volume key kept, for now, in the clear in the superblock (308-STO-0021).
 // A memory domain's calls come through a client the store mints for it, and work under the domain's own key (308-STO-0023).
+// Between requests it scrubs the medium, a step at a time, a pass a day; a client may ask for a whole pass (309-STO-0025).
 mod store;
 
 // store.rs names these as crate::cid, crate::dag and crate::sha256, so the host tests build it from the libmind files.
@@ -36,6 +37,11 @@ const HOLES: usize = 512;
 const PINS: usize = 64;
 /// Clients of memory domains the store keeps at once.
 const DOMAIN_CLIENTS: usize = 64;
+/// The scrub between requests (MC-5.1): the sectors a step covers (it ends at the end of the record or window it is in),
+/// after a pause this long without a request, and a pass this long after the last one ended (the mount counts as one).
+const SCRUB_STEP: u64 = 256;
+const SCRUB_PAUSE_MS: u32 = 20;
+const SCRUB_EVERY_NS: u64 = 24 * 3600 * 1_000_000_000;
 
 static mut HEADS: [Head; NAMES] = [Head::EMPTY; NAMES];
 static mut RUNS: [Extent; HOLES] = [Extent::EMPTY; HOLES];
@@ -129,6 +135,32 @@ fn error(e: store::Error) -> Error {
 
 fn parse(bytes: &[u8]) -> Result<Cid, Error> { Cid::from_bytes(bytes).map_err(|_| Error::Unsupported) }
 
+// The scrubs' account: whole passes, the last one's findings and when it ended, and when the next starts (ns).
+struct Scrubs { passes: u32, last: store::Scrubbed, ended: u64, next: u64 }
+impl Scrubs {
+    // A whole pass ended: between requests, or asked for by `pid`.
+    fn ended(&mut self, found: store::Scrubbed, now: u64, pid: Option<u64>) {
+        (self.passes, self.last, self.ended, self.next) = (self.passes + 1, found, now, now + SCRUB_EVERY_NS);
+        let (records, corrupt, damaged) = (found.records, found.corrupt, found.damaged);
+        match pid {
+            Some(pid) => mind::println!("[BLOCKSTORE] SCRUBBED {} RECORDS: {} CORRUPT, {} DAMAGED SECTORS, ASKED BY PID {}", records, corrupt, damaged, pid),
+            None => mind::println!("[BLOCKSTORE] SCRUBBED {} RECORDS: {} CORRUPT, {} DAMAGED SECTORS, BETWEEN REQUESTS", records, corrupt, damaged),
+        }
+    }
+    fn report(&self, now: u64) -> blockstore::Scrubbed {
+        let ago_ms = if self.passes == 0 { 0 } else { now.saturating_sub(self.ended) / 1_000_000 };
+        blockstore::Scrubbed { passes: self.passes, records: self.last.records, corrupt: self.last.corrupt, damaged: self.last.damaged, ago_ms }
+    }
+}
+
+// A record a scrub found that does not open or is not whole.
+fn found_corrupt(lba: u64, block: Option<Cid>) {
+    match block {
+        Some(cid) => mind::println!("[BLOCKSTORE] SCRUB: BLOCK {} AT SECTOR {} CORRUPT", cid, lba),
+        None => mind::println!("[BLOCKSTORE] SCRUB: RECORD AT SECTOR {} CORRUPT", lba),
+    }
+}
+
 // The index's slots for a medium of `sectors` (251-STO-0013): as many as it asks for and the task's memory quota allows,
 // halving down to the least; none if not even that can be had.
 fn index_for(sectors: u64) -> &'static mut [Entry] {
@@ -192,8 +224,30 @@ fn main(_info: &'static BootInfo) {
         Err(e) => { mind::println!("[BLOCKSTORE] NOT MOUNTED: {:?}", e); Err(error(e)) }
     };
     let mut clients = DomainClients([None; DOMAIN_CLIENTS]);
+    let mut scrubs = Scrubs { passes: 0, last: store::Scrubbed::default(), ended: 0, next: mind::time::monotonic_ns() + SCRUB_EVERY_NS };
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        // A pass under way goes on after a pause without requests; the next one starts when it is due.
+        let now = mind::time::monotonic_ns();
+        let wait = match store.as_ref() {
+            Ok(s) if s.scrubbing() => SCRUB_PAUSE_MS,
+            Ok(_) => (scrubs.next.saturating_sub(now) / 1_000_000).clamp(1, u32::MAX as u64) as u32,
+            Err(_) => 0,
+        };
+        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else {
+            let now = mind::time::monotonic_ns();
+            if let Some(s) = store.as_mut().ok().filter(|s| s.scrubbing() || now >= scrubs.next) {
+                match s.scrub(SCRUB_STEP, &mut found_corrupt) {
+                    Ok(Some(found)) => scrubs.ended(found, now, None),
+                    Ok(None) => {}
+                    Err(e) => {
+                        mind::println!("[BLOCKSTORE] SCRUB STOPPED: {:?}", e);
+                        s.restart_scrub();
+                        scrubs.next = now + SCRUB_EVERY_NS;
+                    }
+                }
+            }
+            continue;
+        };
         if !request.is_call { continue; }
         let (badge, pid) = (request.badge, request.sender);
         let (mut rights, owner, domain) = clients.of(badge);
@@ -235,6 +289,8 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::DomainClient { .. }, call)) if refused(Operation::DomainClient) || through_domain(Operation::DomainClient) => blockstore::reply_domain_client(call, Err(Error::Rights)),
             Ok((Request::DomainForget { .. }, call)) if refused(Operation::DomainForget) || through_domain(Operation::DomainForget) => blockstore::reply_domain_forget(call, Err(Error::Rights)),
             Ok((Request::Domains, call)) if refused(Operation::Domains) || through_domain(Operation::Domains) => blockstore::reply_domains(call, Err(Error::Rights)),
+            Ok((Request::Scrub, call)) if refused(Operation::Scrub) => blockstore::reply_scrub(call, Err(Error::Rights)),
+            Ok((Request::Scrubbed, call)) if refused(Operation::Scrubbed) => blockstore::reply_scrubbed(call, Err(Error::Rights)),
             Ok((Request::Put { codec, data }, call)) => {
                 let codec = match codec { blockstore::Codec::Raw => cid::Codec::Raw, blockstore::Codec::DagCbor => cid::Codec::DagCbor };
                 let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(codec, data).map_err(error)).map(|c| c.to_bytes());
@@ -414,6 +470,23 @@ fn main(_info: &'static BootInfo) {
                     n
                 });
                 blockstore::reply_domains(call, n.map(|n| &list[..n]))
+            }
+            Ok((Request::Scrub, call)) => {
+                // A whole pass from the first record, on the caller's behalf; one under way between requests is dropped.
+                let found = store.as_mut().map_err(|e| *e).and_then(|s| {
+                    s.restart_scrub();
+                    s.scrub(u64::MAX, &mut found_corrupt).map_err(error)?.ok_or(Error::Device)
+                });
+                let now = mind::time::monotonic_ns();
+                let report = found.map(|f| {
+                    scrubs.ended(f, now, Some(pid as u64));
+                    scrubs.report(now)
+                });
+                blockstore::reply_scrub(call, report.as_ref().map_err(|e| *e))
+            }
+            Ok((Request::Scrubbed, call)) => {
+                let report = store.as_ref().map_err(|e| *e).map(|_| scrubs.report(mind::time::monotonic_ns()));
+                blockstore::reply_scrubbed(call, report.as_ref().map_err(|e| *e))
             }
         };
     }

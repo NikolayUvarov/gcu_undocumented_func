@@ -1,6 +1,6 @@
 # 308-STO-0023 — Memory domains: a key per domain, and forgetting by destroying it
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** the store's endpoint with the badge right, from `init` ([requests-KRN.md](requests-KRN.md), 2026-10-29), for the platform checks · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308-KRN-0184](308-KRN-0184-blockstore-badges-its-own-clients.md) (the store's endpoint with the badge right, from `init`), for the platform checks · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
 
 Split from [308](308-encryption-at-rest.md) (2026-10-28).
 
@@ -26,7 +26,7 @@ With one volume key, nothing can be forgotten for sure: deleting a name leaves c
 - **Forgetting** writes a tombstone (the key record with state 2 and no key), then erases the key record. A mount that finds both erases the key record. A collection frees the domain's records, then the tombstone. A damaged key record leaves its domain unknown: its records are kept and counted corrupt, never freed.
 - **The interface is a minor version, `blockstore.wit` 2.2:** `domain-create`, `domain-client`, `domain-forget`, `domains` and the error `no-random`. Every earlier call keeps its form and works in the volume's domain, or in the domain of the client it comes through.
   - A domain's client is minted by `blockstore` from its own endpoint, with a badge from 0x100 up and the asking client's rights; it ends when the domain is forgotten.
-  - So no client of another track changes (`fm` builds as it is), and `init` grants nothing new.
+  - So no client of another track changes (`fm` builds as it is). `init` only adds the badge right to the store's own endpoint, which minting needs (requests-KRN.md, 2026-10-29).
 - **The owner** is the badge, as for quotas: a domain is its creator's, and only that owner lends or forgets it.
 - **No domain without a random source.** A key derived from anything kept could not be destroyed. x86's qemu64 has no RDRAND, so the x86 `store` suite checks the refusal; the domains run in the aarch64 `store` suite (RNDR) and in the x86 store-disk check started with `+rdrand`.
 

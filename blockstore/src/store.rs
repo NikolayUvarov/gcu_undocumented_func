@@ -215,6 +215,11 @@ pub struct Usage { pub retained: u64, pub quota: u64, pub names: u32, pub pins: 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Collected { pub blocks: u32, pub names: u32, pub sectors: u64, pub free: u64 }
 
+/// What a scrub found (309-STO-0025): records read and checked, those that did not open or are not whole, and
+/// non-blank sectors outside every record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Scrubbed { pub records: u32, pub corrupt: u32, pub damaged: u64 }
+
 /// A slot of the index, a hash table with open addressing (251-STO-0013): when the block's lease began, where its
 /// record starts (a sector below 2^32), its length, whether the slot is used and whether the last collection found the
 /// block retained, the CID's binary form and the block's domain. 56 bytes; all zeros is an empty slot.
@@ -445,6 +450,9 @@ pub struct Store<'a, D: Device> {
     // the mount scan once more, every key known.
     deferred: [(u64, u64, u16); DEFERRED],
     waiting: usize,
+    // Where the scrub goes on from (0: no pass under way), and what this pass found so far.
+    scrub_at: u64,
+    scrubbing: Scrubbed,
 }
 
 // Records of domains not yet met a mount keeps for later.
@@ -586,7 +594,8 @@ impl<'a, D: Device> Store<'a, D> {
         let mut store = Store {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
             scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made,
-            domain: VOLUME, domains: [None; DOMAINS], deferred: [(0, 0, 0); DEFERRED], waiting: 0,
+            domain: VOLUME, domains: [None; DOMAINS], deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0,
+            scrubbing: Scrubbed::default(),
         };
         store.mount_pass()?;
         store.size_retained();
@@ -933,6 +942,8 @@ impl<'a, D: Device> Store<'a, D> {
     // Seals the record of `len` bytes at buffer[FRAME..] in `domain` for `lba`, writes and flushes it.
     fn write_sealed(&mut self, lba: u64, len: usize, domain: u16) -> Result<(), Error> {
         let n = self.seal(lba, len, domain)?;
+        // A scrub inside the blank run written now would read the record's middle as damaged: it goes on after it.
+        if (lba + 1..lba + n as u64).contains(&self.scrub_at) { self.scrub_at = lba + n as u64; }
         if !self.dev.write(lba, &self.buffer[..n * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
         Ok(())
     }
@@ -1402,6 +1413,73 @@ impl<'a, D: Device> Store<'a, D> {
 
     /// The domains the store keeps, live and forgotten (a forgotten one until a collection has freed its records).
     pub fn domains(&self) -> impl Iterator<Item = &Domain> { self.domains.iter().flatten() }
+
+    /// Reads and checks the records from where the scrub stopped (309-STO-0025), about `budget` sectors of them, as a
+    /// mount does: each opened under its domain's key, a block's bytes matched to its CID, any other record's digest
+    /// checked; a forgotten domain's records are not opened. Nothing is written. `found` hears of each record that does
+    /// not open or is not whole: its sector, and the block the index holds there. The pass that reaches the medium's
+    /// end returns what it found, and the next call starts another.
+    pub fn scrub(&mut self, budget: u64, found: &mut dyn FnMut(u64, Option<Cid>)) -> Result<Option<Scrubbed>, Error> {
+        let sectors = self.dev.sectors();
+        if self.scrub_at == 0 { (self.scrub_at, self.scrubbing) = (1, Scrubbed::default()); }
+        let mut read = 0;
+        while read < budget && self.scrub_at < sectors {
+            let lba = self.scrub_at;
+            let window = (sectors - lba).min(RECORD_SECTORS as u64) as usize;
+            if !self.dev.read(lba, &mut self.buffer[..window * SECTOR]) { return Err(Error::Device); }
+            let mut next = lba + window as u64;
+            for at in 0..window {
+                let here = lba + at as u64;
+                let sector = &self.buffer[at * SECTOR..(at + 1) * SECTOR];
+                if let Some(n) = parse_frame(sector).filter(|&n| here + n as u64 <= sectors) {
+                    let domain = u16::from_le_bytes([sector[10], sector[11]]);
+                    let (whole, covers) = self.check(here, n as u64, domain)?;
+                    self.scrubbing.records += 1;
+                    if !whole {
+                        self.scrubbing.corrupt += 1;
+                        let block = self.index.iter().find(|e| e.used() && e.lba as u64 == here).and_then(|e| Cid::from_bytes(&e.key).ok());
+                        found(here, block);
+                    }
+                    next = here + covers;
+                    break;
+                }
+                if sector.iter().any(|&b| b != 0) { self.scrubbing.damaged += 1; }
+            }
+            read += next - lba;
+            self.scrub_at = next;
+        }
+        if self.scrub_at < sectors { return Ok(None); }
+        self.scrub_at = 0;
+        Ok(Some(self.scrubbing))
+    }
+
+    /// Whether a scrub's pass is under way.
+    pub fn scrubbing(&self) -> bool { self.scrub_at != 0 }
+
+    /// Drops the pass under way: the next scrub starts at the medium's first record.
+    pub fn restart_scrub(&mut self) { self.scrub_at = 0; }
+
+    // Whether the record of `n` sectors at `here`, sealed in `domain`, opens and is whole; and the sectors it covers.
+    fn check(&mut self, here: u64, n: u64, domain: u16) -> Result<(bool, u64), Error> {
+        if domain != VOLUME && domain != KEYS {
+            match self.slot_of(domain).and_then(|k| self.domains[k]) {
+                // Its key is destroyed: the next collection frees it.
+                Some(d) if d.forgotten => return Ok((true, n)),
+                Some(_) => {}
+                // No key and no tombstone, as a mount counts it.
+                None => return Ok((false, n)),
+            }
+        }
+        if !self.open(here, n as usize, domain)? { return Ok((false, n)); }
+        let sector = &self.buffer[..SECTOR];
+        let one = n == 1;
+        if domain == KEYS { return Ok((one && parse_key(sector).is_some(), n)); }
+        if let Some((cid, size)) = parse_header(sector) { return Ok((record_sectors(size) as u64 == n && self.intact(&cid, size), n)); }
+        if let Some(count) = parse_txn(sector) { return Ok((sealed_sectors((1 + count) * SECTOR) as u64 == n && self.commit_entries(count).is_some(), n)); }
+        // A collection stopped in the middle of freeing this; the next mount finishes it.
+        if let Some(m) = parse_free(sector).filter(|&m| one && domain == VOLUME && here + m <= self.dev.sectors()) { return Ok((true, m)); }
+        Ok((one && (parse_name(sector).is_some() || parse_pin(sector).is_some()), n))
+    }
 
     #[cfg(test)]
     pub fn device(&mut self) -> &mut D { &mut self.dev }
