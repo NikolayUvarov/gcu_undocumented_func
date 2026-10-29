@@ -11,7 +11,7 @@ docs/storage/README.md lists the limits: the whole index in memory, at most 2^32
 ## Plan
 
 - **The index on the medium** (sorted runs or a B-tree of CID to sector) with a cache in memory, and its own digest, so a mount reads it and scans only the records after it.
-- **64-bit sector numbers:** a new layout (4 or later: 3 is the sealed records of [308-STO-0021](308-STO-0021-sealed-records.md)), with the one before refused. Before the first release a new layout or interface replaces the old one, which is refused by name; no conversion code (AGENTS.md section 3, the maintainer's decision of 2026-10-25).
+- **64-bit sector numbers:** a new layout (4 or later: 3 is the sealed records of [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done)), with the one before refused. Before the first release a new layout or interface replaces the old one, which is refused by name; no conversion code (AGENTS.md section 3, the maintainer's decision of 2026-10-25).
 - **Names:** a history's length per name within a quota; commits of more than 8 names; a read session that holds one commit's point across requests.
 
 ## Acceptance criteria

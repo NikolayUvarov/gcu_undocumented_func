@@ -27,7 +27,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
     "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
-    "spawn privilege; a VFS client of system/own/ for the programs' own directories", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
+    "spawn privilege; a VFS client of system/own/ for the programs' own directories; the key service's client for the programs' secrets clients", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
@@ -582,6 +582,8 @@ impl Init {
                 self.lend(&mut grants, 6, "tts")?;
                 // The client that alone opens system/own/, where it makes and scopes each program's own directory (000-KRN-0170).
                 grants.add(7, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_OWNERS)?, CLIENT);
+                // keystore's client that asks for each program's secrets client, which it lends in SLOT_SECRETS (000-KRN-0182).
+                grants.add(8, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_LOADER)?, CLIENT);
             }
             "audio_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
@@ -674,8 +676,9 @@ impl Init {
             "windows" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "windows")?, ALL); self.lend(&mut grants, 2, "windows")?; }
             // The key service makes the device key itself (RDRAND), needs the date for its certificate, and keeps the key
             // in its private directory of the boot disk, which only this client opens (351-NET-0005, 351-KRN-0040).
+            // It badges the clients of programs' secrets it mints for the loader, so its endpoint keeps the right to (000-NET-0045).
             "keystore" => {
-                grants.add(SLOT_SERVICE, self.server(&mut minted, "keystore")?, ALL); self.lend(&mut grants, 2, "rtc")?;
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "keystore")?, ALL | CAP_BADGE); self.lend(&mut grants, 2, "rtc")?;
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_KEYSTORE)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "tpm", mind::tpm::BADGE_SEAL)?, CLIENT); // seals the device key (351-NET-0006)
             }

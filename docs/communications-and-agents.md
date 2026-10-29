@@ -51,7 +51,7 @@ The maintainer, 2026-10-25:
 | Task | What | Blocks |
 |---|---|---|
 | [000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done) | A program's own data directory and its identity, given by the loader by the program's name | the secrets, every client's settings and cache |
-| [000-NET-0045](../issues/000-NET-0045-secrets-per-program-in-keystore.md) | Secrets per program in `keystore`: a token, a password or an API key that only its program reads, never logged | `mail`, `tgtxt`, `agent` |
+| [000-NET-0045](../issues-done/000-NET-0045-secrets-per-program-in-keystore.done) | Secrets per program in `keystore`: a token, a password or an API key that only its program reads, never logged | `mail`, `tgtxt`, `agent` |
 | [000-NET-0046](../issues/000-NET-0046-public-root-certificates.md) | Public root certificates in the image (Mozilla's set, MPL-2.0) | every client of a public service |
 | [000-NET-0047](../issues/000-NET-0047-http-for-api-clients.md) | HTTP for API clients in `libmind`: bodies and headers, multipart, redirects, gzip, a streaming body, Server-Sent Events, Retry-After | `get`, `tgtxt`, `agent`, `www` |
 | [000-NET-0048](../issues/000-NET-0048-get-a-wget-and-curl-analog.md) | `get`, the analog of `wget` and `curl` | — (a console utility of stage 1) |
@@ -194,7 +194,7 @@ Fill in [AGENTS.md](../AGENTS.md), section 7, with:
   - stand-in provider servers under `tests/` (`tests/llm_stub.py`), their suites in `tests/qemu_smoke.py` and their groups in `scripts/ci_local.sh`.
 - **First:** `llm` with one wire format and its stand-in server, then `ask`; `agent` after them (260's stages).
 - **What it needs from other tracks:**
-  - HTTP with SSE and redirects from `NET` (000-NET-0047); keys from `keystore` (000-NET-0045), from a file until then;
+  - HTTP with SSE and redirects from `NET` (000-NET-0047); keys from `keystore` (000-NET-0045: a program that asks for `REQUEST_SECRETS` keeps and reads its own in `SLOT_SECRETS`);
   - flow grants for the providers' hosts from `NET`;
   - its data directory from `KRN` (000-KRN-0170);
   - the `mind::tui` widgets from `APP`, for `agent`'s screen.

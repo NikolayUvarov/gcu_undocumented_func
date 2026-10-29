@@ -58,6 +58,44 @@ download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]
 
   The address may be a host name (`download updates.example.org tcp 443`). The broker looks it up when it makes the grant, at the file's `resolver` line or else the stack's DNS server, and the grant keeps that address (351-NET-0003).
 
+## `get`
+
+```
+get [options] URL
+```
+
+`get` (000-NET-0048) is the console's and the scripts' `wget` and `curl`: one request, its method, headers and body, the
+answer to the console or a file. It is a process of its own, and `help get` lists its options.
+
+- **What it asks its launcher for** (MC-3.11: the request grants nothing):
+  - `REQUEST_NETWORK`: a flow grant from the policy broker. It reaches only what `netpolicy.txt` names for `get`: lines
+    naming a host and port, or a browsing grant (`browse get public tcp 443`, 000-NET-0049). A line `get dns` lets it
+    look names up. A host asked of the user at run time is 000-NET-0049's remainder.
+  - `REQUEST_FILES`: the shell's own client of the user's files (`ram:`, `data/`, `log:`), for `-o`, `-O`, `-d @FILE` and
+    `-F name=@FILE`. A client confined to one directory (`REQUEST_FILE`) would hold only the first argument's.
+  - `REQUEST_PARSE`: the parser service reads each response head (109-NET-0009).
+  - `REQUEST_TLS`: the launcher's TLS client, with `BADGE_TLS_NO_DEVICE`, so `get` never signs in as the device.
+  - `REQUEST_CONSOLE`.
+- **Options:**
+  - `-o FILE` saves the body; `-O` saves it in `ram:` under the URL's last segment; `-c` resumes a saved file with
+    `Range` (a server that answers 200 rather than 206 starts it over; 416 means it is already whole).
+  - `-I` prints the head the parser read (status, length, type, location, chunked). It asks with GET and reads no body:
+    `mind::http` has no HEAD yet (000-NET-0047's methods).
+  - `-X GET|POST|PUT`, `-H 'Name: value'` (up to 14), `-d TEXT` or `-d @FILE` (POST, `application/x-www-form-urlencoded`
+    unless `-H` names a type), `-F name=value` and `-F name=@FILE` (a `multipart/form-data` POST, up to 8 parts).
+  - Redirects are followed by `mind::http::redirect`'s rules (on by default; `--no-location`, `--max-redirs N` up to
+    10). HTTPS to HTTP is refused. `Authorization`, `Cookie` and `Proxy-Authorization` are not sent on to another host or
+    port, as `curl` without `--location-trusted`.
+  - `-s` is silent, `-w` prints the status, the body's bytes and the time, `-f` fails on a status of 400 or more without
+    printing the body, `-m S` (`--max-time`) bounds the whole run.
+  - `http://` only with `--insecure-http`, said on the console (`GET: PLAIN HTTP TO host:port, NOT ENCRYPTED`).
+- **The body:** decoded as it comes (gzip, deflate, chunked; 000-NET-0047). On the console a body that is valid UTF-8 is
+  printed; one that is not is counted and `get` says to save it with `-o`.
+- **The exit status** follows `curl`'s, so that a script reads it (msh: `get … or { … }`): 0; 1 a scheme not allowed;
+  2 usage; 3 a malformed URL; 6 a name not resolved; 7 no connection (a host the grant does not name: `Denied`);
+  22 an HTTP error with `-f`; 23 a file not written; 26 a file to send not read; 28 the time is up; 35 TLS; 47 a
+  redirect not followed; 56 the connection ended before the whole answer; 60 a certificate refused.
+
 ## `sftp://`
 
 ```
@@ -106,10 +144,22 @@ These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networ
   - from a script that does not declare `tls`, `download` gets no TLS client and refuses `https://`.
 - The heads of all these were parsed in `parse` (109-NET-0009). A malformed head from the server is refused there (`DOWNLOAD: HTTP: Head`) and logged by `parse` with `download`'s PID. `parse` holds two capabilities, its endpoint and a `logd` client (`stat caps`). Started from a script that grants it everything but `parse`, `download` refuses. Killed, `parse` is restarted by `init` behind the same endpoint, and the next download goes through it.
 
+- **`get`** (000-NET-0048), against `tests/http_api_stub.py` and the release server over HTTPS: `help get`; a body to the
+  console and to `ram:` (`-o`, `-O`), its SHA-256 checked by the shell; a download cut at 120 000 bytes (exit 56), then
+  finished with `-c` by one `Range` request, and found whole by the next; a JSON POST inline and from `data/`; a multipart
+  form with the saved file, read by Python's own parser; a PUT of a file with a header; a chain of 301, 308, 307 and 302;
+  `--max-redirs 2` (47); HTTPS to HTTP (47); 303 after a POST; `Authorization` kept on the same host and dropped for
+  another port; `-f` on 503 (22); `-I`; a gzip body saved decoded; `-w`; `-m 3` against an 8 s answer (28); a server
+  from a CA nobody trusts (60); `http://` refused (1) and allowed with `--insecure-http`; a host the grant does not name
+  (7); usage (2) and a URL (3).
+
 ## Not provided yet
+
+- **In `get`:** `-u user` (the password asked on the console); a host asked of the user at run time (000-NET-0049's
+  remainder, which waits for the shell's question); HEAD, PATCH and DELETE (000-NET-0047's methods).
 
 - **Roots covered by a release's signature:** the image ships Mozilla's roots as `tlsroots.pem` (000-NET-0046), but the boot manifest does not list the file and a slot update does not replace it. The roots are whatever the file holds, which nothing authenticates; a pin is the way to trust the update server for now.
 - **HTTPS by name with a pin from the channel:** the updater's (351-UPD-0007).
-- **In `get` and `download`:** chunked bodies, redirects, keep-alive, several connections at once, IPv6. A service has chunked bodies and keep-alive through `mind::http::Connection` ([services.md](services.md), 750-NET-0019).
+- **In `mind::http::get` and `download`:** chunked bodies, redirects, keep-alive, several connections at once, IPv6 (the program `get` has the first two through `mind::http::Connection`). A service has chunked bodies and keep-alive through `mind::http::Connection` ([services.md](services.md), 750-NET-0019).
 - **Fast writes of a large file.** `vfs_server` writes a file one 512-byte sector per block request, and walks the file's cluster chain from its start on every write. So writing slows down as the file grows. That is `vfs_server`'s, not this task's.
 - **A parser instance per session** is the kernel track's 109-NET-0010, on its branch (requests-NET.md, the notice).

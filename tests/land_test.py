@@ -26,9 +26,9 @@ def test_requests_and_answers():
 
 
 def test_text_only():
-    for path in ("AGENTS.md", "issues/README.md", "issues-done/x.done.md", "docs/effector.md", "issues-audit/a.md"):
+    for path in ("AGENTS.md", "issues/README.md", "issues-done/x.done.md", "issues-done/307-STO-0019-x.done", "docs/effector.md", "issues-audit/a.md"):
         assert land.text_only(path), path
-    for path in ("scripts/land.py", "issues-audit/repro/x.md", "THIRD_PARTY.md", "kernel/src/main.rs", "docs/figure.png", "LICENSE-MIT"):
+    for path in ("scripts/land.py", "issues-audit/repro/x.md", "issues-audit/repro/x.done", "THIRD_PARTY.md", "kernel/src/main.rs", "docs/figure.png", "LICENSE-MIT"):
         assert not land.text_only(path), path
 
 
@@ -49,6 +49,10 @@ def test_plan_covers_every_group():
                 assert names.index("build (x86)") < names.index("build (x86 test programs)") < min(names.index(g) for p, g in entries if p == "x86" and g not in builds), (lane, names)
             if "aarch64" in used:
                 assert names.index("build (aarch64)") < min(names.index(g) for p, g in entries if p == "aarch64" and g not in builds), (lane, names)
+            if "host tests" in names:  # they read the x86 image's ELF files
+                assert names.index("build (x86)") < names.index("host tests"), (lane, names)
+    part_of = {g: p for p, gs in parts.items() for g in gs}
+    assert [g for _, g in land.builds_for({"host"}, part_of)] == ["build (x86)", "build (x86 test programs)"]
     layout = land.plan(parts, "full", lanes=["rz", "pcu"])
     assert set(layout) <= {"rz", "pcu"} and expected <= {g for e in layout.values() for _, g in e}, layout
     runs = [g for _, g in land.runs_for([("x86", "x86: AVX state"), ("x86", "x86: AVX state, one CPU"), ("x86", "x86: no PIT")])]
