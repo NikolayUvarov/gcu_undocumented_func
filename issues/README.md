@@ -179,6 +179,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [308-STO-0023](308-STO-0023-memory-domains.md) | Memory domains: a key per domain, and forgetting by destroying it; built and tested with `init`'s grant patched in | `STO` | P2 | the store's endpoint with the badge right, from `init` ([requests-KRN.md](requests-KRN.md)) | track B |
 | [308-STO-0024](308-STO-0024-what-sealing-protects.md) | The threat model and the profile: what sealing at rest protects, and what it does not | `STO` | P2 | — | track B |
 | [309](309-copies-scrub-and-repair.md) | Copies, scrub and repair | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
+| [309-STO-0025](309-STO-0025-scrub.md) | Scrub: every record read and checked as a mount does, in idle steps of at most 256 sectors and whole on request; `blockstore.wit` 2.3 | `STO` | P2 | — | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
 | [311](311-storefs-a-file-face.md) | A file face: trees as objects, and `storefs`, a VFS view of a named root | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
 | [312](312-the-minds-memory.md) | The Mind's memory: a journal, assertions and derived indexes | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (no personal data before it) | track B |
