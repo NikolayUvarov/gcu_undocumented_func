@@ -20,6 +20,21 @@ pub fn split(line: &str) -> Result<Option<Split<'_>>, &'static str> {
     Ok(Some(Split { command, append, file }))
 }
 
+/// A line split at its input: the program, and the file it reads as its text input (`grep wm < ram:ps.txt`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Input<'a> { pub command: &'a str, pub file: &'a str }
+
+/// `line` split at its first `<` outside double quotes; None without one; Err says what is wrong with it.
+pub fn input(line: &str) -> Result<Option<Input<'_>>, &'static str> {
+    let Some(at) = crate::pipe::find(line, '<') else { return Ok(None) };
+    let (command, file) = (line[..at].trim(), line[at + 1..].trim());
+    if command.is_empty() { return Err("A PROGRAM COMES BEFORE < (GREP WM < FILE)"); }
+    if file.is_empty() { return Err("A FILE COMES AFTER < (GREP WM < FILE)"); }
+    if file.contains(['>', '<', '|', '"']) || file.split_whitespace().count() > 1 { return Err("ONE FILE AFTER <, AT THE END OF THE COMMAND"); }
+    if command.ends_with('&') { return Err("< TAKES A PROGRAM IN FRONT, NOT ONE STARTED WITH &"); }
+    Ok(Some(Input { command, file }))
+}
+
 /// Output sorted line by line: a line that starts `ERROR: ` is shown, the rest goes into the file. A line longer than
 /// `LONG` without its end goes into the file as it is.
 #[derive(Default)]
