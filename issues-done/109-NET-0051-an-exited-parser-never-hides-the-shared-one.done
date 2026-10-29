@@ -1,6 +1,6 @@
-# 109-NET-0051 — The tests' service table never takes an exited row for a live service
+# 109-NET-0051 — The tests' service table never takes an exited row for a live service — done
 
-**Type:** tests (`tests/qemu_smoke.py`) · **Owner:** `NET` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-12.2
+**Type:** tests (`tests/qemu_smoke.py`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [109](109-session-parsers.done) · **Constitution:** MC-12.2
 
 **Asked by:** APP, `issues/requests-NET.md` (`main` 26f14525) and `KRN/2026-10-29T1404Z-APP-the-net-suites-parser-check-reads-a-downloads-exited-parser.md` on `internal-dev-messages`.
 
@@ -22,4 +22,10 @@
 
 ## Related
 
-- [109-NET-0010](../issues-done/109-NET-0010-a-parser-per-session.done): the download's own parser.
+- [109-NET-0010](109-NET-0010-a-parser-per-session.done): the download's own parser.
+
+## Resolution
+
+- `tests/qemu_smoke.py`, `VM.services()`: a later `EXITED` row never replaces a live row of the same name; a name with only `EXITED` rows is still given (`claude/youthful-mendel-mf1soy` b54e136f).
+- The x86 group "network, TLS and Effector" passed whole with it (QEMU TCG, 4 CPUs, this session's container, 2026-10-29), `parser_check` included.
+- APP's request left `issues/requests-NET.md`.
