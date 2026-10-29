@@ -67,7 +67,7 @@ Everything 1.1 did stays.
   again. When full, it drops its oldest record that is acknowledged and past its command's expiry; unacknowledged work
   is still never forgotten, and an action runs only when its answer has room.
 
-**1.3 (2026-10-29, [750-EFF-0021](../../issues/750-EFF-0021-a-delivery-answers-with-the-file-read-back.md),
+**1.3 (2026-10-29, [750-EFF-0021](../../issues-done/750-EFF-0021-a-delivery-answers-with-the-file-read-back.done),
 [750-EFF-0022](../../issues/750-EFF-0022-the-servers-health-check.md)):** a completed `deliver_file` says what is on the
 machine, and the server's health check is answered. Everything 1.2 did stays.
 

@@ -28,7 +28,11 @@ On hesere, `health_check` on either MIND machine is refused before it reaches th
 - [x] The wire host test: a command that exits 1 is `failed` with its status and `error` (2026-10-29).
 - [x] The `effector` QEMU suite on x86: `exec_v1` of `health` is answered `completed`, exit status 0, `stdout` starting `healthy: up` (4 CPUs, 2026-10-29; the agent logged `healthy: up 131 s, 28 services running`). It passes on aarch64 too (QEMU `virt`, e13b48b7).
 - [ ] On both MIND machines, through hesere, once the server has the health command: `health_check` answers. Evidence for each machine only (MC-12.1).
+  - **The MacBook Pro, 2026-10-29** (release 202610290937): the server's `exec` of `health` (operation `20261029095226.025109611_000348`) answered `completed`, exit 0, `healthy: up 88 s, 35 services running`.
+  - **Left:**
+    - the server's `health_command` (asked in its inbox, `20261029T084429.186116961Z-fa687b3f56ecd4dd`);
+    - the DEXP, at its next release.
 
 ## Related
 
-[750-EFF-0021](750-EFF-0021-a-delivery-answers-with-the-file-read-back.md) (a result kept until the server takes it), [750-EFF-0014](750-EFF-0014-telemetry.md).
+[750-EFF-0021](../issues-done/750-EFF-0021-a-delivery-answers-with-the-file-read-back.done) (a result kept until the server takes it), [750-EFF-0014](750-EFF-0014-telemetry.md).
