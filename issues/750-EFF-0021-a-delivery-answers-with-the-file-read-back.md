@@ -39,7 +39,10 @@ The maintainer (2026-10-29): both MIND machines are to be reachable through Effe
 - [x] The `effector` QEMU suite on x86 and aarch64: the delivery's `stdout` is `delivered data/inbox/d.txt SIZE SHA256` with the file's own values.
   - x86, 4 CPUs (98a23c3e and e13b48b7, 2026-10-29): passes, with the line's size and SHA-256 checked.
   - aarch64 (QEMU `virt`, e13b48b7, 2026-10-29): passes.
-- [ ] On the MacBook Pro, through hesere: a `deliver_file` answers with the line, and the server's task is told. Evidence for that machine only (MC-12.1).
+- [x] On the MacBook Pro, through hesere: a `deliver_file` answers with the line, and the server's task is told. Evidence for that machine only (MC-12.1).
+  - **2026-10-29:** release 202610290937 (`main` with `DRV`'s, `EFF`'s and `LNK`'s branches) was put over the cable into slot B and confirmed.
+  - **The check:** operation `20261029095159.253279081_000347`, a 69-byte upload delivered to `data/inbox/receipt-check.txt`. It answered `completed`, `stdout` `delivered data/inbox/receipt-check.txt 69 527a6863…cbab`, the upload's own size and SHA-256.
+  - **The server's task was told** in its inbox: `20261029T095301.306064944Z-0257f4290e9e796a`, following `…-77fe47054738720a`.
 
 ## Related
 
