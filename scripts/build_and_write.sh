@@ -37,6 +37,8 @@
 #                  and runs the Effector agent's services in them (750-KRN-0143, docs/effector/README.md); `mode`
 #                  in the shell changes it later. `link-console` beside them, with --link-dev, makes the link the
 #                  owner's console (800-KRN-0155, 800-LNK-0019): only the disk's word turns it on or off.
+#                  `remote-update` (751), with development or maintenance, lets a developer's release sent through
+#                  Effector be installed; `link-remote-update`, with link-console, lets the link's console switch it.
 #   --keep-wifi    keep the Wi-Fi networks the machine remembers across the write: before it, system/keystore/
 #                  (wifi.kept, device.key, wifi.country) is saved from the disk's volume MIND CORE into
 #                  ~/.config/mind/keystore (mode 600; a fresh disk uses what was saved last), and after it put back,
@@ -88,6 +90,7 @@ WRITER_WIN="$(wslpath -w "$REPO/05_write_usb_windows.ps1")"
 # Runs PowerShell code passed as base64 UTF-16LE, so no quoting is lost between WSL and Windows.
 winps() { powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$(printf '%s' "$1" | iconv -t UTF-16LE | base64 -w0)"; }
 
+MODE_WORDS="development maintenance link-console remote-update link-remote-update"
 COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; LINK_ADDRESS=; KEEP_WIFI=0; KEEP_EFFECTOR=0; KEEP_SETTINGS=0; IMAGE_FILE=
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -111,16 +114,19 @@ while [[ $# -gt 0 ]]; do
         --keep-settings) KEEP_SETTINGS=1; KEEP_WIFI=1; KEEP_EFFECTOR=1; shift ;;
         --mode=*) m="${1#--mode=}"; words=()
                   for w in ${m//,/ }; do
-                      [[ $w == development || $w == maintenance || $w == link-console ]] || { echo "--mode=<modes>: development, maintenance, link-console, comma-separated: $w" >&2; exit 1; }
+                      [[ " $MODE_WORDS " == *" $w "* ]] || { echo "--mode=<modes>: ${MODE_WORDS// /, }, comma-separated: $w" >&2; exit 1; }
                       [[ " ${words[*]-} " == *" $w "* ]] || words+=("$w")
                   done
-                  [[ ${#words[@]} -gt 0 ]] || { echo "--mode=<modes>: development, maintenance, link-console, comma-separated" >&2; exit 1; }
+                  [[ ${#words[@]} -gt 0 ]] || { echo "--mode=<modes>: ${MODE_WORDS// /, }, comma-separated" >&2; exit 1; }
                   MODES=" ${words[*]} "; FLAGS+=("mode.conf:${words[*]}"); shift ;;
         *) break ;;
     esac
 done
 # init counts link-console only with `dev` in link.conf (800-KRN-0155).
 [[ $MODES != *" link-console "* || $LINK_DEV == 1 ]] || { echo "--mode=link-console needs --link-dev: init leaves the word out without dev in link.conf" >&2; exit 1; }
+# init counts remote-update only in the development or maintenance mode, link-remote-update only with link-console (751).
+[[ $MODES != *" remote-update "* || $MODES == *" development "* || $MODES == *" maintenance "* ]] || { echo "--mode=remote-update needs development or maintenance: init counts it only in them (751)" >&2; exit 1; }
+[[ $MODES != *" link-remote-update "* || $MODES == *" link-console "* ]] || { echo "--mode=link-remote-update needs link-console: it lets the link's console switch remote-update (751)" >&2; exit 1; }
 
 # Request files (data/NAME, holding TEXT) put on the volume MIND CORE that holds this build's MANIFEST (at its root, or in
 # MIND/A with --slots), flushed and read back.
