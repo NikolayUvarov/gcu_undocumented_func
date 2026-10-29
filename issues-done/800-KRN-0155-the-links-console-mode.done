@@ -58,4 +58,4 @@ The shell's `mode` (750-APP-0105) is in `main`, so the last criterion is checked
 
 ## Related
 
-800-LNK-0019 (on `claude/LNK-link`), [800-KRN-0139](../issues/800-KRN-0139-the-links-developer-mode.md), [750-KRN-0143](../issues/750-KRN-0143-init-follows-the-development-and-maintenance-modes.md), [800-APP-0102](../issues/800-APP-0102-the-shells-run-for-the-links-client.md).
+800-LNK-0019 (on `claude/LNK-link`), [800-KRN-0139](../issues/800-KRN-0139-the-links-developer-mode.md), [750-KRN-0143](../issues/750-KRN-0143-init-follows-the-development-and-maintenance-modes.md), [800-APP-0102](800-APP-0102-the-shells-run-for-the-links-client.done).

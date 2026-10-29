@@ -1,6 +1,6 @@
-# 800-APP-0102 — What the shell's `run` takes from the link's client, in developer mode
+# 800-APP-0102 — What the shell's `run` takes from the link's client, in developer mode — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "you must be able to run commands there", 2026-10-22) · **Status:** open · **Blocked by:** — (`KRN`'s client is in `main` with ABI 15, 800-KRN-0148) · **Main task:** [800](800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware (as 800) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "you must be able to run commands there", 2026-10-22) · **Status:** done (2026-10-29) · **Blocked by:** — (`KRN`'s client is in `main` with ABI 15, 800-KRN-0148) · **Main task:** [800](../issues/800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware (as 800) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
 
 **Recorded by:** the tools track, 2026-10-22, from LNK's request (LNK → APP, 2026-10-22 03:56 UTC, for 800-LNK-0015) and the maintainer's choice (a) that LNK passed on at 03:58: "да, режим а".
 
@@ -48,4 +48,18 @@ What runs over the link is evidence for the configurations tested only (MC-12.1)
 
 ## Related
 
-[800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done) (`run`), 800-LNK-0015 (on LNK's branch).
+[800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done), [800-KRN-0139](../issues/800-KRN-0139-the-links-developer-mode.md), [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done) (`run`), 800-LNK-0015 (on LNK's branch).
+
+## Resolution
+
+Done (2026-10-29).
+- **The shell's part** (`shell/src/clients.rs`, `Client::Link`; `shell/src/main.rs`) has been in `main` since 61df5767. It serves `SLOT_COMMANDS` and takes the line of the client badged `BADGE_SHELL_LINK` as the rule above says.
+- **The host test** `the_links_client_gets_at_once_what_a_program_is_asked_but_not_the_policy` in `tests/shell_host.rs` passes.
+- **The docs** are in `docs/tools/README.md` and `README_RU.md` (4.8).
+- **The QEMU `link` suite with `dev`** ran its `sh` checks with no skip, and every check passed:
+  - `sh ip` answered with its cards;
+  - `sh ps` answered;
+  - `sh netpolicy add …` was refused.
+
+  The run: x86, 4 CPUs, TCG, on the tools branch's 10d7b849 (`main` ced25026 merged), with `--suites tools,services,link`. It is evidence for that configuration only (MC-12.1).
+- **On the MacBook Pro,** LNK reported `sh ip`, `sh netstat -i` and `sh ps` answering over the link on 2026-10-22 (above).
