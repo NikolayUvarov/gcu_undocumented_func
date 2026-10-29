@@ -45,4 +45,4 @@ Evidence for the configurations named only (MC-12.1). A replaced service runs un
 
 ## Related
 
-[800-KRN-0144](800-KRN-0144-a-service-replaced-from-data-link.md), [800-LNK-0015](800-LNK-0015-shell-commands-over-the-link.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [docs/link/protocol.md](../docs/link/protocol.md).
+[800-KRN-0144](800-KRN-0144-a-service-replaced-from-data-link.md), [800-LNK-0015](../issues-done/800-LNK-0015-shell-commands-over-the-link.done), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [docs/link/protocol.md](../docs/link/protocol.md).
