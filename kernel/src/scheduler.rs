@@ -19,7 +19,9 @@ const GRANT_BYTES: usize = core::mem::size_of::<Grant>();
 const RECEIVE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1; // arg2 of IPC: the receive slot below the timeout (issue 172)
 // A console read within this long pushes back on its writer (LOG takes only what fits); an application counts as read from its start.
 const CONSOLE_READER_NS: u64 = 1_000_000_000;
-const HOLD_NS: u64 = 50_000_000; // the longest a task is held for the compositor's copy (000-KRN-0086)
+// The longest a task is held for the compositor's copy (000-KRN-0086): a bound for a compositor that never releases,
+// far above a copy's time, which a slow machine may stretch past 50 ms (000-KRN-0186).
+const HOLD_NS: u64 = 250_000_000;
 // Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
 // Every task's log also goes to the kernel's console while no driver holds it (aarch64: until the shell takes the PL011).
 static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(target_arch = "aarch64"));

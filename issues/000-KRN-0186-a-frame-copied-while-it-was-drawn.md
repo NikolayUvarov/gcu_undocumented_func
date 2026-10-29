@@ -17,6 +17,23 @@
 - Find why a slow or loaded machine shows it, and a fast one does not.
 - Fix the protocol or the compositor, not the check.
 
+## Cause (2026-10-29)
+
+- **The hold ran out mid-copy.** The kernel holds the task for the copy until `COMPOSITOR_RELEASE` or 50 ms (000-KRN-0086). The compositor compared and wrote each pixel to the framebuffer from the top, under the hold.
+- **Framebuffer writes are slow where the check failed.** Under TCG, writes to QEMU's video memory are far slower than to memory. In the paused run one copy spanned some 50 screens with its top done and its bottom old: `(9, 6)` many times, then `(9, 12)`.
+- **What followed.** Once the 50 ms passed, `app2` ran on and drew the next frames. The copy, still on its way down, took their bottom half. All task selection goes through `ready()`, which honours the hold, so no other path let the task run.
+
+## Progress
+
+- **The compositor** (`compositor/src/main.rs`):
+  - under the hold it only reads the screen into its shadow buffer and notes each row's changed columns, then releases;
+  - it writes the framebuffer from the shadow after the release;
+  - its watch line names the longest hold of each second.
+- **The kernel:** the hold's bound is 250 ms (`HOLD_NS`), against a compositor that never releases; a copy no longer needs it.
+- **The check:** each screen is taken with the guest paused (QMP `stop` and `cont`). QEMU otherwise reads the screen while the guest writes it, so a copy that overtakes the read also shows the bottom newer.
+- **The docs:** `common/abi.rs`, `docs/api/README.md` and the profile's row on task screens.
+- **Left:** the acceptance runs.
+
 ## Acceptance criteria
 
 - The check passes 20 times in a row under load: two lanes on `un-rizen`, and the guest paused for each screen.

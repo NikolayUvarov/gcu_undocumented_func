@@ -38,7 +38,7 @@ const WATCH_MS: usize = 10_000;
 const LOG_LINES: u32 = 24; // in all, so screens that change often cannot fill the system log's ring
 
 #[derive(Default)]
-struct Watch { screens: u32, since: usize, second: usize, frames: u32, longest: usize, written: usize, lines: u32 }
+struct Watch { screens: u32, since: usize, second: usize, frames: u32, longest: usize, held: usize, written: usize, lines: u32 }
 
 // One line of the watch while lines are left.
 fn say(lines: &mut u32, line: core::fmt::Arguments) { if *lines < LOG_LINES { *lines += 1; mind::println!("{}", line); } }
@@ -115,7 +115,9 @@ fn main(info: &'static BootInfo) {
     // Mapping errors no longer turn into writes to address usize::MAX.
     let Ok(gop) = Mapping::new(SLOT_MEM) else { mind::println!("[COMPOSITOR] NO FRAMEBUFFER MAPPING"); return };
     let Some(mut shadow) = Pages::new(pixels * 4) else { mind::println!("[COMPOSITOR] NO MEMORY FOR SHADOW"); return };
+    let Some(mut spans) = Pages::new(info.height * 8) else { mind::println!("[COMPOSITOR] NO MEMORY FOR SHADOW"); return };
     let (gop, shadow) = (gop.as_ptr::<u32>(), shadow.as_mut_slice().as_mut_ptr() as *mut u32);
+    let spans = spans.as_mut_slice().as_mut_ptr() as *mut [u32; 2]; // each row's changed columns, first and last
     let mut source: Option<Mapping> = None;
     let mut valid = false;
     let native = info.pixel_format == PIXEL_BGR; // screens already hold the framebuffer's layout
@@ -131,7 +133,7 @@ fn main(info: &'static BootInfo) {
         // Whole frames only: a changed screen is copied while its task waits, and the task is held meanwhile; one
         // whose task never waits is copied as it is after FORCE_MS (000-KRN-0086).
         let mut frame = compositor_pull_frame(SOURCE_SLOT).unwrap_or(Frame::Unchanged);
-        let held = frame == Frame::Dirty;
+        let mut held = frame == Frame::Dirty;
         if frame == Frame::Busy {
             let since = *busy.get_or_insert(mind::time::uptime_ms());
             if mind::time::uptime_ms() - since >= FORCE_MS { frame = compositor_pull(SOURCE_SLOT).unwrap_or(Frame::Unchanged); }
@@ -148,25 +150,39 @@ fn main(info: &'static BootInfo) {
             let (start, mut written) = (mind::time::monotonic_ns(), 0usize);
             // The visible width of each row only: the stride may be far wider (4096 for 2880 on the MacBook Pro). Pixels
             // are compared one by one, as a slice comparison is a byte-wise memcmp here (000-KRN-0081).
+            // While the task is held its changes go to the shadow only; the framebuffer, far slower to write, is
+            // written after the release, so the hold never ends mid-copy (000-KRN-0186).
             for y in 0..info.height {
                 let row = y * info.stride;
-                for i in row..row + info.width {
-                    let pixel = unsafe { core::ptr::read_volatile(screen.add(i)) };
-                    if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
-                        let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
-                        unsafe { core::ptr::write_volatile(gop.add(i), device); core::ptr::write(shadow.add(i), pixel); }
-                        written += 1;
+                let mut span = [info.width as u32, 0];
+                for x in 0..info.width {
+                    let pixel = unsafe { core::ptr::read_volatile(screen.add(row + x)) };
+                    if !valid || pixel != unsafe { core::ptr::read(shadow.add(row + x)) } {
+                        unsafe { core::ptr::write(shadow.add(row + x), pixel); }
+                        span = [span[0].min(x as u32), x as u32];
                     }
+                }
+                unsafe { core::ptr::write(spans.add(y), span); }
+            }
+            let held_ms = if held { (mind::time::monotonic_ns() - start) / 1_000_000 } else { 0 };
+            if core::mem::take(&mut held) { let _ = compositor_release(SOURCE_SLOT); }
+            for y in 0..info.height {
+                let ([first, last], row) = (unsafe { core::ptr::read(spans.add(y)) }, y * info.stride);
+                for i in row + first as usize..row + last as usize + 1 {
+                    let pixel = unsafe { core::ptr::read(shadow.add(i)) };
+                    let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
+                    unsafe { core::ptr::write_volatile(gop.add(i), device); }
+                    written += 1;
                 }
             }
             valid = true;
             let (now, took) = (mind::time::uptime_ms(), (mind::time::monotonic_ns() - start) / 1_000_000);
             if frame == Frame::NewSource {
-                watch.screens += 1; watch.since = now; watch.second = now; watch.frames = 0; watch.longest = 0; watch.written = 0;
+                watch.screens += 1; watch.since = now; watch.second = now; watch.frames = 0; watch.longest = 0; watch.held = 0; watch.written = 0;
                 let shown = lit(info, shadow);
                 say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN IN FRONT #{}: FIRST FRAME IN {} MS, {} OF {} PIXELS NOT BLACK", watch.screens, took, shown, info.width * info.height));
             } else {
-                watch.frames += 1; watch.longest = watch.longest.max(took as usize); watch.written += written;
+                watch.frames += 1; watch.longest = watch.longest.max(took as usize); watch.held = watch.held.max(held_ms as usize); watch.written += written;
             }
         }
         if held { let _ = compositor_release(SOURCE_SLOT); }
@@ -175,9 +191,9 @@ fn main(info: &'static BootInfo) {
         if watch.screens > 0 && now - watch.since < WATCH_MS + 1000 && now - watch.second >= 1000 {
             if watch.written > 0 {
                 let shown = lit(info, shadow);
-                say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN IN FRONT #{}: {} FRAMES IN {} MS, LONGEST {} MS, {} PIXELS WRITTEN, {} NOT BLACK", watch.screens, watch.frames, now - watch.second, watch.longest, watch.written, shown));
+                say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN IN FRONT #{}: {} FRAMES IN {} MS, LONGEST {} MS (THE TASK HELD {} MS AT MOST), {} PIXELS WRITTEN, {} NOT BLACK", watch.screens, watch.frames, now - watch.second, watch.longest, watch.held, watch.written, shown));
             }
-            watch.second = now; watch.frames = 0; watch.longest = 0; watch.written = 0;
+            watch.second = now; watch.frames = 0; watch.longest = 0; watch.held = 0; watch.written = 0;
         }
         // The capture dot: drawn over every frame while captures come, then the screen under it put back once.
         if let Some(at) = captured {
