@@ -1,11 +1,11 @@
 # The remote update's threats
 
-**Version:** 0.1 (2026-10-29, [751-ASR-0013](../../issues/751-ASR-0013-the-remote-update-path-threat-model-and-refusals.md)) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.6, MC-7.5, MC-9.3, MC-9.4, MC-3.8, MC-3.11, MC-10.3, MC-12.3
+**Version:** 0.2 (2026-10-29: KRN's review, 751-KRN-0185); 0.1 (2026-10-29, [751-ASR-0013](../../issues/751-ASR-0013-the-remote-update-path-threat-model-and-refusals.md)) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.6, MC-7.5, MC-9.3, MC-9.4, MC-3.8, MC-3.11, MC-10.3, MC-12.3
 
 This document covers a developer agent installing a release on a machine through Effector, under the owner's permission `remote-update` ([751](../../issues/751-system-updates-at-a-developers-request.md)). It lists what an attacker could do with that path, what is meant to stop each attack, and what nothing stops.
 
 **This is a design, not a guarantee (MC-12.3).** On 2026-10-29 none of 751's parts exists:
-- `init`'s words (KRN);
+- `init`'s words (KRN, [751-KRN-0185](../../issues/751-KRN-0185-the-remote-update-permission-in-init.md), its design reviewed against this table on 2026-10-29);
 - `updater`'s client for the gateway (UPD, 750-UPD-0020);
 - the shell's switches (APP);
 - the agent's and the gateway's side (751-EFF-0023).
@@ -44,6 +44,7 @@ Hence:
 | **The Mind turns it on** | `BADGE_MIND` may turn it off only (KRN) | `set-mode` on from `BADGE_MIND` refused, off taken | — |
 | **The cable turns it on without the owner's leave** | The link's console takes `mode remote-update` only while `link-remote-update` is on, which only the console or the disk sets (APP, KRN) | `link` suite: refused without the word; `mode link-remote-update` from the link always refused | Whoever holds the cable while the owner's word is on can switch it: that is the owner's choice |
 | **An install with the permission off** | `updater` asks `init` at `install-begin` and again at `install-commit` and refuses (UPD) | `update` and `effector` suites: refused, nothing written to the other slot | A switch-off during a running install: the commit check refuses it, but the bytes already streamed are discarded only by the next install |
+| **The gateway's client of `updater` outlives the mode** | The client (`BADGE_UPDATE_GATEWAY`) exists only in the development or maintenance mode: outside one `effector_gw` does not run and holds no client. A mode change revokes it by `init`'s restart of the gateway, as for its other clients (750-KRN-0143, 751-KRN-0185; KRN's review, 2026-10-29) | `modes` suite: after `mode development off`, no gateway and no client | — |
 | **The gateway installs on its own** | The gateway holds no file scope `updater` reads; it can only stream to `updater`, which checks the word itself (UPD, KRN) | `effector` suite with the word off | The gateway's own code is trusted to stream what the agent downloaded, not to inspect it |
 | **A release signed with an unknown key** | `updater`'s checks, unchanged: the manifest with a trusted boot key, the channel with a trusted release key (351) | `update` suite: a bundle signed with another key refused with the word on | **The test keys** (above): with them trusted, every release is "known" |
 | **Rollback to an older, vulnerable release** | The version floor in the boot records, raised by `updater` (351-UPD-0024, MC-9.4) | `update` suite: a bundle below the floor refused with the word on | The floor is on the disk, not in hardware: someone with the disk can lower it (351-ASR-0006's "boot-record tampering") |
@@ -55,7 +56,9 @@ Hence:
 
 ## Open
 
-1. **Refusing the word on a disk that trusts the test keys,** or showing that loudly. It needs a decision by KRN and the maintainer: the development disks need the word, and the test keys, today.
+1. **Refusing the word on a disk that trusts the test keys.**
+   - **The warning is planned** in 751-KRN-0185: with the word on and a slot that trusts the public test release key, `init` logs and the shell shows `REMOTE UPDATE ON WITH THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED`.
+   - **The refusal, once the maintainer's own keys exist,** is the maintainer's decision, asked by KRN on 2026-10-29.
 2. **What the owner sees while the word is on:**
    - the shell's notice (APP);
    - the agent's mark, red (751-EFF-0023);

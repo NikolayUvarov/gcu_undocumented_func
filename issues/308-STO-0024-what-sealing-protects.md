@@ -28,7 +28,10 @@ Updated with each part.
 - **2026-10-29, after [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done):**
   - docs/profile/threat-model.md names what is sealed and what is not, that the key lies on the same medium, that a running system and copies handed out are outside, and the configurations;
   - the profile's Article 4 row (x86 and aarch64) says the records are sealed and that this is not yet confidentiality.
-- **Next:** with 0022, where the key lives and what a TPM adds; with 0023, the domains and what forgetting holds against. On flash media, a destroyed key record may survive in the device's spare blocks: forgetting holds against reading the medium through its interface, not its chips.
+- **2026-10-29, after [308-STO-0023](../issues-done/308-STO-0023-memory-domains.done) (round 43):**
+  - docs/profile/threat-model.md says what forgetting a domain holds against: its records never open again, even with the volume key. It does not hold against copies a client already read, or a flash medium's spare blocks, which may keep an erased key record;
+  - the profile's Article 4 row (x86 and aarch64) states the domains and their evidence.
+- **Next:** with 0022, where the key lives and what a TPM adds. The domains' keys are kept under the volume key, so until 0022 runs on the platform, whoever reads the medium reads a live domain too.
 
 ## Acceptance criteria
 

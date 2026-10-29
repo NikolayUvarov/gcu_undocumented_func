@@ -4,8 +4,11 @@
 // (mind::dag), reads one back with every block checked, publishes, resolves, lists (300-STO-0018) and removes names,
 // changes several at once (304-STO-0007), pins objects, shows what the caller retains, collects, fills the store, and imports a model disk's
 // speech models (251-STO-0014, models.rs). A console program: it asks the shell for the store's client (REQUEST_BLOCKSTORE),
-// the user's files (REQUEST_FILES) and the parser service (REQUEST_PARSE, for a model disk's MANIFEST.json).
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
+// the user's files (REQUEST_FILES) and the parser service (REQUEST_PARSE, for a model disk's MANIFEST.json). Makes, lists
+// and forgets memory domains, and runs any command in one (`-d <id>`, 308-STO-0023). Asks for a scrub and shows the last
+// one's findings (309-STO-0025).
+use core::sync::atomic::{AtomicUsize, Ordering};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ, SLOT_FILE};
 use mind::cid::{Cid, Codec};
 use mind::dag::{self, Blocks, Builder, CHUNK};
 use mind::fs::File;
@@ -17,7 +20,11 @@ mod models;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE | REQUEST_PARSE);
 
-const STORE: Endpoint = Endpoint(SLOT_BLOCKSTORE);
+// The store's client every command uses: the shell's, or after `-d <id>` that domain's, received in a slot `blocks` never
+// fills otherwise (it does not ask for the read-only client).
+static CLIENT: AtomicUsize = AtomicUsize::new(SLOT_BLOCKSTORE);
+const DOMAIN_CLIENT: usize = SLOT_BLOCKSTORE_READ;
+pub(crate) fn store() -> Endpoint { Endpoint(CLIENT.load(Ordering::Relaxed)) }
 
 static mut BUILDER: Builder = Builder::new();
 static mut BUFFER: [u8; CHUNK] = [0; CHUNK];
@@ -35,17 +42,17 @@ impl Blocks for Remote {
     fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, dag::Error> {
         let codec = match codec { Codec::Raw => blockstore::Codec::Raw, Codec::DagCbor => blockstore::Codec::DagCbor };
         let mut out = [0u8; 36];
-        match blockstore::put(STORE, codec, data, &mut out) {
+        match blockstore::put(store(), codec, data, &mut out) {
             Ok(Ok(n)) => Cid::from_bytes(&out[..n]).map_err(|_| dag::Error::Store),
             Ok(Err(e)) => Err(self.fail(e)),
             Err(_) => Err(dag::Error::Store),
         }
     }
     fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
-        match blockstore::get(STORE, &cid.to_bytes(), out) { Ok(Ok(n)) => Ok(n), Ok(Err(e)) => Err(self.fail(e)), Err(_) => Err(dag::Error::Store) }
+        match blockstore::get(store(), &cid.to_bytes(), out) { Ok(Ok(n)) => Ok(n), Ok(Err(e)) => Err(self.fail(e)), Err(_) => Err(dag::Error::Store) }
     }
     fn has(&mut self, cid: &Cid) -> Result<bool, dag::Error> {
-        match blockstore::has(STORE, &cid.to_bytes()) { Ok(Ok(h)) => Ok(h), Ok(Err(e)) => Err(self.fail(e)), Err(_) => Err(dag::Error::Store) }
+        match blockstore::has(store(), &cid.to_bytes()) { Ok(Ok(h)) => Ok(h), Ok(Err(e)) => Err(self.fail(e)), Err(_) => Err(dag::Error::Store) }
     }
 }
 
@@ -76,7 +83,7 @@ fn commit<'a>(mut words: impl Iterator<Item = &'a str>) {
         updates[n] = Update { name: text, expected, root };
         n += 1;
     }
-    match blockstore::commit(STORE, &updates[..n]) {
+    match blockstore::commit(store(), &updates[..n]) {
         Ok(Ok(done)) => for (u, v) in updates.iter().zip(done.versions.as_slice()) {
             let class = mind::blockstore::class(done.durability as u8);
             if u.root.is_empty() { mind::println!("COMMITTED {} VERSION {} REMOVED ({})", u.name, v, class) } else { mind::println!("COMMITTED {} VERSION {} ({})", u.name, v, class) }
@@ -95,7 +102,7 @@ fn snapshot<'a>(words: impl Iterator<Item = &'a str>) {
         names[n] = text;
         n += 1;
     }
-    match blockstore::snapshot(STORE, &names[..n]) {
+    match blockstore::snapshot(store(), &names[..n]) {
         Ok(Ok(heads)) => for (name, head) in names.iter().zip(heads.as_slice()) {
             match Cid::from_bytes(head.root.as_slice()) {
                 Ok(root) => mind::println!("{} VERSION {} ROOT {}", name, head.version, root),
@@ -112,7 +119,7 @@ fn snapshot<'a>(words: impl Iterator<Item = &'a str>) {
 fn names(prefix: &str) {
     let (mut after, mut count, mut pages) = (Text::<64>::default(), 0, 0);
     loop {
-        match blockstore::names(STORE, prefix, after.as_str()) {
+        match blockstore::names(store(), prefix, after.as_str()) {
             Ok(Ok(page)) => {
                 pages += 1;
                 for n in page.as_slice() {
@@ -131,14 +138,55 @@ fn names(prefix: &str) {
     mind::println!("{} NAMES IN {} PAGES", count, pages);
 }
 
+// Memory domains of the caller's owner (308-STO-0023): `domains` lists them, `domain new` makes one, `domain forget <id>`
+// destroys its key.
+fn domains(mut words: core::str::SplitWhitespace) {
+    match (words.next(), words.next(), words.next(), words.next()) {
+        (Some("domains"), None, ..) => match blockstore::domains(store()) {
+            Ok(Ok(list)) => {
+                for d in list.as_slice() { mind::println!("DOMAIN {} {}", d.id, if d.forgotten { "FORGOTTEN" } else { "LIVE" }); }
+                mind::println!("{} DOMAINS", list.len());
+            }
+            Ok(Err(e)) => mind::println!("blocks: domains: {:?}", e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
+        (Some("domain"), Some("new"), None, _) => match blockstore::domain_create(store()) {
+            Ok(Ok(id)) => mind::println!("DOMAIN {} MADE", id),
+            Ok(Err(e)) => mind::println!("blocks: domain new: {:?}", e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
+        (Some("domain"), Some("forget"), Some(id), None) => match id.parse::<u16>() {
+            Ok(id) => match blockstore::domain_forget(store(), id) {
+                Ok(Ok(())) => mind::println!("DOMAIN {} FORGOTTEN", id),
+                Ok(Err(e)) => mind::println!("blocks: domain forget {}: {:?}", id, e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            },
+            Err(_) => mind::println!("blocks: domain forget <number>"),
+        },
+        _ => mind::println!("blocks: domains | domain new | domain forget <id>"),
+    }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id>");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
     let mut remote = Remote { last: None };
-    let mut words = mind::process::args_str().split_whitespace();
+    let mut args = mind::process::args_str();
+    // `-d <id>`: every command after it works in that memory domain, through a client the store lends for it.
+    if let Some(after) = args.strip_prefix("-d ") {
+        let (id, rest) = after.trim_start().split_once(' ').unwrap_or((after.trim_start(), ""));
+        let Ok(id) = id.parse::<u16>() else { mind::println!("blocks: -d <domain number>"); return };
+        match blockstore::domain_client(Endpoint(SLOT_BLOCKSTORE), id, DOMAIN_CLIENT) {
+            Ok(Ok(())) => CLIENT.store(DOMAIN_CLIENT, Ordering::Relaxed),
+            Ok(Err(e)) => { mind::println!("blocks: domain {}: {:?}", id, e); return }
+            Err(e) => { mind::println!("blocks: the store does not answer: {:?}", e); return }
+        }
+        args = rest;
+    }
+    let mut words = args.split_whitespace();
     let mut rest = words.clone();
     match rest.next() {
         Some("commit") => return commit(rest),
@@ -148,10 +196,11 @@ fn main(_info: &'static BootInfo) {
             _ => mind::println!("blocks: names [prefix]"),
         },
         Some("models") => return models::command(rest, builder, buffer, data, &mut remote),
+        Some("domain") | Some("domains") => return domains(words),
         _ => {}
     }
     match (words.next(), words.next(), words.next(), words.next()) {
-        (Some("stat"), None, ..) => match blockstore::stat(STORE) {
+        (Some("stat"), None, ..) => match blockstore::stat(store()) {
             Ok(Ok(s)) => mind::println!("BLOCKS={} NAMES={} BYTES={} SECTORS={}/{} CORRUPT={} DAMAGED={} CAPACITY={} DURABILITY={}", s.blocks, s.names, s.bytes, s.used, s.sectors, s.corrupt, s.damaged, s.capacity, mind::blockstore::class(s.durability as u8)),
             Ok(Err(e)) => mind::println!("blocks: stat: {:?}", e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
@@ -212,13 +261,13 @@ fn main(_info: &'static BootInfo) {
         (Some("publish"), Some(name), Some(text), expected) => {
             let Some(root) = cid(text) else { return };
             let expected = match expected.map(|e| e.parse::<u64>()) { None => 0, Some(Ok(v)) => v, Some(Err(_)) => { mind::println!("blocks: not a version"); return } };
-            match blockstore::publish(STORE, name, expected, &root.to_bytes()) {
+            match blockstore::publish(store(), name, expected, &root.to_bytes()) {
                 Ok(Ok(done)) => mind::println!("PUBLISHED {} VERSION {} ({})", name, done.version, mind::blockstore::class(done.durability as u8)),
                 Ok(Err(e)) => mind::println!("blocks: publish {}: {:?}", name, e),
                 Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
             }
         }
-        (Some("resolve"), Some(name), None, _) => match blockstore::resolve(STORE, name) {
+        (Some("resolve"), Some(name), None, _) => match blockstore::resolve(store(), name) {
             Ok(Ok(head)) => match Cid::from_bytes(head.root.as_slice()) {
                 Ok(root) => mind::println!("{} VERSION {} ROOT {}", name, head.version, root),
                 Err(_) => mind::println!("blocks: resolve {}: the store answered no CID", name),
@@ -226,7 +275,7 @@ fn main(_info: &'static BootInfo) {
             Ok(Err(e)) => mind::println!("blocks: resolve {}: {:?}", name, e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
-        (Some("history"), Some(name), None, _) => match blockstore::history(STORE, name) {
+        (Some("history"), Some(name), None, _) => match blockstore::history(store(), name) {
             Ok(Ok(kept)) => for k in kept.as_slice() {
                 match Cid::from_bytes(k.root.as_slice()) {
                     Ok(root) => mind::println!("{} VERSION {} ROOT {}", name, k.version, root),
@@ -238,7 +287,7 @@ fn main(_info: &'static BootInfo) {
         },
         (Some("unpublish"), Some(name), Some(version), None) => {
             let Ok(expected) = version.parse::<u64>() else { mind::println!("blocks: not a version"); return };
-            match blockstore::unpublish(STORE, name, expected) {
+            match blockstore::unpublish(store(), name, expected) {
                 Ok(Ok(done)) => mind::println!("REMOVED {} VERSION {} ({})", name, done.version, mind::blockstore::class(done.durability as u8)),
                 Ok(Err(e)) => mind::println!("blocks: unpublish {}: {:?}", name, e),
                 Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
@@ -246,7 +295,7 @@ fn main(_info: &'static BootInfo) {
         }
         (Some("pin"), Some(text), None, _) => {
             let Some(root) = cid(text) else { return };
-            match blockstore::pin(STORE, &root.to_bytes()) {
+            match blockstore::pin(store(), &root.to_bytes()) {
                 Ok(Ok(pin)) => mind::println!("PINNED {} AS {} ({})", root, pin.id, mind::blockstore::class(pin.durability as u8)),
                 Ok(Err(e)) => mind::println!("blocks: pin: {:?}", e),
                 Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
@@ -254,13 +303,13 @@ fn main(_info: &'static BootInfo) {
         }
         (Some("unpin"), Some(id), None, _) => {
             let Ok(id) = id.parse::<u32>() else { mind::println!("blocks: not a pin id"); return };
-            match blockstore::unpin(STORE, id) {
+            match blockstore::unpin(store(), id) {
                 Ok(Ok(())) => mind::println!("UNPINNED {}", id),
                 Ok(Err(e)) => mind::println!("blocks: unpin {}: {:?}", id, e),
                 Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
             }
         }
-        (Some("pins"), None, ..) => match blockstore::pins(STORE) {
+        (Some("pins"), None, ..) => match blockstore::pins(store()) {
             Ok(Ok(pins)) => {
                 for p in pins.as_slice() {
                     if let Ok(root) = Cid::from_bytes(p.root.as_slice()) { mind::println!("PIN {} ROOT {} SIZE {}", p.id, root, p.size); }
@@ -270,14 +319,19 @@ fn main(_info: &'static BootInfo) {
             Ok(Err(e)) => mind::println!("blocks: pins: {:?}", e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
-        (Some("usage"), None, ..) => match blockstore::usage(STORE) {
+        (Some("usage"), None, ..) => match blockstore::usage(store()) {
             Ok(Ok(u)) => mind::println!("RETAINED {} OF {} BYTES, {} NAMES, {} PINS", u.retained, u.quota, u.names, u.pins),
             Ok(Err(e)) => mind::println!("blocks: usage: {:?}", e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
-        (Some("collect"), None, ..) => match blockstore::collect(STORE) {
+        (Some("collect"), None, ..) => match blockstore::collect(store()) {
             Ok(Ok(c)) => mind::println!("COLLECTED {} BLOCKS {} NAMES {} SECTORS, {} FREE", c.blocks, c.names, c.sectors, c.free),
             Ok(Err(e)) => mind::println!("blocks: collect: {:?}", e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
+        (Some(which @ ("scrub" | "scrubbed")), None, ..) => match if which == "scrub" { blockstore::scrub(store()) } else { blockstore::scrubbed(store()) } {
+            Ok(Ok(s)) => mind::println!("SCRUBBED {} RECORDS: {} CORRUPT, {} DAMAGED SECTORS; PASS {}, ENDED {} MS AGO", s.records, s.corrupt, s.damaged, s.passes, s.ago_ms),
+            Ok(Err(e)) => mind::println!("blocks: {}: {:?}", which, e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
         (Some("fill"), most, None, _) => {
@@ -296,6 +350,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>"),
+        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file>"),
     }
 }

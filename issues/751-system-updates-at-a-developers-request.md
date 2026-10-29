@@ -1,6 +1,6 @@
 # 751 — System updates at a developer's request through Effector, under a permission only the machine's owner turns on
 
-**Type:** main task · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open (2026-10-29) · **Blocked by:** the parts below: `KRN`, `UPD`, `APP`, and the Effector server · **Roadmap:** stage V (remote capabilities through a gateway) · **Constitution:** MC-12.6, MC-7.5, MC-9.3, MC-9.4, MC-8.5, MC-3.8, MC-3.11, MC-10.3
+**Type:** main task · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open (2026-10-29) · **Blocked by:** the parts below: `KRN`'s 751-KRN-0185, `UPD`'s 750-UPD-0020, `APP`, and the Effector server · **Roadmap:** stage V (remote capabilities through a gateway) · **Constitution:** MC-12.6, MC-7.5, MC-9.3, MC-9.4, MC-8.5, MC-3.8, MC-3.11, MC-10.3
 
 ## Problem
 
@@ -73,8 +73,8 @@ Effector cannot do it, and its parts are not built:
 | Track | Part | Record |
 |---|---|---|
 | `EFF` | The agent and the gateway: the command, the download, the stream to `updater`, the answer across the restart, the heartbeat's update state, the mark; contract 1.4 | [751-EFF-0023](751-EFF-0023-the-agent-installs-a-developers-release.md); [750-EFF-0009](750-EFF-0009-system-update.md) stays for the owner's channel |
-| `UPD` | `updater`: the gateway's badge with `install` (a streamed bundle) and `status`, refused unless `remote-update`; the bundle's format in `scripts/release.py` | 750-UPD-0020 extended, asked on `internal-dev-messages` (2026-10-29) |
-| `KRN` | `init`: the words `remote-update` and `link-remote-update`, `init.wit` 1.11, the Mind's right only to turn it off; the gateway's client of `updater` (a badge, an ABI step) | asked on `internal-dev-messages` (2026-10-29) |
+| `UPD` | `updater`: the gateway's badge with `install` (a streamed bundle) and `status`, refused unless `remote-update`; the bundle's format in `scripts/release.py` | [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md), extended as asked; KRN's review of the threat model says `updater`'s rows match it as planned |
+| `KRN` | `init`: the words `remote-update` and `link-remote-update`, `init.wit` 1.11, the Mind's right only to turn it off; the gateway's client of `updater` (`BADGE_UPDATE_GATEWAY`, in ABI 25 with `bt_hci`'s image); the warning on a slot that trusts the test release key | [751-KRN-0185](751-KRN-0185-the-remote-update-permission-in-init.md) (the design taken as written, 2026-10-29) |
 | `APP` | The shell: `mode remote-update on` and `off`, and the same for `link-remote-update`, at the console with a confirmation; the link's console takes `mode remote-update` only with `link-remote-update`; the notice; `wm`'s Settings | asked on `internal-dev-messages` (2026-10-29) |
 | `LNK` | `build_and_write.sh --mode=` takes both words; the `link` suite checks the cable's switch both ways | [751-LNK-0030](751-LNK-0030-the-remote-update-words-on-the-disk-and-over-the-cable.md) |
 | `ASR` | The threat model of this path, and the tests that it is refused when the permission is off | [751-ASR-0013](751-ASR-0013-the-remote-update-path-threat-model-and-refusals.md) |
