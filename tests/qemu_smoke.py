@@ -2297,7 +2297,9 @@ def fm_check(vm):
     assert "ACTIVE=R" in status_line(vm, "HIDDEN=L", whole=True), "Ctrl+F1 hides the left panel; the right one is active"
     time.sleep(.2)
     screen = screen_text(vm)
-    vm.serial()
+    # Enter into docs on the right panel, waited for: its line could come after the serial line's and pass for Ctrl+P's.
+    vm.serial(enter=False)
+    keys(b"\r", "RIGHT=/docs")
     assert any(line.startswith(canon("A:/docs> cd ..")) for line in screen) and canon("║") in screen[1][40:], screen
     assert screen[-1].startswith(canon("1Help")), "a terminal's Ctrl does not stay in the key bar: " + screen[-1]
     assert "HIDDEN" not in keys(b"\x10", "ACTIVE=R"), "Ctrl+P shows the other panel again"
