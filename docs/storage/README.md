@@ -183,7 +183,7 @@ The platform's cipher is the crate, tested by its own project. On the platform, 
 A memory domain is a set of names, pins and blocks with a key of its own, so that it can be forgotten for sure by destroying that key (MC-4.8). Domain 0 is the volume's own; every client works there unless it comes through a domain's client.
 
 - **A domain's key** is 32 random bytes from the processor (RDRAND, RNDR). Without a random source no domain is made (`no-random`): a key derived from anything kept could not be destroyed. It is kept in a key record sealed under the volume key: `MIND-KEY`, layout, the domain, its state (1 live, 2 forgotten), its owner, zero, the key, a SHA-256. Its frame's domain is 0xFFFF.
-- **Its records** are sealed under keys derived from the domain's key; their frames name the domain. A mount reads the key records first, since a domain's records may lie before its key record, and so reads the medium twice.
+- **Its records** are sealed under keys derived from the domain's key; their frames name the domain. A mount scans the medium once: records of a domain whose key record it has not met yet wait (up to 64) and are opened once the scan is done; past 64, it scans once more, every key known. A tombstone met after a domain's records takes them out of the tables again.
 - **Its own blocks.** The index is keyed by CID and domain: the same bytes in two domains are two blocks, so one domain's forgetting cannot leave its blocks readable through another. Names and pins are a domain's too. An owner's quota counts its roots in every domain.
 - **Through a client of its own** (`blockstore.wit` 2.2):
   - `domain-create` makes one for the caller's owner, its badge;
@@ -205,6 +205,7 @@ Evidence: `tests/blockstore_host.rs`:
 - `two_domains_open_only_under_their_own_keys`: the same bytes in the volume and two domains are three records; each domain's records are framed as its own and none opens under the volume key; a name in one is in neither other; all found again after a remount;
 - `a_forgotten_domain_is_refused_then_collected`: its names, pins and blocks gone at once, another owner refused; on the medium the tombstone alone; a remount counts its records neither corrupt nor damaged; a collection frees them and the tombstone; the other domain whole;
 - `a_forget_stopped_before_its_key_record_was_erased_is_finished_by_the_next_mount`;
+- `a_domains_records_before_its_key_record_are_found`: 10 records that wait, and 70, past what waits, found by a second scan;
 - `a_domain_needs_a_random_key_and_an_owner`, `a_damaged_key_record_keeps_its_domains_records`.
 
 On the platform:
