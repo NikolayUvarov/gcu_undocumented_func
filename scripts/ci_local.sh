@@ -8,8 +8,9 @@
 #   Branches are fetched and tested in temporary worktrees ($CI_LOCAL_WORK, default $TMPDIR/mind-ci-work); this tree is not touched.
 #   --only  the parts to run (default: all three); --tap  also the netbench group over a tap interface (sudo);
 #   --no-merge  test branches as they are; --keep  keep the worktrees; --list  print the groups and exit.
-#   --group TEXT  only the groups whose name contains TEXT (repeatable); a part's build runs only when named, so the
-#     groups after it use the tree's earlier build: a long part in steps of its own (docs/effector.md).
+#   --group TEXT  only the groups whose name contains TEXT (repeatable); --group =NAME the group named so alone; a part's
+#     build runs only when named, so the groups after it use the tree's earlier build: a long part in steps of its own
+#     (docs/effector.md).
 # Logs: $CI_LOCAL_LOGS (default $TMPDIR/mind-ci-local), one file per group, one directory per branch.
 # SSH host tests: $MIND_SSHD selects an absolute server path (default /usr/sbin/sshd).
 # Temporary files: under $TMPDIR (default /tmp). Two runs with different TMPDIR share no file and no lock, so two tracks'
@@ -46,7 +47,7 @@ while [[ $# -gt 0 ]]; do
         --no-merge) MERGE=0; shift ;;
         --keep) KEEP=1; shift ;;
         --tree) TREE="$2"; shift 2 ;; # internal: run the groups in this tree
-        -h|--help) sed -n '2,13p' "$SELF"; exit 0 ;;
+        -h|--help) sed -n '2,14p' "$SELF"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -112,8 +113,8 @@ tap_bench() {
         --suites netbench --tap mindtap0 --bench-runs 2
 }
 
-# With --group, a group runs only if its name contains one of the texts.
-selected() { local g; [[ ${#PICK[@]} == 0 ]] && return 0; for g in "${PICK[@]}"; do [[ $1 == *"$g"* ]] && return 0; done; return 1; }
+# With --group, a group runs only if its name contains one of the texts, or is the one named after "=".
+selected() { local g; [[ ${#PICK[@]} == 0 ]] && return 0; for g in "${PICK[@]}"; do if [[ $g == =* ]]; then [[ $1 == "${g#=}" ]] && return 0; elif [[ $1 == *"$g"* ]]; then return 0; fi; done; return 1; }
 if [[ $LIST == 1 ]]; then
     for entry in $(want host && printf '%s\n' "${HOST_GROUPS[@]%%|*}" | tr ' ' '\001'; want x86 && printf '%s\n' "${X86_GROUPS[@]%%|*}" | tr ' ' '\001';
                    want aarch64 && printf '%s\n' "${A64_GROUPS[@]%%|*}" | tr ' ' '\001'); do

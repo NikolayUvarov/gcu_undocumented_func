@@ -85,6 +85,53 @@ def test_a_failed_build_stops_its_lane():
     assert "MIND_SSHD=/bin/true" in gate.effector.commands[0] and "MIND_SSHD" not in gate.effector.commands[-1]
 
 
+def test_a_pool_takes_the_longest_first():
+    parts = land.ci_groups(ROOT)
+    part_of = {g: p for p, gs in parts.items() for g in gs}
+    builds = {g for names in land.BUILDS.values() for g in names}
+    queue = [(part_of[g], g) for g in part_of if g not in builds]
+    for pool, lanes in land.POOLS.items():
+        taken, minutes, left = land.simulate(lanes, queue, land.SECONDS)
+        assert not left and 0 < minutes < 120, (pool, left, minutes)
+        assert sorted(g for gs in taken.values() for g in gs) == sorted(g for _, g in queue), pool  # each group once
+        for lane, groups in taken.items():
+            assert all(part_of[g] in land.POOL_PARTS[lane.split("-")[0]] for g in groups), (pool, lane, groups)
+    queue = [("x86", "a"), ("aarch64", "b")]
+    assert land.pick(queue, "acc1", {"x86"}, {"a": 100, "b": 400}) == ("x86", "a")  # b is not worth an aarch64 build
+    assert land.pick(queue, "acc1", {"x86"}, {"a": 100, "b": 900}) == ("aarch64", "b")
+    assert land.pick(queue, "pcu", set(), {"a": 900, "b": 1}) == ("aarch64", "b")  # PCU gates aarch64 alone
+    assert land.pick(queue, "i9", set(), {}, broken={"x86"}) is None
+
+
+def test_a_pool_gives_a_failed_builds_groups_to_another_lane():
+    class Effector:
+        def __init__(self): self.commands, self.lock = [], __import__("threading").Lock()
+        def run(self, machine, command, timeout, reason, key):
+            group = command.split('--group "')[1].split('"')[0]
+            with self.lock: self.commands.append((reason.split(" on ")[-1], group))
+            failed = group == "=build (aarch64)" and reason.endswith(" on pcu")
+            return "completed", 0, f"{'FAIL' if failed else 'PASS'}   5s       {group[1:]}\n"
+    part_of = {"build (x86)": "host", "build (x86 test programs)": "x86", "build (aarch64)": "aarch64",
+               "x86: a": "x86", "x86: b": "x86", "aarch64: c": "aarch64", "aarch64: d": "aarch64"}
+    queue = [(p, g) for g, p in part_of.items() if not g.startswith("build")]
+    with tempfile.TemporaryDirectory() as temp:
+        taken_path = pathlib.Path(temp) / "taken.json"
+        gate = land.Gate("a" * 40, "t", Effector(), pathlib.Path(os.devnull), exact=True)
+        gate.trees.update({"acc1", "pcu"})
+        gate.pool(["acc1", "pcu"], list(queue), part_of, {"aarch64: c": 900, "aarch64: d": 800, "x86: a": 50, "x86: b": 40}, taken_path)
+        passed = {r["group"] for r in gate.results if r["state"] == "PASS" and not r["group"].startswith("build")}
+        assert passed == {g for _, g in queue}, gate.results
+        ran = [(lane, g) for lane, g in gate.effector.commands]
+        assert ("pcu", "=build (aarch64)") in ran and not any(lane == "pcu" and not g.startswith("=build") for lane, g in ran), ran
+        taken = json.loads(taken_path.read_text())
+        assert sorted(taken["acc1"]) == sorted(g for _, g in queue) and not taken.get("pcu"), taken
+        # Started again on the same candidate, each lane first takes what it took before, in order: the same keys.
+        again = land.Gate("a" * 40, "t", Effector(), pathlib.Path(os.devnull), exact=True)
+        again.trees.update({"acc1", "pcu"})
+        again.pool(["acc1", "pcu"], list(queue), part_of, {}, taken_path)
+        assert [g for lane, g in again.effector.commands if lane == "acc1" and not g.startswith("=build")] == ["=" + g for g in taken["acc1"]]
+
+
 def git(*args, cwd):
     return subprocess.run(["git", *args], cwd=cwd, env=ENV, capture_output=True, text=True, check=True).stdout.strip()
 
