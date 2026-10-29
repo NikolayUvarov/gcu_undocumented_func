@@ -52,7 +52,7 @@ At run time `svc` can stop and restart a service (`idl/init.wit` 1.1), but nothi
 |---|---|---|
 | [173-KRN-0035](../issues-done/173-KRN-0035-init-reads-the-service-configuration.done) | `KRN` | init reads and applies `data/services.txt`; `boot-plan` in `init.wit` |
 | [173-KRN-0036](../issues-done/173-KRN-0036-safe-start.done) (done) | `KRN`, with `PRT` for the bootloader | A safe start: a key at the bootloader, a flag in `BootInfo`, the configuration ignored |
-| request in [requests-APP.md](requests-APP.md) | `APP` | `svc boot`, `enable`, `disable`, `after`, `reset` |
+| [173-APP-0092](../issues-done/173-APP-0092-svc-boot.done) (done) | `APP` | `svc boot`, `enable`, `disable`, `after`, `reset` |
 
 ## Acceptance criteria
 

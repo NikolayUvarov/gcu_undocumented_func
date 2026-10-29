@@ -1,0 +1,53 @@
+# 173-APP-0092 — `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot — done
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** `KRN`: [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.done) (`init` reads `data/services.txt` and reports the plan through `init.wit` `boot-plan`) · **Main task:** [173](../issues/173-boot-services-configuration.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-12.3
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, in `requests-APP.md`, for main task 173 at the maintainer's request. Numbered by the tools track on 2026-10-20, at the maintainer's word.
+
+## Problem
+
+The maintainer wants a tool to turn boot services on and off and to order them. `init` will read `data/services.txt` and report the plan; nothing lets the user change the file but editing it by hand.
+
+## Plan
+
+- `svc boot`: the plan from `init` (order, enabled, essential, off and why) and how the last boot went.
+- `svc enable <service>`, `svc disable <service>`, `svc after <service> <other>` edit `data/services.txt` through the shell's file client and say that the change applies at the next boot; `svc reset` removes the file.
+- What `init` would refuse is refused here first: essential services, unknown names, an order against a dependency.
+- The help and `docs/tools` (EN, RU).
+
+## Acceptance criteria
+
+The `tools` suite runs `svc disable tts`, reboots, and finds `tts` off in `svc boot`. `svc disable logd` is refused.
+
+## Related
+
+[173](../issues/173-boot-services-configuration.md), [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.done).
+
+## Resolution
+
+- **`svc boot`** (`svc/src/main.rs`) prints:
+  - how this boot went: `init.wit` 1.10 `boot` and `configuration`, that is the slot, the trial and whether init read the file;
+  - the plan, from `boot-plan`: each service's place, `enabled`, `disabled` or `essential`, what it waited for, and why it did not start;
+  - what `data/services.txt` as it is now changes at the next boot.
+- **`svc enable|disable <service>` and `svc after <service> <other>`** edit the file through the user's files the shell lends (`REQUEST_FILES`); `svc/src/plan.rs` holds the edit.
+  - The directive a command replaces is taken out and its own is appended. The other lines stay as they are, and a file that already has the line is not rewritten.
+  - The change takes effect at the next boot. `disable` names what goes off with the service because it needs it.
+  - A missing `data/` is made first.
+- **Refused as init refuses.** svc includes init's own parser, `init/src/services.rs`, by path and judges the edited file with it. So it refuses:
+  - an essential service (`svc disable logd`) or an unknown one;
+  - an order against init's rules, or a cycle with the file's other lines.
+
+  It also refuses an instance (`virtio_net#1`), since `#` starts a comment in the file and init would read the line as the whole image.
+- **`svc reset`** removes the file.
+- **Tests:**
+  - `tests/svc_host.rs`, in `scripts/host_tests.sh`.
+  - The `tools` suite's `svc_boot_check` on its own raw disk:
+    - the refusals;
+    - `svc disable tts` and `svc after windows sysmon` written and named for the next boot;
+    - a reboot, after which `svc boot` shows tts `disabled` and windows after sysmon, tts does not run, init's log names it, and `svc start tts` still starts it;
+    - `svc enable tts` and `svc reset` undo them;
+    - the volume is clean after power-off.
+
+  It passed on x86 under QEMU TCG with 4 CPUs, in this session's container (before `svc start tts` was added to it). aarch64 has no `tools` suite, so its `modes` suite runs the same check, for main task 173's criteria on both architectures; that run is recorded with the landing request.
+- **Docs:** `docs/tools/README.md` and `README_RU.md`; the program's `--help`.
+- **Not done here:** the check is not against `boot-plan`, as main task 173 first wrote it. `boot-plan` is this boot's result, while init's parser is what judges the next boot.

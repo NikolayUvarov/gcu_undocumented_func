@@ -4683,6 +4683,8 @@ def modes_suite(args):
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     modes_lifecycle_check(args)
     installed_apps_check(args)
+    if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
+        svc_boot_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
         services_config_check(args)
@@ -5090,6 +5092,7 @@ def svc_boot_check(args):
             assert row(out, "windows")[1:3] == ("enabled", "sysmon") and row(out, "sysmon")[0] < row(out, "windows")[0], (row(out, "windows"), row(out, "sysmon"))
             assert "tts" not in vm.services(), vm.services()
             require(vm.command("dmesg -s init", raw=True), "[INIT] tts OFF BY data/services.txt: PREPARED, `svc start tts` STARTS IT")
+            require(vm.command("svc start tts"), "tts started: PID")
             require(vm.command("svc disable tts"), "svc: data/services.txt has it already: nothing written")
             require(vm.command("svc enable tts"), "tts on from the next boot (data/services.txt)")
             text = vm.command("cat data/services.txt", raw=True)
@@ -5110,7 +5113,7 @@ def svc_boot_check(args):
     print("PASS: svc boot (173-APP-0092): an essential service, an unknown one, an instance, an order against init's and a "
           "cycle refused as init refuses them; svc disable tts and svc after windows sysmon written to data/services.txt and "
           "named for the next boot; after a reboot tts off and not running, windows after sysmon; svc enable and svc reset "
-          "undo them", flush=True)
+          "undo them; svc start still starts the disabled tts", flush=True)
 
 
 def effector_grants_check(vm):
