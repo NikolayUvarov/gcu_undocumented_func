@@ -1,5 +1,5 @@
 // nnpkg against NRL's pinned conformance bundle (900-NRL-0025) and nrl-lab's writer (262-APP-0112).
-use nnpkg::{encode, json, model, package, program::Prepared, sha256, Refusal};
+use nnpkg::{encode, json, model, package, package::Package, program::Prepared, sha256, Refusal};
 use nrl_runtime::{Budget, Checkpoint, Control, Error, Program, Session, Status, Usage};
 use std::path::PathBuf;
 
@@ -232,4 +232,54 @@ fn the_reader_is_as_strict_as_serde_json() {
     let deep = "[".repeat(40) + &"]".repeat(40);
     assert_eq!(json::parse(deep.as_bytes()), Err("NESTED TOO DEEP"));
     assert!(json::parse(&[b'"', 0xff, b'"']).is_err());
+}
+
+#[test]
+fn the_parsers_answer_in_the_layout_loads_the_same_package() {
+    let f = files();
+    let m = package::read_manifest(&package::parse_manifest(&f.manifest).unwrap(), &id()).unwrap();
+    assert_eq!(m, package::manifest(&f.manifest, &id()).unwrap());
+    let mut objects = Vec::new();
+    for ((key, record), (_, raw)) in m.objects.iter().zip(&f.objects) {
+        package::vet_file(raw, record).unwrap();
+        objects.push((key.clone(), package::read_object(&package::parse_object(raw).unwrap(), raw, record).unwrap()));
+    }
+    let total = f.manifest.len() + f.objects.iter().map(|(_, b)| b.len()).sum::<usize>();
+    let p = package::assemble(m, objects, id(), total).unwrap();
+    let direct = load(&f, &id()).unwrap();
+    assert_eq!((p.objects.len(), p.bytes, p.workspace_values, p.work_per_row), (direct.objects.len(), direct.bytes, direct.workspace_values, direct.work_per_row));
+    assert!(p.objects.iter().zip(&direct.objects).all(|(a, b)| a == b));
+    // What a job's worker gets: the same package again, its ID checked.
+    let again = Package::from_description(&p.describe()).unwrap();
+    assert_eq!((again.id, again.bytes, again.objects.len()), (p.id, p.bytes, 7));
+    let mut description = p.describe();
+    description[8] ^= 1;
+    assert!(matches!(Package::from_description(&description), Err(Refusal::Digest(_))));
+}
+
+#[test]
+fn a_made_up_answer_is_refused_without_a_panic() {
+    let f = files();
+    let m = package::manifest(&f.manifest, &id()).unwrap();
+    let (record, raw) = (&m.objects[1].1, &f.objects[1].1);
+    let answer = package::parse_object(raw).unwrap();
+    let manifest_answer = package::parse_manifest(&f.manifest).unwrap();
+    let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut accepted = 0;
+    for i in 0..20_000 {
+        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        let mut a = if i % 2 == 0 { answer.clone() } else { manifest_answer.clone() };
+        match x % 3 {
+            0 => { let at = (x >> 8) as usize % a.len(); a[at] ^= 1 << (x >> 40) % 8; }
+            1 => { let n = (x >> 8) as usize % a.len(); a.truncate(n); }
+            _ => { let at = (x >> 8) as usize % a.len(); a.splice(at..at, [0xFF, 0xFF, 0xFF, 0x7F]); }
+        }
+        if i % 2 == 0 {
+            if let Ok(data) = package::read_object(&a, raw, record) { assert_eq!(&data, &package::object(raw, record).unwrap().0); accepted += 1; }
+        } else if let Ok(read) = package::read_manifest(&a, &id()) {
+            assert_eq!(read, m);
+            accepted += 1;
+        }
+    }
+    assert!(accepted < 20_000);
 }
