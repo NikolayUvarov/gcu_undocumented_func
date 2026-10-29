@@ -67,8 +67,18 @@ Everything 1.1 did stays.
   again. When full, it drops its oldest record that is acknowledged and past its command's expiry; unacknowledged work
   is still never forgotten, and an action runs only when its answer has room.
 
-**1.3 (2026-10-29, [750-EFF-0021](../../issues/750-EFF-0021-a-delivery-answers-with-the-file-read-back.md)):** a
-completed `deliver_file` says what is on the machine. Everything 1.2 did stays.
+**1.3 (2026-10-29, [750-EFF-0021](../../issues/750-EFF-0021-a-delivery-answers-with-the-file-read-back.md),
+[750-EFF-0022](../../issues/750-EFF-0022-the-servers-health-check.md)):** a completed `deliver_file` says what is on the
+machine, and the server's health check is answered. Everything 1.2 did stays.
+
+- **`health_check`.** The server sends it as `exec_v1` of the program's `health_command`; MIND's is `health`. The
+  gateway's status answers it, and it needs no policy line, as `status` reads nothing:
+  - **healthy** when the owner's policy is loaded and no boot service is quarantined: `completed`, exit status 0;
+  - **otherwise** `failed`, exit status 1 and `error` `exit status 1`, as the server's other agents report a health
+    command that exits 1;
+  - **`stdout`** is one line: `healthy:` or `unhealthy:`, the uptime, the boot services running, and whatever is
+    quarantined or missing;
+  - **every other command** but `reboot` is still denied.
 
 - **What `stdout` holds:** `delivered PATH SIZE SHA256`, one line:
   - `PATH` is the file's path as the command named it;

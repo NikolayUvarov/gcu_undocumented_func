@@ -246,8 +246,12 @@ every request (MC-10.6).
   - **The answer's `stdout`** is `delivered PATH SIZE SHA256` as read. It is kept in `system/effector/result` until the
     server takes it.
 - **`exec` of `reboot`** (`reboot on`): the gateway admits it, answers, and 10 s later asks `init`, which checks the policy
-  again (750-KRN-0154); meanwhile the session keeps and sends its answer, or sends it after the restart. Any other
-  command is denied: MIND runs none.
+  again (750-KRN-0154); meanwhile the session keeps and sends its answer, or sends it after the restart.
+- **`exec` of `health`** (no policy line: it reads only the gateway's status), the server's `health_check` (750-EFF-0022):
+  - `completed` while the owner's policy is loaded and no boot service is quarantined;
+  - otherwise `failed`, exit status 1, naming why.
+
+  Any other command is denied: MIND runs none.
 - **`start_service`, `stop_service`, `restart_service`** (`service NAME ACTION`): the program the server names is the boot
   service; `init` checks the owner's policy again (750-KRN-0121).
 - **`performance_measure`** (no policy line: it reads and changes nothing): the Effector agents' fixed benchmarks

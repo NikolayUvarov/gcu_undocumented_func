@@ -101,16 +101,21 @@ pub fn ack<'b>(buf: &'b mut [u8], command_id: &str, result_json: &str) -> Result
     Ok(w.finish()?)
 }
 
-/// A completed result whose `stdout` says what was done: a delivery's `delivered PATH SIZE SHA256` (contract 1.4).
-pub fn completed_result<'b>(buf: &'b mut [u8], stdout: &str) -> Result<&'b [u8], Error> {
+/// A completed result whose `stdout` says what was done: a delivery's `delivered PATH SIZE SHA256` (contract 1.3).
+pub fn completed_result<'b>(buf: &'b mut [u8], stdout: &str) -> Result<&'b [u8], Error> { exec_result(buf, 0, stdout, "") }
+
+/// A command's result as the other agents report one: `completed` with exit status 0, else `failed` with the status
+/// and `error` (`exit status N`).
+pub fn exec_result<'b>(buf: &'b mut [u8], exit_code: u64, stdout: &str, error: &str) -> Result<&'b [u8], Error> {
     let mut w = Writer::new(buf);
     w.object()?;
-    w.field_str("status", "completed")?;
-    w.field_u64("exit_code", 0)?;
+    w.field_str("status", if exit_code == 0 { "completed" } else { "failed" })?;
+    w.field_u64("exit_code", exit_code)?;
     w.field_str("stdout", stdout)?;
     w.field_str("stderr", "")?;
     w.field_bool("truncated", false)?;
     w.field_str("run_as", "effector")?;
+    if exit_code != 0 { w.field_str("error", error)?; }
     w.end()?;
     Ok(w.finish()?)
 }

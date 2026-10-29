@@ -8284,12 +8284,12 @@ def effector_suite(args, disk):
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(12 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(13 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (12 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (13 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
@@ -8363,6 +8363,11 @@ def effector_actions_check(vm, server, agent, until, beats):
     until(f"EFFECTOR: ACK {reboot_id} failed ACCEPTED")
     assert server.operation(reboot_id)["result"]["error"] == "denied", server.operation(reboot_id)
     require(vm.command("dmesg -s effector_gw", raw=True), f"{reboot_id} reboot?in?10000?ms denied refused")
+    # The server's health check runs `exec` of the program's health command, `health` (750-EFF-0022).
+    health_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
+    until(f"EFFECTOR: ACK {health_id} completed WITH ITS RESULT ACCEPTED")
+    health = server.operation(health_id)["result"]
+    assert health["status"] == "completed" and health["exit_code"] == 0 and health["stdout"].startswith("healthy: up "), health
     # A service the policy names restarted through init's lifecycle client (750-KRN-0121).
     sysmon_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
     until(f"EFFECTOR: ACK {sysmon_id} completed ACCEPTED")

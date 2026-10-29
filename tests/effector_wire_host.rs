@@ -238,4 +238,8 @@ fn a_completed_result_says_what_was_done() {
     let json = completed_result(&mut buf, "a \"quoted\" name").unwrap();
     assert!(core::str::from_utf8(json).unwrap().contains(r#""stdout":"a \"quoted\" name""#));
     assert!(completed_result(&mut [0u8; 32], "too long for the buffer").is_err());
+    // A command that exits 1 fails, as the other agents report it (750-EFF-0022).
+    let json = exec_result(&mut buf, 1, "unhealthy: quarantined: wlan", "exit status 1").unwrap();
+    assert_eq!(core::str::from_utf8(json).unwrap(),
+        r#"{"status":"failed","exit_code":1,"stdout":"unhealthy: quarantined: wlan","stderr":"","truncated":false,"run_as":"effector","error":"exit status 1"}"#);
 }
