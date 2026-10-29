@@ -435,7 +435,7 @@ types! {
     parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error Offset;
     serial: Error Info;
-    shell: Error CardCounters;
+    shell: Error CardCounters KeyboardLayout LayoutSwitch Keymap;
     socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo;
     ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;

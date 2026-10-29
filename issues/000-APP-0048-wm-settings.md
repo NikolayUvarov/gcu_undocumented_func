@@ -1,6 +1,6 @@
 # 000-APP-0048 — `wm`: Settings, one entry point in the top bar
 
-**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** in progress (the window and the background's page done; the system's pages wait for 211-APP-0044) · **Blocked by:** — (the system's pages: 211-APP-0044 for the shell's channel; the sound: [000-APP-0076](000-APP-0076-output-volume.md) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md)) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** in progress (every page but the sound's done) · **Blocked by:** the sound: [000-APP-0076](000-APP-0076-output-volume.md) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 The maintainer's request (2026-10-10): "Add a background switch to the top menu: we will put settings there, where the screen's parameters (network, sound and the rest that needs configuration) can be managed too, through one entry point."
 
@@ -33,6 +33,13 @@ What can be configured is spread over shell commands (`keymap`, `date set`, `net
 - **Checked:** host tests (the bar item and Alt+S, the picture cycling, a toggle, the place, a typed file, the system pages' text, clicks); the `wm` suite (Alt+S, the picture to an image's fallback and to none, the desktop's `░` cells at once, the next `wm` reading `none`).
 - **Added with [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done):** rows for the pattern's kind, speed, contrast and complexity and the information's brightness; ← → step them, Space and Enter go round.
 - **Left:** the system's pages acting through the shell (211-APP-0044's `run`, still to come; `SLOT_SHELL` is in `main`); the sound's volume and the microphone's sensitivity (000-APP-0076, 000-APP-0077).
+
+## Progress (2026-10-29)
+
+- **The keyboard page** (`shell.wit` 1.10): its rows Layout (US or Russian) and Switch (Ctrl+Shift or Alt+Shift, Ctrl+Shift, Alt+Shift, Caps Lock, none). It reads them through the shell's `keymap` call when it is opened. ← → Enter, Space and a click change a row, and `wm` sends the pair with `set-keymap`. The shell sets it through `keyboard.wit` at once for the window manager it started (its Settings, as for the clock), refuses it from other programs, and logs `FOR PID … THE SHELL SET THE KEYBOARD: …`. The page shows the outcome; it says so when `wm` does not hold the shell's commands or the keyboard cannot be read.
+- **The other system pages** were done in their own tasks: the date and time ([000-APP-0055](000-APP-0055-date-and-time-from-wms-settings.md), the time zone in 000-APP-0099), the network ([550-APP-0033](550-APP-0033-wifi-setup-program.md): Wi-Fi, the country, the addresses, the cards, the flow grants and the policy, each in a window) and the screen's scale, pointer and colour ([000-APP-0061](../issues-done/000-APP-0061-wms-scale.done)).
+- **Checked:** host tests (`wm_host`: the keyboard page's rows, keys, clicks and messages; `idl_fuzz_host` with the new types); the `wm` suite in QEMU on x86 with 4 CPUs (`keyboard_from_settings`: the page reads US, → sets Russian through the shell at once, ← sets US back).
+- **Left:** the sound page, when `audio.wit` has the volume and the microphone's sensitivity (000-APP-0076, 000-APP-0077).
 
 ## Related
 

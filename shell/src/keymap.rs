@@ -4,6 +4,7 @@
 use core::fmt::Write;
 use mind::abi::SLOT_KEYBOARD;
 use mind::idl::keyboard::{self, Layout, SwitchKey};
+use mind::idl::shell as commands;
 use mind::ipc::Endpoint;
 
 const KEYBOARD: Endpoint = Endpoint(SLOT_KEYBOARD);
@@ -44,4 +45,25 @@ pub fn command(out: &mut impl Write, args: &[u8]) {
         }
         Err(error) => failed(out, error),
     }
+}
+
+/// The layout and switch now, in `shell.wit`'s words (1.10, 000-APP-0048: wm's Settings).
+pub fn state() -> Option<commands::Keymap> {
+    let state = keyboard::state(KEYBOARD).ok()?;
+    let switch = match state.switch_key {
+        SwitchKey::CtrlOrAltShift => commands::LayoutSwitch::CtrlOrAltShift, SwitchKey::CtrlShift => commands::LayoutSwitch::CtrlShift,
+        SwitchKey::AltShift => commands::LayoutSwitch::AltShift, SwitchKey::CapsLock => commands::LayoutSwitch::CapsLock, SwitchKey::None => commands::LayoutSwitch::None,
+    };
+    Some(commands::Keymap { layout: if state.layout == Layout::Ru { commands::KeyboardLayout::Ru } else { commands::KeyboardLayout::Us }, switch })
+}
+
+/// Sets them as `keymap <layout> --switch <key>` does, and answers what the keyboard then has; None without a keyboard.
+pub fn set(wanted: commands::Keymap) -> Option<commands::Keymap> {
+    let key = match wanted.switch {
+        commands::LayoutSwitch::CtrlOrAltShift => SwitchKey::CtrlOrAltShift, commands::LayoutSwitch::CtrlShift => SwitchKey::CtrlShift,
+        commands::LayoutSwitch::AltShift => SwitchKey::AltShift, commands::LayoutSwitch::CapsLock => SwitchKey::CapsLock, commands::LayoutSwitch::None => SwitchKey::None,
+    };
+    keyboard::set_switch(KEYBOARD, key).ok()?;
+    keyboard::set_layout(KEYBOARD, if wanted.layout == commands::KeyboardLayout::Ru { Layout::Ru } else { Layout::Us }).ok()?;
+    state()
 }

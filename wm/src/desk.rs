@@ -425,6 +425,8 @@ pub enum Action {
     SetClock { date: u32, seconds: u32 },
     /// The time zone through the shell (shell.wit 1.9, 000-APP-0099).
     SetZone { west: bool, minutes: u32 },
+    /// The keyboard page's layout and switch, set through the shell (shell.wit 1.10, 000-APP-0048).
+    SetKeymap { layout: usize, switch: usize },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -641,6 +643,7 @@ impl Wm {
                     // The shell sets the clock at once (000-APP-0060): Settings stay open and show the outcome.
                     Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
                     Outcome::SetZone { west, minutes } => Action::SetZone { west, minutes },
+                    Outcome::SetKeymap { layout, switch } => Action::SetKeymap { layout, switch },
                     // The network page's row (550-APP-0033): its program in a window, in front of the closed Settings.
                     Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
                 };
@@ -771,6 +774,7 @@ impl Wm {
                 Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
                 Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
                     Outcome::SetZone { west, minutes } => Action::SetZone { west, minutes },
+                Outcome::SetKeymap { layout, switch } => Action::SetKeymap { layout, switch },
                 Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
             };
         }
@@ -1066,7 +1070,7 @@ impl Wm {
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
             Mode::More { items, row, .. } => format!(" MORE={}", items.get(*row).map_or("-", |&i| bar_label(i))),
             Mode::Settings(s) if s.browser.is_some() => { let b = s.browser.as_ref().unwrap(); format!(" SETTINGS=Background:Image file BROWSE={}:{}", b.dir, b.entries.get(b.selected).map_or("-", |e| e.0.as_str())) }
-            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else if s.page == crate::settings::NETWORK { format!(":{}", crate::settings::NETWORK_ROWS[s.net_row].0) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
+            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else if s.page == crate::settings::NETWORK { format!(":{}", crate::settings::NETWORK_ROWS[s.net_row].0) } else if s.page == crate::settings::KEYBOARD { format!(":{}", crate::settings::KEYBOARD_ROWS[s.key_row]) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
         let battery = self.chip().map_or(String::new(), |c| format!(" BATTERY={}", c.trim()));
