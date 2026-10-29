@@ -7880,8 +7880,8 @@ def net_suite(args, disk):
         vm.send_bytes(b"ping -c 5 10.0.2.2\r")  # the shell passes the serial line's keys to wm, wm to the window in front
         vm.logged("(THE LINE MOVED)", sent, timeout=60)
         vm.logged("(THE LINE STILL)", sent, timeout=60)
-        moves = re.findall(r"\[WM\] NET IN (\d+)/S OUT (\d+)/S \(THE LINE (MOVED|STILL)\)", vm.log[sent:])
-        assert moves[0][2] == "MOVED" and any(how == "MOVED" and int(out) > 0 for _, out, how in moves) and ("0", "0", "STILL") in moves, (moves, vm.log[sent:][-1500:])
+        moves = re.findall(r"\[WM\] NET IN (<1|\d+K?)/S OUT (<1|\d+K?)/S \(THE LINE (MOVED|STILL)\)", vm.log[sent:])
+        assert moves[0][2] == "MOVED" and any(how == "MOVED" and out != "0" for _, out, how in moves) and ("0", "0", "STILL") in moves, (moves, vm.log[sent:][-1500:])
         since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
         vm.logged("SHELL RESUMED.", since)

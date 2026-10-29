@@ -2129,6 +2129,12 @@ fn the_traffic_is_the_frames_a_second_between_two_samples() {
     // A restarted driver counts from 0 again: no negative rate; the same instant counts as a millisecond.
     assert_eq!(background::net_line((500, 500, 10), (3, 4, 10)), "NET IN 0/S OUT 0/S");
     assert!(background::net_line((0, 0, 0), (9_999_000, 9_999_000, 1_000)).len() <= 26);
+    // The nearest whole rate: a ping a second over samples a little more than a second apart; fewer than one frame in
+    // two seconds is `<1`, not still.
+    assert_eq!(background::net_line((10, 10, 0), (11, 11, 1_100)), "NET IN 1/S OUT 1/S");
+    assert_eq!(background::net_line((10, 10, 0), (15, 15, 6_000)), "NET IN 1/S OUT 1/S");
+    assert_eq!(background::net_line((10, 10, 0), (11, 10, 3_000)), "NET IN 0/S OUT <1/S");
+    assert_eq!(background::net_line((10, 10, 0), (10, 10, 3_000)), "NET IN 0/S OUT 0/S");
 }
 
 // 000-APP-0049: the line's moves in the log, between still and traffic, so a suite sees `ping` move it.
