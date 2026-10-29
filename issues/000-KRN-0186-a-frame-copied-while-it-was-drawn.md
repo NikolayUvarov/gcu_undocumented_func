@@ -26,6 +26,9 @@
   - The compositor asks every millisecond or so while it is answered `COMPOSITOR_BUSY`, and `app2` waits only 2 ms of each frame.
   - On a loaded machine the asks can miss those waits for `FORCE_MS` (250 ms). The screen is then copied as it is drawn, with no hold.
   - With only the first fix, under load (four busy loops on this container's four cores), the check still failed 2 runs of 5: top 97, bottom 101, and top 60, bottom 64.
+- **A third path: the bound in the guest's time.** With the hold at the next wait too, one run of 5 under the same load failed: top 99, bottom 108.
+  - The guest's time runs on while the host does not run the compositor's virtual CPU, so a 250 ms bound in that time can end a hold in the middle of the copy.
+  - So a hold now ends by what the compositor does, and the time bound is only for a compositor that neither releases nor waits.
 
 ## Progress
 
@@ -36,7 +39,8 @@
 - **The kernel** (`kernel/src/scheduler.rs`):
   - a task answered `COMPOSITOR_BUSY` is held as it starts its next wait, where its frame ends, and the compositor's next ask finds it so;
   - a hold with nothing to copy is released at once, and a change of focus releases it;
-  - the hold's bound is 250 ms (`HOLD_NS`), against a compositor that never releases; a copy no longer needs it.
+  - a hold also ends when the compositor waits or ends, which it does only after its copy;
+  - the time bound is 1 s (`HOLD_NS`), against a compositor that neither releases nor waits, and the kernel logs a hold it ends so.
 - **The compositor** releases after any dirty copy, including `FORCE_MS`'s.
 - **The check:** each screen is taken with the guest paused (QMP `stop` and `cont`). QEMU otherwise reads the screen while the guest writes it, so a copy that overtakes the read also shows the bottom newer.
 - **The docs:** `common/abi.rs`, `docs/api/README.md` and the profile's row on task screens.

@@ -99,7 +99,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages; up to `IRQ_SHARERS` (4) drivers share a line, each gets every interrupt, and the line stays masked until each has called `IRQ_ACK` |
 | 25 | `IRQ_ACK` | `arg1` = IRQ handle; unmasks the line |
 | 20 | `INPUT_EVENT` | routes decoded input [input privilege] |
-| 21 | `COMPOSITOR_PULL` | `arg1` = slot for the focused screen, `arg2` = 0 → 0 unchanged, 1 dirty, 2 new screen (read-only capability); `arg2` = `COMPOSITOR_FRAME`: the same, or `COMPOSITOR_BUSY` while the focused task runs with a changed screen (the task is then held at its next wait), and on 1 the task is held until `arg2` = `COMPOSITOR_RELEASE` or 250 ms (000-KRN-0086, 000-KRN-0186) [display privilege] |
+| 21 | `COMPOSITOR_PULL` | `arg1` = slot for the focused screen, `arg2` = 0 → 0 unchanged, 1 dirty, 2 new screen (read-only capability); `arg2` = `COMPOSITOR_FRAME`: the same, or `COMPOSITOR_BUSY` while the focused task runs with a changed screen (the task is then held at its next wait), and on 1 the task is held until `arg2` = `COMPOSITOR_RELEASE`, until the compositor waits or ends, or for 1 s at most (000-KRN-0086, 000-KRN-0186) [display privilege] |
 
 ### Platform (init only)
 

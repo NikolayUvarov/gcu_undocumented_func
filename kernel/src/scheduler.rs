@@ -19,9 +19,10 @@ const GRANT_BYTES: usize = core::mem::size_of::<Grant>();
 const RECEIVE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1; // arg2 of IPC: the receive slot below the timeout (issue 172)
 // A console read within this long pushes back on its writer (LOG takes only what fits); an application counts as read from its start.
 const CONSOLE_READER_NS: u64 = 1_000_000_000;
-// The longest a task is held for the compositor's copy (000-KRN-0086): a bound for a compositor that never releases,
-// far above a copy's time, which a slow machine may stretch past 50 ms (000-KRN-0186).
-const HOLD_NS: u64 = 250_000_000;
+// The longest a task is held for the compositor's copy (000-KRN-0086): a bound for a compositor that neither releases
+// nor waits. A hold also ends when the compositor waits or ends, so a loaded machine that stops the compositor's CPU
+// while the guest's time runs on does not end it mid-copy (000-KRN-0186).
+const HOLD_NS: u64 = 1_000_000_000;
 // Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
 // Every task's log also goes to the kernel's console while no driver holds it (aarch64: until the shell takes the PL011).
 static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(target_arch = "aarch64"));
@@ -189,8 +190,8 @@ struct Scheduler {
     composited: usize, // screen the compositor already holds a capability for
     next_node: u64, // capability identities are never reused
     next_wake: u64, next_expiry: u64, // the earliest sleep's end (ns) and IPC deadline (ms) set since the last pass, or MAX
-    held: Option<(usize, u64, u64)>, // (slot, PID, since ns): the focused task kept from running while its frame is copied
-    wanted: Option<(usize, u64)>, // (slot, PID): the focused task the compositor found drawing, held at its next wait
+    held: Option<(usize, u64, u64, usize)>, // (slot, PID, since ns, the compositor's slot): the focused task kept from running while its frame is copied
+    wanted: Option<(usize, u64, usize)>, // (slot, PID, the compositor's slot): the focused task found drawing, held at its next wait
     zeroing: [Option<Zeroing>; cpu::MAX], // each CPU's large block to zero once it lets go of the lock (262-KRN-0160)
     storms: [Storm; MSI_VECTORS],
 }
@@ -262,11 +263,11 @@ impl Scheduler {
     fn ready(&self, slot: usize, cpu: usize, band: u8) -> bool {
         if slot == 0 { return band == BAND_APPLICATION as u8; }
         self.tasks[slot].as_ref().is_some_and(|t| t.cpu == cpu && t.band == band && (t.budget_ns == 0 || t.consumed < t.budget_ns) && t.state == State::Ready
-            && !self.held.is_some_and(|(held, pid, _)| held == slot && pid == t.pid))
+            && !self.held.is_some_and(|(held, pid, _, _)| held == slot && pid == t.pid))
     }
     // The task held for the compositor's copy may run again: its CPU is looked at by the next wake_idle (000-KRN-0086).
     fn release_held(&mut self) {
-        let Some((slot, pid, _)) = self.held.take() else { return };
+        let Some((slot, pid, _, _)) = self.held.take() else { return };
         if let Some(t) = self.tasks[slot].as_ref().filter(|t| t.pid == pid && t.state == State::Ready) { self.readied.mark(t.cpu); }
     }
     fn select(&mut self, sp: usize, cpu: usize) -> usize {
@@ -280,8 +281,12 @@ impl Scheduler {
         let now = crate::clock::now_ns(); let elapsed = now.saturating_sub(core::mem::replace(&mut self.accounting.last_switch[cpu], now));
         if current == 0 { self.accounting.idle_ns[cpu] += elapsed; } else { self.accounting.busy_ns[cpu] += elapsed; }
         // The task the compositor found drawing is held as it starts to wait, at the end of its frame (000-KRN-0186).
-        if let Some((slot, pid)) = self.wanted.filter(|&(slot, pid)| slot == current && self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && !matches!(t.state, State::Ready | State::Exited))) {
-            self.wanted = None; self.held = Some((slot, pid, now));
+        if let Some((slot, pid, holder)) = self.wanted.filter(|&(slot, pid, _)| slot == current && self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && !matches!(t.state, State::Ready | State::Exited))) {
+            self.wanted = None; self.held = Some((slot, pid, now, holder));
+        }
+        // The compositor waits or ends only after its copy: its hold ends then if it was not released.
+        if current != 0 && self.held.is_some_and(|(_, _, _, holder)| holder == current) && self.tasks[current].as_ref().is_none_or(|t| t.state != State::Ready) {
+            self.release_held(); self.wake_idle(cpu, false);
         }
         let fast = FAST_CALLS[cpu].swap(0, Ordering::Relaxed); self.accounting.interrupts[cpu] += fast;
         if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); task.run_ns += elapsed; task.consumed += elapsed; task.calls += fast; unsafe { context::save(sp, task.context.ptr() as usize); } }
@@ -338,7 +343,10 @@ impl Scheduler {
             }
         }
         if now >= self.next_expiry { self.expire(now); }
-        if self.held.is_some_and(|(_, _, since)| ns.saturating_sub(since) >= HOLD_NS) { self.release_held(); }
+        if let Some((_, pid, _, _)) = self.held.filter(|&(_, _, since, _)| ns.saturating_sub(since) >= HOLD_NS) {
+            let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PID {} HELD FOR THE COMPOSITOR'S COPY {} MS, LET GO\n", pid, HOLD_NS / 1_000_000));
+            self.release_held();
+        }
         self.wake_idle(cpu, every);
         crate::trial::check(now);
     }
@@ -1696,7 +1704,7 @@ impl Scheduler {
                         Some(t) => {
                             // A task that runs may be mid-frame: in frame mode its screen is copied once it waits, and it
                             // is held until the copy is done (000-KRN-0086).
-                            let held = self.held.is_some_and(|(slot, pid, _)| slot == focused && pid == t.pid);
+                            let held = self.held.is_some_and(|(held, pid, _, _)| held == focused && pid == t.pid);
                             let drawing = request.arg2 == COMPOSITOR_FRAME && t.state == State::Ready && !held;
                             let source = t.screen.as_ref().unwrap().ptr() as usize;
                             // New capability only on screen change: the compositor keeps the mapping across frames.
@@ -1707,11 +1715,11 @@ impl Scheduler {
                                 crate::screen::take(); self.composited = source; self.remove(slot, request.arg1); let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot), CAP_READ)); task.nodes[request.arg1] = self.root(); Ok(2)
                             } else if drawing {
                                 // Held at its next wait, where a frame ends, and copied at the next pull (000-KRN-0186).
-                                if t.dirty || self.dirty { self.wanted = Some((focused, t.pid)); Ok(COMPOSITOR_BUSY) } else { Ok(0) }
+                                if t.dirty || self.dirty { self.wanted = Some((focused, t.pid, slot)); Ok(COMPOSITOR_BUSY) } else { Ok(0) }
                             } else {
                                 let dirty = core::mem::take(&mut t.dirty) | core::mem::take(&mut self.dirty);
                                 self.wanted = None;
-                                if dirty && request.arg2 == COMPOSITOR_FRAME && !held { self.held = Some((focused, t.pid, crate::clock::now_ns())); }
+                                if dirty && request.arg2 == COMPOSITOR_FRAME && !held { self.held = Some((focused, t.pid, crate::clock::now_ns(), slot)); }
                                 if !dirty && held { self.release_held(); self.wake_idle(cpu, false); }
                                 Ok(dirty as usize)
                             }
