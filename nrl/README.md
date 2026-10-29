@@ -6,6 +6,8 @@ NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). Hos
 
 T06–T10 are complete for the declared bounded host profiles. Five requested autonomous extensions, 900-NRL-0020–0024, add optimizer recovery, incremental generation, full embedding training, a complete supported-model QSL bridge and a larger licensed study. The complete `bash nrl/tools/check.sh --expanded` run passes on `b44fbc0d`: **95 host tests**, zero failures/skips, four portable release builds and all CLI cycles including the larger study. New independent fixtures regenerate exactly under the pinned reference environments. [Final evidence](reports/five-extensions-2026-10-26.json), [raw check log](reports/five-extensions-check-2026-10-26.txt). This source reached main on 2026-10-28. Native service integration remains pending; new changes still pass through the landing queue.
 
+900-NRL-0025 now supplies the pinned native-service handoff: unchanged MIT graph, independent f64 reference/tolerance, exact writer encoding vectors and 16 host runtime scenarios. **99 host tests**, four portable builds and all standard CLI cycles pass on `50caca7e`; independent PyTorch regeneration matches. [Current evidence](reports/native-conformance-2026-10-29.json), [contract](specs/native-conformance-v0.md). APP/KRN received the handoff; native T11 remains open.
+
 | Work | Current scope and outcome | Evidence |
 |---|---|---|
 | T06–T10 | Real trained decoder, resumable local fitting, shared metrics, measured mixed-plan search and student-input recovery | [Previous recovery](reports/recovery-2026-10-26.json) |
@@ -251,4 +253,4 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- make-native-fixture /tmp/new-native-fixture
 ```
 
-The checker and exporter are host tools; native parser/service/IDL and named-target evidence remain APP/KRN work under 0017. Full checking regenerates the bundle byte for byte.
+The checker and exporter are host tools; native parser/service/IDL and named-target evidence remain APP/KRN work under 0017. **99 host tests**, four portable builds and all standard CLI cycles pass on `50caca7e`; the independent original PyTorch oracle regenerates exactly. Full checking regenerates the bundle byte for byte. [Evidence](reports/native-conformance-2026-10-29.json), [raw log](reports/native-conformance-check-2026-10-29.txt).
