@@ -6,7 +6,8 @@
 // logged. Leases are measured on the monotonic clock (303-STO-0001); a commit changes several names at once (304-STO-0007);
 // the current names are listed by prefix, 16 at a time (300-STO-0018); each write says how far it reached (307-STO-0019).
 // A medium it cannot mount leaves it running and answering every request with the reason (305-STO-0008). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
-// Records are sealed with ChaCha20-Poly1305 under a volume key kept, for now, in the clear in the superblock (308-STO-0021).
+// Records are sealed with ChaCha20-Poly1305 under a volume key (308-STO-0021), kept by keystore as the store's secret
+// where init lends its client, else in the superblock in the clear (308-STO-0022).
 // A memory domain's calls come through a client the store mints for it, and work under the domain's own key (308-STO-0023).
 // Between requests it scrubs the medium, a step at a time, a pass a day; a client may ask for a whole pass (309-STO-0025).
 mod store;
@@ -17,18 +18,20 @@ use mind::{cid, dag, sha256};
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use cid::Cid;
-use mind::abi::{BootInfo, CAP_GRANT, CAP_WRITE, SLOT_SERVICE};
+use mind::abi::{BootInfo, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_SERVICE};
 use mind::block::Device as Client;
 use mind::blockstore::{allowed, Operation, FIRST_DOMAIN_CLIENT};
 use mind::idl::blockstore::{self, Collected, Committed, Durability, Error, Head as Current, Kept, Named, PinTaken, Pinned, Published, Request, Stats, Usage};
 use mind::idl::codec::{List, Text};
 use mind::idl::wire;
 use mind::ipc::{self, Endpoint};
-use store::{slots_for, Crypto, Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, DOMAINS, LAYOUT, SECTOR, VOLUME};
+use store::{slots_for, Crypto, Device, Entry, Extent, Head, Keeper, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, DOMAINS, KEY_KEPT, LAYOUT, SECTOR, VOLUME};
 
 const RECEIVED: usize = 9;
 /// The block client init grants.
 const BLOCK: usize = 2;
+/// The secrets client init lends the store, when keystore gives one (308-KRN-0183).
+const SECRETS: usize = 3;
 /// Names the store holds (120 bytes each).
 const NAMES: usize = 256;
 /// Runs of blank sectors the store keeps track of between scans.
@@ -79,6 +82,29 @@ impl Crypto for Sealing {
     fn random(&self, out: &mut [u8]) -> bool { mind::random::fill(out) }
 }
 
+// The volume key as the store's secret `volume-<id in hex>` in keystore (308-STO-0022).
+struct Secrets(Endpoint);
+impl Keeper for Secrets {
+    fn put(&mut self, id: &[u8; 8], key: &[u8; 32]) -> bool {
+        matches!(mind::idl::keystore::secret_put(self.0, secret_name(id).as_str(), key), Ok(Ok(())))
+    }
+    fn get(&mut self, id: &[u8; 8]) -> Option<[u8; 32]> {
+        let mut key = [0u8; 32];
+        matches!(mind::idl::keystore::secret_get(self.0, secret_name(id).as_str(), &mut key), Ok(Ok(32))).then_some(key)
+    }
+}
+
+// The name a volume key is kept under: `volume-` and its id in hex.
+fn secret_name(id: &[u8; 8]) -> Text<32> {
+    let mut name = [0u8; 23];
+    name[..7].copy_from_slice(b"volume-");
+    for (k, b) in id.iter().enumerate() {
+        name[7 + 2 * k] = b"0123456789abcdef"[(b >> 4) as usize];
+        name[8 + 2 * k] = b"0123456789abcdef"[(b & 15) as usize];
+    }
+    Text::new(core::str::from_utf8(&name).unwrap_or("")).unwrap_or_default()
+}
+
 // A client minted for a memory domain (308-STO-0023): its badge and handle, its domain, and the rights and owner of the
 // client that asked for it.
 #[derive(Clone, Copy)]
@@ -127,7 +153,7 @@ fn error(e: store::Error) -> Error {
         store::Error::Incomplete => Error::Incomplete,
         store::Error::Quota => Error::Quota,
         store::Error::Rights => Error::Rights,
-        store::Error::Key => Error::Key,
+        store::Error::Key | store::Error::Kept(_) => Error::Key,
         store::Error::NoRandom => Error::NoRandom,
         store::Error::Device | store::Error::Foreign | store::Error::Layout(_) => Error::Device,
     }
@@ -190,11 +216,18 @@ fn main(_info: &'static BootInfo) {
     // How far a write reaches is the medium's: nothing outlives a reset on a RAM disk; elsewhere the driver acknowledged
     // a flush after it, and what that reaches is the driver's to state (307-STO-0019).
     let mut durability = Durability::Volatile;
+    // A RAM disk keeps its key in its own superblock, as nothing of it outlives a reset; any other medium's key is kept
+    // by keystore, when init lent its client (308-STO-0022).
+    let lent = mind::dev::cap_info(SECRETS).0 == CAP_KIND_ENDPOINT;
+    let mut ram = true;
+    let mut secrets = Secrets(Endpoint(SECRETS));
     let mounted = match Client::open(Endpoint(BLOCK)) {
         Ok(client) => {
-            if client.kind() != mind::block::KIND_RAM { durability = Durability::Flushed; }
+            ram = client.kind() == mind::block::KIND_RAM;
+            if !ram { durability = Durability::Flushed; }
             let index = index_for(client.sectors());
-            Store::mount(Medium(client), &Sealing, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns())
+            let keeper = (!ram && lent).then_some(&mut secrets as &mut dyn Keeper);
+            Store::mount(Medium(client), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns())
         }
         Err(_) => Err(store::Error::Device),
     };
@@ -203,19 +236,34 @@ fn main(_info: &'static BootInfo) {
         Ok(mut store) => {
             store.renew(mind::time::monotonic_ns());
             let s = store.stats();
+            // Where a key made now went, and why not off the medium.
+            let kept = store.key_source() == KEY_KEPT;
+            let place = match (kept, ram, lent, store.made()) {
+                (true, ..) => "KEPT BY KEYSTORE, NOT ON THE MEDIUM",
+                (_, true, ..) => "IN THE SUPERBLOCK: A RAM DISK OUTLIVES NO RESET",
+                (_, _, false, _) => "IN THE SUPERBLOCK: NO SECRETS CLIENT",
+                (.., Some(false)) => "IN THE SUPERBLOCK: A DERIVED KEY IS NOT KEPT",
+                _ => "IN THE SUPERBLOCK: KEYSTORE DID NOT KEEP IT",
+            };
             match store.made() {
-                Some(true) => mind::println!("[BLOCKSTORE] VOLUME KEY MADE FROM {}", mind::random::SOURCE),
-                Some(false) => mind::println!("[BLOCKSTORE] VOLUME KEY MADE WITHOUT {}: DERIVED FROM THE MEDIUM AND THE TIME", mind::random::SOURCE),
+                Some(true) => mind::println!("[BLOCKSTORE] VOLUME KEY MADE FROM {}, {}", mind::random::SOURCE, place),
+                Some(false) => mind::println!("[BLOCKSTORE] VOLUME KEY MADE WITHOUT {}: DERIVED FROM THE MEDIUM AND THE TIME, {}", mind::random::SOURCE, place),
                 None => {}
             }
-            // The key is in the superblock: whoever reads the medium can open the records (308-STO-0022 moves it).
-            mind::println!("[BLOCKSTORE] READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={} DURABILITY={} SEALED, KEY IN THE CLEAR",
-                s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged, mind::blockstore::class(durability as u8));
+            // A key in the superblock opens the records for whoever reads the medium; a kept one needs keystore too.
+            mind::println!("[BLOCKSTORE] READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={} DURABILITY={} SEALED, {}",
+                s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged, mind::blockstore::class(durability as u8),
+                if kept { "KEY KEPT BY KEYSTORE" } else { "KEY IN THE CLEAR" });
             for d in store.domains() {
                 if d.forgotten { mind::println!("[BLOCKSTORE] DOMAIN {} FORGOTTEN: {} RECORDS LEFT FOR THE NEXT COLLECTION", d.id, d.records); }
                 else { mind::println!("[BLOCKSTORE] DOMAIN {} OF BADGE {}: {} RECORDS", d.id, d.owner, d.records); }
             }
             Ok(store)
+        }
+        Err(store::Error::Kept(id)) => {
+            let why = if lent { "WHICH KEEPS NONE UNDER IT: ANOTHER MACHINE'S MEDIUM, OR ITS SECRET LOST" } else { "AND NO SECRETS CLIENT WAS LENT" };
+            mind::println!("[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {}, {}", secret_name(&id), why);
+            Err(Error::Key)
         }
         Err(store::Error::Layout(found)) => {
             mind::println!("[BLOCKSTORE] NOT MOUNTED: A STORE OF LAYOUT {}; THIS BUILD READS LAYOUT {} AND CONVERTS NONE", found, LAYOUT);
