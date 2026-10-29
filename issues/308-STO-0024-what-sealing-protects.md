@@ -23,6 +23,13 @@ docs/profile/threat-model.md and the profile's Article 4 row say:
 
 Updated with each part.
 
+## Progress
+
+- **2026-10-29, after [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done):**
+  - docs/profile/threat-model.md names what is sealed and what is not, that the key lies on the same medium, that a running system and copies handed out are outside, and the configurations;
+  - the profile's Article 4 row (x86 and aarch64) says the records are sealed and that this is not yet confidentiality.
+- **Next:** with 0022, where the key lives and what a TPM adds; with 0023, the domains and what forgetting holds against. On flash media, a destroyed key record may survive in the device's spare blocks: forgetting holds against reading the medium through its interface, not its chips.
+
 ## Acceptance criteria
 
 - Both documents name each item above. A reviewer finds no statement of protection that a test does not show.
