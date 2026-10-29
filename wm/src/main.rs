@@ -433,31 +433,38 @@ fn shell_failed(what: &str, call: &str, since: &str, waited_ms: u32, error: mind
 }
 
 // The CPUs' busy and idle time so far, summed (system information, as `load` reads it).
-// Why the net line has no new frames: the shell did not answer in time, or is not asked while it was slow lately (the
-// line stays either way), or no source gives them.
-enum NetMissing { Slow, Quiet, Why(&'static str) }
+// Why the net line has no new frames: the shell is busy and no card client stands in (the line stays), or no source
+// gives them.
+enum NetMissing { Quiet, Why(&'static str) }
+
+// The net line's sources, each with its last sample: the shell's, then the card client's.
+const NET_SOURCES: [&str; 2] = ["EVERY CARD'S FRAMES", "THE CARD'S COUNTERS"];
 
 // The frames sent and received and where they come from: every card the stack counts, the Wi-Fi station's too, from
-// the shell (shell.wit 1.7, 000-APP-0096), else the card whose read-only client the shell lent (000-APP-0049).
-// The cards counted, and how many of them are Wi-Fi stations, are for the log.
-fn net_frames(ask_shell: bool) -> Result<(u64, u64, &'static str, Option<(usize, usize)>), NetMissing> {
-    let mut why = "NET: NO COUNTERS";
+// the shell (shell.wit 1.7, 000-APP-0096), else the card whose read-only client the shell lent (000-APP-0049). The card
+// client stands in while the shell is busy, so the line moves while `ping` runs there. The cards counted, and how many
+// of them are Wi-Fi stations, are for the log; `slow` when the shell was asked and did not answer in time.
+fn net_frames(ask_shell: bool, slow: &mut bool) -> Result<(u64, u64, &'static str, Option<(usize, usize)>), NetMissing> {
+    let (mut why, mut busy) = ("NET: NO COUNTERS", false);
     if holds(SLOT_SHELL) {
-        if !ask_shell { return Err(NetMissing::Quiet); }
-        match mind::idl::wire::with_timeout(NET_SHELL_MS, || mind::idl::shell::net_counters(Endpoint(SLOT_SHELL))) {
-            Ok(Ok(cards)) if cards.is_empty() => return Err(NetMissing::Why("NET: NO CARD")),
-            Ok(Ok(cards)) => {
-                let (sent, received) = cards.as_slice().iter().fold((0u64, 0u64), |(s, r), c| (s.wrapping_add(c.sent), r.wrapping_add(c.received)));
-                let wireless = cards.as_slice().iter().filter(|c| c.wireless).count();
-                return Ok((sent, received, "EVERY CARD'S FRAMES", Some((cards.len(), wireless))));
+        busy = !ask_shell;
+        if ask_shell {
+            match mind::idl::wire::with_timeout(NET_SHELL_MS, || mind::idl::shell::net_counters(Endpoint(SLOT_SHELL))) {
+                Ok(Ok(cards)) if cards.is_empty() => return Err(NetMissing::Why("NET: NO CARD")),
+                Ok(Ok(cards)) => {
+                    let (sent, received) = cards.as_slice().iter().fold((0u64, 0u64), |(s, r), c| (s.wrapping_add(c.sent), r.wrapping_add(c.received)));
+                    let wireless = cards.as_slice().iter().filter(|c| c.wireless).count();
+                    return Ok((sent, received, NET_SOURCES[0], Some((cards.len(), wireless))));
+                }
+                Ok(Err(mind::idl::shell::Error::Unavailable)) => why = "NET: NO NETWORK STACK",
+                Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => (*slow, busy) = (true, true),
+                Ok(Err(_)) | Err(_) => {}
             }
-            Ok(Err(mind::idl::shell::Error::Unavailable)) => why = "NET: NO NETWORK STACK",
-            Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => return Err(NetMissing::Slow),
-            Ok(Err(_)) | Err(_) => {}
         }
     }
     match holds(SLOT_NET).then(|| mind::idl::net::counters(Endpoint(SLOT_NET))) {
-        Some(Ok(c)) => Ok((c.sent, c.received, "THE CARD'S COUNTERS", None)),
+        Some(Ok(c)) => Ok((c.sent, c.received, NET_SOURCES[1], None)),
+        _ if busy => Err(NetMissing::Quiet),
         _ => Err(NetMissing::Why(why)),
     }
 }
@@ -605,11 +612,10 @@ fn main(info: &'static BootInfo) {
     let (mut free, mut total): (Option<u64>, Option<u64>) = (None, None); // the free memory the background shows
     // The frames as last read, and the traffic's line made from the two last samples (000-APP-0049); until when the
     // shell is not asked again after it did not answer in time (000-APP-0096).
-    let (mut net_sample, mut net_text, mut net_logged): (Option<(u64, u64, u64)>, Option<String>, bool) = (None, None, false);
+    let (mut net_samples, mut net_text, mut net_logged): ([Option<(u64, u64, u64)>; 2], Option<String>, bool) = ([None; 2], None, false);
     let mut net_moves = wm::background::NetMoves::default();
     let mut net_why: Option<&'static str> = None; // the last reason without a rate the log named
     let mut shell_quiet_until = 0usize;
-    let mut net_from: Option<&'static str> = None;
     let has_battery = holds(SLOT_BATTERY);
     let mut next_battery = 0;
     let mut buttons = 0u8;
@@ -823,29 +829,33 @@ fn main(info: &'static BootInfo) {
                 // The traffic: every card's frames from the shell, the Wi-Fi station's too (shell.wit 1.7,
                 // 000-APP-0096), else the card the shell lent a read-only client of (BADGE_COUNTERS, 000-APP-0049).
                 if backdrop.config.net {
-                    match net_frames(now >= shell_quiet_until) {
+                    let mut slow = false;
+                    let frames = net_frames(now >= shell_quiet_until, &mut slow);
+                    // Only a call that timed out starts the quiet time: a tick that does not ask would make it last for
+                    // ever, and the line froze once the shell's window had opened (000-APP-0049).
+                    if slow { shell_quiet_until = now + SHELL_QUIET_MS; }
+                    match frames {
                         Ok((sent, received, from, cards)) => {
                             let sample = (sent, received, now as u64);
-                            // A sample from another source starts the rate again.
-                            let before = net_sample.filter(|_| net_from == Some(from));
+                            // The rate from the source's own last sample: the card client stands in while the shell is busy.
+                            let source = NET_SOURCES.iter().position(|s| *s == from).unwrap_or(0);
+                            let before = net_samples[source];
                             let line = before.map_or_else(|| String::from("NET IN - OUT -"), |before| wm::background::net_line(before, sample));
-                            // The first rate in the log, for the suites: the background's pixels are not text.
-                            if before.is_some() && !net_logged {
+                            // The first rate in the log, for the suites: the background's pixels are not text. The shell's when
+                            // it gives one, not the card client's that stood in.
+                            if before.is_some() && !net_logged && (source == 0 || !holds(SLOT_SHELL)) {
                                 net_logged = true;
                                 let counted = cards.map_or_else(String::new, |(n, w)| format!(", {} CARDS, {} WI-FI", n, w));
                                 mind::println!("[WM] {} ({}{}, THE FIRST RATE)", line, from, counted);
                             }
                             if before.is_some() { if let Some(how) = net_moves.next(&line) { mind::println!("[WM] {} (THE LINE {})", line, how); } }
-                            (net_sample, net_text, net_from) = (Some(sample), Some(line), Some(from));
+                            (net_samples[source], net_text) = (Some(sample), Some(line));
                         }
-                        // Only a call that timed out starts the quiet time: one not made would make it last for ever, and
-                        // the line froze once the shell's window had opened (000-APP-0049).
-                        Err(NetMissing::Slow) => shell_quiet_until = now + SHELL_QUIET_MS,
                         Err(NetMissing::Quiet) => {}
                         Err(NetMissing::Why(line)) => {
                             // Each reason once in the log: the background's pixels are not text.
                             if net_why != Some(line) { mind::println!("[WM] {} (THE BACKGROUND'S NET LINE)", line); net_why = Some(line); }
-                            (net_sample, net_text, net_from) = (None, Some(String::from(line)), None)
+                            (net_samples, net_text) = ([None; 2], Some(String::from(line)))
                         }
                     }
                 }
