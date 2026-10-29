@@ -38,7 +38,9 @@ pub fn cat(out: &mut Console, path: &[u8]) {
     let mut file = match File::open(utf8(path)) { Ok(f) => f, Err(e) => return report(out, "CAT", e) };
     let mut buffer = [0u8; 4096];
     let mut shown = 0;
-    while shown < 16 * 1024 {
+    // 16 KiB on the screen; the whole file, to what a capture keeps, into a pipe or a file (000-APP-0074).
+    let most = if out.capture.is_some() { crate::console::CAPTURE_MAX - buffer.len() } else { 16 * 1024 };
+    while shown < most {
         match file.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => { for &b in &buffer[..n] { out.print_char(b); } shown += n; }

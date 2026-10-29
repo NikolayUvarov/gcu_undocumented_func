@@ -2494,6 +2494,10 @@ def search_check(vm):
     assert digest("sha256 docs/pipe.txt") == [(expected, "docs/pipe.txt")]
     assert digest("sha256 < docs/pipe.txt") == [(expected, "-")]
     assert digest("cat docs/pipe.txt | sha256") == [(expected, "-")]
+    # cat gives a pipe or a file the whole file, not the screen's 16 KiB.
+    require(vm.command("cat docs/pipe.txt > ram:pipe.txt", timeout=30), f"{len(PIPE_TEXT)} BYTES WRITTEN TO ram:pipe.txt")
+    assert digest("sha256 ram:pipe.txt") == [(expected, "ram:pipe.txt")]
+    require(vm.command("rm ram:pipe.txt"), "OK")
     assert lines(vm.command("grep -c line < docs/pipe.txt", timeout=30)) == ["2048"]
     assert digest("sha256 < ram:a.txt") == [(digest("sha256 ram:a.txt")[0][0], "-")]
     require(vm.command("sha256"), "USAGE: SHA256")

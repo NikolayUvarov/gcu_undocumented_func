@@ -891,7 +891,7 @@ impl Shell {
     // Output of the console program running in the shell; when it has exited, its last output and the prompt.
     fn pump_console(&mut self, pid: u64) {
         let mut buffer = [0u8; 1024];
-        // While captured, 32 KiB at most: the capture keeps 64 KiB, and its reader empties it between calls.
+        // While captured, 32 KiB at most: the capture keeps more, and its reader empties it between calls.
         let mut room = if self.term.capture.is_some() { 32 } else { usize::MAX };
         while let Ok(len @ 1..) = control::console(pid, &mut buffer) {
             for &byte in &buffer[..len] { self.term.print_char(byte); }

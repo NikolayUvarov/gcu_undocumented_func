@@ -82,6 +82,7 @@
   - `<` belongs to the first command of the line (`grep a < f | grep b`); after a `|` it is refused;
   - its command is a program of the disk's, as after `|`; `> file` may follow.
 - **`sha256` without a file** hashes its text input and names it `-`, as `sha256sum` does.
+- **`cat` into a pipe or a file** gives the whole file: the screen's 16 KiB had cut `cat big | sha256` and `cat big > copy`. What the shell keeps of a command's output between its reader's calls grew from 64 KiB to 1 MiB (`console::CAPTURE_MAX`), as a shell command prints all of it in one call.
 - **`msh`** runs its command lines through the shell, so `<` and `|` work in scripts as at the prompt.
 - **Not taken up:** `view` reading its input. `cat` and `find` are not readers: `cat` is the shell's command, and `find` lists names.
 - **Tests:**
@@ -89,7 +90,7 @@
   - the `find`/`grep` check:
     - `cat | grep | grep -c`, `ps | grep shell | grep -c shell`;
     - `grep hello < ram:a.txt`;
-    - `sha256 < docs/pipe.txt` and `cat docs/pipe.txt | sha256` against `sha256 docs/pipe.txt` and the host's digest: 156 KiB whole through `<` and through `|`; `grep -c` counts its 2048 lines through `<`;
+    - `sha256 < docs/pipe.txt` and `cat docs/pipe.txt | sha256` against `sha256 docs/pipe.txt` and the host's digest: 156 KiB whole through `<` and through `|`; `grep -c` counts its 2048 lines through `<`; `cat docs/pipe.txt > ram:pipe.txt` writes all of it;
     - the refusals.
 
   `docs/pipe.txt`, which the `tools` suite puts on its disk, stands in for `log:boot0001.log` in the stage 2 criterion: a log being written could change between two reads.

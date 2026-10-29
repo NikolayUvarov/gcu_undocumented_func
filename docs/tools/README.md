@@ -270,6 +270,7 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - `command | program` (`ps | grep wm`) gives what the command prints to the program as its text input (`loader.wit` 1.9 `commit-with-input`, [000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)). The command before it may be the shell's or a console program, which runs to its end first; the one after it is a program of the disk's, started in front, and the shell fills its input as it reads. `ERROR: ` lines of the command stay on the screen.
   - **Several `|`** (`dmesg | grep SHELL | grep -c START`): each program runs to its end in turn, and what it prints is the next one's input. The whole line is checked before anything runs.
   - **Programs that read their input** without a file named: `grep`, and `sha256`, which names it `-`.
+  - **`cat` into a pipe or a file** gives the whole file, up to the 1 MiB the shell keeps of a command's output, where the screen shows 16 KiB.
 - `program < file` (`grep wm < ram:ps.txt`) gives the file, taken from the current directory, to the program as its text input.
   - The shell reads it whole first, 1 MiB at most.
   - `<` comes before the line's first `|`: it is the first command's (`grep a < f | grep b`). Its command is a program of the disk's, as after `|`, and `> file` may follow it.
