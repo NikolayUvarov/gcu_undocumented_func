@@ -605,6 +605,7 @@ fn main(info: &'static BootInfo) {
     // The frames as last read, and the traffic's line made from the two last samples (000-APP-0049); until when the
     // shell is not asked again after it did not answer in time (000-APP-0096).
     let (mut net_sample, mut net_text, mut net_logged): (Option<(u64, u64, u64)>, Option<String>, bool) = (None, None, false);
+    let mut net_moves = wm::background::NetMoves::default();
     let mut net_why: Option<&'static str> = None; // the last reason without a rate the log named
     let mut shell_quiet_until = 0usize;
     let mut net_from: Option<&'static str> = None;
@@ -833,6 +834,7 @@ fn main(info: &'static BootInfo) {
                                 let counted = cards.map_or_else(String::new, |(n, w)| format!(", {} CARDS, {} WI-FI", n, w));
                                 mind::println!("[WM] {} ({}{}, THE FIRST RATE)", line, from, counted);
                             }
+                            if before.is_some() { if let Some(how) = net_moves.next(&line) { mind::println!("[WM] {} (THE LINE {})", line, how); } }
                             (net_sample, net_text, net_from) = (Some(sample), Some(line), Some(from));
                         }
                         Err(NetMissing::Slow) => shell_quiet_until = now + SHELL_QUIET_MS,

@@ -2130,3 +2130,22 @@ fn the_traffic_is_the_frames_a_second_between_two_samples() {
     assert_eq!(background::net_line((500, 500, 10), (3, 4, 10)), "NET IN 0/S OUT 0/S");
     assert!(background::net_line((0, 0, 0), (9_999_000, 9_999_000, 1_000)).len() <= 26);
 }
+
+// 000-APP-0049: the line's moves in the log, between still and traffic, so a suite sees `ping` move it.
+#[test]
+fn the_line_s_moves_are_logged_between_still_and_traffic() {
+    let mut moves = background::NetMoves::default();
+    let still = "NET IN 0/S OUT 0/S";
+    assert_eq!(moves.next(still), None, "the first rate is logged as such");
+    assert_eq!(moves.next(still), None);
+    assert_eq!(moves.next("NET IN 1/S OUT 1/S"), Some("MOVED"));
+    assert_eq!(moves.next("NET IN 2/S OUT 1/S"), None, "traffic that changes its rate stays moved");
+    assert_eq!(moves.next(still), Some("STILL"));
+    // A first rate with traffic: the move is to still.
+    let mut busy = background::NetMoves::default();
+    assert_eq!((busy.next("NET IN 5/S OUT 0/S"), busy.next(still)), (None, Some("STILL")));
+    // At most MOST moves, so a busy network does not fill the log.
+    let mut many = background::NetMoves::default();
+    let logged = (0..100).filter_map(|i| many.next(if i % 2 == 0 { still } else { "NET IN 1/S OUT 0/S" })).count();
+    assert_eq!(logged, background::NetMoves::MOST);
+}

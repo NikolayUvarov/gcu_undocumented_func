@@ -684,6 +684,25 @@ pub fn net_line(before: (u64, u64, u64), after: (u64, u64, u64)) -> String {
     format!("NET IN {}/S OUT {}/S", rate(before.1, after.1), rate(before.0, after.0))
 }
 
+/// The NET line's moves between still and traffic, for the log (000-APP-0049): the background's pixels are not text, and
+/// a suite sees `ping` move the line.
+#[derive(Default)]
+pub struct NetMoves { still: Option<bool>, logged: usize }
+
+impl NetMoves {
+    /// How many moves the log takes, so a busy network does not fill it.
+    pub const MOST: usize = 16;
+    /// What `line`, a rate, says of the line: `MOVED` when traffic starts, `STILL` when it stops; None when it stays as
+    /// it was, for the first rate, and past `MOST`.
+    pub fn next(&mut self, line: &str) -> Option<&'static str> {
+        let still = line == "NET IN 0/S OUT 0/S";
+        let was = self.still.replace(still);
+        if was.is_none_or(|was| was == still) || self.logged >= Self::MOST { return None; }
+        self.logged += 1;
+        Some(if still { "STILL" } else { "MOVED" })
+    }
+}
+
 /// Draws the information `config` asks for over `frame`, at its place: one column, each line from the block's left edge
 /// (000-APP-0064).
 #[allow(clippy::too_many_arguments)]
