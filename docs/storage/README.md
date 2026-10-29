@@ -138,7 +138,7 @@ Evidence:
   - a damaged block, name record, key record and sector are found, the block named by its CID, and nothing is written;
   - a forgotten domain's records are not counted corrupt, and an unknown domain's are counted as a mount counts them;
   - a record written around the scrub's place is not read as damaged; without the move this test reads 2 damaged sectors.
-- QEMU `storefaults` suite on x86: a byte changed in a chunk on the medium is found by `blocks scrub` before anything reads the chunk, logged with its CID and reported by `blocks scrubbed`.
+- QEMU `storefaults` suite, x86 and aarch64: a byte changed in a chunk on the medium is found by `blocks scrub` before anything reads the chunk, logged with its CID and reported by `blocks scrubbed`.
 
 Not tested on the platform: the scrub between requests, whose first pass starts a day after the mount. Its steps are the host tests' steps; its pacing is not measured.
 

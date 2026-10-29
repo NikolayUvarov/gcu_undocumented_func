@@ -44,8 +44,8 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
 - **A whole pass on request** keeps every other client waiting too, as a collection does: requests are served one at a time.
 - **Tested:**
   - host tests, all four criteria; the test of a record written around the scrub reads 2 damaged sectors without the move;
-  - QEMU `store` and `storefaults` on x86, in this session's container;
-  - aarch64: not yet, as the landing gate held the remote machines.
+  - QEMU `store`, `storefaults`, `boot` and `vfs` on x86, in this session's container;
+  - QEMU `store`, `storefaults` and `vfs` on aarch64, on `i9_4e6882212251` through Effector (08155086).
 - **Not tested on the platform:** the scrub between requests, whose first pass starts a day after the mount.
 
 ## Related
