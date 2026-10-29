@@ -7,6 +7,7 @@ extern crate alloc;
 pub mod check;
 pub mod encode;
 pub mod json;
+pub mod layout;
 pub mod model;
 pub mod package;
 pub mod program;

@@ -238,6 +238,11 @@ impl Service {
         if closed { self.drop_jobs(|j| j.session == session); self.drop_sessions(|s| s.id == session); }
     }
 
+    /// A job whose worker could not start (every CPU's worker live): queued again.
+    pub fn requeue(&mut self, job: u32) {
+        if let Some(j) = self.jobs.iter_mut().find(|j| j.id == job && j.state == State::Running) { j.state = State::Queued; self.workers = self.workers.saturating_sub(1); }
+    }
+
     /// A worker that ended without answering: its session poisoned.
     pub fn lost(&mut self, job: u32) {
         let charged = nrl_runtime::Usage { rows: 0, work_units: 0, requests: 0 };
