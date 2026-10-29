@@ -450,9 +450,10 @@ pub fn cover(data: &[u8], frame: &mut [u32], width: usize, height: usize) -> Res
 
 /// What is drawn over the picture: the seconds since midnight, the date (year, month, day), the CPU load of the last
 /// samples (percent, oldest first), the free memory in bytes (000-APP-0064) of `total` (000-APP-0069: the memory
-/// gauge), the battery (211-APP-0070) and a line about the network.
+/// gauge), the battery (211-APP-0070), a line about the network and its last rates (frames received and sent a second,
+/// in thousandths, oldest first: 000-APP-0049's graph).
 #[derive(Clone, Copy, Default)]
-pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub free: Option<u64>, pub total: Option<u64>, pub battery: Option<Power>, pub net: Option<&'a str> }
+pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub free: Option<u64>, pub total: Option<u64>, pub battery: Option<Power>, pub net: Option<&'a str>, pub traffic: &'a [(u64, u64)] }
 
 /// The battery as its service last read it (idl/battery.wit, 211-APP-0070): on the mains, charging, the charge in
 /// percent, and the minutes to empty and to full (`NO_MINUTES`: not discharging, or not charging).
@@ -513,7 +514,7 @@ pub fn memory_line(free: Option<u64>) -> String {
 /// A glyph of the 8 × 16 font: its rows, the leftmost pixel in the top bit.
 pub type Glyph<'a> = &'a dyn Fn(char) -> [u8; 16];
 
-/// The samples the CPU graph shows.
+/// The samples the CPU and NET graphs show: one a second, a minute.
 pub const CPU_SAMPLES: usize = 60;
 
 // `text` at (x, y) in the 8 × 16 font, each pixel `scale` × `scale`, over its shadow.
@@ -560,7 +561,7 @@ pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: u
     if config.cpu { add(GRAPH * 8 * small, 16 * small + gap / 2 + GRAPH_ROWS * small); }
     if config.memory { add(MEMORY * 8 * small, 16 * small); }
     if config.battery { add(BATTERY * 8 * small, 16 * small); }
-    if config.net { add(NET * 8 * small, 16 * small); }
+    if config.net { add(NET * 8 * small, 16 * small + gap / 2 + traffic_rows(small) + gap / 2 + 16 * small); }
     place(config, width, height, z(32), (w, h)).map(|at| (at, big, small))
 }
 
@@ -574,6 +575,9 @@ fn place(config: &Config, width: usize, height: usize, margin: usize, (w, h): (u
     let y = match config.place { Place::TopLeft | Place::TopRight => margin, Place::Center => (height - h) / 2, _ => height - margin - h };
     Some((x, y, w, h))
 }
+
+// The NET graph's rows at the lines' glyph scale `small`: a half for each way and the middle line between them.
+fn traffic_rows(small: usize) -> usize { GRAPH_ROWS * small / 2 * 2 + 1 }
 
 // The analog face's sizes at the first size, in pixels: the dial's radius and a gauge's (000-APP-0069).
 const DIAL: usize = 72;
@@ -684,10 +688,33 @@ pub fn net_line(before: (u64, u64, u64), after: (u64, u64, u64)) -> String {
     let rate = |was: u64, now: u64| {
         let frames = now.saturating_sub(was);
         let r = (frames.saturating_mul(1000) + ms / 2) / ms;
-        if frames > 0 && r == 0 { String::from("<1") } else if r >= 10_000 { format!("{}K", r / 1000) } else { format!("{}", r) }
+        if frames > 0 && r == 0 { String::from("<1") } else { whole(r) }
     };
     format!("NET IN {}/S OUT {}/S", rate(before.1, after.1), rate(before.0, after.0))
 }
+
+// A rate a second as the NET lines write it: thousands as `K` from 10 000.
+fn whole(rate: u64) -> String { if rate >= 10_000 { format!("{}K", rate / 1000) } else { format!("{}", rate) } }
+
+/// A card's rates between two samples of its counters (frames sent, frames received, ms), for the graph
+/// (000-APP-0049): frames received and frames sent a second, in thousandths.
+pub fn net_rates(before: (u64, u64, u64), after: (u64, u64, u64)) -> (u64, u64) {
+    let ms = after.2.saturating_sub(before.2).max(1);
+    let rate = |was: u64, now: u64| now.saturating_sub(was).saturating_mul(1_000_000) / ms;
+    (rate(before.1, after.1), rate(before.0, after.0))
+}
+
+/// The NET graph's full height in frames a second: the largest of `rates` (in thousandths) rounded up to 1, 2 or 5
+/// times a power of ten, 1 at least, so the graph keeps its scale while the traffic stays near it.
+pub fn net_scale(rates: &[(u64, u64)]) -> u64 {
+    let most = rates.iter().map(|&(received, sent)| received.max(sent)).max().unwrap_or(0).div_ceil(1000).max(1);
+    let mut step = 1u64;
+    while step <= most / 10 { step *= 10; }
+    [1, 2, 5, 10].iter().map(|&k| step.saturating_mul(k)).find(|&top| top >= most).unwrap_or(u64::MAX)
+}
+
+/// The line under the NET graph: which way is which, its full height, and the time it spans.
+pub fn net_scale_line(scale: u64) -> String { format!("↑IN ↓OUT 0–{}/S, 1 MIN", whole(scale)) }
 
 /// The NET line's moves between still and traffic, for the log (000-APP-0049): the background's pixels are not text, and
 /// a suite sees `ping` move the line.
@@ -765,13 +792,34 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom
     if config.net {
         let line = info.net.unwrap_or("NET: NO COUNTERS");
         text(frame, width, height, x, y, line, small, ink, glyph);
+        y += 16 * small + gap / 2;
+        // The last minute's traffic (000-APP-0049): a bar a sample, the frames received up from the middle line and the
+        // frames sent down from it, the newest at the right; the line under it gives the full height.
+        let (graph_w, half) = (GRAPH * 8 * small, traffic_rows(small) / 2);
+        let samples = &info.traffic[info.traffic.len().saturating_sub(CPU_SAMPLES)..];
+        let scale = net_scale(samples);
+        let full = scale.saturating_mul(1000);
+        let tall = |rate: u64| (rate.min(full) as u128 * half as u128).div_ceil(full as u128) as usize;
+        let bar = (graph_w / CPU_SAMPLES).max(1);
+        let middle = y + half;
+        let mut paint = |rows: core::ops::Range<usize>, bx: usize| {
+            for py in rows { for px in bx..bx + bar { if px < width && py < height { frame[py * width + px] = graph; } } }
+        };
+        for (i, &(received, sent)) in samples.iter().enumerate() {
+            let bx = x + graph_w - (samples.len() - i) * bar;
+            paint(middle - tall(received)..middle, bx);
+            paint(middle + 1..middle + 1 + tall(sent), bx);
+        }
+        for px in x..x + graph_w { if px < width && middle < height { frame[middle * width + px] = colour; } }
+        y += traffic_rows(small) + gap / 2;
+        text(frame, width, height, x, y, &net_scale_line(scale), small, ink, glyph);
     }
 }
 
 /// The background's state in `wm`: its frame (the screen's pixels, or half of them each way when that would not fit
-/// in 4 MiB), the picture scaled once, the pattern's phase and the CPU samples.
+/// in 4 MiB), the picture scaled once, the pattern's phase, the CPU samples and the network's.
 /// `zoom`: wm's scale in percent, which the information's glyphs and margins follow (000-APP-0061).
-pub struct Backdrop { pub config: Config, pub width: usize, pub height: usize, pub unit: usize, pub zoom: usize, pub frame: Vec<u32>, base: Option<Vec<u32>>, pub phase: u32, carry: usize, pub cpu: Vec<u8> }
+pub struct Backdrop { pub config: Config, pub width: usize, pub height: usize, pub unit: usize, pub zoom: usize, pub frame: Vec<u32>, base: Option<Vec<u32>>, pub phase: u32, carry: usize, pub cpu: Vec<u8>, pub traffic: Vec<(u64, u64)> }
 
 impl Backdrop {
     /// For a screen of `screen` pixels; `image` reads the file `image <file>` names (None: the pattern is drawn instead,
@@ -779,7 +827,7 @@ impl Backdrop {
     pub fn new(config: Config, screen: (usize, usize), image: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> (Self, Option<String>) {
         let unit = if screen.0 * screen.1 * 4 <= 4 << 20 { 1 } else { 2 };
         let (width, height) = (screen.0 / unit, screen.1 / unit);
-        let mut backdrop = Self { config: Config { picture: Picture::None, ..config.clone() }, width, height, unit, zoom: 100, frame: Vec::new(), base: None, phase: 0, carry: 0, cpu: Vec::new() };
+        let mut backdrop = Self { config: Config { picture: Picture::None, ..config.clone() }, width, height, unit, zoom: 100, frame: Vec::new(), base: None, phase: 0, carry: 0, cpu: Vec::new(), traffic: Vec::new() };
         let problem = backdrop.change(config, image);
         (backdrop, problem)
     }
@@ -817,6 +865,12 @@ impl Backdrop {
         self.cpu.push(percent.min(100));
     }
 
+    /// The network's rates (`net_rates`), kept for the NET graph over the last minute (000-APP-0049).
+    pub fn traffic_sample(&mut self, rates: (u64, u64)) {
+        if self.traffic.len() == CPU_SAMPLES { self.traffic.remove(0); }
+        self.traffic.push(rates);
+    }
+
     /// How often the pattern is drawn again (ms): twice a second at speed 1, 20 times from speed 10.
     pub fn interval(&self) -> usize { 500 / self.config.speed.clamp(1, 10) as usize }
 
@@ -835,7 +889,7 @@ impl Backdrop {
             Some(base) => self.frame.copy_from_slice(base),
             None => pattern(&mut self.frame, self.width, self.height, &self.config, self.phase),
         }
-        let info = Info { cpu: &self.cpu, ..*info };
+        let info = Info { cpu: &self.cpu, traffic: &self.traffic, ..*info };
         overlay(&mut self.frame, self.width, self.height, self.unit, self.zoom, &self.config, &info, glyph);
     }
 

@@ -9870,8 +9870,44 @@ def wm_suite(vm):
                     counts[p] += 1
         return counts
 
-    def camera_window(start):
-        # Starts camera with `start`; its window shows the bars (yellow, cyan, magenta); then it is closed.
+    def camera_fit(cam, natural):
+        # 211-APP-0046: on the left half the picture is scaled to fit it whole (more of the bars' pixels); Alt+0 gives the
+        # frame back to the stream's 320 x 240 where it stands, and the picture is the test pattern pixel for pixel: the
+        # frame its counter rows name (mind::video).
+        assert state()[2][cam][2:] == (42, 17), state()
+        keys("alt-left")
+        until(f"[WM] PIXELS {cam} 624X736")
+        time.sleep(.6)
+        bars3 = tuple(natural)
+        larger = colours(cam, bars3)
+        assert sum(larger.values()) > 3 * sum(natural.values()), (larger, natural)
+        mark = len("".join(seen))
+        mode, focus, rects = keys("alt-0")
+        assert rects[cam] == (0, 1, 42, 17), rects
+        while f"[WM] PIXELS {cam} 320X240" not in "".join(seen)[mark:]:
+            wait(f"[WM] PIXELS {cam} 320X240", lines=0)
+        bars = [bytes.fromhex(c) for c in ("ffffff", "ffff00", "00ffff", "00ff00", "ff00ff", "ff0000", "0000ff", "000000")]
+        for _ in range(10):
+            time.sleep(.3)
+            _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+            vm.serial(enter=False)
+            width = int(size.split()[0])
+            at = lambda px, py: pixels[((32 + py) * width + 8 + px) * 3:((32 + py) * width + 8 + px) * 3 + 3]
+            sequence = sum(1 << (31 - c) for c in range(32) if at(c * 10 + 5, 232) == bars[0])
+            def expected(px, py):
+                if py >= 224:
+                    return bars[0] if sequence >> (31 - px * 32 // 320) & 1 else bars[7]
+                return bars[(px + sequence * 4 % 320) % 320 * 8 // 320]
+            wrong = sum(at(px, py) != expected(px, py) for py in range(240) for px in range(320))
+            if wrong == 0:
+                break
+        else:
+            raise AssertionError(("not the pattern at 320 x 240", sequence, wrong))
+        return sum(larger.values()), sequence
+
+    def camera_window(start, fit=False):
+        # Starts camera with `start`; its window shows the bars (yellow, cyan, magenta); with `fit`, camera_fit; then it
+        # is closed.
         known = {m[0] for m in windows_re.findall("".join(seen))}
         start()
         while not any(m[0] not in known and m[2] == "PIXELS" for m in windows_re.findall("".join(seen))):
@@ -9886,12 +9922,13 @@ def wm_suite(vm):
                 break
         else:
             raise AssertionError(counts)
+        fitted = camera_fit(cam, counts) if fit else None
         keys("alt-w", text=f"CLOSE {cam}")
         until(f"GONE {cam}")
         while cam in state()[2]:
             wait()
         time.sleep(1)  # the gateway closes the stream of an ended reader within its next look
-        return counts
+        return counts, fitted
 
     def scale_from_settings():
         # 000-APP-0061: wm started at auto, 100% on the suite's 1280 × 800 screen. Settings' screen page steps to 100%,
@@ -10391,7 +10428,9 @@ def wm_suite(vm):
         names = [{" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot"}.get(c, c) for c in command]
         return keys("alt-r", *names, "ret", text=text)
 
-    camera_window(lambda: run_line("camera", "STARTED camera"))
+    _, fitted = camera_window(lambda: run_line("camera", "STARTED camera"), fit=True)
+    print(f"PASS: wm fit to content (211-APP-0046): camera's picture scaled to the left half ({fitted[0]} of the bars' points), "
+          f"Alt+0 back to 320 × 240 where it stood, and the test pattern there pixel for pixel (frame {fitted[1]})", flush=True)
     assert re.findall(r"\[WM\] STARTED camera PID \d+ WITH ([^\n]*)", "".join(seen))[-1].split(",")[-1] == "camera", "wm lends the camera"
     run_line("console", "STARTED console")
     console_pid = re.findall(r"\[WM\] STARTED console PID (\d+) WITH ([^\n]*)", "".join(seen))[-1]

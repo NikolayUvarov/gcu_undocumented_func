@@ -882,13 +882,15 @@ fn main(info: &'static BootInfo) {
                                 mind::println!("[WM] {} ({}{}, THE FIRST RATE)", line, from, counted);
                             }
                             if before.is_some() { if let Some(how) = net_moves.next(&line) { mind::println!("[WM] {} (THE LINE {})", line, how); } }
+                            if let Some(before) = before { backdrop.traffic_sample(wm::background::net_rates(before, sample)); }
                             (net_samples[source], net_text) = (Some(sample), Some(line));
                         }
                         Err(NetMissing::Quiet) => {}
                         Err(NetMissing::Why(line)) => {
                             // Each reason once in the log: the background's pixels are not text.
                             if net_why != Some(line) { mind::println!("[WM] {} (THE BACKGROUND'S NET LINE)", line); net_why = Some(line); }
-                            (net_samples, net_text) = ([None; 2], Some(String::from(line)))
+                            (net_samples, net_text) = ([None; 2], Some(String::from(line)));
+                            backdrop.traffic.clear(); // no counters: no graph of old ones
                         }
                     }
                 }
@@ -897,7 +899,7 @@ fn main(info: &'static BootInfo) {
                     (free, total) = (pool.as_ref().map(|p| p.frames_free), pool.as_ref().map(|p| p.frames));
                 }
             }
-            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, battery: manager.wm.battery, net: net_text.as_deref() };
+            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, battery: manager.wm.battery, net: net_text.as_deref(), traffic: &[] };
             backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
             background_moved = true;
             frame_began = Some(now);
