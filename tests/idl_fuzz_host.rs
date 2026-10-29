@@ -90,6 +90,7 @@ mod idl {
     #[path = "../../libmind/src/idl/log.rs"] pub mod log;
     #[path = "../../libmind/src/idl/net.rs"] pub mod net;
     #[path = "../../libmind/src/idl/netpolicy.rs"] pub mod netpolicy;
+    #[path = "../../libmind/src/idl/nn.rs"] pub mod nn;
     #[path = "../../libmind/src/idl/parse.rs"] pub mod parse;
     #[path = "../../libmind/src/idl/rtc.rs"] pub mod rtc;
     #[path = "../../libmind/src/idl/serial.rs"] pub mod serial;
@@ -354,7 +355,7 @@ fn scribble() {
 fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
         owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), borrowed!(effector), owned!(gpio), owned!(init), owned!(keyboard),
-        borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
+        borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(nn), borrowed!(parse), owned!(rtc),
         borrowed!(serial), owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
     ];
@@ -430,6 +431,7 @@ types! {
     log: Error Entry State;
     net: Error Info Counters;
     netpolicy: Error Grant;
+    nn: Error Model Budget Usage Status;
     parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error Offset;
     serial: Error Info;
