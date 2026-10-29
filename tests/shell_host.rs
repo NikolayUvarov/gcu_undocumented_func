@@ -1,6 +1,6 @@
 //! Host tests of the shell console's lines (shell/src/ring.rs): wrapping, the input line's positions, truncation, the
 //! scrollback, and a console that follows its window's size (211-APP-0040); what the shell takes from a client of its
-//! commands (shell/src/clients.rs, 211-APP-0044); `>` and `>>` (shell/src/redirect.rs, 000-APP-0074); the lines on
+//! commands (shell/src/clients.rs, 211-APP-0044); `>`, `>>`, `<` and `|` (shell/src/redirect.rs, pipe.rs, 000-APP-0074); the lines on
 //! the way to the first frame (shell/src/start.rs, 000-APP-0075); a safe start told from the boot's log
 //! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031); `ping`'s options and
 //! tally (shell/src/ping.rs, 000-APP-0095).
@@ -363,8 +363,33 @@ fn a_pipe_splits_a_line_between_the_command_and_the_program() {
     assert_eq!(pipe::split("ps | grep wm"), Ok(Some(pipe::Split { writer: "ps", reader: "grep wm" })));
     assert_eq!(pipe::split("ps"), Ok(None));
     assert_eq!(pipe::split("write ram:x \"a | b\""), Ok(None), "a | inside quotes is text");
-    for wrong in ["| grep x", "ps |", "ps || grep x", "ps | grep a | grep b", "ps | grep x &", "run clock & | grep x"] {
+    for wrong in ["| grep x", "ps |", "ps || grep x", "ps | grep x &", "run clock & | grep x", "ps | grep a |", "ps | grep a || grep b",
+                  "ps | grep a | grep b &", "ps | grep a < ram:x"] {
         assert!(pipe::split(wrong).is_err(), "{:?}", wrong);
     }
-    assert!(pipe::split("ps | grep a | grep b").unwrap_err().contains("ONE |"));
+    // Several pipes: each program reads what the one before it prints; the whole line is checked before it runs.
+    let split = pipe::split("dmesg | grep SHELL | grep -c START").unwrap().unwrap();
+    assert_eq!(split, pipe::Split { writer: "dmesg", reader: "grep SHELL | grep -c START" });
+    assert_eq!(pipe::readers(split).collect::<Vec<_>>(), ["grep SHELL", "grep -c START"]);
+    assert_eq!(pipe::readers(pipe::split("ps | grep wm").unwrap().unwrap()).collect::<Vec<_>>(), ["grep wm"]);
+    assert_eq!(pipe::readers(pipe::split("a | b | \"c | d\" | e").unwrap().unwrap()).collect::<Vec<_>>(), ["b", "\"c | d\"", "e"]);
+    assert!(pipe::split("ps | grep a | | grep b").unwrap_err().contains("||"));
+    assert!(pipe::split("ps | grep a < ram:x").unwrap_err().starts_with("< GIVES THE FIRST COMMAND"));
+    // `<` before the first `|` is that command's.
+    assert_eq!(pipe::split("grep a < ram:x | grep b"), Ok(Some(pipe::Split { writer: "grep a < ram:x", reader: "grep b" })));
+}
+
+#[test]
+fn an_input_splits_a_line_between_the_program_and_its_file() {
+    // 000-APP-0074: `program < file`, the file the program's text input.
+    assert_eq!(redirect::input("grep wm < ram:ps.txt"), Ok(Some(redirect::Input { command: "grep wm", file: "ram:ps.txt" })));
+    assert_eq!(redirect::input("sha256 <notes.txt"), Ok(Some(redirect::Input { command: "sha256", file: "notes.txt" })));
+    assert_eq!(redirect::input("grep wm"), Ok(None));
+    assert_eq!(redirect::input("write ram:x \"a < b\""), Ok(None), "a < inside quotes is text");
+    assert!(redirect::input("< ram:x").unwrap_err().starts_with("A PROGRAM COMES BEFORE <"));
+    assert!(redirect::input("grep a <").unwrap_err().starts_with("A FILE COMES AFTER <"));
+    for wrong in ["grep a < x y", "grep a < x < y", "grep a < \"x\"", "grep a & < x"] {
+        assert!(redirect::input(wrong).is_err(), "{:?}", wrong);
+    }
+    assert!(redirect::input("grep a & < x").unwrap_err().contains("&"));
 }

@@ -267,7 +267,12 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - A line that starts `ERROR: ` stays on the screen, and so does the shell's `STARTED` line. The shell says how many bytes went in (`312 BYTES WRITTEN TO ram:list.txt`).
 - The file is written through the shell's file client: `ram:`, `log:` and `data/`.
 - A client of the shell's commands (`console` in `wm`) is asked in the shell's window first, and a script needs `requires: files`.
-- `command | program` (`ps | grep wm`) gives what the command prints to the program as its text input (`loader.wit` 1.9 `commit-with-input`, [000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)). The command before it may be the shell's or a console program, which runs to its end first; the one after it is a program of the disk's, started in front, and the shell fills its input as it reads. `ERROR: ` lines of the command stay on the screen. One `|` a line; `grep` without a path reads its input. `<` is left.
+- `command | program` (`ps | grep wm`) gives what the command prints to the program as its text input (`loader.wit` 1.9 `commit-with-input`, [000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)). The command before it may be the shell's or a console program, which runs to its end first; the one after it is a program of the disk's, started in front, and the shell fills its input as it reads. `ERROR: ` lines of the command stay on the screen.
+  - **Several `|`** (`dmesg | grep SHELL | grep -c START`): each program runs to its end in turn, and what it prints is the next one's input. The whole line is checked before anything runs.
+  - **Programs that read their input** without a file named: `grep`, and `sha256`, which names it `-`.
+- `program < file` (`grep wm < ram:ps.txt`) gives the file, taken from the current directory, to the program as its text input.
+  - The shell reads it whole first, 1 MiB at most.
+  - `<` comes before the line's first `|`: it is the first command's (`grep a < f | grep b`). Its command is a program of the disk's, as after `|`, and `> file` may follow it.
 
 **Its start in the system log** (213-APP-0075): `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S` once the shell has drawn its first frame, and `[SHELL] <STEP> TOOK <N> MS BEFORE THE FIRST FRAME` for a step before it that took longer than 5 s, naming what it called (the kernel, `logd`, the serial line, the keys and the commands typed, the drawing). With the compositor's `SCREEN IN FRONT` lines, `dmesg -s shell` tells a shell that never drew from one that waited (213-KRN-0098). A step that never returns leaves no line.
 

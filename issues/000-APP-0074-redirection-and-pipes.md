@@ -1,6 +1,6 @@
 # 000-APP-0074 — Redirection and pipes in the shell and in `msh`
 
-**Type:** tools (`shell`, `msh`, tools) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `>`, `>>` and `|` done; `<` left · **Blocked by:** — ([000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md)'s text input is in `main`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`shell`, `msh`, tools) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `>`, `>>`, `<` and `|` done, several `|` in a line too; the MacBook Pro's check left (the maintainer's) · **Blocked by:** — ([000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md)'s text input is in `main`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 **Recorded by:** the kernel track (KRN), 2026-10-12, in `requests-APP.md`, at the maintainer's request: "redirection and pipes have to be added to the shell". Numbered by the tools track on 2026-10-14; the maintainer chose it as the track's next task.
 
@@ -71,6 +71,29 @@
   - host tests (`tests/shell_host.rs`: the split; `tests/search_host.rs`: grep without a path);
   - the `find`/`grep` check: `cat | grep`, `ps | grep shell`, `ls | grep -c`, a line that matches nothing, the refusals.
 - **Left:** `<`; more than one `|`.
+
+## Progress (2026-10-29): `<` and several `|`
+
+- **Several `|`** (`shell/src/pipe.rs`, `piped_stage`): `dmesg | grep SHELL | grep -c START`.
+  - Each program runs to its end in turn, its input filled as `|` fills one, and what it prints is gathered for the next.
+  - The whole line is checked before anything runs: an empty side, `||`, `&`, and a shell command after any `|`.
+- **`program < file`** (`redirect::input`, `input_line`):
+  - the file, from the current directory, is read whole, 1 MiB at most, and becomes the program's text input;
+  - `<` belongs to the first command of the line (`grep a < f | grep b`); after a `|` it is refused;
+  - its command is a program of the disk's, as after `|`; `> file` may follow.
+- **`sha256` without a file** hashes its text input and names it `-`, as `sha256sum` does.
+- **`msh`** runs its command lines through the shell, so `<` and `|` work in scripts as at the prompt.
+- **Not taken up:** `view` reading its input. `cat` and `find` are not readers: `cat` is the shell's command, and `find` lists names.
+- **Tests:**
+  - host tests (`tests/shell_host.rs`): the pipe chain and its refusals, `<` and its refusals;
+  - the `find`/`grep` check:
+    - `cat | grep | grep -c`, `ps | grep shell | grep -c shell`;
+    - `grep hello < ram:a.txt`;
+    - `sha256 < tlsroots.pem` and `cat tlsroots.pem | sha256` against `sha256 tlsroots.pem`: 195 KiB whole through `<` and through `|`;
+    - the refusals.
+
+  `tlsroots.pem` stands in for `log:boot0001.log` in the stage 2 criterion: a log being written could change between two reads.
+- **Left:** the MacBook Pro's `dmesg -s battery > data/battery.txt`, the maintainer's run on the machine.
 
 ## Related
 

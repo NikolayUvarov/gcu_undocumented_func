@@ -2480,13 +2480,29 @@ def search_check(vm):
     require(vm.command("grep hello"), "USAGE: GREP")  # no path and no input
     require(vm.command("ps | ls"), "| FEEDS A PROGRAM (GREP …), NOT THE SHELL'S LS")
     require(vm.command("ps |"), "A COMMAND COMES ON EACH SIDE OF |")
-    require(vm.command("ps | grep a | grep b"), "ONE | A LINE")
+    # Several `|`: each program reads what the one before it printed.
+    assert piped("cat ram:a.txt | grep hello | grep -c world") == ["1"]
+    assert piped("ps | grep shell | grep -c shell") == [str(len(found))], found
+    require(vm.command("ps | grep shell | ls"), "| FEEDS A PROGRAM (GREP …), NOT THE SHELL'S LS")
+    # `<`: a file, from the current directory, as a program's text input; 195 KiB of it arrive whole, through `|` too.
+    assert lines(vm.command("grep hello < ram:a.txt")) == ["hello world"]
+    digest = lambda line: re.findall(r"^([0-9a-f]{64})  (\S+)", vm.command(line, raw=True, timeout=60), re.M)
+    whole = digest("sha256 tlsroots.pem")
+    assert len(whole) == 1 and whole[0][1] == "tlsroots.pem", whole
+    assert digest("sha256 < tlsroots.pem") == [(whole[0][0], "-")]
+    assert digest("cat tlsroots.pem | sha256") == [(whole[0][0], "-")]
+    assert digest("sha256 < ram:a.txt") == [(digest("sha256 ram:a.txt")[0][0], "-")]
+    require(vm.command("sha256"), "USAGE: SHA256")
+    require(vm.command("cat < ram:a.txt"), "< FEEDS A PROGRAM (GREP …), NOT THE SHELL'S CAT")
+    require(vm.command("grep a | grep b < ram:a.txt"), "< GIVES THE FIRST COMMAND ITS INPUT")
+    require(vm.command("grep a < ram:none.txt"), "< ram:none.txt: NOT FOUND")
+    require(vm.command("grep a < ram:a.txt ram:b.txt"), "ONE FILE AFTER <")
     for path in ("ram:docs/b.md", "ram:a.txt"):
         require(vm.command(f"rm {path}"), "OK")
     require(utf8("rm ram:docs/заметки.txt"), "OK")
     require(vm.command("rm ram:docs"), "OK")
     print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file; "
-          "a shell command's output piped into grep", flush=True)
+          "a shell command's output piped into grep, through several | too; a file given to grep and sha256 with <, 195 KiB of it whole, and through |", flush=True)
 
 
 def busy_suite(vm):
