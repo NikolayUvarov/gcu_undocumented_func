@@ -37,6 +37,17 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
   - a record written around the scrub's place during a pass is not counted damaged.
 - QEMU `storefaults` (x86 and aarch64): a byte changed in a block's record on the medium is found by `blocks scrub`, logged with its CID, and reported by `blocks scrubbed`.
 
+## Progress (2026-10-29)
+
+- **Built** on the storage branch (86f68750), on top of 308-STO-0023's layout 4, so it lands with it, after [308-KRN-0184](308-KRN-0184-blockstore-badges-its-own-clients.md).
+- **A step** ends at the end of the record or the 33-sector window it is in, so a step covers about 256 sectors rather than at most 256.
+- **A whole pass on request** keeps every other client waiting too, as a collection does: requests are served one at a time.
+- **Tested:**
+  - host tests, all four criteria; the test of a record written around the scrub reads 2 damaged sectors without the move;
+  - QEMU `store` and `storefaults` on x86, in this session's container;
+  - aarch64: not yet, as the landing gate held the remote machines.
+- **Not tested on the platform:** the scrub between requests, whose first pass starts a day after the mount.
+
 ## Related
 
 [300-STO-0005](../issues-done/300-STO-0005-corruption-on-the-platform.done), [309](309-copies-scrub-and-repair.md), [docs/storage](../docs/storage/README.md).
