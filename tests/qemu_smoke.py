@@ -1676,7 +1676,13 @@ def tools_suite(vm):
     vm.expect("EXITED. SHELL RESUMED.")
     time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command("view nothing.txt"), "PID=")
-    assert heap_used(vm) == baseline
+    # The ended view's task is reaped after its exit notice, as after the monitors and fm: up to 2 s.
+    for _ in range(20):
+        if heap_used(vm) == baseline:
+            break
+        time.sleep(.1)
+    used = heap_used(vm)
+    assert used == baseline, f"the kernel heap after view: {used} bytes used, {baseline} at the suite's start"
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
     fbank_check(vm)
     dictate_check(vm)

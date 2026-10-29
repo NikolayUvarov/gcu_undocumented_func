@@ -46,10 +46,41 @@
 5. **The test program `nncheck` and the suite `nnd`** (section 8 of the design), on x86 and aarch64.
 6. **Docs:** the design at 1.0; `docs/tools/README.md` and `README_RU.md`; an entry in `docs/profile` for what `nnd` holds and what was shown, on the configurations tested only.
 
+**Progress (2026-10-29): the code, but for the shell and the native run.**
+- **Item 2, done:** `idl/nn.wit` 1.0 and its bindings (`libmind/src/idl/nn.rs`), as the design gives it.
+- **The checks, in `nnpkg/`** (a `no_std` crate, built for x86 and aarch64):
+  - a strict JSON reader;
+  - the typed description and its layout between nnd and its workers;
+  - the writer profile `nrl.serde-json-pretty-object/0`, with floats through `zmij` 1.0.23 as `NRL`'s writer;
+  - the manifest's canonical form and the model ID;
+  - `nrl-lab`'s checks ported;
+  - `nrl-runtime`'s program with `NRL`'s work policy;
+  - the service's state: holds, sessions bound to a badge, budgets checked before a job runs, jobs, cancellation, deadlines, retirement.
+- **Item 3, written:** the program `nnd/`, built with the programs for x86 and aarch64:
+  - a parser worker per load, holding only the files' bytes;
+  - a job worker per job, with the model's sealed description and the job's memory (the cancel flag and the answer);
+  - waits deferred;
+  - `--memory <MiB>` its quota (asked of `KRN`);
+  - a probe worker telling whether it may start workers.
+
+  It runs once 262-KRN-0178 gives it its boot image and grants.
+- **Host tests:** 18 in `nnpkg/tests/`, on `NRL`'s pinned bundle, in `scripts/host_tests.sh`:
+  - the encoding vector back to its bits and bytes, and 200 000 floats and strings as `serde_json` writes them;
+  - every object file in the profile, and the model ID `1b23aaf4…`;
+  - `NRL`'s 16 runtime scenarios and their charges;
+  - the design's refusals: a wrong ID, a changed byte, another layout, an overlay, an unknown field, a duplicate key, a missing file;
+  - the reader against `serde_json`;
+  - 20 000 made-up answers of the parser refused without a panic;
+  - the badge rules, budgets, cancellation, the deadline, retirement and memory.
+- **Left:**
+  - item 4, the shell's part (minting, keeping, revoking and retiring a badge; `nn`), which waits for 262-KRN-0178's slot and `REQUEST_NN`;
+  - item 5, `nncheck` and the suite;
+  - the profile entry, after the native run.
+
 ## Acceptance criteria
 
 - [x] **The design is agreed:** `NRL` and `KRN` answer its questions in messages, and the page is at 1.0 (2026-10-29).
-- **Host tests:**
+- [x] **Host tests** (`nnpkg/tests/`, 2026-10-29):
   - the re-encoding check of a package's description;
   - every bound of the profile;
   - the badge-to-session rule, with every call naming another client's session or job refused;
