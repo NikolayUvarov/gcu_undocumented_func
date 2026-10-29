@@ -319,6 +319,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [700-DRV-0044](../issues-done/700-DRV-0044-usb-hosts-buffer-table-sized-by-the-highest-badge.done) | `usb_host`'s table of client buffers sized by the highest badge: it panicked at `bt_hci`'s attach (KRN's request, for 700-KRN-0176) | `ALL_BADGES` and `BADGES` in `libmind/src/usb.rs`; the `usb` and `keys` suites pass with `bt_hci`'s image |
 | [000-APP-0113](../issues-done/000-APP-0113-console-drops-a-line-typed-before-the-last-one-ran.done) | `console` dropped a line typed before the one before it had run (the `wm` suite, 2026-10-28) | the loop stops reading keys at an Enter, so each line runs in turn; done (2026-10-28) |
 | [211-APP-0090](../issues-done/211-APP-0090-horizontal-scrolling.done) | Horizontal scrolling from a trackpad (211-DRV-0018) | `mind::input::Pointer`'s `across`, `wm` passes it to the window under the pointer, `view` scrolls unwrapped text by it; host tests; the MacBook Pro's swipe is the maintainer's run; done (2026-10-28) |
 | [000-KRN-0175](../issues-done/000-KRN-0175-one-handoff-version-and-no-older-paths.done) | The kernel takes one handoff version; `BOOT_HANDOFF_OLDEST` and the older loaders' paths gone (round 39) | done (2026-10-28) |
