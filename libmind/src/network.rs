@@ -43,6 +43,9 @@ pub const BADGE_KEY_SSH: u16 = 3;
 /// The key service's loader (idl/keystore.wit 1.4, 000-KRN-0182): the loader's client may ask for a client for each
 /// program's secrets, which it lends in SLOT_SECRETS; it reads no secret itself.
 pub const BADGE_KEY_LOADER: u16 = 4;
+/// The block store's own secrets (idl/keystore.wit 1.5, 308-KRN-0183): `blockstore`'s client, which init alone lends
+/// it in its slot 3, keeps and reads the store's volume keys, apart from every program's secrets.
+pub const BADGE_KEY_BLOCKSTORE: u16 = 5;
 
 /// Whether `address` (IPv4, its first byte in bits 24-31) is a public unicast address, which a browsing grant's rule
 /// reaches (idl/socket.wit 2.7, a rule's address 0, 000-NET-0049). Not public: this network (0/8), the private ranges
