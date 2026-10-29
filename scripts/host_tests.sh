@@ -42,6 +42,7 @@ python3 tests/app_package_test.py
 python3 tests/test_usb_writer.py
 python3 tests/boot_switch_test.py
 python3 tests/mac_startup_disk_test.py # an Intel Mac's startup disk from macOS Recovery (800-LNK-0029)
+python3 tests/build_and_write_args_test.py # the writer's --mode= refusals (751-LNK-0030)
 python3 tests/gate_test.py
 python3 tests/build_jobs_test.py
 python3 tests/mirror_test.py
