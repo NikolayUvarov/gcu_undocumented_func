@@ -22,13 +22,9 @@
 - **The hold ran out mid-copy.** The kernel holds the task for the copy until `COMPOSITOR_RELEASE` or 50 ms (000-KRN-0086). The compositor compared and wrote each pixel to the framebuffer from the top, under the hold.
 - **Framebuffer writes are slow where the check failed.** Under TCG, writes to QEMU's video memory are far slower than to memory. In the paused run one copy spanned some 50 screens with its top done and its bottom old: `(9, 6)` many times, then `(9, 12)`.
 - **What followed.** Once the 50 ms passed, `app2` ran on and drew the next frames. The copy, still on its way down, took their bottom half. All task selection goes through `ready()`, which honours the hold, so no other path let the task run.
-- **A second path: the copy as drawn.**
-  - The compositor asks every millisecond or so while it is answered `COMPOSITOR_BUSY`, and `app2` waits only 2 ms of each frame.
-  - On a loaded machine the asks can miss those waits for `FORCE_MS` (250 ms). The screen is then copied as it is drawn, with no hold.
-  - With only the first fix, under load (four busy loops on this container's four cores), the check still failed 2 runs of 5: top 97, bottom 101, and top 60, bottom 64.
-- **A third path: the bound in the guest's time.** With the hold at the next wait too, one run of 5 under the same load failed: top 99, bottom 108.
-  - The guest's time runs on while the host does not run the compositor's virtual CPU, so a 250 ms bound in that time can end a hold in the middle of the copy.
-  - So a hold now ends by what the compositor does, and the time bound is only for a compositor that neither releases nor waits.
+- **Two more ways to a copy of a frame being drawn,** found by reading the code, not seen in a run:
+  - **The copy as drawn.** The compositor asks every millisecond or so while it is answered `COMPOSITOR_BUSY`, and `app2` waits only 2 ms of each frame. On a loaded machine the asks could miss those waits for `FORCE_MS` (250 ms), and the screen was then copied as it was drawn, with no hold.
+  - **A bound in the guest's time.** The guest's time runs on while the host does not run the compositor's virtual CPU, so a time bound alone can end a hold in the middle of the copy.
 
 ## Progress
 
@@ -44,7 +40,13 @@
 - **The compositor** releases after any dirty copy, including `FORCE_MS`'s.
 - **The check:** each screen is taken with the guest paused (QMP `stop` and `cont`). QEMU otherwise reads the screen while the guest writes it, so a copy that overtakes the read also shows the bottom newer.
 - **The docs:** `common/abi.rs`, `docs/api/README.md` and the profile's row on task screens.
-- **Left:** the acceptance runs.
+- **Runs in this container** (QEMU TCG, 4 guest CPUs, the `x86: protection probes` group, four busy loops on the four host cores):
+  - **A mistake corrected.** `scripts/ci_local.sh` with a single test group builds nothing. Every run of that group here before the counted runs below used images built before this task. So the earlier notes in this file that runs failed "with only the first fix" or "with the hold at the next wait too" were wrong: those runs tested the old code.
+  - **The old code** (before this task): 7 of 15 runs saw a frame copied while it was drawn (top 92, bottom 101; top 13, bottom 18; …).
+  - **The code of `d26de9fd`**, built for the runs: 18 runs in a row passed.
+    - 8 of them carried temporary counters, sent to QEMU's debug port. Over each whole run (the boot and the suite) they counted 375 to 441 busy answers and 750 to 830 holds, 162 to 181 of them made at a task's next wait. Per run, 0 to 6 holds ended because the compositor waited before its next ask. None ended by the time bound, none of the copies was made without a hold, and the held task was never found running.
+    - 10 had no counters.
+- **Left:** the acceptance runs on `un-rizen`, two lanes.
 
 ## Acceptance criteria
 
