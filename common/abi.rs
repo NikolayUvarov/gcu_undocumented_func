@@ -168,8 +168,9 @@ pub const SYSCALL_INPUT_LISTEN: usize = 57;
 pub const INPUT_LISTENERS: usize = 8;
 pub const SYSCALL_COMPOSITOR_PULL: usize = 21;
 // COMPOSITOR_PULL's arg2 (000-KRN-0086). 0: the focused screen's state, as before. COMPOSITOR_FRAME: the same, but a
-// changed screen whose task still runs gives COMPOSITOR_BUSY (it may be mid-frame); one whose task waits gives 1 and the
-// task is held, not run, until COMPOSITOR_RELEASE or 50 ms, so the copy is of one whole frame.
+// changed screen whose task still runs gives COMPOSITOR_BUSY (it may be mid-frame) and the task is held at its next
+// wait; one whose task waits gives 1 and the task is held, not run, until COMPOSITOR_RELEASE, until the compositor
+// waits or ends, or for 1 s at most, so the copy is of one whole frame (000-KRN-0186).
 pub const COMPOSITOR_FRAME: usize = 1;
 pub const COMPOSITOR_RELEASE: usize = 2;
 pub const COMPOSITOR_BUSY: usize = 3;
