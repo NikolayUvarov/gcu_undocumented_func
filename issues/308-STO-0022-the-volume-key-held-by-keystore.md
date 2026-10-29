@@ -1,12 +1,12 @@
 # 308-STO-0022 — The volume key held by `keystore`: sealed by the TPM or unlocked by a passphrase, with a recovery key
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [308-STO-0021](308-STO-0021-sealed-records.md); `keystore` and `init` are the kernel session's (`NET`, `KRN`): requests · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** `keystore` and `init` are the kernel session's (`NET`, `KRN`): requests · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
 Split from [308](308-encryption-at-rest.md) (2026-10-28).
 
 ## Problem
 
-After [308-STO-0021](308-STO-0021-sealed-records.md) the records are sealed, but the volume key lies in the superblock in the clear. Confidentiality at rest needs the key kept where a medium read elsewhere does not give it away (MC-11.9: access to key material apart from the right to use it).
+After [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done) the records are sealed, but the volume key lies in the superblock in the clear. Confidentiality at rest needs the key kept where a medium read elsewhere does not give it away (MC-11.9: access to key material apart from the right to use it).
 
 ## Plan
 

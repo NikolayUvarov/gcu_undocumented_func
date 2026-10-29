@@ -1,6 +1,6 @@
 # 308-STO-0024 — The threat model and the profile: what sealing at rest protects, and what it does not
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308-STO-0021](308-STO-0021-sealed-records.md) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-12.1, MC-12.3
 
 Split from [308](308-encryption-at-rest.md) (2026-10-28).
 
