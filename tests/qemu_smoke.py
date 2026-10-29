@@ -4077,7 +4077,8 @@ def services_suite(vm):
     assert sorted(names) == [rows[r].split()[c] for c in range(len(rows[0].split())) for r in range(len(rows)) if c < len(rows[r].split())], listing
     require(listing, "SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): init logd rtc")
     # Every program says what it does (mind::about!, issue 091): list -l takes the first line from the program file.
-    detailed = vm.command("list -l")
+    # It reads each program's section headers: 56 programs took more than the default 8 s under TCG (2026-10-29).
+    detailed = vm.command("list -l", timeout=30)
     described = re.findall(r"^  ([\w-]+) +\d+ KB  (.*)$", detailed, re.M)
     assert len(described) == count and all(text.strip() for _, text in described), detailed
     assert re.search(r"^  fm +\d+ KB  file manager \(Norton Commander keys\)", detailed, re.M), detailed
