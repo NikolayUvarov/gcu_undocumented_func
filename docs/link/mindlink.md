@@ -36,7 +36,7 @@ Options come before the command; what follows the command is its own, a program'
 - a move between `firmware/` and the rest is refused, as are a change of `firmware` itself and `run` or `replace` of a name there;
 - without `dev` such names are unsupported.
 
-A driver's proprietary file thus goes to a running machine with no disk written again: `scripts/proprietary.sh link PORT`, or `scripts/proprietary.sh link effector485` through the daemon. The driver checks the file by its SHA-256 and reads it at its next start (a restart, or `replace <unit> --back`).
+A driver's proprietary file thus goes to a running machine with no disk written again: `scripts/proprietary.sh link PORT`, or `scripts/proprietary.sh link effector485` through the daemon. The driver reads it at its next start (a restart, or `replace <unit> --back`). `rtw88_wifi`, `rtw89_wifi` and `bt_hci` refuse a file whose SHA-256 is not the one they pin. `bcm_wifi` only logs its microcode's SHA-256, for a file from the cable as for one from the disk.
 
 **Ports:**
 
