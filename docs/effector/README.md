@@ -242,6 +242,9 @@ every request (MC-10.6).
 - **`collect_logs`** (`log ring`, or a `collect` root): the system log or a file, inline as text the same way.
 - **`deliver_file`** (`deliver ROOT`): downloaded from the server straight into the gateway, which checks the size and
   SHA-256 before the file takes its name under the root (750-KRN-0120's scope).
+  - **Since contract 1.3** (750-EFF-0021), the gateway then reads the file back under that name.
+  - **The answer's `stdout`** is `delivered PATH SIZE SHA256` as read. It is kept in `system/effector/result` until the
+    server takes it.
 - **`exec` of `reboot`** (`reboot on`): the gateway admits it, answers, and 10 s later asks `init`, which checks the policy
   again (750-KRN-0154); meanwhile the session keeps and sends its answer, or sends it after the restart. Any other
   command is denied: MIND runs none.

@@ -405,7 +405,7 @@ impl Agent {
         let body = wire::ack(&mut buf, ack.record.id.as_str(), json).ok()?.to_vec();
         let Some(status) = self.request(Method::Post, "/api/commands/ack", "", Some(&body)) else { return Some(Outcome::Retry) };
         let ok = status == 200 && self.answer(wire::ok_answer).is_ok();
-        mind::println!("EFFECTOR: ACK {} completed WITH ITS MEASUREMENT {}", ack.record.id.as_str(), if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
+        mind::println!("EFFECTOR: ACK {} completed WITH ITS RESULT {}", ack.record.id.as_str(), if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
         Some(session::outcome(status, ok))
     }
 
@@ -718,8 +718,14 @@ impl Agent {
             (Some(200), None) => Ok(()),
             _ => Err(Failure::Upload),
         };
-        match result.and_then(|()| match gateway::deliver_commit(GATEWAY, handle) { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) }) {
-            Ok(()) => Final::Completed,
+        match result.and_then(|()| match gateway::deliver_commit(GATEWAY, handle) { Ok(Ok(d)) => Ok(d), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) }) {
+            Ok(d) => {
+                // The answer names the file as the gateway read it back (750-EFF-0021); delivered either way.
+                let stdout = alloc::format!("delivered {} {} {}", d.path.as_str(), d.size, d.sha256.as_str());
+                let mut buf = [0u8; 1024];
+                let kept = wire::completed_result(&mut buf, &stdout).ok().is_some_and(|json| self.keep_result(id, json));
+                if kept { Final::Reported } else { Final::Completed }
+            }
             Err(f) => { let _ = gateway::close(GATEWAY, handle); Final::Failed(f) }
         }
     }

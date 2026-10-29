@@ -16,6 +16,9 @@
 //!
 //! 1.3 (750-EFF-0015): `connection`, what the session reports each heartbeat of its link to the server, so the gateway
 //! lights the agent's mark on the screen: grey unless connected and activated, then red or yellow by the policy.
+//!
+//! 1.4 (750-EFF-0021): `deliver-commit` answers with `delivered`, what the gateway read back from the file under its
+//! name once it was published, so the server gets the destination's own size and SHA-256 rather than a bare `ok`.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -25,7 +28,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:effector";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -161,6 +164,15 @@ impl Wire for RunReport {
     const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <Text<4096> as Wire>::MAX + <bool as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.status.encode(w)?; self.elapsed_ms.encode(w)?; self.output.encode(w)?; self.truncated.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { status: Wire::decode(r)?, elapsed_ms: Wire::decode(r)?, output: Wire::decode(r)?, truncated: Wire::decode(r)? }) }
+}
+
+/// A delivered file as read back under its name: its path, its size and its SHA-256 (64 hex digits).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Delivered { pub path: Text<256>, pub size: u64, pub sha256: Text<64> }
+impl Wire for Delivered {
+    const MAX: usize = <Text<256> as Wire>::MAX + <u64 as Wire>::MAX + <Text<64> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.path.encode(w)?; self.size.encode(w)?; self.sha256.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { path: Wire::decode(r)?, size: Wire::decode(r)?, sha256: Wire::decode(r)? }) }
 }
 
 /// The loaded policy, for the owner: its version, its SHA-256 (64 hex digits), its number of rules, and when it was
@@ -361,13 +373,20 @@ pub fn write(endpoint: Endpoint, handle: u32, offset: u64, data: &[u8]) -> Resul
     Ok(Ok(()))
 }
 
-/// Finishes a delivered file: checks its size and SHA-256, flushes it and gives it its name.
-pub fn deliver_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<(), Error>> {
-    let words = [11 | MAJOR << 8 | ((handle) as usize) << 16, 0];
-    let reply = wire::call(endpoint, words, None)?;
+/// Finishes a delivered file: checks its size and SHA-256, flushes it and gives it its name, then reads it back
+/// under that name; a read-back that differs is `digest`.
+pub fn deliver_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Delivered, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        handle.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 11 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    wire::check_reply(&reply, [0, 0], false)?;
-    Ok(Ok(()))
+    let length = wire::buffer_reply(&reply, 332, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Delivered as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Finishes a package: checks its size and SHA-256, then its signature and version, then does its action.
@@ -636,8 +655,12 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Write { handle, offset, data }, call))
         }
         11 => {
-            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
-            Ok((Request::DeliverCommit { handle: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
+            let (call, length) = wire::take_buffer(request, cap, 332, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let handle = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::DeliverCommit { handle }, call))
         }
         12 => {
             let (call, length) = wire::take_buffer(request, cap, 102, &mut *scratch)?;
@@ -756,9 +779,9 @@ pub fn reply_write(call: Call, value: core::result::Result<(), Error>) -> Result
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
 }
-pub fn reply_deliver_commit(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+pub fn reply_deliver_commit(call: Call, value: core::result::Result<&Delivered, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
-    wire::finish(call, [0, 0])
+    wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_package_commit(call: Call, value: core::result::Result<&PackageReport, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };

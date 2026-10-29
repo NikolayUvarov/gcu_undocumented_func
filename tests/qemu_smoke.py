@@ -8347,9 +8347,12 @@ def effector_actions_check(vm, server, agent, until, beats):
     delivery = b"delivered by the Effector fixture\n" * 2000
     published = server.publish(delivery, command_id="deliver-1")
     server.queue(agent, "deliver_file", {"path": "data/inbox/d.txt", "max_bytes": 1048576, "timeout_seconds": 60, **published}, command_id="deliver-1")
-    until("EFFECTOR: ACK deliver-1 completed ACCEPTED")
+    until("EFFECTOR: ACK deliver-1 completed WITH ITS RESULT ACCEPTED")
     listing = vm.command("ls data/inbox", raw=True)
     assert re.search(rf"d\.txt +{len(delivery)}\b", listing) and "d.txt.part" not in listing, listing
+    # The answer names the file as the gateway read it back under its name (750-EFF-0021).
+    receipt = server.operation("deliver-1")["result"]["stdout"]
+    assert receipt == f"delivered data/inbox/d.txt {len(delivery)} {hashlib.sha256(delivery).hexdigest()}", receipt
     server.publish(b"x", command_id="deliver-2")
     server.queue(agent, "deliver_file", {"path": "data/elsewhere.txt", "max_bytes": 10, "size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, command_id="deliver-2")
     until("EFFECTOR: ACK deliver-2 failed ACCEPTED")
@@ -8369,7 +8372,7 @@ def effector_actions_check(vm, server, agent, until, beats):
     # busy with it meanwhile; a result the server's AcceptPerformance takes.
     perf_id = server.queue(agent, "performance_measure", {"duration_seconds": 12, "timeout_seconds": 90})
     begun = time.monotonic()
-    out = until(f"EFFECTOR: ACK {perf_id} completed WITH ITS MEASUREMENT ACCEPTED", 120)
+    out = until(f"EFFECTOR: ACK {perf_id} completed WITH ITS RESULT ACCEPTED", 120)
     require(out, f"EFFECTOR: STARTED {perf_id} performance_measure (12 S)")
     r = server.operation(perf_id)["result"]
     assert r["status"] == "completed" and r["benchmark"] == "effector_bogomips_v1" and re.fullmatch(r"[0-9a-f]{16}", r["checksum"]), r

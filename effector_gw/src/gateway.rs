@@ -71,6 +71,8 @@ pub trait Machine {
     /// Flushes the temporary file and gives it `path`'s name; `replace` lets it take an existing file's place.
     fn publish(&mut self, path: &str, replace: bool) -> Result<(), Fail>;
     fn discard_temporary(&mut self, path: &str);
+    /// Reads a published file under its own name, below the policy's delivery root.
+    fn read_published(&mut self, path: &str, offset: u64, out: &mut [u8]) -> Result<usize, Fail>;
     /// One audit line, to the system log and the owner's audit file; false if it could not be written.
     fn audit(&mut self, line: &str) -> bool;
     /// The owner's policy file, read whole (at most `policy::FILE_MAX` + 1 bytes).
@@ -88,6 +90,22 @@ pub trait Machine {
 enum Out { Bytes(Vec<u8>), File(String) }
 struct Outgoing { handle: u32, command: String, size: u64, source: Out }
 struct Incoming { handle: u32, command: String, path: String, size: u64, sha256: [u8; 32], replace: bool, written: u64, hash: Sha256 }
+
+/// A delivered file as read back under its name (750-EFF-0021): what the server is told is what is there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Delivered { pub path: String, pub size: u64, pub sha256: [u8; 32] }
+
+/// A published file's size and SHA-256, read through to its end; reading stops past `limit` bytes.
+fn read_back(m: &mut dyn Machine, path: &str, limit: u64) -> Result<(u64, [u8; 32]), Fail> {
+    let (mut hash, mut buf, mut at) = (Sha256::new(), vec![0u8; CHUNK], 0u64);
+    while at <= limit {
+        let n = m.read_published(path, at, &mut buf)?;
+        if n == 0 { break; }
+        hash.update(&buf[..n]);
+        at += n as u64;
+    }
+    Ok((at, hash.finish()))
+}
 
 pub struct Gateway {
     policy: Option<Policy>,
@@ -323,15 +341,21 @@ impl Gateway {
     }
 
     /// Checks size and SHA-256, then publishes. Either way the transfer ends.
-    pub fn deliver_commit(&mut self, m: &mut dyn Machine, badge: Badge, handle: u32) -> Result<(), Fail> {
+    pub fn deliver_commit(&mut self, m: &mut dyn Machine, badge: Badge, handle: u32) -> Result<Delivered, Fail> {
         if badge != Badge::Session { return Err(Fail::Denied); }
         let Some(i) = self.inc.take() else { return Err(Fail::NotFound) };
         if i.handle != handle { self.inc = Some(i); return Err(Fail::NotFound); }
         let request = alloc::format!("deliver {} {} bytes", i.path, i.size);
         let o = Origin { command: &i.command, initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
-        let result = if i.written != i.size || i.hash.finish() != i.sha256 { Err(Fail::Digest) } else { m.publish(&i.path, i.replace) };
-        if result.is_err() { m.discard_temporary(&i.path); }
-        if !self.audited(m, Some(&o), &request, "commit", match &result { Ok(()) => "completed", Err(f) => fail_name(*f) }) && result.is_ok() {
+        let published = if i.written != i.size || i.hash.finish() != i.sha256 { Err(Fail::Digest) } else { m.publish(&i.path, i.replace) };
+        if published.is_err() { m.discard_temporary(&i.path); }
+        // Read back under its name: a file that differs from what was announced stays, and is reported as `digest`.
+        let result = published.and_then(|()| read_back(m, &i.path, i.size)).and_then(|(size, sha256)| {
+            if size == i.size && sha256 == i.sha256 { Ok(Delivered { path: i.path.clone(), size, sha256 }) } else { Err(Fail::Digest) }
+        });
+        // The audit's result field holds the read-back SHA-256's first 16 digits; the server gets all 64.
+        let outcome = match &result { Ok(d) => alloc::format!("completed {}", &hex(&d.sha256)[..16]), Err(f) => String::from(fail_name(*f)) };
+        if !self.audited(m, Some(&o), &request, "commit", &outcome) && result.is_ok() {
             // Published but not audited: the file stays, the request is reported as the audit failure it is.
             return Err(Fail::Audit);
         }
