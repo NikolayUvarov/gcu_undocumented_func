@@ -1138,7 +1138,7 @@ fn the_information_has_its_place() {
     // The drawing stays inside the block and puts the text's colour there.
     let (fw, fh) = (640, 400);
     let mut frame = vec![background::DARK; fw * fh];
-    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60 + 56), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], free: Some(336 << 20), total: None, battery: None, net: None }, &glyph);
+    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60 + 56), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], free: Some(336 << 20), total: None, battery: None, net: None, traffic: &[] }, &glyph);
     let ((bx, by, bw, bh), big, small) = layout(&c, fw, fh, 1, 100).unwrap();
     let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
     assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
@@ -1161,7 +1161,7 @@ fn the_information_has_its_place() {
     // The large digits' edge is the smaller lines' edge: "2026" and "12" both start in their glyph's second column.
     let edge = |f: &[u32], top: usize, tall: usize| (top..top + tall).flat_map(|py| (0..fw).filter(move |&px| f[py * fw + px] == text)).min().unwrap();
     let mut evening = vec![background::DARK; fw * fh];
-    overlay(&mut evening, fw, fh, 1, 100, &c, &Info { seconds: Some(20 * 3600), date: Some((2026, 10, 10)), cpu: &[10], free: None, total: None, battery: None, net: None }, &glyph);
+    overlay(&mut evening, fw, fh, 1, 100, &c, &Info { seconds: Some(20 * 3600), date: Some((2026, 10, 10)), cpu: &[10], free: None, total: None, battery: None, net: None, traffic: &[] }, &glyph);
     assert_eq!(edge(&evening, by, 16 * big), edge(&evening, by + 16 * big + gap, 16 * small), "20:00:00 over 2026-10-10");
     assert_eq!(background::memory_line(Some(336 << 20)), "MEM 336 MiB FREE");
     assert_eq!(background::memory_line(Some(47 << 30 | 1 << 29)), "MEM 47.5 GiB FREE");
@@ -1171,7 +1171,7 @@ fn the_information_has_its_place() {
     assert!(blue(text) < 0xA8 && blue(text) > blue(background::LIGHT) + 0x10, "{:06x}", text);
     assert!(blue(ink(80).0) > blue(text) + 0x40);
     let mut hidden = vec![background::DARK; fw * fh];
-    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], free: None, total: None, battery: None, net: None }, &glyph);
+    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], free: None, total: None, battery: None, net: None, traffic: &[] }, &glyph);
     let (none, _, _) = ink(0);
     assert!(hidden.iter().all(|&p| p == background::DARK || p == none));
 }
@@ -2161,6 +2161,56 @@ fn the_traffic_is_the_frames_a_second_between_two_samples() {
     assert_eq!(background::net_line((10, 10, 0), (15, 15, 6_000)), "NET IN 1/S OUT 1/S");
     assert_eq!(background::net_line((10, 10, 0), (11, 10, 3_000)), "NET IN 0/S OUT <1/S");
     assert_eq!(background::net_line((10, 10, 0), (10, 10, 3_000)), "NET IN 0/S OUT 0/S");
+}
+
+// 000-APP-0049: the graph over the last minute: the rates from two samples, its scale, the frames received up from
+// its middle line and the frames sent down from it.
+#[test]
+fn the_net_graph_shows_the_last_minute_both_ways() {
+    // Thousandths of frames a second: 60 received and 12 sent over two seconds; a restarted driver gives no rate.
+    assert_eq!(background::net_rates((100, 200, 1_000), (112, 260, 3_000)), (30_000, 6_000));
+    assert_eq!(background::net_rates((500, 500, 10), (3, 4, 10)), (0, 0));
+    assert_eq!(background::net_rates((10, 10, 0), (11, 10, 3_000)), (0, 333));
+    // The scale: the largest rate either way, rounded up to 1, 2 or 5 times a power of ten, 1 at least.
+    let scale = |most: u64| background::net_scale(&[(most, 0), (0, most / 2)]);
+    assert_eq!(background::net_scale(&[]), 1);
+    for (most, top) in [(0, 1), (333, 1), (1_001, 2), (3_000, 5), (10_000, 10), (11_000, 20), (60_000, 100), (100_000, 100), (250_000_000, 500_000)] {
+        assert_eq!(scale(most), top, "{} thousandths", most);
+    }
+    assert_eq!(background::net_scale(&[(0, 7_000)]), 10, "the frames sent count too");
+    assert_eq!(background::net_scale_line(5), "↑IN ↓OUT 0–5/S, 1 MIN");
+    assert_eq!(background::net_scale_line(50_000), "↑IN ↓OUT 0–50K/S, 1 MIN");
+    // The drawing: a full bar received at the oldest sample, half of one at the next, a full bar sent at the newest.
+    let c = Config { time: false, seconds: false, date: false, cpu: false, memory: false, battery: false, net: true, ..Config::default() };
+    let mut traffic = vec![(0, 0); 60];
+    (traffic[0], traffic[1], traffic[59]) = ((10_000, 0), (5_000, 0), (0, 10_000));
+    let (fw, fh) = (640, 400);
+    let mut frame = vec![background::DARK; fw * fh];
+    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { net: Some("NET IN 0/S OUT 10/S"), traffic: &traffic, ..Info::default() }, &glyph);
+    let ((bx, by, bw, bh), _, small) = layout(&c, fw, fh, 1, 100).unwrap();
+    let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
+    assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)), "drawn inside its block");
+    let (text, graph, _) = ink(c.info);
+    let (top, half, bar) = (by + 16 * small + 4, 24, 24 * 8 * small / 60);
+    let middle = top + half;
+    let at = |x: usize, y: usize| frame[y * fw + bx + x];
+    assert!((0..24 * 8 * small).all(|x| at(x, middle) == text), "the middle line");
+    let first = 24 * 8 * small - 60 * bar;
+    assert!((top..middle).all(|y| at(first, y) == graph) && at(first, middle + 1) != graph, "the oldest: received, full");
+    assert!((middle - 12..middle).all(|y| at(first + bar, y) == graph) && at(first + bar, middle - 13) != graph, "half of it");
+    let last = 24 * 8 * small - bar;
+    assert!((middle + 1..middle + 1 + half).all(|y| at(last, y) == graph) && at(last, middle - 1) != graph, "the newest: sent, full");
+    assert!((first + 2 * bar..last).all(|x| at(x, middle - 1) != graph && at(x, middle + 1) != graph), "no traffic between");
+    // The scale's line under the graph, in the text's colour.
+    assert!((middle + half + 2..by + bh).any(|y| (0..bw).any(|x| at(x, y) == text)), "the scale's line");
+    // No samples yet: the middle line alone, at the scale 1.
+    let mut empty = vec![background::DARK; fw * fh];
+    overlay(&mut empty, fw, fh, 1, 100, &c, &Info { net: Some("NET IN - OUT -"), ..Info::default() }, &glyph);
+    assert!(!empty.contains(&graph) && empty[middle * fw + bx] == text);
+    // The backdrop keeps a minute of them.
+    let (mut b, _) = Backdrop::new(c.clone(), (fw, fh), &mut |_| None);
+    for i in 0..70 { b.traffic_sample((i, 0)); }
+    assert_eq!((b.traffic.len(), b.traffic[0]), (60, (10, 0)));
 }
 
 // 000-APP-0049: the line's moves in the log, between still and traffic, so a suite sees `ping` move it.

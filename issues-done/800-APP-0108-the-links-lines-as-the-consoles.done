@@ -38,7 +38,7 @@ What the link may do in this mode is shown on the configurations tested only (MC
 
 ## Related
 
-- [800-APP-0102](../issues/800-APP-0102-the-shells-run-for-the-links-client.md): the link's client.
+- [800-APP-0102](800-APP-0102-the-shells-run-for-the-links-client.done): the link's client.
 - 800-LNK-0019: the link's part.
 - [750-APP-0105](750-APP-0105-the-mode-command.done): `mode`.
 
