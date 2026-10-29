@@ -1,6 +1,6 @@
 # 751-ASR-0013 — The remote update path: its threat model, and tests that it is refused whenever the permission is off
 
-**Type:** assurance · **Owner:** `ASR` · **Priority:** P1 · **Status:** open (2026-10-29) · **Blocked by:** the parts of [751](751-system-updates-at-a-developers-request.md) (`EFF`, `UPD`, `KRN`, `APP`) for the tests; nothing for the model · **Main task:** [751](751-system-updates-at-a-developers-request.md) · **Constitution:** MC-12.6, MC-7.5, MC-9.3, MC-9.4, MC-3.11, MC-10.3
+**Type:** assurance · **Owner:** `ASR` · **Priority:** P1 · **Status:** in progress (2026-10-29) · **Blocked by:** the parts of [751](751-system-updates-at-a-developers-request.md) (`EFF`, `UPD`, `KRN`, `APP`) for the tests; nothing for the model · **Main task:** [751](751-system-updates-at-a-developers-request.md) · **Constitution:** MC-12.6, MC-7.5, MC-9.3, MC-9.4, MC-3.11, MC-10.3
 
 ## Problem
 
@@ -8,7 +8,7 @@
 
 ## Plan
 
-1. **The threat model.** It goes into [351-ASR-0006](351-ASR-0006-update-threat-model.md)'s document as a section of its own. It covers:
+1. **The threat model,** [docs/assurance/remote-update-threats.md](../docs/assurance/remote-update-threats.md), apart from [351-ASR-0006](351-ASR-0006-update-threat-model.md)'s document, which is not in `main` yet. It covers:
    - **Who can turn the permission on:** only the console, the disk, and the cable with `link-remote-update`. Never the server, a policy line, the Mind or a program.
    - **What a server holding the agent's token can do while it is on:** install any release signed with keys the machine trusts.
    - **The test keys' risk.** With the public test release and boot keys trusted, as the maintainer's development disks do today, anyone who reaches the server installs any code.
@@ -24,6 +24,14 @@
    - with `link-remote-update` off, the link's `mode remote-update on` is refused;
    - a bundle signed with a key the machine does not trust is refused by `updater` with the word on;
    - a release below the floor is refused with the word on.
+
+## Progress
+
+- **2026-10-29, the model's first version** (0.1): [docs/assurance/remote-update-threats.md](../docs/assurance/remote-update-threats.md).
+  - Every attack is listed with the check asked of its track and the test asked here.
+  - The test keys' risk is stated: on the development disks the path installs anyone's code.
+  - Open: refusing the word on a disk that trusts the test keys.
+  - It is a design until the parts exist (MC-12.3). Review by `EFF`, `UPD` and `KRN` is asked on `internal-dev-messages`.
 
 ## Acceptance criteria
 
