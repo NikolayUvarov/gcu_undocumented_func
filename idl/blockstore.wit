@@ -8,19 +8,22 @@
 /// Several names change at once, all or none, and are read at one point (304-STO-0007, 1.3). The current names are
 /// listed by prefix, page by page (300-STO-0018, 1.4). A write says how far it reached, and 1.x is refused (307-STO-0019, 2.0).
 /// The records are sealed on the medium, and a volume key that does not open the superblock's check is refused (308-STO-0021, 2.1).
-package mind:blockstore@2.1.0;
+/// Memory domains, each with a key of its own, worked in through a client of their own and forgotten by destroying the key
+/// (308-STO-0023, 2.2). A scrub reads and checks every record, in idle steps and whole on request (309-STO-0025, 2.3).
+package mind:blockstore@2.3.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
-    /// (`mind::blockstore`: put and collect need BADGE_PUT; get, has, resolve, history, snapshot and names BADGE_GET;
-    /// publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins and usage any).
+    /// (`mind::blockstore`: put, collect and scrub need BADGE_PUT; get, has, resolve, history, snapshot and names
+    /// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any).
     /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
     /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
     /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
     /// owner would retain more than its quota; nothing is published or pinned (1.2). `key`: the store is not mounted,
     /// since its volume key does not open the superblock's check or comes from a source this build does not know; every
-    /// request gets it (2.1).
-    enum error { not-found, corrupt, full, too-large, read-only, device, unsupported, rights, invalid, conflict, incomplete, quota, key }
+    /// request gets it (2.1). `no-random`: no random source for a domain's key, which must not be derivable from anything
+    /// kept, or it could not be destroyed (2.2).
+    enum error { not-found, corrupt, full, too-large, read-only, device, unsupported, rights, invalid, conflict, incomplete, quota, key, no-random }
 
     /// What a block's bytes are: opaque (`raw`), or a node of an object (`dag-cbor`, `mind::dag`), checked before it is
     /// stored.
@@ -68,6 +71,14 @@ interface blockstore {
 
     /// A commit: the names' new versions, in order, and how far they reached (2.0).
     record committed { versions: list<u64, 8>, durability: durability }
+
+    /// A memory domain of the caller's owner: its number, and whether it is forgotten, until a collection has freed its
+    /// records (2.2).
+    record domain { id: u16, forgotten: bool }
+
+    /// What the last whole scrub found: the passes since the store started (0: none yet), the records read and checked,
+    /// those that did not open or are not whole, non-blank sectors outside every record, and how long ago it ended (2.3).
+    record scrubbed { passes: u32, records: u32, corrupt: u32, damaged: u64, ago-ms: u64 }
 
     /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
     /// stored is not written again. How far it reached is the medium's, in `stat`: a put is retained only by its lease
@@ -119,4 +130,30 @@ interface blockstore {
     /// with fewer than 16. Knowing a name grants nothing: reading its object needs the right still (MC-4.7). Error:
     /// invalid (`prefix` or `after` holds a byte no name has) (1.4).
     names: func(prefix: string<64>, after: string<64>) -> result<list<named, 16>, error>;
+
+    /// Makes a memory domain for the caller's owner, with a key of its own, random, kept in a record sealed under the
+    /// volume key (308-STO-0023); returns its number. Every other call works in the volume's own domain, or in the
+    /// domain of the client it comes through. Errors: no-random, full (32 domains, live and forgotten), read-only,
+    /// device; rights through a domain's client (2.2).
+    domain-create: func() -> result<u16, error>;
+    /// A client whose every call works in domain `id` of the caller's owner, with the caller's rights: the domain's
+    /// names, pins and blocks, sealed under its key. The same bytes in two domains are two blocks. The client ends when
+    /// the domain is forgotten or the store restarts. Errors: not-found (no such live domain), rights (another owner's
+    /// domain, or asked through a domain's client), full (64 domain clients), device (the store could not mint one) (2.2).
+    domain-client: func(id: u16) -> result<borrow<endpoint>, error>;
+    /// Forgets domain `id` of the caller's owner (MC-4.8): a tombstone is written, then its key record erased. Its
+    /// names, pins and blocks are gone at once and its clients revoked; its records never open again, and the next
+    /// collection frees them. Copies already read, and a flash medium's spare blocks, are outside this. Errors:
+    /// not-found, rights, full, read-only, device (2.2).
+    domain-forget: func(id: u16) -> result<_, error>;
+    /// The domains of the caller's owner (2.2).
+    domains: func() -> result<list<domain, 32>, error>;
+
+    /// Reads and checks every record of the medium now, as a mount does, and returns what it found; the caller, and every
+    /// other client, waits for the whole medium (MC-5.1). Each record that does not open or is not whole is logged; nothing is written or
+    /// repaired. Between requests the store scrubs by itself, about 256 sectors at a time, a pass a day.
+    /// Errors: device (2.3).
+    scrub: func() -> result<scrubbed, error>;
+    /// What the last whole scrub found, by itself or asked for (2.3).
+    scrubbed: func() -> result<scrubbed, error>;
 }

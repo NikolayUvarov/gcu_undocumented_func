@@ -19,6 +19,17 @@ With one volume key, nothing can be forgotten for sure: deleting a name leaves c
   - copies handed out before are outside this (MC-4.8), and that is said.
 - **Rights:** a client works in the domains its badge holds (MC-4.7). An interface change: `blockstore.wit` 3.0 or a minor version, as the design needs.
 
+## Decisions while building (2026-10-29)
+
+- **Layout 4,** with layout 3 refused by name: a build of layout 3 would read a domain's records as corrupt and free them.
+- **A key record** per domain (`MIND-KEY`: domain, state, owner, key), sealed under the volume key, its frame's domain 0xFFFF. A domain's records may lie before its key record. A mount scans once, and up to 64 such records wait to be opened at its end; past that it scans again, every key known. (A first version read the key records in a pass of their own, reading the medium twice. The aarch64 `vfs` suite's restart of the store on a disk holding a model then outran the command's wait.)
+- **Forgetting** writes a tombstone (the key record with state 2 and no key), then erases the key record. A mount that finds both erases the key record. A collection frees the domain's records, then the tombstone. A damaged key record leaves its domain unknown: its records are kept and counted corrupt, never freed.
+- **The interface is a minor version, `blockstore.wit` 2.2:** `domain-create`, `domain-client`, `domain-forget`, `domains` and the error `no-random`. Every earlier call keeps its form and works in the volume's domain, or in the domain of the client it comes through.
+  - A domain's client is minted by `blockstore` from its own endpoint, with a badge from 0x100 up and the asking client's rights; it ends when the domain is forgotten.
+  - So no client of another track changes (`fm` builds as it is). `init` only adds the badge right to the store's own endpoint, which minting needs (requests-KRN.md, 2026-10-29).
+- **The owner** is the badge, as for quotas: a domain is its creator's, and only that owner lends or forgets it.
+- **No domain without a random source.** A key derived from anything kept could not be destroyed. x86's qemu64 has no RDRAND, so the x86 `store` suite checks the refusal; the domains run in the aarch64 `store` suite (RNDR) and in the x86 store-disk check started with `+rdrand`.
+
 ## Acceptance criteria
 
 - Host tests:
