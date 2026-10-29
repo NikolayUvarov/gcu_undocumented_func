@@ -39,7 +39,7 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
 
 ## Progress (2026-10-29)
 
-- **Built** on the storage branch (86f68750), on top of 308-STO-0023's layout 4, so it lands with it, after [308-KRN-0184](308-KRN-0184-blockstore-badges-its-own-clients.md).
+- **Built** on the storage branch (86f68750), on top of 308-STO-0023's layout 4, so it lands with it, after [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done).
 - **A step** ends at the end of the record or the 33-sector window it is in, so a step covers about 256 sectors rather than at most 256.
 - **A whole pass on request** keeps every other client waiting too, as a collection does: requests are served one at a time.
 - **Tested:**
