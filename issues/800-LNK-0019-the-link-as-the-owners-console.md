@@ -1,6 +1,6 @@
 # 800-LNK-0019 — The link as the owner's console, in a mode the owner turns on: `link-console`
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-23) · **Blocked by:** `KRN`: `init` reads `link-console` in `data/mode.conf`; `APP`: the shell takes the link's lines as the console's in it (both asked on `internal-dev-messages`, 2026-10-23) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.11, MC-8.1, MC-12.3, MC-12.6
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-29) · **Blocked by:** — (`KRN`'s 800-KRN-0155 and `APP`'s 800-APP-0108 are in `main`) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.11, MC-8.1, MC-12.3, MC-12.6
 
 ## Problem
 
@@ -40,7 +40,7 @@ The maintainer's word, 2026-10-23: "effector and effector485 have to have equal 
 
 ## Acceptance criteria
 
-- [ ] **QEMU:**
+- [x] **QEMU:** (the `link` suite, x86, 4 CPUs, 2026-10-29)
   - the `link` suite with `dev` and `link-console`: `msh` of a script in `data/link/` runs and its lines are logged whole;
   - without the mode, the same line is refused, and `mode` is refused in both cases.
 - [ ] **On the MacBook Pro:** `msh /data/link/effector/start.msh` from `effector485` puts the agent's files in place, and the agent connects.
@@ -53,8 +53,16 @@ Evidence for the configurations named only (MC-12.1). What the cable may do in t
   - `init` takes `link-console` in `data/mode.conf` when `link.conf` has `dev`, and leaves it out otherwise;
   - `init.wit` 1.8 adds `link-console()`.
 - **2026-10-23, the script writes the word.** `scripts/build_and_write.sh --mode=` takes `link-console` beside `development` and `maintenance`, for example `--mode=maintenance,link-console`. It refuses the word without `--link-dev`, as `init` would leave it out. `docs/write-disk.md` and its Russian version say so.
-- **Still waiting:** `APP`'s part, the shell taking the link's lines as the console's, so scripts still cannot run over the cable. Then the QEMU link suite's checks.
+- **2026-10-28, `APP`'s part is in `main`** (800-APP-0108): the shell takes the link's lines as the console's in the mode: a script by its file and the network policy's changes, never `mode`.
+- **2026-10-29, the `link` suite's checks** (`tests/qemu_smoke.py`, on `main` 5a09c53d, x86, 4 CPUs, passed):
+  - **with `dev` and `link-console` in `data/mode.conf`:**
+    - `init` logs `MODE: LINK CONSOLE`;
+    - a script put over the link, `sh msh /data/link/console.msh`, runs, and its output comes back;
+    - `link` logs the whole line, and the shell logs `FOR THE LINK'S CONSOLE THE SHELL RAN MSH`;
+    - `mode` is refused;
+  - **with `dev` alone:** the same line is refused, and `mode` too.
+- **Left:** the MacBook Pro's run.
 
 ## Related
 
-[800-LNK-0015](800-LNK-0015-shell-commands-over-the-link.md), [800-LNK-0014](800-LNK-0014-build-and-write-in-the-repository.md) (`--mode=`), [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md), [750-EFF-0013](750-EFF-0013-development-and-maintenance-modes.md), `shell/src/clients.rs`, [docs/effector/README.md](../docs/effector/README.md).
+[800-LNK-0015](../issues-done/800-LNK-0015-shell-commands-over-the-link.done), [800-LNK-0014](800-LNK-0014-build-and-write-in-the-repository.md) (`--mode=`), [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md), [750-EFF-0013](750-EFF-0013-development-and-maintenance-modes.md), `shell/src/clients.rs`, [docs/effector/README.md](../docs/effector/README.md).

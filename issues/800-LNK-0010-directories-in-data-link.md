@@ -65,4 +65,4 @@ Evidence for the configurations named only (MC-12.1).
 
 ## Related
 
-[800-LNK-0001](../issues-done/800-LNK-0001-the-link-protocol.done), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md), [800-LNK-0011](800-LNK-0011-effector485.md), [docs/link/protocol.md](../docs/link/protocol.md).
+[800-LNK-0001](../issues-done/800-LNK-0001-the-link-protocol.done), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [800-LNK-0009](../issues-done/800-LNK-0009-programs-started-for-the-master.done), [800-LNK-0011](800-LNK-0011-effector485.md), [docs/link/protocol.md](../docs/link/protocol.md).
