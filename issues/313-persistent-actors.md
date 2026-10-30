@@ -14,6 +14,10 @@ From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-
 - **First users:** the agent module's sessions (260, `AGT`) and the messenger client's last event (950, `COM`). `tally` stays the pilot.
 - **Identity:** an actor's identity apart from its instance's generation and place (MC-6.12); "who is active" held as a name with compare-and-swap, so two instances never both take commands; a move to another machine through a copy of its store ([309](309-copies-scrub-and-repair.md)) and a rebind.
 
+## Tasks
+
+- [313-STO-0026](313-STO-0026-operation-ids-and-queues-in-a-checkpoint.md): operation IDs and queues in a checkpoint, manifest format 2, `tally` as the pilot.
+
 ## Acceptance criteria
 
 - Host: a stop at every point between an effect and its record, each reconciled.
