@@ -18,7 +18,8 @@
                                               one answer in LANDING/ naming each request landed, returned or superseded
 
 Requests are messages on `internal-dev-messages`: LANDING/<YYYY-MM-DDTHHMMZ>-<TRK>-ready-<name>.md with the line
-**Ready:** `<branch>` <commit>. Answers there name them in **Landed:**, **Returned:** or **Superseded:** lines.
+**Ready:** `<branch>` <commit>. Answers there name them in **Landed:**, **Returned:** or **Superseded:** lines; a
+request's own track takes it back with a **Withdraws:** line naming it.
 State: $LAND_WORK (default $TMPDIR/mind-land). Effector's API key: the file $EFFECTOR_KEY_FILE, sent only in the
 X-API-Key header and never printed (docs/effector.md, section 2). $LAND_TRAILER is appended to the merge messages.
 """
@@ -35,6 +36,7 @@ EFFECTOR = os.environ.get("EFFECTOR_URL", "https://hesere.uz/effector")
 
 REQUEST = re.compile(r"^\*\*Ready:\*\*\s+`?([^`\s]+)`?\s+([0-9a-f]{7,40})\b", re.M)
 ANSWER = re.compile(r"^\*\*(Landed|Returned|Superseded):\*\*\s+`?([^`\s]+\.md)`?", re.M)
+WITHDRAWN = re.compile(r"\*\*Withdraws:\*\*\s+`?(?:LANDING/)?([^`\s]+\.md)`?")
 SUMMARY = re.compile(r"^(PASS|FAIL)\s+(\d+)s\s+(.+?)\s*$", re.M)
 
 
@@ -50,6 +52,9 @@ def git(*args, cwd=None, check=True):
 def pending(files):
     """Requests not answered, oldest first, and the older requests of a branch that a newer one superseded."""
     answered = {name for text in files.values() for _, name in ANSWER.findall(text)}
+    # A withdrawal counts from the request's own track alone (round 58 took STO's withdrawn 1952Z).
+    track = lambda name: name.split("-")[3] if name.count("-") >= 3 else None
+    answered |= {gone for name, text in files.items() for gone in WITHDRAWN.findall(text) if track(gone) == track(name)}
     latest, superseded = {}, []
     for name in sorted(files):
         match = REQUEST.search(files[name])
