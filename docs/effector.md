@@ -1,6 +1,6 @@
 # Remote build and test machines through Effector
 
-**Version:** 1.3 (2026-10-23): renewing a reservation extends its command's run time, and a run has an hour after the reservation ends (rule 3); 1.2 (2026-10-23): a reservation's lease is no limit; an operation still ends at its `timeout_seconds` until the service stops cutting commands; work in parts of an hour or two, the maintainer's word (rule 3); 1.1 (2026-10-23): 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
+**Version:** 1.4 (2026-10-30): the MIND Core machines and their agents (section 1); 1.3 (2026-10-23): renewing a reservation extends its command's run time, and a run has an hour after the reservation ends (rule 3); 1.2 (2026-10-23): a reservation's lease is no limit; an operation still ends at its `timeout_seconds` until the service stops cutting commands; work in parts of an hour or two, the maintainer's word (rule 3); 1.1 (2026-10-23): 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
 
 The maintainer lends agents real machines for builds and tests through **Effector**, a service that runs commands on registered computers.
 
@@ -113,6 +113,24 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - the host tests: `scripts/models.py` and `tests/models_host.rs` read TOML with `tomllib` (Python 3.11). `scripts/ci_local.sh` now names it among the missing tools for the host part. Run the host part on un-rizen or i9;
   - the Effector suites: `tests/effector_server.py` answers 400 to every POST without a query, as Python 3.10's `parse_qs` refuses an empty query in strict mode (`issues/requests-EFF.md`). The groups with them, x86 "boot, display, network, TLS, shell, memory, clock" and aarch64 "files, network and TLS", run elsewhere until EFF's fix.
 - **Setting up another machine.** `scripts/setup_build_env.sh` installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone. Run it once as root, for example from Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
+
+### The MIND Core machines (1.4)
+
+These run MIND Core itself with its own agent (`effector` and `effector_gw`, main task 750), not Linux. They are for checks on real hardware, never for builds or gates.
+
+| Agent ID | What it is | What its agent does | Use |
+|---|---|---|---|
+| `mind_353abc18de2dbd0e` (`mind-mbp2`, host name `mind-macbook-pro`) | MacBook Pro A1398 (2012, Core i7-3615QM, 8 GB), MIND Core from a USB stick, on Wi-Fi (BCM4331: slow, with frame loss) | what the owner's policy there allows of contract 1.3 ([protocol.md](effector/protocol.md)): `exec` `health`; `screenshot`; `collect_logs` `ring` and `boot` with `program_name` "MIND Core"; `collect_file` and `deliver_file` under the owner's roots; the services the policy names; `performance_measure` | Checks of MIND Core on the Mac. It is shared with the cable's runs (`effector485`, the `LNK` track). |
+| `mind_09dca8b4def0f6e6` (host name `mind-n100`) | the maintainer's DEXP desktop, MIND Core from a USB stick, on Wi-Fi (RTL8821CE) | the same, by its own owner's policy | Checks of MIND Core on the DEXP. |
+
+- **Everything else is refused** (`denied`):
+  - `exec` other than `health`, and `reboot` under the owner's `reboot on`. So there are no shell lines yet: the test account's `msh` (501) is not built;
+  - `deploy`;
+  - `update_agent`, until 751.
+- **One command at a time.** While an answer waits for the server to take it, the agent takes no new command.
+  - A large log over the Mac's Wi-Fi can hold it for an hour (750-EFF-0025).
+  - Give `collect_logs` `boot` there `timeout_seconds` of 300 or more, or collect `ring`.
+- **Restarts and services** go only as far as the owner's policy allows. Not on a machine another track is using: say so on `internal-dev-messages` first.
 
 ## 2. The key
 
