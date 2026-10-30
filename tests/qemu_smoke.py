@@ -1288,6 +1288,7 @@ def shell_suite(vm):
     vm.process.stdin.flush()
     vm.expect("WROTE 180 BYTES TO ram:serial.txt", timeout=20)  # with its newline
     require(vm.command("cat ram:serial.txt"), marker)
+    require(vm.command("rm ram:serial.txt"), "OK")  # msh's sum of ram: below counts every file there
     vm.output = ""
     # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
     keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
