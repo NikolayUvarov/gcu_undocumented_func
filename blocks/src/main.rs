@@ -29,6 +29,8 @@ mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE | REQUEST_PA
 static CLIENT: AtomicUsize = AtomicUsize::new(SLOT_BLOCKSTORE);
 const DOMAIN_CLIENT: usize = SLOT_BLOCKSTORE_READ;
 pub(crate) fn store() -> Endpoint { Endpoint(CLIENT.load(Ordering::Relaxed)) }
+// Whether the commands work in a memory domain (`-d`).
+pub(crate) fn in_domain() -> bool { CLIENT.load(Ordering::Relaxed) == DOMAIN_CLIENT }
 
 static mut BUILDER: Builder = Builder::new();
 static mut BUFFER: [u8; CHUNK] = [0; CHUNK];

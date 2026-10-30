@@ -9,7 +9,7 @@ use mind::idl::blockstore;
 use mind::idl::codec::Text;
 
 use crate::models::hex;
-use crate::{report, store, store_silent, Remote};
+use crate::{in_domain, report, store, store_silent, Remote};
 
 const USAGE: &str = "Usage: blocks export <file> <name>... | import [--check] <file>";
 
@@ -68,6 +68,8 @@ impl Target for Output<'_> {
 
 pub fn command<'a>(which: &str, mut words: impl Iterator<Item = &'a str>, buffer: &mut [u8; CHUNK], data: &mut [u8; CHUNK], remote: &mut Remote) {
     match (which, words.next()) {
+        // A copy is not sealed, and would outlive the domain's forgetting (308-STO-0023).
+        ("export", Some(_)) if in_domain() => mind::println!("blocks: export: a memory domain is not copied: its copy would be in the clear and outlive its forgetting"),
         ("export", Some(path)) => {
             // One more than a copy holds, so that many is refused by mind::car as too many.
             let mut names = [""; car::NAMES + 1];
