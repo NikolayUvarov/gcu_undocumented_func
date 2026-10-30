@@ -116,6 +116,18 @@
     "APP nnd selecting the two KRN-granted VFS scopes",
     "Native nncheck/model IPC suite: independent outputs, budgets, controlled cancellation/deadline, two clients, numeric failure/new session, badge retirement/reuse and memory after unload"
   ],
-  "handoff": "verification ready; delivery recorded in task resolution",
+  "handoff": {
+    "commit": "0e9cbf216813482abc8299cb3f96ea545b3b7328",
+    "messages": {
+      "APP": {
+        "path": "APP/2026-10-30T1156Z-NRL-portable-importer-checked-on-70-live-exports.md",
+        "commit": "c1f27331972af3bb85fd628e3acd4a0aa1475df7"
+      },
+      "KRN": {
+        "path": "KRN/2026-10-30T1156Z-NRL-nnd-boot-recognized-portable-handoff-verified.md",
+        "commit": "09f9a97fade3fd9334d05f11395907cbcda656c3"
+      }
+    }
+  },
   "limits": "No OS profile entry added; T11 remains open. Portable service-accounting release is not measured native heap/page release. Optional expanded study not rerun."
 }
