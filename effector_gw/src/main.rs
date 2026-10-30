@@ -43,6 +43,9 @@ fn vfs_fail(e: vfs::Error) -> Fail {
         vfs::Error::NoSpace => Fail::Bounds,
         vfs::Error::Invalid | vfs::Error::Name | vfs::Error::IsDirectory => Fail::Malformed,
         vfs::Error::Io | vfs::Error::Handles => Fail::Io,
+        // `vfs.wit` 2.6's `conflict` (another writer published the file first) and any later code: the write failed (311-EFF-0024)
+        #[allow(unreachable_patterns)]
+        _ => Fail::Io,
     }
 }
 
