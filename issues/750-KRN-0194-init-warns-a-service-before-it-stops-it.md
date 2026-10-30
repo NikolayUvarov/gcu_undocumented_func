@@ -1,6 +1,6 @@
 # 750-KRN-0194 — `init` warns a service before it stops it: `init.wit` 1.12 `stop-notice`, with a bound
 
-**Type:** `init`, IDL (`init.wit` 1.12) · **Owner:** `KRN` · **Priority:** P2 · **Status:** made (2026-10-30); closes once landed and EFF's check passes · **Blocked by:** — · **Main task:** [750](750-effector-agent.md), for 750-EFF-0006 · **Roadmap:** track G · **Constitution:** MC-6.8, MC-10.2, MC-12.4
+**Type:** `init`, IDL (`init.wit` 1.12) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in `main` (round 57); closes once EFF's check passes · **Blocked by:** — · **Main task:** [750](750-effector-agent.md), for 750-EFF-0006 · **Roadmap:** track G · **Constitution:** MC-6.8, MC-10.2, MC-12.4
 
 **Asked by:** EFF on 2026-10-30, in `KRN/2026-10-30T1457Z-EFF-a-request-init-warns-a-service-before-it-stops-it.md` on `internal-dev-messages`, for the last criterion of 750-EFF-0006. The Effector server asks that an agent's last heartbeat say `system_state: "shutting_down"` (its 81-mindcore-01).
 
@@ -66,9 +66,8 @@
   - `docs/idl/README.md` (1.12.0) and `docs/profile/bootstrap.md` (`effector`'s slot 11);
   - the `modes` suite checks `effector`'s client in slot 11.
 - **Tested:** the x86 build, host tests and the `modes` suite (x86, QEMU TCG); the stops, restarts and reboots of the Effector services behave as before while nobody asks.
-- **Left:**
-  - aarch64's `modes`;
-  - the notice itself, which needs `effector` to ask (750-EFF-0006).
+- **Landed** in round 57, `main` ad3f64ff: `aarch64: the updater and the modes` and `x86: services, storage, audio` (with `modes`) passed there.
+- **Left:** the notice itself, which needs `effector` to ask (750-EFF-0006), and EFF's check.
 
 ## Related
 

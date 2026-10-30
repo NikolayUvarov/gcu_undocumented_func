@@ -41,4 +41,4 @@ STO offered two ways in: (a) `vfs_server` forwards the volumes it does not hold,
 
 ## Related
 
-[311](311-storefs-a-file-face.md), 311-STO-0032, [311-KRN-0189](311-KRN-0189-a-conflict-error-in-vfs-wit.md), [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done).
+[311](311-storefs-a-file-face.md), 311-STO-0032, [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done), [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done).
