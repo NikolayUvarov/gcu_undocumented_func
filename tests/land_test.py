@@ -23,6 +23,13 @@ def test_requests_and_answers():
     requests, superseded = land.pending(files)
     assert requests == [("2026-10-21T1200Z-LNK-ready-link-again.md", "claude/LNK-link", "0123abcd")], requests
     assert superseded == ["2026-10-21T1000Z-LNK-ready-link.md"], superseded
+    # A track takes its own request back; another track's line withdraws nothing.
+    files["2026-10-21T1500Z-STO-ready-store.md"] = "**Ready:** `claude/STO-store` 1111111\n"
+    files["2026-10-21T1510Z-STO-ready-tally.md"] = "**Ready:** `claude/STO-tally` 2222222\n"
+    files["2026-10-21T1520Z-STO-withdrawn-store.md"] = "**From:** STO · **Withdraws:** `LANDING/2026-10-21T1500Z-STO-ready-store.md`\n"
+    files["2026-10-21T1530Z-APP-withdrawn-tally.md"] = "**Withdraws:** `2026-10-21T1510Z-STO-ready-tally.md`\n"
+    requests, _ = land.pending(files)
+    assert [r[0] for r in requests] == ["2026-10-21T1200Z-LNK-ready-link-again.md", "2026-10-21T1510Z-STO-ready-tally.md"], requests
 
 
 def test_text_only():
