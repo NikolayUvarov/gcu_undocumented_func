@@ -5,6 +5,8 @@
 //! the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
 //! may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
 //! Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
+//! A client badged `BADGE_NOTICE` (the Effector agent's, 1.12, 750-KRN-0194) may ask `stop-notice` and what any client
+//! may ask; it gets `denied` (`rights` for `run`) for every lifecycle change.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -14,7 +16,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 11, 0);
+pub const VERSION: (u8, u8, u8) = (1, 12, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -109,6 +111,21 @@ impl Configuration {
     pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Absent), 1 => Some(Self::Read), 2 => Some(Self::Ignored), 3 => Some(Self::Unreadable), _ => None } }
 }
 impl Wire for Configuration {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// Why the caller is about to be stopped (1.12, 750-KRN-0194): `stop` by name, `restart` (by name, `replace` or the
+/// machine's restart), or `power-off`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum StopReason { #[default] Stop = 0, Restart = 1, PowerOff = 2 }
+impl StopReason {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Stop), 1 => Some(Self::Restart), 2 => Some(Self::PowerOff), _ => None } }
+}
+impl Wire for StopReason {
     const MAX: usize = 1;
     fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
@@ -294,6 +311,18 @@ pub fn configuration(endpoint: Endpoint) -> Result<core::result::Result<Configur
     Ok(Ok(Configuration::from_code(wire::field(&reply, 0, 16, 8)).ok_or(SysError::Invalid)?))
 }
 
+/// Waits until init decides to stop the caller, and says why (1.12, 750-KRN-0194). The caller then has 2 s to end on
+/// its own; that end is not restarted, and past the 2 s init kills it as before. Only a running boot service may ask,
+/// and init holds one call for each: a second one replaces the first, which is answered `failed`. Errors: denied (not
+/// a running boot service), failed.
+pub fn stop_notice(endpoint: Endpoint) -> Result<core::result::Result<StopReason, Error>> {
+    let words = [14 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xff0000, 0x0], false)?;
+    Ok(Ok(StopReason::from_code(wire::field(&reply, 0, 16, 8)).ok_or(SysError::Invalid)?))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -310,6 +339,7 @@ pub enum Request {
     LinkConsole,
     BootPlan,
     Configuration,
+    StopNotice,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -406,6 +436,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Configuration, Call::words(request, cap)))
         }
+        14 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::StopNotice, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -459,6 +493,10 @@ pub fn reply_boot_plan(call: Call, value: core::result::Result<&[Planned], Error
     wire::reply_buffer(call, |w| codec::encode_slice::<Planned, 64>(value, w))
 }
 pub fn reply_configuration(call: Call, value: core::result::Result<Configuration, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_stop_notice(call: Call, value: core::result::Result<StopReason, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [((value) as usize) << 16, 0])
 }

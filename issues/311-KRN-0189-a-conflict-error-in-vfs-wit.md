@@ -1,6 +1,6 @@
 # 311-KRN-0189 — `vfs.wit` 2.6: an error `conflict`, for a write another writer published before
 
-**Type:** service interface (`idl/vfs.wit`, `libmind` `fs`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** an arm for the new error in the shell (APP, [requests-APP.md](requests-APP.md)) and in `effector_gw` (EFF, [requests-EFF.md](requests-EFF.md)), each in `main` or in the same landing round · **Main task:** [311](311-storefs-a-file-face.md) (STO's), for 311-STO-0032 · **Constitution:** MC-11.10, MC-12.4
+**Type:** service interface (`idl/vfs.wit`, `libmind` `fs`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** made (2026-10-30); closes once landed · **Blocked by:** — (the arms are in `main`: the shell's 311-APP-0116, `effector_gw`'s 311-EFF-0024) · **Main task:** [311](311-storefs-a-file-face.md) (STO's), for 311-STO-0032 · **Constitution:** MC-11.10, MC-12.4
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-30, "`storefs`: started by `init`, reached by a files client, and a `conflict` error in `vfs.wit`", and in its message to KRN of 10:53.
 
@@ -26,6 +26,16 @@
 - A host test: `mind::fs` maps `conflict` to `Error::Conflict`.
 - Every program builds, x86 and aarch64. The groups `files and block writes` (x86) and `files and the block store` (aarch64) pass unchanged: `vfs_server` answers as before.
 - STO's `storefs` answers `conflict` on the wire. That is 311-STO-0032's criterion; this task only makes it expressible.
+
+## Progress
+
+- **2026-10-30, made:**
+  - `idl/vfs.wit` 2.6.0 appends `conflict`, code 12; `libmind/src/idl/vfs.rs` is regenerated.
+  - `mind::fs::Error::Conflict` is mapped from it. Toward a system error code it becomes `Invalid`, through the mapping's last arm.
+  - Every other user has a last arm: the shell's `files::text` ("REFUSED"), `effector_gw`'s `vfs_fail` (`io`) and `link`'s `io` (`IO`).
+  - `tests/idl_fuzz_host.rs`: code 12 decodes as `Conflict` and 13 is refused; `mind::fs` maps every code to the error of its own name, read from `libmind/src/fs.rs`.
+  - `docs/idl/README.md`: the row reads 2.6.0 and names 2.5's `adopt`.
+- **Left:** the gate's builds of every program and its files groups, x86 and aarch64.
 
 ## Related
 

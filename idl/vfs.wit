@@ -4,11 +4,12 @@
 /// from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
 /// the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files and the model disk `models` are never writable. Major
 /// version 2: directory handles change the meaning of `open` and `list` of 1.0.
-package mind:vfs@2.5.0;
+package mind:vfs@2.6.0;
 
 interface vfs {
-    /// Why a request failed.
-    enum error { not-found, exists, not-empty, invalid, denied, no-space, read-only, io, handles, name, not-directory, is-directory }
+    /// Why a request failed. `conflict` (2.6, 311-KRN-0189): another writer published the file first, so the caller reads
+    /// it again before it writes; a store that publishes by compare-and-swap answers it, and `vfs_server` never does.
+    enum error { not-found, exists, not-empty, invalid, denied, no-space, read-only, io, handles, name, not-directory, is-directory, conflict }
 
     /// An entry of a directory, or what `stat` reports. `modified` is FAT date << 16 | FAT time; `attributes` are
     /// `mind::fs::ENTRY_*` bits.
