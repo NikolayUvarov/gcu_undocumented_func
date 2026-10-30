@@ -50,6 +50,15 @@
   - without `dev`, the keys are refused, logged, and none reaches it;
   - with `dev`, the same until KRN's grant, with a SKIP naming it; afterwards it checks the events `sendkey` would give.
 
+**Tested** (LEG9, WSL2, Ubuntu 24.04; QEMU on the host):
+- **Host tests:**
+  - `linkproto`: 23 tests, 2 of them new: INPUT over a lossy line, and its bounds;
+  - `mindlink`'s keys against PS/2's events;
+  - `mindlink` and `effector485` against `mindlink serve`, which refuses keys;
+  - all of `scripts/host_tests.sh`.
+- **Builds:** the x86 and aarch64 images, and `mindlink` and `effector485` for Linux and Windows, without warnings.
+- **The QEMU `link` suite, x86 and aarch64:** PASS. Both refusals are checked, and the check that keys arrive SKIPs until KRN's grant. The suite now runs on aarch64 too (`rtc.elf` from the tested architecture's image), though it is in no aarch64 CI group.
+
 **Open:**
 - `KRN`'s grant of the input capability to `link` in `dev`;
 - the positive QEMU check, which turns on by itself with that grant;
