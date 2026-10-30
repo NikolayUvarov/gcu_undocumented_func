@@ -39,7 +39,7 @@ struct Done { slot: u8, dci: u8, code: u32, residue: u32 }
 
 const QUEUE: usize = 8;
 /// An interrupt IN endpoint being polled and the reports it gave since they were last taken.
-// `lossless` (a bulk IN endpoint, 800-DRV-0034): a transfer goes back on the ring only while the queue has room for its
+// `lossless` (a bulk IN endpoint, 800-DRV-0034; a Bluetooth controller's events, 700-DRV-0047): a transfer goes back on the ring only while the queue has room for its
 // packet, so the device holds what does not fit (NAK) instead of the oldest report being dropped; `in_flight` counts the
 // transfers on the ring.
 pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool, reported: bool, lossless: bool, in_flight: usize }
