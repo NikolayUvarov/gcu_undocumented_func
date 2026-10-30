@@ -339,6 +339,9 @@ impl Builder {
         Self { chunk: [0; CHUNK], filled: 0, total: 0, levels: [[empty; FANOUT]; LEVELS], counts: [0; LEVELS], node: [0; NODE_MAX] }
     }
 
+    /// Starts a new object: what was written since `new`, a `finish` or a refusal is dropped (311-STO-0032).
+    pub fn reset(&mut self) { (self.filled, self.total, self.counts) = (0, 0, [0; LEVELS]); }
+
     pub fn write<B: Blocks>(&mut self, blocks: &mut B, mut data: &[u8]) -> Result<(), Error> {
         self.total = self.total.checked_add(data.len() as u64).ok_or(Error::TooLarge)?;
         while !data.is_empty() {

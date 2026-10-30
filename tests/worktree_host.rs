@@ -3,7 +3,7 @@
 //! Every edit, its refusals and the reads that see it; the bounds refused with `Full` and nothing changed; a
 //! write-out's root walks, and what no edit touched keeps its CID; of two writers from one version the second is told
 //! of the conflict and publishes nothing; a medium stopped at each write of a publication leaves the old root or the
-//! new one, never a mix.
+//! new one, never a mix. A file replaced in one edit, for storefs (311-STO-0032).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -273,6 +273,56 @@ fn each_edit_is_read_at_once_and_refused_against_its_rules() {
 }
 
 #[test]
+fn a_replace_puts_a_new_version_of_a_file_in_one_edit() {
+    // 311-STO-0032: storefs stores a written file in place of the one it read.
+    let mut medium = Memory::new();
+    let mut room = Room::new();
+    let mut store = mount(&mut medium, &mut room);
+    let (a, _) = object(&mut store, b"alpha");
+    let (big, big_size) = object(&mut store, &pattern(2, 2 * CHUNK + 9));
+    let mut wt = Box::new(Worktree::new());
+    for dir in ["docs", "docs/deep"] { wt.mkdir(&mut store, dir).unwrap(); }
+    wt.put(&mut store, "docs/a", &a, 5).unwrap();
+    wt.put(&mut store, "docs/z", &a, 5).unwrap();
+    // In place of a file: the entries keep their number and order.
+    wt.replace(&mut store, "docs/a", &big, big_size).unwrap();
+    assert_eq!((wt.lookup(&mut store, "docs/a"), wt.lookup(&mut store, "docs")), (Ok(file(big, big_size)), Ok(held(3))));
+    let mut names = Vec::new();
+    wt.list(&mut store, "docs", |name, _| names.push(name.to_vec())).unwrap();
+    assert_eq!(names, [b"a".to_vec(), b"deep".to_vec(), b"z".to_vec()]);
+    // Under a name not taken, as a put.
+    wt.replace(&mut store, "docs/deep/new", &a, 5).unwrap();
+    assert_eq!((wt.lookup(&mut store, "docs/deep/new"), wt.lookup(&mut store, "docs/deep")), (Ok(file(a, 5)), Ok(held(1))));
+    // Refused, each with nothing changed: a directory there, a missing parent, a file where a directory belongs, an
+    // object not stored or not of the size given, a name refused, the root.
+    refused(&mut wt, &mut store, Error::Exists, |w, s| w.replace(s, "docs/deep", &a, 5));
+    refused(&mut wt, &mut store, Error::NotFound, |w, s| w.replace(s, "none/a", &a, 5));
+    refused(&mut wt, &mut store, Error::NotDirectory, |w, s| w.replace(s, "docs/a/x", &a, 5));
+    refused(&mut wt, &mut store, Error::Store(dag::Error::NotFound), |w, s| w.replace(s, "docs/a", &Cid::raw(b"never stored"), 12));
+    refused(&mut wt, &mut store, Error::Store(dag::Error::Shape), |w, s| w.replace(s, "docs/a", &a, 4));
+    refused(&mut wt, &mut store, Error::Name, |w, s| w.replace(s, "docs/..", &a, 5));
+    refused(&mut wt, &mut store, Error::Name, |w, s| w.replace(s, "", &a, 5));
+    // Published, then replaced in the stored tree: the directories down to it are written, and every other CID stays.
+    let (_, root) = wt.publish(&mut store, "home").unwrap();
+    let before = contents(&mut store, &root);
+    wt.replace(&mut store, "docs/deep/new", &big, big_size).unwrap();
+    assert_eq!(wt.held().0, 3);
+    let (_, root) = wt.publish(&mut store, "home").unwrap();
+    let after = contents(&mut store, &root);
+    assert_eq!(after["/docs/deep/new"], (File, big_size, big));
+    for (path, entry) in &before {
+        if !["/docs", "/docs/deep", "/docs/deep/new"].contains(&path.as_str()) { assert_eq!(after[path], *entry, "{path}"); }
+    }
+    assert_eq!(complete(&mut store, &root), 2 * big_size + 5);
+    // Past DIRS, a stored directory is not held for a replace either.
+    let mut wt = Box::new(Worktree::new());
+    wt.start(Some(root), 2);
+    for k in 0..DIRS - 1 { wt.mkdir(&mut store, &format!("d{k:02}")).unwrap(); }
+    refused(&mut wt, &mut store, Error::Full, |w, s| w.replace(s, "docs/z", &big, big_size));
+    wt.replace(&mut store, "d00/z", &big, big_size).unwrap();
+}
+
+#[test]
 fn the_bounds_are_refused_with_full_and_nothing_changed() {
     let mut medium = Memory::new();
     let mut room = Room::new();
@@ -469,7 +519,7 @@ fn random_edits_read_and_publish_as_a_model_of_them_does() {
     let objects: Vec<(Cid, u64)> = (0..3).map(|k| object(&mut store, &pattern(k, 1 + k * 1000))).collect();
     let (mut model, mut rng, mut wt) = (Model::new(), Rng(0x2545_f491_4f6c_dd1d), Box::new(Worktree::new()));
     for step in 0..2400 {
-        let (op, p, f) = (rng.below(4), rng.path(), objects[rng.below(3)]);
+        let (op, p, f) = (rng.below(5), rng.path(), objects[rng.below(3)]);
         // A move's target: any path, or a name of four in a directory that exists.
         let dirs: Vec<&String> = model.iter().filter(|(_, v)| v.is_none()).map(|(k, _)| k).collect();
         let q = match (rng.below(2), ["a", "b", "c", "d"][rng.below(4)]) {
@@ -484,6 +534,7 @@ fn random_edits_read_and_publish_as_a_model_of_them_does() {
                 Some(None) if below(&model, &p).next().is_some() => Err(Error::NotEmpty),
                 _ => Ok(()),
             }),
+            4 => parent(&model, &p).and_then(|()| if model.get(&p) == Some(&None) { Err(Error::Exists) } else { Ok(()) }),
             _ => parent(&model, &p).and_then(|()| match model.get(&p) {
                 None => Err(Error::NotFound),
                 Some(None) if q.starts_with(&format!("{p}/")) => Err(Error::Inside),
@@ -495,12 +546,13 @@ fn random_edits_read_and_publish_as_a_model_of_them_does() {
             0 => wt.put(&mut store, &p, &f.0, f.1),
             1 => wt.mkdir(&mut store, &p),
             2 => wt.remove(&mut store, &p),
-            _ => wt.rename(&mut store, &p, &q),
+            3 => wt.rename(&mut store, &p, &q),
+            _ => wt.replace(&mut store, &p, &f.0, f.1),
         };
         assert_eq!(done, wanted, "step {step}: {op} {p} {q}");
         match (done, op) {
             (Err(_), _) => assert_eq!(wt.held(), held),
-            (Ok(()), 0) => { model.insert(p, Some(f)); }
+            (Ok(()), 0 | 4) => { model.insert(p, Some(f)); }
             (Ok(()), 1) => { model.insert(p, None); }
             (Ok(()), 2) => { model.remove(&p); }
             (Ok(()), _) => {

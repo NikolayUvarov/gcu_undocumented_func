@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not started (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -82,7 +82,7 @@ A directory is a set of named files and subdirectories under one root CID (`libm
   - The store's walk is the tree's. A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`.
   - **A walk in the store takes at most four steps for each block its index can hold, and 64 more.** A tree that needs more is refused as out of shape (`invalid`), with nothing written. So a walk's work is bounded by the medium's size (MC-5.1). By count, not run here: a 3 GiB object of distinct chunks takes about 199 000 steps of the about 790 000 its index's 225 654 slots give. A collection marks every block a retained directory reaches, so a directory's files are retained by the name or pin that holds it.
   - An owner is charged the bytes of the files under a directory it retains; a mount reads them again with `tree::size`.
-- **Not built yet:** `storefs` (a `vfs.wit` provider). On the platform, `blocks tree` makes and reads directories through a working tree (next section).
+- **Not built yet:** the `storefs` service (a `vfs.wit` provider); its logic is host-tested (below). On the platform, `blocks tree` makes and reads directories through a working tree (next section).
 
 Evidence: host tests of the code, not a proof (MC-12.2).
 - `tests/tree_host.rs`:
@@ -103,10 +103,10 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 A writer changes a published tree through a **working tree** (`libmind/src/worktree.rs`), the second step of [311](../../issues/311-storefs-a-file-face.md). A published root is never changed in place (MC-4.9): the edits are made in memory and published as a new root.
 
 - **It starts** from the root a name's version gave, and that version; none and 0 are the empty tree of a new name.
-- **Edits:** put a file (an object the store holds, with its size: its root is read and the size checked), make a directory, remove a file or an empty directory, move an entry. A path is names separated by `/`, each one a name a directory node takes; a leading `/` is allowed, and the root is the empty path. Each refusal changes nothing:
+- **Edits:** put a file (an object the store holds, with its size: its root is read and the size checked), replace a file with another in one edit (or put it under a name not taken; 311-STO-0032), make a directory, remove a file or an empty directory, move an entry. A path is names separated by `/`, each one a name a directory node takes; a leading `/` is allowed, and the root is the empty path. Each refusal changes nothing:
   - a name a directory refuses, or the root where an edit needs an entry (`Name`);
   - a missing parent (`NotFound`), a file where a directory belongs (`NotDirectory`);
-  - a name taken (`Exists`): a put does not replace a file, a removal and a put do, in one publication;
+  - a name taken (`Exists`): a put does not replace a file, a replace does, and a replace does not take a directory's place;
   - a directory removed with entries (`NotEmpty`), or moved into itself or under it (`Inside`).
 - **What it holds:** each directory an edit changed, with every directory above it, as its node; what no edit touched stays in the store. **Reads** (lookup and list) see the edits and read the rest from the store. A held directory has no CID until it is written out.
 - **Bounds.** It holds at most 64 directories (`DIRS`) and 64 KiB of their nodes and names (`BYTES`). An edit past them is refused (`Full`) with nothing changed, until a publication lets them go. A directory over a block, or more than 32 directories down from the root, is refused (`TooLarge`). A move checks the depth of the place it goes to, not the height of what it moves: a tree too deep is refused by the store's walk at the publication (`invalid`), and nothing is published. The tree takes about 85 KiB, so a program keeps it in a static.
@@ -120,7 +120,7 @@ A writer changes a published tree through a **working tree** (`libmind/src/workt
   - `cat <name> <path> <file>` copies a file out, every block checked, and prints `READ <n> BYTES SHA-256 <hex>`;
   - `put <name> <file> <path>`, `mkdir <name> <path>`, `rm <name> <path>`, `mv <name> <from> <to>` print `PUBLISHED <name> VERSION <v> ROOT <cid> (<durability>)`, or `CONFLICT <name>: READ AT VERSION <r>, NOW AT <c>; ROOT <cid> NOT PUBLISHED`;
   - a change reads the name's current version, or a version the name keeps, given as the last word (0: the empty tree of a new name). A test plays a second writer so.
-- **Not built yet:** `storefs`, sharded directories, and changes to several names at once from working trees (a commit).
+- **Not built yet:** sharded directories, and changes to several names at once from working trees (a commit). `storefs`'s logic is the next section.
 
 Evidence: host tests of the code, not a proof (MC-12.2).
 - `tests/worktree_host.rs`, through the store's own logic on a simulated medium:
@@ -129,13 +129,54 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - a write-out's root decodes and walks (`tree::walk`) with every block stored; an edit deep in one subtree writes the directories down to it and no others, and every other CID stays;
   - of two writers from one version, the second is told of the conflict with both versions, and nothing of it is published. A collection after the lease frees its nodes, and every version kept stays whole;
   - a medium stopped at each write of a publication, the write not made or only its first sector, mounts with the old root or the new one, each whole, never a mix;
-  - 2400 random edits read, and publish, as a model of them does.
+  - 2400 random edits, replaces among them, read and publish as a model of them does;
+  - a replace keeps the directory's entries and their order, is refused as the other edits are, and past `DIRS` holds no stored directory.
 - The QEMU `store` suite (x86 and aarch64):
   - `blocks tree` makes two directories and three files under a name, one of them two blocks under a node, and lists them;
   - each file reads back, its SHA-256 checked by the suite, and the name's history holds each root;
   - a change read at an older version is refused as a conflict, and the name is unchanged;
   - once the leases have ended, a collection frees the refused tree's root, and every file is still read;
   - a move and two removals are published, and a directory with entries is not removed.
+
+## Files over the store: `storefs` — host-tested, built into the image; no service runs yet, waiting for the kernel track (311-STO-0032)
+
+`storefs/src/fs.rs` is the logic of a service that is to serve `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues/311-storefs-a-file-face.md). `storefs/src/main.rs` answers `vfs.wit` 2.5's calls with it, and is built into the x86 and aarch64 images as `storefs.elf`. Nothing starts it yet: its start by `init` with a client of the store, and the clients it lends, are 311-KRN-0190; an error `conflict` in `vfs.wit` 2.6 is 311-KRN-0189.
+
+- **How a files client reaches it** (the kernel track's answer, 2026-10-30): `mind::fs` asks `vfs_server` first, and asks `storefs` for a volume `vfs_server` answers `not-found`, if the program holds a client of it. So `storefs` answers `not-found` for the boot disk's empty name, `ram`, `log` and `models`, whatever their case; any other volume `v` is the store's name `fs/<v>`.
+- **A volume** is 1 to 16 bytes of `A-Z a-z 0-9 . _ -`, its case ignored, and none of `vfs_server`'s; another name is `not-found`. Its tree is the name `fs/<volume>`, in lower case.
+- **`root`** opens a tree of its own, a working tree (above) at the name's current version, or the empty tree if the name has none. The handles opened from it share that tree.
+- **A tree follows its name:** before each call on it, a tree that holds no unpublished data moves to the name's current version if another writer published since. Its open files are read again at their paths, and a handle whose entry is gone, or no longer a file or a directory as it was, is closed, as a removal closes it. A tree that holds unpublished data stays at the version it read until it publishes.
+- **Handles** belong to the client that opened them, by its PID and badge: another client's request with one is `invalid`. Whether a root may write is the service's predicate over the client's badge and the volume. A handle never allows more than the one it came from: `write`, `create` and `truncate` need a directory handle that may write, and a file handle may write only if opened with `write`. A path never leaves its handle's directory: `.` and `..` are `invalid`.
+- **Reads** go to the store through the working tree, every block checked against its CID. `list` gives at most 16 entries from an index, in the order of the names; an empty page is the end. A file open in the tree is listed, and `stat`ed, with the size written to it.
+- **A change of a directory is one publication** by the name's compare-and-swap, made by the call itself: `open-dir` with `create` (every directory it makes), `open` that makes or empties a file, `remove` and `rename`. A removal closes the handles of what it removes, and the handles of what moves follow it.
+- **A file's data** is held as the chunks of 16 KiB it changed; the rest is read from the object it was. The handles of one file in one tree share what is written. At the file's `flush` or `close`, through a handle that may write, it is stored as an object, put in the tree in place of the old one in one edit, and published. A directory's `flush` stores every file written below it and publishes them in one version. A file the working tree cannot hold for its bounds is put after the files before it are published, so that flush publishes twice. A flush through a handle that may not write publishes nothing.
+- **A conflict:** if another writer published since the tree was read, nothing is published, and the call that would have published is told (`Conflict`). The tree drops what it did not publish and moves to the name's current version, never merging. A file whose written data was dropped so answers the same conflict to every call until it is closed, and its `close` closes it. The writer then makes its change again from the current version. What a refused publication stored is retained by nothing, and a collection frees it once its lease (60 s) has ended.
+- **Bounds,** each refused with nothing changed:
+  - a file is at most 64 MiB (`FILE_MAX`) after a write or a truncation: `no-space`;
+  - 4 trees (`TREES`), 64 handles (`HANDLES`) and 32 open files (`FILES`), and a client (PID and badge) holds at most half of each: 2 trees, 32 handles, 16 files: `handles`;
+  - 16 chunks of written files at once (`CHUNKS`, 256 KiB), a client at most 8 (128 KiB), until a flush lets them go; the working tree's `DIRS` and `BYTES`: `no-space`;
+  - a handle's path of 512 bytes (`PATH`), a directory over a block, a tree past 32 directories: `no-space`.
+
+  The state takes 786 KiB, all zeros when new, so a program keeps it in `.bss`.
+- **Errors** are the logic's own, each with the error of `vfs.wit` 2.5 that says it. A conflict is `io` until `vfs.wit` 2.6 has `conflict`: nothing of the write was stored under the name, as for a write that did not reach a medium.
+- **The service** answers `check`, `scope`, `format`, `fill` and `adopt` with `denied`: they are `vfs_server`'s. `volume` gives the label `MIND STORE`, no FAT type and no room (the store's own `stat` says it), and a chunk as the cluster. A directory's size is 0, as on FAT, and no time stamps are kept (`modified` is 0). Until 311-KRN-0190, the user's badge writes every volume and every other badge reads, and the store's client is looked for where a program's is (`SLOT_BLOCKSTORE`); its first line is `[STOREFS] READY …`.
+- **Not run yet:** the service, and its files client in `mind::fs` (the kernel track's).
+
+Evidence: host tests of the code, not a proof (MC-12.2).
+- `tests/storefs_host.rs`, through the store's own logic on a simulated medium:
+  - `root` (refusing `vfs_server`'s volumes), `open-dir` (directories made on the way), `open` by each mode, `read`, `write` with a gap read as zeros, `truncate` shorter and longer, `stat`, `list` sixteen at a time, `remove`, `rename` across directory handles, `volume`, and their refusals; each change of a directory one version of the name, and a file's data published at its close;
+  - a file of three chunks and more, written in pieces, flushed and read back by SHA-256 through its handle, another client's root and the store alone; changed across a chunk's end, and read so through a reader's open file; 400 random writes, truncations and flushes read as a model of them does;
+  - the flush of a directory stores the files written below it and publishes them in one version; a directory's changes are published with no flush;
+  - a reader's open root, file and directory follow a writer's publications, and its handles of what the writer removed are closed; a tree holding unpublished data stays at its version;
+  - of two writers from one version, the second is told of the conflict, `io` on the wire, and the name keeps the first writer's tree and versions; the second tree drops its data and reads the new version, its other handle that held data answers the conflict to every call until closed, and it writes again and publishes;
+  - a directory made, a move and a removal each refused on its own call by a conflict, with nothing published, and made once the tree followed the name;
+  - a medium stopped at each write of a flush, the write not made or only its first sector, mounts with the old root or the new one, each whole, never a mix;
+  - every call with a handle of another PID, or of another badge, is `invalid`; a volume the badge may not write refuses every change; a handle opened to read refuses a write;
+  - each bound refused with nothing changed: `FILE_MAX` for a write and a truncation, each table and each client's share of it, the chunks, the path, a path of 32 directories refused at the last leaving none; three files that the working tree cannot hold at once published in two versions;
+  - a second client gets its share of trees, handles, files and chunks while the first holds its own;
+  - a volume whose root is not a directory is refused;
+  - the error mapping, checked against the generated `vfs.wit` 2.5 enum.
+- `tests/dag_host.rs`: a builder reset between objects makes each one as a new builder does.
 
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
 

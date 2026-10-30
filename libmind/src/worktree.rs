@@ -240,6 +240,25 @@ impl Worktree {
         })
     }
 
+    /// Puts the file `cid` of `size` bytes, an object the store holds, at `path` in place of the file there, or under a
+    /// name not taken: one edit, so a new version of a file never leaves it missing (311-STO-0032). A directory there is
+    /// Exists.
+    pub fn replace<B: Blocks>(&mut self, blocks: &mut B, path: &str, cid: &Cid, size: u64) -> Result<(), Error> {
+        let (parent, name) = Path::parse(path)?.split()?;
+        if dag::size(blocks, cid, &mut self.buffer)? != size { return Err(dag::Error::Shape.into()); }
+        self.edit(|w| {
+            let k = w.hold(blocks, parent)?;
+            let mut plan = Plan::new();
+            plan.at(k).add = Some(Entry { name, kind: Kind::File, size, cid: *cid });
+            match w.get(blocks, Place::Held(k), name)? {
+                Some((Kind::File, ..)) => plan.at(k).out = Some(name),
+                Some(_) => return Err(Error::Exists),
+                None => w.grow(&mut plan, k, parent, 1),
+            }
+            w.apply(&plan)
+        })
+    }
+
     /// Makes an empty directory at `path`: in a directory that exists, under a name not taken, at most `tree::DEPTH`
     /// directories down from the root.
     pub fn mkdir<B: Blocks>(&mut self, blocks: &mut B, path: &str) -> Result<(), Error> {
@@ -488,10 +507,10 @@ fn position(dir: &Dir, name: &[u8]) -> Result<usize, usize> {
 fn rewrite(node: &[u8], change: &Change, out: &mut [u8; CHUNK]) -> Result<(usize, usize), Error> {
     let dir = tree::decode(node)?;
     let gone = match change.out { Some(name) => Some(position(&dir, name).map_err(|_| Error::NotFound)?), None => None };
-    // Where the new entry goes among those left.
+    // Where the new entry goes among those left: in place of the one taken out under its name (a replace).
     let at = match change.add {
         Some(e) => {
-            let at = position(&dir, e.name).err().ok_or(Error::Exists)?;
+            let at = match position(&dir, e.name) { Err(at) => at, Ok(at) if gone == Some(at) => at, Ok(_) => return Err(Error::Exists) };
             Some(if gone.is_some_and(|g| g < at) { at - 1 } else { at })
         }
         None => None,
