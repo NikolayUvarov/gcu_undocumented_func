@@ -12,8 +12,9 @@
 // Between requests it scrubs the medium, a step at a time, a pass a day; a client may ask for a whole pass (309-STO-0025).
 mod store;
 
-// store.rs names these as crate::cid, crate::dag and crate::sha256, so the host tests build it from the libmind files.
-use mind::{cid, dag, sha256};
+// store.rs names these as crate::cid, crate::dag, crate::sha256 and crate::tree, so the host tests build it from the
+// libmind files.
+use mind::{cid, dag, sha256, tree};
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
