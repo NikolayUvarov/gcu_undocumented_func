@@ -215,6 +215,10 @@ fn each_call_does_what_vfs_wit_says() {
         let e = fs.stat(s, USER, r).unwrap();
         assert_eq!((e.name(), e.kind, e.size), (&b""[..], Directory, 0));
         for bad in ["", "a/b", "seventeen-bytes-x", "a b"] { assert_eq!(fs.root(s, USER, bad, writable), Err(Error::NotFound), "{bad:?}"); }
+        // vfs_server's volumes are not storefs's, whatever their case: a files client asks vfs_server first.
+        for theirs in ["ram", "log", "models", "RAM", "Models"] { assert_eq!(fs.root(s, USER, theirs, writable), Err(Error::NotFound), "{theirs}"); }
+        assert_eq!(fs::VFS_VOLUMES, ["ram", "log", "models"]);
+        assert_eq!(fs.held(), (1, 1, 0, 0));
 
         // Directories: made on the way with `create`, a path without names the directory itself.
         let deep = fs.open_dir(s, USER, r, "/docs//deep/", true).unwrap();
@@ -615,7 +619,7 @@ fn a_clients_handles_are_its_own_and_none_allows_more_than_the_one_it_came_from(
         // A client that ended: its handles are closed, and what it did not publish is dropped.
         write_all(&mut fs, s, USER, f, 0, b"lost");
         let before = fs.held();
-        assert_eq!(fs.forget(USER.pid), 5);
+        assert_eq!(fs.forget(|pid| pid == USER.pid), 5);
         assert_eq!(fs.held(), (before.0 - 5, before.1 - 2, before.2 - 1, 0));
         assert_eq!(fs.stat(s, USER, r), Err(Error::Invalid));
         assert_eq!(published(s, "fs/home"), (1, BTreeMap::from([("notes".into(), Err(b"mine".to_vec()))])));

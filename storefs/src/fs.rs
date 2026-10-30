@@ -27,6 +27,10 @@ pub const PATH: usize = 512;
 pub const PAGE: usize = 16;
 /// Bytes of a volume's name at most (`vfs.wit`'s `string<16>`).
 pub const VOLUME_MAX: usize = 16;
+/// The volumes vfs_server holds, never storefs's: a files client asks vfs_server first, and storefs for a volume
+/// vfs_server answers `not-found` (the kernel track's way (b), 2026-10-30). So these, and the boot disk's empty name, are
+/// NotFound here.
+pub const VFS_VOLUMES: [&str; 3] = ["ram", "log", "models"];
 /// `open`'s mode bits, as `vfs.wit` has them: write, create, truncate, refuse an existing file.
 pub const WRITE: u8 = 1;
 pub const CREATE: u8 = 2;
@@ -180,10 +184,11 @@ impl Fs {
 
     /// The root of `volume` for `client`: a tree of its own, read at the current version of the name `fs/<volume>` (none:
     /// the empty tree), that may write if `writable` says so of the client's badge and the volume. A volume is 1 to
-    /// VOLUME_MAX bytes of `A-Z a-z 0-9 . _ -`, its case ignored; another name is NotFound.
+    /// VOLUME_MAX bytes of `A-Z a-z 0-9 . _ -`, its case ignored, and none of VFS_VOLUMES; another name is NotFound.
     pub fn root<S: Blocks + Roots>(&mut self, store: &mut S, client: Client, volume: &str, writable: impl Fn(u16, &str) -> bool) -> Result<u32, Error> {
         let bytes = volume.as_bytes();
         if bytes.is_empty() || bytes.len() > VOLUME_MAX || !bytes.iter().all(|&c| c.is_ascii_alphanumeric() || b"._-".contains(&c)) { return Err(Error::NotFound); }
+        if VFS_VOLUMES.iter().any(|v| v.eq_ignore_ascii_case(volume)) { return Err(Error::NotFound); }
         let h = self.free()?;
         let t = self.views.iter().position(|v| v.users == 0).ok_or(Error::Handles)?;
         let mut view = View { users: 0, len: bytes.len(), volume: [0; VOLUME_MAX] };
@@ -446,10 +451,12 @@ impl Fs {
         published
     }
 
-    /// Closes every handle of the client `pid`, one that has ended, without publishing; returns how many.
-    pub fn forget(&mut self, pid: u64) -> usize {
-        let gone = (0..HANDLES).filter(|&h| self.handles[h].used && self.handles[h].pid == pid).count();
-        for h in 0..HANDLES { if self.handles[h].used && self.handles[h].pid == pid { self.release(h); } }
+    /// Closes every handle of the clients that have ended, by `ended` of their PIDs, without publishing; returns how many.
+    pub fn forget(&mut self, ended: impl Fn(u64) -> bool) -> usize {
+        let mut gone = 0;
+        for h in 0..HANDLES {
+            if self.handles[h].used && ended(self.handles[h].pid) { self.release(h); gone += 1; }
+        }
         gone
     }
 

@@ -138,11 +138,12 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - once the leases have ended, a collection frees the refused tree's root, and every file is still read;
   - a move and two removals are published, and a directory with entries is not removed.
 
-## Files over the store: `storefs` — host-tested; no service runs yet, waiting for the kernel track (311-STO-0032)
+## Files over the store: `storefs` — host-tested, built into the image; no service runs yet, waiting for the kernel track (311-STO-0032)
 
-`storefs/src/fs.rs` is the logic of a service that is to serve `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues/311-storefs-a-file-face.md). Nothing runs it yet: its start by `init`, how a files client reaches it and an error `conflict` in `vfs.wit` are asked of the kernel track ([requests-KRN.md](../../issues/requests-KRN.md), "`storefs`").
+`storefs/src/fs.rs` is the logic of a service that is to serve `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues/311-storefs-a-file-face.md). `storefs/src/main.rs` answers `vfs.wit` 2.5's calls with it, and is built into the x86 and aarch64 images as `storefs.elf`. Nothing starts it yet: its start by `init` with a client of the store, and the clients it lends, are 311-KRN-0190; an error `conflict` in `vfs.wit` 2.6 is 311-KRN-0189.
 
-- **A volume** is 1 to 16 bytes of `A-Z a-z 0-9 . _ -`, its case ignored; another name is `not-found`. Its tree is the name `fs/<volume>`, in lower case.
+- **How a files client reaches it** (the kernel track's answer, 2026-10-30): `mind::fs` asks `vfs_server` first, and asks `storefs` for a volume `vfs_server` answers `not-found`, if the program holds a client of it. So `storefs` answers `not-found` for the boot disk's empty name, `ram`, `log` and `models`, whatever their case; any other volume `v` is the store's name `fs/<v>`.
+- **A volume** is 1 to 16 bytes of `A-Z a-z 0-9 . _ -`, its case ignored, and none of `vfs_server`'s; another name is `not-found`. Its tree is the name `fs/<volume>`, in lower case.
 - **`root`** opens a tree of its own, a working tree (above) at the name's current version, or the empty tree if the name has none. The handles opened from it share that tree, which stays at that version until it publishes; a later `root` reads a later one.
 - **Handles** belong to the client that opened them, by its PID and badge: another client's request with one is `invalid`. Whether a root may write is the service's predicate over the client's badge and the volume. A handle never allows more than the one it came from: `write`, `create` and `truncate` need a directory handle that may write, and a file handle may write only if opened with `write`. A path never leaves its handle's directory: `.` and `..` are `invalid`.
 - **Reads** go to the store through the working tree, every block checked against its CID. `list` gives at most 16 entries from an index, in the order of the names; an empty page is the end. A file open in the tree is listed, and `stat`ed, with the size written to it.
@@ -159,11 +160,12 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 
   The state takes 786 KiB, all zeros when new, so a program keeps it in `.bss`.
 - **Errors** are the logic's own, each with the error of `vfs.wit` 2.5 that says it. A conflict is `io` until `vfs.wit` 2.6 has `conflict`: nothing of the write was stored under the name, as for a write that did not reach a medium.
-- **Not built yet:** the service and its files client (the kernel track's), `check`, `scope`, `format`, `fill` and `adopt`, and time stamps (`modified` has none to give).
+- **The service** answers `check`, `scope`, `format`, `fill` and `adopt` with `denied`: they are `vfs_server`'s. `volume` gives the label `MIND STORE`, no FAT type and no room (the store's own `stat` says it), and a chunk as the cluster. A write that would make a file larger than 4 GiB − 1 byte (`vfs.wit`'s `u32` sizes) is `no-space`. A directory's size is 0, as on FAT, and no time stamps are kept (`modified` is 0). Until 311-KRN-0190, the user's badge writes every volume and every other badge reads, and the store's client is looked for where a program's is (`SLOT_BLOCKSTORE`); its first line is `[STOREFS] READY …`.
+- **Not run yet:** the service, and its files client in `mind::fs` (the kernel track's).
 
 Evidence: host tests of the code, not a proof (MC-12.2).
 - `tests/storefs_host.rs`, through the store's own logic on a simulated medium:
-  - `root`, `open-dir` (directories made on the way), `open` by each mode, `read`, `write` with a gap read as zeros, `truncate` shorter and longer, `stat`, `list` sixteen at a time, `remove`, `rename` across directory handles, `volume`, and their refusals;
+  - `root` (refusing `vfs_server`'s volumes), `open-dir` (directories made on the way), `open` by each mode, `read`, `write` with a gap read as zeros, `truncate` shorter and longer, `stat`, `list` sixteen at a time, `remove`, `rename` across directory handles, `volume`, and their refusals;
   - a file of three chunks and more, written in pieces, flushed and read back by SHA-256 through its handle, another client's root and the store alone; changed across a chunk's end; 400 random writes, truncations and flushes read as a model of them does;
   - the flush of a directory stores the files written below it and publishes every edit of the tree in one version; edits whose tree was closed first are not published;
   - of two writers from one version, the second is told of the conflict, `io` on the wire, and the name keeps the first writer's tree and versions; the second tree reads its own changes, its flush is refused again, and a later root reads the new version;
