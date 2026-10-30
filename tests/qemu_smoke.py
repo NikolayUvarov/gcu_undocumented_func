@@ -6361,6 +6361,7 @@ def update_suite(args):
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
                                        "channel stable\nautomatic apply\nevery 20\ntries 3\n")
+    (layout / "update0.msh").write_text("#!msh\nupdate status\n")  # 351-APP-0029: without `requires: lifecycle`
     image = boot_slots.Image.create(temp / "update.img", layout)
     first = boot_slots.records(image.path)
     (server / "channels/stable").write_bytes(channel(6, 5, "2020-01-01T00:00:00Z"))
@@ -6465,6 +6466,20 @@ def update_suite(args):
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/B/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        # 351-APP-0029: the shell's `update` shows the updater's view and the channel it holds (update.wit 1.1), says
+        # check's refusal, asks before a rollback and is refused to a script without `requires: lifecycle`.
+        out = vm.command("update", raw=True, timeout=60)
+        for line in ("UPDATE: RUNNING SLOT B, VERSION 6\n", "UPDATE: THE NEWER BOOT RECORD NAMES SLOT B, CONFIRMED", "UPDATE: CHANNEL stable: VERSION 6, MINIMUM 5, EXPIRES "):
+            require(out.replace("\r", ""), line)
+        require(out, ", READ FROM THE SOURCE")
+        require(vm.command("update check", raw=True, timeout=60), "UPDATE: THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE")
+        require(vm.command("update apply 10", raw=True), "USAGE: UPDATE [STATUS | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]")
+        vm.send("update rollback\n")
+        require(vm.expect("(Y/N)", timeout=30), "ROLL BACK TO SLOT A? ")
+        vm.send_bytes(b"n")
+        require(vm.expect("MIND> ", timeout=30), "UPDATE: NOT ROLLED BACK")
+        require(vm.command("msh /update0.msh", raw=True), "SCRIPT FAILED: update needs `requires: lifecycle` in the script (LINE 2)")
+        assert "[SHELL] UPDATE ROLLBACK" not in vm.command("dmesg -s shell", raw=True)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -6505,6 +6520,17 @@ def update_suite(args):
             require(log, line)
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
+        # 351-APP-0029: `update` names the channel kept in slot A, expired; `apply` asks about the release slot B holds
+        # from before the restart, and declined, writes nothing.
+        out = vm.command("update", raw=True, timeout=60)
+        for line in ("UPDATE: RUNNING SLOT A, VERSION 5", "UPDATE: CHANNEL stable: VERSION 5, ", ", KEPT IN THE RUNNING SLOT, NOT READ FROM THE SOURCE",
+                     "UPDATE: THE CHANNEL HAS EXPIRED, OR THE CLOCK CANNOT BE READ: FETCH AND APPLY WAIT FOR A CURRENT ONE, ROLLBACK STAYS POSSIBLE"):
+            require(out, line)
+        vm.send("update apply 2\n")
+        require(vm.expect("(Y/N)", timeout=30), "APPLY THE RELEASE IN SLOT B (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 2 TRIES, FALLING BACK TO SLOT A.")
+        vm.send_bytes(b"n")
+        require(vm.expect("MIND> ", timeout=30), "UPDATE: NOT APPLIED")
+        assert "[UPDATER] APPLY:" not in vm.command("dmesg -s updater", raw=True)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -6517,8 +6543,11 @@ def update_suite(args):
           "its applications are in slot B, "
           "the one it changed fetched and the others copied from slot A, and the trial runs them from there; release 6's minimum "
           "raises the version floor to 6, and a record booting slot A's release 5 boots slot B instead; booted back in "
-          "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
-          "is consistent", flush=True)
+          "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the shell's "
+          "`update` shows the updater's view and the channel it holds, read from the source, then kept and expired, says "
+          "check's refusal, asks before a rollback and an apply, which declined write nothing, and is refused to a script "
+          "without requires: lifecycle (351-APP-0029); "
+          "the file system is consistent", flush=True)
 
 
 def install_suite(args, stub_elf):
