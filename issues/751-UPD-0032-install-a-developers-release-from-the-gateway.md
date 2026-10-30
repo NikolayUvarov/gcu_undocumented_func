@@ -69,7 +69,7 @@
     - `apply` (the word asked again) boots slot B on trial, and the trial is confirmed.
   - The two refusals the plan put on the host (`digest`, `signature`) are checked here, where the updater's built-in keys are.
   - **x86: passed** locally in QEMU (about 3 minutes, 2026-10-30).
-- **Fixed on the way:** the updater received its requests with no slot for a caller's buffer, so the first buffer call (`install-begin`) was refused `invalid`. It now receives into slot 9, as the other services do; the stand-in too.
+- **Fixed on the way:** the updater received its requests with no slot for a caller's buffer, so the first buffer call (`install-begin`) was refused `invalid`. It now receives into slot 9, as the other services do; the stand-in too. This is also the tools track's request of 2026-10-28 in [requests-UPD.md](requests-UPD.md): `check`, `status` and `metadata` lend a buffer too, and 351-APP-0029 waited for it.
 
 **Left:**
 - the `install` suite on aarch64;
