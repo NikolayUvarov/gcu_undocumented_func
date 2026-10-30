@@ -98,7 +98,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - a directory node is stored and found again by a mount, and a `dag-cbor` block of neither schema is refused;
   - a tree that takes one step more than the store gives is refused for a publication, a pin and a commit, and one within is published.
 
-## A working tree — host-tested, run in QEMU on x86 (311-STO-0029)
+## A working tree — host-tested, run in QEMU on x86 and aarch64 (311-STO-0029)
 
 A writer changes a published tree through a **working tree** (`libmind/src/worktree.rs`), the second step of [311](../../issues/311-storefs-a-file-face.md). A published root is never changed in place (MC-4.9): the edits are made in memory and published as a new root.
 
@@ -221,7 +221,7 @@ Evidence:
 
 Not tested on the platform: the scrub between requests, whose first pass starts a day after the mount. Its steps are the host tests' steps; its pacing is not measured.
 
-## Copies in a file — host-tested, run in QEMU on x86 (309-STO-0031)
+## Copies in a file — host-tested, run in QEMU on x86 and aarch64 (309-STO-0031)
 
 A copy of named roots in a file (`libmind/src/car.rs`, the second step of [309](../../issues/309-copies-scrub-and-repair.md)) brings back names a store lost, and repairs blocks a scrub or a read found damaged. It needs no second medium lent to the store: it is made and used by hand, with `blocks`.
 
@@ -267,8 +267,8 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - a name at another root is left and reported, a removed one is published again, one at the copy's root is left; a name another writer published between the read and the publication is a conflict, or the same at the copy's root;
   - a copy with a bad section, wherever it is, or cut short, puts nothing (no write on the medium); one that changed between its check and its import publishes nothing;
   - an export refuses names that do not exist or are removed, are not the store's, are given twice or are more than 8, and a root with a damaged or missing block.
-- The QEMU `storefaults` suite (x86): `obj` exported to `ram:` is the CAR v1 the suite writes from the specifications, byte for byte (its SHA-256). A chunk damaged on the medium is found by `blocks scrub` and repaired by `blocks import` of that copy (1 repaired, the damaged copy collected); the next scrub finds nothing, and the object reads back whole.
-- The QEMU `store` suite (x86): a tree and a file under two names exported to the boot volume; after a reboot, with the store's RAM disk blank, an import publishes each at its root and every file reads back (its SHA-256 checked by the suite). An import again changes nothing, and a name published since at another root is left as it is.
+- The QEMU `storefaults` suite (x86 and aarch64): `obj` exported to `ram:` is the CAR v1 the suite writes from the specifications, byte for byte (its SHA-256). A chunk damaged on the medium is found by `blocks scrub` and repaired by `blocks import` of that copy (1 repaired, the damaged copy collected); the next scrub finds nothing, and the object reads back whole.
+- The QEMU `store` suite (x86 and aarch64): a tree and a file under two names exported to the boot volume; after a reboot, with the store's RAM disk blank, an import publishes each at its root and every file reads back (its SHA-256 checked by the suite). An import again changes nothing, and a name published since at another root is left as it is.
 
 Not run on aarch64 yet.
 

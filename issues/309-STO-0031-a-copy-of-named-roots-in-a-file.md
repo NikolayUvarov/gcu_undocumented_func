@@ -51,7 +51,11 @@ The store keeps one copy on one medium. A damaged block is found by a read or a 
   - `tests/car_host.rs` (9 tests), and `tree`, `worktree`, `dag`, `checkpoint`, `cid`, `blockstore` pass; `scripts/host_tests.sh` whole exits 0;
   - the QEMU `store` and `storefaults` suites (x86) pass, the two new checks among them.
 - **The tests can fail:** with `Reader::next`'s check against the CID left out, three host tests fail; with a name at another root published over, the conflict test fails (experiments on copies of `car.rs`).
-- **Not done here:** aarch64; the profile (README, evidence), which is the session's to update.
+- **Merged by the session:**
+  - on aa352f88, a memory domain's export is refused (a copy is in the clear and would outlive the domain's forgetting), checked in the `store` suite where domains are made (aarch64);
+  - `store`, `storefaults` and `vfs` pass on `un-rizen_2a8b108d5593` through Effector, on x86 and aarch64;
+  - the profile (README and evidence, x86 and aarch64) and docs/storage say so.
+- **Closes when landed.**
 
 ## Acceptance criteria
 
