@@ -1,6 +1,6 @@
-# MIND Core's Effector agent contract 1.3
+# MIND Core's Effector agent contract 1.4
 
-**Status:** implementation contract, 2026-10-15; 1.1 and 1.2 on 2026-10-22, 1.3 on 2026-10-29 (below). No real-machine compatibility is claimed.
+**Status:** implementation contract, 2026-10-15; 1.1 and 1.2 on 2026-10-22, 1.3 on 2026-10-29, 1.4 on 2026-10-30 (below). No real-machine compatibility is claimed.
 **Task:** [750-EFF-0001](../../issues/750-EFF-0001-protocol-contract.md).
 Publishing this subset was approved by the maintainer on 2026-10-09
 ([owner decision](../../issues-human/README.md#7-an-effector-server-for-mind-core)).
@@ -33,7 +33,10 @@ Everything 1.1 did stays.
   the result gains `"artifact":{"name","content_type","encoding":"base64","size","sha256","metadata"?,"data"}`, `data`
   last. A screenshot is `image/png`, at most 1280x800 and 2 MiB, with `metadata` `width` and `height`; a log is
   `text/plain; charset=utf-8`, `truncated` when the policy cut it. An artifact above 8 MiB is refused (`failed: bounds`),
-  so the ACK stays below the server's 12 MiB.
+  so the ACK stays below the server's 12 MiB. An answer sent after the command's run time (its `timeout_seconds`, or
+  the server's default for its kind, from when the agent took it) carries no artifact: it is `completed` with `stdout`
+  `not sent: the server had ended the command; NAME SIZE SHA256`. The server keeps nothing of a late answer but its
+  status, and the agent is free for the next command at once (750-EFF-0025).
 - **`collect_logs`** takes `path` (JSON, or the payload itself): `ring` (the system log) and `boot` (the last boot's
   log) are logs, any other path is a file under the policy's `collect` roots.
 - **`deliver_file`** takes `path`, `size`, `sha256` (64 lower-case hex digits), `overwrite` and `max_bytes`; the bytes
@@ -41,7 +44,9 @@ Everything 1.1 did stays.
 - **`start_service`, `stop_service`, `restart_service`**: the command's `program_name` is a boot service's name.
 - **`exec_v1` with the command `reboot`** (the server's `exec`) restarts the machine under the owner's `reboot on`: the
   gateway answers, then asks `init` 10 s later, which checks the policy again (750-KRN-0154); the answer is
-  `completed` once the restart is admitted. Every other command is still `denied`: MIND runs none.
+  `completed` once the restart is admitted. Every other command is still `denied`: MIND runs none. Once that answer
+  is sent, and before an update's apply, the agent sends one heartbeat with `system_state` `shutting_down`. No heartbeat
+  or poll follows until the restart, or for 40 s if it does not come (750-EFF-0006).
 - **`performance_measure`**: the agents' fixed benchmarks `effector_bogomips_v1` on one thread, `effector_memcpy_v1`
   and `effector_seqio_v1`, run a slice at a time between heartbeats; the result carries the fields the server's
   `AcceptPerformance` checks. A task's 16 MiB of memory makes MIND's copy move 4 MiB buffers (8 MiB on Linux) and
@@ -91,6 +96,35 @@ machine, and the server's health check is answered. Everything 1.2 did stays.
   completed WITH ITS RESULT`.
 - **If the result cannot be kept,** the answer is the bare `completed` of 1.2: the file was delivered, but its line is
   lost.
+
+**1.4 (2026-10-30, [751-EFF-0023](../../issues/751-EFF-0023-the-agent-installs-a-developers-release.md)):**
+`update_agent` installs a developer's release, while the machine's owner has `remote-update` on
+([751](../../issues/751-system-updates-at-a-developers-request.md)). Everything 1.3 did stays.
+
+- **The payload:** `size` and `sha256` (64 lower-case hex digits) of the bundle `scripts/release.py bundle` writes, which
+  the server serves on `GET /api/commands/file` as for `deliver_file`; `version` (optional: the version it must stage);
+  `tries` (1–9, default 1: the trial boot's); `timeout_seconds` (default 1800 here). These names are what MIND asked of
+  the server (its inbox, 2026-10-29); its own names, once fixed, replace them.
+- **The order:**
+  1. the gateway's `update-begin` (`effector.wit` 1.5): the owner's policy must say `update apply`, and `init` must say
+     `remote-update` is on, before anything reaches the updater, which asks `init` again itself. A refusal is `failed`
+     with `denied`, before a byte is downloaded;
+  2. the bundle is downloaded straight into the gateway, which streams it to the updater: nothing of it lands in a file
+     the agent or the gateway writes;
+  3. the updater checks it as any source (the channel with the release key, the manifest with the boot key, each file,
+     the floor) and stages the release in the other slot. A refusal is `failed` with the updater's reason (`digest`,
+     `signature`, `older`, `expired`, `malformed`); a `version` other than the one staged is `failed` with `version`,
+     and nothing is applied;
+  4. the command is kept in `system/effector/update`, flushed, and the release applied: the machine restarts at once.
+- **The answer comes after the restart,** from the updater's view, and is journaled and kept until the server takes it:
+  - **`completed`**, exit status 0, `stdout` `updated VERSION, slot S confirmed`, once `init` has confirmed the trial
+    boot;
+  - **`failed`**, exit status 1, when the machine came back in the old slot: `stdout` `fell back: slot S runs version
+    V, not W` and the updater's last failure, `error` `fell-back`;
+  - **`failed`** with `not-confirmed` if the new slot is still on trial 180 s after the agent started, `restart` if the
+    restart did not come within 60 s of the apply, `io` if the updater's state cannot be read.
+- **Meanwhile** the heartbeat says the agent is busy with the command, as for any answer that waits, and no other
+  command is taken.
 
 `effector-agent 1.0` is the name of this MIND subset, not a version field that
 the existing server negotiates. The server publishes a build identity and an
@@ -210,7 +244,7 @@ unsupported required field before dispatch to the local gateway.
 | `exec_v1` | JSON `command`, `run_as`, `session`, `timeout_seconds`; only a test-account msh invocation with declared and permitted grants (501) | `denied` |
 | `screenshot` | Empty payload; policy-authorized native capture | `denied` |
 | `deploy` | JSON `operation`, `package_id`; only a verified MIND application package | `denied` |
-| `update_agent` | Ask the existing signed system updater; never replace a service with a Windows/Linux ConfigAgent binary | `denied` |
+| `update_agent` | JSON `size`, `sha256`, `version`, `tries`: a developer's release bundle handed to the signed system updater while the owner's `remote-update` is on (1.4); never a Windows/Linux ConfigAgent binary | `failed` with `denied` |
 | `refresh_config`, `update_agent_config` | Re-read owner-authorized settings; never widen policy or replace origin/token | `denied` until implemented |
 | `cancel_command` | The ID of a queued/interruptible request | Explicit result; receipt alone does not establish execution stopped |
 | `exec`, `powershell_v1`, `console_v1`, `console_users_v1`, `collect_registration`, `set_hostport`, `uninstall_agent`, `performance_measure`, unknown actions | No permitted mapping in contract 1.0 | `denied` |

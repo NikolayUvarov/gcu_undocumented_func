@@ -9,12 +9,12 @@ that a MIND machine is remotely manageable yet.
 
 The agent is two boot services on the network path of Appendix B.6
 ([750](../../issues/750-effector-agent.md)). They talk only through
-[`idl/effector.wit`](../../idl/effector.wit) 1.1, which `effector_gw` serves.
+[`idl/effector.wit`](../../idl/effector.wit) 1.5, which `effector_gw` serves.
 The grants below are those of
 [750-KRN-0119](../../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done),
 0120, 0121 and 0153, and the table below "As boot services" says which slot
-holds which. Those not built yet (the updater's client, the reboot badge, the
-test account) are marked as later.
+holds which. Those not built yet (the reboot badge, the test account) are
+marked as later.
 
 **Only in the development and maintenance modes** (the maintainer's decision
 of 2026-10-21, [750-EFF-0013](../../issues/750-EFF-0013-development-and-maintenance-modes.md)).
@@ -155,7 +155,7 @@ its private `system/effector`:
 | `agent_id` | the owner (optional), in `data/effector` | the agent's ID the server knows (1–64 of `[A-Za-z0-9_-]`): taken at a start that finds none in `system/effector`, so a disk written afresh keeps it |
 | `agent_id` | the agent, once, in `system/effector` | the owner's, or `mind_` and 16 hex digits from the random source |
 | `journal` | the agent, in `system/effector` | `effector-journal 1`, then one line per answer, appended and flushed before its ACK, and a `done` line once it needs no more ACK (`effector/src/journal.rs`); compacted at each start through `journal.new` |
-| `artifact` | the agent, in `system/effector` | the screenshot or log of the answer waiting for its ACK, after a line naming its command, size and SHA-256; removed once acknowledged |
+| `artifact` | the agent, in `system/effector` | the screenshot or log of the answer waiting for its ACK, after a line naming its command, size, SHA-256 and when its run time ends (750-EFF-0025); removed once acknowledged |
 | `executed` | the agent, in `system/effector` | the count of commands answered, kept across restarts for telemetry |
 
 **The network policy line** (`netpolicy add`, which asks the user, 108): the
@@ -208,6 +208,7 @@ says so. The slots and badges are one table in `libmind/src/effector.rs`
 | | `SLOT_VFS` (3) | its private `system/effector_gw`: the audit file (`audit`, then `audit.old` beyond 256 KiB) |
 | | `SLOT_SYSINFO` (10), `SLOT_LIFECYCLE` (11), `SLOT_LOG` (12) | the counters, the services (750-KRN-0121's limited client), the log ring |
 | | `SLOT_DISPLAY` (15) | the compositor's client (750-KRN-0153): the screen, which the compositor marks with its red dot while it is captured |
+| | `SLOT_UPDATE` (35) | the updater's client badged `BADGE_UPDATE_GATEWAY` (751-KRN-0185): a developer's release handed over and applied, and the updater's view; the updater answers it only while the owner's `remote-update` is on |
 
 A grant `init` does not give makes the requests that need it fail; without
 its private directory the gateway cannot write an audit line, so it refuses
@@ -215,8 +216,10 @@ every request (MC-10.6).
 
 **Not done in this slice** (each stays in its task):
 
-- packages, the system update, reboot and the test account's scripts
-  (750-EFF-0008, 0009, 0010, 501): those commands are still denied;
+- packages, the system update from the owner's channel and the test account's scripts
+  (750-EFF-0008, 0009, 501): those commands are still denied;
+- for a developer's release (751-EFF-0023), the heartbeat's `update` field and the mark's red while `remote-update` is
+  on;
 - a `shutting_down` heartbeat when `init` stops the session;
 - the wake-up stream (SSE): polling only, as the contract allows a first slice;
 - the heartbeat's `programs` list is empty: the server's MIND programs come from
@@ -252,6 +255,15 @@ every request (MC-10.6).
   - otherwise `failed`, exit status 1, naming why.
 
   Any other command is denied: MIND runs none.
+- **`update_agent`** (`update apply`, and the owner's `remote-update`; contract 1.4, 751-EFF-0023): a developer's release
+  bundle, downloaded straight into the gateway, which streams it to the updater (`effector.wit` 1.5 `update-begin`,
+  `write`, `update-commit`; `update.wit` 1.3 `install-…`):
+  - with `remote-update` off (`init`'s `mode`), the gateway refuses it before a byte is downloaded and nothing reaches the
+    updater, which asks `init` again itself and checks the bundle as any source;
+  - once the release is staged in the other slot, the agent keeps the command in `system/effector/update` and the
+    gateway asks the updater to apply it (`update-apply`): the machine restarts at once;
+  - after the restart the agent reads the updater's view (`update-state`) and answers `completed` (`updated VERSION,
+    slot S confirmed`) once `init` has confirmed the trial boot, or `failed` naming the fall-back.
 - **`start_service`, `stop_service`, `restart_service`** (`service NAME ACTION`): the program the server names is the boot
   service; `init` checks the owner's policy again (750-KRN-0121).
 - **`performance_measure`** (no policy line: it reads and changes nothing): the Effector agents' fixed benchmarks

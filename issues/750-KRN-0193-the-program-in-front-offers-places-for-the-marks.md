@@ -1,6 +1,6 @@
 # 750-KRN-0193 — `display.wit` 1.3 `offer-marks`: the program in front offers places for the marks, the corners otherwise
 
-**Type:** `compositor`, `init`, IDL (`display.wit` 1.3) · **Owner:** `KRN`, made by `EFF` by agreement (section 2 of AGENTS.md) on EFF's branch · **Priority:** P2 · **Status:** open · **Blocked by:** [750-KRN-0192](750-KRN-0192-the-compositor-learns-whose-screen-is-in-front.md) · **Main task:** [750](750-effector-agent.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-10.2, MC-12.4
+**Type:** `compositor`, `init`, IDL (`display.wit` 1.3) · **Owner:** `KRN`, made by `EFF` by agreement (section 2 of AGENTS.md) on EFF's branch · **Priority:** P2 · **Status:** open · **Blocked by:** — ([750-KRN-0192](../issues-done/750-KRN-0192-the-compositor-learns-whose-screen-is-in-front.done) is done) · **Main task:** [750](750-effector-agent.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-10.2, MC-12.4
 
 **Asked by:** EFF on 2026-10-24, in `ALL/2026-10-24T1654Z-EFF-a-request-the-program-in-front-offers-a-place-for-the-marks.md` on `internal-dev-messages`. That request passes on the maintainer's choice of that day and replaces a34c20e9, 19a5ae12 and the place in 2c03c6d0. EFF offered on 2026-10-30 to make the compositor's part as a KRN task, and KRN agreed.
 
