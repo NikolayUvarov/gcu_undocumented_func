@@ -67,8 +67,7 @@ impl core::fmt::Display for Version {
 }
 
 pub fn state(out: &mut impl Write, view: &View) {
-    // A trial boot is over once the newer record names the running slot confirmed, as the updater stages again then.
-    let trial = view.trial && !(view.recorded == view.slot && view.confirmed);
+    let trial = on_trial(view);
     let _ = match view.slot {
         0 => writeln!(out, "UPDATE: RUNNING FROM THE VOLUME'S ROOT, NOT A SLOT, VERSION {}", Version(view.running)),
         slot => writeln!(out, "UPDATE: RUNNING SLOT {}{}, VERSION {}", slot as char, if trial { " ON TRIAL" } else { "" }, Version(view.running)),
@@ -116,5 +115,9 @@ pub fn rollback_question(out: &mut impl Write, view: &View) {
 /// Why the shell answers `apply` or `rollback` itself, without a question: the updater refuses both without a slot or on
 /// trial. Whether the other slot holds a newer release is the updater's to check.
 pub fn refused(view: &View) -> Option<usize> {
-    if view.slot == 0 { Some(NO_SLOT) } else if view.trial { Some(TRIAL) } else { None }
+    if view.slot == 0 { Some(NO_SLOT) } else if on_trial(view) { Some(TRIAL) } else { None }
 }
+
+/// Whether the running slot is still on trial: it booted so, and the newer record does not name it confirmed yet.
+/// Once it does, the updater stages and boots the other slot again (its `plan::may_stage`).
+pub fn on_trial(view: &View) -> bool { view.trial && !(view.recorded == view.slot && view.confirmed) }

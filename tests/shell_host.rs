@@ -453,6 +453,7 @@ fn update_takes_its_requests_and_says_what_the_updater_holds() {
     // What the updater would refuse whatever the other slot holds is answered without a question.
     assert_eq!(updates::refused(&root), Some(updates::NO_SLOT));
     assert_eq!(updates::refused(&trial), Some(updates::TRIAL));
+    assert_eq!(updates::refused(&View { confirmed: true, ..trial }), None, "a trial confirmed since: the updater stages and rolls back again");
     assert_eq!(updates::refused(&View { trial: false, ..trial }), None);
     assert_eq!(updates::refused(&staged), None);
     assert_eq!(updates::error(8), "THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE");
