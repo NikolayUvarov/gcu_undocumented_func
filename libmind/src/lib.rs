@@ -15,6 +15,7 @@ pub mod battery;
 pub mod block;
 pub mod block_protocol;
 pub mod blockstore;
+pub mod car;
 pub mod checkpoint;
 pub mod cid;
 pub mod control;

@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -202,7 +202,7 @@ A damaged record is otherwise found only when it is read or when the store mount
 - a record of a domain with no key record is counted corrupt, as a mount counts it;
 - non-blank sectors outside every record are counted damaged.
 
-Nothing is written, and nothing is repaired: one copy cannot be repaired from itself ([309](../../issues/309-copies-scrub-and-repair.md)'s copies will). `stat`'s `corrupt` and `damaged` stay the mount's and the reads' counts; the scrub reports its own.
+Nothing is written, and nothing is repaired: one copy cannot be repaired from itself. An import of a copy in a file repairs the blocks it holds (next section). `stat`'s `corrupt` and `damaged` stay the mount's and the reads' counts; the scrub reports its own.
 
 **When it runs (MC-5.1).**
 - **Between requests.** After 20 ms without a request, the store checks the records of the next 256 sectors, ending a step at the end of the record or the 33-sector window it is in, then waits again; a request is always served first. A pass starts a day after the last one ended, the mount counting as one.
@@ -220,6 +220,56 @@ Evidence:
 - QEMU `storefaults` suite, x86 and aarch64: a byte changed in a chunk on the medium is found by `blocks scrub` before anything reads the chunk, logged with its CID and reported by `blocks scrubbed`.
 
 Not tested on the platform: the scrub between requests, whose first pass starts a day after the mount. Its steps are the host tests' steps; its pacing is not measured.
+
+## Copies in a file — host-tested, run in QEMU on x86 (309-STO-0031)
+
+A copy of named roots in a file (`libmind/src/car.rs`, the second step of [309](../../issues/309-copies-scrub-and-repair.md)) brings back names a store lost, and repairs blocks a scrub or a read found damaged. It needs no second medium lent to the store: it is made and used by hand, with `blocks`.
+
+- **The format is CAR v1**, the IPLD content archive, so other tools read it:
+  - a header: a varint length, then DAG-CBOR `{"roots": [link], "version": 1}`. Its one root is the names node;
+  - sections, each a varint length, a CID's binary form and its block: the names node first, then every block under each name's root, in the order `tree::walk` visits them. A block met twice is written twice.
+- **The names node** is one DAG-CBOR block `{"v": 1, "names": [[name, version, root], ...]}`:
+  - 1 to 8 names (one `snapshot` reads 8 at one point), sorted by their bytes, each once, each a name the store takes;
+  - `version`: the one the name was at in the store it was exported from, from 1;
+  - `root`: a link, written as an object's node writes its links;
+  - `"v"` is the schema's version, and another is refused (MC-4.13). The node is the copy's own, not a block the store takes.
+- **A copy is checked whole** before anything of it is put:
+  - the header and the names node only if re-encoding them gives exactly their bytes. A CAR of another version (CAR v2) is refused;
+  - every section's CID a supported one, its length at most a CID and a block (16 KiB) in its shortest form, its bytes matching its CID;
+  - each name's root is walked (`tree::walk`) over the copy's own sections. Each block the walk visits must be the next section, and each node it reads is checked against its schema and its place. So a copy cut short at any byte, even at a section's end, missing a block, or with one out of the walk's order, is refused, and so is a section after the last;
+  - a refusal names its error and the byte its section starts at.
+- **`blocks export <file> <name>...`** reads the names' current roots at one point (`snapshot`). It then writes the copy, each block read from the store and checked against its CID, each walk within the steps the store gives its own. It prints `EXPORT <name> VERSION <v> ROOT <cid>` for each name, then `EXPORTED <n> NAMES, <b> BLOCKS, <bytes> BYTES TO <file>; SHA-256 <hex>`.
+  - A name that does not exist or is removed, one the store does not take, one given twice, or more than 8 are refused, and nothing is written.
+  - The file is made at the first byte written, so a refusal before it leaves a file of that name as it was; a copy that failed part-way is removed.
+- **`blocks import --check <file>`** checks the copy and puts nothing. It prints `NAME <name> VERSION <v> ROOT <cid>` for each name, then `CHECKED <file>: <n> NAMES, <b> BLOCKS, <bytes> BYTES; SHA-256 <hex>`, or `blocks: import --check: <file> refused at byte <n>: <error>`.
+- **`blocks import <file>`:**
+  - checks the copy whole first, and puts nothing if any of it is refused;
+  - reads it again and puts each block, after reading it from the store. A block the store holds damaged is found corrupt by that read, leaves the store's index, and the put stores it again: it is repaired. The second read must give the same bytes as the first (`changed`), or nothing is published;
+  - reads the names at one point. A name at the copy's root already is left: `SAME <name> VERSION <v> ROOT <cid>`. A name with no root, new or removed, is published at the copy's root by compare-and-swap from the version it is at: `PUBLISHED <name> VERSION <v> ROOT <cid> (<durability>)`. A name at another root is left as it is, never overwritten: `CONFLICT <name>: VERSION <v> ROOT <cid>, NOT <cid>; LEFT AS IT IS`. A name another writer publishes between that read and the publication is read again and reported the same way;
+  - prints `IMPORTED <file>: <n> NAMES, <b> BLOCKS (<s> STORED, <r> REPAIRED, <h> HELD), <bytes> BYTES; SHA-256 <hex>`;
+  - after a repair, asks for a collection, which frees the damaged copies, so the next scrub does not find them: `COLLECTED <k> BLOCKS: THE DAMAGED COPIES FREED`. A block a mount found damaged has left the index already: the import stores it as one the store lacked, and the next collection frees the damaged copy.
+- **Independence (MC-4.8).** A copy guards against the loss of the store's medium only on another medium:
+  - a file on the boot volume is on another medium than the RAM disk store; a file on `ram:` is lost with a reset as the store is;
+  - a store on a partition of the stick (307-STO-0020) and a file on the stick's boot volume share one medium: losing the stick loses both;
+  - a copy is as old as its export. What was published after it is not in it, and an import does not take a name back to it: a name moved on is a conflict.
+- **Not provided:** copies made by the store itself, or on a medium lent to it (309); a name brought back at its old version (an import publishes from the version the name is at here, so into an empty store at 1). The blocks an import puts are retained by their leases (60 s) until its names are published; an import that takes longer is not tested.
+
+Evidence: host tests of the code, not a proof (MC-12.2).
+- `tests/car_host.rs`, through the store's own logic on a simulated medium:
+  - a copy written by hand from the CAR v1 and DAG-CBOR specifications is what an export writes, byte for byte, and what a check reads;
+  - every cut of it and every bit of every byte changed are refused; in a copy of a tree, cuts at and around each section and every 97 bytes, and a changed byte in each section's length, CID and block;
+  - a CID of another hash, content type, version or digest length, a section longer than a block, a length that cuts its CID or is not in its shortest form, a header not exactly its encoding, CAR v2, and sections out of order or after the last are refused, each with its error and place;
+  - a names node unsorted, with a name twice, not in shortest forms, with its keys out of order or another key, of another schema version, with a name the store does not take, at version 0, or with none or more than 8 names, is refused;
+  - each block of a tree left out, or moved one place on, is refused; a directory read again after more nodes than a check remembers is found;
+  - export, then import into an empty store, gives the same names at version 1, the same roots and each name's blocks in the same order; imported again, nothing is written; the imported store exports the same copy;
+  - a chunk damaged on the medium is found by a scrub; the import repairs it, its collection frees the damaged copy, the next scrub finds nothing, and a new instance mounts the medium whole. A block a mount found damaged is stored again;
+  - a name at another root is left and reported, a removed one is published again, one at the copy's root is left; a name another writer published between the read and the publication is a conflict, or the same at the copy's root;
+  - a copy with a bad section, wherever it is, or cut short, puts nothing (no write on the medium); one that changed between its check and its import publishes nothing;
+  - an export refuses names that do not exist or are removed, are not the store's, are given twice or are more than 8, and a root with a damaged or missing block.
+- The QEMU `storefaults` suite (x86): `obj` exported to `ram:` is the CAR v1 the suite writes from the specifications, byte for byte (its SHA-256). A chunk damaged on the medium is found by `blocks scrub` and repaired by `blocks import` of that copy (1 repaired, the damaged copy collected); the next scrub finds nothing, and the object reads back whole.
+- The QEMU `store` suite (x86): a tree and a file under two names exported to the boot volume; after a reboot, with the store's RAM disk blank, an import publishes each at its root and every file reads back (its SHA-256 checked by the suite). An import again changes nothing, and a name published since at another root is left as it is.
+
+Not run on aarch64 yet.
 
 ## Names — run on the platform (302, 303-STO-0003, 0004)
 
@@ -535,7 +585,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 |---|---|---|
 | [307](../../issues/307-the-stores-own-partition.md) | A partition of the store's own on real machines; durability classes `volatile`, `flushed`, `copied` (`blockstore.wit` 2.0) | first: until then nothing survives a reset on a real machine |
 | [308](../../issues/308-encryption-at-rest.md) | Sealed records, a key per memory domain, the volume key from the TPM or a passphrase | before any personal data |
-| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)); copies and repair after 307 |
+| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), and copies in a file with repair from them ([309-STO-0031](../../issues/309-STO-0031-a-copy-of-named-roots-in-a-file.md)); copies on a second medium after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues/311-storefs-a-file-face.md) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
 | [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | after 308 |
