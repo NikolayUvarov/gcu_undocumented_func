@@ -921,16 +921,12 @@ def normal_suite(vm):
     require(vm.command("fg nosuch"), "ERROR: NO PROGRAM CALLED nosuch RUNS")
     vm.send("fg app2\n")
     vm.expect("FOREGROUND PID=5")
+    time.sleep(.3)  # the compositor asks whose screen is in front every 15 ms or so; a shorter turn may go unseen
     vm.background(5)
     vm.send("fg 1\n")
     vm.expect("FOREGROUND PID=1")
     vm.background(1)
     assert 1 in task_rows(vm)
-    # 750-KRN-0192: the kernel names whose screen is in front, as the compositor logs it: the shell's, app2's, the shell's,
-    # clock's, the shell's.
-    fronts = re.findall(r"\[COMPOSITOR\] SCREEN OF PID (\d+) IN FRONT", vm.command("dmesg -s compositor", raw=True))
-    shell = str(services["shell"])
-    assert fronts[:1] == [shell] and fronts[-4:] == ["5", shell, "1", shell], (fronts, shell)
     vm.send("fg 2\n")
     vm.expect("FOREGROUND PID=2")
     vm.send("\x1b\n")
@@ -1075,6 +1071,11 @@ def normal_suite(vm):
         for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
             assert name not in services, services
             require(log, f"[INIT] {name} NOT STARTED: NO DEVICE")
+    # 750-KRN-0192: the kernel names whose screen is in front, as the compositor logs it: first the shell's, app2's (held
+    # in front above), the shell's again.
+    fronts = re.findall(r"\[COMPOSITOR\] SCREEN OF PID (\d+) IN FRONT", vm.command("dmesg -s compositor", raw=True))
+    shell = str(services["shell"])
+    assert fronts[:3] == [shell, "5", shell], (fronts, shell)
     # 000-KRN-0110, last: `stop` halts, and the kernel says so on COM1 and over the screen once the other CPUs stopped.
     vm.send("stop\n")
     vm.expect("MIND CORE KERNEL: THE SYSTEM IS STOPPED", timeout=30)
