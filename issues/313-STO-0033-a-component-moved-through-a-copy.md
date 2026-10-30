@@ -64,6 +64,15 @@ A component's checkpoint lives in one store. A copy of its names ([309-STO-0031]
   - a manifest of another epoch taken at any version fails two host tests, the refusal of a republished one among them; taken at none, as before this task, it fails two, the move stopped anywhere among them.
 - **Not yet:** the aarch64 run and the profile.
 
+## Merged and run by the session (2026-10-30)
+
+- **Merged** as 73348732 and ef066d9f.
+- **Host:** `scripts/host_tests.sh` whole, exit 0, on ef066d9f.
+- **QEMU, on `un-rizen_2a8b108d5593` through Effector, on ef066d9f:**
+  - aarch64: the `store` suite passes whole, with the move's check;
+  - x86: the move's check passes. In the same group, the `vfs` suite's recording of the clock failed once (`the clock changed while it was recorded`), a check this task does not touch; it is run again alone.
+- **The profile** (README and evidence, x86 and aarch64) says what ran.
+
 ## Acceptance criteria
 
 - Host tests (`tests/checkpoint_host.rs`, two stores on simulated media):
