@@ -1,6 +1,6 @@
 # 000-NET-0015 — A network card's client that only reads it — done
 
-**Type:** network (driver, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** — (for the tools track's [000-APP-0049](../issues/000-APP-0049-network-traffic-on-wms-background.md)) · **Roadmap:** track D, G · **Constitution:** MC-3.11, MC-12.4, Appendix B.6
+**Type:** network (driver, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** — (for the tools track's [000-APP-0049](../issues-done/000-APP-0049-network-traffic-on-wms-background.done)) · **Roadmap:** track D, G · **Constitution:** MC-3.11, MC-12.4, Appendix B.6
 
 From the tools track's request in requests-NET.md ("A read-only client of a card's counters, for `wm`'s background", 2026-10-10).
 
