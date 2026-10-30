@@ -7,7 +7,8 @@
 //! links, removing a name (303-STO-0002..0004); the current names listed by prefix, page by page (300-STO-0018); sealed
 //! records: nothing of a block, a CID or a name in the clear, a changed or moved record refused, a wrong key refused at
 //! mount (308-STO-0021); memory domains, each under its own key, and a domain forgotten by destroying its key, its
-//! records then refused and collected (308-STO-0023).
+//! records then refused and collected (308-STO-0023); directory nodes stored, and the files of a directory tree retained
+//! by the name that holds it (311-STO-0027).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -15,6 +16,8 @@ mod sha256;
 mod cid;
 #[path = "../libmind/src/dag.rs"]
 mod dag;
+#[path = "../libmind/src/tree.rs"]
+mod tree;
 #[path = "../blockstore/src/store.rs"]
 mod store;
 #[path = "../libmind/src/blockstore.rs"]
@@ -560,6 +563,49 @@ fn a_record_typed_as_a_node_that_does_not_decode_is_corrupt() {
     assert!(!store.has(&Cid::of(Codec::DagCbor, b"not a node")));
 }
 
+// A directory of `entries` (311-STO-0027), encoded; and stored, its CID.
+fn node(entries: &[tree::Entry]) -> Vec<u8> {
+    let mut out = Box::new([0u8; dag::CHUNK]);
+    let len = tree::encode(entries, &mut out).unwrap();
+    out[..len].to_vec()
+}
+fn directory(store: &mut Store<&mut Memory>, entries: &[tree::Entry]) -> Cid { store.put(Codec::DagCbor, &node(entries)).unwrap() }
+
+fn entry(name: &str, kind: tree::Kind, size: u64, cid: Cid) -> tree::Entry<'_> { tree::Entry { name: name.as_bytes(), kind, size, cid } }
+
+#[test]
+fn a_directory_node_is_stored_and_a_node_of_neither_schema_refused() {
+    let mut medium = Memory::new(128);
+    let dir;
+    {
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        let a = store.put(Codec::Raw, b"a").unwrap();
+        let (first, second) = (node(&[entry("a", tree::Kind::File, 1, a)]), node(&[entry("b", tree::Kind::File, 1, a)]));
+        dir = store.put(Codec::DagCbor, &first).unwrap();
+        assert_eq!(get(&mut store, &dir).unwrap(), first);
+        // The map, "v", 1 and "entries" are 12 bytes; the array's head and the entries follow.
+        let header = &first[..12];
+        let used = store.stats().used;
+        for (case, bytes) in [
+            ("v alone", vec![0xa1, 0x61, b'v', 1]),
+            ("an empty directory and a byte", [header, &[0x80, 0]].concat()),
+            ("another version", [&first[..3], &[2], &first[4..]].concat()),
+            ("b before a", [header, &[0x82], &second[13..], &first[13..]].concat()),
+        ] {
+            assert_eq!(store.put(Codec::DagCbor, &bytes), Err(Error::Invalid), "{case}");
+        }
+        assert_eq!(store.stats().used, used);
+        // In their order, the two entries are a directory.
+        assert!(store.put(Codec::DagCbor, &[header, &[0x82], &first[13..], &second[13..]].concat()).is_ok());
+    }
+    // A mount checks it against its type again, and finds it whole.
+    let mut room = Room::new(16);
+    let store = mount(&mut medium, &mut room).unwrap();
+    assert!(store.has(&dir));
+    assert_eq!(store.stats().corrupt, 0);
+}
+
 #[test]
 fn a_name_changes_only_from_the_version_expected() {
     let mut medium = Memory::new(256);
@@ -835,6 +881,77 @@ fn nothing_is_collected_while_a_name_lacks_a_block() {
     assert_eq!(collected.blocks, 2);
     assert_eq!((store.has(&loose), store.stats().corrupt), (false, 0));
     assert_eq!(read_object(&mut store, &root), block(4, 40_000));
+}
+
+#[test]
+fn a_published_directory_tree_keeps_its_files_across_a_collection() {
+    use tree::Kind::{Directory, File};
+    let mut medium = Memory::new(2048);
+    let (root, small, big, inner, alone, unretained);
+    {
+        let mut room = Room::new(256);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        // A file of one block, one over several, a subdirectory with a file of its own, an empty directory.
+        small = store.put(Codec::Raw, &block(1, 3000)).unwrap();
+        big = object(&mut store, 2, 40_000);
+        inner = store.put(Codec::Raw, b"inner").unwrap();
+        let sub = directory(&mut store, &[entry("inner.txt", File, 5, inner)]);
+        let empty = directory(&mut store, &[]);
+        root = directory(&mut store, &[entry("a.txt", File, 3000, small), entry("big.bin", File, 40_000, big), entry("empty", Directory, 0, empty), entry("sub", Directory, 1, sub)]);
+        // Another tree, which no name retains.
+        alone = store.put(Codec::Raw, &block(3, 2000)).unwrap();
+        unretained = directory(&mut store, &[entry("alone", File, 2000, alone)]);
+        assert_eq!(store.publish(b"home", 0, &root, OWNER), Ok(1));
+        // The owner is charged the bytes of the files under the root.
+        assert_eq!(store.usage(OWNER).retained, 3000 + 40_000 + 5);
+        store.set_time(LEASE_NS);
+        assert_eq!(store.collect().unwrap().blocks, 2);
+        assert!(!store.has(&unretained) && !store.has(&alone));
+        for cid in [root, sub, empty, small, inner] { assert!(store.has(&cid)); }
+        assert_eq!(read_object(&mut store, &big), block(2, 40_000));
+    }
+    // A mount reads the tree's bytes for the account again, and a collection after it keeps the tree.
+    let mut room = Room::new(256).at(LEASE_NS);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.usage(OWNER).retained, 3000 + 40_000 + 5);
+    store.set_time(2 * LEASE_NS);
+    assert_eq!(store.collect().unwrap().blocks, 0);
+    assert_eq!(get(&mut store, &inner).unwrap(), b"inner");
+    assert_eq!(read_object(&mut store, &big), block(2, 40_000));
+    // Removed, the name retains nothing: the whole tree goes.
+    assert_eq!(store.unpublish(b"home", 1, OWNER), Ok(2));
+    store.collect().unwrap();
+    assert_eq!(store.stats().blocks, 0);
+    assert!(!store.has(&root) && !store.has(&small));
+}
+
+#[test]
+fn a_tree_missing_a_files_block_is_incomplete() {
+    use tree::Kind::{Directory, File};
+    let mut medium = Memory::new(512);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    // A file whose first chunk was never put, in a subdirectory.
+    let chunk = [7u8; dag::CHUNK];
+    let x = store.put(Codec::Raw, b"x").unwrap();
+    let mut node = [0u8; dag::NODE_MAX];
+    let len = dag::encode(dag::CHUNK as u64 + 1, &[Cid::raw(&chunk), x], &mut node);
+    let partial = store.put(Codec::DagCbor, &node[..len]).unwrap();
+    let sub = directory(&mut store, &[entry("partial", File, dag::CHUNK as u64 + 1, partial)]);
+    let root = directory(&mut store, &[entry("sub", Directory, 1, sub)]);
+    assert_eq!(store.publish(b"tree", 0, &root, OWNER), Err(Error::Incomplete));
+    assert_eq!(store.pin(&root, OWNER), Err(Error::Incomplete));
+    assert_eq!(store.commit(&[Update { name: b"tree", expected: 0, root: Some(root) }], OWNER), Err(Error::Incomplete));
+    // A subdirectory never put.
+    let dangling = directory(&mut store, &[entry("gone", Directory, 0, Cid::of(Codec::DagCbor, b"never stored"))]);
+    assert_eq!(store.publish(b"tree", 0, &dangling, OWNER), Err(Error::Incomplete));
+    assert_eq!((store.resolve(b"tree"), store.stats().pins), (Err(Error::NotFound), 0));
+    // With the chunk put, the tree is published; a tree whose entry disagrees with its file is not one.
+    store.put(Codec::Raw, &chunk).unwrap();
+    assert_eq!(store.publish(b"tree", 0, &root, OWNER), Ok(1));
+    assert_eq!(store.usage(OWNER).retained, dag::CHUNK as u64 + 1);
+    let wrong = directory(&mut store, &[entry("x", File, 2, x)]);
+    assert_eq!(store.publish(b"wrong", 0, &wrong, OWNER), Err(Error::Invalid));
 }
 
 #[test]

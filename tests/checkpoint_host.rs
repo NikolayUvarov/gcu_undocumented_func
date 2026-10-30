@@ -9,6 +9,8 @@ mod sha256;
 mod cid;
 #[path = "../libmind/src/dag.rs"]
 mod dag;
+#[path = "../libmind/src/tree.rs"]
+mod tree;
 #[path = "../blockstore/src/store.rs"]
 mod store;
 #[path = "../libmind/src/checkpoint.rs"]

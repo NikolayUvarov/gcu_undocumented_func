@@ -16,7 +16,7 @@ pub const FANOUT: usize = 256;
 /// The node schema's version (`"v"`); another is refused (MC-4.13).
 pub const VERSION: u64 = 1;
 // tag 42, a 37-byte byte string, the multibase identity prefix 0, the CID's binary form.
-const LINK: usize = 2 + 2 + 1 + cid::BYTES;
+pub(crate) const LINK: usize = 2 + 2 + 1 + cid::BYTES;
 /// Bytes of the largest node: the map, "v", "size" (with a 64-bit value), "links" and FANOUT links.
 pub const NODE_MAX: usize = 1 + 2 + 1 + 5 + 9 + 6 + 3 + FANOUT * LINK;
 /// Levels a builder keeps: a tree over u64 bytes is at most 7 nodes high.
@@ -29,7 +29,7 @@ pub enum Error {
     /// A node of another schema version.
     Version,
     /// A node or chunk that does not fit the shape its size gives: link count, the children's sizes and types, a
-    /// chunk's length.
+    /// chunk's length. In `tree`: an entry that disagrees with what it links, or a tree past the depth.
     Shape,
     /// A block whose bytes do not match its CID.
     Corrupt,
@@ -37,7 +37,7 @@ pub enum Error {
     NotFound,
     /// The store refused a block for lack of room.
     Full,
-    /// More than u64 bytes, or a read past the end.
+    /// More than u64 bytes, a read past the end, or a directory over a block (`tree`).
     TooLarge,
     /// Another failure of the store.
     Store,
@@ -86,9 +86,9 @@ impl Node<'_> {
 }
 
 // Where an encoding goes: written into a buffer, or compared with bytes already there (`decode`'s canonical check).
-struct Out<'a> { bytes: &'a mut [u8], at: usize }
-struct Same<'a> { bytes: &'a [u8], at: usize, equal: bool }
-trait Sink {
+pub(crate) struct Out<'a> { pub(crate) bytes: &'a mut [u8], pub(crate) at: usize }
+pub(crate) struct Same<'a> { pub(crate) bytes: &'a [u8], pub(crate) at: usize, pub(crate) equal: bool }
+pub(crate) trait Sink {
     fn push(&mut self, data: &[u8]);
     // A CBOR head in its shortest form, as DAG-CBOR requires.
     fn head(&mut self, major: u8, value: u64) {
@@ -102,6 +102,8 @@ trait Sink {
         }
     }
     fn text(&mut self, text: &str) { self.head(3, text.len() as u64); self.push(text.as_bytes()); }
+    // A link: tag 42 over the identity prefix and the CID's binary form.
+    fn link(&mut self, cid: &Cid) { self.head(6, 42); self.head(2, 1 + cid::BYTES as u64); self.push(&[0]); self.push(&cid.to_bytes()); }
 }
 impl Sink for Out<'_> {
     fn push(&mut self, data: &[u8]) { self.bytes[self.at..self.at + data.len()].copy_from_slice(data); self.at += data.len(); }
@@ -130,18 +132,14 @@ fn encode_with(size: u64, count: usize, link: impl Fn(usize) -> Cid, o: &mut imp
     o.head(0, size);
     o.text("links");
     o.head(4, count as u64);
-    for k in 0..count {
-        o.head(6, 42);
-        o.head(2, 1 + cid::BYTES as u64);
-        o.push(&[0]);
-        o.push(&link(k).to_bytes());
-    }
+    for k in 0..count { o.link(&link(k)); }
 }
 
-struct In<'a> { bytes: &'a [u8], at: usize }
+pub(crate) struct In<'a> { pub(crate) bytes: &'a [u8], pub(crate) at: usize }
 impl<'a> In<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], Error> {
-        let taken = self.bytes.get(self.at..self.at + n).ok_or(Error::Format)?;
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], Error> {
+        // A length read from the bytes may be anything up to u64: past the end, not an overflow.
+        let taken = self.at.checked_add(n).and_then(|end| self.bytes.get(self.at..end)).ok_or(Error::Format)?;
         self.at += n;
         Ok(taken)
     }
@@ -155,13 +153,18 @@ impl<'a> In<'a> {
         };
         Ok((major, value))
     }
-    fn expect(&mut self, major: u8) -> Result<u64, Error> {
+    pub(crate) fn expect(&mut self, major: u8) -> Result<u64, Error> {
         match self.head()? { (m, value) if m == major => Ok(value), _ => Err(Error::Format) }
     }
-    fn key(&mut self, name: &str) -> Result<(), Error> {
+    pub(crate) fn key(&mut self, name: &str) -> Result<(), Error> {
         let len = self.expect(3)? as usize;
         if self.take(len)? != name.as_bytes() { return Err(Error::Format); }
         Ok(())
+    }
+    // A link as `Sink::link` writes it, to a supported CID.
+    pub(crate) fn link(&mut self) -> Result<Cid, Error> {
+        if self.expect(6)? != 42 || self.expect(2)? != 1 + cid::BYTES as u64 || self.take(1)? != [0] { return Err(Error::Format); }
+        Cid::from_bytes(self.take(cid::BYTES)?).map_err(|_| Error::Format)
     }
 }
 
@@ -179,10 +182,7 @@ pub fn decode(bytes: &[u8]) -> Result<Node<'_>, Error> {
     let count = i.expect(4)? as usize;
     if count == 0 || count > FANOUT { return Err(Error::Format); }
     let start = i.at;
-    for _ in 0..count {
-        if i.expect(6)? != 42 || i.expect(2)? != 1 + cid::BYTES as u64 || i.take(1)? != [0] { return Err(Error::Format); }
-        Cid::from_bytes(i.take(cid::BYTES)?).map_err(|_| Error::Format)?;
-    }
+    for _ in 0..count { i.link()?; }
     if i.at != bytes.len() || i.at - start != count * LINK { return Err(Error::Format); }
     let node = Node { size, links: &bytes[start..], count };
     // Shortest integer forms: the encoding of what was read must be the bytes themselves.
@@ -193,7 +193,7 @@ pub fn decode(bytes: &[u8]) -> Result<Node<'_>, Error> {
 }
 
 // Fetches a block and checks it against its CID: the store is another process, and the reader does not trust it.
-fn fetch<B: Blocks>(blocks: &mut B, cid: &Cid, buffer: &mut [u8; CHUNK]) -> Result<usize, Error> {
+pub(crate) fn fetch<B: Blocks>(blocks: &mut B, cid: &Cid, buffer: &mut [u8; CHUNK]) -> Result<usize, Error> {
     let len = blocks.get(cid, buffer)?;
     if !cid.matches(&buffer[..len]) { return Err(Error::Corrupt); }
     Ok(len)
