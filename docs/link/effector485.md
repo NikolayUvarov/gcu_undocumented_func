@@ -32,6 +32,12 @@ effector485 daemon /dev/ttyUSB0 --baud 460800             # Linux
 - follows again the programs it had started;
 - marks `lost` any other operation that was running when it stopped.
 
+**Local, by design** (the maintainer, 2026-10-30):
+- **What it is:** the daemon is the local way into the machine on the cable, with raised rights. In the developer mode it does what the machine's Effector agent may not do through the server: it writes `data/`, starts programs, and restarts the machine.
+- **It is not opened** to sessions on other machines, through the Effector server or otherwise.
+- **A session elsewhere** that needs a run on the cable asks the `LNK` track on `internal-dev-messages`. LNK runs it and posts the output.
+- **`--key-file`** is for the maintainer's own other machines.
+
 ## Several machines on one cable
 
 One RS-485 pair can carry several machines, each at its own address (800-LNK-0026, the [protocol's version 2](protocol.md)). The wiring and the addresses are in [mindlink.md](mindlink.md), "Several machines on one line".
