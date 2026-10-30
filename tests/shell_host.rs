@@ -3,7 +3,7 @@
 //! commands (shell/src/clients.rs, 211-APP-0044); `>`, `>>`, `<` and `|` (shell/src/redirect.rs, pipe.rs, 000-APP-0074); the lines on
 //! the way to the first frame (shell/src/start.rs, 000-APP-0075); a safe start told from the boot's log
 //! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031); `ping`'s options and
-//! tally (shell/src/ping.rs, 000-APP-0095).
+//! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -26,6 +26,8 @@ mod modes;
 mod pick;
 #[path = "../shell/src/pipe.rs"]
 mod pipe;
+#[path = "../shell/src/updates.rs"]
+mod updates;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -392,4 +394,60 @@ fn an_input_splits_a_line_between_the_program_and_its_file() {
         assert!(redirect::input(wrong).is_err(), "{:?}", wrong);
     }
     assert!(redirect::input("grep a & < x").unwrap_err().contains("&"));
+}
+
+#[test]
+fn update_takes_its_requests_and_says_what_the_updater_holds() {
+    // 351-APP-0029: the updater's view, its channel (update.wit 1.1 `metadata`, 351-UPD-0025) and the questions.
+    use updates::{parse, Asked, View, USAGE};
+    assert_eq!(parse(""), Ok(Asked::Status));
+    assert_eq!(parse("status"), Ok(Asked::Status));
+    assert_eq!(parse("CHECK"), Ok(Asked::Check));
+    assert_eq!(parse("fetch"), Ok(Asked::Fetch));
+    assert_eq!(parse("apply"), Ok(Asked::Apply(3)));
+    assert_eq!(parse("apply 1"), Ok(Asked::Apply(1)));
+    assert_eq!(parse("apply 9"), Ok(Asked::Apply(9)));
+    assert_eq!(parse("rollback"), Ok(Asked::Rollback));
+    for line in ["apply 0", "apply 10", "apply x", "apply 3 4", "status now", "install", "rollback a"] { assert_eq!(parse(line), Err(USAGE), "{}", line); }
+    let mut out = String::new();
+    let trial = View { slot: b'B', trial: true, running: 6, recorded: b'B', confirmed: false, staged: 0, failure: "" };
+    updates::state(&mut out, &trial);
+    assert_eq!(out, "UPDATE: RUNNING SLOT B ON TRIAL, VERSION 6\nUPDATE: THE NEWER BOOT RECORD NAMES SLOT B, NOT CONFIRMED\nUPDATE: NOTHING STAGED IN THE OTHER SLOT\n");
+    out.clear();
+    let staged = View { slot: b'A', trial: false, running: 5, recorded: b'A', confirmed: true, staged: 6, failure: "expired" };
+    updates::state(&mut out, &staged);
+    assert_eq!(out, "UPDATE: RUNNING SLOT A, VERSION 5\nUPDATE: THE NEWER BOOT RECORD NAMES SLOT A, CONFIRMED\nUPDATE: STAGED IN SLOT B: VERSION 6\nUPDATE: THE LAST FAILURE: expired\n");
+    out.clear();
+    let root = View { slot: 0, trial: false, running: 0, recorded: 0, confirmed: false, staged: 0, failure: "" };
+    updates::state(&mut out, &root);
+    assert!(out.starts_with("UPDATE: RUNNING FROM THE VOLUME'S ROOT, NOT A SLOT, VERSION NOT KNOWN\nUPDATE: NO BOOT RECORD NAMES A SLOT\n"), "{}", out);
+    out.clear();
+    updates::channel(&mut out, "stable", 6, 5, "2026-12-01T00:00:00Z", false, true);
+    assert_eq!(out, "UPDATE: CHANNEL stable: VERSION 6, MINIMUM 5, EXPIRES 2026-12-01T00:00:00Z, READ FROM THE SOURCE\n");
+    out.clear();
+    updates::channel(&mut out, "stable", 5, 5, "2026-01-01T00:00:00Z", true, false);
+    assert!(out.contains("KEPT IN THE RUNNING SLOT") && out.contains("FETCH AND APPLY WAIT FOR A CURRENT ONE, ROLLBACK STAYS POSSIBLE"), "{}", out);
+    out.clear();
+    updates::channel(&mut out, "", 0, 0, "", false, false);
+    assert_eq!(out, "UPDATE: THE UPDATER HOLDS NO CHANNEL\n");
+    out.clear();
+    updates::offer(&mut out, "stable", 6, 5, "2026-12-01T00:00:00Z", 5);
+    assert_eq!(out, "UPDATE: CHANNEL stable OFFERS VERSION 6 (MINIMUM 5, EXPIRES 2026-12-01T00:00:00Z); RUNNING VERSION 5\n");
+    out.clear();
+    updates::apply_question(&mut out, &staged, 1);
+    assert_eq!(out, "APPLY VERSION 6 (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 1 TRY, FALLING BACK TO SLOT A.");
+    out.clear();
+    updates::rollback_question(&mut out, &staged);
+    assert!(out.starts_with("ROLL BACK TO SLOT B? ") && out.ends_with("FALLING BACK TO SLOT A."), "{}", out);
+    // After a restart nothing reads as staged, but the other slot may hold a release: the updater checks it.
+    out.clear();
+    updates::apply_question(&mut out, &View { staged: 0, ..staged }, 3);
+    assert_eq!(out, "APPLY THE RELEASE IN SLOT B (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 3 TRIES, FALLING BACK TO SLOT A.");
+    // What the updater would refuse whatever the other slot holds is answered without a question.
+    assert_eq!(updates::refused(&root), Some(updates::NO_SLOT));
+    assert_eq!(updates::refused(&trial), Some(updates::TRIAL));
+    assert_eq!(updates::refused(&View { trial: false, ..trial }), None);
+    assert_eq!(updates::refused(&staged), None);
+    assert_eq!(updates::error(8), "THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE");
+    assert_eq!(updates::error(99), "THE UPDATER ANSWERED AN ERROR");
 }

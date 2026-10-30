@@ -131,7 +131,7 @@ after an error**:
   - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`, and `>` or `>>` after a command (000-APP-0074);
   - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`, `netstat`;
   - `log`: `logger`, `log()`;
-  - `lifecycle`: `kill`, `budget`, `stop`, `reboot`.
+  - `lifecycle`: `kill`, `budget`, `stop`, `reboot`, `poweroff`, `shutdown`, `update`.
 
   Without its word a command fails: `ping needs requires: network in the script`.
 - **Programs a script starts** get, of what they ask for, only what the script declared (`sysinfo`, `file`, `files`,

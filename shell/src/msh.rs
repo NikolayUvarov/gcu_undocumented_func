@@ -25,7 +25,7 @@ fn needs(command: &str) -> Option<&'static str> {
     if is(&["write", "mkdir", "rm", "mv", "sync", "screenshot"]) { Some("files") }
     else if is(&["ping", "nslookup", "fetch", "https", "net", "netrevoke", "ip", "tls", "netstat"]) { Some("network") }
     else if is(&["logger"]) { Some("log") }
-    else if is(&["kill", "budget", "stop", "reboot", "poweroff", "shutdown"]) { Some("lifecycle") }
+    else if is(&["kill", "budget", "stop", "reboot", "poweroff", "shutdown", "update"]) { Some("lifecycle") }
     else { None }
 }
 
