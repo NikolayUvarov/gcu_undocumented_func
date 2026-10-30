@@ -1,8 +1,8 @@
-# 213-APP-0075 — The shell logs its first frame, and a slow step before it
+# 213-APP-0075 — The shell logs its first frame, and a slow step before it — done
 
-**Type:** tools (`shell`), diagnostics · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 92781301 (2026-10-20), checked in QEMU; a real machine's boot log left · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.3
+**Type:** tools (`shell`), diagnostics · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.3
 
-**Recorded by:** the kernel track (KRN), 2026-10-13, in `requests-APP.md`, for [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md). Numbered by the tools track on 2026-10-14.
+**Recorded by:** the kernel track (KRN), 2026-10-13, in `requests-APP.md`, for [213-KRN-0098](../issues/213-KRN-0098-black-screen-when-the-shell-takes-it.md). Numbered by the tools track on 2026-10-14.
 
 ## Problem
 
@@ -39,6 +39,13 @@ On the maintainer's Ryzen machine the screen went black when the shell took it. 
 - **The `display` suite** (x86, on VGA std, virtio-vga and ramfb; the aarch64 groups run no `display` suite): `dmesg -s shell` has `[SHELL] FIRST FRAME …`. A slow step is not a failure there: a loaded host may make one.
 - **A real machine:** the line is in the boot log (`log:bootNNNN.log`).
 
-## Related
+## Resolution
 
-[213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md) (the black screen, the compositor's lines), [213](213-amd-ryzen-pc.md) (the Ryzen PC).
+- **The code** (`shell/src/start.rs`, `shell/src/main.rs`, `shell/src/console.rs`) is in `main` since 92781301 (2026-10-20). The host tests and the `display` suite checked it there.
+- **A real machine:** the MacBook Pro's saved boot log. The maintainer's build b8a41f083501 (a local commit, not on `origin`) booted on 2026-10-29. The log came through Effector's MIND Core agent (`mind_353abc18de2dbd0e`, `collect_logs` `boot`, artifact `90ebb894…`, 338 954 bytes) and has:
+  - `[    2.936] shell(33) [SHELL] FIRST FRAME 2880X1800 AT 2.9 S`;
+  - no `… TOOK <N> MS BEFORE THE FIRST FRAME`: no step before the first frame took over 5 s;
+  - around it, the compositor's `SCREEN IN FRONT` lines, so the log tells the shell's frame from the screens before and after it.
+- **What it is evidence for.** This line, on this machine and this build (MC-12.1). The Ryzen PC of 213, where the screen went black, has not given a boot log with this code yet.
+
+[213-KRN-0098](../issues/213-KRN-0098-black-screen-when-the-shell-takes-it.md) (the black screen, the compositor's lines), [213](../issues/213-amd-ryzen-pc.md) (the Ryzen PC).

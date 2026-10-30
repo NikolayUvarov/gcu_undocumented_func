@@ -1,12 +1,13 @@
 #![no_std]
 #![no_main]
 // tally: named counters kept across instances by checkpoints in the block store (306-STO-0009, the pilot of
-// docs/storage/checkpoints.md, contract "tally" 1). Each run is a new instance: it restores the last checkpoint,
+// docs/storage/checkpoints.md, contract "tally" 2). Each run is a new instance: it restores the last checkpoint,
 // applies one request and saves the next, fenced if another instance saved first (MC-6.12). Effects (writing a file)
-// are journaled before they begin and come back pending if the instance ends first (Appendix B.4). A console program:
-// it asks the shell for the store's client and the user's files, and holds nothing a checkpoint could hand back.
+// are journaled before they begin and come back pending if the instance ends first (Appendix B.4). An addition sent
+// with an operation ID is applied once: sent again, it is answered with its first result (313-STO-0026). A console
+// program: it asks the shell for the store's client and the user's files, and holds nothing a checkpoint could hand back.
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
-use mind::checkpoint::{self, rebind, restore, save, Error, Label, Manifest, Names, Outcome, Restored, MAX};
+use mind::checkpoint::{self, rebind, restore, save, Applied, Error, Label, Manifest, Names, Outcome, Restored, FORMAT, MAX};
 use mind::cid::Cid;
 use mind::fs::File;
 use mind::idl::blockstore::{self, Update};
@@ -17,7 +18,7 @@ mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE);
 
 const STORE: Endpoint = Endpoint(SLOT_BLOCKSTORE);
 const CONTRACT: &str = "tally";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 /// The state's schema: lines `key=count`, sorted by key.
 const SCHEMA: u16 = 1;
 const KEYS: usize = 32;
@@ -53,7 +54,7 @@ impl checkpoint::Store for Remote {
     }
 }
 
-/// The counters: the state of contract "tally" 1.
+/// The counters: the state of contract "tally" 2, schema 1.
 struct Counters { keys: [Label; KEYS], counts: [u64; KEYS], len: usize }
 impl Counters {
     fn parse(text: &[u8]) -> Option<Counters> {
@@ -118,6 +119,7 @@ struct Instance { from: u64, manifest: Manifest, counters: Counters }
 fn open(names: &Names, buffer: &mut [u8]) -> Option<Instance> {
     let restored = match restore(&mut Remote, names, CONTRACT, VERSION, SCHEMA, buffer) {
         Ok(r) => r,
+        Err(Error::Version(found)) => { mind::println!("tally: a checkpoint of format {}; this build reads format {} and converts none", found, FORMAT); return None }
         Err(e) => { mind::println!("tally: restore: {:?}", e); return None }
     };
     let (manifest, counters) = match restored {
@@ -159,9 +161,32 @@ fn show(i: &Instance) {
     for e in i.manifest.pending() { mind::println!("EFFECT {} {} PENDING: RECONCILE BEFORE TRYING AGAIN", e.id, e.what); }
 }
 
+// Adds `n` (a number, 1 if none) to `key`. With an operation (`client`, `id`) it is applied once: a repeat is answered
+// with its first result and an older one refused.
+fn add(names: &Names, i: &mut Instance, buffer: &mut [u8], state: &mut [u8], key: &str, n: Option<&str>, op: Option<(&str, &str)>) {
+    let Ok(n) = n.map_or(Ok(1), |n| n.parse::<u64>()) else { mind::println!("tally: not a count"); return };
+    let op = match op.map(|(client, id)| (client, id.parse::<u64>())) {
+        None => None,
+        Some((client, Ok(id))) if id > 0 => Some((client, id)),
+        Some(_) => { mind::println!("tally: an operation ID is a number from 1"); return }
+    };
+    if let Some((client, id)) = op {
+        match i.manifest.applied(client, id) {
+            Applied::Repeat(total) => { mind::println!("REPEATED {} {}: ANSWERED {}, NOT APPLIED AGAIN", client, id, total); return }
+            Applied::Stale => { mind::println!("tally: operation {} of {} is older than its last: refused", id, client); return }
+            Applied::New => {}
+        }
+    }
+    let Some(total) = i.counters.add(key, n) else { mind::println!("tally: add: a key of at most {} printable bytes, at most {} keys", KEY, KEYS); return };
+    if let Some((client, id)) = op {
+        if i.manifest.record(client, id, total).is_err() { mind::println!("tally: a client of at most {} printable bytes", checkpoint::LABEL); return; }
+    }
+    if commit(names, i, buffer, state) { mind::println!("SAVED EPOCH {} SEQUENCE {}: {} = {}", i.from, i.manifest.sequence, key, total); }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("tally — named counters kept by checkpoints in the block store (contract tally 1).\nUsage: tally [show] | add <key> [n] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed");
+    mind::about!("tally — named counters kept by checkpoints in the block store (contract tally 2).\nUsage: tally [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if !holds("blockstore") { mind::println!("tally: no client of the block store: nothing to restore from"); return; }
     let (buffer, state) = unsafe { (&mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(STATE)) };
@@ -173,15 +198,19 @@ fn main(_info: &'static BootInfo) {
         mind::println!("tally: AUTHORITY {} NOT HELD NOW", missing);
         files &= missing.as_str() != "files";
     }
-    let mut words = mind::process::args_str().split_whitespace();
-    match (words.next(), words.next(), words.next(), words.next()) {
-        (None | Some("show"), None, ..) => show(&i),
-        (Some("add"), Some(key), n, None) => {
-            let Ok(n) = n.map_or(Ok(1), |n| n.parse::<u64>()) else { mind::println!("tally: not a count"); return };
-            let Some(total) = i.counters.add(key, n) else { mind::println!("tally: add: a key of at most {} printable bytes, at most {} keys", KEY, KEYS); return };
-            if commit(&names, &mut i, buffer, state) { mind::println!("SAVED EPOCH {} SEQUENCE {}: {} = {}", i.from, i.manifest.sequence, key, total); }
-        }
-        (Some("hold"), Some(seconds), Some(key), None) => {
+    let (mut words, mut count) = ([""; 7], 0);
+    for w in mind::process::args_str().split_whitespace() {
+        if count == words.len() { count += 1; break; }
+        words[count] = w;
+        count += 1;
+    }
+    match words.get(..count).unwrap_or(&[]) {
+        [] | ["show"] => show(&i),
+        ["add", key] => add(&names, &mut i, buffer, state, key, None, None),
+        ["add", key, n] => add(&names, &mut i, buffer, state, key, Some(n), None),
+        ["add", key, "op", client, id] => add(&names, &mut i, buffer, state, key, None, Some((client, id))),
+        ["add", key, n, "op", client, id] => add(&names, &mut i, buffer, state, key, Some(n), Some((client, id))),
+        ["hold", seconds, key] => {
             // An instance that restored, then stalls: if another saved meanwhile, its save is fenced.
             let Ok(seconds) = seconds.parse::<usize>() else { mind::println!("tally: not a number of seconds"); return };
             mind::println!("HOLDING EPOCH {}", i.from);
@@ -189,7 +218,8 @@ fn main(_info: &'static BootInfo) {
             let Some(total) = i.counters.add(key, 1) else { return };
             if commit(&names, &mut i, buffer, state) { mind::println!("SAVED EPOCH {} SEQUENCE {}: {} = {}", i.from, i.manifest.sequence, key, total); }
         }
-        (Some("effect"), Some(file), crash, None) => {
+        ["effect", file, crash @ ..] if crash.len() <= 1 && crash.iter().all(|c| *c == "crash") => {
+            let crash = crash.first().copied();
             if !files { mind::println!("tally: effect refused: this instance does not hold the files authority"); return; }
             if let Some(e) = i.manifest.pending().next() { mind::println!("tally: effect refused: effect {} is pending; reconcile it first", e.id); return; }
             let mut what = [0u8; 32];
@@ -206,13 +236,13 @@ fn main(_info: &'static BootInfo) {
             i.manifest.settle(id, if written { Outcome::Done } else { Outcome::Failed });
             if commit(&names, &mut i, buffer, state) { mind::println!("EFFECT {} {} SAVED EPOCH {}", id, if written { "DONE" } else { "FAILED" }, i.from); }
         }
-        (Some("reconcile"), Some(id), Some(outcome), None) => {
-            let outcome = match outcome { "done" => Outcome::Done, "failed" => Outcome::Failed, _ => { mind::println!("tally: reconcile <id> done|failed"); return } };
+        ["reconcile", id, outcome] => {
+            let outcome = match *outcome { "done" => Outcome::Done, "failed" => Outcome::Failed, _ => { mind::println!("tally: reconcile <id> done|failed"); return } };
             let Ok(id) = id.parse::<u64>() else { mind::println!("tally: not an effect id"); return };
             if !i.manifest.pending().any(|e| e.id == id) { mind::println!("tally: effect {} is not pending", id); return; }
             i.manifest.settle(id, outcome);
             if commit(&names, &mut i, buffer, state) { mind::println!("RECONCILED {} SAVED EPOCH {}", id, i.from); }
         }
-        _ => mind::println!("Usage: tally [show] | add <key> [n] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed"),
+        _ => mind::println!("Usage: tally [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed"),
     }
 }

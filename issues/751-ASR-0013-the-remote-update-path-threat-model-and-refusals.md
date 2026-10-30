@@ -32,6 +32,7 @@
   - The test keys' risk is stated: on the development disks the path installs anyone's code.
   - Open: refusing the word on a disk that trusts the test keys.
   - It is a design until the parts exist (MC-12.3). Review by `EFF`, `UPD` and `KRN` is asked on `internal-dev-messages`.
+- **2026-10-30, the maintainer's decision on the test keys** (0.3): the word is not refused on a disk that trusts them, because the work goes through this path now; `init`'s warning stays. The model records the risk that follows.
 
 ## Acceptance criteria
 

@@ -3737,8 +3737,21 @@ def store_suite(vm):
     require(tally("effect fy.txt"), "tally: effect refused: effect 1 is pending; reconcile it first")
     require(tally("reconcile 1 done"), "RECONCILED 1 SAVED EPOCH 6")
     require(tally("effect fy.txt"), "EFFECT 2 DONE SAVED EPOCH 8")
+    # 313-STO-0026: an addition sent with an operation ID is applied once. Sent again, also after the store restarted,
+    # it is answered with its first result; an older one is refused.
+    require(tally("add plums 2 op shell 1"), "SAVED EPOCH 9 SEQUENCE 9: plums = 2")
+    require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+    require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
+    require(tally("add plums 5 op shell 2"), "SAVED EPOCH 10 SEQUENCE 10: plums = 7")
+    require(tally("add plums 5 op shell 1"), "tally: operation 1 of shell is older than its last: refused")
+    shown = tally("show")
+    for line in ("TALLY EPOCH 10 SEQUENCE 10", "plums = 7"):
+        require(shown, line)
     print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
-          "effect cut short comes back pending and is reconciled before another begins", flush=True)
+          "effect cut short comes back pending and is reconciled before another begins, an operation sent again is "
+          "applied once (also after the store restarted)", flush=True)
     store_domains_check(vm)
     fm_store_check(vm)
 

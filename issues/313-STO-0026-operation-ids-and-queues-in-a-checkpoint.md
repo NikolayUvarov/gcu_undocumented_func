@@ -35,6 +35,14 @@ A checkpoint ([306](../issues-done/306-checkpoints-and-rebinding.done)) records 
   - `tally add <key> [n] [op <client> <id>]` counts a repeated operation once, and says it is a repeat;
   - its contract becomes version 2.
 
+## Decisions while building (2026-10-30)
+
+- **The claim is a save,** with nothing changed, before the first request: no function of its own.
+- **The five counts stand together** after the state's CID, then `inbox` and `sent`, then the lists in order. A manifest of format 2 thus starts as format 1 did, up to its counts.
+- **`sent` is kept apart from the outbox,** so a sequence is never given twice, even after every message was acknowledged.
+- **An acknowledged message's slot is cleared,** so two manifests that encode alike compare alike.
+- **`tally`'s contract is version 2.** A repeat prints `REPEATED <client> <id>: ANSWERED <count>, NOT APPLIED AGAIN`; an older ID is refused; an addition without an ID is applied each time, as before. `tally` takes no messages, so the outbox is checked on the host model alone.
+
 ## Acceptance criteria
 
 - Host tests (`tests/checkpoint_host.rs`):
