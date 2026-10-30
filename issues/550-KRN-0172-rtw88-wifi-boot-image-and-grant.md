@@ -2,7 +2,7 @@
 
 **Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (landed in round 37, `main` c8fe8d03, both architectures gated; the run on the DEXP left, DRV's) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track A (drivers), track D (network) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
 
-**Asked by:** the drivers track (`DRV`) on 2026-10-27, for [550-DRV-0042](550-DRV-0042-rtl8821ce-wifi.md), in `KRN/2026-10-27T1700Z-DRV-the-boot-image-rtw88-wifi-and-its-grant.md` on `internal-dev-messages`.
+**Asked by:** the drivers track (`DRV`) on 2026-10-27, for [550-DRV-0042](../issues-done/550-DRV-0042-rtl8821ce-wifi.done), in `KRN/2026-10-27T1700Z-DRV-the-boot-image-rtw88-wifi-and-its-grant.md` on `internal-dev-messages`.
 - **Why now:** the maintainer's order for the DEXP is Wi-Fi first. No Ethernet cable is at hand, so the RTL8821CE is the only way onto the network for the server's Effector agent.
 
 ## Problem
@@ -46,4 +46,4 @@
 
 ## Related
 
-[550-DRV-0042](550-DRV-0042-rtl8821ce-wifi.md), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done) (`wlan` and `RADIOS`), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) (the pattern for `rtw89_wifi`), [173-KRN-0036](../issues-done/173-KRN-0036-safe-start.done) (`boot_flags`).
+[550-DRV-0042](../issues-done/550-DRV-0042-rtl8821ce-wifi.done), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done) (`wlan` and `RADIOS`), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) (the pattern for `rtw89_wifi`), [173-KRN-0036](../issues-done/173-KRN-0036-safe-start.done) (`boot_flags`).
