@@ -3901,6 +3901,7 @@ def store_suite(vm):
     tally_messages_check(vm)
     store_tree_check(vm)
     store_copy_check(vm)
+    tally_move_check(vm)
 
 
 def run_tally(vm, args):
@@ -3913,6 +3914,16 @@ def restart_store(vm):
     """A new instance of the block store, mounted on the same medium."""
     require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
     require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+
+
+def reboot_blank_store(vm):
+    """The store suite's reboot: the store's RAM disk starts blank, while the boot volume (QEMU's virtual FAT, whose
+    writes the snapshot overlay keeps) keeps what was written to it."""
+    vm.send("reboot\n")
+    vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=180)
+    vm.expect("MIND>", timeout=120)
+    time.sleep(1); vm.collect(); vm.output = ""
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 ")
 
 
 def tally_messages_check(vm):
@@ -4062,11 +4073,7 @@ def store_copy_check(vm):
     require_all(blocks("import --check data/names.car"), f"NAME home VERSION {home[1]} ROOT {home[2]}", f"NAME list/n00 VERSION 1 ROOT {left[1]}",
                 f"CHECKED data/names.car: 2 NAMES, {written[1]} BLOCKS, {written[2]} BYTES; SHA-256 {written[3]}")
     # The reboot: the RAM disk starts blank, the boot volume keeps the file.
-    vm.send("reboot\n")
-    vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=180)
-    vm.expect("MIND>", timeout=120)
-    time.sleep(1); vm.collect(); vm.output = ""
-    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 ")
+    reboot_blank_store(vm)
     require(blocks("resolve home"), "blocks: resolve home: NotFound")
     out = blocks("import data/names.car")
     require_all(out, f"PUBLISHED home VERSION 1 ROOT {home[2]} (VOLATILE)", f"PUBLISHED list/n00 VERSION 1 ROOT {left[1]} (VOLATILE)")
@@ -4094,6 +4101,73 @@ def store_copy_check(vm):
     print("PASS: copies in a file: two names exported to the boot volume come back whole into the store a reboot left "
           "blank (each at its root, every file read back), an import again changes nothing, and a name published since at "
           "another root is left as it is", flush=True)
+
+
+def tally_move_check(vm):
+    """313-STO-0033: a component moved to another store through a copy, active in one place only. `tally as a` counts
+    with operation IDs, owes a message, and is moved to a file on the boot volume. The release fences an instance that
+    restored before it; afterwards every run of `a` at the source is refused by the release, never started fresh, and
+    both names hold the release record, which names the last checkpoint the names' history keeps; a second move writes
+    the same copy from it. After a reboot leaves the store blank, `blocks import` brings the copy in, and `tally as a`
+    goes on from its count, sequence and outbox at the next epoch of the new store, a repeated operation answered from
+    the record."""
+    import base64
+    def tally(args):
+        return run_tally(vm, args)
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def cid_bytes(text):
+        return base64.b32decode(text[1:].upper() + "=" * (-len(text[1:]) % 8))
+    vm.command("mkdir data")
+    require(tally("as a add apples 4 op shell 1"), "SAVED EPOCH 1 SEQUENCE 1: apples = 4")
+    require(tally("as a add apples 3 op shell 2"), "SAVED EPOCH 2 SEQUENCE 2: apples = 7")
+    require_all(tally("as a send apples 2 to b"), "OWED apples 2 TO b 1", "SAVED EPOCH 3 SEQUENCE 3: apples = 5")
+    last = blocks("snapshot checkpoint/tally.a checkpoint/tally.a/state")
+    manifest = re.search(r"^checkpoint/tally\.a VERSION 3 ROOT (\S+)\r?$", last, re.M)
+    state = re.search(r"^checkpoint/tally\.a/state VERSION 3 ROOT (\S+)\r?$", last, re.M)
+    assert manifest and state, last
+    # An instance restores epoch 3 and stalls; the move releases the component meanwhile; the stalled one is fenced.
+    held = re.search(r"PID=(\d+) NAME=tally BACKGROUND", vm.command("run tally as a hold 15 pears &"))
+    assert held, "tally did not start in the background"
+    require(vm.program_logs(held[1], "HOLDING EPOCH"), "HOLDING EPOCH 3")
+    out = tally("as a move data/tally-a.car")
+    require(out, "RELEASED a EPOCH 4: NO INSTANCE IN THIS STORE SAVES IT AGAIN")
+    moved = re.search(r"^MOVED a EPOCH 3 TO data/tally-a\.car: 2 BLOCKS, (\d+) BYTES; SHA-256 ([0-9a-f]{64})\r?$", out, re.M)
+    assert moved, out
+    require(vm.program_logs(held[1], "FENCED"), "tally: FENCED: epoch 3 is no longer current; nothing saved")
+    # At the source a run of `a` is refused by the release: nothing restored, nothing saved, never a fresh start.
+    for args in ("as a show", "as a add apples 1", "as a add apples 3 op shell 2", "as a receive b"):
+        out = tally(args)
+        require(out, "tally: RELEASED: a was moved out of this store at epoch 4; nothing restored or saved here (MC-6.12)")
+        assert "SAVED" not in out and "TALLY EPOCH" not in out and "REPEATED" not in out, out
+    # Both names hold the release record (written here from its format: MIND-RLS, format 2, the epoch, the two CIDs),
+    # and the history keeps the last checkpoint.
+    record = b"MIND-RLS" + (2).to_bytes(2, "little") + (3).to_bytes(8, "little") + cid_bytes(manifest[1]) + cid_bytes(state[1])
+    snap = blocks("snapshot checkpoint/tally.a checkpoint/tally.a/state")
+    require_all(snap, f"checkpoint/tally.a VERSION 4 ROOT {cid_raw(record)}", f"checkpoint/tally.a/state VERSION 4 ROOT {cid_raw(record)}")
+    require(blocks("history checkpoint/tally.a"), f"checkpoint/tally.a VERSION 3 ROOT {manifest[1]}")
+    require(blocks("history checkpoint/tally.a/state"), f"checkpoint/tally.a/state VERSION 3 ROOT {state[1]}")
+    # Moved again: the same copy, written from the names' history.
+    copy = f"MOVED a EPOCH 3 TO data/tally-a.car: 2 BLOCKS, {moved[1]} BYTES; SHA-256 {moved[2]}"
+    require_all(tally("as a move data/tally-a.car"), "RELEASED a EPOCH 4 BEFORE: ITS LAST CHECKPOINT IS WRITTEN AGAIN", copy)
+    require_all(blocks("import --check data/tally-a.car"), f"NAME checkpoint/tally.a VERSION 3 ROOT {manifest[1]}",
+                f"NAME checkpoint/tally.a/state VERSION 3 ROOT {state[1]}",
+                f"CHECKED data/tally-a.car: 2 NAMES, 2 BLOCKS, {moved[1]} BYTES; SHA-256 {moved[2]}")
+    reboot_blank_store(vm)
+    require(tally("as a show"), "TALLY EPOCH 0 SEQUENCE 0")
+    out = blocks("import data/tally-a.car")
+    require_all(out, f"PUBLISHED checkpoint/tally.a VERSION 1 ROOT {manifest[1]} (VOLATILE)",
+                f"PUBLISHED checkpoint/tally.a/state VERSION 1 ROOT {state[1]} (VOLATILE)", "(2 STORED, 0 REPAIRED, 0 HELD)")
+    # The moved-in checkpoint: its sequence, counts and outbox, at the names' version here.
+    require_all(tally("as a show"), "TALLY EPOCH 1 SEQUENCE 3", "apples = 5", "OWED apples 2 TO b 1")
+    require(tally("as a add apples 3 op shell 2"), "REPEATED shell 2: ANSWERED 7, NOT APPLIED AGAIN")
+    require(tally("as a add apples 1 op shell 3"), "SAVED EPOCH 2 SEQUENCE 4: apples = 6")
+    require_all(tally("as a show"), "TALLY EPOCH 2 SEQUENCE 4", "apples = 6", "OWED apples 2 TO b 1")
+    print("PASS: a move through a copy: tally.a, moved to the boot volume, is released at the source (an instance restored "
+          "before is fenced, every later run refused by the release, never fresh) and its copy written again the same from "
+          "the names' history; after a reboot left the store blank, imported, it goes on from its sequence, count and "
+          "outbox at the new store's next epoch, a repeated operation answered from the record", flush=True)
 
 
 def store_domains_check(vm):

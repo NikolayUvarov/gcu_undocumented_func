@@ -7,12 +7,16 @@
 // if the instance ends first (Appendix B.4). An addition sent with an operation ID is applied once: sent again, it is
 // answered with its first result (313-STO-0026). A component moves an amount to another as a message it owes: the
 // receiver reads the sender's checkpoint and applies it once, the sender clears it once the receiver's checkpoint shows
-// it applied, and each writes only its own checkpoint (313-STO-0030). A console program: it asks the shell for the
-// store's client and the user's files, and holds nothing a checkpoint could hand back.
+// it applied, and each writes only its own checkpoint (313-STO-0030). A component moves to another store through a copy:
+// `move` releases it, so no instance in this store saves it again, and writes its last checkpoint to a file that `blocks
+// import` brings into another store, where the next run goes on from it (313-STO-0033). A console program: it asks the
+// shell for the store's client and the user's files, and holds nothing a checkpoint could hand back.
 use core::fmt::Write;
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
-use mind::checkpoint::{self, read, rebind, restore, save, Applied, Error, Label, Manifest, Message, Names, Outcome, Restored, FORMAT, LABEL, MAX, OUTBOX};
-use mind::cid::Cid;
+use mind::car::{self, Named};
+use mind::checkpoint::{self, read, rebind, release, released, restore, save, Applied, Error, Label, Manifest, Message, Names, Outcome, Restored, FORMAT, LABEL, MAX, OUTBOX};
+use mind::cid::{Cid, Codec};
+use mind::dag::{self, CHUNK};
 use mind::fs::File;
 use mind::idl::blockstore::{self, Update};
 use mind::idl::codec::{List, Text};
@@ -33,6 +37,7 @@ const STATE_MAX: usize = KEYS * (KEY + 22) + OUTBOX * 42;
 
 static mut BUFFER: [u8; MAX] = [0; MAX];
 static mut STATE: [u8; STATE_MAX] = [0; STATE_MAX];
+static mut CHUNKS: [[u8; CHUNK]; 2] = [[0; CHUNK]; 2];
 
 /// The store's client as checkpoints need it.
 struct Remote;
@@ -58,6 +63,31 @@ impl checkpoint::Store for Remote {
             Ok(Err(blockstore::Error::Conflict)) => Err(Error::Fenced),
             _ => Err(Error::Store),
         }
+    }
+}
+
+/// The store's blocks as a copy reads them: nothing is put through it.
+impl dag::Blocks for Remote {
+    fn put(&mut self, _: Codec, _: &[u8]) -> Result<Cid, dag::Error> { Err(dag::Error::Store) }
+    fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
+        match blockstore::get(STORE, &cid.to_bytes(), out) {
+            Ok(Ok(n)) => Ok(n),
+            Ok(Err(blockstore::Error::NotFound)) => Err(dag::Error::NotFound),
+            Ok(Err(blockstore::Error::Corrupt)) => Err(dag::Error::Corrupt),
+            _ => Err(dag::Error::Store),
+        }
+    }
+    fn has(&mut self, cid: &Cid) -> Result<bool, dag::Error> {
+        match blockstore::has(STORE, &cid.to_bytes()) { Ok(Ok(h)) => Ok(h), _ => Err(dag::Error::Store) }
+    }
+}
+
+// A copy written to a file, made at its first byte.
+struct Output<'p> { path: &'p str, file: Option<File> }
+impl car::Target for Output<'_> {
+    fn write(&mut self, data: &[u8]) -> Result<(), car::Error> {
+        if self.file.is_none() { self.file = Some(File::create(self.path).map_err(|_| car::Error::File)?); }
+        match self.file.as_mut().map(|f| f.write(data)) { Some(Ok(n)) if n == data.len() => Ok(()), _ => Err(car::Error::File) }
     }
 }
 
@@ -156,13 +186,21 @@ fn holds(authority: &str) -> bool {
 /// acknowledged since its last save.
 struct Instance { me: Label, from: u64, manifest: Manifest, counters: Counters, acked: [Message; OUTBOX], acks: usize }
 
+// Why a restore refused the component's last checkpoint.
+fn refused(me: &Label, e: Error) {
+    match e {
+        Error::Version(found) => mind::println!("tally: a checkpoint of format {}; this build reads format {} and converts none", found, FORMAT),
+        Error::Contract(found) => mind::println!("tally: a checkpoint of contract version {}; this build follows tally {} and converts none", found, VERSION),
+        Error::Schema(found) => mind::println!("tally: a state of schema {}; this build reads schema {} and converts none", found, SCHEMA),
+        Error::Released(epoch) => mind::println!("tally: RELEASED: {} was moved out of this store at epoch {}; nothing restored or saved here (MC-6.12)", short(me), epoch),
+        e => mind::println!("tally: restore: {:?}", e),
+    }
+}
+
 fn open(me: Label, names: &Names, buffer: &mut [u8]) -> Option<Instance> {
     let restored = match restore(&mut Remote, names, CONTRACT, VERSION, SCHEMA, buffer) {
         Ok(r) => r,
-        Err(Error::Version(found)) => { mind::println!("tally: a checkpoint of format {}; this build reads format {} and converts none", found, FORMAT); return None }
-        Err(Error::Contract(found)) => { mind::println!("tally: a checkpoint of contract version {}; this build follows tally {} and converts none", found, VERSION); return None }
-        Err(Error::Schema(found)) => { mind::println!("tally: a state of schema {}; this build reads schema {} and converts none", found, SCHEMA); return None }
-        Err(e) => { mind::println!("tally: restore: {:?}", e); return None }
+        Err(e) => { refused(&me, e); return None }
     };
     let (manifest, counters) = match restored {
         Restored::Fresh { .. } => {
@@ -307,9 +345,48 @@ fn receive(names: &Names, i: &mut Instance, buffer: &mut [u8], state: &mut [u8],
     if let Ok(1..) = applied { mind::println!("SAVED EPOCH {} SEQUENCE {}", i.from, i.manifest.sequence); }
 }
 
+// Moves the component out of this store: releases it, so no instance here saves it again, then writes its last
+// checkpoint to `file`, a copy for `blocks import` into another store. Released before: the copy is written again from
+// the names' history.
+fn move_out(me: &Label, names: &Names, file: &str, buffer: &mut [u8]) {
+    if !holds("files") { mind::println!("tally: move refused: this instance does not hold the files authority"); return; }
+    let r = match restore(&mut Remote, names, CONTRACT, VERSION, SCHEMA, buffer) {
+        Ok(Restored::Found(m)) => match release(&mut Remote, names, m.epoch, buffer) {
+            Ok((r, epoch)) => { mind::println!("RELEASED {} EPOCH {}: NO INSTANCE IN THIS STORE SAVES IT AGAIN", short(me), epoch); r }
+            Err(Error::Fenced) => { mind::println!("tally: FENCED: epoch {} is no longer current; nothing released", m.epoch); return }
+            Err(e) => { mind::println!("tally: release: {:?}", e); return }
+        },
+        Ok(Restored::Fresh { .. }) => { mind::println!("tally: {} has no checkpoint in this store: nothing to move", short(me)); return }
+        Err(Error::Released(epoch)) => match released(&mut Remote, names, buffer) {
+            Ok(r) => { mind::println!("RELEASED {} EPOCH {} BEFORE: ITS LAST CHECKPOINT IS WRITTEN AGAIN", short(me), epoch); r }
+            Err(e) => { mind::println!("tally: release: {:?}", e); return }
+        },
+        Err(e) => return refused(me, e),
+    };
+    let named = [Named { name: names.manifest(), version: r.epoch, root: r.manifest }, Named { name: names.state(), version: r.epoch, root: r.state }];
+    let [chunk, block] = unsafe { &mut *core::ptr::addr_of_mut!(CHUNKS) };
+    let mut output = Output { path: file, file: None };
+    // Each object of a checkpoint of tally is one raw block: a step each.
+    let written = car::write(&mut Remote, &named, &mut output, 1, chunk, block).map(|(_, w)| w);
+    let whole = written.is_ok() && output.file.as_ref().is_some_and(|f| f.flush().is_ok());
+    match written {
+        Ok(w) if whole => {
+            let mut hex = [0u8; 64];
+            let mut h = Writer { out: &mut hex, len: 0 };
+            for b in w.digest { let _ = write!(h, "{:02x}", b); }
+            mind::println!("MOVED {} EPOCH {} TO {}: {} BLOCKS, {} BYTES; SHA-256 {}", short(me), r.epoch, file, w.blocks, w.bytes, core::str::from_utf8(&hex).unwrap_or(""));
+        }
+        failed => {
+            if output.file.take().is_some() { let _ = mind::fs::remove(file); }
+            let why = failed.err().unwrap_or(car::Error::File);
+            mind::println!("tally: move: {} not written whole ({:?}), and removed; released here, the next move writes it", file, why);
+        }
+    }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("tally — named counters kept by checkpoints in the block store (contract tally 3). As <name> it is the component tally.<name>, which owes amounts to others and receives what they owe it.\nUsage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed\n       tally as <name> send <key> <n> to <name> | receive <name>");
+    mind::about!("tally — named counters kept by checkpoints in the block store (contract tally 3). As <name> it is the component tally.<name>, which owes amounts to others and receives what they owe it. A move releases it here and writes its last checkpoint to a file, for `blocks import` into another store.\nUsage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed | move <file>\n       tally as <name> send <key> <n> to <name> | receive <name>");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if !holds("blockstore") { mind::println!("tally: no client of the block store: nothing to restore from"); return; }
     let (buffer, state) = unsafe { (&mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(STATE)) };
@@ -326,6 +403,8 @@ fn main(_info: &'static BootInfo) {
         Some(None) => { mind::println!("tally: a component's name: at most {} of A-Z a-z 0-9 . _ -", LABEL - CONTRACT.len() - 1); return }
     };
     let names = Names::of(me.as_str()).unwrap();
+    // A move restores on its own: a component released before is written again, not refused.
+    if let ["move", file] = words { return move_out(&me, &names, file, buffer); }
     let Some(mut i) = open(me, &names, buffer) else { return };
     // The rights the checkpoint names come from this instance's grants, never from the checkpoint (MC-6.11).
     let mut files = true;
@@ -374,6 +453,6 @@ fn main(_info: &'static BootInfo) {
             i.manifest.settle(id, outcome);
             if commit(&names, &mut i, buffer, state) { mind::println!("RECONCILED {} SAVED EPOCH {}", id, i.from); }
         }
-        _ => mind::println!("Usage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed | as <name> send <key> <n> to <name> | as <name> receive <name>"),
+        _ => mind::println!("Usage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed | move <file> | as <name> send <key> <n> to <name> | as <name> receive <name>"),
     }
 }

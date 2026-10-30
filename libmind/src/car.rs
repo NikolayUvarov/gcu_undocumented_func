@@ -577,8 +577,20 @@ pub fn export<S: Store, T: Target>(store: &mut S, names: &[&str], target: T, ste
     for &k in &order[..count] { each(names[k], heads[k].0, heads[k].1); }
     if heads[..count].iter().any(|h| h.1.is_none()) { return Err(Error::Missing); }
     let named = |i: usize| Named { name: names[order[i]], version: heads[order[i]].0, root: heads[order[i]].1.unwrap() };
+    write_each(store, count, named, target, steps, buffer, block)
+}
+
+/// Writes a copy of `names` at the roots given, as `export` writes the current ones: a version a name's history keeps,
+/// for one. 1 to NAMES of them, sorted by name with each once, each a name the store takes at a version from 1 (else
+/// Name).
+pub fn write<B: Blocks, T: Target>(blocks: &mut B, names: &[Named], target: T, steps: u64, buffer: &mut [u8; CHUNK], block: &mut [u8; CHUNK]) -> Result<(T, Exported), Error> {
+    write_each(blocks, names.len(), |k| names[k], target, steps, buffer, block)
+}
+
+fn write_each<'a, B: Blocks, T: Target>(store: &mut B, count: usize, named: impl Fn(usize) -> Named<'a>, target: T, steps: u64, buffer: &mut [u8; CHUNK],
+                                        block: &mut [u8; CHUNK]) -> Result<(T, Exported), Error> {
     let mut node = [0u8; NODE_MAX];
-    let len = encode_each(count, named, &mut node)?;
+    let len = encode_each(count, &named, &mut node)?;
     let root = Cid::of(Codec::DagCbor, &node[..len]);
     let mut writer = Writer::new(target, &root)?;
     writer.section(&root, &node[..len])?;
