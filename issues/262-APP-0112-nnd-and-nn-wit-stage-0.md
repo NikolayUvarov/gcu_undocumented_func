@@ -88,7 +88,15 @@
 - **`nncheck`**, the first part of item 5: its client's badge and rights, `nnd`'s status, `retire` and `retire-all` refused (`owner`), and `hold`.
 - **Tests:**
   - three host tests in `tests/shell_host.rs`;
-  - the QEMU check `nn_clients_check` in the suite `nnd` (with `KRN`'s `nnd_check`), added to the shell lanes of `scripts/ci_local.sh` and CI on x86 and aarch64. Its run is recorded below once made.
+  - the QEMU check `nn_clients_check` in the suite `nnd` (with `KRN`'s `nnd_check`), added to the shell lanes of `scripts/ci_local.sh` and CI on x86 and aarch64.
+  - **Its run:** passed on x86 QEMU with 4 CPUs, TCG (branch 8f3a60e6, 2026-10-30). It shows, on that configuration only:
+    - `nncheck` gets badge 1 with rights 6 (no right to badge); its `retire` and `retire-all` are refused `owner`;
+    - nnd retires the badge after each exit, and the next start takes badge 1 again;
+    - with two held, the shell keeps copies badged 1 and 2 beside its own, and `nn status` names their PIDs;
+    - `dzen-clock`, which does not ask, has no `SLOT_NN`;
+    - once the first ends, its copy is gone from the shell and badge 1 is retired and taken again while 2 is held;
+    - after the shell is killed and `init` starts it again, the old shell's programs, still running, hold no client, the new shell retired every badge, and the next start gets badge 1.
+  - aarch64 is not run yet.
 - **Left:** `nn load | run | bench`; `nncheck`'s native steps (section 8, steps 1–9) with `NRL`'s model on the image; `nnd`'s two scopes; the profile entry after the native run.
 
 ## Acceptance criteria
