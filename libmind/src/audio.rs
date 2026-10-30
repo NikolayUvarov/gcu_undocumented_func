@@ -9,6 +9,10 @@ use core::cell::UnsafeCell;
 
 const CHUNK: usize = 16 * 1024;
 
+/// The badge of the audio_gw client that may change the levels: init gives it to the shell alone (audio.wit 1.2,
+/// 000-KRN-0118); programs get the loader's plain client.
+pub const BADGE_LEVELS: u16 = 1;
+
 struct Channel { pages: Pages, cap: usize }
 struct Shared(UnsafeCell<Option<Channel>>);
 unsafe impl Sync for Shared {} // processes are single-threaded

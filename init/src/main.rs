@@ -871,8 +871,10 @@ impl Init {
                 flags |= SPAWN_SCREEN;
                 // Badged: an unbadged copy could be badged for reboot by whoever holds it (351-KRN-0022).
                 grants.add(SLOT_INIT, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_LIFECYCLE)?, CLIENT);
-                for (slot, service) in [(SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
-                // The clock's client that may set it (211-KRN-0051); programs get the plain one from the loader.
+                for (slot, service) in [(SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
+                // The clients that may set the clock (211-KRN-0051) and the audio levels (000-KRN-0118); programs get the
+                // plain ones from the loader.
+                grants.add(SLOT_AUDIO, self.badged(&mut minted, "audio_gw", mind::audio::BADGE_LEVELS)?, CLIENT);
                 grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
