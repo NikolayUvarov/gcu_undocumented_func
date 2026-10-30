@@ -6902,7 +6902,7 @@ def update_suite(args):
         # 351-APP-0029: the shell's `update` shows the updater's view and the channel it holds (update.wit 1.1), says
         # check's refusal, asks before a rollback and is refused to a script without `requires: lifecycle`.
         out = vm.command("update", raw=True, timeout=60)
-        for line in ("UPDATE: RUNNING SLOT B, VERSION 6\n", "UPDATE: THE NEWER BOOT RECORD NAMES SLOT B, CONFIRMED", "UPDATE: CHANNEL stable: VERSION 6, MINIMUM 5, EXPIRES "):
+        for line in ("UPDATE: RUNNING SLOT B, VERSION 6\n", "UPDATE: THE NEWER BOOT RECORD NAMES SLOT B, CONFIRMED", "UPDATE: CHANNEL stable: VERSION 6, MINIMUM 6, EXPIRES "):  # release 6 raised it (351-UPD-0024)
             require(out.replace("\r", ""), line)
         require(out, ", READ FROM THE SOURCE")
         require(vm.command("update check", raw=True, timeout=60), "UPDATE: THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE")
@@ -6960,7 +6960,8 @@ def update_suite(args):
                      "UPDATE: THE CHANNEL HAS EXPIRED, OR THE CLOCK CANNOT BE READ: FETCH AND APPLY WAIT FOR A CURRENT ONE, ROLLBACK STAYS POSSIBLE"):
             require(out, line)
         vm.send("update apply 2\n")
-        require(vm.expect("(Y/N)", timeout=30), "APPLY THE RELEASE IN SLOT B (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 2 TRIES, FALLING BACK TO SLOT A.")
+        # The updater names the release staged there (its `staged`), so the question names its version.
+        require(vm.expect("(Y/N)", timeout=30), "APPLY VERSION 6 (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 2 TRIES, FALLING BACK TO SLOT A.")
         vm.send_bytes(b"n")
         require(vm.expect("MIND> ", timeout=30), "UPDATE: NOT APPLIED")
         assert "[UPDATER] APPLY:" not in vm.command("dmesg -s updater", raw=True)

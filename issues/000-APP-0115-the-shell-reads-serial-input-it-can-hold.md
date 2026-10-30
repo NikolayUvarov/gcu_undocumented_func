@@ -17,7 +17,7 @@ Numbered on 2026-10-30 from the kernel track's request in `requests-APP.md`, "Th
 
 ## Acceptance criteria
 
-- **The `shell` suite:** `logger` and 193 characters, written to the serial line at once, arrive whole, and `dmesg -s shell` holds them.
+- **The `shell` suite:** a line of 200 characters, written to the serial line at once, arrives whole. Done: `write ram:serial.txt` and 179 characters answers `WROTE 180 BYTES` and `cat` gives them back, in the `shell` suite on x86 QEMU with 4 CPUs (branch 8f3a60e6, 2026-10-30). The shell's own commands replaced `logger` and `dmesg`, which started a program and moved the PIDs the suite checks after it; the file is removed, as msh's check sums `ram:`.
 - **KRN's criterion in 000-KRN-0188**, which KRN adds to the `shell` suite: a line of 200 characters typed 50 times under four busy loops on the host arrives whole every time, on x86 and aarch64.
 
 ## Related
