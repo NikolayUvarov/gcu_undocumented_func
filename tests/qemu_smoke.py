@@ -5007,14 +5007,15 @@ def link_suite(args):
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
             # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
             # init's reboot client, the policy broker, the Wi-Fi station, the shell's commands (800-KRN-0148) and a writable
-            # scope of data/firmware/ in slot 7 (800-KRN-0173).
+            # scope of data/firmware/ in slot 7 (800-KRN-0173), and the input privilege in slot 8 (800-KRN-0191).
             base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"]), (15, pids["compositor"])]
             developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0)),  # 0: no station runs
                          (30, pids.get("shell")), (7, pids["vfs_server"])}
-            assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
+            assert re.search(r"^SLOT=8 GEN=0 KIND=6 ", caps, re.M), caps  # CAP_KIND_INPUT: keys and the pointer from the cable
+            assert count == len(held) + 1 and count - 1 - len(granted) <= 3 and len(own) <= 1, caps
             assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
             assert (7, pids["vfs_server"]) in granted, caps
-            require(vm.command("dmesg -s init", raw=True), "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; data/firmware/ TO WRITE")
+            require(vm.command("dmesg -s init", raw=True), "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; INPUT; data/firmware/ TO WRITE")
             assert re.search(r"\bfirmware\b", vm.command("ls data", raw=True)), "init made data/firmware/"
             # 800-KRN-0148: link's slot 30 is a client badged BADGE_SHELL_LINK (1) of the endpoint the shell serves in slot 37.
             commands = re.search(r"^SLOT=37 GEN=0 KIND=1 .*EP=(\d+)", vm.command(f"stat caps {pids['shell']}", raw=True), re.M)
