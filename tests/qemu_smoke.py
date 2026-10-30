@@ -1281,12 +1281,13 @@ def shell_suite(vm):
             time.sleep(.01)
         raise AssertionError(f"Timeout waiting for {fragment!r} and a prompt: {vm.output[-3000:]}")
     # 000-APP-0115 (for 000-KRN-0188): a line of 200 characters written to the serial line at once arrives whole; the
-    # shell's loop used to keep 64 bytes of one pass and drop the rest, the newline with it.
-    marker = "".join("0123456789ABCDEF"[i % 16] for i in range(193))
-    vm.process.stdin.write(f"logger {marker}\r".encode())
+    # shell's loop used to keep 64 bytes of one pass and drop the rest, the newline with it. The shell's own `write` and
+    # `cat`, so no program starts and the PIDs below keep their ordinals.
+    marker = "".join("0123456789ABCDEF"[i % 16] for i in range(179))
+    vm.process.stdin.write(f"write ram:serial.txt {marker}\r".encode())
     vm.process.stdin.flush()
-    vm.expect("MIND> ", timeout=20, after=marker)
-    require(vm.command("dmesg -s shell"), marker)
+    vm.expect("WROTE 180 BYTES TO ram:serial.txt", timeout=20)  # with its newline
+    require(vm.command("cat ram:serial.txt"), marker)
     vm.output = ""
     # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
     keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
