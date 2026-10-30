@@ -57,12 +57,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // directory (000-KRN-0170). ABI 24 moves it to 41 for SLOT_SECRETS, a program's client of its own secrets
 // (000-KRN-0182); 23 is never used, as a build of fast-test carried it with another layout. ABI 25 gives a task the CPUs
 // online at its start in BootInfo.cpu_count (0 before), and moves SLOT_DYNAMIC to 42 for SLOT_NN, the shell's client of the model service `nnd`, a boot image after `sysmon` (262-KRN-0178), and adds the USB
-// Bluetooth controller's driver `bt_hci` after `rtw88_wifi` (700-KRN-0176).
+// Bluetooth controller's driver `bt_hci` after `rtw88_wifi` (700-KRN-0176). ABI 26: COMPOSITOR_PULL returns in arg2 the
+// PID of the task whose screen is in front (750-KRN-0192).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 25;
+pub const ABI_VERSION: u32 = 26;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -173,7 +174,8 @@ pub const SYSCALL_COMPOSITOR_PULL: usize = 21;
 // COMPOSITOR_PULL's arg2 (000-KRN-0086). 0: the focused screen's state, as before. COMPOSITOR_FRAME: the same, but a
 // changed screen whose task still runs gives COMPOSITOR_BUSY (it may be mid-frame) and the task is held when it next
 // sleeps or waits for a message; one whose task waits gives 1 and the task is held, not run, until COMPOSITOR_RELEASE, until the compositor
-// waits or ends, or for 1 s at most, so the copy is of one whole frame (000-KRN-0186).
+// waits or ends, or for 1 s at most, so the copy is of one whole frame (000-KRN-0186). Every pull but a release returns
+// in arg2 the PID of the task whose screen is in front, 0 when none is (ABI 26, 750-KRN-0192).
 pub const COMPOSITOR_FRAME: usize = 1;
 pub const COMPOSITOR_RELEASE: usize = 2;
 pub const COMPOSITOR_BUSY: usize = 3;
