@@ -23,6 +23,7 @@ Programs keep their data as files on FAT, which has no history, no snapshots, no
 ## Tasks
 
 - [311-STO-0027](311-STO-0027-directories-as-objects.md): directories as objects, their walk, and the store's reachability through them.
+- [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md): a working tree in memory, published by compare-and-swap; `blocks tree`.
 
 ## Acceptance criteria
 

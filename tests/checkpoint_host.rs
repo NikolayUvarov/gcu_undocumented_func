@@ -1,7 +1,8 @@
 //! Host tests of checkpoints (libmind/src/checkpoint.rs, issue 306-STO-0009; MC-6.10, 6.11, 6.12): the manifest's
 //! one encoding and its refusals, save and restore through the block store's own logic (blockstore/src/store.rs on a
 //! simulated medium), fencing of a stale instance, contract and schema checks, names that disagree, effects that come
-//! back pending, authorities checked against what an instance holds.
+//! back pending, authorities checked against what an instance holds; messages between components, each writing only
+//! its own checkpoint (313-STO-0030).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -16,7 +17,7 @@ mod store;
 #[path = "../libmind/src/checkpoint.rs"]
 mod checkpoint;
 
-use checkpoint::{rebind, restore, save, Applied, Error, Label, Manifest, Names, Outcome, Restored, CLIENTS, MAX, OUTBOX};
+use checkpoint::{read, rebind, restore, save, Applied, Error, Label, Manifest, Names, Outcome, Restored, CLIENTS, MAX, OUTBOX};
 use cid::{Cid, Codec};
 use store::{hmac_sha256, Crypto, Device, Entry, Extent, Head, Pin, Update, BUFFER, SECTOR};
 
@@ -173,9 +174,10 @@ fn another_contract_schema_or_disagreeing_names_are_not_restored() {
     let mut buffer = [0u8; MAX];
     let mut m = manifest(&mut local, b"a=1\n");
     save(&mut local, &names, &mut m, 0, &mut buffer).unwrap();
-    assert_eq!(restore(&mut local, &names, "tally", 2, 1, &mut buffer), Err(Error::Contract));
-    assert_eq!(restore(&mut local, &names, "other", 1, 1, &mut buffer), Err(Error::Contract));
-    assert_eq!(restore(&mut local, &names, "tally", 1, 2, &mut buffer), Err(Error::Schema));
+    // Refused by the version found (313-STO-0030: tally 2 and its schema 1 are named, not read).
+    assert_eq!(restore(&mut local, &names, "tally", 2, 1, &mut buffer), Err(Error::Contract(1)));
+    assert_eq!(restore(&mut local, &names, "other", 1, 1, &mut buffer), Err(Error::Contract(1)));
+    assert_eq!(restore(&mut local, &names, "tally", 1, 2, &mut buffer), Err(Error::Schema(1)));
     // The state's name moved alone: the checkpoint no longer describes it.
     let elsewhere = local.0.put(Codec::Raw, b"a=5\n").unwrap();
     assert_eq!(local.0.publish(names.state().as_bytes(), 1, &elsewhere, 7), Ok(2));
@@ -442,4 +444,144 @@ fn a_checkpoint_of_format_1_is_refused_by_its_number() {
     let updates = [Update { name: names.manifest().as_bytes(), expected: 1, root: Some(block) }, Update { name: names.state().as_bytes(), expected: 1, root: Some(m.state) }];
     local.0.commit(&updates, 7).unwrap();
     assert_eq!(restore(&mut local, &names, "tally", 1, 1, &mut buffer), Err(Error::Version(1)));
+}
+
+// Messages between components (313-STO-0030): `a` owes `b` amounts, each its message's label. Each writes only its own
+// checkpoint and reads the other's.
+
+// The last checkpoint of component `of`, read and not restored.
+fn peek(store: &mut impl checkpoint::Store, of: &Names, buffer: &mut [u8]) -> Result<Option<Manifest>, Error> {
+    let mut state = [0u8; 32];
+    Ok(read(store, of, "model", 1, 1, buffer, &mut state)?.map(|(m, _)| m))
+}
+
+// The sender's step: `a` restores, clears what `b`'s last checkpoint shows applied, moves `n` (if any) out of its count
+// into a message owed to `b`, and saves. Err: the instance stopped.
+fn send(store: &mut impl checkpoint::Store, a: &Names, b: &Names, n: u64, buffer: &mut [u8]) -> Result<(), Error> {
+    let (mut m, from, count) = open(store, a, buffer)?;
+    if let Some(receiver) = peek(store, b, buffer)? { m.acknowledge("a", "b", &receiver, |_| {}); }
+    if n > 0 { m.send("b", &n.to_string())?; }
+    keep(store, a, &mut m, from, count - n, buffer).map(|_| ())
+}
+
+// The receiver's step: `b` restores, reads `a`'s last checkpoint, applies what `a` owes it and it has not applied, and
+// saves if it applied any. Returns how many; Err: the instance stopped.
+fn receive(store: &mut impl checkpoint::Store, a: &Names, b: &Names, buffer: &mut [u8]) -> Result<usize, Error> {
+    let (mut m, from, mut count) = open(store, b, buffer)?;
+    let Some(sender) = peek(store, a, buffer)? else { return Ok(0) };
+    let applied = m.receive("b", "a", &sender, |message| { count += message.what.as_str().parse::<u64>().unwrap(); Ok(count) })?;
+    if applied > 0 { keep(store, b, &mut m, from, count, buffer)?; }
+    Ok(applied)
+}
+
+// From the last checkpoints: `a`'s count, `b`'s, the amounts `a` owes `b` that `b` has not applied, and how many
+// messages `a` still owes `b` that `b` applied.
+fn ledger(store: &mut impl checkpoint::Store, a: &Names, b: &Names, buffer: &mut [u8]) -> (u64, u64, u64, usize) {
+    let (sender, _, kept) = open(store, a, buffer).unwrap();
+    let (receiver, _, got) = open(store, b, buffer).unwrap();
+    let last = receiver.clients().iter().find(|c| c.who.as_str() == "a").map_or(0, |c| c.op);
+    let owed = sender.owed("b").filter(|m| m.seq > last).map(|m| m.what.as_str().parse::<u64>().unwrap()).sum();
+    (kept, got, owed, sender.owed("b").filter(|m| m.seq <= last).count())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Step { Send(u64), Save, Receive }
+
+#[test]
+fn messages_between_components_are_applied_once_wherever_either_side_stops() {
+    // `a` counts 100 and moves 1, 2, 4, 8 and 16 to `b`; `b` receives between, twice in a row too; `a` saves between,
+    // clearing what `b` applied. Each step in turn stops after each number of the store's calls; the others run.
+    use Step::*;
+    let steps = [Send(1), Send(2), Receive, Receive, Save, Send(4), Receive, Send(8), Save, Receive, Send(16), Save];
+    for (k, stopped) in steps.iter().enumerate() {
+        for stop in 0..10 {
+            let mut medium = Memory { data: vec![0; 1024 * SECTOR] };
+            let mut room = Room::new();
+            let mut local = mount(&mut medium, &mut room);
+            let (a, b) = (Names::of("a").unwrap(), Names::of("b").unwrap());
+            let mut buffer = [0u8; MAX];
+            let (mut m, from, _) = open(&mut local, &a, &mut buffer).unwrap();
+            keep(&mut local, &a, &mut m, from, 100, &mut buffer).unwrap();
+            for (j, step) in steps.iter().enumerate() {
+                let mut store = Stopping { store: &mut local, left: if j == k { stop } else { usize::MAX } };
+                let done = match *step {
+                    Send(n) => send(&mut store, &a, &b, n, &mut buffer),
+                    Save => send(&mut store, &a, &b, 0, &mut buffer),
+                    Receive => receive(&mut store, &a, &b, &mut buffer).map(|_| ()),
+                };
+                // Both counts and what is owed and not applied: the same total at every stop.
+                let (kept, got, owed, applied) = ledger(&mut local, &a, &b, &mut buffer);
+                assert_eq!(kept + got + owed, 100, "{stopped:?} stopped after {stop} calls; step {j}");
+                // A sender's save leaves owed nothing its receiver applied.
+                if done.is_ok() && !matches!(step, Receive) { assert_eq!(applied, 0, "{stopped:?} stopped after {stop} calls; step {j}"); }
+            }
+            // Received and saved once more: nothing is owed, and each message was applied once.
+            receive(&mut local, &a, &b, &mut buffer).unwrap();
+            send(&mut local, &a, &b, 0, &mut buffer).unwrap();
+            let (kept, got, owed, applied) = ledger(&mut local, &a, &b, &mut buffer);
+            assert_eq!((kept + got, owed, applied, open(&mut local, &a, &mut buffer).unwrap().0.outbox().len()), (100, 0, 0, 0), "{stopped:?} stopped after {stop} calls");
+            assert!(got == 31 || matches!(stopped, Send(n) if got == 31 - n), "{stopped:?} stopped after {stop} calls: {got}");
+        }
+    }
+}
+
+#[test]
+fn a_receiver_reading_the_same_outbox_again_applies_nothing() {
+    let mut medium = Memory { data: vec![0; 512 * SECTOR] };
+    let mut room = Room::new();
+    let mut local = mount(&mut medium, &mut room);
+    let (a, b) = (Names::of("a").unwrap(), Names::of("b").unwrap());
+    let mut buffer = [0u8; MAX];
+    let mut state = [0u8; 32];
+    assert_eq!(read(&mut local, &a, "model", 1, 1, &mut buffer, &mut state), Ok(None));
+    let (mut m, from, _) = open(&mut local, &a, &mut buffer).unwrap();
+    keep(&mut local, &a, &mut m, from, 10, &mut buffer).unwrap();
+    send(&mut local, &a, &b, 3, &mut buffer).unwrap();
+    send(&mut local, &a, &b, 4, &mut buffer).unwrap();
+    // A read gives the sender's manifest and state, checked as a restore checks them.
+    let Ok(Some((sender, n))) = read(&mut local, &a, "model", 1, 1, &mut buffer, &mut state) else { panic!() };
+    assert_eq!((&state[..n], sender.owed("b").count(), sender.epoch), (&b"3"[..], 2, 3));
+    assert_eq!(read(&mut local, &a, "model", 2, 1, &mut buffer, &mut state), Err(Error::Contract(1)));
+    let versions = |local: &mut Local| [a.manifest(), a.state(), b.manifest(), b.state()].map(|n| local.0.snapshot(n.as_bytes()).unwrap().0);
+    assert_eq!(versions(&mut local), [3, 3, 0, 0]);
+    // `b` applies both in one save, and writes only its own names; read again, nothing is applied or saved.
+    assert_eq!(receive(&mut local, &a, &b, &mut buffer), Ok(2));
+    assert_eq!(receive(&mut local, &a, &b, &mut buffer), Ok(0));
+    assert_eq!((versions(&mut local), open(&mut local, &b, &mut buffer).unwrap().2), ([3, 3, 1, 1], 7));
+    // Cleared at `a`'s next save; then only the next message is new to `b`.
+    send(&mut local, &a, &b, 0, &mut buffer).unwrap();
+    assert_eq!(open(&mut local, &a, &mut buffer).unwrap().0.outbox().len(), 0);
+    assert_eq!(receive(&mut local, &a, &b, &mut buffer), Ok(0));
+    send(&mut local, &a, &b, 2, &mut buffer).unwrap();
+    assert_eq!((receive(&mut local, &a, &b, &mut buffer), receive(&mut local, &a, &b, &mut buffer)), (Ok(1), Ok(0)));
+    let (receiver, _, count) = open(&mut local, &b, &mut buffer).unwrap();
+    assert_eq!((count, receiver.applied("a", 3), open(&mut local, &a, &mut buffer).unwrap().2), (9, Applied::Repeat(9), 1));
+}
+
+#[test]
+fn a_message_is_acknowledged_only_by_its_receiver_and_up_to_what_it_applied() {
+    let model = || Manifest::new(Label::new("model").unwrap(), 1, 1, Cid::raw(b"0"));
+    let mut a = model();
+    for to in ["b", "c", "b", "c"] { a.send(to, "1").unwrap(); }
+    // `b` applies its first message; the next is refused, and nothing after it is applied.
+    let (mut b, mut seen) = (model(), vec![]);
+    assert_eq!(b.receive("b", "a", &a, |m| { seen.push(m.seq); if m.seq == 1 { Ok(1) } else { Err(Error::Invalid) } }), Err(Error::Invalid));
+    assert_eq!((seen, b.applied("a", 1), b.applied("a", 3)), (vec![1, 3], Applied::Repeat(1), Applied::New));
+    // `c` applies its own two, in sequence order.
+    let (mut c, mut order) = (model(), vec![]);
+    assert_eq!(c.receive("c", "a", &a, |m| { order.push(m.seq); Ok(m.seq) }), Ok(2));
+    assert_eq!(order, vec![2, 4]);
+    // `c`'s table clears only what is owed to `c`, though `b`'s second is below what `c` applied; `b`'s clears only
+    // up to what `b` applied.
+    let mut cleared = vec![];
+    assert_eq!(a.acknowledge("a", "c", &c, |m| cleared.push(m.seq)), 2);
+    assert_eq!(a.acknowledge("a", "b", &b, |m| cleared.push(m.seq)), 1);
+    assert_eq!((cleared, a.outbox().iter().map(|m| m.seq).collect::<Vec<_>>()), (vec![2, 4, 1], vec![3]));
+    // A receiver with no record of `a`, or with another sender's: nothing.
+    let mut other = model();
+    other.record("x", 9, 0).unwrap();
+    assert_eq!((a.acknowledge("a", "b", &model(), |_| {}), a.acknowledge("a", "b", &other, |_| {})), (0, 0));
+    // Once `b` applies the rest it is cleared, once.
+    assert_eq!(b.receive("b", "a", &a, |_| Ok(2)), Ok(1));
+    assert_eq!((a.acknowledge("a", "b", &b, |_| {}), a.acknowledge("a", "b", &b, |_| {}), a.outbox().len()), (1, 0, 0));
 }

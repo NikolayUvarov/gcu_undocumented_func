@@ -3711,8 +3711,7 @@ def store_suite(vm):
     # 306-STO-0009: checkpoints. Each run of tally is an instance: it restores the last checkpoint, applies one request
     # and saves the next, its manifest and state under two names in one commit.
     def tally(args):
-        vm.send(f"tally {args}\n")
-        return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+        return run_tally(vm, args)
     require(tally("show"), "TALLY EPOCH 0 SEQUENCE 0")
     require(tally("add apples 3"), "SAVED EPOCH 1 SEQUENCE 1: apples = 3")
     require(tally("add pears"), "SAVED EPOCH 2 SEQUENCE 2: pears = 1")
@@ -3741,8 +3740,7 @@ def store_suite(vm):
     # it is answered with its first result; an older one is refused.
     require(tally("add plums 2 op shell 1"), "SAVED EPOCH 9 SEQUENCE 9: plums = 2")
     require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
-    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
-    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+    restart_store(vm)
     require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
     require(tally("add plums 5 op shell 2"), "SAVED EPOCH 10 SEQUENCE 10: plums = 7")
     require(tally("add plums 5 op shell 1"), "tally: operation 1 of shell is older than its last: refused")
@@ -3754,6 +3752,65 @@ def store_suite(vm):
           "applied once (also after the store restarted)", flush=True)
     store_domains_check(vm)
     fm_store_check(vm)
+    tally_messages_check(vm)
+
+
+def run_tally(vm, args):
+    """One instance of tally (306-STO-0009): it restores, applies `args` and saves; what it printed."""
+    vm.send(f"tally {args}\n")
+    return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+
+
+def restart_store(vm):
+    """A new instance of the block store, mounted on the same medium."""
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+
+
+def tally_messages_check(vm):
+    """313-STO-0030: messages between components. `tally as a` moves an amount out of its count into a message owed to
+    `tally.b`; b reads a's checkpoint and applies it once, also when it reads it again, and writes only its own. After a
+    restart of the store, a's next save clears the message, b's checkpoint showing it applied, and the two still count
+    what a counted; two messages owed at once are applied in order."""
+    def tally(args):
+        return run_tally(vm, args)
+    def versions():
+        snap = vm.command("blocks snapshot checkpoint/tally.a checkpoint/tally.b", timeout=240)
+        return [int(v) for v in re.findall(r"^checkpoint/tally\.[ab] VERSION (\d+) ROOT", snap, re.M)]
+    require(tally("as a add apples 10"), "SAVED EPOCH 1 SEQUENCE 1: apples = 10")
+    require_all(tally("as a send apples 3 to b"), "OWED apples 3 TO b 1", "SAVED EPOCH 2 SEQUENCE 2: apples = 7")
+    require(tally("as a send apples 8 to b"), "tally: a holds 7 apples: 8 refused")
+    require(tally("send apples 1 to b"), "Usage: tally [as <name>]")
+    require_all(tally("as b receive a"), "ADDED apples 3 FROM a 1", "SAVED EPOCH 1 SEQUENCE 1")
+    # Read again, the same outbox applies nothing and nothing is saved; a's checkpoint was read, never written.
+    again = tally("as b receive a")
+    require(again, "REPEATED apples 3 FROM a 1: NOT APPLIED AGAIN")
+    assert "ADDED" not in again and "SAVED" not in again, again
+    assert versions() == [2, 1], versions()
+    # A request cannot pose as a's messages: a component's name is no client's.
+    require(tally("as b add apples 5 op tally.a 9"), "tally: tally.a is a component: its operations are its messages")
+    require(tally("as a show"), "OWED apples 3 TO b 1")
+    restart_store(vm)
+    require(tally("as b receive a"), "REPEATED apples 3 FROM a 1: NOT APPLIED AGAIN")
+    # a's next save reads b's checkpoint and clears what b applied: 7 and 3 still make 10.
+    require_all(tally("as a add apples 0"), "ACKNOWLEDGED a 1 BY b", "SAVED EPOCH 3 SEQUENCE 3: apples = 7")
+    shown = tally("as a show")
+    require(shown, "apples = 7")
+    assert "OWED" not in shown, shown
+    require(tally("as b show"), "apples = 3")
+    require(tally("as b receive a"), "NOTHING OWED BY a")
+    # Two messages owed at once: applied in sequence order, in one save.
+    require(tally("as a send apples 1 to b"), "OWED apples 1 TO b 2")
+    require(tally("as a send apples 2 to b"), "OWED apples 2 TO b 3")
+    got = tally("as b receive a")
+    first, second = got.find("ADDED apples 1 FROM a 2"), got.find("ADDED apples 2 FROM a 3")
+    assert 0 <= first < second, got
+    require(got, "SAVED EPOCH 2 SEQUENCE 2")
+    require_all(tally("as a add apples 0"), "ACKNOWLEDGED a 2 BY b", "ACKNOWLEDGED a 3 BY b", "SAVED EPOCH 6 SEQUENCE 6: apples = 4")
+    require(tally("as b show"), "apples = 6")
+    print("PASS: messages between components: tally.a moves 3 of its 10 to tally.b as a message it owes; b applies it once, "
+          "read again it applies nothing, and a's checkpoint is only read; after the store restarted a's next save "
+          "clears it, and the two still count 10; two messages owed at once are applied in order", flush=True)
 
 
 def store_domains_check(vm):
@@ -9399,7 +9456,8 @@ def tpm_check(args, cpu):
     driven by the TPM service, which init gives its registers from the firmware's tables. On one raw image: a boot without
     a TPM keeps the device key unencrypted (the interim); a boot with TPM A seals that key and removes the plain file; A
     again unseals the same key; another TPM, B, does not open the blob, and a new key is made and sealed. The shell's
-    client, without the seal badge, is refused a seal."""
+    client, without the seal badge, is refused a seal. 308-STO-0022: a store disk whose volume key keystore keeps opens
+    under the same device key, sealed by A or not, and not under B's."""
     if not raw_tools() or not shutil.which("swtpm"):
         print("SKIP: the TPM check needs swtpm, mkfs.fat, fsck.fat and mtools", flush=True)
         return
@@ -9408,6 +9466,10 @@ def tpm_check(args, cpu):
         image, start, fs_sectors = raw_fat_image(temp)
         part = f"{image}@@{start * 512}"
         device = "tpm-tis-device" if args.arch == "aarch64" else "tpm-crb"
+        store = temp / "store.img"
+        with store.open("wb") as f:
+            f.truncate(32 << 20)
+        disk = ["-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
 
         def boot(tpm=None):
             # A swtpm for each boot, on the state directory of TPM `tpm`.
@@ -9424,7 +9486,7 @@ def tpm_check(args, cpu):
                         break
                     time.sleep(.1)
                 extra = ["-chardev", f"socket,id=chrtpm,path={socket_path}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", f"{device},tpmdev=tpm0"]
-            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra])
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra, *disk])
             vm.swtpm, vm.sockets = swtpm, sockets
             log = vm.service_logs("keystore", "PUBLIC KEY")
             name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
@@ -9440,11 +9502,29 @@ def tpm_check(args, cpu):
 
         def stored(name):
             return subprocess.run(["mtype", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True).returncode == 0
+
+        def store_opens(vm, root=None):
+            # 308-STO-0022: the store disk mounts with the volume key keystore keeps; an object published at the first
+            # boot reads back at the others. Returns its CID and the secret's name.
+            log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+            require(log, "SEALED, KEY KEPT BY KEYSTORE")
+            if root:
+                assert "VOLUME KEY MADE" not in log, log
+                require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+                return root
+            assert re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE FROM \w+, KEPT BY KEYSTORE, NOT ON THE MEDIUM", log), log
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.command("dmesg -s blockstore", raw=True)
+            require(vm.command(f"blocks publish kept {put[1]}"), "PUBLISHED kept VERSION 1")
+            return put[1]
         vm, log, plain = boot()
         try:
             require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
             require(vm.service_logs("tpm", "[TPM] NO TPM"), "[TPM] NO TPM")
             require(vm.command("tpm"), "TPM: NONE")
+            root = store_opens(vm)
+            volume = re.search(r"\[KEYSTORE\] SECRET (volume-[0-9a-f]{16}) OF SERVICE blockstore KEPT", service_log(vm, "keystore", "OF SERVICE blockstore KEPT"))
+            assert volume, vm.command("dmesg -s keystore", raw=True)
         finally:
             close(vm)
         assert stored("device.key") and not stored("device.sealed")
@@ -9459,22 +9539,34 @@ def tpm_check(args, cpu):
             require(vm.command("tpm seal not mine"), "TPM: Rights")
             log = vm.command("dmesg -s tpm")
             assert re.search(r"\[TPM\] SEALED 32 BYTES FOR PID \d+", log) and re.search(r"\[TPM\] REFUSED SEAL FOR PID \d+ \(BADGE 0\)", log), log
+            store_opens(vm, root)
         finally:
             close(vm)
         assert sealed == plain, (plain, sealed)
         assert stored("device.sealed") and not stored("device.key")
         vm, log, again = boot("a")
-        close(vm)
+        try:
+            store_opens(vm, root)
+        finally:
+            close(vm)
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
         assert again == plain, (plain, again)
-        # The disk without its TPM: another TPM does not open the blob.
+        # The disk without its TPM: another TPM does not open the blob, nor the store's disk the secret kept under it.
         vm, log, other = boot("b")
-        close(vm)
+        try:
+            refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
+            require(refused, f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}, WHICH KEEPS NONE UNDER IT")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
+        finally:
+            close(vm)
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM AND SEALED BY THE TPM IN system/keystore/device.sealed")
         assert other != plain, (plain, other)
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: TPM 2.0 ({device}, swtpm) driven by the TPM service: the unencrypted device key (MIND {plain}) sealed and its file removed, "
           "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal", flush=True)
+    print(f"PASS: the store's volume key kept by keystore under the device key (308-STO-0022): its disk made at a boot without a TPM "
+          f"({volume[1]}) mounts and reads back an object put then after TPM A sealed the device key, and twice under A; under "
+          "TPM B's new device key it is not mounted and the object is not read", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):

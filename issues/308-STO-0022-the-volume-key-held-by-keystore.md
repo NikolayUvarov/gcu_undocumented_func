@@ -1,6 +1,6 @@
-# 308-STO-0022 — The volume key held by `keystore`: sealed by the TPM or unlocked by a passphrase, with a recovery key
+# 308-STO-0022 — The volume key held by `keystore`, under the device key the TPM seals
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [308-KRN-0183](../issues-done/308-KRN-0183-a-secrets-client-for-blockstore.done) (the block store's secrets client from `init` and `keystore`) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** — ([308-KRN-0183](../issues-done/308-KRN-0183-a-secrets-client-for-blockstore.done), the block store's secrets client, done in round 46) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
 Split from [308](308-encryption-at-rest.md) (2026-10-28).
 
@@ -33,16 +33,27 @@ After [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done) the record
   - **Not kept:** a derived key, as it could be found again from the medium's size and the time; and a key `keystore` refuses, which stays in the clear and is logged. A medium formatted with its key in the clear keeps it there: no conversion.
   - **Refused at mount:** a kept key's medium without the client, or whose secret is missing (another machine's medium), with `key` on the wire and the secret named in the log.
 - **Until `init` lends the client,** every medium keeps its key in the clear and says why, so the platform's behaviour does not change yet. The QEMU criteria below wait for 308-KRN-0183.
-- **The recovery key and the passphrase** are still to come, with `APP`.
+- **The recovery key and the passphrase** are still to come, with `APP`: [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md).
 - **Recorded in [docs/storage](../docs/storage/README.md)** (0.16). The profile does not change until the platform runs it.
+
+## Progress (2026-10-30)
+
+- **The store's QEMU checks pass on 0a8c342b, on `un-rizen_2a8b108d5593` through Effector:** the `tls` suite's TPM check (x86 `tpm-crb`, aarch64 `tpm-tis-device`, swtpm) gets a blank store disk.
+  - It is made at a boot without a TPM: its key kept by `keystore`, an object put and named.
+  - It mounts, and the object reads back, after TPM A sealed the device key, and again under A.
+  - Under TPM B's new device key it is not mounted (the secret named in the log), and the object is not read (`key`).
+- **The `tls` suite's device key check (308-KRN-0183)** shows the key kept, read back after a reboot and not on the medium.
+- **`store`, `storefaults` and `vfs` pass on both architectures** on the same commit.
+- **docs/storage 0.18 and the profile** (README, evidence and threat model, x86 and aarch64) say so. The recovery key and the passphrase are [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md).
 
 ## Acceptance criteria
 
+Changed on 2026-10-30: the recovery key and the passphrase moved to [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md), as they need `APP` and `KRN` for what the owner sees and types.
+
 - QEMU, x86 and aarch64:
-  - the sealed store mounts across a reboot with its key unwrapped by `keystore`;
-  - a medium moved to another machine without the recovery key shows nothing;
-  - the recovery key opens it.
-- swtpm in QEMU: the wrapping key sealed by the TPM.
+  - the sealed store mounts across a reboot with its key kept by `keystore`, and an object put before the reboot reads back;
+  - a medium moved to another machine shows nothing.
+- swtpm in QEMU: the key that seals `keystore`'s secrets is sealed by the TPM. The store opens under the same TPM, and not under another.
 - docs/storage and the profile.
 
 ## Related
