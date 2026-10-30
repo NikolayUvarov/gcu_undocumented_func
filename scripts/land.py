@@ -354,6 +354,29 @@ def online_lanes(lanes, endpoints):
     return [lane for lane in lanes if lane not in off], off
 
 
+def machine_loads(lanes, endpoints):
+    """{machine: "16 cores, 3% busy"} for each machine the lanes run on, as Effector last heard: a busy one is shared with
+    another track's work, which slows every lane there (the maintainer's ask, 2026-10-30: check the machines before a gate)."""
+    seen = {e.get("id") or e.get("agent_id"): e for e in endpoints}
+    out = {}
+    for machine in dict.fromkeys(lane.split("-")[0] for lane in lanes):
+        load = (seen.get(MACHINES[machine]["agent"]) or {}).get("load") or {}
+        busy = load.get("load_percent", load.get("cpu_percent"))
+        out[machine] = f"{load.get('cpu_cores', '?')} cores, " + (f"{busy:.0f}% busy" if isinstance(busy, (int, float)) else "load unknown")
+    return out
+
+
+def lane_minutes(results):
+    """{lane: (minutes, groups)} the gate's lanes worked, builds included: how evenly the pool shared the machines out."""
+    out = {}
+    for r in results:
+        if r.get("lane", "-") == "-":
+            continue
+        minutes, groups = out.get(r["lane"], (0.0, 0))
+        out[r["lane"]] = (minutes + r.get("seconds", 0) / 60, groups + 1)
+    return {lane: (round(minutes), groups) for lane, (minutes, groups) in out.items()}
+
+
 def simulate(lanes, queue, seconds):
     """{lane: [group]} and the minutes until the last ends, as a pool would run `queue` if every estimate held."""
     queue, free = list(queue), {lane: 0.0 for lane in lanes}
@@ -540,6 +563,8 @@ class Gate:
             f"cd {clone} || exit 3\n[ \"$(git rev-parse HEAD)\" = \"{self.commit}\" ] || {{ echo \"TREE MOVED\"; exit 5; }}\n"
             # Only the SSH client's host tests need sshd; a machine without it (i9) still runs the host part's other groups.
             + (f"[ -x \"${{MIND_SSHD:-/usr/sbin/sshd}}\" ] || export MIND_SSHD=/bin/true\n" if part == "host" and group != "host tests" else "")
+            # A build runs below the suites' priority: on a machine with two lanes it would starve the other's QEMU (2026-10-30, i9).
+            + ("nice -n 10 " if group in {b for names in BUILDS.values() for b in names} else "")
             + f"scripts/ci_local.sh --only {part} --group \"{'=' if self.exact else ''}{group}\" > \"$TMPDIR/land-group.out\" 2>&1\n"
             f"grep -E '^(PASS|FAIL) +[0-9]+s ' \"$TMPDIR/land-group.out\"\n"
             f"mkdir -p {logs}; cp \"$TMPDIR/land-group.out\" \"$TMPDIR\"/mind-ci-local/*.log {logs}/ 2>/dev/null\n"
@@ -666,10 +691,14 @@ def cmd_gate(args):
     effector = Effector()
     gate = Gate(commit, tag, effector, out, exact)
     if layout is None:
-        pool_lanes, off = online_lanes(pool_lanes, effector.endpoints())
+        endpoints = effector.endpoints()
+        pool_lanes, off = online_lanes(pool_lanes, endpoints)
         for lane, seen in off.items():
             gate.log(f"{lane}: its machine is off (last seen {seen}); the other lanes take its groups")
+        for machine, load in machine_loads(pool_lanes, endpoints).items():
+            gate.log(f"{machine}: {load}")
         gate.pool(pool_lanes, queue, part_of, seconds, WORK / f"gate-{commit[:12]}-taken.json")
+        gate.log("lanes: " + "; ".join(f"{lane} {m} min, {n} groups" for lane, (m, n) in sorted(lane_minutes(gate.results).items())))
     else:
         threads = [threading.Thread(target=gate.lane_run, args=(lane, entries)) for lane, entries in layout.items()]
         for thread in threads: thread.start()

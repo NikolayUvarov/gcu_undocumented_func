@@ -3,7 +3,9 @@
 //! slot, and nothing more (MC-9.2–9.4, MC-3.11). It checks a channel's signature with the release key built into it,
 //! a manifest's with the boot key, and every file it stages by size and SHA-256, before a boot record names the slot.
 //! The parser service reads the metadata (MC-11.11). The source, the channel and what the updater does by itself are
-//! in `update.txt` on the boot volume. A request runs to its end before the next one is read.
+//! in `update.txt` on the boot volume. A request runs to its end before the next one is read. A client badged
+//! `BADGE_UPDATE_GATEWAY` (`mind::process`: the Effector gateway's, 1.2, 751-KRN-0185) may `fetch`, `apply` and `rollback`
+//! only while init's `remote-update` counts (`init.wit` 1.11 `mode`), which the updater asks at each; else `denied`.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,7 +15,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:update";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;

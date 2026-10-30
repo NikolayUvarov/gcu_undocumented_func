@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #[path = "../common/abi.rs"] mod abi;
 #[path = "../init/src/services.rs"] mod services;
+#[path = "../libmind/src/memconf.rs"] mod memconf;
 
 use abi::{BOOT_IMAGES, BOOT_SERVICES, SERVICE_INSTANCES};
 use services::*;
@@ -191,4 +192,16 @@ fn a_long_or_foreign_file_is_cut_or_skipped_by_line() {
     assert_eq!(plan.counts(), (1, 0, 0));
     let (_, refused) = parsed("disable tts\r\nafter windows sysmon\r\n");
     assert!(refused.is_empty(), "{refused:?}"); // a file written on Windows
+}
+
+// data/memory.conf (262-KRN-0178): the line init reads for nnd at each start, as the loader reads a program's.
+#[test]
+fn the_memory_line_of_a_name() {
+    let text = "# the owner's lines\nmemtest 160\nNND 64 # the model service\nnnd 32\nkbench\n";
+    assert_eq!(memconf::mib(text, "nnd"), Some(64), "the first line of the name, its case aside");
+    assert_eq!(memconf::mib(text, "memtest"), Some(160));
+    assert_eq!(memconf::mib(text, "kbench"), None, "a line without its MiB gives nothing");
+    assert_eq!(memconf::mib(text, "shell"), None);
+    assert_eq!(memconf::mib("nnd 99999999\n", "nnd"), Some(65534), "at most one below the spawner's whole quota");
+    assert_eq!(memconf::mib("# nnd 64\nnnd x\nnnd 8\n", "nnd"), Some(8), "a comment and a bad line are passed over");
 }

@@ -48,16 +48,25 @@ fn version_read_needs_only_the_old_record() {
     assert_eq!(unsafe { BootInfo::read_abi_version(1usize as *const BootInfo) }, None);
 }
 
-// 351-KRN-0166: the loader's handoff apart from the system calls, one version with no range (000-KRN-0175). Handoff 21
-// (550-KRN-0172) adds a 44th image, which moves every field after extra_programs.
+// 351-KRN-0166: the loader's handoff apart from the system calls, one version with no range (000-KRN-0175). Handoff 25
+// adds two images, bt_hci (700-KRN-0176) and nnd (262-KRN-0178), which move every field after extra_programs.
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
-    assert_eq!(BOOT_HANDOFF_VERSION, 21);
-    assert_eq!(BOOT_IMAGES, 44, "a change of the boot images is a change of the handoff");
-    assert_eq!(size_of::<BootInfo>(), 1064, "a change of BootInfo is a change of the handoff");
+    assert_eq!(BOOT_HANDOFF_VERSION, 25);
+    assert!(BOOT_HANDOFF_VERSION >= ABI_VERSION, "a handoff is numbered above every ABI so far");
+    assert_eq!(BOOT_IMAGES, 46, "a change of the boot images is a change of the handoff");
+    assert_eq!(size_of::<BootInfo>(), 1096, "a change of BootInfo is a change of the handoff");
     let at = BOOT_SERVICES.iter().position(|&name| name == "rtw88_wifi").unwrap();
     assert_eq!((BOOT_SERVICES[at - 1], BOOT_FILES[at]), ("rtw89_wifi", "rtw88_wifi.elf"));
     assert!(at < BOOT_SERVICES.iter().position(|&name| name == "wlan").unwrap(), "init starts the radio before wlan");
+    // bt_hci holds usb_host's client and reads its patch through vfs_server, so it starts after both (700-KRN-0176).
+    let bt = BOOT_SERVICES.iter().position(|&name| name == "bt_hci").unwrap();
+    assert_eq!((BOOT_SERVICES[bt - 1], BOOT_FILES[bt]), ("rtw88_wifi", "bt_hci.elf"));
+    assert!(bt > BOOT_SERVICES.iter().position(|&name| name == "usb_host").unwrap() && bt > BOOT_SERVICES.iter().position(|&name| name == "vfs_server").unwrap());
+    // nnd needs vfs_server and logd only, and starts before the shell, which holds its client (262-KRN-0178).
+    let nnd = BOOT_SERVICES.iter().position(|&name| name == "nnd").unwrap();
+    assert_eq!((BOOT_SERVICES[nnd - 1], BOOT_FILES[nnd]), ("sysmon", "nnd.elf"));
+    assert!(nnd > BOOT_SERVICES.iter().position(|&name| name == "vfs_server").unwrap() && nnd < BOOT_SERVICES.iter().position(|&name| name == "shell").unwrap());
 }
 
 // 173-KRN-0036: boot_flags stays the last field.

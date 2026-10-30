@@ -246,6 +246,13 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 
 - **What it gives,** in simulation with these estimates: about 56 minutes with `pool`'s six lanes and 63 with `pool-no-i9`'s five, against 64 to 70 for rounds 41 to 43 with fixed lists (49 with a third lane on `un-rizen-service`, which its timing tests did not bear). The tests take about 233 minutes in all, and each lane builds its images first. More lanes are the next step, such as `x32-128` once it is stable.
 - **What it gave** in round 44 (2026-10-29, candidate e6678d4a, `pool`): every group once in 41.5 minutes, the builds included; with the one group that failed run again alone, 48.5.
+- **Before each pool gate** `land.py` logs each machine's cores and load as Effector last heard them, and after it the minutes and groups of each lane, so that how evenly the machines were loaded is on record (2026-10-30, the maintainer's ask). A build runs at `nice 10`, below the suites beside it.
+- **One lane on i9.** A second lane there was tried on 2026-10-30: every x86 group of `main` 15597f46 in two lanes, 55 and 56 minutes. 5 of 24 groups failed:
+  - three in the first six minutes, while the other lane's build held every core;
+  - `RAM above 4 GiB`, where 4 digits of a typed line never reached the guest (000-KRN-0188);
+  - `TSC measured again`.
+
+  `un-rizen`'s two lanes on the same 16 cores stay; i9 keeps one.
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 
