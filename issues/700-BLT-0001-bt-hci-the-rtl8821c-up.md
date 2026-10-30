@@ -64,6 +64,19 @@ The stack comes next, as its own tasks: `bt_host`, L2CAP, ATT/GATT, SMP, HID, th
   Evidence for the DEXP only (MC-12.1).
 - [ ] The `usb`, `keys` and `link` QEMU suites pass with the boot image, where QEMU has no controller (`bt_hci` waits, then says none).
 
+## Progress (2026-10-31)
+
+**The DEXP's criterion is met with services not yet in a release.**
+- **The setting:** release 202610301115 (ABI 25), with `rtw88_wifi` (DRV's 700-DRV-0046) and `bt_hci` (700-BLT-0002) put by `effector485 replace`, unverified, built from that release's tree.
+- **The log:**
+  - `CONTROLLER 0BDA:C821`;
+  - the ROM's `REVISION 000C … SUBVERSION 8821`;
+  - `PATCH 75B8F098 … 34926 BYTES`, then `PATCHED: LMP SUBVERSION F098` (2026-10-30);
+  - `ADDRESS 1C:79:2D:F0:6B:A6`.
+- **A round heard 15 LE devices and a BR/EDR one** (`CLASS 0C043C AUDIO`). Later ones heard named devices: `"BRAVIA 4K GB"`, `"[TV] Samsung AU7100 65 TV"`.
+- **Why it heard nothing before:** `rtw88_wifi` granted the air to the Wi-Fi alone (700-DRV-0046).
+- **What closes this task:** a release that carries both, run on the DEXP. The QEMU criterion is also still to record.
+
 ## Related
 
 [700](700-bluetooth.md), `700-DRV-0043`, `800-LNK-0027`, `550-DRV-0042` (the same card's Wi-Fi).

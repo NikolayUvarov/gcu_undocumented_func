@@ -110,14 +110,15 @@ impl Hci {
     }
 
     /// Listens for `ms`, noting the devices heard; stops early when `until` sees the event it waits for.
-    fn listen(&mut self, ms: u64, mut until: impl FnMut(u8) -> bool) -> Result<(), Fail> {
+    /// Returns the number of events that came.
+    fn listen(&mut self, ms: u64, mut until: impl FnMut(u8, &[u8]) -> bool) -> Result<u32, Fail> {
         let deadline = now() + ms;
-        let mut over = false;
+        let (mut over, mut events) = (false, 0);
         while !over && now() < deadline {
-            self.poll(|code, _| if until(code) { over = true })?;
+            self.poll(|code, p| { events += 1; if until(code, p) { over = true } })?;
             let _ = mind::time::sleep(10);
         }
-        Ok(())
+        Ok(events)
     }
 
     /// One round: an active LE scan, then a general inquiry; each device heard is logged once.
@@ -126,11 +127,19 @@ impl Hci {
         // Active, every 60 ms for 30 ms, the public address, every advertiser.
         self.command(hci::LE_SET_SCAN_PARAMETERS, &[1, 0x60, 0, 0x30, 0, 0, 0])?;
         self.command(hci::LE_SET_SCAN_ENABLE, &[1, 1])?;
-        self.listen(SCAN_MS, |_| false)?;
+        let le_events = self.listen(SCAN_MS, |_, _| false)?;
         self.command(hci::LE_SET_SCAN_ENABLE, &[0, 0])?;
         self.command(hci::INQUIRY, &INQUIRY)?;
-        self.listen(SCAN_MS + 2_000, |code| code == hci::EV_INQUIRY_COMPLETE)?;
-        say(format_args!("ROUND: {} LE AND {} BR/EDR DEVICES HEARD; {} EVENT PACKETS DROPPED", self.heard.le, self.heard.bredr, self.events.dropped));
+        let started = now();
+        let mut ended: Option<u8> = None;
+        let inquiry_events = self.listen(SCAN_MS + 2_000, |code, p| { if code == hci::EV_INQUIRY_COMPLETE { ended = Some(p.first().copied().unwrap_or(0xFF)); } ended.is_some() })?;
+        // What the controller gave: its events in each part, and how the inquiry ended (00 after its 10.24 s is a full one).
+        say(format_args!("ROUND: {} LE AND {} BR/EDR DEVICES HEARD; {} EVENTS IN THE LE SCAN, {} IN THE INQUIRY; {} EVENT PACKETS DROPPED",
+            self.heard.le, self.heard.bredr, le_events, inquiry_events, self.events.dropped));
+        match ended {
+            Some(status) => say(format_args!("INQUIRY COMPLETE AFTER {} MS, STATUS {:02X}", now() - started, status)),
+            None => say(format_args!("NO INQUIRY COMPLETE IN {} MS", SCAN_MS + 2_000)),
+        }
         Ok(())
     }
 }
@@ -221,6 +230,8 @@ fn main(_info: &'static BootInfo) {
     say(format_args!("UP: LISTENING EVERY {} S", ROUND_MS / 1000));
     loop {
         if let Err(e) = hci.round() { say(format_args!("ROUND FAILED: {:?}", e)); }
-        let _ = mind::time::sleep(ROUND_MS as usize);
+        // The kernel ends one wait at 60 s at most, so the round's wait is made of several (700-BLT-0002).
+        let next = now() + ROUND_MS;
+        while now() < next { let _ = mind::time::sleep((next - now()).min(60_000) as usize); }
     }
 }
