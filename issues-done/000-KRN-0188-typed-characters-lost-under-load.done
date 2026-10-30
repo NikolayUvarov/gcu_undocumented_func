@@ -1,6 +1,6 @@
-# 000-KRN-0188 — Characters typed on the serial line lost under load
+# 000-KRN-0188 — Characters typed on the serial line lost under load — done
 
-**Type:** kernel track (the serial console's input path, the QEMU harness) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the shell's change is in `main`: 000-APP-0115, round 56) · **Main task:** — · **Constitution:** MC-12.2
+**Type:** kernel track (the serial console's input path, the QEMU harness) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — (the shell's change is in `main`: 000-APP-0115, round 56) · **Main task:** — · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -28,7 +28,7 @@
   - So whatever arrives while the shell is held, past 64 bytes of one pass, is lost: about 0.65 s at the harness's pace of one byte per 10 ms. That matches losing 4 digits of a long line on a loaded host.
 - **Reproduced without load.** `echo` and 190 characters written to QEMU's stdin at once, on x86 in QEMU (4 CPUs, KVM): the shell's echo held 64 bytes, and the newline was lost.
 - **Fixed in a local tree.** Bounding the read by the room left in `Events`, the rest left in the UART, gave 10 runs of 10 with the 195-byte line whole.
-- **The change is the tools track's** (`shell/`): it is recorded, with the patch, in [requests-APP.md](requests-APP.md). This task then adds the criterion's check to the `shell` suite.
+- **The change is the tools track's** (`shell/`): it is recorded, with the patch, in [requests-APP.md](../issues/requests-APP.md). This task then adds the criterion's check to the `shell` suite.
 
 ## Progress (2026-10-30)
 
@@ -38,7 +38,6 @@
   - each must arrive whole, through the shell's `write` and `cat`.
   - It is no gate group: its loops would load the other lanes of the same machine.
 - **First run:** x86, this session's container (4 CPUs): 50 of 50 whole, in 18 s.
-- **Left:** a run on a gate machine, x86 and aarch64, when no gate runs there.
 
 ## Acceptance criteria
 
@@ -48,3 +47,13 @@
 ## Related
 
 000-KRN-0186 (the same lanes' load); [docs/effector.md](../docs/effector.md) (the gate's lanes).
+
+## Resolution
+
+- **The cause** is recorded above: the shell's loop kept 64 bytes of one pass and dropped the rest. The fix is the tools track's, 000-APP-0115, landed in round 56.
+- **The criterion's check:** the `serialload` suite (`tests/qemu_smoke.py`, `--suites serialload`), landed in round 59, `main` 791f5aac. It writes 50 lines of 200 characters, each to the serial line at once, while four busy loops spin on the host; each must arrive whole through the shell's `write` and `cat`.
+- **Its runs at `main` 791f5aac, QEMU under TCG, 4 CPUs:**
+  - x86 on `i9` (16 CPUs): 50 of 50 whole, in 17 s;
+  - aarch64 on `acc-1` (8 CPUs): 50 of 50 whole, in 13 s;
+  - before it, x86 in this session's container (4 CPUs): 50 of 50, twice.
+- **What it shows (MC-12.2):** the runs it made, on those machines, not every load. It is in no gate group, as its loops would load the machine's other lanes; the `shell` suite's one long line runs in every gate on both architectures.
