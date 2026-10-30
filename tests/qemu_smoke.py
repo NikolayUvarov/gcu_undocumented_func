@@ -3689,8 +3689,7 @@ def store_suite(vm):
     # 306-STO-0009: checkpoints. Each run of tally is an instance: it restores the last checkpoint, applies one request
     # and saves the next, its manifest and state under two names in one commit.
     def tally(args):
-        vm.send(f"tally {args}\n")
-        return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+        return run_tally(vm, args)
     require(tally("show"), "TALLY EPOCH 0 SEQUENCE 0")
     require(tally("add apples 3"), "SAVED EPOCH 1 SEQUENCE 1: apples = 3")
     require(tally("add pears"), "SAVED EPOCH 2 SEQUENCE 2: pears = 1")
@@ -3719,8 +3718,7 @@ def store_suite(vm):
     # it is answered with its first result; an older one is refused.
     require(tally("add plums 2 op shell 1"), "SAVED EPOCH 9 SEQUENCE 9: plums = 2")
     require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
-    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
-    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+    restart_store(vm)
     require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
     require(tally("add plums 5 op shell 2"), "SAVED EPOCH 10 SEQUENCE 10: plums = 7")
     require(tally("add plums 5 op shell 1"), "tally: operation 1 of shell is older than its last: refused")
@@ -3732,6 +3730,65 @@ def store_suite(vm):
           "applied once (also after the store restarted)", flush=True)
     store_domains_check(vm)
     fm_store_check(vm)
+    tally_messages_check(vm)
+
+
+def run_tally(vm, args):
+    """One instance of tally (306-STO-0009): it restores, applies `args` and saves; what it printed."""
+    vm.send(f"tally {args}\n")
+    return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+
+
+def restart_store(vm):
+    """A new instance of the block store, mounted on the same medium."""
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+
+
+def tally_messages_check(vm):
+    """313-STO-0030: messages between components. `tally as a` moves an amount out of its count into a message owed to
+    `tally.b`; b reads a's checkpoint and applies it once, also when it reads it again, and writes only its own. After a
+    restart of the store, a's next save clears the message, b's checkpoint showing it applied, and the two still count
+    what a counted; two messages owed at once are applied in order."""
+    def tally(args):
+        return run_tally(vm, args)
+    def versions():
+        snap = vm.command("blocks snapshot checkpoint/tally.a checkpoint/tally.b", timeout=240)
+        return [int(v) for v in re.findall(r"^checkpoint/tally\.[ab] VERSION (\d+) ROOT", snap, re.M)]
+    require(tally("as a add apples 10"), "SAVED EPOCH 1 SEQUENCE 1: apples = 10")
+    require_all(tally("as a send apples 3 to b"), "OWED apples 3 TO b 1", "SAVED EPOCH 2 SEQUENCE 2: apples = 7")
+    require(tally("as a send apples 8 to b"), "tally: a holds 7 apples: 8 refused")
+    require(tally("send apples 1 to b"), "Usage: tally [as <name>]")
+    require_all(tally("as b receive a"), "ADDED apples 3 FROM a 1", "SAVED EPOCH 1 SEQUENCE 1")
+    # Read again, the same outbox applies nothing and nothing is saved; a's checkpoint was read, never written.
+    again = tally("as b receive a")
+    require(again, "REPEATED apples 3 FROM a 1: NOT APPLIED AGAIN")
+    assert "ADDED" not in again and "SAVED" not in again, again
+    assert versions() == [2, 1], versions()
+    # A request cannot pose as a's messages: a component's name is no client's.
+    require(tally("as b add apples 5 op tally.a 9"), "tally: tally.a is a component: its operations are its messages")
+    require(tally("as a show"), "OWED apples 3 TO b 1")
+    restart_store(vm)
+    require(tally("as b receive a"), "REPEATED apples 3 FROM a 1: NOT APPLIED AGAIN")
+    # a's next save reads b's checkpoint and clears what b applied: 7 and 3 still make 10.
+    require_all(tally("as a add apples 0"), "ACKNOWLEDGED a 1 BY b", "SAVED EPOCH 3 SEQUENCE 3: apples = 7")
+    shown = tally("as a show")
+    require(shown, "apples = 7")
+    assert "OWED" not in shown, shown
+    require(tally("as b show"), "apples = 3")
+    require(tally("as b receive a"), "NOTHING OWED BY a")
+    # Two messages owed at once: applied in sequence order, in one save.
+    require(tally("as a send apples 1 to b"), "OWED apples 1 TO b 2")
+    require(tally("as a send apples 2 to b"), "OWED apples 2 TO b 3")
+    got = tally("as b receive a")
+    first, second = got.find("ADDED apples 1 FROM a 2"), got.find("ADDED apples 2 FROM a 3")
+    assert 0 <= first < second, got
+    require(got, "SAVED EPOCH 2 SEQUENCE 2")
+    require_all(tally("as a add apples 0"), "ACKNOWLEDGED a 2 BY b", "ACKNOWLEDGED a 3 BY b", "SAVED EPOCH 6 SEQUENCE 6: apples = 4")
+    require(tally("as b show"), "apples = 6")
+    print("PASS: messages between components: tally.a moves 3 of its 10 to tally.b as a message it owes; b applies it once, "
+          "read again it applies nothing, and a's checkpoint is only read; after the store restarted a's next save "
+          "clears it, and the two still count 10; two messages owed at once are applied in order", flush=True)
 
 
 def store_domains_check(vm):
