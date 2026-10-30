@@ -140,7 +140,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 
 ## Files over the store: `storefs` — host-tested, built; not in the images and not run yet, waiting for the kernel track (311-STO-0032)
 
-`storefs/src/fs.rs` is the logic of a service that is to serve `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues/311-storefs-a-file-face.md). `storefs/src/main.rs` answers `vfs.wit` 2.5's calls with it, and builds for x86 and aarch64. It is not put on the images: a program there that is not a boot image is listed as one the user runs. Its start by `init` as a boot image with a client of the store, and the clients it lends, are 311-KRN-0190; an error `conflict` in `vfs.wit` 2.6 is 311-KRN-0189.
+`storefs/src/fs.rs` is the logic of a service that is to serve `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues/311-storefs-a-file-face.md). `storefs/src/main.rs` answers `vfs.wit` 2.6's calls with it, and builds for x86 and aarch64. It is not put on the images: a program there that is not a boot image is listed as one the user runs. Its start by `init` as a boot image with a client of the store, and the clients it lends, are 311-KRN-0190; `vfs.wit` 2.6's error `conflict` came with 311-KRN-0189.
 
 - **How a files client reaches it** (the kernel track's answer, 2026-10-30): `mind::fs` asks `vfs_server` first, and asks `storefs` for a volume `vfs_server` answers `not-found`, if the program holds a client of it. So `storefs` answers `not-found` for the boot disk's empty name, `ram`, `log` and `models`, whatever their case; any other volume `v` is the store's name `fs/<v>`.
 - **A volume** is 1 to 16 bytes of `A-Z a-z 0-9 . _ -`, its case ignored, and none of `vfs_server`'s; another name is `not-found`. Its tree is the name `fs/<volume>`, in lower case.
@@ -158,7 +158,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - a handle's path of 512 bytes (`PATH`), a directory over a block, a tree past 32 directories: `no-space`.
 
   The state takes 786 KiB, all zeros when new, so a program keeps it in `.bss`.
-- **Errors** are the logic's own, each with the error of `vfs.wit` 2.5 that says it. A conflict is `io` until `vfs.wit` 2.6 has `conflict`: nothing of the write was stored under the name, as for a write that did not reach a medium.
+- **Errors** are the logic's own, each with the error of `vfs.wit` 2.6 that says it. A conflict is `conflict`: nothing of the write was stored under the name, and the client reads the file again and writes once more.
 - **The service** answers `check`, `scope`, `format`, `fill` and `adopt` with `denied`: they are `vfs_server`'s. `volume` gives the label `MIND STORE`, no FAT type and no room (the store's own `stat` says it), and a chunk as the cluster. A directory's size is 0, as on FAT, and no time stamps are kept (`modified` is 0). Until 311-KRN-0190, the user's badge writes every volume and every other badge reads, and the store's client is looked for where a program's is (`SLOT_BLOCKSTORE`); its first line is `[STOREFS] READY …`.
 - **Not run yet:** the service, and its files client in `mind::fs` (the kernel track's).
 
@@ -175,7 +175,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - each bound refused with nothing changed: `FILE_MAX` for a write and a truncation, each table and each client's share of it, the chunks, the path, a path of 32 directories refused at the last leaving none; three files that the working tree cannot hold at once published in two versions;
   - a second client gets its share of trees, handles, files and chunks while the first holds its own;
   - a volume whose root is not a directory is refused;
-  - the error mapping, checked against the generated `vfs.wit` 2.5 enum.
+  - the error mapping, checked against the generated `vfs.wit` 2.6 enum.
 - `tests/dag_host.rs`: a builder reset between objects makes each one as a new builder does.
 
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
