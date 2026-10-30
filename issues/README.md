@@ -205,7 +205,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-DRV-0015](351-DRV-0015-tpm-driver.md) | A TPM 2.0 driver: the `tpm` service (CRB, FIFO), seal and unseal for `keystore` built and host-tested; the NV counter with 351-UPD-0011 | `DRV` | P2 | [requests-KRN.md](requests-KRN.md) (the TPM's registers, `PLATFORM_TPM`) | track A |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` | P1 | — (351-UPD-0007 and 351-KRN-0014 done) | Assurance |
 | [351-ASR-0006](351-ASR-0006-update-threat-model.md) | The update threat model; fuzzing the metadata parsers — the model and three fuzzers written (on a branch), two findings sent to `UPD` | `ASR` | P2 | 351-UPD-0005 | Assurance |
-| [351-APP-0029](351-APP-0029-update-in-the-shell.md) | `update check, fetch, apply, status, rollback` in the shell and `msh` (requested by KRN for 351), with `update.wit` 1.1 `metadata` | `APP` | P2 | — (the updater takes buffer calls since `main` 57c2fd3d); the command back on the tools branch | track G |
 | [351-KRN-0116](351-KRN-0116-the-shells-client-of-the-updater.md) | The shell holds a client of `updater` in `SLOT_UPDATE` (ABI 12) | `KRN` | P2 | — | track D |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` | P2 | — | Assurance |
@@ -321,6 +320,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [351-APP-0029](../issues-done/351-APP-0029-update-in-the-shell.done) | `update check, fetch, apply, status, rollback` in the shell and `msh` (requested by KRN for 351) | the updater's view and channel, its refusals and the questions before `apply` and `rollback`, checked against the test server in the `updater` suite on x86 |
 | [000-APP-0049](../issues-done/000-APP-0049-network-traffic-on-wms-background.done) | The network traffic on `wm`'s background (split from 000-APP-0047) | the line from every card through the shell, moving while `ping` runs; a graph of the last minute both ways with its scale; done (2026-10-30) |
 | [313-STO-0026](../issues-done/313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done) | Operation IDs and queues in a checkpoint: manifest format 2 | each client's last operation and result, the inbox and the outbox; format 1 refused by its number; `tally` 2 applies a repeated operation once, also after the store restarted, on x86 and aarch64 (round 51) |
 | [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done) | Directories as objects: a directory node, its walk, and the store's reachability | `mind::tree`, canonical nodes and a bounded walk; the store takes, walks and collects through directories, every walk bounded by its index's size; host-tested (round 51) |
