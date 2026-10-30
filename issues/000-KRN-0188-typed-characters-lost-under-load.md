@@ -1,6 +1,6 @@
 # 000-KRN-0188 — Characters typed on the serial line lost under load
 
-**Type:** kernel track (the serial console's input path, the QEMU harness) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** the tools track's change ([requests-APP.md](requests-APP.md)) · **Main task:** — · **Constitution:** MC-12.2
+**Type:** kernel track (the serial console's input path, the QEMU harness) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the shell's change is in `main`: 000-APP-0115, round 56) · **Main task:** — · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -29,6 +29,16 @@
 - **Reproduced without load.** `echo` and 190 characters written to QEMU's stdin at once, on x86 in QEMU (4 CPUs, KVM): the shell's echo held 64 bytes, and the newline was lost.
 - **Fixed in a local tree.** Bounding the read by the room left in `Events`, the rest left in the UART, gave 10 runs of 10 with the 195-byte line whole.
 - **The change is the tools track's** (`shell/`): it is recorded, with the patch, in [requests-APP.md](requests-APP.md). This task then adds the criterion's check to the `shell` suite.
+
+## Progress (2026-10-30)
+
+- **The shell's change is in `main`:** 000-APP-0115 landed in round 56. The `shell` suite writes one line of 200 characters at once on x86 and aarch64, in every gate.
+- **The criterion's check:** the `serialload` suite in `tests/qemu_smoke.py` (`--suites serialload`):
+  - 50 lines of 200 characters, each written to the serial line at once, while four busy loops spin on the host;
+  - each must arrive whole, through the shell's `write` and `cat`.
+  - It is no gate group: its loops would load the other lanes of the same machine.
+- **First run:** x86, this session's container (4 CPUs): 50 of 50 whole, in 18 s.
+- **Left:** a run on a gate machine, x86 and aarch64, when no gate runs there.
 
 ## Acceptance criteria
 

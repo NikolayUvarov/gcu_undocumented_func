@@ -1495,6 +1495,29 @@ def shell_suite(vm):
     print("PASS: poweroff and shutdown: help names them, another word gets the usage, poweroff -f turns the machine off", flush=True)
 
 
+def serial_load_suite(vm, lines=50, loops=4):
+    """000-KRN-0188: a 200-character line written to the serial line at once, `lines` times while `loops` busy loops spin
+    on the host, arrives whole every time. Evidence for one machine, not a gate group: the loops would load its lanes."""
+    busy = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(loops)]
+    try:
+        whole, start = 0, time.monotonic()
+        for i in range(lines):
+            marker = "".join("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(i + j) % 36] for j in range(179))
+            vm.output = ""
+            vm.process.stdin.write(f"write ram:serial.txt {marker}\r".encode())
+            vm.process.stdin.flush()
+            vm.expect("WROTE 180 BYTES TO ram:serial.txt", timeout=30)  # with its newline
+            require(vm.command("cat ram:serial.txt"), marker)
+            whole += 1
+        require(vm.command("rm ram:serial.txt"), "OK")
+    finally:
+        for process in busy:
+            process.kill()
+            process.wait()
+    print(f"PASS: serial line under load: {whole} of {lines} lines of 200 characters, each written at once, arrived whole "
+          f"while {loops} busy loops spun on the host ({os.cpu_count()} CPUs), in {time.monotonic() - start:.0f} s", flush=True)
+
+
 def line_faces_check(vm):
     """`clock --line` and `dzen-clock --line` (issue u016): console programs in the shell, their line written again
     with \\r every second: one line on the screen, the updates on the serial line; Esc stops them."""
@@ -12759,6 +12782,8 @@ def main():
                     listen_suite(vm, starts)
                 elif suite == "tablet":
                     tablet_suite(vm, wav)
+                elif suite == "serialload":  # 000-KRN-0188, named only, in no gate group
+                    serial_load_suite(vm)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
