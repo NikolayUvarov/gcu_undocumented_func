@@ -6,7 +6,7 @@
 // says so (issue 165), and while a camera stream is open a green camera mark left of it (issue 158); left of that, the
 // marks of who can reach the machine from outside, the link and the Effector agent (800-KRN-0156): drawn here, on the
 // framebuffer only, so no capture holds them and no program can hide them. It logs the screen, each screen put in
-// front and its first seconds of frames (213-KRN-0098).
+// front and its first seconds of frames (213-KRN-0098), and whose screen is in front (750-KRN-0192).
 use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, SLOT_MEM};
 use mind::dev::{compositor_pull, compositor_pull_frame, compositor_release, Frame};
 use mind::display::{remote_center, remote_of, remote_pixel, Remote};
@@ -126,6 +126,7 @@ fn main(info: &'static BootInfo) {
     let mut remotes = [None::<(usize, RemoteState)>; 2]; // the link's and the Effector's: the last call and its state
     let mut remote_lines = 0u32; // the remote marks' changes and refusals logged, LOG_LINES at most
     let mut busy = None::<usize>; // since when the screen changed while its task ran
+    let (mut front, mut front_lines) = (0u64, 0u32); // the PID whose screen is in front (750-KRN-0192), and its lines logged
     let mut watch = Watch::default();
     let format = match info.pixel_format { PIXEL_BGR => "BGR", PIXEL_RGB => "RGB", PIXEL_BITMASK => "BIT MASKS", _ => "UNKNOWN" };
     say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN {}X{}, STRIDE {}, FORMAT {}", info.width, info.height, info.stride, format));
@@ -133,12 +134,17 @@ fn main(info: &'static BootInfo) {
         // Whole frames only: a changed screen is copied while its task waits, and the task is held meanwhile; a task
         // found drawing is held at its next wait (000-KRN-0186); one that never waits is copied as it is after FORCE_MS
         // (000-KRN-0086).
-        let mut frame = compositor_pull_frame(SOURCE_SLOT).unwrap_or(Frame::Unchanged);
+        let (mut frame, mut owner) = compositor_pull_frame(SOURCE_SLOT).unwrap_or((Frame::Unchanged, front));
         if frame == Frame::Busy {
             let since = *busy.get_or_insert(mind::time::uptime_ms());
-            if mind::time::uptime_ms() - since >= FORCE_MS { frame = compositor_pull(SOURCE_SLOT).unwrap_or(Frame::Unchanged); }
+            if mind::time::uptime_ms() - since >= FORCE_MS { (frame, owner) = compositor_pull(SOURCE_SLOT).unwrap_or((Frame::Unchanged, owner)); }
         } else {
             busy = None;
+        }
+        if owner != front {
+            front = owner;
+            if front == 0 { say(&mut front_lines, format_args!("[COMPOSITOR] NO SCREEN IN FRONT")); }
+            else { say(&mut front_lines, format_args!("[COMPOSITOR] SCREEN OF PID {} IN FRONT", front)); }
         }
         // Released after any dirty copy: a task that waited after a busy answer is held even when FORCE_MS's pull finds it.
         let mut held = frame == Frame::Dirty;
