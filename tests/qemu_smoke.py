@@ -3501,6 +3501,53 @@ def cid_raw(data):
     return "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(data).digest()).decode().lower().rstrip("=")
 
 
+def cbor_head(major, value):
+    """A CBOR head in its shortest form (RFC 8949), as DAG-CBOR requires."""
+    if value < 24:
+        return bytes([major << 5 | value])
+    size = next(n for n in (1, 2, 4, 8) if value < 1 << 8 * n)
+    return bytes([major << 5 | {1: 24, 2: 25, 4: 26, 8: 27}[size]]) + value.to_bytes(size, "big")
+
+
+def cbor_text(text):
+    return cbor_head(3, len(text)) + text.encode()
+
+
+def cbor_link(cid):
+    """A DAG-CBOR link: tag 42 over the identity multibase prefix 0 and the CID's binary form."""
+    return cbor_head(6, 42) + cbor_head(2, len(cid) + 1) + b"\0" + cid
+
+
+def cid_binary(codec, data):
+    """A CIDv1's binary form: version 1, the codec (0x55 raw, 0x71 dag-cbor), sha2-256 and its 32 bytes."""
+    return bytes([1, codec, 0x12, 0x20]) + hashlib.sha256(data).digest()
+
+
+def cid_text(cid):
+    return "b" + base64.b32encode(cid).decode().lower().rstrip("=")
+
+
+def uvarint(value):
+    """An unsigned varint of multiformats (LEB128), in its shortest form."""
+    out = bytearray()
+    while True:
+        out.append(value & 0x7f | (0x80 if value > 0x7f else 0))
+        value >>= 7
+        if not value:
+            return bytes(out)
+
+
+def car_v1(names, blocks):
+    """A copy of named roots (309-STO-0031) written here from the CAR v1 and DAG-CBOR specifications, not from libmind: a
+    header `{"roots": [link], "version": 1}` naming the names node `{"v": 1, "names": [[name, version, root], ...]}`,
+    sorted by name, then the node's section and a section for each (CID, block) of `blocks`."""
+    node = (cbor_head(5, 2) + cbor_text("v") + cbor_head(0, 1) + cbor_text("names") + cbor_head(4, len(names))
+            + b"".join(cbor_head(4, 3) + cbor_text(name) + cbor_head(0, version) + cbor_link(root) for name, version, root in sorted(names)))
+    root = cid_binary(0x71, node)
+    head = cbor_head(5, 2) + cbor_text("roots") + cbor_head(4, 1) + cbor_link(root) + cbor_text("version") + cbor_head(0, 1)
+    return uvarint(len(head)) + head + b"".join(uvarint(len(cid) + len(block)) + cid + block for cid, block in [(root, node), *blocks])
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -3695,8 +3742,7 @@ def store_suite(vm):
     # 306-STO-0009: checkpoints. Each run of tally is an instance: it restores the last checkpoint, applies one request
     # and saves the next, its manifest and state under two names in one commit.
     def tally(args):
-        vm.send(f"tally {args}\n")
-        return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+        return run_tally(vm, args)
     require(tally("show"), "TALLY EPOCH 0 SEQUENCE 0")
     require(tally("add apples 3"), "SAVED EPOCH 1 SEQUENCE 1: apples = 3")
     require(tally("add pears"), "SAVED EPOCH 2 SEQUENCE 2: pears = 1")
@@ -3725,8 +3771,7 @@ def store_suite(vm):
     # it is answered with its first result; an older one is refused.
     require(tally("add plums 2 op shell 1"), "SAVED EPOCH 9 SEQUENCE 9: plums = 2")
     require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
-    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
-    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+    restart_store(vm)
     require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
     require(tally("add plums 5 op shell 2"), "SAVED EPOCH 10 SEQUENCE 10: plums = 7")
     require(tally("add plums 5 op shell 1"), "tally: operation 1 of shell is older than its last: refused")
@@ -3738,6 +3783,202 @@ def store_suite(vm):
           "applied once (also after the store restarted)", flush=True)
     store_domains_check(vm)
     fm_store_check(vm)
+    tally_messages_check(vm)
+    store_tree_check(vm)
+    store_copy_check(vm)
+
+
+def run_tally(vm, args):
+    """One instance of tally (306-STO-0009): it restores, applies `args` and saves; what it printed."""
+    vm.send(f"tally {args}\n")
+    return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+
+
+def restart_store(vm):
+    """A new instance of the block store, mounted on the same medium."""
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+
+
+def tally_messages_check(vm):
+    """313-STO-0030: messages between components. `tally as a` moves an amount out of its count into a message owed to
+    `tally.b`; b reads a's checkpoint and applies it once, also when it reads it again, and writes only its own. After a
+    restart of the store, a's next save clears the message, b's checkpoint showing it applied, and the two still count
+    what a counted; two messages owed at once are applied in order."""
+    def tally(args):
+        return run_tally(vm, args)
+    def versions():
+        snap = vm.command("blocks snapshot checkpoint/tally.a checkpoint/tally.b", timeout=240)
+        return [int(v) for v in re.findall(r"^checkpoint/tally\.[ab] VERSION (\d+) ROOT", snap, re.M)]
+    require(tally("as a add apples 10"), "SAVED EPOCH 1 SEQUENCE 1: apples = 10")
+    require_all(tally("as a send apples 3 to b"), "OWED apples 3 TO b 1", "SAVED EPOCH 2 SEQUENCE 2: apples = 7")
+    require(tally("as a send apples 8 to b"), "tally: a holds 7 apples: 8 refused")
+    require(tally("send apples 1 to b"), "Usage: tally [as <name>]")
+    require_all(tally("as b receive a"), "ADDED apples 3 FROM a 1", "SAVED EPOCH 1 SEQUENCE 1")
+    # Read again, the same outbox applies nothing and nothing is saved; a's checkpoint was read, never written.
+    again = tally("as b receive a")
+    require(again, "REPEATED apples 3 FROM a 1: NOT APPLIED AGAIN")
+    assert "ADDED" not in again and "SAVED" not in again, again
+    assert versions() == [2, 1], versions()
+    # A request cannot pose as a's messages: a component's name is no client's.
+    require(tally("as b add apples 5 op tally.a 9"), "tally: tally.a is a component: its operations are its messages")
+    require(tally("as a show"), "OWED apples 3 TO b 1")
+    restart_store(vm)
+    require(tally("as b receive a"), "REPEATED apples 3 FROM a 1: NOT APPLIED AGAIN")
+    # a's next save reads b's checkpoint and clears what b applied: 7 and 3 still make 10.
+    require_all(tally("as a add apples 0"), "ACKNOWLEDGED a 1 BY b", "SAVED EPOCH 3 SEQUENCE 3: apples = 7")
+    shown = tally("as a show")
+    require(shown, "apples = 7")
+    assert "OWED" not in shown, shown
+    require(tally("as b show"), "apples = 3")
+    require(tally("as b receive a"), "NOTHING OWED BY a")
+    # Two messages owed at once: applied in sequence order, in one save.
+    require(tally("as a send apples 1 to b"), "OWED apples 1 TO b 2")
+    require(tally("as a send apples 2 to b"), "OWED apples 2 TO b 3")
+    got = tally("as b receive a")
+    first, second = got.find("ADDED apples 1 FROM a 2"), got.find("ADDED apples 2 FROM a 3")
+    assert 0 <= first < second, got
+    require(got, "SAVED EPOCH 2 SEQUENCE 2")
+    require_all(tally("as a add apples 0"), "ACKNOWLEDGED a 2 BY b", "ACKNOWLEDGED a 3 BY b", "SAVED EPOCH 6 SEQUENCE 6: apples = 4")
+    require(tally("as b show"), "apples = 6")
+    print("PASS: messages between components: tally.a moves 3 of its 10 to tally.b as a message it owes; b applies it once, "
+          "read again it applies nothing, and a's checkpoint is only read; after the store restarted a's next save "
+          "clears it, and the two still count 10; two messages owed at once are applied in order", flush=True)
+
+
+def store_tree_check(vm):
+    """311-STO-0029: a directory tree under a name through `blocks tree`, each change one publication by compare-and-swap.
+    A tree of two directories and three files (one of two blocks under a node) is made, listed and read back, each file's
+    SHA-256 checked here; the name's history holds each root; a change read at an older version is refused as a conflict
+    and the name is unchanged; once the leases have ended, a collection frees the refused tree's nodes and every file is
+    still read; then a move and removals."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    first, second = b"first file\n", b"second file\n"
+    require(vm.command("write ram:ta.txt first file"), "WROTE 11 BYTES")
+    require(vm.command("write ram:tb.txt second file"), "WROTE 12 BYTES")
+    # The reference pattern of tests/dag_host.rs over two chunks, put and copied out to a file.
+    big = bytes((i * 31 + 7) % 251 for i in range(20000))
+    put = re.search(r"PUT (\S+) SIZE 20000", blocks("pattern 20000"))
+    assert put, "blocks pattern 20000"
+    require(blocks(f"get {put[1]} ram:tc.bin"), "GOT 20000 BYTES")
+    files = {"docs/a.txt": (first, cid_raw(first)), "docs/deep/b.txt": (second, cid_raw(second)), "c.bin": (big, put[1])}
+    roots = []
+
+    def published(out):
+        version = len(roots) + 1
+        found = re.search(rf"^PUBLISHED home VERSION {version} ROOT (\S+) \((VOLATILE|FLUSHED|COPIED)\)\r?$", out, re.M)
+        assert found, out
+        roots.append(found[1])
+        # The name keeps this root and the three before it.
+        history = blocks("history home")
+        for v in range(max(1, version - 3), version + 1):
+            require(history, f"home VERSION {v} ROOT {roots[v - 1]}")
+
+    def read_back():
+        for path, (data, _) in files.items():
+            require(blocks(f"tree cat home {path} ram:back.bin"), f"READ {len(data)} BYTES SHA-256 {hashlib.sha256(data).hexdigest()}")
+
+    def listed(path, count):
+        out = blocks(f"tree ls home {path}".rstrip())
+        require(out, f"{count} ENTRIES IN /{path} OF home VERSION {len(roots)}")
+        return re.findall(r"^(FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)
+    published(blocks("tree mkdir home docs"))
+    published(blocks("tree put home ram:ta.txt docs/a.txt"))
+    published(blocks("tree mkdir home docs/deep"))
+    published(blocks("tree put home ram:tb.txt docs/deep/b.txt"))
+    published(blocks("tree put home ram:tc.bin c.bin"))
+    top = listed("", 2)
+    assert [(k, s, n) for k, s, _, n in top] == [("FILE", "20000", "c.bin"), ("DIR", "2", "docs")] and top[0][2] == put[1], top
+    docs = listed("docs", 2)
+    assert [(k, s, n) for k, s, _, n in docs] == [("FILE", "11", "a.txt"), ("DIR", "1", "deep")] and docs[0][2] == cid_raw(first), docs
+    assert listed("docs/deep", 1) == [("FILE", "12", cid_raw(second), "b.txt")]
+    read_back()
+    require(blocks("tree cat home docs/a.txt ram:back.txt"), "READ 11 BYTES")
+    require(vm.command("cat ram:back.txt"), "first file")
+    # A second writer: it read version 3 and publishes against it. Refused, nothing published, the name unchanged.
+    out = blocks("tree mkdir home other 3")
+    refused = re.search(r"^CONFLICT home: READ AT VERSION 3, NOW AT 5; ROOT (\S+) NOT PUBLISHED\r?$", out, re.M)
+    assert refused, out
+    require(blocks("resolve home"), f"home VERSION 5 ROOT {roots[-1]}")
+    assert "other" not in blocks("tree ls home"), "the refused change was published"
+    # Its nodes are stored, and nothing retains them: its root is a directory, not an object `get` reads.
+    require(blocks(f"get {refused[1]} ram:x.bin"), "blocks: get: Format")
+    # Leases run 60 s by the guest's clock (303-STO-0017): after them a collection frees what nothing retains.
+    since = guest_seconds(vm)
+    time.sleep(55)
+    while guest_seconds(vm) < since + 62: time.sleep(2)
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    require(blocks(f"get {refused[1]} ram:x.bin"), "blocks: get: NotFound")
+    read_back()
+    print("PASS: blocks tree: two directories and three files under a name, one publication each, listed and read back "
+          "(SHA-256); the history holds each root; a change from an older version is refused as a conflict, the name "
+          "unchanged; after a collection the refused tree is gone and every file is read", flush=True)
+    # A directory with entries is not removed; a move, then a file and an empty directory removed.
+    require(blocks("tree rm home docs/deep"), "blocks: tree rm: NotEmpty")
+    published(blocks("tree mv home c.bin docs/c.bin"))
+    published(blocks("tree rm home docs/deep/b.txt"))
+    published(blocks("tree rm home docs/deep"))
+    assert [(k, n) for k, _, _, n in listed("docs", 2)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
+    require(blocks("tree cat home docs/c.bin ram:back.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
+    print("PASS: blocks tree: a move and two removals, each published; a directory with entries is not removed", flush=True)
+
+
+def store_copy_check(vm):
+    """309-STO-0031: names exported to a file on the boot volume come back whole into a store that lost them. The store's
+    medium is a RAM disk, blank after a reboot; the boot volume is QEMU's virtual FAT, whose writes the snapshot overlay
+    keeps across the guest's reboot. `home` (store_tree_check's tree) and `list/n00` are exported; after the reboot an
+    import publishes each at its root, every file reads back (SHA-256 checked here), an import again changes nothing, and
+    a name published elsewhere since is left as it is."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    vm.command("mkdir data")
+    snap = blocks("snapshot home list/n00")
+    home = re.search(r"^home VERSION (\d+) ROOT (\S+)\r?$", snap, re.M)
+    left = re.search(r"^list/n00 VERSION 1 ROOT (\S+)\r?$", snap, re.M)
+    assert home and left, snap
+    out = blocks("export data/names.car list/n00 home")
+    require_all(out, f"EXPORT home VERSION {home[1]} ROOT {home[2]}", f"EXPORT list/n00 VERSION 1 ROOT {left[1]}")
+    written = re.search(r"^EXPORTED 2 NAMES, (\d+) BLOCKS, (\d+) BYTES TO data/names.car; SHA-256 ([0-9a-f]{64})\r?$", out, re.M)
+    assert written, out
+    require_all(blocks("import --check data/names.car"), f"NAME home VERSION {home[1]} ROOT {home[2]}", f"NAME list/n00 VERSION 1 ROOT {left[1]}",
+                f"CHECKED data/names.car: 2 NAMES, {written[1]} BLOCKS, {written[2]} BYTES; SHA-256 {written[3]}")
+    # The reboot: the RAM disk starts blank, the boot volume keeps the file.
+    vm.send("reboot\n")
+    vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=180)
+    vm.expect("MIND>", timeout=120)
+    time.sleep(1); vm.collect(); vm.output = ""
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 ")
+    require(blocks("resolve home"), "blocks: resolve home: NotFound")
+    out = blocks("import data/names.car")
+    require_all(out, f"PUBLISHED home VERSION 1 ROOT {home[2]} (VOLATILE)", f"PUBLISHED list/n00 VERSION 1 ROOT {left[1]} (VOLATILE)")
+    counts = re.search(rf"^IMPORTED data/names.car: 2 NAMES, {written[1]} BLOCKS \((\d+) STORED, 0 REPAIRED, (\d+) HELD\), {written[2]} BYTES; SHA-256 {written[3]}\r?$", out, re.M)
+    assert counts and int(counts[1]) > 0 and int(counts[1]) + int(counts[2]) == int(written[1]), out
+    require(blocks("snapshot home list/n00"), f"home VERSION 1 ROOT {home[2]}")
+    # Every file reads back whole: the tree's, as store_tree_check left it, and list/n00's.
+    big = bytes((i * 31 + 7) % 251 for i in range(20000))
+    assert [(k, n) for k, _, _, n in re.findall(r"^(FILE|DIR) (\d+) (\S+) (\S+)\r?$", blocks("tree ls home docs"), re.M)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
+    for path, data in (("docs/a.txt", b"first file\n"), ("docs/c.bin", big)):
+        require(blocks(f"tree cat home {path} ram:back.bin"), f"READ {len(data)} BYTES SHA-256 {hashlib.sha256(data).hexdigest()}")
+    require(blocks(f"get {left[1]} ram:left.txt"), "GOT 5 BYTES")
+    require(vm.command("cat ram:left.txt"), "left")
+    # Imported again: every name at its root, every block held, nothing published.
+    require_all(blocks("import data/names.car"), f"SAME home VERSION 1 ROOT {home[2]}", f"SAME list/n00 VERSION 1 ROOT {left[1]}",
+                f"(0 STORED, 0 REPAIRED, {written[1]} HELD)")
+    # A name published since at another root: left as it is, and reported.
+    require(vm.command("write ram:other.txt other"), "WROTE 6 BYTES")
+    other = cid_raw(b"other\n")
+    require(blocks("put ram:other.txt"), f"PUT {other} SIZE 6")
+    require(blocks(f"publish list/n00 {other} 1"), "PUBLISHED list/n00 VERSION 2")
+    require_all(blocks("import data/names.car"), f"SAME home VERSION 1 ROOT {home[2]}",
+                f"CONFLICT list/n00: VERSION 2 ROOT {other}, NOT {left[1]}; LEFT AS IT IS")
+    require(blocks("resolve list/n00"), f"list/n00 VERSION 2 ROOT {other}")
+    print("PASS: copies in a file: two names exported to the boot volume come back whole into the store a reboot left "
+          "blank (each at its root, every file read back), an import again changes nothing, and a name published since at "
+          "another root is left as it is", flush=True)
 
 
 def store_domains_check(vm):
@@ -3767,6 +4008,8 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 309-STO-0031: a copy in a file is in the clear and would outlive the domain's forgetting, so none is made.
+    require(blocks(f"-d {first} export ram:dom.car secret"), "blocks: export: a memory domain is not copied")
     out = blocks("domains")
     for line in (f"DOMAIN {first} LIVE", f"DOMAIN {second} LIVE"):
         require(out, line)
@@ -3964,6 +4207,38 @@ def block_record(chunk):
     return lambda opened: opened[:8] == b"MIND-BLK" and opened[16:52] == cid
 
 
+def store_copy_repair_check(vm, blocks, data, root):
+    """309-STO-0031: `obj` (`data`, the pattern's first 100 000 bytes: a node over 7 chunks, `root`) is exported to a file
+    on the RAM volume: the CAR v1 this suite writes from the specifications, byte for byte (its SHA-256). A chunk then
+    damaged on the store's medium is found by a scrub; an import of the copy reads it, finds it corrupt and stores it
+    again, a collection frees the damaged copy, and the next scrub finds nothing."""
+    chunks = [data[k:k + 16384] for k in range(0, len(data), 16384)]
+    node = (cbor_head(5, 3) + cbor_text("v") + cbor_head(0, 1) + cbor_text("size") + cbor_head(0, len(data)) + cbor_text("links")
+            + cbor_head(4, len(chunks)) + b"".join(cbor_link(cid_binary(0x55, c)) for c in chunks))
+    assert cid_text(cid_binary(0x71, node)) == root
+    copy = car_v1([("obj", 1, cid_binary(0x71, node))], [(cid_binary(0x71, node), node), *((cid_binary(0x55, c), c) for c in chunks)])
+    digest = hashlib.sha256(copy).hexdigest()
+    require_all(blocks("export ram:obj.car obj"), f"EXPORT obj VERSION 1 ROOT {root}",
+                f"EXPORTED 1 NAMES, 8 BLOCKS, {len(copy)} BYTES TO ram:obj.car; SHA-256 {digest}")
+    require_all(blocks("import --check ram:obj.car"), f"NAME obj VERSION 1 ROOT {root}",
+                f"CHECKED ram:obj.car: 1 NAMES, 8 BLOCKS, {len(copy)} BYTES; SHA-256 {digest}")
+    # The fourth chunk changes on the medium: a scrub finds it.
+    assert poke(vm, sealed_record(vm, block_record(chunks[3])), 44 + 84 + 100, GDB_PORT) >= 1
+    require(blocks("scrub"), "1 CORRUPT, 0 DAMAGED SECTORS;")
+    found = f"[BLOCKSTORE] SCRUB: BLOCK {cid_raw(chunks[3])} AT SECTOR"
+    require(vm.service_logs("blockstore", found), found)
+    # The import repairs it from the copy, the name left at its root; the collection frees the damaged copy.
+    require_all(blocks("import ram:obj.car"), f"SAME obj VERSION 1 ROOT {root}",
+                f"IMPORTED ram:obj.car: 1 NAMES, 8 BLOCKS (0 STORED, 1 REPAIRED, 7 HELD), {len(copy)} BYTES; SHA-256 {digest}",
+                "COLLECTED 1 BLOCKS: THE DAMAGED COPIES FREED")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] CORRUPT"), f"[BLOCKSTORE] CORRUPT {cid_raw(chunks[3])}")
+    require(blocks("scrub"), "0 CORRUPT, 0 DAMAGED SECTORS;")
+    require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
+    print("PASS: a copy in a file: obj exported as the CAR v1 written here from the specifications (SHA-256), a chunk "
+          "damaged on the medium found by a scrub and repaired by an import of the copy, the next scrub clean", flush=True)
+
+
 def store_faults_suite(vm):
     """300-STO-0005: damage on the block store's own medium, injected from the host into the RAM disk's bytes in guest
     memory (no program can reach that medium). A flipped byte in a chunk is refused when read and when mounting; a
@@ -4003,6 +4278,9 @@ def store_faults_suite(vm):
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
     assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
     require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
+    # 309-STO-0031: a copy in a file repairs what a scrub finds. Here, while the medium is otherwise whole: the damaged
+    # frame below leaves 33 sectors damaged for good, and the suite's end leaves a store that is not mounted.
+    store_copy_repair_check(vm, blocks, data, root)
     # A byte of the fifth chunk, found when a new instance mounts the medium.
     assert poke(vm, sealed_record(vm, block_record(chunk(4))), 44 + 84 + 100, GDB_PORT) >= 1
     require(restart(), "CORRUPT=1 DAMAGED=0")
@@ -9407,7 +9685,8 @@ def tpm_check(args, cpu):
     driven by the TPM service, which init gives its registers from the firmware's tables. On one raw image: a boot without
     a TPM keeps the device key unencrypted (the interim); a boot with TPM A seals that key and removes the plain file; A
     again unseals the same key; another TPM, B, does not open the blob, and a new key is made and sealed. The shell's
-    client, without the seal badge, is refused a seal."""
+    client, without the seal badge, is refused a seal. 308-STO-0022: a store disk whose volume key keystore keeps opens
+    under the same device key, sealed by A or not, and not under B's."""
     if not raw_tools() or not shutil.which("swtpm"):
         print("SKIP: the TPM check needs swtpm, mkfs.fat, fsck.fat and mtools", flush=True)
         return
@@ -9416,6 +9695,10 @@ def tpm_check(args, cpu):
         image, start, fs_sectors = raw_fat_image(temp)
         part = f"{image}@@{start * 512}"
         device = "tpm-tis-device" if args.arch == "aarch64" else "tpm-crb"
+        store = temp / "store.img"
+        with store.open("wb") as f:
+            f.truncate(32 << 20)
+        disk = ["-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
 
         def boot(tpm=None):
             # A swtpm for each boot, on the state directory of TPM `tpm`.
@@ -9432,7 +9715,7 @@ def tpm_check(args, cpu):
                         break
                     time.sleep(.1)
                 extra = ["-chardev", f"socket,id=chrtpm,path={socket_path}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", f"{device},tpmdev=tpm0"]
-            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra])
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra, *disk])
             vm.swtpm, vm.sockets = swtpm, sockets
             log = vm.service_logs("keystore", "PUBLIC KEY")
             name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
@@ -9448,11 +9731,29 @@ def tpm_check(args, cpu):
 
         def stored(name):
             return subprocess.run(["mtype", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True).returncode == 0
+
+        def store_opens(vm, root=None):
+            # 308-STO-0022: the store disk mounts with the volume key keystore keeps; an object published at the first
+            # boot reads back at the others. Returns its CID and the secret's name.
+            log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+            require(log, "SEALED, KEY KEPT BY KEYSTORE")
+            if root:
+                assert "VOLUME KEY MADE" not in log, log
+                require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+                return root
+            assert re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE FROM \w+, KEPT BY KEYSTORE, NOT ON THE MEDIUM", log), log
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.command("dmesg -s blockstore", raw=True)
+            require(vm.command(f"blocks publish kept {put[1]}"), "PUBLISHED kept VERSION 1")
+            return put[1]
         vm, log, plain = boot()
         try:
             require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
             require(vm.service_logs("tpm", "[TPM] NO TPM"), "[TPM] NO TPM")
             require(vm.command("tpm"), "TPM: NONE")
+            root = store_opens(vm)
+            volume = re.search(r"\[KEYSTORE\] SECRET (volume-[0-9a-f]{16}) OF SERVICE blockstore KEPT", service_log(vm, "keystore", "OF SERVICE blockstore KEPT"))
+            assert volume, vm.command("dmesg -s keystore", raw=True)
         finally:
             close(vm)
         assert stored("device.key") and not stored("device.sealed")
@@ -9467,22 +9768,34 @@ def tpm_check(args, cpu):
             require(vm.command("tpm seal not mine"), "TPM: Rights")
             log = vm.command("dmesg -s tpm")
             assert re.search(r"\[TPM\] SEALED 32 BYTES FOR PID \d+", log) and re.search(r"\[TPM\] REFUSED SEAL FOR PID \d+ \(BADGE 0\)", log), log
+            store_opens(vm, root)
         finally:
             close(vm)
         assert sealed == plain, (plain, sealed)
         assert stored("device.sealed") and not stored("device.key")
         vm, log, again = boot("a")
-        close(vm)
+        try:
+            store_opens(vm, root)
+        finally:
+            close(vm)
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
         assert again == plain, (plain, again)
-        # The disk without its TPM: another TPM does not open the blob.
+        # The disk without its TPM: another TPM does not open the blob, nor the store's disk the secret kept under it.
         vm, log, other = boot("b")
-        close(vm)
+        try:
+            refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
+            require(refused, f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}, WHICH KEEPS NONE UNDER IT")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
+        finally:
+            close(vm)
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM AND SEALED BY THE TPM IN system/keystore/device.sealed")
         assert other != plain, (plain, other)
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: TPM 2.0 ({device}, swtpm) driven by the TPM service: the unencrypted device key (MIND {plain}) sealed and its file removed, "
           "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal", flush=True)
+    print(f"PASS: the store's volume key kept by keystore under the device key (308-STO-0022): its disk made at a boot without a TPM "
+          f"({volume[1]}) mounts and reads back an object put then after TPM A sealed the device key, and twice under A; under "
+          "TPM B's new device key it is not mounted and the object is not read", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
@@ -12083,10 +12396,12 @@ def main():
                 svc_boot_check(args)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
-            # line, and audio_gw must keep playing without interrupts (issue 096).
+            # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
+            # its end (309-STO-0031): its RAM disk store starts blank, and the snapshot overlay keeps the boot volume's files.
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
-                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults" else (), tablet=suite == "tablet", usb_input=suite == "usb")
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults" else (), tablet=suite == "tablet", usb_input=suite == "usb",
+                    reboot=suite == "store")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)

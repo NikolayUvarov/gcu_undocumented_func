@@ -154,7 +154,7 @@ impl core::fmt::Display for Cid {
 }
 
 /// An unsigned varint (multiformats): 7 bits a byte, low first, at most 9 bytes, in its shortest form.
-fn varint(bytes: &[u8]) -> Result<(u64, usize), Error> {
+pub(crate) fn varint(bytes: &[u8]) -> Result<(u64, usize), Error> {
     let mut value = 0u64;
     for (i, &byte) in bytes.iter().take(9).enumerate() {
         value |= ((byte & 0x7f) as u64) << (7 * i);

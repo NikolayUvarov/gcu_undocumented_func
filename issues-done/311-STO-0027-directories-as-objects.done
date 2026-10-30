@@ -62,7 +62,7 @@ Done 2026-10-30, landed in round 51 (`main` 57c2fd3d, from `claude/relaxed-meitn
   - its checks of completeness, quotas and collection walk through directories;
   - every walk is bounded by `4 × limit + 64` steps, from the index's size. A tree that needs more is refused (`invalid`).
 - **`dag`'s CBOR reader** no longer overflows on a length near `u64::MAX`.
-- **Evidence:** `tests/tree_host.rs` (10) and `tests/blockstore_host.rs` (the store's tree tests and the step bound). Host-tested only: no program on the platform made a directory before [311-STO-0029](../issues/311-STO-0029-a-working-tree-published-by-compare-and-swap.md).
+- **Evidence:** `tests/tree_host.rs` (10) and `tests/blockstore_host.rs` (the store's tree tests and the step bound). Host-tested only: no program on the platform made a directory before [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
 - **Recorded in** [docs/storage](../docs/storage/README.md) ("Directories as objects") and the profile.
 
 ## Related
