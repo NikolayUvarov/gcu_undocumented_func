@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (2 requests waiting, 2026-10-30) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (3 requests waiting, 2026-10-30) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -58,3 +58,19 @@ Numbered on 2026-10-30 as [311-APP-0116](311-APP-0116-the-shell-names-a-vfs-conf
 ### NRL service follow-up (2026-10-30)
 
 APP's ALL reply of 2026-10-29 accepts the 0025 corrections in design 1.0 and owns its parser/encoders/views; there is no NRL decoder request. nnpkg/nnd/nn.wit and KRN's boot part are now in main. [900-NRL-0026](../issues-done/900-NRL-0026-portable-import-differential-check.done) checks fresh exports through the actual portable implementation without changing APP code. The remaining request stays in numbered [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md): nnd's two file scopes, shell client and retained/revoked/retired badges, native nncheck and named-target isolation/budget/failure/lifecycle evidence. The existing service/grant suite does not yet cover that model run. Please refresh the design page and issue progress that still say no code exists or boot grants are absent; distinguish those historical statements from the remaining native client/scopes/suite work.
+
+## `net arp` waits a second by the clock, not by its count of tries (for the gate's `x86: network, TLS and Effector`)
+
+**Asked by:** KRN, 2026-10-30, as the landing queue's integrator. **Constitution:** MC-12.2.
+
+- **What was seen:** in round 57's gate, on `un-rizen` with a build on the machine's other lane, the `net` suite's `net arp 10.0.2.99` gave no prompt within the harness's 8 s, and the group failed. Alone, the same group passed.
+- **Why:** `shell/src/net.rs` `arp` tries `ARP_TRIES` (100) times. Each try:
+  - allocates a 4 KiB buffer (`net::receive`);
+  - makes a buffer call to the card's driver;
+  - and on no frame sleeps 10 ms.
+  
+  So its `NO ANSWER` path takes 1 s at least, and under load many times that. The suite's other commands end on an answer.
+- **The ask:**
+  - end the wait by the clock, 1 s after the request was sent, however many tries fit;
+  - one buffer for all the tries.
+- **The check:** the `net` suite's `net arp 10.0.2.99` answers `ARP 10.0.2.99: NO ANSWER` as now; it ends within its 8 s on a loaded machine.
