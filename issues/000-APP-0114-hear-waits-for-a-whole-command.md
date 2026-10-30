@@ -57,6 +57,8 @@ The causes in our code:
   - The maintainer's run: `hear`, then a command at arm's length; and `listen 3`, whose playback should now be heard.
   - With `hear --save data/media/heard.wav`, APP can collect the recording through Effector and see what the microphone gives.
 
+**Progress (2026-10-30): the `listen` suite.** Its 1 s recording overflowed `audio_gw`'s capture ring in 7 runs of 13 on x86 TCG with 4 CPUs, with `main`'s own `listen` as with this one, and with the check typing nothing as with its polling. The playback this task changed comes after the recording. The overflow is recorded for DRV in [requests-DRV.md](requests-DRV.md#audio_gw-the-ac97-capture-ring-overflows-in-the-listen-suite-on-x86-tcg-for-000-app-0114), and the check's requirement stays.
+
 ## Related
 
 [000-APP-0077](000-APP-0077-microphone-sensitivity.md) and [000-APP-0076](000-APP-0076-output-volume.md) (the levels at the device), [000-APP-0053](000-APP-0053-hear-shows-what-it-heard.md) (`hear`'s levels), [000-APP-0052](000-APP-0052-voice-control-as-a-service.md), [079](../issues-done/079-voice-control-in-the-shell.done).
