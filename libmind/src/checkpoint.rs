@@ -8,10 +8,14 @@
 //! applied again; how far an input queue was read; and the messages owed to others, sent again until acknowledged.
 //! Between components (313-STO-0030) the receiver reads the sender's checkpoint and applies what it owes once, the
 //! sender its client; the sender clears what the receiver's checkpoint shows applied. Each writes only its own.
-//! No system calls: tests/checkpoint_host.rs.
+//! A move (313-STO-0033) releases the component, both names to a release record by one compare-and-swap, so no instance
+//! in this store saves it again, and its last checkpoint, which the names' history keeps, goes to a copy; restored in
+//! another store, a manifest takes its names' version there as its epoch. No system calls: tests/checkpoint_host.rs.
 use crate::cid::{self, Cid};
 
 pub const MAGIC: &[u8; 8] = b"MIND-CKP";
+/// A release record's magic: the component was moved out of this store.
+pub const RELEASED: &[u8; 8] = b"MIND-RLS";
 /// The manifest format's version; another is refused by its number, never read as this one.
 pub const FORMAT: u16 = 2;
 /// Bytes of a label (a contract, a resource, an authority, an effect) at most.
@@ -41,6 +45,8 @@ pub enum Error {
     Inconsistent,
     /// Another instance saved since this one restored: it no longer holds the component (MC-6.12).
     Fenced,
+    /// Released at this epoch, moved out of this store: no instance here restores or saves it again (MC-6.12).
+    Released(u64),
     /// A label too long or not printable, or more entries than the format holds.
     Invalid,
 }
@@ -92,7 +98,8 @@ pub struct Manifest {
     pub contract: Label,
     pub contract_version: u16,
     pub schema: u16,
-    /// The generation of the instance that saved it: the version of the checkpoint's names it wrote.
+    /// The generation of the instance that saved it: the version of the checkpoint's names it wrote; restored, their
+    /// version in this store.
     pub epoch: u64,
     /// The consistency point: requests applied to the state.
     pub sequence: u64,
@@ -305,6 +312,34 @@ impl Manifest {
     }
 }
 
+/// A release: the epoch of the component's last checkpoint in this store, and that checkpoint's manifest and state,
+/// which the names' history retains.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Release { pub epoch: u64, pub manifest: Cid, pub state: Cid }
+impl Release {
+    /// The canonical bytes: RELEASED, the format version, the epoch and the two CIDs; `out` holds MAX.
+    pub fn encode(&self, out: &mut [u8]) -> usize {
+        let mut w = Out { out, at: 0 };
+        w.put(RELEASED);
+        w.put(&FORMAT.to_le_bytes());
+        w.put(&self.epoch.to_le_bytes());
+        w.put(&self.manifest.to_bytes());
+        w.put(&self.state.to_bytes());
+        w.at
+    }
+    /// The release `bytes` encode, if they are exactly one of this format version.
+    pub fn decode(bytes: &[u8]) -> Result<Release, Error> {
+        let mut r = In { bytes, at: 0 };
+        if r.take(8)? != RELEASED { return Err(Error::Format); }
+        match r.u16()? { FORMAT => {} other => return Err(Error::Version(other)) }
+        let epoch = r.u64()?;
+        let manifest = Cid::from_bytes(r.take(cid::BYTES)?).map_err(|_| Error::Format)?;
+        let state = Cid::from_bytes(r.take(cid::BYTES)?).map_err(|_| Error::Format)?;
+        if r.at != bytes.len() { return Err(Error::Format); }
+        Ok(Release { epoch, manifest, state })
+    }
+}
+
 struct Out<'a> { out: &'a mut [u8], at: usize }
 impl Out<'_> {
     fn put(&mut self, b: &[u8]) { self.out[self.at..self.at + b.len()].copy_from_slice(b); self.at += b.len(); }
@@ -361,7 +396,9 @@ impl Restored {
 }
 
 /// The last checkpoint of `component`, if it follows `contract` at `version` with state of `schema`, and its two names
-/// agree. `buffer` holds MAX. Its authorities are text: the caller checks them against what it holds now (`rebind`).
+/// agree; its epoch is their version, also for a manifest saved in another store and moved in. Released if both names
+/// hold a release, never fresh. `buffer` holds MAX. Its authorities are text: the caller checks them against what it
+/// holds now (`rebind`).
 pub fn restore(store: &mut impl Store, names: &Names, contract: &str, version: u16, schema: u16, buffer: &mut [u8]) -> Result<Restored, Error> {
     let [(mv, manifest), (sv, state)] = store.snapshot([names.manifest(), names.state()])?;
     let (manifest, state) = match (manifest, state) {
@@ -370,11 +407,46 @@ pub fn restore(store: &mut impl Store, names: &Names, contract: &str, version: u
         _ => return Err(Error::Inconsistent),
     };
     let n = store.get(&manifest, &mut buffer[..MAX])?;
-    let m = Manifest::decode(&buffer[..n])?;
+    if buffer[..n].starts_with(RELEASED) {
+        Release::decode(&buffer[..n])?;
+        return Err(if state == manifest { Error::Released(mv) } else { Error::Inconsistent });
+    }
+    let mut m = Manifest::decode(&buffer[..n])?;
     if m.contract.as_str() != contract || m.contract_version != version { return Err(Error::Contract(m.contract_version)); }
     if m.schema != schema { return Err(Error::Schema(m.schema)); }
-    if m.state != state || m.epoch != mv { return Err(Error::Inconsistent); }
+    if m.state != state { return Err(Error::Inconsistent); }
+    // A manifest moved in records its epoch in the store it came from: here the names' version is its epoch.
+    m.epoch = mv;
     Ok(Restored::Found(m))
+}
+
+/// Releases the component whose checkpoint was restored at epoch `from`: both names to a release record by one commit
+/// from `from`, so every instance of that epoch is fenced and every later restore in this store refused (Released). The
+/// checkpoint stays the names' version `from`, which their history keeps, and the release names it. Fenced if another
+/// instance saved since; Invalid if no checkpoint is at `from`. Returns the release and its epoch. `buffer` holds MAX.
+pub fn release(store: &mut impl Store, names: &Names, from: u64, buffer: &mut [u8]) -> Result<(Release, u64), Error> {
+    let [(mv, manifest), (sv, state)] = store.snapshot([names.manifest(), names.state()])?;
+    if mv != from || sv != from { return Err(Error::Fenced); }
+    let (Some(manifest), Some(state)) = (manifest, state) else { return Err(Error::Invalid) };
+    // Both names at one block: a release already, never a checkpoint (its manifest names its state).
+    if manifest == state { return Err(Error::Released(from)); }
+    let r = Release { epoch: from, manifest, state };
+    let n = r.encode(&mut buffer[..MAX]);
+    let root = store.put(&buffer[..n])?;
+    Ok((r, store.commit([names.manifest(), names.state()], from, [root, root])?))
+}
+
+/// The release of a component moved out of this store, which `restore` refuses: it names the last checkpoint, which the
+/// names' history keeps, to be written to a copy again. Inconsistent unless both names hold one release. `buffer` holds
+/// MAX.
+pub fn released(store: &mut impl Store, names: &Names, buffer: &mut [u8]) -> Result<Release, Error> {
+    match store.snapshot([names.manifest(), names.state()])? {
+        [(mv, Some(manifest)), (sv, Some(state))] if mv == sv && manifest == state => {
+            let n = store.get(&manifest, &mut buffer[..MAX])?;
+            Release::decode(&buffer[..n])
+        }
+        _ => Err(Error::Inconsistent),
+    }
 }
 
 /// Another component's last checkpoint, read and not restored: its manifest, checked as `restore` checks it, and its

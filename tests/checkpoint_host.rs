@@ -2,7 +2,8 @@
 //! one encoding and its refusals, save and restore through the block store's own logic (blockstore/src/store.rs on a
 //! simulated medium), fencing of a stale instance, contract and schema checks, names that disagree, effects that come
 //! back pending, authorities checked against what an instance holds; messages between components, each writing only
-//! its own checkpoint (313-STO-0030).
+//! its own checkpoint (313-STO-0030); a component moved to another store through a copy, active in one place only
+//! (313-STO-0033).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -16,10 +17,15 @@ mod tree;
 mod store;
 #[path = "../libmind/src/checkpoint.rs"]
 mod checkpoint;
+#[path = "../libmind/src/worktree.rs"]
+mod worktree;
+#[path = "../libmind/src/car.rs"]
+mod car;
 
-use checkpoint::{read, rebind, restore, save, Applied, Error, Label, Manifest, Names, Outcome, Restored, CLIENTS, MAX, OUTBOX};
+use car::{Named, Target};
+use checkpoint::{read, rebind, release, released, restore, save, Applied, Error, Label, Manifest, Names, Outcome, Release, Restored, CLIENTS, MAX, OUTBOX};
 use cid::{Cid, Codec};
-use store::{hmac_sha256, Crypto, Device, Entry, Extent, Head, Pin, Update, BUFFER, SECTOR};
+use store::{hmac_sha256, Crypto, Device, Entry, Extent, Head, Pin, Update, BUFFER, LEASE_NS, SECTOR};
 
 struct Memory { data: Vec<u8> }
 impl Device for &mut Memory {
@@ -58,6 +64,30 @@ impl checkpoint::Store for Local<'_> {
         let updates = [0, 1].map(|k| Update { name: names[k].as_bytes(), expected, root: Some(roots[k]) });
         match self.0.commit(&updates, 7) { Ok(v) => Ok(v[0]), Err(store::Error::Conflict) => Err(Error::Fenced), Err(_) => Err(Error::Store) }
     }
+}
+
+/// Its blocks and names as copies see them (313-STO-0033), for the same owner.
+impl dag::Blocks for Local<'_> {
+    fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, dag::Error> { dag::Blocks::put(&mut self.0, codec, data) }
+    fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, dag::Error> { dag::Blocks::get(&mut self.0, cid, out) }
+    fn has(&mut self, cid: &Cid) -> Result<bool, dag::Error> { dag::Blocks::has(&mut self.0, cid) }
+}
+impl worktree::Names for Local<'_> {
+    fn publish(&mut self, name: &str, expected: u64, root: &Cid) -> Result<Option<u64>, dag::Error> {
+        match self.0.publish(name.as_bytes(), expected, root, 7) { Ok(v) => Ok(Some(v)), Err(store::Error::Conflict) => Ok(None), Err(_) => Err(dag::Error::Store) }
+    }
+    fn version(&mut self, name: &str) -> Result<u64, dag::Error> { self.0.snapshot(name.as_bytes()).map(|(v, _)| v).map_err(|_| dag::Error::Store) }
+}
+impl car::Store for Local<'_> {
+    fn snapshot(&mut self, names: &[&str], heads: &mut [(u64, Option<Cid>)]) -> Result<(), dag::Error> {
+        for (name, head) in names.iter().zip(heads.iter_mut()) { *head = self.0.snapshot(name.as_bytes()).map_err(|_| dag::Error::Store)?; }
+        Ok(())
+    }
+    fn collect(&mut self) -> Result<u64, dag::Error> { self.0.collect().map(|c| c.blocks as u64).map_err(|_| dag::Error::Store) }
+}
+
+impl Target for Vec<u8> {
+    fn write(&mut self, data: &[u8]) -> Result<(), car::Error> { self.extend_from_slice(data); Ok(()) }
 }
 
 fn mount<'a>(medium: &'a mut Memory, room: &'a mut Room) -> Local<'a> {
@@ -252,14 +282,28 @@ fn keep(store: &mut impl checkpoint::Store, names: &Names, m: &mut Manifest, fro
 
 // The store with a stop: after `left` more calls, every call fails, as for an instance that ended there.
 struct Stopping<'s, S> { store: &'s mut S, left: usize }
-impl<S: checkpoint::Store> Stopping<'_, S> {
+impl<S> Stopping<'_, S> {
     fn step(&mut self) -> Result<(), Error> { if self.left == 0 { return Err(Error::Store); } self.left -= 1; Ok(()) }
+    fn dag(&mut self) -> Result<(), dag::Error> { self.step().map_err(|_| dag::Error::Store) }
 }
 impl<S: checkpoint::Store> checkpoint::Store for Stopping<'_, S> {
     fn put(&mut self, data: &[u8]) -> Result<Cid, Error> { self.step()?; self.store.put(data) }
     fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, Error> { self.step()?; self.store.get(cid, out) }
     fn snapshot(&mut self, names: [&str; 2]) -> Result<[(u64, Option<Cid>); 2], Error> { self.step()?; self.store.snapshot(names) }
     fn commit(&mut self, names: [&str; 2], expected: u64, roots: [Cid; 2]) -> Result<u64, Error> { self.step()?; self.store.commit(names, expected, roots) }
+}
+impl<S: dag::Blocks> dag::Blocks for Stopping<'_, S> {
+    fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, dag::Error> { self.dag()?; self.store.put(codec, data) }
+    fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, dag::Error> { self.dag()?; self.store.get(cid, out) }
+    fn has(&mut self, cid: &Cid) -> Result<bool, dag::Error> { self.dag()?; self.store.has(cid) }
+}
+impl<S: worktree::Names> worktree::Names for Stopping<'_, S> {
+    fn publish(&mut self, name: &str, expected: u64, root: &Cid) -> Result<Option<u64>, dag::Error> { self.dag()?; self.store.publish(name, expected, root) }
+    fn version(&mut self, name: &str) -> Result<u64, dag::Error> { self.dag()?; self.store.version(name) }
+}
+impl<S: car::Store> car::Store for Stopping<'_, S> {
+    fn snapshot(&mut self, names: &[&str], heads: &mut [(u64, Option<Cid>)]) -> Result<(), dag::Error> { self.dag()?; self.store.snapshot(names, heads) }
+    fn collect(&mut self) -> Result<u64, dag::Error> { self.dag()?; self.store.collect() }
 }
 
 // One request of a model service, in the protocol's order: restore, tell a repeat, apply in memory with the client's
@@ -584,4 +628,208 @@ fn a_message_is_acknowledged_only_by_its_receiver_and_up_to_what_it_applied() {
     // Once `b` applies the rest it is cleared, once.
     assert_eq!(b.receive("b", "a", &a, |_| Ok(2)), Ok(1));
     assert_eq!((a.acknowledge("a", "b", &b, |_| {}), a.acknowledge("a", "b", &b, |_| {}), a.outbox().len()), (1, 0, 0));
+}
+
+// Moves through a copy (313-STO-0033): out of one store by a release and a copy, into another by an import and a restore.
+
+// A component of the model with each part of a checkpoint: three operations of a client, an inbox, two messages owed
+// and an effect pending. Its last checkpoint.
+fn component(store: &mut impl checkpoint::Store, names: &Names, buffer: &mut [u8]) -> Manifest {
+    for op in 1..=3 { serve(store, names, "shell", op, op * 10, buffer).unwrap(); }
+    let (mut m, from, count) = open(store, names, buffer).unwrap();
+    m.inbox = 41;
+    m.send("peer", "one").unwrap();
+    m.send("peer", "two").unwrap();
+    m.begin("write:ram:x").unwrap();
+    keep(store, names, &mut m, from, count, buffer).unwrap();
+    open(store, names, buffer).unwrap().0
+}
+
+// Whether an instance restored in this store holds the component: a checkpoint found, to save from.
+fn active(store: &mut impl checkpoint::Store, names: &Names, buffer: &mut [u8]) -> bool {
+    matches!(restore(store, names, "model", 1, 1, buffer), Ok(Restored::Found(_)))
+}
+
+// A copy of the names at the roots given.
+fn copy_of(store: &mut impl dag::Blocks, named: &[Named]) -> Result<Vec<u8>, car::Error> {
+    let (mut chunk, mut block) = (Box::new([0; dag::CHUNK]), Box::new([0; dag::CHUNK]));
+    car::write(store, named, Vec::new(), 1, &mut chunk, &mut block).map(|(copy, _)| copy)
+}
+
+// The move out: restore and release, or find the release made before; then the last checkpoint, which the names'
+// history keeps, to a copy. Err: the instance stopped, or nothing to move.
+fn move_out<S: checkpoint::Store + dag::Blocks>(store: &mut S, names: &Names, buffer: &mut [u8]) -> Result<Vec<u8>, Error> {
+    let r = match restore(store, names, "model", 1, 1, buffer) {
+        Ok(Restored::Found(m)) => release(store, names, m.epoch, buffer)?.0,
+        Ok(Restored::Fresh { .. }) => return Err(Error::Invalid),
+        Err(Error::Released(_)) => released(store, names, buffer)?,
+        Err(e) => return Err(e),
+    };
+    let named = [Named { name: names.manifest(), version: r.epoch, root: r.manifest }, Named { name: names.state(), version: r.epoch, root: r.state }];
+    copy_of(store, &named).map_err(|_| Error::Store)
+}
+
+// The move in: the copy imported, then restored.
+fn move_in<S: checkpoint::Store + car::Store>(store: &mut S, copy: &[u8], names: &Names, buffer: &mut [u8]) -> Result<Restored, Error> {
+    let (mut chunk, mut block) = (Box::new([0; dag::CHUNK]), Box::new([0; dag::CHUNK]));
+    car::import(store, copy, &mut chunk, &mut block, |_, _| {}).map_err(|_| Error::Store)?;
+    restore(store, names, "model", 1, 1, buffer)
+}
+
+// `m` as saved at `epoch`.
+fn at(mut m: Manifest, epoch: u64) -> Manifest { m.epoch = epoch; m }
+
+// The last checkpoint a release names, read from the store's blocks: its manifest and its count.
+fn last_of(store: &mut impl checkpoint::Store, r: &Release) -> (Manifest, u64) {
+    let mut b = [0u8; MAX];
+    let n = store.get(&r.manifest, &mut b).unwrap();
+    let m = Manifest::decode(&b[..n]).unwrap();
+    assert_eq!(m.state, r.state);
+    (m, count_of(store, &m).unwrap())
+}
+
+#[test]
+fn a_move_stopped_anywhere_leaves_the_component_active_in_one_place_and_lands_whole() {
+    // The move runs with one store stopping after each number of its calls in turn, until one it does not reach, the
+    // other whole; then again, whole. After the stop the component is active at the source or at the destination, never
+    // both; released at the source, its last checkpoint is still there, and written again it is the same copy. It lands
+    // with the sequence, clients, inbox, outbox, effects and state the source last saved, and its next save is the next
+    // epoch in its new store.
+    let names = Names::of("model").unwrap();
+    for stopped in ["source", "destination"] {
+        for stop in 0.. {
+            let (mut a, mut b) = (Memory { data: vec![0; 512 * SECTOR] }, Memory { data: vec![0; 512 * SECTOR] });
+            let (mut ra, mut rb) = (Room::new(), Room::new());
+            let (mut source, mut destination) = (mount(&mut a, &mut ra), mount(&mut b, &mut rb));
+            let mut buffer = [0u8; MAX];
+            let last = component(&mut source, &names, &mut buffer);
+            let count = count_of(&mut source, &last).unwrap();
+            let left = |which| if which == stopped { stop } else { usize::MAX };
+            let mut out = Stopping { store: &mut source, left: left("source") };
+            let first = move_out(&mut out, &names, &mut buffer);
+            let mut unused = out.left;
+            if let Ok(copy) = &first {
+                let mut into = Stopping { store: &mut destination, left: left("destination") };
+                let _ = move_in(&mut into, copy, &names, &mut buffer);
+                if stopped == "destination" { unused = into.left; }
+            }
+            let (here, there) = (active(&mut source, &names, &mut buffer), active(&mut destination, &names, &mut buffer));
+            assert!(!(here && there), "{stopped} stopped after {stop} calls: active in both");
+            if !here {
+                assert_eq!(restore(&mut source, &names, "model", 1, 1, &mut buffer), Err(Error::Released(last.epoch + 1)), "{stopped} {stop}");
+                let r = released(&mut source, &names, &mut buffer).unwrap();
+                assert_eq!((r.epoch, last_of(&mut source, &r)), (last.epoch, (last, count)), "{stopped} {stop}");
+            }
+            let again = move_out(&mut source, &names, &mut buffer).unwrap();
+            if let Ok(copy) = first { assert_eq!(copy, again, "{stopped} {stop}"); }
+            let Ok(Restored::Found(landed)) = move_in(&mut destination, &again, &names, &mut buffer) else { panic!("{stopped} {stop}") };
+            assert_eq!((landed.epoch, at(landed, last.epoch)), (1, last), "{stopped} {stop}");
+            assert_eq!((count_of(&mut destination, &landed), landed.outbox().len(), landed.pending().count(), landed.inbox), (Ok(count), 2, 1, 41));
+            // A repeat is answered from the record; a new operation is applied, saved at the next epoch here.
+            assert_eq!(serve(&mut destination, &names, "shell", 3, 30, &mut buffer), Some(60));
+            assert_eq!(serve(&mut destination, &names, "shell", 4, 40, &mut buffer), Some(100));
+            let (m, from, _) = open(&mut destination, &names, &mut buffer).unwrap();
+            assert_eq!((from, m.sequence, m.applied("shell", 4)), (2, last.sequence + 1, Applied::Repeat(100)));
+            assert!(!active(&mut source, &names, &mut buffer));
+            // A stop the move did not reach: every point of it was cut.
+            if unused > 0 { assert!(there && stop > 5, "{stopped} {stop}"); break; }
+        }
+    }
+}
+
+#[test]
+fn a_released_component_is_refused_at_the_source_and_an_older_instance_fenced() {
+    let mut medium = Memory { data: vec![0; 512 * SECTOR] };
+    let mut room = Room::new();
+    let mut local = mount(&mut medium, &mut room);
+    let names = Names::of("model").unwrap();
+    let mut buffer = [0u8; MAX];
+    let last = component(&mut local, &names, &mut buffer);
+    // An instance restored before the release. A release from an epoch since saved past is fenced and releases nothing.
+    let (mut old, old_from, count) = open(&mut local, &names, &mut buffer).unwrap();
+    assert_eq!(release(&mut local, &names, last.epoch - 1, &mut buffer), Err(Error::Fenced));
+    assert!(active(&mut local, &names, &mut buffer));
+    let copy = move_out(&mut local, &names, &mut buffer).unwrap();
+    // A new instance is refused by its restore, by the release's epoch, never started fresh; a reader too.
+    let refused = Error::Released(last.epoch + 1);
+    assert_eq!(restore(&mut local, &names, "model", 1, 1, &mut buffer), Err(refused));
+    assert_eq!(serve(&mut local, &names, "shell", 9, 1, &mut buffer), None);
+    let mut state = [0u8; 32];
+    assert_eq!(read(&mut local, &names, "model", 1, 1, &mut buffer, &mut state), Err(refused));
+    assert_eq!(release(&mut local, &names, last.epoch + 1, &mut buffer), Err(refused));
+    // The instance restored before is fenced at its save, which changes nothing.
+    old.record("shell", 9, count + 1).unwrap();
+    assert_eq!(keep(&mut local, &names, &mut old, old_from, count + 1, &mut buffer), Err(Error::Fenced));
+    assert_eq!(restore(&mut local, &names, "model", 1, 1, &mut buffer), Err(refused));
+    // Its copy imported back here finds both names at the release, another root: left as they are, still released.
+    let mut conflicts = 0;
+    let (mut chunk, mut block) = (Box::new([0; dag::CHUNK]), Box::new([0; dag::CHUNK]));
+    car::import(&mut local, &copy[..], &mut chunk, &mut block, |_, o| conflicts += matches!(o, car::Outcome::Conflict { .. }) as usize).unwrap();
+    assert_eq!((conflicts, restore(&mut local, &names, "model", 1, 1, &mut buffer)), (2, Err(refused)));
+    // The release names the last checkpoint, the version before it in the names' history, which retains it: after a
+    // collection with every lease ended, the copy written again is the same.
+    let r = released(&mut local, &names, &mut buffer).unwrap();
+    let (version, root) = local.0.snapshot(names.manifest().as_bytes()).unwrap();
+    for (name, at) in [(names.manifest(), r.manifest), (names.state(), r.state)] {
+        let kept: Vec<_> = local.0.history(name.as_bytes()).unwrap().iter().map(|v| (v.version, v.root())).collect();
+        assert_eq!(kept[..2], [(version, root), (last.epoch, Some(at))], "{name}");
+    }
+    local.0.set_time(10 * LEASE_NS);
+    assert!(local.0.collect().unwrap().blocks > 0);
+    assert_eq!(last_of(&mut local, &r), (last, count));
+    assert_eq!(move_out(&mut local, &names, &mut buffer), Ok(copy));
+    // The release record has one encoding; another format is refused by its number; it is not a manifest.
+    let mut out = [0u8; MAX];
+    let n = r.encode(&mut out);
+    assert_eq!((Release::decode(&out[..n]), checkpoint::Store::get(&mut local, &root.unwrap(), &mut buffer)), (Ok(r), Ok(n)));
+    assert_eq!(&buffer[..n], &out[..n]);
+    for len in 0..n { assert_eq!(Release::decode(&out[..len]), Err(Error::Format), "{len}"); }
+    let mut long = out[..n].to_vec();
+    long.push(0);
+    assert_eq!(Release::decode(&long), Err(Error::Format));
+    let mut other = out[..n].to_vec();
+    other[8..10].copy_from_slice(&3u16.to_le_bytes());
+    assert_eq!(Release::decode(&other), Err(Error::Version(3)));
+    assert_eq!(Manifest::decode(&out[..n]), Err(Error::Format));
+}
+
+#[test]
+fn a_moved_in_checkpoint_is_restored_and_saved_and_its_names_still_checked() {
+    let names = Names::of("model").unwrap();
+    let mut buffer = [0u8; MAX];
+    let medium = || Memory { data: vec![0; 512 * SECTOR] };
+    let (mut a, mut b, mut c, mut d) = (medium(), medium(), medium(), medium());
+    let (mut ra, mut rb, mut rc, mut rd) = (Room::new(), Room::new(), Room::new(), Room::new());
+    let (mut source, mut destination) = (mount(&mut a, &mut ra), mount(&mut b, &mut rb));
+    let last = component(&mut source, &names, &mut buffer);
+    let count = count_of(&mut source, &last).unwrap();
+    let copy = move_out(&mut source, &names, &mut buffer).unwrap();
+    // The destination held a component of this name, removed at version 5: the copy comes in at 6, its epoch here.
+    for op in 1..=4 { serve(&mut destination, &names, "other", op, 1, &mut buffer).unwrap(); }
+    let removal = [names.manifest(), names.state()].map(|n| Update { name: n.as_bytes(), expected: 4, root: None });
+    destination.0.commit(&removal, 7).unwrap();
+    assert_eq!(restore(&mut destination, &names, "model", 1, 1, &mut buffer), Ok(Restored::Fresh { epoch: 5 }));
+    let Ok(Restored::Found(landed)) = move_in(&mut destination, &copy, &names, &mut buffer) else { panic!() };
+    assert_eq!((landed.epoch, at(landed, last.epoch), count_of(&mut destination, &landed)), (6, last, Ok(count)));
+    // Saved again here from that epoch; an instance restored before that save is fenced.
+    let (mut stale, stale_from, _) = open(&mut destination, &names, &mut buffer).unwrap();
+    assert_eq!(serve(&mut destination, &names, "shell", 4, 40, &mut buffer), Some(100));
+    assert_eq!(open(&mut destination, &names, &mut buffer).unwrap().1, 7);
+    assert_eq!(keep(&mut destination, &names, &mut stale, stale_from, 0, &mut buffer), Err(Error::Fenced));
+    // The state's name moved alone: refused. The manifest's name moved along to the same manifest: its state and the
+    // state's name still disagree, refused.
+    let (version, manifest) = destination.0.snapshot(names.manifest().as_bytes()).unwrap();
+    let elsewhere = destination.0.put(Codec::Raw, b"5").unwrap();
+    assert_eq!(destination.0.publish(names.state().as_bytes(), version, &elsewhere, 7), Ok(version + 1));
+    assert_eq!(restore(&mut destination, &names, "model", 1, 1, &mut buffer), Err(Error::Inconsistent));
+    assert_eq!(destination.0.publish(names.manifest().as_bytes(), version, &manifest.unwrap(), 7), Ok(version + 1));
+    assert_eq!(restore(&mut destination, &names, "model", 1, 1, &mut buffer), Err(Error::Inconsistent));
+    // A copy of the manifest's name alone, or with the state's name at another root, is not restored where it lands.
+    let r = released(&mut source, &names, &mut buffer).unwrap();
+    let other = source.0.put(Codec::Raw, b"5").unwrap();
+    let manifest = Named { name: names.manifest(), version: r.epoch, root: r.manifest };
+    let alone = copy_of(&mut source, &[manifest]).unwrap();
+    let moved = copy_of(&mut source, &[manifest, Named { name: names.state(), version: r.epoch, root: other }]).unwrap();
+    assert_eq!(move_in(&mut mount(&mut c, &mut rc), &alone, &names, &mut buffer), Err(Error::Inconsistent));
+    assert_eq!(move_in(&mut mount(&mut d, &mut rd), &moved, &names, &mut buffer), Err(Error::Inconsistent));
 }
