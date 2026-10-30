@@ -24,6 +24,7 @@ Programs keep their data as files on FAT, which has no history, no snapshots, no
 
 - [311-STO-0027](311-STO-0027-directories-as-objects.md): directories as objects, their walk, and the store's reachability through them.
 - [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md): a working tree in memory, published by compare-and-swap; `blocks tree`.
+- [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md): `storefs`, a `vfs.wit` view of a named root; waits for `KRN` on how a files client reaches it.
 
 ## Acceptance criteria
 

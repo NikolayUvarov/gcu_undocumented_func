@@ -181,8 +181,10 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [309](309-copies-scrub-and-repair.md) | Copies, scrub and repair | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
 | [311](311-storefs-a-file-face.md) | A file face: trees as objects, and `storefs`, a VFS view of a named root | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
+| [309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.md) | A copy of named roots in a file (CAR v1): export, import, and repair from it | `STO` | P2 | — | track B |
 | [311-STO-0027](311-STO-0027-directories-as-objects.md) | Directories as objects: a directory node (`mind::tree`), its walk, and the store's reachability through it | `STO` | P2 | — | track B |
 | [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md) | A working tree published by compare-and-swap: edits in memory, a new root under a name; `blocks tree` | `STO` | P2 | [311-STO-0027](311-STO-0027-directories-as-objects.md) | track B |
+| [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md) | `storefs`: files and directories of a named root through `vfs.wit`, each flush a publication by compare-and-swap | `STO` | P2 | [requests-KRN.md](requests-KRN.md) (`storefs`) | track B |
 | [312](312-the-minds-memory.md) | The Mind's memory: a journal, assertions and derived indexes | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (no personal data before it) | track B |
 | [313](313-persistent-actors.md) | Persistent actors: checkpoints of services with queues | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (for actors that hold personal data) | track B |
 | [313-STO-0026](313-STO-0026-operation-ids-and-queues-in-a-checkpoint.md) | Operation IDs and queues in a checkpoint: manifest format 2 (clients, inbox, outbox), `claim`, `tally` as the pilot | `STO` | P2 | — | track B |
