@@ -31,6 +31,15 @@ An object in the store is one file's bytes ([301](../issues-done/301-objects-as-
   - the store's walk (publication and pin completeness, quotas, collection) uses the tree's walk, so a directory's files are retained by the name that holds it.
 - **Not here:** the working tree in memory, the publish by compare-and-swap of a changed tree, `storefs` (a `vfs.wit` provider), the shell's commands. These come in the next tasks of 311.
 
+## Decisions while building (2026-10-30)
+
+- **Built in a worktree of the storage session** (330ffd4f), in parallel with 313-STO-0026, at the maintainer's word; reviewed and merged by the session.
+- **`tree::encode` and `tree::decode`,** mirroring `dag`'s names. `Dir` keeps where each entry starts, so an entry or a name is found without reading the node again.
+- **`dag` shares its CBOR writer, reader and link form** with the crate (`pub(crate)`). `In::take` no longer overflows on a length near u64::MAX: with debug assertions that was a panic, found by a tree test.
+- **`tree::size`** reads the directory nodes and each file's root alone: a mount sizes retained roots with it, so a directory is charged its files' bytes after a remount too.
+- **The walk's work is bounded:** `tree::walk` and `tree::size` take the steps they may take (an entry gone through, a block visited, a file's blocks included). The store gives every walk four steps for each block its index can hold, and 64 more. A tree that needs more is refused as out of shape (`invalid`), with nothing written (MC-5.1). A file's root is walked through the same count.
+- **Errors are `dag::Error`'s:** a node over a block is `TooLarge`; an entry that disagrees with what it links, or a tree deeper than 32, is `Shape`.
+
 ## Acceptance criteria
 
 - Host tests (`tests/tree_host.rs`):
