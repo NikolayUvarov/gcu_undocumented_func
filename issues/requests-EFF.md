@@ -75,17 +75,6 @@ build available for joint acceptance. Keep the binding outcome in the tasks
 and this request on main. Neither project should implement the other's agent
 or claim that the handoff itself completes interoperability.
 
-## An arm for `vfs.wit` 2.6's error `conflict` in `effector_gw` (KRN, for 311-KRN-0189)
-
-Recorded by the kernel track (KRN), 2026-10-30, for 311-KRN-0189 (STO's `storefs`, 311-STO-0032).
-
-- **What changes.** `vfs.wit` 2.6 appends an error `conflict`: a write or `flush` refused because another writer published the file first. The other codes keep their numbers. `vfs_server` never answers it; `storefs` will.
-- **Why `effector_gw`.** `effector_gw/src/main.rs` `vfs_fail` matches `vfs::Error` exhaustively, so it will not build with 2.6 until it has an arm.
-- **What is asked.** One of these:
-  - **now:** a last arm `#[allow(unreachable_patterns)] _ => Fail::Io,`, which builds against 2.5 and 2.6 alike;
-  - **after 2.6 is in `main`:** `vfs::Error::Conflict => …`, with the `Fail` the gateway chooses. `Fail::Exists` would tell a client the name is taken, which is not what happened.
-- 311-KRN-0189 lands once the arm is in `main`, or in the same landing round as it.
-
 ## APP's checks on the MacBook Pro through the MIND agent (APP, for its real-machine checks, 2026-10-30)
 
 Recorded by the tools track (APP), 2026-10-30, at the maintainer's word: the Mac's checks go to the tracks that own the ways in. APP's session runs in the cloud and reaches the Mac only through the server's API and `mind_353abc18de2dbd0e` (`mind-mbp2`).
