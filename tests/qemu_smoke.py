@@ -3731,6 +3731,7 @@ def store_suite(vm):
     store_domains_check(vm)
     fm_store_check(vm)
     tally_messages_check(vm)
+    store_tree_check(vm)
 
 
 def run_tally(vm, args):
@@ -3789,6 +3790,86 @@ def tally_messages_check(vm):
     print("PASS: messages between components: tally.a moves 3 of its 10 to tally.b as a message it owes; b applies it once, "
           "read again it applies nothing, and a's checkpoint is only read; after the store restarted a's next save "
           "clears it, and the two still count 10; two messages owed at once are applied in order", flush=True)
+
+
+def store_tree_check(vm):
+    """311-STO-0029: a directory tree under a name through `blocks tree`, each change one publication by compare-and-swap.
+    A tree of two directories and three files (one of two blocks under a node) is made, listed and read back, each file's
+    SHA-256 checked here; the name's history holds each root; a change read at an older version is refused as a conflict
+    and the name is unchanged; once the leases have ended, a collection frees the refused tree's nodes and every file is
+    still read; then a move and removals."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    first, second = b"first file\n", b"second file\n"
+    require(vm.command("write ram:ta.txt first file"), "WROTE 11 BYTES")
+    require(vm.command("write ram:tb.txt second file"), "WROTE 12 BYTES")
+    # The reference pattern of tests/dag_host.rs over two chunks, put and copied out to a file.
+    big = bytes((i * 31 + 7) % 251 for i in range(20000))
+    put = re.search(r"PUT (\S+) SIZE 20000", blocks("pattern 20000"))
+    assert put, "blocks pattern 20000"
+    require(blocks(f"get {put[1]} ram:tc.bin"), "GOT 20000 BYTES")
+    files = {"docs/a.txt": (first, cid_raw(first)), "docs/deep/b.txt": (second, cid_raw(second)), "c.bin": (big, put[1])}
+    roots = []
+
+    def published(out):
+        version = len(roots) + 1
+        found = re.search(rf"^PUBLISHED home VERSION {version} ROOT (\S+) \((VOLATILE|FLUSHED|COPIED)\)\r?$", out, re.M)
+        assert found, out
+        roots.append(found[1])
+        # The name keeps this root and the three before it.
+        history = blocks("history home")
+        for v in range(max(1, version - 3), version + 1):
+            require(history, f"home VERSION {v} ROOT {roots[v - 1]}")
+
+    def read_back():
+        for path, (data, _) in files.items():
+            require(blocks(f"tree cat home {path} ram:back.bin"), f"READ {len(data)} BYTES SHA-256 {hashlib.sha256(data).hexdigest()}")
+
+    def listed(path, count):
+        out = blocks(f"tree ls home {path}".rstrip())
+        require(out, f"{count} ENTRIES IN /{path} OF home VERSION {len(roots)}")
+        return re.findall(r"^(FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)
+    published(blocks("tree mkdir home docs"))
+    published(blocks("tree put home ram:ta.txt docs/a.txt"))
+    published(blocks("tree mkdir home docs/deep"))
+    published(blocks("tree put home ram:tb.txt docs/deep/b.txt"))
+    published(blocks("tree put home ram:tc.bin c.bin"))
+    top = listed("", 2)
+    assert [(k, s, n) for k, s, _, n in top] == [("FILE", "20000", "c.bin"), ("DIR", "2", "docs")] and top[0][2] == put[1], top
+    docs = listed("docs", 2)
+    assert [(k, s, n) for k, s, _, n in docs] == [("FILE", "11", "a.txt"), ("DIR", "1", "deep")] and docs[0][2] == cid_raw(first), docs
+    assert listed("docs/deep", 1) == [("FILE", "12", cid_raw(second), "b.txt")]
+    read_back()
+    require(blocks("tree cat home docs/a.txt ram:back.txt"), "READ 11 BYTES")
+    require(vm.command("cat ram:back.txt"), "first file")
+    # A second writer: it read version 3 and publishes against it. Refused, nothing published, the name unchanged.
+    out = blocks("tree mkdir home other 3")
+    refused = re.search(r"^CONFLICT home: READ AT VERSION 3, NOW AT 5; ROOT (\S+) NOT PUBLISHED\r?$", out, re.M)
+    assert refused, out
+    require(blocks("resolve home"), f"home VERSION 5 ROOT {roots[-1]}")
+    assert "other" not in blocks("tree ls home"), "the refused change was published"
+    # Its nodes are stored, and nothing retains them: its root is a directory, not an object `get` reads.
+    require(blocks(f"get {refused[1]} ram:x.bin"), "blocks: get: Format")
+    # Leases run 60 s by the guest's clock (303-STO-0017): after them a collection frees what nothing retains.
+    since = guest_seconds(vm)
+    time.sleep(55)
+    while guest_seconds(vm) < since + 62: time.sleep(2)
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    require(blocks(f"get {refused[1]} ram:x.bin"), "blocks: get: NotFound")
+    read_back()
+    print("PASS: blocks tree: two directories and three files under a name, one publication each, listed and read back "
+          "(SHA-256); the history holds each root; a change from an older version is refused as a conflict, the name "
+          "unchanged; after a collection the refused tree is gone and every file is read", flush=True)
+    # A directory with entries is not removed; a move, then a file and an empty directory removed.
+    require(blocks("tree rm home docs/deep"), "blocks: tree rm: NotEmpty")
+    published(blocks("tree mv home c.bin docs/c.bin"))
+    published(blocks("tree rm home docs/deep/b.txt"))
+    published(blocks("tree rm home docs/deep"))
+    assert [(k, n) for k, _, _, n in listed("docs", 2)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
+    require(blocks("tree cat home docs/c.bin ram:back.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
+    print("PASS: blocks tree: a move and two removals, each published; a directory with entries is not removed", flush=True)
 
 
 def store_domains_check(vm):

@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -82,7 +82,7 @@ A directory is a set of named files and subdirectories under one root CID (`libm
   - The store's walk is the tree's. A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`.
   - **A walk in the store takes at most four steps for each block its index can hold, and 64 more.** A tree that needs more is refused as out of shape (`invalid`), with nothing written. So a walk's work is bounded by the medium's size (MC-5.1). By count, not run here: a 3 GiB object of distinct chunks takes about 199 000 steps of the about 790 000 its index's 225 654 slots give. A collection marks every block a retained directory reaches, so a directory's files are retained by the name or pin that holds it.
   - An owner is charged the bytes of the files under a directory it retains; a mount reads them again with `tree::size`.
-- **Not built yet:** a working tree in memory, the publication of a changed tree by compare-and-swap, `storefs` (a `vfs.wit` provider) and the shell's commands. The store built for the platform takes directories, but no program there makes or reads one yet, and no QEMU suite tests them (MC-12.1, 12.3).
+- **Not built yet:** `storefs` (a `vfs.wit` provider). On the platform, `blocks tree` makes and reads directories through a working tree (next section).
 
 Evidence: host tests of the code, not a proof (MC-12.2).
 - `tests/tree_host.rs`:
@@ -97,6 +97,45 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - a tree missing a file's block is `incomplete` for a publication, a pin and a commit;
   - a directory node is stored and found again by a mount, and a `dag-cbor` block of neither schema is refused;
   - a tree that takes one step more than the store gives is refused for a publication, a pin and a commit, and one within is published.
+
+## A working tree — host-tested, run in QEMU on x86 (311-STO-0029)
+
+A writer changes a published tree through a **working tree** (`libmind/src/worktree.rs`), the second step of [311](../../issues/311-storefs-a-file-face.md). A published root is never changed in place (MC-4.9): the edits are made in memory and published as a new root.
+
+- **It starts** from the root a name's version gave, and that version; none and 0 are the empty tree of a new name.
+- **Edits:** put a file (an object the store holds, with its size: its root is read and the size checked), make a directory, remove a file or an empty directory, move an entry. A path is names separated by `/`, each one a name a directory node takes; a leading `/` is allowed, and the root is the empty path. Each refusal changes nothing:
+  - a name a directory refuses, or the root where an edit needs an entry (`Name`);
+  - a missing parent (`NotFound`), a file where a directory belongs (`NotDirectory`);
+  - a name taken (`Exists`): a put does not replace a file, a removal and a put do, in one publication;
+  - a directory removed with entries (`NotEmpty`), or moved into itself or under it (`Inside`).
+- **What it holds:** each directory an edit changed, with every directory above it, as its node; what no edit touched stays in the store. **Reads** (lookup and list) see the edits and read the rest from the store. A held directory has no CID until it is written out.
+- **Bounds.** It holds at most 64 directories (`DIRS`) and 64 KiB of their nodes and names (`BYTES`). An edit past them is refused (`Full`) with nothing changed, until a publication lets them go. A directory over a block, or more than 32 directories down from the root, is refused (`TooLarge`). A move checks the depth of the place it goes to, not the height of what it moves: a tree too deep is refused by the store's walk at the publication (`invalid`), and nothing is published. The tree takes about 85 KiB, so a program keeps it in a static.
+- **Write-out** puts the held directories, deepest first, and returns the new root. A subtree no edit touched keeps its CID and is not written again.
+- **Publication** is the name's compare-and-swap: `publish` with the version read. If another writer published since:
+  - nothing is published, and the writer is told the version it read and the current one: a conflict, never a merge;
+  - its working tree stays as it was. What to do next is the writer's, for example to read the new version and make its edits again;
+  - the nodes it wrote out are retained by nothing, and a collection frees them once their lease (60 s) has ended.
+- **`blocks tree`**, each change one publication:
+  - `ls <name> [path]` prints `FILE <bytes> <cid> <name>` or `DIR <entries> <cid> <name>` for each entry, then `<n> ENTRIES IN /<path> OF <name> VERSION <v>`;
+  - `cat <name> <path> <file>` copies a file out, every block checked, and prints `READ <n> BYTES SHA-256 <hex>`;
+  - `put <name> <file> <path>`, `mkdir <name> <path>`, `rm <name> <path>`, `mv <name> <from> <to>` print `PUBLISHED <name> VERSION <v> ROOT <cid> (<durability>)`, or `CONFLICT <name>: READ AT VERSION <r>, NOW AT <c>; ROOT <cid> NOT PUBLISHED`;
+  - a change reads the name's current version, or a version the name keeps, given as the last word (0: the empty tree of a new name). A test plays a second writer so.
+- **Not built yet:** `storefs`, sharded directories, and changes to several names at once from working trees (a commit).
+
+Evidence: host tests of the code, not a proof (MC-12.2).
+- `tests/worktree_host.rs`, through the store's own logic on a simulated medium:
+  - each edit is read at once, and each refusal above leaves what the tree holds and every read unchanged;
+  - `DIRS`, `BYTES`, a directory over a block and the depth are refused with nothing changed, and the edit refused for a bound is made after a publication;
+  - a write-out's root decodes and walks (`tree::walk`) with every block stored; an edit deep in one subtree writes the directories down to it and no others, and every other CID stays;
+  - of two writers from one version, the second is told of the conflict with both versions, and nothing of it is published. A collection after the lease frees its nodes, and every version kept stays whole;
+  - a medium stopped at each write of a publication, the write not made or only its first sector, mounts with the old root or the new one, each whole, never a mix;
+  - 2400 random edits read, and publish, as a model of them does.
+- The QEMU `store` suite, run on x86 with this change (aarch64 not yet):
+  - `blocks tree` makes two directories and three files under a name, one of them two blocks under a node, and lists them;
+  - each file reads back, its SHA-256 checked by the suite, and the name's history holds each root;
+  - a change read at an older version is refused as a conflict, and the name is unchanged;
+  - once the leases have ended, a collection frees the refused tree's root, and every file is still read;
+  - a move and two removals are published, and a directory with entries is not removed.
 
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
 
