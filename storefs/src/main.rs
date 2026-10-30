@@ -15,7 +15,7 @@ use mind::{cid, dag, tree, worktree};
 
 use cid::{Cid, Codec};
 use dag::{Blocks, CHUNK};
-use fs::{Client, Error, Fs, Roots, CHUNKS, FILES, HANDLES, PAGE, TREES};
+use fs::{Client, Error, Fs, Roots, CHUNKS, CHUNKS_EACH, FILES, FILES_EACH, FILE_MAX, HANDLES, HANDLES_EACH, PAGE, TREES, TREES_EACH};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE};
 use mind::fs::{BADGE_USER, ENTRY_DIR};
 use mind::idl::blockstore;
@@ -120,12 +120,9 @@ fn serve(fs: &mut Fs, store: &mut Remote, client: Client, request: Request, call
             let read = fs.read(store, client, file, offset as u64, &mut data[..n]);
             vfs::reply_read(call, read.map(|n| &data[..n]).map_err(Error::wire))
         }
-        Request::Write { file, offset, data } => {
-            // A file stays within `vfs.wit`'s sizes.
-            let written = if offset as u64 + data.len() as u64 > u32::MAX as u64 { Err(Error::TooLarge) } else { fs.write(store, client, file, offset as u64, data) };
-            vfs::reply_write(call, written.map(|n| n as u32).map_err(Error::wire))
-        }
-        Request::Truncate { file, size } => vfs::reply_truncate(call, fs.truncate(client, file, size as u64).map_err(Error::wire)),
+        // A file is FILE_MAX at most, within `vfs.wit`'s sizes.
+        Request::Write { file, offset, data } => vfs::reply_write(call, fs.write(store, client, file, offset as u64, data).map(|n| n as u32).map_err(Error::wire)),
+        Request::Truncate { file, size } => vfs::reply_truncate(call, fs.truncate(store, client, file, size as u64).map_err(Error::wire)),
         Request::Stat { handle } => {
             let stat = fs.stat(store, client, handle).map(|e| entry(e.name(), e.kind, e.size));
             vfs::reply_stat(call, stat.as_ref().map_err(|e| e.wire()))
@@ -141,7 +138,7 @@ fn serve(fs: &mut Fs, store: &mut Remote, client: Client, request: Request, call
         }
         Request::Volume { handle } => {
             // The store's room is the store's to say (`blocks stat`); a chunk is the unit a file is held in.
-            let volume = fs.volume(client, handle).map(|v| vfs::Volume {
+            let volume = fs.volume(store, client, handle).map(|v| vfs::Volume {
                 name: Text::new(v.name()).unwrap_or_default(), label: Text::new("MIND STORE").unwrap_or_default(), fat_bits: 0, bytes: 0, free: 0,
                 cluster: CHUNK as u32, writable: v.writable,
             });
@@ -163,8 +160,9 @@ fn main(_info: &'static BootInfo) {
     let (fs, scratch, data) = unsafe { (&mut *core::ptr::addr_of_mut!(FS), &mut *core::ptr::addr_of_mut!(SCRATCH), &mut *core::ptr::addr_of_mut!(DATA)) };
     // Without a store client every volume fails (`io`), so clients are not left waiting.
     let held = mind::dev::cap_info(SLOT_BLOCKSTORE).0 == CAP_KIND_ENDPOINT;
-    mind::println!("[STOREFS] READY VOLUMES fs/<NAME>: {} TREES, {} HANDLES, {} FILES, {} KIB OF WRITTEN CHUNKS{}", TREES, HANDLES, FILES,
-                   CHUNKS * CHUNK / 1024, if held { "" } else { "; NO STORE CLIENT (311-KRN-0190)" });
+    mind::println!("[STOREFS] READY VOLUMES fs/<NAME>: {} TREES, {} HANDLES, {} FILES, {} KIB OF WRITTEN CHUNKS ({}, {}, {}, {} KIB A CLIENT), FILES UP TO {} MIB{}",
+                   TREES, HANDLES, FILES, CHUNKS * CHUNK / 1024, TREES_EACH, HANDLES_EACH, FILES_EACH, CHUNKS_EACH * CHUNK / 1024, FILE_MAX >> 20,
+                   if held { "" } else { "; NO STORE CLIENT (311-KRN-0190)" });
     let mut store = Remote;
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
