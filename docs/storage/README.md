@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -231,7 +231,7 @@ Then the record and zeros up to the end of its last sector, encrypted. So the fr
 - **The nonce** is the first 12 bytes of an HMAC-SHA-256 of the associated data and the sealed bytes, under a key derived from the volume key. A write needs no random source, which a qemu64 CPU and the i7-930 lack. The same nonce comes back only for the same record at the same place, which seals to the same bytes.
 - **Keys.** Two keys are derived from the volume key by HMAC-SHA-256: one seals, one makes nonces.
 - **The volume key** is made at the first mount of a blank medium, or of a partition `make_usb_image.py` formatted with no key yet. It is random where the processor gives random numbers (RDRAND, RNDR). Elsewhere it comes from the medium's size and the time, and the log says so (`VOLUME KEY MADE WITHOUT RDRAND`).
-- **The key is kept in the superblock in the clear.** That is **no confidentiality:** whoever reads the medium reads the key and opens every record. What this stage gives is the format, the cipher on the platform and their cost; [308-STO-0022](../../issues/308-STO-0022-the-volume-key-held-by-keystore.md) moves the key to `keystore`. The service's ready line says `SEALED, KEY IN THE CLEAR`.
+- **A key kept in the superblock is in the clear.** That is **no confidentiality:** whoever reads the medium reads the key and opens every record. A RAM disk's key is kept there, and so is any key `keystore` does not keep; the service's ready line then says `SEALED, KEY IN THE CLEAR`. Any other medium's key is kept by `keystore` (next section).
 - **A wrong key.** The superblock holds a check, 32 zero bytes sealed under the key. A key that does not open it is refused at mount with `key` (`blockstore.wit` 2.1), and nothing is read or written. A store of damaged records is not mistaken for one of another key.
 - **Corrupt and damaged.** A record whose frame is whole but whose seal does not open is corrupt. Sectors outside any frame are damaged. A block found corrupt at a read is named by its CID from the index; one found at a mount, only counted.
 - **A collection** opens every record to learn what it is, and frees a record that does not open unless the index names its place.
@@ -245,13 +245,13 @@ Evidence: `tests/blockstore_host.rs` over a stand-in cipher (a keystream of spli
 
 The platform's cipher is the crate, tested by its own project. On the platform, the QEMU `store` suite (x86 and aarch64) puts, reads and names objects through sealed records, and finds them again after a restart without making a key again. The `storefaults` suite finds each record it damages by opening frames (above), and shows a wrong key refused.
 
-**Not provided:** confidentiality of the medium (the key is in the clear). What sealing protects and what it does not is in [the threat model](../profile/threat-model.md) (308-STO-0024).
+**Not provided:** confidentiality of a medium whose key is in the clear. What sealing protects and what it does not is in [the threat model](../profile/threat-model.md) (308-STO-0024).
 
-## The volume key kept by `keystore` — built; on the platform once `init` lends the client (308-STO-0022)
+## The volume key kept by `keystore` — run on the platform (308-STO-0022)
 
 A medium that outlives the machine's memory keeps no key: `keystore` keeps it as the store's own secret.
 - **Key source 2, kept.** The superblock holds an id of 8 random bytes where the key would be, zeros after it, and the check as before. The key is `blockstore`'s secret `volume-<id in hex>` in `keystore` (`keystore.wit` 1.4's `secret-put` and `secret-get`), sealed there under a key from the device key.
-- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take ([308-KRN-0183](../../issues-done/308-KRN-0183-a-secrets-client-for-blockstore.done), the kernel session's). Until it does, every medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
+- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take, whenever `keystore` runs ([308-KRN-0183](../../issues-done/308-KRN-0183-a-secrets-client-for-blockstore.done), the kernel session's, since round 46). Without it, a new medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
 - **Which key is kept.** At the first mount of a blank medium, or of a partition with no key yet:
   - a RAM disk keeps its key in its superblock, as nothing of it outlives a reset and a restarted store must find it;
   - any other medium's key is kept, if it is random and `keystore` keeps it;
@@ -264,8 +264,8 @@ A medium that outlives the machine's memory keeps no key: `keystore` keeps it as
   - another key under the id does not open the check: `key`.
 - **The ready line** says `SEALED, KEY KEPT BY KEYSTORE` or `SEALED, KEY IN THE CLEAR`; a key made at this mount is logged with where it went and why.
 - **What it does not give:**
-  - the device key is kept on the boot volume in the clear until a TPM seals it (351-NET-0006). So a store disk alone opens nothing, but with the boot volume beside it, it opens. The stick's own store partition (307-STO-0020) is beside it;
-  - a recovery key and a passphrase are still to come, with `APP`;
+  - where there is no TPM, the device key lies on the boot volume in the clear. So a store disk alone opens nothing, but with the boot volume beside it, it opens. The stick's own store partition (307-STO-0020) is beside it. Where there is a TPM, it seals the device key (351-NET-0006), and the store opens only on that TPM;
+  - a recovery key and a passphrase are still to come, with `APP` and `KRN` ([308-STO-0028](../../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)). Until then, a medium whose machine is gone or whose device key was made anew stays closed;
   - the key of a medium that is gone stays kept until deleted.
 
 Evidence, `tests/blockstore_host.rs` (a keeper in memory):
@@ -274,7 +274,11 @@ Evidence, `tests/blockstore_host.rs` (a keeper in memory):
 - `only_a_random_key_is_kept_and_only_by_a_keeper_that_keeps_it`: a derived key and a refused one stay in the clear;
 - `a_kept_superblock_with_bytes_where_the_key_would_be_is_refused`.
 
-Not run on the platform: no secrets client is lent yet. The QEMU checks of [308-STO-0022](../../issues/308-STO-0022-the-volume-key-held-by-keystore.md) come with 308-KRN-0183.
+On the platform, the QEMU `tls` suite (x86 and aarch64), on a raw image with a blank store disk beside it:
+- **its device key check** (308-KRN-0183): the store's volume key is kept as `volume-…`, read back at the next boot, and is not on the medium. Another program's secrets client finds none of it, nor opens the store's file copied under its own name. Under a new device key it opens no more;
+- **its TPM check** (swtpm): the disk is made at a boot without a TPM, and an object is put and named. The disk mounts, and the object reads back, after TPM A sealed the device key, and again under A. Under TPM B's new device key it is not mounted (`NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS volume-…`), and the object is not read (`key`).
+
+These are tests of the configurations named, not a proof (MC-12.2). The device key on the boot volume beside the disk, without a TPM, is not a protection, as said above.
 
 ## Memory domains — run on the platform (308-STO-0023)
 
