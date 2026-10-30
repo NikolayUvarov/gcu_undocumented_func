@@ -119,5 +119,6 @@ A manifest decodes only if it is exactly one encoding: no bytes after the last f
 These are tests of one pilot, not a proof (MC-12.2). Not provided:
 - a service with queues that uses format 2: the parts are in `mind::checkpoint`, and `tally`, one request a run, uses operation IDs and messages between its components. The first users are planned: the agent's sessions (260) and the messenger's client (950). The inbox, and a message pushed to its receiver and acknowledged by it (`delivered`), are checked on a model alone;
 - a sender started afresh, its checkpoint removed, while a receiver keeps its record of it: its sequences start from 1 again, and the receiver would take them as applied;
+- components' names kept apart by the store: its rights are a client's (by badge), not a name's, so that each component writes only its own checkpoint is `tally`'s code, not a right the store checks ("owners apart from badges" in the profile);
 - migration of an instance to another place;
 - a test that a recorded authority the instance lacks is refused on the platform (the shell lends `tally` both rights; the refusal is host-tested).
