@@ -8,4 +8,5 @@ pub mod journal;
 pub mod json;
 pub mod session;
 pub mod telemetry;
+pub mod update;
 pub mod wire;

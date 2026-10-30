@@ -294,6 +294,28 @@ pub fn deliver<'a>(values: &[Value<'a>]) -> Result<Deliver<'a>, Error> {
     Ok(Deliver { path, size, sha256, overwrite })
 }
 
+/// An `update_agent` payload for MIND (751-EFF-0023): the uploaded bundle's size and SHA-256, the version it must stage
+/// if the server names one, and the trial boot's tries (1–9, default 1); other fields are skipped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Update<'a> { pub size: u64, pub sha256: &'a str, pub version: Option<u64>, pub tries: u8 }
+
+pub fn update<'a>(values: &[Value<'a>]) -> Result<Update<'a>, Error> {
+    root(values)?;
+    let [size, sha256, version, tries] = members(values, 0, ["size", "sha256", "version", "tries"])?;
+    let number = |at: Option<usize>| match at.map(|i| values[i]) {
+        None => Ok(None),
+        Some(v) if v.kind == Kind::Null => Ok(None),
+        Some(v) if v.kind == Kind::Number => v.text.parse::<u64>().map(Some).map_err(|_| Error::Type),
+        Some(_) => Err(Error::Type),
+    };
+    let size = number(size)?.ok_or(Error::Missing)?;
+    if size == 0 { return Err(Error::Bounds); }
+    let sha256 = string(values, sha256)?;
+    if sha256.len() != 64 || !sha256.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) { return Err(Error::Type); }
+    let tries = match number(tries)? { None => 1, Some(t) if (1..=9).contains(&t) => t as u8, Some(_) => return Err(Error::Bounds) };
+    Ok(Update { size, sha256, version: number(version)?, tries })
+}
+
 /// An `exec_v1` payload's command (Effector's ExecOperation). MIND runs none: the agent maps only `reboot` to the
 /// gateway's restart, under the owner's `reboot on`; every other command is denied.
 pub fn exec_command<'a>(values: &[Value<'a>]) -> Result<&'a str, Error> {

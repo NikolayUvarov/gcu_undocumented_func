@@ -243,3 +243,17 @@ fn a_completed_result_says_what_was_done() {
     assert_eq!(core::str::from_utf8(json).unwrap(),
         r#"{"status":"failed","exit_code":1,"stdout":"unhealthy: quarantined: wlan","stderr":"","truncated":false,"run_as":"effector","error":"exit status 1"}"#);
 }
+
+#[test]
+fn an_update_names_its_bundle_and_the_trials_tries() {
+    let sha = "a".repeat(64);
+    let u = with_values(&format!(r#"{{"size": 4096, "sha256": "{sha}", "version": 202610301200, "tries": 3, "timeout_seconds": 1800}}"#), |v| update(v).map(|u| (u.size, u.sha256.to_owned(), u.version, u.tries)));
+    assert_eq!(u, Ok((4096, sha.clone(), Some(202610301200), 3)));
+    let plain = with_values(&format!(r#"{{"size": 1, "sha256": "{sha}", "version": null}}"#), |v| update(v).map(|u| (u.version, u.tries)));
+    assert_eq!(plain, Ok((None, 1)), "no version named, one try");
+    for (text, error) in [(format!(r#"{{"sha256": "{sha}"}}"#), Error::Missing), (format!(r#"{{"size": 0, "sha256": "{sha}"}}"#), Error::Bounds),
+                          (r#"{"size": 5, "sha256": "ABC"}"#.to_owned(), Error::Type), (format!(r#"{{"size": 5, "sha256": "{sha}", "tries": 10}}"#), Error::Bounds),
+                          (format!(r#"{{"size": "5", "sha256": "{sha}"}}"#), Error::Type), (format!(r#"{{"size": 5, "size": 6, "sha256": "{sha}"}}"#), Error::Duplicate)] {
+        assert_eq!(with_values(&text, |v| update(v).map(|_| ())), Err(error), "{text}");
+    }
+}

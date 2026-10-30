@@ -9425,6 +9425,133 @@ def effector_suite(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
 
 
+def effector_update_suite(args):
+    """751-EFF-0023: a developer's release through the Effector agent, against the fixture. A raw image with release 5 in
+    slot A, confirmed, in the development mode, the owner's policy saying `update apply`; the fixture holds release 6's
+    bundle as `release.py bundle` writes it, for an `update_agent` command. With the owner's `remote-update` off, the
+    gateway refuses it as init says the word is off: the command is answered failed (denied), nothing reaches the
+    updater, nothing is downloaded or staged. With it on, the agent downloads the bundle into the gateway, which streams it to the updater; release 6 is
+    staged in slot B and applied, the machine restarts and boots slot B on trial, and after init confirms it the agent
+    answers the command it kept across the restart: completed, `updated 6, slot B confirmed`."""
+    if not raw_tools():
+        print("SKIP: effector-update suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    sys.path.insert(0, str(ROOT / "tests"))
+    import effector_server  # noqa: E402
+    temp = Path(tempfile.mkdtemp(prefix="mind-effector-update-"))
+    arch = args.arch
+    volume, _, server_tree, kept, _, _, manifest6, boot_files, _ = update_releases(temp, arch)
+    release_tool.bundle(server_tree, temp / "release6.zip", arches=[arch])
+    bundle = (temp / "release6.zip").read_bytes()
+    payload = {"size": len(bundle), "sha256": hashlib.sha256(bundle).hexdigest(), "version": 6, "tries": 3, "timeout_seconds": 1800}
+    agent, token = "mind-test", "mind-effector-test-token"
+    server = effector_server.EffectorFixture(token=token).start()
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    files = {"netpolicy.txt": f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\n".encode(), "data/mode.conf": b"development\n",
+             "data/effector/effector.conf": f"effector-config 1\nserver https://10.0.2.2:{server.port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n".encode(),
+             "data/effector/token": (token + "\n").encode(), "data/effector/agent_id": (agent + "\n").encode(),
+             "data/effector/policy": b"effector-policy 1\nagent on\nupdate apply\n"}
+    for name, data in files.items():
+        (layout / name).parent.mkdir(parents=True, exist_ok=True)
+        (layout / name).write_bytes(data)
+    # Room for both slots and the bundle the updater holds while it stages.
+    image = boot_slots.Image.create(temp / "effector-update.img", layout, megabytes=256)
+    first = boot_slots.records(image.path)
+    cpu = ["-cpu", "max" if arch == "aarch64" else "qemu64,+rdrand"]
+    network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+
+    def logged(vm, name, line, timeout=120):
+        # A service's lines through dmesg; a read a kernel line lands in is made again.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            try:
+                log = vm.command(f"dmesg -s {name}", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            if line in log:
+                return log
+            time.sleep(1)
+        raise AssertionError((name, line, log[-3000:], vm.command("dmesg -s effector_gw", raw=True)[-2000:]))
+
+    def downloads(command):
+        return [r for r in list(server.requests) if "/api/commands/file" in r["path"] and f"command_id={command}" in r["path"]]
+
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
+        off = server.queue(agent, "update_agent", payload, program="MIND Core")
+        server.publish(bundle, command_id=off, bundle=True)
+        log = logged(vm, "effector", f"EFFECTOR: ACK {off} failed ACCEPTED", 180)
+        require(log, f"EFFECTOR: {off}: THE UPDATE REFUSED: denied")
+        result = server.operation(off)
+        assert result["status"] == "failed" and result["result"]["error"] == "denied", result
+        assert not downloads(off), "a byte was downloaded"
+        assert "INSTALL" not in vm.command("dmesg -s updater", raw=True), "the updater was asked"
+        require(vm.command("dmesg -s effector_gw", raw=True), f" {off} update-begin?{len(bundle)}?bytes remote-update off ")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-effector-update-off-{args.cpus}cpu.log").write_text(vm.log)
+    assert boot_slots.records(image.path) == first, "a boot record was written"
+    assert image.read("MIND/B/MANIFEST") is None and image.read("MIND/B/INSTALL/BUNDLE.ZIP") is None
+    print(f"PASS: effector-update with remote-update off: the gateway refuses the command as init says the word is off, "
+          f"answered failed (denied); nothing reaches the updater, nothing of the {len(bundle)}-byte bundle is downloaded "
+          "and nothing staged", flush=True)
+    image.write("data/mode.conf", b"development\nremote-update\n")
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT; REMOTE UPDATE (data/mode.conf)")
+        logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        on = server.queue(agent, "update_agent", payload, program="MIND Core")
+        server.publish(bundle, command_id=on, bundle=True)
+        started = time.monotonic()
+        logged(vm, "effector", f"EFFECTOR: {on}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
+        # No shell command meanwhile: the download, the staging and the restart come on their own. An answer before the
+        # restart is a failure, its services' lines said.
+        vm.collect()
+        since, deadline = len(vm.log), time.monotonic() + 1500
+        while "BOOT: SLOT B LOADED ON TRIAL" not in vm.log[since:]:
+            answered = server.operation(on)
+            if answered or time.monotonic() > deadline:
+                raise AssertionError((answered, *(vm.command(f"dmesg -s {name}", raw=True)[-2500:] for name in ("effector", "effector_gw", "updater"))))
+            time.sleep(1)
+            vm.collect()
+        print(f"TIME: {len(bundle)} bytes downloaded, streamed to the updater, staged and applied in {time.monotonic() - started:.0f} s", flush=True)
+        vm.logged("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", since, timeout=300)
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        log = logged(vm, "effector", f"EFFECTOR: ACK {on} completed WITH ITS RESULT ACCEPTED", 300)
+        require(log, f"EFFECTOR: UPDATE {on} TO VERSION 6: THE MACHINE RESTARTED")
+        require(log, f"EFFECTOR: {on}: updated 6, slot B confirmed")
+        result = server.operation(on)
+        assert result["status"] == "completed" and result["result"]["stdout"] == "updated 6, slot B confirmed", result
+        assert len(downloads(on)) == 1, downloads(on)
+        require(logged(vm, "updater", "[UPDATER] SLOT B CONFIRMED ON THE DISK", 120), "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        # The agent removed its kept answer last, which leaves the volume marked changed until a flush.
+        require(vm.command("sync"), "OK")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        server.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-effector-update-on-{args.cpus}cpu.log").write_text(vm.log)
+    records = boot_slots.records(image.path)
+    assert boot_slots.newest(records)[1]["slot"] == "B" and boot_slots.newest(records)[1]["confirmed"], records
+    assert image.read("MIND/B/MANIFEST") == manifest6, "slot B's manifest"
+    for name, digest in boot_files:
+        assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
+    assert image.read("MIND/B/INSTALL/BUNDLE.ZIP") is None and image.read("system/effector/update") is None
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: effector-update with remote-update on: the agent downloads release 6's bundle into the gateway, which "
+          "streams it to the updater; release 6 is staged in slot B and applied, the machine restarts into slot B on trial, "
+          "and once it is confirmed the agent answers the command it kept across the restart: completed, updated 6, slot B "
+          "confirmed", flush=True)
+
+
 def effector_actions_check(vm, server, agent, until, beats):
     """750-EFF-0007, 0014: the gateway's other actions as the suite's policy allows them, and the agent's telemetry."""
     # The screen as a PNG, inline in the ACK as the server's other agents send it; the gateway audits the capture.
@@ -9447,6 +9574,16 @@ def effector_actions_check(vm, server, agent, until, beats):
     until(f"EFFECTOR: ACK {log_id} completed WITH ring.log")
     text = base64.b64decode(server.operation(log_id)["result"]["artifact"]["data"]).decode()
     assert "[INIT] MODE: DEVELOPMENT" in text and f"{shot_id} open-screen" in text, text[-1500:]
+    # Past its run time an answer goes without its artifact, naming it, and the agent is free at once (750-EFF-0025): the
+    # first ACK fails, and the retry, 5 s or more later, comes after the command's 3 s.
+    server.inject("/api/commands/ack", "ack_500")
+    late_id = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 3}, program="mind")
+    until(f"EFFECTOR: ACK {late_id} completed LATE, WITHOUT ring.log")
+    late = server.operation(late_id)["result"]
+    assert late["status"] == "completed" and "artifact" not in late, late.keys()
+    assert re.fullmatch(r"not sent: the server had ended the command; ring\.log \d+ [0-9a-f]{64}", late["stdout"]), late["stdout"]
+    after_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
+    until(f"EFFECTOR: ACK {after_id} completed WITH ITS RESULT ACCEPTED")
     # A file delivered under the policy's root, checked by size and SHA-256 before it takes its name; one outside refused.
     delivery = b"delivered by the Effector fixture\n" * 2000
     published = server.publish(delivery, command_id="deliver-1")
@@ -12366,7 +12503,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,download,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
+    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -12427,6 +12564,9 @@ def main():
             continue
         if suite == "install":
             install_suite(args, args.updater_elf)
+            continue
+        if suite == "effector-update":
+            effector_update_suite(args)
             continue
         if suite == "update":
             update_suite(args)

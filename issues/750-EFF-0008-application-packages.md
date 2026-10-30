@@ -43,3 +43,11 @@
 ## Related
 
 [351](351-self-update.md), [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [750-EFF-0005](../issues-done/750-EFF-0005-zip-reader.done), [docs/profile/README.md](../docs/profile/README.md) (applications not verified: "Not met").
+
+## Progress (2026-10-30)
+
+- **Points 1 and 2 of the package contract are drafted** in [docs/effector/packages-draft.md](../docs/effector/packages-draft.md), contract 1.5 draft 1, for the Effector server project's review. They are native EFF's since 2026-10-24.
+  - The command: `deploy` with `new_hostport` `mind-package-1:<operation>:<package_id>:<size>:<sha256>`.
+  - The download: only `/api/deployment/download/{id}`, bound to that size and SHA-256.
+  - The result: `DeploymentResult` with `script` `mind-package-1` and one `stdout` line, then the ACK, both with the same outcome and refusal code.
+- Nothing of it is built. The install waits for the server's confirmation and for KRN's 750-KRN-0169.

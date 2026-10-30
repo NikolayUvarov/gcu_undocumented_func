@@ -173,6 +173,22 @@ class EffectorServerTests(unittest.TestCase):
             self.request("GET", route)
         self.assertEqual(self.request("GET", route)[1], data)
 
+    def test_an_update_bundle_is_served_for_its_command(self):
+        self.heartbeat()
+        bundle = bytes(range(256)) * (FILE_LIMIT // 128)  # over a delivery's bound, as a release is
+        command = self.fixture.queue("mind-test", "update_agent", {"size": len(bundle), "sha256": hashlib.sha256(bundle).hexdigest()})
+        with self.assertRaises(ValueError):
+            self.fixture.publish(bundle, command_id=command)
+        self.fixture.publish(bundle, command_id=command, bundle=True)
+        route = "/api/commands/file?agent_id=mind-test&command_id=" + command
+        self.assertEqual(self.request("GET", route)[0], 409, "not before it is sent")
+        self.poll()
+        self.assertEqual(self.request("GET", route)[1], bundle)
+        # The answer comes after the agent's restart, while the command is still the one sent.
+        result = json.dumps({"status": "completed", "exit_code": 0, "stdout": "updated 6, slot B confirmed", "stderr": "", "truncated": False, "run_as": "effector"})
+        self.assertEqual(self.request("POST", "/api/commands/ack", {"command_id": command, "result": result})[0], 200)
+        self.assertEqual(self.fixture.operation(command)["result"]["stdout"], "updated 6, slot B confirmed")
+
     def test_upload_digest_and_package_exchange(self):
         self.heartbeat()
         data = b"native diagnostic output\x00"
