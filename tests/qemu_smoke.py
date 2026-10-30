@@ -2781,9 +2781,9 @@ def nnd_check(vm):
     require(vm.command("write data/memory.conf nnd 64"), "WROTE 7 BYTES")
     require(vm.command("svc restart nnd"), "nnd restarted: PID")
     assert ready(2) == (64, vm.cpus), ready(2)
-    require(vm.command("dmesg -s init", raw=True), f"[INIT] nnd: 64 MIB AND UP TO {vm.cpus} WORKERS BY data/memory.conf")
+    require(vm.command("dmesg -s init", raw=True), "[INIT] nnd: 64 MIB AND WORKERS BY data/memory.conf")
     require(vm.command("dmesg -s vfs_server", raw=True), ":/models (READ-ONLY)")  # each start's scope, made anew
-    assert quota(vm.services()["nnd"]) == (vm.cpus, 1, 64), quota(vm.services()["nnd"])
+    assert quota(vm.services()["nnd"]) == (32, 1, 64), quota(vm.services()["nnd"])  # NND_TASKS; the kernel bounds live workers by the CPUs
     require(vm.command(f"kill {vm.services()['nnd']}", raw=True), "KILLED PID=")
     assert ready(3) == (64, vm.cpus), ready(3)
     require(vm.command("rm data/memory.conf"), "OK")

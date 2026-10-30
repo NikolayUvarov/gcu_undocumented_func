@@ -63,11 +63,12 @@
     - its MiB as its quota;
     - the argument `--memory <MiB>`;
     - `SPAWN_WORKERS`;
-    - a task quota of one worker per online CPU.
+    - a task quota of 32 (`NND_TASKS`), a ceiling: the kernel bounds its live workers by the online CPUs too, and `init`, which starts before the other CPUs, cannot count them.
 
     Without a line, the default 16 MiB, no argument and no workers; one endpoint either way, for the probe's notices.
   - The shell holds a copy of a client of `nnd` with the right to badge, which `init` keeps, in `SLOT_NN`. Before each new shell, `init` revokes every copy of it: the old shell's, what it minted and lent. Each revocation is logged.
   - `nnd` may be turned off in `data/services.txt`, and the shell starts after it.
+- **The kernel gives a task the online CPUs' count** in `BootInfo.cpu_count`, as many as were online at its start. It gave 0 before, and nnd, which sizes its workers by it, saw one CPU (the first run of `nnd_check`: 1 worker on 4 CPUs). No CPU's address is given.
 - **Answers to APP** (its message of 2026-10-29):
   - `--memory <MiB>` suits: `init` passes it with the line, and nothing without one.
   - **The files are two scopes, not one client.** A `vfs_server` scope is one directory, so:

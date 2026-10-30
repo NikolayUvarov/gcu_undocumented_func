@@ -10,7 +10,7 @@ pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd"
 pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bt_hci.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "nnd.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
-pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
+pub const SERVICE_INSTANCES: [&str; 5] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2", "rtl8168#1"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64); rtl8168#1: the DEXP's second wired port (211-KRN-0187)
 // The largest task or endpoint quota SPAWN can delegate (16 bits): the root quota init holds (issue 171).
 pub const QUOTA_MAX: usize = 0xFFFF;
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
@@ -55,8 +55,8 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // ABI 21 adds the boot image `rtw88_wifi`, the RTL8821CE's driver, after `rtw89_wifi`, so that init starts it before
 // `wlan` (550-KRN-0172, for 550-DRV-0042). ABI 22 moves SLOT_DYNAMIC to 40 for SLOT_OWN, a program's own data
 // directory (000-KRN-0170). ABI 24 moves it to 41 for SLOT_SECRETS, a program's client of its own secrets
-// (000-KRN-0182); 23 is never used, as a build of fast-test carried it with another layout. ABI 25 moves it to 42 for
-// SLOT_NN, the shell's client of the model service `nnd`, a boot image after `sysmon` (262-KRN-0178), and adds the USB
+// (000-KRN-0182); 23 is never used, as a build of fast-test carried it with another layout. ABI 25 gives a task the CPUs
+// online at its start in BootInfo.cpu_count (0 before), and moves SLOT_DYNAMIC to 42 for SLOT_NN, the shell's client of the model service `nnd`, a boot image after `sysmon` (262-KRN-0178), and adds the USB
 // Bluetooth controller's driver `bt_hci` after `rtw88_wifi` (700-KRN-0176).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its

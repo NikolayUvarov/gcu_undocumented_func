@@ -79,6 +79,9 @@ const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across re
 const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
 const NND_MODELS: usize = 2; // nnd: a read-only scope of the model disk, models: (262-KRN-0178)
 const NN_MODELS_DIR: &str = "data/models"; // the owner's models on the boot volume, nnd's SLOT_VFS scope (262-KRN-0178)
+// nnd's task quota with its line: a ceiling on its live workers, which the kernel bounds by the online CPUs too; init
+// starts before the other CPUs and cannot count them (262-KRN-0178).
+const NND_TASKS: u16 = 32;
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -135,9 +138,8 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // memory object init holds unmapped, and the image's length.
               replaced: [Option<(usize, usize)>; UNITS],
               placed: [Placed; UNITS], configuration: idl_init::Configuration,
-              // The online CPUs, the most workers nnd may have live; the client of nnd init keeps, whose copies the shell
-              // holds and lends, revoked before each new shell (262-KRN-0178).
-              cpus: u16, shell_nn: Option<usize> }
+              // The client of nnd init keeps, whose copies the shell holds and lends, revoked before each new shell (262-KRN-0178).
+              shell_nn: Option<usize> }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -261,7 +263,7 @@ impl Init {
 
     fn wired_cards(&self) -> [Option<&'static str>; 2] {
         let mut result = [None; 2]; let mut count = 0;
-        for name in ["virtio_net", "virtio_net#1", "rtl8168"] {
+        for name in ["virtio_net", "virtio_net#1", "rtl8168", "rtl8168#1"] {
             if self.plans[Self::index(name).unwrap()].is_some() && count < result.len() { result[count] = Some(name); count += 1; }
         }
         result
@@ -293,7 +295,7 @@ impl Init {
         if let Some(plan) = self.plans[index] {
             // A restart, or a start a safe start prepared: the device was stopped; the same capabilities are granted.
             if let Some(device) = self.devices[index] {
-                if matches!(name, "rtl8168" | "rtw89_wifi" | "rtw88_wifi") {
+                if matches!(services::base(name), "rtl8168" | "rtw89_wifi" | "rtw88_wifi") {
                     platform::registers_only(device)?;
                 } else { platform::resume(device)?; }
             }
@@ -349,8 +351,8 @@ impl Init {
     }
 
     // nnd's line of data/memory.conf, read at each start as the loader reads a program's (262-KRN-0178): its MiB as its
-    // quota and its argument `--memory`, and the right to start workers, as many live as the online CPUs; without a line
-    // the default quota and none.
+    // quota and its argument `--memory`, and the right to start workers, at most NND_TASKS live; without a line the
+    // default quota and none.
     fn nnd_memory(&mut self, mut plan: Plan) -> Plan {
         let mut text = [0u8; mind::memconf::MAX];
         let length = self.read_boot_file(mind::memconf::FILE, &mut text);
@@ -360,9 +362,9 @@ impl Init {
             Some(mib) => {
                 let mib = if mib == 0 { (HEAP_MAX_BYTES >> 20) as u16 } else { mib };
                 plan.flags |= SPAWN_WORKERS;
-                plan.quota = Quota { tasks: self.cpus, endpoints: 1, memory_mib: mib };
+                plan.quota = Quota { tasks: NND_TASKS, endpoints: 1, memory_mib: mib };
                 let _ = core::fmt::Write::write_fmt(&mut args, format_args!("--memory {}", mib));
-                mind::println!("[INIT] nnd: {} MIB AND UP TO {} WORKERS BY {}", mib, self.cpus, mind::memconf::FILE);
+                mind::println!("[INIT] nnd: {} MIB AND WORKERS BY {}", mib, mind::memconf::FILE);
             }
             None => {
                 plan.flags &= !SPAWN_WORKERS;
@@ -550,14 +552,16 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, VIRTIO_BLK_DMA_BYTES)?, 0);
             }
             "rtl8168" | "rtw89_wifi" => {
-                let (id, class) = if name == "rtl8168" { (0x8168_10EC, 0x02_00_00) } else { (0xB852_10EC, 0x02_80_00) };
-                let device = platform::find_device_id(class, 0xFF_FF_00, id, 0)?;
+                // The instance's RTL8168 in PCI order: rtl8168#1 drives the DEXP's second port (211-KRN-0187).
+                let wired = BOOT_SERVICES[image] == "rtl8168";
+                let (id, class) = if wired { (0x8168_10EC, 0x02_00_00) } else { (0xB852_10EC, 0x02_80_00) };
+                let device = platform::find_device_id(class, 0xFF_FF_00, id, instance)?;
                 self.devices[index] = Some(device);
                 let registers = minted.mint(PLATFORM_DEVICE_BAR_IDLE, device, 2)?;
                 if cap_info(registers).0 != CAP_KIND_MMIO { return Err(Error::NotFound); }
                 grants.add(SLOT_DEV0, registers, 0);
                 let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", device));
-                if name == "rtl8168" {
+                if wired {
                     grants.copy(SLOT_MEM, self.dma(index, RTL8168_DMA_BYTES)?, 0);
                     if let Ok(irq) = minted.mint(PLATFORM_DEVICE_MSI, device, 0) { grants.add(SLOT_IRQ, irq, 0); }
                     grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL | CAP_BADGE);
@@ -1682,7 +1686,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, cpus: info.cpu_count.clamp(1, u16::MAX as usize) as u16, shell_nn: None };
+                         configuration: idl_init::Configuration::Absent, shell_nn: None };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
