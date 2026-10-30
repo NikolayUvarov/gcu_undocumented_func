@@ -297,6 +297,36 @@ fn level_follows_loudness() {
     assert!((loud[0].level - quiet[0].level - 12).abs() <= 1, "{} vs {} dBFS", loud[0].level, quiet[0].level);
 }
 
+// 000-APP-0114: a command's words 400 ms apart stay one utterance at the command's pause (600 ms), and are two at the
+// default 200 ms; a second apart they are two either way.
+#[test]
+fn a_commands_pause_keeps_its_words_together() {
+    let with = |signal: &[i16], mut detector: Detector| {
+        let mut found = Vec::new();
+        for chunk in signal.chunks(1_234) { detector.push(chunk, &mut |u| found.push(u)); }
+        detector.finish(&mut |u| found.push(u));
+        found
+    };
+    // The synthesizer's own silence around each phrase makes the gap between the words' sounds wider than `compose`'s.
+    let (close, spans) = compose(&["открой", "файлы"], 120);
+    let gap = (spans[1].0 - spans[0].1) / MS;
+    assert!((300..=500).contains(&gap), "the words {} ms apart", gap);
+    let joined = with(&close, Detector::with_pause(front::COMMAND_PAUSE_MS));
+    let report: Vec<(u64, u64)> = joined.iter().map(|u| (u.start_ms, u.length_ms())).collect();
+    assert_eq!(joined.len(), 1, "one command: {:?}", report);
+    let (start, end) = (joined[0].start_ms as i64, (joined[0].start_ms + joined[0].length_ms()) as i64);
+    assert!((start - (spans[0].0 / MS) as i64).abs() <= 50 && (end - (spans[1].1 / MS) as i64).abs() <= 50, "both words: {:?} for {:?}", report, spans);
+    assert_eq!(with(&close, Detector::new()).len(), 2, "the default pause parts them");
+    let (apart, _) = compose(&["открой", "файлы"], 1_000);
+    assert_eq!(with(&apart, Detector::with_pause(front::COMMAND_PAUSE_MS)).len(), 2, "a second apart: two");
+    // A quiet recording is raised for its playback to a peak near full scale, at most 32 times; a loud one is kept.
+    assert_eq!(front::playback_gain(0), 16);
+    assert_eq!(front::playback_gain(29_000), 16);
+    assert_eq!(front::playback_gain(32_767), 16, "never lowered");
+    assert_eq!(front::playback_gain(1_000), 29 * 16);
+    assert_eq!(front::playback_gain(100), 32 * 16, "at most +30 dB");
+}
+
 // ---- Recognition (issue 078) ----
 
 fn read(path: &str) -> Vec<u8> {
