@@ -3,11 +3,11 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 44;
+pub const BOOT_IMAGES: usize = 46;
 // ABI 10's image array stays in the fixed prefix; later images are appended after all ABI 10 fields.
 pub const BOOT_PREFIX_IMAGES: usize = 36;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bt_hci.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "nnd.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -55,20 +55,23 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // ABI 21 adds the boot image `rtw88_wifi`, the RTL8821CE's driver, after `rtw89_wifi`, so that init starts it before
 // `wlan` (550-KRN-0172, for 550-DRV-0042). ABI 22 moves SLOT_DYNAMIC to 40 for SLOT_OWN, a program's own data
 // directory (000-KRN-0170). ABI 24 moves it to 41 for SLOT_SECRETS, a program's client of its own secrets
-// (000-KRN-0182); 23 is never used, as a build of fast-test carried it with another layout.
+// (000-KRN-0182); 23 is never used, as a build of fast-test carried it with another layout. ABI 25 moves it to 42 for
+// SLOT_NN, the shell's client of the model service `nnd`, a boot image after `sysmon` (262-KRN-0178), and adds the USB
+// Bluetooth controller's driver `bt_hci` after `rtw88_wifi` (700-KRN-0176).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 24;
+pub const ABI_VERSION: u32 = 25;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
-// BOOT_FILES sets it to one number above every ABI_VERSION so far (MC-12.4). Handoff 21 (550-KRN-0172): a 44th image
-// renumbers the images after it and moves every field after extra_programs, so an older loader is refused by name.
+// BOOT_FILES sets it to one number above every ABI_VERSION so far (MC-12.4). Handoff 25: two images, `bt_hci` after
+// `rtw88_wifi` (700-KRN-0176) and `nnd` after `sysmon` (262-KRN-0178), renumber the images after them and move every
+// field after extra_programs, so an older loader is refused by name.
 // Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
 // refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
-pub const BOOT_HANDOFF_VERSION: u32 = 21;
+pub const BOOT_HANDOFF_VERSION: u32 = 25;
 // BootInfo.boot_flags: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init ignores
 // data/services.txt (173-KRN-0036).
 pub const BOOT_SAFE: u32 = 1;
@@ -299,7 +302,7 @@ pub const CAP_KEEP: u8 = 1 << 3;
 pub const CAP_BADGE: u8 = 1 << 4;
 // Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX (issue 171), a bound on the
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
-pub const CAP_SLOTS: usize = 105; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (000-KRN-0182)
+pub const CAP_SLOTS: usize = 106; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (262-KRN-0178)
 pub const CAP_SLOTS_MAX: usize = 4096;
 // Derivations from a root a capability may be (000-KRN-0104): a copy or mint deeper than this is refused with ERR_LIMIT.
 pub const DERIVE_DEPTH_MAX: usize = 64;
@@ -411,12 +414,15 @@ pub const SLOT_OWN: usize = 39;
 // A program's client of the key service for its own secrets (idl/keystore.wit 1.4), which the loader asks for at each
 // start of a program it runs by its name, as for SLOT_OWN; no other program's secrets are reached (ABI 24, 000-KRN-0182).
 pub const SLOT_SECRETS: usize = 40;
+// The model service's client (idl/nn.wit): the shell's, with the right to badge, which it lends for REQUEST_NN to the
+// program's same slot with a badge minted for that start; init revokes what an old shell minted (ABI 25, 262-KRN-0178).
+pub const SLOT_NN: usize = 41;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 41;
+pub const SLOT_DYNAMIC: usize = 42;
 // The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
 // carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
-pub const LAUNCH_SLOTS: [usize; 20] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
-    SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH];
+pub const LAUNCH_SLOTS: [usize; 21] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
+    SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_NN];
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):

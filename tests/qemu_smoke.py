@@ -46,7 +46,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -2664,6 +2664,7 @@ def smp_suite(vm):
     require(vm.service_logs("init", "rtc RESTARTED"), "rtc RESTARTED")
     assert heap_used(vm) == baseline
     workers_check(vm)
+    nnd_check(vm)
     if vm.arch == "aarch64":
         # No WFI state in QEMU's monitor: with every CPU idle the emulator uses little processor time.
         vm.serial()
@@ -2742,6 +2743,56 @@ def workers_check(vm):
     require(vm.command("rm data/memory.conf"), "OK")
     held = f"held, the program and its {cpus - 1} workers ran on {cpus} CPUs, and killing it ended them" if cpus > 1 else "one CPU: no held check"
     print(f"PASS: workers (262-KRN-0163): none without the owner's line; {cpus} counted on a shared page and one more refused; one that faulted ended alone; {held}; kbench: a worker starts in {rows['worker start'][0] / 1e6:.1f} ms and answers a call in {rows['worker call and reply'][0] / 1000:.1f} µs", flush=True)
+
+
+def nnd_check(vm):
+    """262-KRN-0178: init starts the model service nnd with its endpoint, the log and read-only scopes of data/models/ and
+    of the model disk (models:, where there is one) alone; its line of data/memory.conf, read at each start, gives its
+    quota and up to one worker per CPU, and without one it has the default quota and no workers. The shell holds its
+    client with the right to badge, which it lends for REQUEST_NN."""
+    def ready(count):  # nnd's quota and most workers as its start number `count` says them
+        for _ in range(60):
+            lines = re.findall(r"\[NND\] READY: QUOTA (\d+) MIB, (\d+) WORKERS AT MOST", vm.command("dmesg -s nnd", raw=True))
+            if len(lines) >= count:
+                return tuple(map(int, lines[count - 1]))
+            time.sleep(1)
+        raise AssertionError((count, vm.command("dmesg -s nnd", raw=True)[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
+
+    def quota(pid):
+        found = re.search(r"QUOTA TASKS=\d+/(\d+) ENDPOINTS=\d+/(\d+) MEMORY=\d+/(\d+)", vm.command(f"stat {pid}", raw=True))
+        assert found, vm.command(f"stat {pid}", raw=True)
+        return int(found[1]), int(found[2]), int(found[3]) >> 20
+
+    pids = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    named = {pid: n for n, pid in pids.items()}
+    caps = vm.command(f"stat caps {pids['nnd']}", raw=True)
+    held = {int(slot): (int(badge), named.get(servers.get(int(ep)), "?")) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
+    slots = {int(slot) for slot in re.findall(r"^SLOT=(\d+) ", caps, re.M)}
+    assert slots - {2} == {1, 3, 12} and held[1][1] == "nnd" and held[12] == (0, "logd"), (held, caps)
+    for slot in {3, 2} & slots:  # read-only scopes: their badges are vfs_server's own, from 0x100
+        assert held[slot][1] == "vfs_server" and held[slot][0] >= 0x100, (slot, held)
+    assert ready(1) == (16, 0) and quota(pids["nnd"]) == (0, 1, 16), quota(pids["nnd"])
+    shell = vm.command(f"stat caps {pids['shell']}", raw=True)
+    lent = re.search(r"^SLOT=41 GEN=0 KIND=1 RIGHTS=22 SIZE=0 BADGE=0 EP=(\d+)", shell, re.M)
+    assert lent and servers.get(int(lent[1])) == pids["nnd"], shell
+    # The owner's line, read at the restart, and again when init restarts nnd after its end.
+    vm.command("mkdir data")
+    require(vm.command("write data/memory.conf nnd 64"), "WROTE 7 BYTES")
+    require(vm.command("svc restart nnd"), "nnd restarted: PID")
+    assert ready(2) == (64, vm.cpus), ready(2)
+    require(vm.command("dmesg -s init", raw=True), f"[INIT] nnd: 64 MIB AND UP TO {vm.cpus} WORKERS BY data/memory.conf")
+    require(vm.command("dmesg -s vfs_server", raw=True), ":/models (READ-ONLY)")  # each start's scope, made anew
+    assert quota(vm.services()["nnd"]) == (vm.cpus, 1, 64), quota(vm.services()["nnd"])
+    require(vm.command(f"kill {vm.services()['nnd']}", raw=True), "KILLED PID=")
+    assert ready(3) == (64, vm.cpus), ready(3)
+    require(vm.command("rm data/memory.conf"), "OK")
+    require(vm.command("svc restart nnd"), "nnd restarted: PID")
+    assert ready(4) == (16, 0), ready(4)
+    require(vm.command("dmesg -s init", raw=True), "[INIT] nnd: NO LINE IN data/memory.conf: 16 MIB, NO WORKERS")
+    models = "and the model disk's " if 2 in slots else ""
+    print(f"PASS: nnd (262-KRN-0178): its endpoint, the log and read-only scopes of data/models/ {models}alone; 16 MiB and no workers without a line, "
+          f"64 MiB and {vm.cpus} workers with one, read again at a restart and after its end; the shell holds its client with the right to badge", flush=True)
 
 
 def held_check(vm, cpus):
@@ -11837,7 +11888,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "bigmem": big_memory_check}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "nnd": nnd_check, "bigmem": big_memory_check}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

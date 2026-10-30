@@ -1,6 +1,6 @@
 # 262-KRN-0178 — `nnd` as a boot service: its grants, its memory line and workers, and the shell's badged client
 
-**Type:** kernel (ABI: a boot image and a slot), `init`, the shell's launch · **Owner:** `KRN` · **Priority:** P3 · **Status:** open (waits for the design to be agreed) · **Blocked by:** the agreement on [docs/nn/runtime.md](../docs/nn/runtime.md) (262-APP-0112, NRL's answers) · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.1, MC-3.2, MC-8.1, MC-12.4
+**Type:** kernel (ABI: a boot image and a slot), `init`, the shell's launch · **Owner:** `KRN` · **Priority:** P3 · **Status:** in progress (2026-10-30: `init`'s part made; APP's shell part left) · **Blocked by:** — (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed 2026-10-29) · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.1, MC-3.2, MC-8.1, MC-12.4
 
 **Asked by:** the tools track (`APP`) in `issues/requests-KRN.md`, 2026-10-28, "The model service `nnd` (for 262-APP-0112)".
 
@@ -46,6 +46,44 @@
      - when the shell is restarted, revokes that capability's descendants first, so that no copy the old shell minted survives;
      - the new shell's retirement of every badge then clears `nnd`.
 6. **A wait and wake on a shared word** (the design's question 4) is not planned in this task. It is its own kernel task, [262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md). Until it lands, `nnd` starts a worker per job, as the design says.
+
+## Progress (2026-10-30)
+
+- **The ABI step, ABI 25 and handoff 25** (`common/abi.rs`):
+  - the boot image `nnd` after `sysmon`, the 45th;
+  - `SLOT_NN` 41, in `LAUNCH_SLOTS`, moves `SLOT_DYNAMIC` to 42, and `CAP_SLOTS` grows to 106;
+  - `REQUEST_NN` (`1 << 27`) in `mind::process`.
+- **`init`** (`init/src/main.rs`):
+  - `nnd` holds its endpoint, the log and two read-only scopes, made at each start:
+    - `data/models/` in `SLOT_VFS`;
+    - the model disk's root, `models:`, in slot 2, where there is a model disk.
+
+    No network, device or lifecycle client.
+  - At each start and restart `init` reads `nnd`'s line of `data/memory.conf` (`mind::memconf`, which the loader now reads through too). With a line, `nnd` gets:
+    - its MiB as its quota;
+    - the argument `--memory <MiB>`;
+    - `SPAWN_WORKERS`;
+    - a task quota of one worker per online CPU.
+
+    Without a line, the default 16 MiB, no argument and no workers; one endpoint either way, for the probe's notices.
+  - The shell holds a copy of a client of `nnd` with the right to badge, which `init` keeps, in `SLOT_NN`. Before each new shell, `init` revokes every copy of it: the old shell's, what it minted and lent. Each revocation is logged.
+  - `nnd` may be turned off in `data/services.txt`, and the shell starts after it.
+- **Answers to APP** (its message of 2026-10-29):
+  - `--memory <MiB>` suits: `init` passes it with the line, and nothing without one.
+  - **The files are two scopes, not one client.** A `vfs_server` scope is one directory, so:
+    - `SLOT_VFS` holds `data/models/`, whose root stands for that directory;
+    - slot 2 holds `models:`.
+
+    `nnd` opens `data/models/…` through the first and `models:…` through the second (`mind::fs::use_scope` with each base).
+- **Tests:**
+  - **Host:** `tests/boot_abi_host.rs` (the image's place and the handoff); `tests/runtime.rs` (the slot and the launch slots); `tests/services_host.rs` (the memory line).
+  - **QEMU:** the 4-CPU suite's `nnd_check` (`tests/qemu_smoke.py`, also `--suites nnd`) checks:
+    - the grants (`stat caps`);
+    - the quota and workers with and without the line, read again at a restart and after nnd's end;
+    - the shell's `SLOT_NN`.
+- **Left:**
+  - **APP's shell part:** the badge per start, kept and revoked at the program's end, `retire`, and `retire-all` at its start. With it come the criteria about `REQUEST_NN`, a badge's reuse and a restart of the shell.
+  - **`nnd`'s two scopes,** for loading models.
 
 ## Acceptance criteria
 

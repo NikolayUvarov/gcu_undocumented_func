@@ -32,11 +32,13 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
     "RTL8821CE BAR2 initially non-mastering; 1 MiB DMA below 4 GiB; read-only VFS for its firmware; a wlanhw endpoint for wlan; polled, no interrupt",
+    "a USB client for Bluetooth controllers; read-only VFS for its patch",
     "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
     "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
-    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
+    "observe privilege", "read-only scopes of data/models/ and models:; its quota and workers by its line of data/memory.conf, read at each start",
+    "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
     "screen; process control; input; the serial line"];
@@ -75,6 +77,8 @@ const FIRMWARE_DIR: &str = "data/firmware"; // the drivers' proprietary files; l
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
 const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
+const NND_MODELS: usize = 2; // nnd: a read-only scope of the model disk, models: (262-KRN-0178)
+const NN_MODELS_DIR: &str = "data/models"; // the owner's models on the boot volume, nnd's SLOT_VFS scope (262-KRN-0178)
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -130,7 +134,10 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // What a service runs in place of its boot image until the next boot, in developer mode (800-KRN-0144): a
               // memory object init holds unmapped, and the image's length.
               replaced: [Option<(usize, usize)>; UNITS],
-              placed: [Placed; UNITS], configuration: idl_init::Configuration }
+              placed: [Placed; UNITS], configuration: idl_init::Configuration,
+              // The online CPUs, the most workers nnd may have live; the client of nnd init keeps, whose copies the shell
+              // holds and lends, revoked before each new shell (262-KRN-0178).
+              cpus: u16, shell_nn: Option<usize> }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -332,16 +339,76 @@ impl Init {
         made
     }
 
-    // A client confined to `dir` on the boot volume, made if missing, writable or not (750-KRN-0120, for 800-KRN-0128
-    // and 750-KRN-0119), asked of vfs_server through a client with `badge` that init drops at once.
+    // The client of nnd init keeps for the shell, with the right to badge: the shell holds a copy, so that revoking this
+    // one's descendants ends every client an old shell minted (262-KRN-0178).
+    fn shell_nn(&mut self) -> Result<usize> {
+        if let Some(slot) = self.shell_nn { return Ok(slot); }
+        let slot = ipc::mint(self.keeper("nnd")?, CLIENT | CAP_BADGE, 0, 0)?;
+        self.shell_nn = Some(slot);
+        Ok(slot)
+    }
+
+    // nnd's line of data/memory.conf, read at each start as the loader reads a program's (262-KRN-0178): its MiB as its
+    // quota and its argument `--memory`, and the right to start workers, as many live as the online CPUs; without a line
+    // the default quota and none.
+    fn nnd_memory(&mut self, mut plan: Plan) -> Plan {
+        let mut text = [0u8; mind::memconf::MAX];
+        let length = self.read_boot_file(mind::memconf::FILE, &mut text);
+        let line = core::str::from_utf8(&text[..length]).ok().and_then(|text| mind::memconf::mib(text, "nnd"));
+        let mut args = mind::util::FixedBuf::<ARGS_KEPT>::new();
+        match line {
+            Some(mib) => {
+                let mib = if mib == 0 { (HEAP_MAX_BYTES >> 20) as u16 } else { mib };
+                plan.flags |= SPAWN_WORKERS;
+                plan.quota = Quota { tasks: self.cpus, endpoints: 1, memory_mib: mib };
+                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("--memory {}", mib));
+                mind::println!("[INIT] nnd: {} MIB AND UP TO {} WORKERS BY {}", mib, self.cpus, mind::memconf::FILE);
+            }
+            None => {
+                plan.flags &= !SPAWN_WORKERS;
+                plan.quota = Quota { endpoints: 1, ..Quota::default() };
+                mind::println!("[INIT] nnd: NO LINE IN {}: {} MIB, NO WORKERS", mind::memconf::FILE, HEAP_MAX_BYTES >> 20);
+            }
+        }
+        plan.args = ([0; ARGS_KEPT], args.as_str().len());
+        plan.args.0[..plan.args.1].copy_from_slice(args.as_str().as_bytes());
+        plan
+    }
+
+    // A file of the boot volume read into `text` through a reader's client of init's own; 0 bytes when it is absent.
+    fn read_boot_file(&mut self, path: &str, text: &mut [u8]) -> usize {
+        let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_READER).map_err(Into::into)) else { return 0 };
+        let files = Endpoint(client);
+        let mut done = 0;
+        if let Ok(Ok(root)) = vfs::root(files, "") {
+            if let Ok(Ok(file)) = vfs::open(files, root, path, 0) {
+                while done < text.len() {
+                    let want = (text.len() - done).min(mind::fs::CHUNK);
+                    match vfs::read(files, file, done as u32, want as u32, &mut text[done..done + want]) { Ok(Ok(got)) if got > 0 => done += got, _ => break }
+                }
+                let _ = vfs::close(files, file);
+            }
+            let _ = vfs::close(files, root);
+        }
+        let _ = ipc::drop_cap(client);
+        done
+    }
+
+    // A client confined to `dir`, made if missing, writable or not (750-KRN-0120, for 800-KRN-0128 and 750-KRN-0119), asked
+    // of vfs_server through a client with `badge` that init drops at once. `dir` is on the boot volume, or names a volume
+    // whose root it stands for (`models:`, 262-KRN-0178).
     fn scope(&mut self, badge: u16, dir: &str, writable: bool) -> Result<usize> {
         let keeper = self.keeper("vfs_server")?;
         let client = ipc::mint_badged(keeper, CLIENT, badge)?;
         let files = Endpoint(client);
         let scoped = (|| -> Result<usize> {
-            let root = vfs::root(files, "")?.map_err(|_| Error::NotFound)?;
-            let dir = vfs::open_dir(files, root, dir, true);
-            let _ = vfs::close(files, root);
+            let (volume, path) = mind::fs::split(dir);
+            let root = vfs::root(files, volume)?.map_err(|_| Error::NotFound)?;
+            let dir = if path.is_empty() { Ok(Ok(root)) } else {
+                let dir = vfs::open_dir(files, root, path, true);
+                let _ = vfs::close(files, root);
+                dir
+            };
             let dir = dir?.map_err(|_| Error::NotFound)?;
             let made = vfs::scope(files, dir, writable, RECEIVED);
             let _ = vfs::close(files, dir);
@@ -516,6 +583,14 @@ impl Init {
                 // Its idl/wlanhw.wit endpoint, whose client goes to wlan alone.
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
             }
+            // A USB Bluetooth controller's HCI driver (700-KRN-0176, for 700-BLT-0001): usb_host's client badged for the
+            // wireless controller interface alone, as usb_serial's is for converters, and a reader for its patch.
+            "bt_hci" => {
+                if !self.running(service_index("usb_host")) { return Err(Error::NotFound); }
+                grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", mind::usb::BADGE_BLUETOOTH)?, CLIENT);
+                // A reader's client of vfs_server for the controller's patch and configuration in data/firmware/rtl_bt/.
+                if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
+            }
             "bcm_wifi" => {
                 // The MacBook Pro's Broadcom BCM4331 (14E4:4331), or a Broadcom network controller of class 02:80:00: BAR0 only (550-KRN-0059).
                 let broadcom = |device: &usize| mind::dev::device_config_at(SLOT_DEV0, *device, 0).is_ok_and(|id| id & 0xFFFF == 0x14E4);
@@ -663,6 +738,10 @@ impl Init {
             }
             // The parser service holds its endpoint and the log only: it parses outside bytes for others (109-NET-0008).
             "parse" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "parse")?, ALL); }
+            // The model service (262-KRN-0178, docs/nn/runtime.md): its endpoint and the log; read-only scopes of the models
+            // (`scopes_of`); its quota and workers by data/memory.conf at each start (`nnd_memory`). No network, device or
+            // lifecycle client.
+            "nnd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "nnd")?, ALL); }
             // The TPM service alone holds the TPM's registers (351-KRN-0043); without a TPM it runs and says so.
             "tpm" => {
                 if let Ok(slot) = minted.mint(PLATFORM_MMIO, PLATFORM_TPM, 0) { grants.add(SLOT_DEV0, slot, 0); }
@@ -812,6 +891,9 @@ impl Init {
                 // shell's own `update` command and no program (351-KRN-0116).
                 if self.present("ssh") { grants.copy(SLOT_SSH, self.keeper("ssh")?, CLIENT | CAP_BADGE); }
                 if self.present("updater") { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
+                // The model service's, with the right to badge, lent for REQUEST_NN with a badge for each start: a copy of the
+                // client init keeps, revoked before a new shell starts (262-KRN-0178).
+                if self.present("nnd") { grants.copy(SLOT_NN, self.shell_nn()?, CLIENT | CAP_BADGE); }
                 // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
                 grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
                 // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148).
@@ -843,6 +925,8 @@ impl Init {
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
             // The endpoint a check's parser serves (109-KRN-0117).
             "updater" => Quota { endpoints: 1, ..Quota::default() },
+            // The endpoint of nnd's probe for workers; its memory and workers come with its line of data/memory.conf.
+            "nnd" => Quota { endpoints: 1, ..Quota::default() },
             // The endpoint where the programs link starts send their output (800-LNK-0009, 800-KRN-0137).
             "link" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
@@ -864,6 +948,14 @@ impl Init {
 
     fn spawn(&mut self, index: usize, plan: Plan) -> Result<u64> {
         let name = unit_name(index);
+        let plan = if name == "nnd" { self.nnd_memory(plan) } else { plan };
+        // A new shell starts with no client of nnd the old one minted or lent: every copy of the kept one goes (262-KRN-0178).
+        if let Some(kept) = self.shell_nn.filter(|_| name == "shell" && self.starts[index] > 0) {
+            match ipc::revoke(kept) {
+                Ok(removed) => mind::println!("[INIT] shell: {} CLIENTS OF nnd THE OLD SHELL HELD OR LENT REVOKED", removed),
+                Err(error) => mind::println!("[INIT] shell: THE OLD SHELL'S CLIENTS OF nnd NOT REVOKED ({:?})", error),
+            }
+        }
         let mut grants = plan.grants; let mut receiver = None;
         // The shell serves its commands in SLOT_COMMANDS: its slot 1 is its client of init (800-KRN-0148).
         let serves = if name == "shell" { SLOT_COMMANDS } else { SLOT_SERVICE };
@@ -1496,6 +1588,8 @@ fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool)] {
     match name {
         "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true)],
         "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false)],
+        // The models nnd reads, and nothing else of the volumes (262-KRN-0178): each scope's root is its directory.
+        "nnd" => &[(SLOT_VFS, mind::fs::BADGE_USER, NN_MODELS_DIR, false), (NND_MODELS, mind::fs::BADGE_USER, "models:", false)],
         _ => &[],
     }
 }
@@ -1519,7 +1613,7 @@ fn boot_order() -> impl Iterator<Item = usize> {
 
 // What a safe start leaves out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
 // run was most likely in. Their plans are prepared and their devices stopped, so `svc start` starts them (000-KRN-0131).
-const SAFE_LEFT_OUT: [&str; 6] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi"];
+const SAFE_LEFT_OUT: [&str; 7] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
 
@@ -1588,7 +1682,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent };
+                         configuration: idl_init::Configuration::Absent, cpus: info.cpu_count.clamp(1, u16::MAX as usize) as u16, shell_nn: None };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).

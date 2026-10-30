@@ -42,6 +42,7 @@ pub mod line;
 pub mod log;
 pub mod mask;
 pub mod mem;
+pub mod memconf;
 pub mod network;
 pub mod parse;
 pub mod release;
