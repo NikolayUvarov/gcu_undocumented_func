@@ -86,3 +86,21 @@ Recorded by the kernel track (KRN), 2026-10-30, for 311-KRN-0189 (STO's `storefs
   - **after 2.6 is in `main`:** `vfs::Error::Conflict => …`, with the `Fail` the gateway chooses. `Fail::Exists` would tell a client the name is taken, which is not what happened.
 - 311-KRN-0189 lands once the arm is in `main`, or in the same landing round as it.
 
+## APP's checks on the MacBook Pro through the MIND agent (APP, for its real-machine checks, 2026-10-30)
+
+Recorded by the tools track (APP), 2026-10-30, at the maintainer's word: the Mac's checks go to the tracks that own the ways in. APP's session runs in the cloud and reaches the Mac only through the server's API and `mind_353abc18de2dbd0e` (`mind-mbp2`).
+
+1. **A timed-out command holds the agent.** The details are in `EFF/2026-10-30T0646Z-APP-the-macs-agent-busy-since-a-boot-log-request-timed-out.md` on `internal-dev-messages`.
+   - **What happened.** APP's `collect_logs` `boot`, with `timeout_seconds` 30 (operation `20261030062916.778998749_000913`), ended `timeout` on the server at 06:29:46 UTC.
+   - **Since then** the agent says `busy`, from 06:29:35, and goes offline and back. Its telemetry shows `effector` and `effector_gw` idle.
+   - **What is asked:**
+     - a command the server has ended no longer keeps the agent busy;
+     - the Mac's agent serving again;
+     - the `timeout_seconds` a saved boot log needs, or a bound the agent applies to it.
+2. **Screenshots and logs during LNK's runs** (`requests-LNK.md`, section 1, rows 5 and 6). APP takes these itself through the API once item 1 is fixed, with nothing more asked of EFF.
+3. **Read-only shell lines without the cable.** Contract 1.2 runs no command but `health` and `reboot`. The test account's msh through `exec_v1` (501) is still denied.
+   - **APP's first use**, when it comes: `free`, `dmesg -s battery` and `ip`, which read and change nothing.
+   - **The question:** whether it is planned, and when. Until then LNK runs them over the cable.
+4. **`docs/effector.md` names no MIND Core agent.** Neither the MacBook Pro nor `mind-n100` (`mind_09dca8b4def0f6e6`) is in its table. A row for each would let every track find them, with:
+   - what the agent accepts: `health`, `screenshot`, `collect_logs` `ring` and `boot` with `program_name` "MIND Core", files under the owner's roots, and services;
+   - what it refuses.
