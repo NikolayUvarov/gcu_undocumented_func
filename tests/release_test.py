@@ -2,13 +2,16 @@
 """Tests of releases (scripts/release.py, issue 351-UPD-0005; MC-9.2, 9.4, 9.6): a staged release published to a
 directory verifies; a version not above the channel's is refused; an upload cut before the channel leaves the old
 channel whole; a changed channel, manifest or blob, an expired channel and a channel signed with the boot key are
-refused by the checker; a signed body that is not a channel gets a reason, never an exception (351-UPD-0014)."""
+refused by the checker; a signed body that is not a channel gets a reason, never an exception (351-UPD-0014); a bundle
+holds what a device needs of the channel, stored, the same for the same release, and only of a layout that verifies
+(751-UPD-0032)."""
 import datetime
 import hashlib
 import json
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -188,6 +191,33 @@ class Releases(unittest.TestCase):
             sm.sign_volume(copies[a], version=1)
         release.publish(release.stage(1, self.dir / "built", copies), self.dest, now=NOW)
         self.assertIsNone(self.check())
+
+    def test_a_bundle_holds_what_a_device_needs(self):
+        release.publish(self.staged(1), self.dest, now=NOW)
+        release.publish(self.staged(2), self.dest, now=NOW)
+        out = self.dir / "bundle.zip"
+        paths = release.bundle(self.dest, out, now=NOW)
+        manifest = (self.dest / "releases/2/x86_64/MANIFEST").read_bytes()
+        blobs = sorted(blob for _, _, blob in release.manifest_files(manifest))
+        self.assertEqual(paths, ["channels/stable", "releases/2/x86_64/MANIFEST", "releases/2/x86_64/MANIFEST.SIG", *(f"blobs/{b}" for b in blobs)])
+        with zipfile.ZipFile(out) as archive:
+            self.assertEqual(archive.namelist(), paths)
+            for info in archive.infolist():
+                self.assertEqual(info.compress_type, zipfile.ZIP_STORED, info.filename)
+                self.assertEqual(archive.read(info), (self.dest / info.filename).read_bytes(), info.filename)
+        # Release 1's kernel is not release 2's: only what the channel's manifest lists goes in.
+        self.assertEqual(len(list((self.dest / "blobs").iterdir())), len(blobs) + 1)
+        again = self.dir / "again.zip"
+        release.bundle(self.dest, again, now=NOW)
+        self.assertEqual(out.read_bytes(), again.read_bytes())
+        with self.assertRaisesRegex(release.ReleaseError, "names no manifest for aarch64"):
+            release.bundle(self.dest, self.dir / "other.zip", arches=["aarch64"], now=NOW)
+        # A layout that does not verify is not bundled.
+        blob = self.dest / "blobs" / blobs[0]
+        blob.write_bytes(blob.read_bytes() + b"!")
+        with self.assertRaisesRegex(release.ReleaseError, "missing or not as listed"):
+            release.bundle(self.dest, self.dir / "bad.zip", now=NOW)
+        self.assertFalse((self.dir / "bad.zip").exists())
 
 
 if __name__ == "__main__":

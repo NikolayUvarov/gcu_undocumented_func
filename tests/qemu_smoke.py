@@ -6280,16 +6280,18 @@ def updater_parser_check(vm, https):
     print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
 
 
-def update_releases(temp, arch, changed=None, minimum6=None):
+def update_releases(temp, arch, changed=None, minimum6=None, gateway=None):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
     TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6, and so does
-    the loader, so that slot B boots through its own (351-UPD-0010). Returns the volumes, the server, release 5's channel,
-    release 6's and that one with its signature changed, release 6's manifest, its boot files (name, digest) with the
-    loader's last, and a channel maker."""
+    the loader, so that slot B boots through its own (351-UPD-0010); `gateway`, if named, is both releases' effector_gw.
+    Returns the volumes, the server, release 5's channel, release 6's and that one with its signature changed, release
+    6's manifest, its boot files (name, digest) with the loader's last, and a channel maker."""
     volume = temp / "release5"
     (volume / "EFI/BOOT").mkdir(parents=True)
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
         shutil.copyfile(ROOT / IMAGE / name, volume / name)
+    if gateway:
+        shutil.copyfile(gateway, volume / "effector_gw.elf")
     sign_manifest.sign_volume(volume, version=5)  # the version under the boot key (351-UPD-0024)
     newer = temp / "release6"
     shutil.copytree(volume, newer)
@@ -6509,6 +6511,123 @@ def update_suite(args):
           "raises the version floor to 6, and a record booting slot A's release 5 boots slot B instead; booted back in "
           "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
           "is consistent", flush=True)
+
+
+def install_suite(args, stub_elf):
+    """751-UPD-0032: the Effector gateway's client hands the updater a release as one bundle (update.wit 1.3). The
+    updater's stand-in sits in effector_gw's place (it then holds the updater's client badged for the gateway and acts
+    as the gateway) on a raw image with release 5 in slot A, confirmed, and the development mode on; the gateway's
+    directory holds bundles of release 6 and the list it hands over. With the owner's remote-update off, every
+    install-begin and install-commit is denied and the updater says so. With it on: a bundle with one byte of a boot file
+    changed is refused (`digest`), one whose manifest is signed by another key (`signature`), and one cut after its first
+    piece (`digest`: not the size begun); release 6's own, its second piece written twice as a resumed transfer would, is
+    staged in slot B and the bundle removed; the gateway applies it, and the machine boots slot B on trial and confirms it."""
+    if not raw_tools() or not stub_elf:
+        print("SKIP: install suite needs mkfs.fat, fsck.fat, mtools and the updater's stand-in", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-install-"))
+    arch = args.arch
+    volume, _, server, kept, _, _, manifest6, boot_files, _ = update_releases(temp, arch, gateway=stub_elf)
+    # The bundles: release 6's as release.py makes it, one with a byte of its first boot file changed, one whose
+    # manifest is signed by a key that is not the boot key (no blobs: the updater stops at the signature).
+    bundles = temp / "bundles"
+    bundles.mkdir()
+    paths = release_tool.bundle(server, bundles / "good.zip", arches=[arch])
+    entries = [(path, (server / path).read_bytes()) for path in paths]
+    changed = f"blobs/{boot_files[0][1]}"
+    release_tool.write_bundle(bundles / "flipped.zip", [(p, d[:-1] + bytes([d[-1] ^ 1]) if p == changed else d) for p, d in entries])
+    signature = f"releases/6/{arch}/MANIFEST.SIG"
+    other = hashlib.sha256(b"MIND Core install suite: not the boot key").digest()
+    release_tool.write_bundle(bundles / "forged.zip", [(p, sign_manifest.sign(other, manifest6) if p == signature else d) for p, d in entries if not p.startswith("blobs/")])
+    size = {name: (bundles / name).stat().st_size for name in ("flipped.zip", "forged.zip", "good.zip")}
+    sha = {name: hashlib.sha256((bundles / name).read_bytes()).hexdigest() for name in size}
+    listed = ["flipped.zip", "forged.zip", "good.zip short", "good.zip apply"]
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    gateway = layout / "system/effector_gw"
+    gateway.mkdir(parents=True)
+    for name in size:
+        shutil.copyfile(bundles / name, gateway / name)
+    (gateway / "install.txt").write_text("".join(f"{line.split()[0]} {sha[line.split()[0]]} {' '.join(line.split()[1:])}\n" for line in listed))
+    for name, data in {**MODES_EFFECTOR_FILES, "data/mode.conf": b"development\n"}.items():
+        (layout / name).parent.mkdir(parents=True, exist_ok=True)
+        (layout / name).write_bytes(data)
+    # Room for both slots, the bundles and the one being staged.
+    image = boot_slots.Image.create(temp / "install.img", layout, megabytes=256)
+    cpu = ["-cpu", "max" if arch == "aarch64" else "qemu64,+rdrand"]
+
+    def logged(vm, name, line, timeout):
+        # A service's lines, read with dmesg (the shell holds the serial line); a read a kernel line lands in is made again.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            try:
+                log = vm.command(f"dmesg -s {name}", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            if line in log:
+                return log
+            time.sleep(2)
+        raise AssertionError((name, line, log[-3000:]))
+
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    try:
+        log = logged(vm, "effector_gw", "[GATEWAY-STUB] DONE", 300)
+        for line in listed:
+            name = line.split()[0]
+            require(log, f"[GATEWAY-STUB] {name}: {size[name]} BYTES, BEGIN Ok(Err(Denied)), WRITTEN Ok(0), COMMIT Ok(Err(Denied))")
+        log = vm.command("dmesg -s updater", raw=True)
+        for call in ("INSTALL-BEGIN", "INSTALL-COMMIT"):
+            assert len(re.findall(rf"\[UPDATER\] {call} REFUSED TO THE EFFECTOR GATEWAY \(PID \d+\): REMOTE-UPDATE IS OFF \(MC-12.6\)", log)) == len(listed), log[-3000:]
+        assert "[UPDATER] INSTALL:" not in log, log[-3000:]
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-install-off-{args.cpus}cpu.log").write_text(vm.log)
+    image.write("data/mode.conf", b"development\nremote-update\n")
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    try:
+        log = logged(vm, "effector_gw", "[GATEWAY-STUB] good.zip: APPLY WAITS FOR data/apply", 1200)
+        for name, committed in (("flipped.zip", "Ok(Err(Digest))"), ("forged.zip", "Ok(Err(Signature))"), ("good.zip", "Ok(Ok(6))")):
+            assert re.search(rf"\[GATEWAY-STUB\] {re.escape(name)}: {size[name]} BYTES, BEGIN Ok\(Ok\(\d+\)\), WRITTEN Ok\(\d+\), COMMIT {re.escape(committed)}", log), (name, log[-3000:])
+        require(log, f"[GATEWAY-STUB] good.zip: {size['good.zip']} BYTES, BEGIN Ok(Ok(3)), WRITTEN Ok(32768), COMMIT Ok(Err(Digest))")
+        log = vm.command("dmesg -s updater", raw=True)
+        for line in (f"[UPDATER] INSTALL: A BUNDLE OF {size['flipped.zip']} BYTES, SHA-256 {sha['flipped.zip'][:16]}, FOR THE GATEWAY'S COMMAND test-1: HANDLE 1",
+                     f"[UPDATER] INSTALL: {boot_files[0][0]} IS NOT AS THE MANIFEST LISTS IT", "[UPDATER] INSTALL: REFUSED: Digest",
+                     "[UPDATER] INSTALL: REFUSED: Signature",
+                     f"[UPDATER] INSTALL: COMMAND test-3: 32768 OF {size['good.zip']} BYTES: NOT THE SIZE OR SHA-256 BEGUN",
+                     f"[UPDATER] INSTALL: WRITTEN AGAIN FROM BYTE 32768 OF {size['good.zip']}",
+                     f"[UPDATER] INSTALL: COMMAND test-4: {size['good.zip']} OF {size['good.zip']} BYTES, SHA-256 AS BEGUN",
+                     "FROM THE GATEWAY'S BUNDLE", "[UPDATER] INSTALL: VERSION 6 STAGED IN SLOT B"):
+            require(log, line)
+        assert "REFUSED TO THE EFFECTOR GATEWAY" not in log, log[-3000:]
+        vm.collect(); vm.output = ""
+        require(vm.command("mkdir data/apply"), "OK")
+        out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        require(out, f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}")
+        log = logged(vm, "updater", "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 120)
+        require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        require(logged(vm, "effector_gw", "[GATEWAY-STUB] DONE", 120), "[GATEWAY-STUB] BOOTED FROM SLOT B: NOTHING TO HAND OVER")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-install-on-{args.cpus}cpu.log").write_text(vm.log)
+    records = boot_slots.records(image.path)
+    assert boot_slots.newest(records)[1]["slot"] == "B" and boot_slots.newest(records)[1]["confirmed"], records
+    assert image.read("MIND/B/MANIFEST") == manifest6, "slot B's manifest"
+    for name, digest in boot_files:
+        assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
+    assert image.read("MIND/B/INSTALL/BUNDLE.ZIP") is None and image.read("MIND/A/INSTALL/BUNDLE.ZIP") is None
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: install (751-UPD-0032): with remote-update off every install-begin and install-commit of the gateway's "
+          "client is denied and logged; with it on, a bundle with a changed boot file (digest), one with a manifest signed "
+          "by another key (signature) and one cut short (digest) are refused, and release 6's bundle, a piece written "
+          "again, is staged in slot B and removed; the gateway applies it, and slot B boots on trial and is confirmed", flush=True)
 
 
 def mindlink_tool():
@@ -11776,6 +11895,10 @@ def main():
         if suite == "updater":
             updater_suite(args, args.updater_elf)
             update_suite(args)
+            install_suite(args, args.updater_elf)
+            continue
+        if suite == "install":
+            install_suite(args, args.updater_elf)
             continue
         if suite == "update":
             update_suite(args)
