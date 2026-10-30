@@ -80,8 +80,17 @@ The maintainer (2026-10-29): a developer agent updates a machine's system throug
 
     The `net,tls,effector` groups pass on both with these changes. This is QEMU evidence only (MC-12.1).
 
+**Checked again after `main` was merged (14487ec6, 2026-10-30, LEG9, `scripts/ci_local.sh`):**
+- all host tests (`scripts/host_tests.sh`, with OpenSSH's server for `ssh`): 165 suites pass;
+- the groups that the gateway's new grants touch:
+  - `x86: services, storage, audio` (`modes` among them);
+  - `x86: the updater and an update through the link` (`updater` with `install`, and `linkupdate`);
+  - `aarch64: the updater and the modes`.
+
+  All pass.
+
 **Open:**
-- **The hardware criterion:** the Effector server's `update_agent` for MIND endpoints (its inbox, 2026-10-29). Its
+- **The hardware criterion:** the Effector server's `update_agent` for MIND endpoints, now its task `81-mindcore-08-update-agent-release-bundle` (sst-test-deploy 9bc793f). Its
   field names, once fixed, replace the ones above.
 - **Plan item 6,** the heartbeat's `update` field: waits for the server's field.
 - **Plan item 7,** the mark: red already whenever the policy says `update apply` (a change past a check); a red mark
