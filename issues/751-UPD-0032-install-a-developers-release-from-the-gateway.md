@@ -58,8 +58,21 @@
   - the bundle is removed after a commit, at a new begin and at start.
 - **Host tests:** `tests/updater_host.rs` reads a bundle `release.py bundle` wrote, every entry as the server holds it, and refuses a byte past the end record, a count one more, a compressed or encrypted entry, a local name that differs, and Python's deflated, escaping, repeated and absolute names.
 
+- **The QEMU `install` suite** (in `--suites updater`, so in both architectures' updater groups; alone with `--suites install`):
+  - `tests/updater_stub` stands in for the gateway in effector_gw's place. It holds the updater's client badged `BADGE_UPDATE_GATEWAY` and hands over the bundles `system/effector_gw/install.txt` lists.
+  - Boot 1, `remote-update` off: four `install-begin` and four `install-commit` calls are `denied`, and the updater logs each.
+  - Boot 2, on:
+    - a bundle with one byte of its first boot file changed: `digest`, the file named;
+    - a manifest signed by another key: `signature`;
+    - a bundle cut after its first piece: `digest`, not the size begun;
+    - release 6's bundle, its second piece written twice: staged in slot B, then the bundle is removed;
+    - `apply` (the word asked again) boots slot B on trial, and the trial is confirmed.
+  - The two refusals the plan put on the host (`digest`, `signature`) are checked here, where the updater's built-in keys are.
+  - **x86: passed** locally in QEMU (about 3 minutes, 2026-10-30).
+- **Fixed on the way:** the updater received its requests with no slot for a caller's buffer, so the first buffer call (`install-begin`) was refused `invalid`. It now receives into slot 9, as the other services do; the stand-in too.
+
 **Left:**
-- the QEMU `update` suite's install run, x86 and aarch64: a gateway-badged client's bundle staged and applied, the word off (`denied`, logged), a bundle with one byte changed (`digest`) and a manifest not signed by the boot key (`signature`), both now checked there rather than on the host, where the signature check needs the updater's built-in keys;
+- the `install` suite on aarch64;
 - "another badge is `denied`" has no client to run it in QEMU: the shell holds the updater's unbadged client for its `update` command (351-APP-0029), which no program uses yet.
 
 ## Related

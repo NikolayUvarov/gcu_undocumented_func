@@ -118,7 +118,15 @@ tries 3                                   # tries of a trial boot for an automat
 
 - **A caller of `idl/update.wit`.** No program holds a client of the updater: the shell's `update` command is the tools track's (351-APP-0029, numbered on its branch from [requests-APP.md](../../issues/requests-APP.md)), and the slot for its client is asked of the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)). So `check`, `fetch`, `apply`, `rollback`, `status` and `metadata` run only through the automatic policy in the tests. `rollback`, `status` and `metadata` have not run on the platform, nor `apply`'s refusal of an expired staged release: the automatic run checks the source first.
 - **The directory source's other refusals, in QEMU.** The `linkupdate` suite (351-KRN-0141) fetches a release from `data/link/rel/`, boots it on trial and confirms it, and refuses an expired channel and one with a changed signature. An older channel, a changed boot file and a resumed file go through the same `stage()` as over HTTPS, where the `update` suite shows each, but none of them has run from a directory.
-- **A bundle from the gateway, in QEMU.** The bundle's reader runs in the host tests on a bundle `release.py bundle` wrote and on hostile archives (`tests/updater_host.rs`), and `release.py bundle` in `tests/release_test.py`. No QEMU suite has yet streamed a bundle through the gateway's client: the Effector gateway's side is 751-EFF-0023, and the suite is 751-UPD-0032's.
+- **The Effector gateway's own side of `install`** (751-EFF-0023). The `install` suite (run with `updater`, 751-UPD-0032) streams bundles through a stand-in: `tests/updater_stub` in effector_gw's place, holding the gateway's client.
+  - With `remote-update` off, every `install-begin` and `install-commit` is `denied` and logged.
+  - With it on:
+    - a bundle with one byte of a boot file changed is refused (`digest`);
+    - so is one whose manifest is signed by another key (`signature`), and one cut after its first piece (`digest`);
+    - release 6's bundle, a piece written twice, is staged in slot B and removed;
+    - `apply` boots slot B on trial, and the trial is confirmed.
+
+  It has passed on x86 in QEMU. The bundle's reader also runs in the host tests (`tests/updater_host.rs`) on a bundle `release.py bundle` wrote and on hostile archives. No client of another badge has run against the install calls: the shell's `update` command is not there yet.
 - **SSH** (351-NET-0004).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).

@@ -3,12 +3,15 @@
 //! Test-only stand-in for the updater service (QEMU `updater` suite, 351-KRN-0022): reports the slots init filled and
 //! what each authority does, tries the update zone when the system booted from a slot, then waits for the directory
 //! data/reboot on the boot volume and asks init to restart the machine. It answers `update.wit` meanwhile (`serve`).
-//! Never packaged into the normal OS; the real updater is 351-UPD-0007.
+//! In effector_gw's place it stands in for the Effector gateway instead (`gateway`, 751-UPD-0032). Never packaged into
+//! the normal OS; the real updater is 351-UPD-0007.
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
 use mind::abi::*;
-use mind::idl::update::{self as api, Error, Metadata, State};
+use mind::idl::update::{self as api, self as update, Error, Metadata, State};
 use mind::idl::{init, vfs, wire};
 use mind::ipc::{Endpoint, Received};
 use mind::sha256::Sha256;
@@ -16,6 +19,7 @@ use mind::sha256::Sha256;
 // What `install-commit` answers as staged: the stand-in stages nothing.
 const STAGED: u64 = 1;
 const ASK_MS: u32 = 1000;
+const RECEIVED: usize = 9; // the buffer of an install call lands here
 
 fn kind(slot: usize) -> usize { let kind = mind::dev::cap_info(slot).0; if kind > 64 { CAP_KIND_NONE } else { kind } }
 
@@ -60,8 +64,60 @@ fn zone(files: Endpoint, root: u32, info: &BootInfo) {
         inactive, staged, whole, part, made, running, live, efi, mind);
 }
 
+// In effector_gw's place, which alone holds the updater's client badged for the gateway in SLOT_UPDATE: each line of
+// system/effector_gw/install.txt, `FILE SHA256 [short|apply]`, is a bundle of that directory handed to the updater with
+// the SHA-256 named: in 32 KiB pieces, the second written twice as a resumed transfer would; `short` stops after the
+// first piece; `apply` asks the updater to apply once the directory data/apply exists. Booted from slot B, nothing.
+fn gateway(info: &BootInfo) -> ! {
+    const DIR: &str = "system/effector_gw";
+    const PIECE: usize = 32 * 1024;
+    let updater = Endpoint(SLOT_UPDATE);
+    let list = mind::fs::File::open(&format!("{}/install.txt", DIR)).ok().and_then(|f| {
+        let mut text = alloc::vec![0u8; f.size().min(4096)];
+        (f.read_at(0, &mut text) == Ok(text.len())).then(|| String::from_utf8_lossy(&text).into_owned())
+    });
+    match (info.boot_slot.slot, list) {
+        (BOOT_SLOT_B, _) => mind::println!("[GATEWAY-STUB] BOOTED FROM SLOT B: NOTHING TO HAND OVER"),
+        (_, None) => mind::println!("[GATEWAY-STUB] NO {}/install.txt", DIR),
+        (_, Some(list)) => for (index, line) in list.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let mut words = line.split_whitespace();
+            let (Some(name), Some(sha256)) = (words.next(), words.next()) else { continue };
+            let what = words.next().unwrap_or("");
+            let command = format!("test-{}", index + 1);
+            let Ok(file) = mind::fs::File::open(&format!("{}/{}", DIR, name)) else { mind::println!("[GATEWAY-STUB] {}: NOT FOUND", name); continue };
+            let size = file.size();
+            let begun = update::install_begin(updater, size as u64, sha256, &command);
+            let handle = match begun { Ok(Ok(handle)) => handle, _ => 1 };
+            let mut written: Result<usize, Error> = Ok(0);
+            if matches!(begun, Ok(Ok(_))) {
+                let mut piece = alloc::vec![0u8; PIECE];
+                let mut offsets = (0..size).step_by(PIECE).collect::<alloc::vec::Vec<_>>();
+                if what == "short" { offsets.truncate(1); } else if offsets.len() > 2 { offsets.insert(2, offsets[1]); }
+                for offset in offsets {
+                    let got = file.read_at(offset, &mut piece[..PIECE.min(size - offset)]).unwrap_or(0);
+                    match update::install_write(updater, handle, offset as u64, &piece[..got]) {
+                        Ok(Ok(())) => written = written.map(|n| n + got),
+                        Ok(Err(error)) => { written = Err(error); break; }
+                        Err(_) => { written = Err(Error::Denied); break; }
+                    }
+                }
+            }
+            let committed = update::install_commit(updater, handle);
+            mind::println!("[GATEWAY-STUB] {}: {} BYTES, BEGIN {:?}, WRITTEN {:?}, COMMIT {:?}", name, size, begun, written, committed);
+            if what == "apply" && matches!(committed, Ok(Ok(_))) {
+                mind::println!("[GATEWAY-STUB] {}: APPLY WAITS FOR data/apply", name);
+                while mind::fs::Dir::open("data/apply").is_err() { mind::time::sleep(200); }
+                mind::println!("[GATEWAY-STUB] {}: APPLY {:?}", name, update::apply(updater, 3));
+            }
+        },
+    }
+    mind::println!("[GATEWAY-STUB] DONE");
+    loop { mind::time::sleep(1000); }
+}
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    if kind(SLOT_UPDATE) == CAP_KIND_ENDPOINT { gateway(info); }
     let mut held = mind::util::FixedBuf::<256>::new();
     for slot in 1..SLOT_DYNAMIC {
         if kind(slot) != CAP_KIND_NONE { let _ = core::fmt::Write::write_fmt(&mut held, format_args!(" {}:{}", slot, kind(slot))); }
@@ -87,7 +143,7 @@ fn main(info: &'static BootInfo) {
             rebooting = true;
             restart();
         }
-        if let Ok(request) = Endpoint::SERVICE.recv_timeout(0, 200) { stub.serve(&request, &mut scratch); }
+        if let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, 200) { stub.serve(&request, &mut scratch); }
     }
 }
 
@@ -171,7 +227,7 @@ impl Stub {
     }
 
     fn serve(&mut self, request: &Received, scratch: &mut [u8; api::REQUEST_MAX]) {
-        let _ = match api::decode(request, 0, scratch) {
+        let _ = match api::decode(request, RECEIVED, scratch) {
             Ok((api::Request::Check, call)) => api::reply_check(call, Err(Error::NoSource)),
             Ok((api::Request::Fetch, call)) => api::reply_fetch(call, Err(Error::NoSource)),
             Ok((api::Request::Apply { tries }, call)) => { let applied = self.apply(request, tries); api::reply_apply(call, applied) }
