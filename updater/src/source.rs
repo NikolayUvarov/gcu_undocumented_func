@@ -1,6 +1,7 @@
 // Where releases come from (351-UPD-0007): an HTTPS server, trusted by its pinned key or the system's roots, over the
-// flow grant the network policy gives the updater; or a directory on a mounted volume (a USB stick). Both read the
-// layout of scripts/release.py, and nothing read here is trusted until the updater has checked it.
+// flow grant the network policy gives the updater; a directory on a mounted volume (a USB stick); or a bundle the
+// Effector gateway handed over (751-UPD-0032). All read the layout of scripts/release.py, and nothing read here is
+// trusted until the updater has checked it.
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -11,6 +12,7 @@ use mind::idl::{socket, tls, wire};
 use mind::ipc::Endpoint;
 use mind::parse::Session as Parser;
 use mind::idl::update::Error;
+use crate::bundle;
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
@@ -21,7 +23,39 @@ const STAGE: usize = 64 * 1024; // a file is written to the slot in pieces of th
 // error rather than a silence (351-UPD-0018, as download does since 351-NET-0029). Above the services' own 10 s.
 const CALL_MS: u32 = 60_000;
 
-pub enum Source { Https { base: String, pin: Option<[u8; 32]> }, Directory(String) }
+pub enum Source { Https { base: String, pin: Option<[u8; 32]> }, Directory(String), Bundle(Bundle) }
+
+/// A bundle in the updater's staging: its file, and each entry's name, start and size in it.
+pub struct Bundle { file: File, entries: Vec<(String, u64, u64)> }
+
+impl Bundle {
+    /// The bundle at `path`, its directory and every local header read and checked (`bundle`): else `malformed`.
+    pub fn open(path: &str) -> Result<Self, Error> {
+        let file = File::open(path).map_err(|_| Error::Write)?;
+        let len = file.size() as u64;
+        let read = |at: u64, size: usize| -> Result<Vec<u8>, Error> {
+            let mut data = alloc::vec![0u8; size];
+            if file.read_at(at as usize, &mut data) != Ok(size) { return Err(Error::Malformed); }
+            Ok(data)
+        };
+        let tail_len = (len as usize).min(bundle::TAIL_MAX);
+        let (directory, size, count) = bundle::end(&read(len - tail_len as u64, tail_len)?, len).ok_or(Error::Malformed)?;
+        let entries = bundle::entries(&read(directory, size)?, count, directory).ok_or(Error::Malformed)?;
+        let mut ranges = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let header = read(entry.local, bundle::LOCAL_LEN + entry.name.len())?;
+            let start = bundle::start(&header, &entry, directory).ok_or(Error::Malformed)?;
+            ranges.push((entry.name, start, entry.size));
+        }
+        Ok(Self { file, entries: ranges })
+    }
+
+    pub fn len(&self) -> usize { self.entries.len() }
+
+    fn find(&self, path: &str) -> Result<(u64, u64), Error> {
+        self.entries.iter().find(|(name, _, _)| name == path).map(|&(_, start, size)| (start, size)).ok_or(Error::Missing)
+    }
+}
 
 fn now() -> usize { mind::time::uptime_ms() }
 
@@ -214,6 +248,13 @@ impl Source {
                 if file.read_at(0, &mut data) != Ok(data.len()) { return Err(Error::Network); }
                 Ok(data)
             }
+            Source::Bundle(bundle) => {
+                let (start, size) = bundle.find(path)?;
+                if size > limit as u64 { return Err(Error::Digest); }
+                let mut data = alloc::vec![0u8; size as usize];
+                if bundle.file.read_at(start as usize, &mut data) != Ok(data.len()) { return Err(Error::Write); }
+                Ok(data)
+            }
         }
     }
 
@@ -238,15 +279,24 @@ impl Source {
                 copy(&from, file, have as usize, size as usize)?;
                 Ok(size - have)
             }
+            Source::Bundle(bundle) => {
+                let (start, length) = bundle.find(path)?;
+                if length != size { return Err(Error::Digest); }
+                copy_from(&bundle.file, start as usize, file, have as usize, size as usize)?;
+                Ok(size - have)
+            }
         }
     }
 }
 
 /// Bytes `at..size` of `from` into the same place of `file`.
-pub fn copy(from: &File, file: &mut File, mut at: usize, size: usize) -> Result<(), Error> {
+pub fn copy(from: &File, file: &mut File, at: usize, size: usize) -> Result<(), Error> { copy_from(from, 0, file, at, size) }
+
+/// Bytes `at..size` of `from`, read `base` bytes further on, into `file` at `at..size`.
+fn copy_from(from: &File, base: usize, file: &mut File, mut at: usize, size: usize) -> Result<(), Error> {
     let mut buffer = alloc::vec![0u8; STAGE];
     while at < size {
-        let got = from.read_at(at, &mut buffer[..STAGE.min(size - at)]).map_err(|_| Error::Network)?;
+        let got = from.read_at(base + at, &mut buffer[..STAGE.min(size - at)]).map_err(|_| Error::Network)?;
         if got == 0 { return Err(Error::Network); }
         if file.write_at(at, &buffer[..got]) != Ok(got) { return Err(Error::Write); }
         at += got;

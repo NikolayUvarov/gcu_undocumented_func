@@ -1,10 +1,19 @@
 //! Host tests of the boot records the updater writes (updater/src/plan.rs, 351-UPD-0007; MC-9.3): each goes into the
 //! file that does not hold the newer valid record, and the bootloader (bootloader/src/slots.rs) follows it as meant.
+extern crate alloc;
 #[allow(dead_code)]
 #[path = "../bootloader/src/slots.rs"]
 mod slots;
 #[path = "../updater/src/plan.rs"]
 mod plan;
+#[path = "../updater/src/bundle.rs"]
+mod bundle;
+#[allow(dead_code)]
+#[path = "../libmind/src/zip.rs"]
+mod zip;
+#[allow(dead_code)]
+#[path = "../libmind/src/inflate.rs"]
+mod inflate;
 
 use plan::{confirm, expired, floor, in_slot, manifest_version, kind, may_stage, newest, other, raise, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
@@ -147,4 +156,75 @@ fn a_manifests_version_is_its_header_line() {
     assert_eq!(manifest_version(b"MIND-MANIFEST 1\nkey ab\nversion 6\nfile kernel.elf 1 aa 0 0\n"), 6);
     assert_eq!(manifest_version(b"MIND-MANIFEST 1\nkey ab\nfile kernel.elf 1 aa 0 0\n"), 0, "none: version 0");
     assert_eq!(manifest_version(b"MIND-MANIFEST 1\nfile version 9 aa 0 0\nversion 6\n"), 0, "not after a file line");
+}
+
+// Bundles (751-UPD-0032): one release.py makes of a published release, and hostile ones Python's zipfile makes, in `dir`.
+fn bundles(dir: &std::path::Path) {
+    let script = r#"
+import sys, zipfile
+from pathlib import Path
+sys.path.insert(0, "scripts"); sys.path.insert(0, "tests")
+import release, release_test
+d = Path(sys.argv[1])
+v = release_test.volume(d / "volume", b"\x7fELF kernel 1")
+(d / "server").mkdir()
+release.publish(release.stage(1, d / "staged", {"x86_64": v}), d / "server")
+release.bundle(d / "server", d / "bundle.zip")
+for name, method, entries in [("deflated", zipfile.ZIP_DEFLATED, [("a", b"x" * 100)]), ("escape", zipfile.ZIP_STORED, [("../a", b"x")]),
+                              ("twice", zipfile.ZIP_STORED, [("a", b"x"), ("a", b"y")]), ("absolute", zipfile.ZIP_STORED, [("/a", b"x")])]:
+    with zipfile.ZipFile(d / f"{name}.zip", "w", method) as z:
+        for path, data in entries:
+            z.writestr(path, data)
+"#;
+    let status = std::process::Command::new("python3").args(["-W", "ignore", "-c", script]).arg(dir).status().expect("python3");
+    assert!(status.success());
+}
+
+// The entries of a bundle as the updater reads them: names and bytes.
+fn read_bundle(data: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
+    let tail = &data[data.len().saturating_sub(bundle::TAIL_MAX)..];
+    let (directory, size, count) = bundle::end(tail, data.len() as u64)?;
+    let entries = bundle::entries(data.get(directory as usize..directory as usize + size)?, count, directory)?;
+    entries.iter().map(|e| {
+        let header = data.get(e.local as usize..(e.local as usize + bundle::LOCAL_LEN + e.name.len()).min(data.len()))?;
+        let start = bundle::start(header, e, directory)? as usize;
+        Some((e.name.clone(), data[start..start + e.size as usize].to_vec()))
+    }).collect()
+}
+
+#[test]
+fn a_bundle_of_release_py_is_read_in_place() {
+    let dir = std::env::temp_dir().join(format!("mind-bundle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    bundles(&dir);
+    let data = std::fs::read(dir.join("bundle.zip")).unwrap();
+    let read = read_bundle(&data).expect("the bundle reads");
+    let names: Vec<&str> = read.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(&names[..3], ["channels/stable", "releases/1/x86_64/MANIFEST", "releases/1/x86_64/MANIFEST.SIG"]);
+    assert!(names.len() > 3 && names[3..].iter().all(|n| n.starts_with("blobs/")), "{names:?}");
+    for (name, bytes) in &read { assert_eq!(bytes, &std::fs::read(dir.join("server").join(name)).unwrap(), "{name}"); }
+    // A byte past the end record, a count one more, a compressed entry, one of a name changed in its local header: refused.
+    let mut longer = data.clone();
+    longer.push(0);
+    assert!(read_bundle(&longer).is_none());
+    let end = data.len() - 22;
+    let mut more = data.clone();
+    for at in [end + 8, end + 10] { more[at] += 1; }
+    assert!(read_bundle(&more).is_none());
+    let central = u32::from_le_bytes(data[end + 16..end + 20].try_into().unwrap()) as usize;
+    let mut packed = data.clone();
+    packed[central + 10] = 8;
+    assert!(read_bundle(&packed).is_none());
+    let mut renamed = data.clone();
+    renamed[30] ^= 1;
+    assert!(read_bundle(&renamed).is_none());
+    let mut sealed = data.clone();
+    sealed[central + 8] |= 1;
+    assert!(read_bundle(&sealed).is_none());
+    // Python's own archives: deflated, a name that leaves the tree, one met twice, an absolute one.
+    for name in ["deflated", "escape", "twice", "absolute"] {
+        assert!(read_bundle(&std::fs::read(dir.join(format!("{name}.zip"))).unwrap()).is_none(), "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

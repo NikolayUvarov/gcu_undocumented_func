@@ -41,4 +41,4 @@ The store keeps one copy on one medium. A damaged block is found by a read or a 
 
 ## Related
 
-[309](309-copies-scrub-and-repair.md), [309-STO-0025](../issues-done/309-STO-0025-scrub.done), [311-STO-0027](311-STO-0027-directories-as-objects.md), [313](313-persistent-actors.md) (a move through a copy of its store).
+[309](309-copies-scrub-and-repair.md), [309-STO-0025](../issues-done/309-STO-0025-scrub.done), [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), [313](313-persistent-actors.md) (a move through a copy of its store).

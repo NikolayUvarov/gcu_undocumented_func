@@ -1,12 +1,12 @@
-# 311-STO-0027 — Directories as objects: a directory node, its walk, and the store's reachability
+# 311-STO-0027 — Directories as objects: a directory node, its walk, and the store's reachability — done
 
-**Type:** storage (`libmind` `tree`, `blockstore`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.2, MC-4.5, MC-4.13
+**Type:** storage (`libmind` `tree`, `blockstore`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.2, MC-4.5, MC-4.13
 
-Split from [311](311-storefs-a-file-face.md) (2026-10-30), its first step at the maintainer's word: "trees as objects" needs no partition of the store's own, so it does not wait for 307.
+Split from [311](../issues/311-storefs-a-file-face.md) (2026-10-30), its first step at the maintainer's word: "trees as objects" needs no partition of the store's own, so it does not wait for 307.
 
 ## Problem
 
-An object in the store is one file's bytes ([301](../issues-done/301-objects-as-merkle-dags.done)). There is no directory: a set of named files and subdirectories with one root. The store's checks and its retention know only file trees. A directory node would be refused at `put` as a `dag-cbor` block of no known schema. A file reached only through a directory would be collected.
+An object in the store is one file's bytes ([301](301-objects-as-merkle-dags.done)). There is no directory: a set of named files and subdirectories with one root. The store's checks and its retention know only file trees. A directory node would be refused at `put` as a `dag-cbor` block of no known schema. A file reached only through a directory would be collected.
 
 ## Plan
 
@@ -53,6 +53,18 @@ An object in the store is one file's bytes ([301](../issues-done/301-objects-as-
   - a publication of a tree missing a file's block is `incomplete`;
   - a directory node is stored, and a `dag-cbor` block of neither schema refused.
 
+## Resolution
+
+Done 2026-10-30, landed in round 51 (`main` 57c2fd3d, from `claude/relaxed-meitner-5bmhpz` 208d9a9e; built in 330ffd4f, cb29982a and 30d327b8).
+- **`libmind/src/tree.rs`:** the directory node, decoded only as its canonical encoding, and its walk with an explicit stack of 32 directories and a budget of steps.
+- **`blockstore`:**
+  - takes a `dag-cbor` block that is a file node or a directory node, and refuses any other;
+  - its checks of completeness, quotas and collection walk through directories;
+  - every walk is bounded by `4 × limit + 64` steps, from the index's size. A tree that needs more is refused (`invalid`).
+- **`dag`'s CBOR reader** no longer overflows on a length near `u64::MAX`.
+- **Evidence:** `tests/tree_host.rs` (10) and `tests/blockstore_host.rs` (the store's tree tests and the step bound). Host-tested only: no program on the platform made a directory before [311-STO-0029](../issues/311-STO-0029-a-working-tree-published-by-compare-and-swap.md).
+- **Recorded in** [docs/storage](../docs/storage/README.md) ("Directories as objects") and the profile.
+
 ## Related
 
-[311](311-storefs-a-file-face.md), [301](../issues-done/301-objects-as-merkle-dags.done), [303](../issues-done/303-retention-and-collection.done), [docs/storage](../docs/storage/README.md).
+[311](../issues/311-storefs-a-file-face.md), [301](301-objects-as-merkle-dags.done), [303](303-retention-and-collection.done), [docs/storage](../docs/storage/README.md).
