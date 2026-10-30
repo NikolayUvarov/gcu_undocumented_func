@@ -1,0 +1,9 @@
+source: 007f0a4290349aade1972b948aee47223df4f185
+$ cargo build --manifest-path nnpkg/Cargo.toml --locked --release --target aarch64-unknown-none-softfloat --target-dir /tmp/mind-nrl-nnpkg-target
+   Compiling libm v0.2.16
+   Compiling nrl-core v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nrl/crates/nrl-core)
+   Compiling zmij v1.0.23
+   Compiling nrl-repr v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nrl/crates/nrl-repr)
+   Compiling nrl-runtime v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nrl/crates/nrl-runtime)
+   Compiling nnpkg v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nnpkg)
+    Finished `release` profile [optimized] target(s) in 1.77s

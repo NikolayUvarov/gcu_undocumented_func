@@ -1,0 +1,121 @@
+{
+  "schema": "nrl.portable-import-evidence/0",
+  "date": "2026-10-30",
+  "issue": "900-NRL-0026",
+  "implementation_commit": "30144e031d203f96e85c00b55daad1d567d0eae1",
+  "tested_commit": "007f0a4290349aade1972b948aee47223df4f185",
+  "tested_main": "e36f564a1ad6709256e4803e974fb0086c6c7c52",
+  "tested_branch": "codex/NRL-lab",
+  "portable_importer_tree": "b5c1ba65f74c4a10ce17437f6464c6374404c7e7",
+  "service_program_tree": "debd52bbc8e86f67a598c46b44ca04c4e0129642",
+  "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "host": "Linux x86_64; in-process portable parser/runtime/service; no native IPC or isolated worker execution",
+  "test_summaries": {
+    "nrl": {
+      "passed": 102,
+      "failed": 0,
+      "ignored": 0
+    },
+    "nnpkg-tests": {
+      "passed": 18,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "commands": [
+    {
+      "name": "nrl",
+      "command": "bash nrl/tools/check.sh",
+      "exit_code": 0,
+      "elapsed_seconds": 142.46153283119202,
+      "log": "portable-import-nrl-check-2026-10-30.txt",
+      "sha256": "5bab53aa31b7a97fa2bff2d209599b183438cc37eaacc25f681d5b2ee4db6ab7"
+    },
+    {
+      "name": "nnpkg-tests",
+      "command": "cargo test --manifest-path nnpkg/Cargo.toml --locked --target-dir /tmp/mind-nrl-nnpkg-target",
+      "exit_code": 0,
+      "elapsed_seconds": 3.4375691413879395,
+      "log": "portable-import-nnpkg-tests-check-2026-10-30.txt",
+      "sha256": "e83faece5badcb5b72f6eec570b6ce599a031c2bfb24a7dbfddfc5748c631ec5"
+    },
+    {
+      "name": "nnpkg-x86",
+      "command": "cargo build --manifest-path nnpkg/Cargo.toml --locked --release --target x86_64-unknown-none --target-dir /tmp/mind-nrl-nnpkg-target",
+      "exit_code": 0,
+      "elapsed_seconds": 1.7798378467559814,
+      "log": "portable-import-nnpkg-x86-check-2026-10-30.txt",
+      "sha256": "752a76e4869eca89cf0537866cc53b75cfdfb8a5cfa080447fea5272c6a19c30"
+    },
+    {
+      "name": "nnpkg-aarch64",
+      "command": "cargo build --manifest-path nnpkg/Cargo.toml --locked --release --target aarch64-unknown-none-softfloat --target-dir /tmp/mind-nrl-nnpkg-target",
+      "exit_code": 0,
+      "elapsed_seconds": 1.8033816814422607,
+      "log": "portable-import-nnpkg-aarch64-check-2026-10-30.txt",
+      "sha256": "e05fbd1daba09468cdea66bd76179b2905487abd064278c261172801e4789b59"
+    }
+  ],
+  "baremetal_release_builds": [
+    {
+      "crate": "nrl-repr",
+      "target": "x86_64-unknown-none",
+      "result": "pass"
+    },
+    {
+      "crate": "nrl-repr",
+      "target": "aarch64-unknown-none-softfloat",
+      "result": "pass"
+    },
+    {
+      "crate": "nrl-runtime",
+      "target": "x86_64-unknown-none",
+      "result": "pass"
+    },
+    {
+      "crate": "nrl-runtime",
+      "target": "aarch64-unknown-none-softfloat",
+      "result": "pass"
+    },
+    {
+      "crate": "nnpkg",
+      "target": "x86_64-unknown-none",
+      "result": "pass"
+    },
+    {
+      "crate": "nnpkg",
+      "target": "aarch64-unknown-none-softfloat",
+      "result": "pass"
+    }
+  ],
+  "differential_cases": {
+    "count": 70,
+    "file": "portable-import-cases-2026-10-30.json",
+    "sha256": "c9bae9f6d5cc6b96b150d16d3ac36be24d7ecd17b3b7b11d615fd5463f8b10eb",
+    "reference": "NRL host Model::forward; kernels partly shared; not a new independent numerical oracle"
+  },
+  "cli_cases": {
+    "count": 3,
+    "file": "portable-import-cli-2026-10-30.json",
+    "sha256": "55b53b5e9966e9d0c5c02dc753160a4c1562ca490034b7d3d48aa81559bbd080",
+    "profiles": [
+      "fresh complete graph",
+      "materialized standalone overlay/history",
+      "actually trained/selected regression model"
+    ]
+  },
+  "native_execution": false,
+  "full_repository_gate": "pending landing integrator; affected checks passed",
+  "reply_evidence": [
+    "ALL/2026-10-29T1630Z-KRN-nnd-badges-reused-only-after-retirement.md",
+    "ALL/2026-10-29T1612Z-APP-nnd-badge-retirement-suits-apps-design-at-1-0.md",
+    "ALL/2026-10-30T0918Z-KRN-abi-25-and-handoff-25-are-in-main.md"
+  ],
+  "remaining_native": [
+    "APP shell mint/keep/revoke/retire/retire-all and REQUEST_NN client",
+    "APP nnd selecting the two KRN-granted VFS scopes",
+    "Native nncheck/model IPC suite: independent outputs, budgets, controlled cancellation/deadline, two clients, numeric failure/new session, badge retirement/reuse and memory after unload"
+  ],
+  "handoff": "verification ready; delivery recorded in task resolution",
+  "limits": "No OS profile entry added; T11 remains open. Portable service-accounting release is not measured native heap/page release. Optional expanded study not rerun."
+}

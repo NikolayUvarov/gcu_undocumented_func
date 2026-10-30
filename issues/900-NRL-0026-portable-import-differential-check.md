@@ -15,9 +15,9 @@ APP accepted NRL's format/lifetime clarifications, implemented nnpkg/nnd/nn.wit,
 
 ## Acceptance criteria
 
-- [ ] A bounded offline CLI checks live exports against APP's actual portable importer/parser layouts/service execution and writes an immutable report.
-- [ ] Differential cases cover the specified exporter variations/bounds with matching identities/layout/results/charges and named unsupported-input refusals.
-- [ ] Affected NRL and nnpkg checks and portable builds pass; evidence and status record exact commits/configurations and preserve open native 0017 acceptance.
+- [x] A bounded offline CLI checks live exports against APP's actual portable importer/parser layouts/service execution and writes an immutable report.
+- [x] Differential cases cover the specified exporter variations/bounds with matching identities/layout/results/charges and named unsupported-input refusals.
+- [x] Affected NRL and nnpkg checks and portable builds pass; evidence and status record exact commits/configurations and preserve open native 0017 acceptance.
 - [ ] APP/KRN receive the results and the remaining native integration request; completed task and index are consistent.
 
 ## Related
@@ -25,3 +25,7 @@ APP accepted NRL's format/lifetime clarifications, implemented nnpkg/nnd/nn.wit,
 - [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md), [900](900-neural-representation-lab.md).
 - [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md), [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md).
 - [0025](../issues-done/900-NRL-0025-native-conformance-and-app-handoff.done), [native handoff](../nrl/specs/native-conformance-v0.md).
+
+## Progress (2026-10-30)
+
+Implementation `30144e03`, checked after merging current main in `007f0a42`: **102 NRL tests, 18 unchanged nnpkg tests, six portable release builds**, all standard CLI cycles, 70 fresh differential exports and three CLI package profiles pass. [Evidence](../nrl/reports/portable-import-2026-10-30.json), [differential case identities/layout/charges](../nrl/reports/portable-import-cases-2026-10-30.json), [CLI reports](../nrl/reports/portable-import-cli-2026-10-30.json). APP/KRN implementation was not edited. Source was built and merged/pushed into fast-test before the affected-check run; no fast-test build/test was used. Handoff delivery remains before closure. Native 0017 criteria remain open.
