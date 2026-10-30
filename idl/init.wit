@@ -4,7 +4,7 @@
 /// the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
 /// may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
 /// Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
-package mind:init@1.10.0;
+package mind:init@1.11.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -40,16 +40,21 @@ interface init {
     boot: func() -> result<boot, error>;
     /// The machine's modes (1.5, 750-KRN-0143): in the development mode and in the maintenance mode init runs the
     /// Effector agent's services (750-EFF-0013); in neither, the normal mode, it runs none and grants them nothing.
-    enum mode { development, maintenance }
+    /// Since 1.11 (751-KRN-0185), two permissions beside them: `remote-update`, the owner's leave for a release from the
+    /// Effector server, which counts only with either mode on; and `link-remote-update`, the owner's leave for the link's
+    /// console to switch `remote-update`, which counts only with `dev` in link.conf and `link-console`.
+    enum mode { development, maintenance, remote-update, link-remote-update }
     /// Which modes are on, as data/mode.conf keeps them across restarts, and who made the last change and why: `disk`
     /// (the file as the disk was written), `operator` (a client badged `BADGE_MODE`, the shell's) or `mind` (one badged
-    /// `BADGE_MIND`).
-    record mode-state { development: bool, maintenance: bool, by: string<16>, reason: string<120> }
+    /// `BADGE_MIND`). `remote-update` and `link-remote-update` (1.11) say whether each permission counts now: the file's
+    /// word and what it needs.
+    record mode-state { development: bool, maintenance: bool, remote-update: bool, link-remote-update: bool, by: string<16>, reason: string<120> }
     /// The modes; any client may ask (1.5).
     mode: func() -> result<mode-state, error>;
     /// Turns a mode on or off (1.5): init writes data/mode.conf, starts or stops the Effector services at once with no
     /// restart, and logs the change with the caller's badge, PID and `reason`. A client badged `BADGE_MODE` may turn
-    /// either mode on or off; one badged `BADGE_MIND` may only turn the maintenance mode on; others get `denied`.
+    /// either mode, and since 1.11 either permission, on or off; one badged `BADGE_MIND` may only turn the maintenance
+    /// mode on and `remote-update` off (MC-12.6); others get `denied`, the Effector services' and the link's among them.
     set-mode: func(which: mode, on: bool, reason: string<120>) -> result<_, error>;
     /// Starts service `name` from the ELF at `path` inside data/link/, in place of its boot image, until the next boot
     /// (1.6, 800-KRN-0144): init stops it, logs the image's SHA-256 as NOT VERIFIED, and starts it with the grants of its

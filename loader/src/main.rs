@@ -16,7 +16,6 @@ use mind::util::FixedBuf;
 const RECEIVED_CAP: usize = 9;
 const APP_ENDPOINTS: u16 = 4; // endpoints an application may create: loader's policy for each program
 const APP_MEMORY_MAX: u32 = 1024; // MiB of private memory a program may ask for (the frame pool limits it further)
-const MEMORY_FILE: &str = "data/memory.conf"; // the owner's lines `<program> <MiB>` (262-KRN-0160, 0163)
 const WORKERS_QUOTA: u16 = 255; // the task quota of a program named there: the kernel allows one worker per online CPU
 // Loader's own slots (granted by init): its endpoint, client endpoints passed on to applications, spawn privilege.
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;
@@ -303,16 +302,13 @@ fn own_dir(task: &str) -> Option<(usize, u16)> {
     made.inspect_err(|why| mind::println!("[LOADER] {}: NO OWN DIRECTORY ({})", task, why)).ok()
 }
 
-// The MiB the owner's data/memory.conf gives program `task` (a line `<program> <MiB>`; `#` starts a comment), read at
-// each run; None without the file or a line for it (262-KRN-0160, 0163).
+// The MiB the owner's data/memory.conf gives program `task`, read at each run; None without the file or a line for it
+// (262-KRN-0160, 0163).
 fn owners_memory(task: &[u8]) -> Option<u16> {
-    let file = File::open(MEMORY_FILE).ok()?;
-    let mut text = [0u8; 2048];
+    let file = File::open(mind::memconf::FILE).ok()?;
+    let mut text = [0u8; mind::memconf::MAX];
     let n = file.read_at(0, &mut text).ok()?;
-    core::str::from_utf8(&text[..n]).ok()?.lines().find_map(|line| {
-        let mut words = line.split('#').next()?.split_whitespace();
-        (words.next()?.as_bytes().eq_ignore_ascii_case(task)).then(|| words.next()?.parse::<u32>().ok())?
-    }).map(|mib| mib.min(QUOTA_MAX as u32 - 1) as u16)
+    mind::memconf::mib(core::str::from_utf8(&text[..n]).ok()?, core::str::from_utf8(task).ok()?)
 }
 
 // A program file read whole into memory, if it is an ELF of a size the loader takes.

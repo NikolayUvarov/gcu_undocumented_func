@@ -108,6 +108,11 @@ def test_a_pool_takes_the_longest_first():
     # A machine Effector lists as off gives no lane (round 47).
     endpoints = [{"id": land.MACHINES["rz"]["agent"], "online": True}, {"id": land.MACHINES["acc1"]["agent"], "online": False, "last_seen": "20:07"}]
     assert land.online_lanes(["rz", "rz-2", "acc1", "pcu"], endpoints) == (["rz", "rz-2"], {"acc1": "20:07", "pcu": "never"})
+    # Each machine's load once, before the gate; and how long each lane worked, after it.
+    endpoints[0]["load"] = {"cpu_cores": 16, "load_percent": 7.8}
+    assert land.machine_loads(["rz", "rz-2", "pcu"], endpoints) == {"rz": "16 cores, 8% busy", "pcu": "? cores, load unknown"}
+    results = [{"lane": "rz", "seconds": 600}, {"lane": "rz", "seconds": 300}, {"lane": "pcu", "seconds": 120}, {"lane": "-", "seconds": 0}]
+    assert land.lane_minutes(results) == {"rz": (15, 2), "pcu": (2, 1)}
 
 
 def test_a_pool_gives_a_failed_builds_groups_to_another_lane():
