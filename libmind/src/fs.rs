@@ -42,9 +42,9 @@ pub const BADGE_READER: u16 = 5;
 /// it into the program's SLOT_OWN (000-KRN-0170); set by init.
 pub const BADGE_OWNERS: u16 = 8;
 
-/// Why a file operation failed.
+/// Why a file operation failed. `Conflict`: another writer published the file first, so read it again (vfs.wit 2.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { NotFound, Exists, NotEmpty, Invalid, Denied, NoSpace, ReadOnly, Io, Handles, Name, NotDirectory, IsDirectory, NoMemory, NoService }
+pub enum Error { NotFound, Exists, NotEmpty, Invalid, Denied, NoSpace, ReadOnly, Io, Handles, Name, NotDirectory, IsDirectory, Conflict, NoMemory, NoService }
 pub type Result<T> = core::result::Result<T, Error>;
 
 impl From<vfs::Error> for Error {
@@ -53,6 +53,7 @@ impl From<vfs::Error> for Error {
             vfs::Error::NotFound => Error::NotFound, vfs::Error::Exists => Error::Exists, vfs::Error::NotEmpty => Error::NotEmpty, vfs::Error::Invalid => Error::Invalid,
             vfs::Error::Denied => Error::Denied, vfs::Error::NoSpace => Error::NoSpace, vfs::Error::ReadOnly => Error::ReadOnly, vfs::Error::Io => Error::Io,
             vfs::Error::Handles => Error::Handles, vfs::Error::Name => Error::Name, vfs::Error::NotDirectory => Error::NotDirectory, vfs::Error::IsDirectory => Error::IsDirectory,
+            vfs::Error::Conflict => Error::Conflict,
         }
     }
 }
