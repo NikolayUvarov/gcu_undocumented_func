@@ -17,6 +17,8 @@ Usage:
     release.py publish STAGED DEST [--channel stable] [--minimum N] [--days 30]   (DEST: a directory or host:dir; the
                                                  minimum stays the published channel's, else 1: raise it only for a fix)
     release.py check DEST [--channel stable] [--now ISO-8601]
+    release.py bundle DEST OUT [--channel stable] [--arch x86_64]   one ZIP of what a device needs of the channel
+                                                 (751-UPD-0032), checked first: for the Effector gateway's install
     release.py --public                     the public test release key
 
 Keys: the release seed from $MIND_RELEASE_KEY (a file of 64 hex digits, outside the repository) or the public test
@@ -32,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -259,6 +262,42 @@ def check(dest, channel="stable", release_public=None, boot_public=None, now=Non
     return None
 
 
+def bundle(dest, out, channel="stable", arches=None, now=None):
+    """Writes OUT, one ZIP of stored entries holding the layout's paths of the channel, the manifests and signatures it
+    names (of `arches`, else all) and the blobs they list, after `check` (751-UPD-0032). The device checks it as any
+    source; the archive's own CRCs and dates mean nothing to it. Returns the paths, in the archive's order."""
+    reason = check(dest, channel, now=now)
+    if reason:
+        raise ReleaseError(reason)
+    target = destination(dest)
+    whole = target.read(f"channels/{channel}")
+    c, _ = channel_from(whole.split(b"\n")[0] + b"\n", channel)
+    chosen = sorted(arches or c["manifests"])
+    missing = [a for a in chosen if a not in c["manifests"]]
+    if missing:
+        raise ReleaseError(f"channels/{channel} names no manifest for {', '.join(missing)}")
+    paths, blobs = [f"channels/{channel}"], set()
+    for arch in chosen:
+        release = f"releases/{c['version']}/{arch}"
+        paths += [f"{release}/MANIFEST", f"{release}/MANIFEST.SIG"]
+        blobs |= {blob for _, _, blob in manifest_files(target.read(f"{release}/MANIFEST"))}
+    paths += [f"blobs/{blob}" for blob in sorted(blobs)]
+    write_bundle(out, [(path, target.read(path)) for path in paths])
+    return paths
+
+
+def write_bundle(out, entries):
+    """A ZIP of stored entries, `(path, bytes)` in order, with fixed dates so that the same release makes the same file."""
+    out = Path(out)
+    part = out.with_name(out.name + ".part")
+    with zipfile.ZipFile(part, "w", zipfile.ZIP_STORED) as archive:
+        for path, data in entries:
+            info = zipfile.ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, data)
+    part.replace(out)
+
+
 def main(argv):
     def option(name, default=None, many=False):
         values = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == name]
@@ -275,6 +314,9 @@ def main(argv):
             minimum = option("--minimum")
             body = publish(argv[1], argv[2], option("--channel", "stable"), int(minimum) if minimum else None, int(option("--days", "30")))
             print(f"PUBLISHED {body.decode().strip()}" + (" (THE TEST RELEASE KEY)" if release_seed() == TEST_RELEASE_SEED else ""))
+        elif argv[:1] == ["bundle"] and len(argv) >= 3:
+            paths = bundle(argv[1], argv[2], option("--channel", "stable"), option("--arch", many=True) or None)
+            print(f"BUNDLED {len(paths)} FILES OF channels/{option('--channel', 'stable')} INTO {argv[2]} ({Path(argv[2]).stat().st_size} BYTES)")
         elif argv[:1] == ["check"] and len(argv) >= 2:
             now = option("--now")
             reason = check(argv[1], option("--channel", "stable"), now=datetime.datetime.fromisoformat(now) if now else None)
