@@ -77,6 +77,20 @@
   - item 5, `nncheck` and the suite;
   - the profile entry, after the native run.
 
+**Progress (2026-10-30): the shell's part (item 4), with 262-KRN-0178 in `main` since landing round 50.**
+- **The badges** (`shell/src/nnclients.rs`, no system calls): the lowest free of 32 taken per start; kept with the copy while the program runs; owed a retirement once it ends or its start fails; free again only when `nnd` has answered; none lent before `nnd` answered the shell's `retire-all`.
+- **The system calls** (`shell/src/nnctl.rs`):
+  - the copy minted with `CAP_WRITE | CAP_GRANT` alone and lent last before the commit, which moved into a method of its own so that a failed commit revokes the copy and owes the badge;
+  - each 100 ms (a second after `nnd` did not answer), and before each start that asks: the ended programs' copies revoked and dropped, then `retire` for each owed badge;
+  - `retire-all` before the first badge is lent, so a restarted shell clears what the old one's clients held;
+  - a start refused with no badge free; without `nnd`'s answer to `retire-all`, the program runs without the client.
+- **`nn [status]` and `nn models`** in the shell; the script word `nn`.
+- **`nncheck`**, the first part of item 5: its client's badge and rights, `nnd`'s status, `retire` and `retire-all` refused (`owner`), and `hold`.
+- **Tests:**
+  - three host tests in `tests/shell_host.rs`;
+  - the QEMU check `nn_clients_check` in the suite `nnd` (with `KRN`'s `nnd_check`), added to the shell lanes of `scripts/ci_local.sh` and CI on x86 and aarch64. Its run is recorded below once made.
+- **Left:** `nn load | run | bench`; `nncheck`'s native steps (section 8, steps 1–9) with `NRL`'s model on the image; `nnd`'s two scopes; the profile entry after the native run.
+
 ## Acceptance criteria
 
 - [x] **The design is agreed:** `NRL` and `KRN` answer its questions in messages, and the page is at 1.0 (2026-10-29).
