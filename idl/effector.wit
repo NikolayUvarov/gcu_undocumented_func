@@ -18,7 +18,11 @@
 ///
 /// 1.4 (750-EFF-0021): `deliver-commit` answers with `delivered`, what the gateway read back from the file under its
 /// name once it was published, so the server gets the destination's own size and SHA-256 rather than a bare `ok`.
-package mind:effector@1.4.0;
+///
+/// 1.5 (751-EFF-0023): `update-begin`, `update-commit`, `update-apply` and `update-state`, a developer's release handed
+/// to `updater` (`update.wit` 1.3's `install-…`, `apply`, `status`) under the policy's `update apply` and the owner's
+/// `remote-update`, which the gateway and the updater each ask of `init`. Nothing of it lands in a file the gateway writes.
+package mind:effector@1.5.0;
 
 interface effector {
     /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -83,6 +87,10 @@ interface effector {
     /// the uptime, the memory programs run in (the kernel's frame pool, bytes), the boot services and the volumes. The
     /// session turns two samples into rates.
     record sample { cpus: u16, busy-ns: u64, idle-ns: u64, uptime-ms: u64, memory-total: u64, memory-free: u64, services: list<load, 48>, volumes: list<space, 4> }
+    /// The updater's view (1.5), as its `status` gives it: the running slot (`A`, `B`, or 0), whether it runs on trial, its
+    /// version; the slot the newer boot record names and whether that is confirmed; the version staged in the other slot;
+    /// the last failure. All zero without the gateway's client of the updater.
+    record update-state { slot: u8, trial: bool, running: u64, recorded: u8, confirmed: bool, staged: u64, failure: string<64> }
 
     /// The machine's state for the heartbeat. Allowed to both clients; changes nothing.
     status: func() -> status;
@@ -132,4 +140,15 @@ interface effector {
     /// The session's link to the server (1.3): connected, and activated by the server's owner. The session only; it
     /// changes only the agent's mark on the screen.
     connection: func(connected: bool, active: bool);
+    /// Starts handing `updater` a release bundle of `size` bytes and the announced SHA-256 (1.5), if the policy says
+    /// `update apply` and the owner's `remote-update` is on (else `denied`, and nothing reaches the updater). `write`
+    /// streams it; `close` and `cancel` drop it.
+    update-begin: func(origin: origin, size: u64, sha256: string<64>) -> result<u32, error>;
+    /// Has `updater` check the whole bundle and stage the release it holds in the other slot: the version staged.
+    update-commit: func(handle: u32) -> result<u64, error>;
+    /// Has `updater` boot the staged release on trial with `tries` (1 to 9), as `update-begin` allows. `init` restarts
+    /// the machine at once, so usually only a refusal is answered.
+    update-apply: func(origin: origin, tries: u8) -> result<_, error>;
+    /// The updater's view (above). Allowed to both clients; changes nothing.
+    update-state: func() -> update-state;
 }

@@ -3,8 +3,8 @@
 // The Effector agent's gateway service (750-EFF-0007, MC-11.3, MC-11.11): serves `idl/effector.wit` to the session
 // (`effector`, `BADGE_SESSION`) and to the owner (the shell, `BADGE_OWNER`) and acts on the machine only through the
 // grants `init` gives it (750-KRN-0119, `mind::effector`): the system monitor, a lifecycle client, the log, a reading
-// client of the volumes, a writable scope (750-KRN-0120), the compositor's client for the screen (750-KRN-0153) and its
-// private directory for the audit file. Every request
+// client of the volumes, a writable scope (750-KRN-0120), the compositor's client for the screen (750-KRN-0153), the
+// updater's client badged for the gateway (751-KRN-0185) and its private directory for the audit file. Every request
 // passes the owner's policy and is audited before its reply (`effector_gw::gateway`, MC-10.6); a grant `init` did not
 // give makes the requests that need it fail, never widen. It runs only in the development or maintenance mode
 // (750-EFF-0013, 750-KRN-0143). No network, no parser, no token.
@@ -13,14 +13,14 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use effector_gw::gateway::{self, Badge, Fail, Gateway, Load, Machine, Mark, Origin, Sample, ServiceState};
+use effector_gw::gateway::{self, Badge, Fail, Gateway, Load, Machine, Mark, Origin, Sample, ServiceState, UpdateState};
 use effector_gw::policy::{self, Ask};
 use effector_gw::png;
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_DISPLAY, SLOT_FILE, SLOT_LIFECYCLE, SLOT_LOG, SLOT_SYSINFO, SLOT_VFS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_DISPLAY, SLOT_FILE, SLOT_LIFECYCLE, SLOT_LOG, SLOT_SYSINFO, SLOT_UPDATE, SLOT_VFS};
 use mind::effector::{BADGE_OWNER, BADGE_SESSION, GATEWAY_DIR, POLICY_FILE, SLOT_READER};
 use mind::idl::codec::{List, Text};
 use mind::idl::effector as wit;
-use mind::idl::{display, init, log, sysinfo, vfs};
+use mind::idl::{display, init, log, sysinfo, update, vfs};
 use mind::ipc::Endpoint;
 use mind::mem::Mapping;
 
@@ -48,6 +48,19 @@ fn vfs_fail(e: vfs::Error) -> Fail {
 
 fn call<T>(r: mind::sys::Result<core::result::Result<T, vfs::Error>>) -> Result<T, Fail> {
     match r { Ok(Ok(v)) => Ok(v), Ok(Err(e)) => Err(vfs_fail(e)), Err(_) => Err(Fail::Io) }
+}
+
+/// An updater's answer as the gateway's error; `denied` is its refusal while the owner's `remote-update` is off.
+fn updater<T>(r: mind::sys::Result<core::result::Result<T, update::Error>>) -> Result<T, Fail> {
+    use update::Error as E;
+    match r {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(match e {
+            E::Denied => Fail::Denied, E::Digest => Fail::Digest, E::Malformed => Fail::Malformed, E::Signature => Fail::Signature, E::Older => Fail::Older,
+            E::Expired => Fail::Expired, E::Trial => Fail::Busy, E::NotStaged => Fail::NotFound, E::NoSlot => Fail::Unsupported, _ => Fail::Io,
+        }),
+        Err(_) => Err(Fail::Io),
+    }
 }
 
 /// One `vfs_server` client and the volume roots it opened (a root handle is kept for the client's life).
@@ -307,6 +320,36 @@ impl Machine for Host {
         match init::reboot(Endpoint(SLOT_LIFECYCLE)) { Ok(Ok(())) => Ok(()), Ok(Err(init::Error::Denied)) => Err(Fail::Denied), _ => Err(Fail::Io) }
     }
 
+    fn remote_update(&mut self) -> bool {
+        present(SLOT_LIFECYCLE) && matches!(init::mode(Endpoint(SLOT_LIFECYCLE)), Ok(Ok(m)) if m.remote_update)
+    }
+
+    fn install_begin(&mut self, size: u64, sha256: &str, command: &str) -> Result<u32, Fail> {
+        if !present(SLOT_UPDATE) { return Err(Fail::Unsupported); }
+        updater(update::install_begin(Endpoint(SLOT_UPDATE), size, sha256, command))
+    }
+
+    fn install_write(&mut self, handle: u32, offset: u64, data: &[u8]) -> Result<(), Fail> {
+        if !present(SLOT_UPDATE) { return Err(Fail::Unsupported); }
+        updater(update::install_write(Endpoint(SLOT_UPDATE), handle, offset, data))
+    }
+
+    fn install_commit(&mut self, handle: u32) -> Result<u64, Fail> {
+        if !present(SLOT_UPDATE) { return Err(Fail::Unsupported); }
+        updater(update::install_commit(Endpoint(SLOT_UPDATE), handle))
+    }
+
+    fn apply(&mut self, tries: u8) -> Result<(), Fail> {
+        if !present(SLOT_UPDATE) { return Err(Fail::Unsupported); }
+        updater(update::apply(Endpoint(SLOT_UPDATE), tries))
+    }
+
+    fn update_state(&mut self) -> Option<UpdateState> {
+        if !present(SLOT_UPDATE) { return None; }
+        let s = update::status(Endpoint(SLOT_UPDATE)).ok()?;
+        Some(UpdateState { slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: String::from(s.failure.as_str()) })
+    }
+
     fn load(&mut self) -> u32 {
         if !present(SLOT_SYSINFO) { return 0; }
         match sysinfo::load(Endpoint(SLOT_SYSINFO)) { Ok(Ok(l)) => l.one, _ => 0 }
@@ -382,8 +425,8 @@ fn main(_info: &'static BootInfo) {
     if let Ok(bytes) = host.policy_file() { host.deliver = policy::Policy::parse(&bytes).ok().and_then(|p| p.deliver().map(String::from)); }
     let mut gw = Gateway::new();
     let held = |slot: usize, name: &'static str| if present(slot) { name } else { "-" };
-    mind::println!("[EFFECTOR_GW] READY; GRANTS: {} {} {} {} {} {} {}", held(SLOT_SYSINFO, "SYSINFO"), held(SLOT_LIFECYCLE, "LIFECYCLE"), held(SLOT_LOG, "LOG"),
-        held(SLOT_READER, "READER"), held(SLOT_FILE, "WRITER"), held(SLOT_VFS, "PRIVATE"), held(SLOT_DISPLAY, "DISPLAY"));
+    mind::println!("[EFFECTOR_GW] READY; GRANTS: {} {} {} {} {} {} {} {}", held(SLOT_SYSINFO, "SYSINFO"), held(SLOT_LIFECYCLE, "LIFECYCLE"), held(SLOT_LOG, "LOG"),
+        held(SLOT_READER, "READER"), held(SLOT_FILE, "WRITER"), held(SLOT_VFS, "PRIVATE"), held(SLOT_DISPLAY, "DISPLAY"), held(SLOT_UPDATE, "UPDATER"));
     // The owner's policy as the machine starts; without it every action answers no-policy.
     if let Err(f) = gw.reload_policy(&mut host, Badge::Owner) { mind::println!("[EFFECTOR_GW] NO POLICY: {}", gateway::fail_name(f)); }
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
@@ -474,6 +517,15 @@ fn main(_info: &'static BootInfo) {
             }
             wit::Request::TestRun { origin: o, .. } => wit::reply_test_run(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "test-run", Ask::Test(&[]))))),
             wit::Request::Cancel { command } => wit::reply_cancel(reply, gw.cancel(m, badge, command.as_str()).map_err(error)),
+            wit::Request::UpdateBegin { origin: o, size, sha256 } =>
+                wit::reply_update_begin(reply, gw.update_begin(m, badge, &origin(&o), size, sha256.as_str()).map_err(error)),
+            wit::Request::UpdateCommit { handle } => wit::reply_update_commit(reply, gw.update_commit(m, badge, handle).map_err(error)),
+            wit::Request::UpdateApply { origin: o, tries } => wit::reply_update_apply(reply, gw.update_apply(m, badge, &origin(&o), tries).map_err(error)),
+            wit::Request::UpdateState => {
+                let s = gw.update_state(m, badge);
+                let state = wit::UpdateState { slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: Text::new(&s.failure).unwrap_or_default() };
+                wit::reply_update_state(reply, &state)
+            }
             wit::Request::ReloadPolicy => {
                 let summary = gw.reload_policy(m, badge).map(|(version, sha, rules, read_ms)| wit::PolicySummary { version, sha256: hex(&sha), rules, read_ms });
                 wit::reply_reload_policy(reply, summary.as_ref().map_err(|f| error(*f)))
