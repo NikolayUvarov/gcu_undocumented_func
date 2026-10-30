@@ -2,7 +2,7 @@
 
 **Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (a gate's failure, 000-KRN-0188) · **Status:** in progress (done in QEMU on x86; KRN's check under load left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1
 
-Numbered on 2026-10-30 from the kernel track's request in `requests-APP.md`, "The shell drops serial input past 64 events in one pass of its loop", for [000-KRN-0188](000-KRN-0188-typed-characters-lost-under-load.md).
+Numbered on 2026-10-30 from the kernel track's request in `requests-APP.md`, "The shell drops serial input past 64 events in one pass of its loop", for [000-KRN-0188](../issues-done/000-KRN-0188-typed-characters-lost-under-load.done).
 
 ## Problem
 
@@ -22,4 +22,4 @@ Numbered on 2026-10-30 from the kernel track's request in `requests-APP.md`, "Th
 
 ## Related
 
-[000-KRN-0188](000-KRN-0188-typed-characters-lost-under-load.md).
+[000-KRN-0188](../issues-done/000-KRN-0188-typed-characters-lost-under-load.done).

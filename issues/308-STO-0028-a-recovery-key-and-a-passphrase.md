@@ -33,7 +33,7 @@ Since 308-STO-0022 a medium's volume key is kept by `keystore`, under a key deri
 
 ## Progress (2026-10-30)
 
-- **Built and host-tested: the store's own part of the recovery key.** Nothing is on the wire, so no program can make or use one yet; the wire (`blockstore.wit` 2.4) waits for the agreement with `APP` and `KRN` above. Described in [docs/storage](../docs/storage/README.md), "The recovery key".
+- **Built and host-tested: the store's own part of the recovery key.** Nothing is on the wire, so no program can make or use one yet; the wire (`blockstore.wit` 2.4) waits for the agreement with `APP` and `KRN` above. Described in [docs/storage](../docs/storage/README.md), "The recovery key". In `main` 791f5aac (round 011b72a8).
   - `blockstore/src/store.rs`, a new key in two steps:
     1. `Store::recovery_new` makes 16 random bytes and a record that keeps the volume key sealed under them, flushes it and returns the key to be shown; nothing is erased;
     2. `recovery_keep` takes the key the owner types back and erases every record it does not open; a key that opens none is `key`, and nothing is erased.
