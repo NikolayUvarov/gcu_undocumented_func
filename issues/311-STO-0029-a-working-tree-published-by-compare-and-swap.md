@@ -1,12 +1,12 @@
 # 311-STO-0029 — A working tree published by compare-and-swap: edits in memory, a new root under a name
 
-**Type:** storage (`libmind` `worktree`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [311-STO-0027](311-STO-0027-directories-as-objects.md) (directory nodes) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.9, MC-4.10, MC-4.13, MC-12.4
+**Type:** storage (`libmind` `worktree`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), directory nodes, done) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.9, MC-4.10, MC-4.13, MC-12.4
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-30), its second step: what `storefs` will do on a write, before there is a `storefs`.
 
 ## Problem
 
-After [311-STO-0027](311-STO-0027-directories-as-objects.md) a directory is an object, but nothing makes one from edits. A writer must not change a published root in place (MC-4.9). It changes a working copy and publishes a new root, and must learn when another writer published first instead of overwriting that writer's work.
+After [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done) a directory is an object, but nothing makes one from edits. A writer must not change a published root in place (MC-4.9). It changes a working copy and publishes a new root, and must learn when another writer published first instead of overwriting that writer's work.
 
 ## Plan
 
@@ -73,4 +73,4 @@ After [311-STO-0027](311-STO-0027-directories-as-objects.md) a directory is an o
 
 ## Related
 
-[311](311-storefs-a-file-face.md), [311-STO-0027](311-STO-0027-directories-as-objects.md), [302](../issues-done/302-names-and-current-roots.done), [304](../issues-done/304-several-names-at-once.done).
+[311](311-storefs-a-file-face.md), [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), [302](../issues-done/302-names-and-current-roots.done), [304](../issues-done/304-several-names-at-once.done).

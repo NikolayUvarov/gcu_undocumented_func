@@ -79,9 +79,9 @@ answer to the console or a file. It is a process of its own, and `help get` list
 - **Options:**
   - `-o FILE` saves the body; `-O` saves it in `ram:` under the URL's last segment; `-c` resumes a saved file with
     `Range` (a server that answers 200 rather than 206 starts it over; 416 means it is already whole).
-  - `-I` prints the head the parser read (status, length, type, location, chunked). It asks with GET and reads no body:
-    `mind::http` has no HEAD yet (000-NET-0047's methods).
-  - `-X GET|POST|PUT`, `-H 'Name: value'` (up to 14), `-d TEXT` or `-d @FILE` (POST, `application/x-www-form-urlencoded`
+  - `-I` prints the head the parser read (status, length, type, location, chunked). It asks with HEAD, as `-X HEAD` does;
+    with another `-X` it sends that method and prints the head alone.
+  - `-X GET|POST|PUT|HEAD|PATCH|DELETE`, `-H 'Name: value'` (up to 14), `-d TEXT` or `-d @FILE` (POST, `application/x-www-form-urlencoded`
     unless `-H` names a type), `-F name=value` and `-F name=@FILE` (a `multipart/form-data` POST, up to 8 parts).
   - Redirects are followed by `mind::http::redirect`'s rules (on by default; `--no-location`, `--max-redirs N` up to
     10). HTTPS to HTTP is refused. `Authorization`, `Cookie` and `Proxy-Authorization` are not sent on to another host or

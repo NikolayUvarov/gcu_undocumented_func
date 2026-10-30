@@ -1,12 +1,12 @@
-# 313-STO-0026 — Operation IDs and queues in a checkpoint: manifest format 2
+# 313-STO-0026 — Operation IDs and queues in a checkpoint: manifest format 2 — done
 
-**Type:** storage (`libmind` `checkpoint`, `tally`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [313](313-persistent-actors.md) · **Constitution:** MC-6.10, MC-6.12, MC-12.4, Appendix B.4
+**Type:** storage (`libmind` `checkpoint`, `tally`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [313](../issues/313-persistent-actors.md) · **Constitution:** MC-6.10, MC-6.12, MC-12.4, Appendix B.4
 
-Split from [313](313-persistent-actors.md) (2026-10-30), its first step at the maintainer's word. It holds no personal data, so it does not wait for [308](308-encryption-at-rest.md).
+Split from [313](../issues/313-persistent-actors.md) (2026-10-30), its first step at the maintainer's word. It holds no personal data, so it does not wait for [308](../issues/308-encryption-at-rest.md).
 
 ## Problem
 
-A checkpoint ([306](../issues-done/306-checkpoints-and-rebinding.done)) records one consistency point and an effect journal. Three things are missing for a service that takes requests and sends messages:
+A checkpoint ([306](306-checkpoints-and-rebinding.done)) records one consistency point and an effect journal. Three things are missing for a service that takes requests and sends messages:
 - **A request repeated after a restart is applied again.** A client whose reply was lost cannot tell whether its request was applied, and retries it.
 - **An input queue's place is not kept.** A service that reads a numbered source starts over or skips.
 - **A message the service owes another is lost** when it ends between deciding to send and sending.
@@ -53,6 +53,20 @@ A checkpoint ([306](../issues-done/306-checkpoints-and-rebinding.done)) records 
   - `claim` fences an instance restored before it.
 - QEMU `store` suite (x86, aarch64): `tally add` with the same operation twice counts once, and says so; the count survives a restart.
 
+## Resolution
+
+Done 2026-10-30, landed in round 51 (`main` 57c2fd3d, from `claude/relaxed-meitner-5bmhpz` 208d9a9e; built in c22907d9).
+- **`libmind/src/checkpoint.rs`, format 2:**
+  - each client's last operation and its result (at most 16, the one applied longest ago dropped);
+  - the inbox, and the outbox with its own `sent` counter;
+  - `Error::Version(1)` for format 1, with no conversion.
+- **`tally`'s contract 2:** `tally add <key> [n] op <client> <id>`, a repeat answered from the record and not applied again, an older operation refused.
+- **Evidence:**
+  - `tests/checkpoint_host.rs`: the one encoding and its refusals; the model service stopped after each of the store's calls; owed messages each received once; the claim fencing an instance restored before it;
+  - QEMU `store` suite on x86 and aarch64: an addition sent again applied once, also after the store restarted, and an older one refused.
+- **Recorded in** [docs/storage/checkpoints.md](../docs/storage/checkpoints.md) (version 2) and the profile.
+- **Next:** [313-STO-0030](../issues/313-STO-0030-messages-between-components.md), messages between components on the platform.
+
 ## Related
 
-[313](313-persistent-actors.md), [306](../issues-done/306-checkpoints-and-rebinding.done), [docs/storage/checkpoints.md](../docs/storage/checkpoints.md).
+[313](../issues/313-persistent-actors.md), [306](306-checkpoints-and-rebinding.done), [docs/storage/checkpoints.md](../docs/storage/checkpoints.md).

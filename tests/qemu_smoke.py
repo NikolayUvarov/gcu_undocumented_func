@@ -7650,7 +7650,8 @@ def service_runs(vm, port):
 def api_runs(vm, port):
     """000-NET-0047: HTTP for API clients against tests/http_api_stub.py over HTTPS with the test CA: a JSON POST, a
     multipart upload checked by Python's own parser, a chunked upload, redirect chains by their rules, gzip and deflate
-    bodies decoded as they come and a bomb stopped at 1 MiB, 1000 Server-Sent Events in order, Retry-After in both forms."""
+    bodies decoded as they come and a bomb stopped at 1 MiB, 1000 Server-Sent Events in order, Retry-After in both forms,
+    and HEAD, PATCH and DELETE on one connection."""
     vm.send(f"webcheck https://10.0.2.2:{port}/ --api\n")
     out = vm.expect("MIND> ", timeout=900, after="WEBCHECK DONE")
     data = bytes(i * 7 % 251 for i in range(100_000))
@@ -7676,10 +7677,22 @@ def api_runs(vm, port):
     require(out, f"WEBCHECK API EVENTS text/event-stream {http_api_stub.EVENTS} DELTAS IN ORDER true DONE true LAST ID {http_api_stub.EVENTS - 1} RETRY Some(3000)")
     require(out, "WEBCHECK API busy 503 RETRY-AFTER Some(Seconds(7))")
     require(out, "WEBCHECK API limited 429 RETRY-AFTER Some(Date(1445412480))")
+    # HEAD's answers end at their heads though they name a length and a chunked coding; the requests after them on the
+    # same connection are answered whole and in order.
+    def echoed(method, body=b"", kind=None):
+        return json.dumps({"method": method, "authorization": None, "type": kind, "token": None, "length": len(body),
+                           "sha256": hashlib.sha256(body).hexdigest()}, separators=(",", ":"))
+    patch = b'{"name":"mind"}'
+    for line in (f"WEBCHECK API HEAD echo 200 LENGTH Some({len(echoed('HEAD'))}) CHUNKED false BODY []",
+                 "WEBCHECK API HEAD events 200 LENGTH None CHUNKED true BODY []", "WEBCHECK API GET final 200 LENGTH Some(8) CHUNKED false BODY [the end ]",
+                 f"WEBCHECK API PATCH 200 {echoed('PATCH', patch, 'application/merge-patch+json')}", f"WEBCHECK API DELETE 200 {echoed('DELETE')}",
+                 "WEBCHECK API DELETE item 204 BODY [] ONE CONNECTION 6"):
+        require(out, line)
     print("PASS: HTTP for API clients over HTTPS: a JSON POST, a multipart upload of a field and a 100 000-byte file, a chunked "
           "upload, redirects by their rules (301, 302, 307, 308, 303 after a POST; a loop refused after 10, HTTPS to HTTP refused), "
           f"gzip and deflate bodies decoded as they came, a bomb stopped at {int(bomb[1])} bytes, {http_api_stub.EVENTS} "
-          "Server-Sent Events in order, Retry-After in seconds and as a date", flush=True)
+          "Server-Sent Events in order, Retry-After in seconds and as a date; HEAD (a length and a chunked coding named, no "
+          "body), PATCH and DELETE (204) on one connection", flush=True)
 
 
 def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, files):
@@ -7749,6 +7762,10 @@ def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, fil
     assert code == 22 and "GET: HTTP 503" in out and "busy" not in out.replace("api/busy", ""), out
     out = get(f"-I {api}/gzip")
     assert re.search(r"HTTP 200\r?\nContent-Length: \d+\r?\nContent-Type: text/plain", out), out
+    # -I sends HEAD; PATCH and DELETE by -X (000-NET-0047).
+    assert echo(get(f"-X PATCH -H 'Content-Type: application/merge-patch+json' -d '{{}}' {api}/echo"))["method"] == "PATCH"
+    assert echo(get(f"-X DELETE {api}/echo"))["method"] == "DELETE"
+    assert re.search(r"HTTP 204", get(f"-X DELETE -I {api}/item")), "DELETE 204"
     require(get(f"-o ram:text.txt {api}/gzip"), f"GET: {len(http_api_stub.TEXT)} BYTES IN ram:text.txt")
     assert re.search(r"GET: HTTP 200, 8 BYTES IN \d+ MS", get(f"-s -w -o ram:w.txt {api}/final")), "-w"
     # Failures and their statuses: time, certificate, plain HTTP, a host the grant does not name, usage, URL.
@@ -7763,12 +7780,12 @@ def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, fil
     require(out, "plain text over http")
     code, out = status("https://10.0.2.3/")
     assert code == 7, out
-    for arguments, expected in (("-X DELETE https://h/", 2), (f"-O {api}/", 2), ("ftp://h/x", 3)):
+    for arguments, expected in (("-X TRACE https://h/", 2), (f"-O {api}/", 2), ("ftp://h/x", 3)):
         code, out = status(arguments)
         assert code == expected, (arguments, out)
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
-          "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I, -w, --max-time, plain HTTP only "
+          "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
           "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's", flush=True)
 
 
