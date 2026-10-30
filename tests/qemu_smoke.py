@@ -1495,6 +1495,29 @@ def shell_suite(vm):
     print("PASS: poweroff and shutdown: help names them, another word gets the usage, poweroff -f turns the machine off", flush=True)
 
 
+def serial_load_suite(vm, lines=50, loops=4):
+    """000-KRN-0188: a 200-character line written to the serial line at once, `lines` times while `loops` busy loops spin
+    on the host, arrives whole every time. Evidence for one machine, not a gate group: the loops would load its lanes."""
+    busy = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(loops)]
+    try:
+        whole, start = 0, time.monotonic()
+        for i in range(lines):
+            marker = "".join("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(i + j) % 36] for j in range(179))
+            vm.output = ""
+            vm.process.stdin.write(f"write ram:serial.txt {marker}\r".encode())
+            vm.process.stdin.flush()
+            vm.expect("WROTE 180 BYTES TO ram:serial.txt", timeout=30)  # with its newline
+            require(vm.command("cat ram:serial.txt"), marker)
+            whole += 1
+        require(vm.command("rm ram:serial.txt"), "OK")
+    finally:
+        for process in busy:
+            process.kill()
+            process.wait()
+    print(f"PASS: serial line under load: {whole} of {lines} lines of 200 characters, each written at once, arrived whole "
+          f"while {loops} busy loops spun on the host ({os.cpu_count()} CPUs), in {time.monotonic() - start:.0f} s", flush=True)
+
+
 def line_faces_check(vm):
     """`clock --line` and `dzen-clock --line` (issue u016): console programs in the shell, their line written again
     with \\r every second: one line on the screen, the updates on the serial line; Esc stops them."""
@@ -12452,7 +12475,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill,serialload (000-KRN-0188, not in a gate group)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -12688,7 +12711,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "nnd": nnd_suite, "bigmem": big_memory_check}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "nnd": nnd_suite, "bigmem": big_memory_check, "serialload": serial_load_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"
