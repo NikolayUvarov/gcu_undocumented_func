@@ -10,6 +10,9 @@ pub fn text(error: Error) -> &'static str {
         Error::Denied => "DENIED (ONLY RAM:, LOG: AND DATA/ ARE WRITABLE)", Error::NoSpace => "NO SPACE", Error::ReadOnly => "READ-ONLY DEVICE", Error::Io => "I/O ERROR",
         Error::Handles => "TOO MANY OPEN FILES", Error::Name => "INVALID NAME", Error::NotDirectory => "NOT A DIRECTORY", Error::IsDirectory => "IS A DIRECTORY",
         Error::NoMemory => "OUT OF MEMORY", Error::NoService => "VFS NOT AVAILABLE",
+        // vfs.wit 2.6's `conflict` (311-APP-0116, for 311-KRN-0189), and any code added after it.
+        #[allow(unreachable_patterns)]
+        _ => "REFUSED",
     }
 }
 

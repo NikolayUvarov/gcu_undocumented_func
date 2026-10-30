@@ -1702,7 +1702,10 @@ impl Scheduler {
                 if !self.holds(slot, Capability::Display) || !(1..SLOT_DYNAMIC).contains(&request.arg1) { Err(ERR_RIGHTS) }
                 else if request.arg2 == COMPOSITOR_RELEASE { self.release_held(); self.wake_idle(cpu, false); Ok(0) } else {
                     let focused = self.foreground;
-                    match (*(*tasks).ptr(focused)).as_mut().filter(|_| focused != 0).filter(|t| t.screen.is_some()) {
+                    let front = (*(*tasks).ptr(focused)).as_mut().filter(|_| focused != 0).filter(|t| t.screen.is_some());
+                    // Whose screen is in front, on every pull: its address alone may outlive its task (750-KRN-0192).
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), front.as_ref().map_or(0, |t| t.pid as usize));
+                    match front {
                         None => Ok(0),
                         Some(t) => {
                             // A task that runs may be mid-frame: in frame mode its screen is copied once it waits, and it

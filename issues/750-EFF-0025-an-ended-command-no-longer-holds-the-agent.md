@@ -1,6 +1,6 @@
 # 750-EFF-0025 — A command the server has ended no longer holds the agent
 
-**Type:** service · **Owner:** `EFF` · **Priority:** P2 · **Status:** open (2026-10-30) · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-6.6, MC-12.1
+**Type:** service · **Owner:** `EFF` · **Priority:** P2 · **Status:** in progress (2026-10-30) · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-6.6, MC-12.1
 
 **Asked by:** the tools track (`APP`) in `issues/requests-EFF.md`, 2026-10-30, "APP's checks on the MacBook Pro through the MIND agent", item 1, and in its message `EFF/2026-10-30T0646Z-APP-the-macs-agent-busy-since-a-boot-log-request-timed-out.md`.
 
@@ -34,9 +34,20 @@ Why it took an hour is not yet read from the Mac's log. What the code and the co
 
 ## Acceptance criteria
 
-- [ ] The `effector` QEMU suite, x86 and aarch64: a capture whose run time passes before its acknowledgement is sent is acknowledged without its artifact, and the agent takes the next command at once.
+- [x] The `effector` QEMU suite, x86 and aarch64: a capture whose run time passes before its acknowledgement is sent is acknowledged without its artifact, and the agent takes the next command at once.
 - [ ] On the MacBook Pro through hesere: a `collect_logs` `boot` with a short `timeout_seconds` holds the agent no longer than its acknowledgement's one try.
 
 ## Related
 
 [750-EFF-0012](750-EFF-0012-run-against-the-effector-server.md), [750-EFF-0021](../issues-done/750-EFF-0021-a-delivery-answers-with-the-file-read-back.done), [docs/effector.md](../docs/effector.md) section 1 (the MIND Core machines), [requests-EFF.md](requests-EFF.md).
+
+## Progress (2026-10-30)
+
+- **Plan item 1, done in `effector/src/main.rs`.**
+  - The artifact file's header line now ends with the command's run-time end in Unix seconds: its `timeout_seconds`, or the server's default for its kind, counted from when the agent took it. It is kept on the RTC's clock, so it holds across a restart.
+  - Past that time, the ACK carries no artifact: `completed`, `stdout` `not sent: the server had ended the command; NAME SIZE SHA256`, logged as `ACK … completed LATE, WITHOUT …`.
+  - A file kept by an older build has no such field, and is answered as before.
+- **Plan item 3, already so.** The heartbeat and the ACK share the agent's loop, so a heartbeat goes between an ACK's tries. A late answer is now one small try, not megabytes of base64.
+- **Plan item 2 (the Mac's log of 06:29–07:28) is not read yet.** The change does not depend on it.
+- **`docs/effector/protocol.md`** states the rule, and `docs/effector/README.md` the header's new field.
+- **The `effector` QEMU suite** gained a check. The first ACK of a `collect_logs` `ring` with `timeout_seconds` 3 is refused once (an injected 500). Its retry, 5 s or more later, must answer `completed LATE` without the artifact, and the next command must be taken at once. It passes in `x86: network, TLS and Effector` and `aarch64: network, TLS and Effector` (LEG9, `scripts/ci_local.sh`, 2026-10-30): `ACK cmd-8 completed LATE, WITHOUT ring.log (13214 BYTES) ACCEPTED`, 5 s after the refused try.

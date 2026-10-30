@@ -130,12 +130,12 @@ print("done: {total}")
   - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`, а также `>` или `>>` после команды (000-APP-0074);
   - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`, `netstat`;
   - `log`: `logger`, `log()`;
-  - `lifecycle`: `kill`, `budget`, `stop`, `reboot`.
+  - `lifecycle`: `kill`, `budget`, `stop`, `reboot`, `poweroff`, `shutdown`, `update`.
 
   Без своего слова команда не выполняется: `ping needs requires: network in the script`.
 - **Программы, запущенные сценарием,** получают из того, что просят, только объявленное сценарием (`sysinfo`, `file`,
   `files`, `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`, `gpio`, `camera`, `blockstore`, `firmware`,
-  `parse`, `tls`, `battery`, `wifi`, `ssh`); без остального они работают так. `tls` и `ssh` дают клиента TLS или сервиса SSH только вместе с разрешением на поток (`network`), а такой клиент TLS не может предъявить сертификат устройства (351-APP-0083). Программа, которая просит `camera` или `firmware`, получает их, только если
+  `parse`, `tls`, `battery`, `wifi`, `ssh`, `nn`); без остального они работают так. `nn` — клиент сервиса моделей с бейджем только этого запуска (262-APP-0112). `tls` и `ssh` дают клиента TLS или сервиса SSH только вместе с разрешением на поток (`network`), а такой клиент TLS не может предъявить сертификат устройства (351-APP-0083). Программа, которая просит `camera` или `firmware`, получает их, только если
   пользователь ответит «да» на вопрос оболочки.
 - **Сценарий не с загрузочного диска** (`ram:`, USB-диск) один раз спрашивает перед запуском:
   `SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)`.

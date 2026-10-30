@@ -240,6 +240,9 @@ pub const HOP: usize = 160;
 pub const START_FRAMES: usize = 3;
 /// Frames below the threshold that end it (200 ms).
 pub const HANGOVER_FRAMES: usize = 20;
+/// The quiet that ends a spoken command (000-APP-0114): the words of one command may be this far apart, and at a quiet
+/// microphone a weak syllable stays this long below the threshold.
+pub const COMMAND_PAUSE_MS: u64 = 600;
 pub const MIN_MS: u64 = 200;
 pub const MAX_MS: u64 = 8_000;
 /// How far the bounds of an utterance may grow over quieter frames before its first and after its last voiced frame
@@ -286,6 +289,10 @@ pub fn meter(samples: &[i16]) -> (i32, i32) {
     (dbfs(decibels(peak * peak)), dbfs(decibels(square)))
 }
 
+/// How much a recording whose peak is `peak` (of 32767) is raised to be heard when played back, in sixteenths: to a peak
+/// of about -1 dBFS, at most 32 times (+30 dB), never lowered; 16 is as recorded (000-APP-0114, `listen`).
+pub fn playback_gain(peak: i32) -> i32 { if peak <= 0 { 16 } else { (29_000 * 16 / peak).clamp(16, 32 * 16) } }
+
 /// A stretch of speech: where it starts in the stream, its 16 kHz mono samples and its level (dBFS of the mean square
 /// of its voiced frames).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -297,7 +304,7 @@ impl Utterance {
 
 /// Speech detection over a 16 kHz mono stream: frame energy against an adaptive noise floor plus the zero-crossing
 /// rate. An utterance starts after `START_FRAMES` voiced frames and ends after `HANGOVER_FRAMES` frames below the
-/// threshold; its bounds are the first and last voiced frames, widened over adjacent frames just above the floor (at
+/// threshold (or the pause `with_pause` gives); its bounds are the first and last voiced frames, widened over adjacent frames just above the floor (at
 /// most `EXTEND_FRAMES`). Utterances shorter than `MIN_MS` are dropped, longer than `MAX_MS` are cut there.
 pub struct Detector {
     /// Samples from absolute index `base` (kept back far enough to widen a pending utterance).
@@ -324,6 +331,8 @@ pub struct Detector {
     quiet: usize,
     energy: u64,
     voiced: u64,
+    /// Frames below the threshold that end an utterance.
+    hangover: usize,
 }
 
 impl Default for Detector { fn default() -> Self { Self::new() } }
@@ -331,8 +340,11 @@ impl Default for Detector { fn default() -> Self { Self::new() } }
 impl Detector {
     pub fn new() -> Self {
         Self { history: Vec::new(), base: 0, analysis: Vec::new(), frame: 0, dc_in: 0, dc_out: 0, floor: None, crossings: 0, weak: 0,
-               earliest: 0, speaking: false, run: 0, first: 0, last: 0, tail: 0, quiet: 0, energy: 0, voiced: 0 }
+               earliest: 0, speaking: false, run: 0, first: 0, last: 0, tail: 0, quiet: 0, energy: 0, voiced: 0, hangover: HANGOVER_FRAMES }
     }
+
+    /// A detector whose utterances end after `ms` below the threshold, not 200 ms (`COMMAND_PAUSE_MS` for commands).
+    pub fn with_pause(ms: u64) -> Self { Self { hangover: ((ms * SAMPLES_PER_MS) as usize / HOP).max(1), ..Self::new() } }
 
     /// The current noise floor in dBFS.
     pub fn floor_dbfs(&self) -> i32 { dbfs((self.floor.unwrap_or(0) / FLOOR_SCALE) as i32) }
@@ -412,7 +424,7 @@ impl Detector {
             self.quiet += 1;
             if weak && self.tail + 1 == k && k - self.last <= EXTEND_FRAMES { self.tail = k; }
         }
-        if self.quiet >= HANGOVER_FRAMES {
+        if self.quiet >= self.hangover {
             self.emit(self.tail, found);
         } else if Self::end(k) - Self::start(self.first) >= MAX_MS * SAMPLES_PER_MS {
             // Too long: cut here; speech that goes on starts a new utterance.

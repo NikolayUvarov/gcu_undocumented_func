@@ -1,4 +1,4 @@
-//! `wifi join`, `wifi status` and `wifi leave` without a screen (550-APP-0078), for scripts and the hardware tests of
+//! `wifi join`, `wifi status`, `wifi leave` and `wifi scan` without a screen (550-APP-0078, 550-APP-0117), for scripts and the hardware tests of
 //! 550-ASR-0007; `wifi country`, `countries` and `channels`, the country the station runs under (550-APP-0082). The passphrase comes from a file whose first line names the network, never from the command line, and
 //! no line made here holds it. No system calls: tests/wifi_host.rs.
 use crate::station::{mac, rate, shown, CountryState, CountryStatus, Link, Reason, Refusal, Station};
@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 pub const JOIN_MS: u64 = 60_000;
 pub const POLL_MS: u64 = 250;
 
-pub const USAGE: &str = "usage: wifi [--demo] [--countries] | wifi join <name> [--passphrase-file <file>] [--remember] | wifi status | wifi leave\n\
+pub const USAGE: &str = "usage: wifi [--demo] [--countries] | wifi join <name> [--passphrase-file <file>] [--remember] | wifi status | wifi leave | wifi scan\n\
                          | wifi country [<code>] | wifi countries [<text>] | wifi channels [<code>]";
 
 /// The most pages of 32 countries `countries` reads: the catalogue has about 250.
@@ -26,6 +26,8 @@ pub const NO_STATION: u32 = 3;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Join { ssid: Vec<u8>, file: Option<String>, remember: bool }, Status, Leave,
+    /// The networks around as text, strongest first (550-APP-0117).
+    Scan,
     /// The country, or a change to `code` (two letters, either case).
     Country(Option<String>),
     /// The catalogue, its codes and names that hold `text` (any case).
@@ -59,6 +61,7 @@ pub fn parse(args: &str) -> Result<Option<Command>, &'static str> {
         [] | ["--countries"] => Ok(None),
         ["status"] => Ok(Some(Command::Status)),
         ["leave"] => Ok(Some(Command::Leave)),
+        ["scan"] => Ok(Some(Command::Scan)),
         ["country"] => Ok(Some(Command::Country(None))),
         ["country", word] => code(word).map(|c| Some(Command::Country(Some(c)))).ok_or(USAGE),
         ["countries"] => Ok(Some(Command::Countries(None))),
@@ -171,6 +174,29 @@ pub fn status(station: &mut dyn Station) -> (u32, String) {
         Link::Lost { ssid } => format!("[WIFI] STATUS LOST {}: JOINING IT AGAIN", shown(&ssid)),
         Link::Failed { ssid, reason } => format!("[WIFI] STATUS FAILED {}: {}", shown(&ssid), reason.text()),
     })
+}
+
+/// The networks around, one line each, strongest first, then their count (550-APP-0117, for the drivers' hardware
+/// evidence): the name as `wifi join` takes it (quoted, `(hidden)` when it has none), the BSSID, the channel, the level,
+/// the protection, whether the station remembers it, and the one joined now. 0 even when the list is empty.
+pub fn networks(station: &mut dyn Station) -> (u32, String) {
+    let mut heard = match station.scan() {
+        Ok(heard) => heard,
+        Err(Refusal::NoStation(why)) => return (NO_STATION, format!("[WIFI] NO STATION: {}", why)),
+        Err(refusal) => return (REFUSED, format!("[WIFI] SCAN REFUSED: {}", refusal.text())),
+    };
+    let joined = match station.status() { Ok(Link::Joined { bssid, .. }) => Some(bssid), _ => None };
+    // Strongest first; a level the station did not measure (0) last.
+    heard.sort_by_key(|n| (n.weakness == 0, n.weakness));
+    let mut out = String::new();
+    for n in &heard {
+        let name = if n.ssid.is_empty() { String::from("(hidden)") } else { format!("\"{}\"", shown(&n.ssid)) };
+        let level = if n.weakness == 0 { String::from("? DBM") } else { format!("-{} DBM", n.weakness) };
+        out.push_str(&format!("[WIFI] NETWORK {} {} CHANNEL {} {} {}{}{}\n", name, mac(n.bssid), n.channel, level, n.security.name().to_uppercase(),
+                              if n.remembered { " REMEMBERED" } else { "" }, if joined == Some(n.bssid) { " JOINED" } else { "" }));
+    }
+    out.push_str(&format!("[WIFI] SCAN: {} NETWORK{}", heard.len(), if heard.len() == 1 { "" } else { "S" }));
+    (JOINED, out)
 }
 
 /// Leaves the network joined.

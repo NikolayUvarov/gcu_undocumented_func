@@ -60,7 +60,7 @@ fn rms(samples: &[i16]) -> i32 {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("listen — records from the microphone, shows the level and plays the recording back; finds speech.\nUsage: listen [seconds] | listen --vad [seconds] | listen [--vad] --wav file\n--vad prints each utterance (start, length, level); --wav takes a WAV file instead of the microphone.");
+    mind::about!("listen — records from the microphone, shows the level and plays the recording back; finds speech.\nUsage: listen [seconds] | listen --vad [seconds] | listen [--vad] --wav file\nA quiet recording is played back raised, at most 32 times, to a peak near full scale; the log says by how much.\n--vad prints each utterance (start, length, level); --wav takes a WAV file instead of the microphone.");
     // In wm a window of its own (000-APP-0056: otherwise it ran unseen), where what went wrong is written too.
     let info = mind::windowed::pixels(info, 608, 336, "listen");
     let screen = Screen::new(info);
@@ -138,7 +138,17 @@ fn record(screen: &Option<Screen>, seconds: usize) {
     let recorded = &samples(&mut buffer)[..filled];
     let peak = peak(recorded);
     mind::println!("[LISTEN] RECORDED {} FRAMES ({} MS), PEAK {}, RMS {}, OVERFLOWS {}", filled / 2, filled / 2 * 1000 / RATE, peak, rms(recorded), overflows);
-    meter(screen, peak, b"PLAYBACK");
+    // A quiet microphone's recording is raised for the playback, and the log says by how much and from what level:
+    // the recording's own level stays the one above (the microphone's gain is the drivers', 000-APP-0077).
+    let gain = mind::voice::playback_gain(peak);
+    let recorded = &mut samples(&mut buffer)[..filled];
+    if gain > 16 {
+        for s in recorded.iter_mut() { *s = (*s as i32 * gain / 16).clamp(i16::MIN as i32, i16::MAX as i32) as i16; }
+        let (was, now) = (mind::voice::meter(&[peak.min(i16::MAX as i32) as i16]).0, mind::voice::meter(recorded).0);
+        mind::println!("[LISTEN] PLAYBACK RAISED {}.{} TIMES: THE PEAK FROM {} DBFS TO {} DBFS", gain / 16, gain % 16 * 10 / 16, was, now);
+    }
+    let recorded = &samples(&mut buffer)[..filled];
+    meter(screen, (peak * gain / 16).min(i16::MAX as i32), b"PLAYBACK");
     if !stopped && filled > 0 {
         match mind::audio::play_all(recorded) { Ok(()) => mind::println!("[LISTEN] PLAYED BACK"), Err(error) => note(screen, &format!("[LISTEN] PLAYBACK FAILED: {:?}", error)) }
     }
