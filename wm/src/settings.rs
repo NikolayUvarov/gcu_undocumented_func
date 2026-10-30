@@ -379,6 +379,12 @@ impl Settings {
         }
     }
 
+    /// A picture wm could not show: when it came from the file's row or the browser, the choice of another, saying
+    /// why; a kind stepped on the Picture row keeps the notice alone, so the arrows go on stepping.
+    pub fn not_shown(&mut self, why: String) {
+        if self.page == 0 && self.row == FILE && !self.on_pages { self.offer(why); }
+    }
+
     /// The choice of a picture instead of the file typed, saying why: it is the picture already, or wm could not show
     /// it (000-APP-0072).
     pub fn offer(&mut self, why: String) {

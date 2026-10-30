@@ -31,6 +31,11 @@ The drivers' hardware evidence needs the list as text: 550-DRV-0042 (the DEXP's 
 - **The `net` suite:** joined to wlansim's MIND-TEST, `wifi scan` marks it `JOINED` and ends with the count.
 - **DRV's runs** on the DEXP and the MacBook Pro over the cable, recorded in DRV's issues.
 
+**Progress (2026-10-30):**
+- the host test passes (`tests/wifi_host.rs`);
+- the `net` suite passed on x86 QEMU with 4 CPUs, on the branch's 4cd110b6: `PASS: wifi join without a screen: … wifi status, wifi scan (MIND-TEST marked joined) and wifi leave`. An earlier run had failed only because the stand-in radio was built before ABI 25 (`scripts/x86_fixtures.sh` builds it again);
+- DRV's runs on the DEXP and the MacBook Pro are left. The command is in `fast-test`, and in the next landing request.
+
 ## Related
 
 [550-APP-0078](550-APP-0078-wifi-join-without-a-screen.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), 550-DRV-0042, 550-DRV-0045.

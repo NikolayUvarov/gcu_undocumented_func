@@ -417,6 +417,10 @@ fn update_takes_its_requests_and_says_what_the_updater_holds() {
     updates::state(&mut out, &trial);
     assert_eq!(out, "UPDATE: RUNNING SLOT B ON TRIAL, VERSION 6\nUPDATE: THE NEWER BOOT RECORD NAMES SLOT B, NOT CONFIRMED\nUPDATE: NOTHING STAGED IN THE OTHER SLOT\n");
     out.clear();
+    // Booted on trial and confirmed since: the trial is over, as the updater stages again (the updater suite's view).
+    updates::state(&mut out, &View { confirmed: true, ..trial });
+    assert_eq!(out, "UPDATE: RUNNING SLOT B, VERSION 6\nUPDATE: THE NEWER BOOT RECORD NAMES SLOT B, CONFIRMED\nUPDATE: NOTHING STAGED IN THE OTHER SLOT\n");
+    out.clear();
     let staged = View { slot: b'A', trial: false, running: 5, recorded: b'A', confirmed: true, staged: 6, failure: "expired" };
     updates::state(&mut out, &staged);
     assert_eq!(out, "UPDATE: RUNNING SLOT A, VERSION 5\nUPDATE: THE NEWER BOOT RECORD NAMES SLOT A, CONFIRMED\nUPDATE: STAGED IN SLOT B: VERSION 6\nUPDATE: THE LAST FAILURE: expired\n");

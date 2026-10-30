@@ -2147,8 +2147,13 @@ fn the_picture_already_shown_offers_the_choice_of_another() {
     s.key(key(KEY_BACKSPACE), &moon);
     assert_eq!(s.click(inner.x + 20, inner.y + 2, &moon), Outcome::Stay);
     assert!(s.browser.is_none(), "a name being typed is not taken by a click");
-    // A file wm could not show: the choice, saying why.
-    s.offer(String::from("data/Moon.PNG: not a picture wm reads; the pattern instead"));
+    // A file wm could not show: from the Picture row the notice alone, so the arrows go on stepping the kind; from the
+    // file's row the choice, saying why.
+    s.row = 0;
+    s.not_shown(String::from("data/Moon.PNG: not a picture wm reads; the pattern instead"));
+    assert!(s.browser.is_none(), "stepping the kind is not taken over by the browser");
+    s.row = 1;
+    s.not_shown(String::from("data/Moon.PNG: not a picture wm reads; the pattern instead"));
     let b = s.browser.as_ref().unwrap();
     assert_eq!((b.dir.as_str(), b.why.as_deref()), ("data", Some("data/Moon.PNG: not a picture wm reads; the pattern instead")));
 }
