@@ -187,7 +187,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 | Sectors | Content |
 |---|---|
 | 0 | superblock: `MIND-STO`, layout version (u16), sector size (u16), the key's source (0: none yet, 1: in the clear), three zeros, the SHA-256 of these 16 bytes; the volume key (32 bytes); a check, 32 zero bytes sealed under it (nonce, ciphertext, tag); the SHA-256 of the 140 bytes before it |
-| 1 … | sealed records, each starting on a sector (below, Sealed records). Inside its seal, a block record is `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes. Name records are described under Names, commit records under Several names at once, pin records under Retention, key records under Memory domains. Each kind of record is checked by its seal, then by its own SHA-256 and the layout version in it |
+| 1 … | sealed records, each starting on a sector (below, Sealed records). Inside its seal, a block record is `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes. Name records are described under Names, commit records under Several names at once, pin records under Retention, key records under Memory domains, recovery records under The recovery key. Each kind of record is checked by its seal, then by its own SHA-256 and the layout version in it |
 
 A store of layout 1 to 3 is refused and left as it is (MC-4.13), with `device` on the wire; the service logs `NOT MOUNTED: A STORE OF LAYOUT 3; THIS BUILD READS LAYOUT 4 AND CONVERTS NONE`. Nothing converts it (AGENTS.md section 3, before the first release). Layout 3 lacked the domains: a build of it would have read a domain's records as corrupt and freed them. The RAM disk starts blank at every boot; a VirtIO disk or a partition that holds an older layout is written again by hand.
 
@@ -351,8 +351,8 @@ Every record is sealed with ChaCha20-Poly1305 (RFC 8439; the RustCrypto `chacha2
 | Bytes | Content |
 |---|---|
 | 0–7 | `MIND-SLD` |
-| 8–9 | layout version (u16, 3) |
-| 10–11 | domain (u16): 0, the volume's; a memory domain's number; 0xFFFF, the domains' key records (below) |
+| 8–9 | layout version (u16, 4) |
+| 10–11 | domain (u16): 0, the volume's; a memory domain's number; 0xFFFF, the domains' key records (below); 0xFFFE, the recovery records (below, host-tested only) |
 | 12–15 | the sectors the record covers (u32) |
 | 16–27 | nonce |
 | 28–43 | tag |
@@ -396,7 +396,7 @@ A medium that outlives the machine's memory keeps no key: `keystore` keeps it as
 - **The ready line** says `SEALED, KEY KEPT BY KEYSTORE` or `SEALED, KEY IN THE CLEAR`; a key made at this mount is logged with where it went and why.
 - **What it does not give:**
   - where there is no TPM, the device key lies on the boot volume in the clear. So a store disk alone opens nothing, but with the boot volume beside it, it opens. The stick's own store partition (307-STO-0020) is beside it. Where there is a TPM, it seals the device key (351-NET-0006), and the store opens only on that TPM;
-  - a recovery key and a passphrase are still to come, with `APP` and `KRN` ([308-STO-0028](../../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)). Until then, a medium whose machine is gone or whose device key was made anew stays closed;
+  - a recovery key and a passphrase are still to come, with `APP` and `KRN` ([308-STO-0028](../../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)); the store's part of the recovery key is host-tested (next section), but no program can make or use one. Until then, a medium whose machine is gone or whose device key was made anew stays closed;
   - the key of a medium that is gone stays kept until deleted.
 
 Evidence, `tests/blockstore_host.rs` (a keeper in memory):
@@ -410,6 +410,48 @@ On the platform, the QEMU `tls` suite (x86 and aarch64), on a raw image with a b
 - **its TPM check** (swtpm): the disk is made at a boot without a TPM, and an object is put and named. The disk mounts, and the object reads back, after TPM A sealed the device key, and again under A. Under TPM B's new device key it is not mounted (`NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS volume-…`), and the object is not read (`key`).
 
 These are tests of the configurations named, not a proof (MC-12.2). The device key on the boot volume beside the disk, without a TPM, is not a protection, as said above.
+
+## The recovery key — host-tested, not on the wire yet (308-STO-0028)
+
+**No program can make or use a recovery key yet.** What follows is the store's own part, in `blockstore/src/store.rs` and `libmind/src/blockstore.rs`, tested on the host only. The wire (`blockstore.wit` 2.4), who may call it, and how the console shows a key and takes it back wait for an agreement with `APP` and `KRN`. Until then, the previous section's limits stand on the platform.
+
+A medium whose volume key `keystore` keeps opens on no other machine, nor on its own once its device key is made anew. A recovery key, kept by the owner away from the machine, is the way back.
+
+- **The key** is 16 random bytes. Without a random source none is made (`no-random`). Only a volume key kept off the medium gets one; a store whose key is in the superblock is refused (`invalid`).
+- **Its text form** (`mind::blockstore::recovery_text` and `recovery_parse`) is 32 characters of Crockford's base32 in 8 groups of 4, joined by `-`, for example `000G-40R4-0M30-E209-185G-R38E-1YZ4-BJS6`. They encode the 16 bytes and then the first 4 bytes of their SHA-256, a check. Typing it back ignores case, `-` and spaces, and reads `I` and `L` as 1 and `O` as 0. A `U` or any other character, a wrong length and a failed check are refused as typos, before any key is tried, so a typo is never mistaken for a wrong key.
+- **A record in the log, not the superblock.** The store never writes over a stored sector, and a torn write of sector 0 would lose the whole medium. So the volume key sealed under the recovery key is a record like the others, written into blank sectors:
+  - its frame's domain is 0xFFFE;
+  - inside its seal: `MIND-RCV`, the layout version (u16), six zeros, the volume key (32 bytes), and the SHA-256 of these 48 bytes;
+  - it is sealed as every record is (Sealed records above), under the keys derived from K, where K is HKDF-SHA-256 (RFC 5869) of the recovery key with the superblock's kept id as salt and `MIND-STO recovery` as info;
+  - the recovery key itself is nowhere on the medium, and neither is the volume key.
+- **A mount** cannot open such a record. It keeps it, counts it neither corrupt nor damaged, and remembers where the first 4 lie. A collection keeps it, and a scrub neither opens nor reports it.
+- **A new key takes two steps,** so the owner never holds only a key that no longer opens the medium:
+  1. `recovery_new` writes the new record, flushes it and returns the key to be shown. Nothing is erased: the older keys still open the medium;
+  2. `recovery_keep` takes the key the owner types back. If it opens none of the recovery records, it is `key` and nothing is erased. Otherwise every record it does not open is erased as a freed record is erased (a free marker first, which a mount finishes after a cut).
+
+  So a cut leaves a key the owner holds opening the medium: the old one, both, or the new one once it was shown. The store mounts whole after it. Until the second step, each new key adds a record. Past the 4 places a mount remembers, the others are found by a scan of the frames. **Forgetting** erases every one.
+- **On another machine,** `recover` reads the superblock, opens the first recovery record the key opens, checks that the volume key in it opens the superblock's check, and gives it to that machine's keeper under the kept id. The medium then mounts there as its own. Nothing is written to the medium:
+  - a wrong key opens nothing (`key`), and nothing is kept;
+  - a keeper that refuses the key gives `kept`;
+  - a store whose key is in the clear has nothing to recover (`invalid`).
+- **The layout stays 4.** A medium without a recovery record is one this build wrote before, so nothing converts anything.
+
+Evidence, `tests/blockstore_host.rs`: host tests of the logic on a simulated medium with the stand-in cipher, not a proof (MC-12.2).
+- `a_recovery_key_opens_a_medium_whose_keeper_lacks_its_key`: a fresh keeper gives `kept`; the recovery key puts the volume key in it, writing nothing; the medium then mounts whole, and the object and its name read back. The record is opened as this section describes it, with HKDF checked against RFC 5869's first test case;
+- `a_wrong_recovery_key_opens_nothing_and_writes_nothing`: a wrong key, `key`; a forged record that opens but holds another volume key, `key`; a refusing keeper, `kept`; nothing written or kept; a key in the clear, `invalid`;
+- `a_recovery_key_is_written_down_in_groups_and_typed_back_with_a_check`: two texts worked out from the alphabet and SHA-256, not from the code; a round trip of 256 keys; the aliases; every character changed to every other one refused by the check; wrong lengths and characters refused;
+- `a_new_recovery_key_replaces_the_old_once_it_is_typed_back`: after a new key, both keys open the medium and there are 2 records; a key typed back wrong is `key` and the medium is unchanged; once the new key is typed back, the first opens nothing, and one record is left, also after a remount;
+- `a_rotation_cut_anywhere_leaves_the_owner_a_key_that_opens_the_medium`: a new key and its typing back, on a device that stops after 0, 1, 2… writes and flushes, until a rotation ends before the stop. The old key alone opens the medium, then both, then the new one alone, and a key the owner holds always opens it; each time the medium mounts whole with its keeper;
+- `a_recovery_record_is_sealed_kept_by_a_collection_and_not_reported_by_a_scrub`: neither key in any 16 or 32 bytes of the medium; a mount counts nothing corrupt or damaged, a whole scrub reports nothing, and a collection that frees a block keeps the record;
+- `a_recovery_key_needs_a_kept_key_and_a_random_source_and_is_forgotten_whole`: a key in the clear, no random source and a read-only medium refused with nothing written; two records forgotten, after which neither key opens anything;
+- `recovery_records_past_those_a_mount_remembers_are_found_and_erased`: 6 records of keys never typed back, all erased by a forget, and all but its own by the last key typed back, whose record the mount did not remember;
+- `a_domains_records_before_its_key_record_are_found`: a mount that scans twice counts a recovery record once.
+
+**What erasing a recovery record does not reach:**
+- a flash medium's spare blocks, which may keep the erased sector beneath its interface, as for a forgotten domain's key record;
+- a record whose frame is damaged: it is no longer taken for a recovery record (a damaged magic, for one, leaves its sector counted as damaged), so neither a replacement nor a forget erases it.
+
+**Not provided:** anything on the platform (above), and the passphrase where there is no TPM (308-STO-0028's other half).
 
 ## Memory domains — run on the platform (308-STO-0023)
 
