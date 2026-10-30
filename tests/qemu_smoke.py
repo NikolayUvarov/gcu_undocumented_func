@@ -4883,6 +4883,7 @@ def modes_suite(args):
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
+    remote_update_check(args)
     modes_lifecycle_check(args)
     installed_apps_check(args)
     if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
@@ -4895,6 +4896,49 @@ def modes_suite(args):
           "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
           "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
           "change, which init logs with its clause (MC-12.6)", flush=True)
+
+
+def remote_update_check(args):
+    """751-KRN-0185: the owner's permission remote-update in data/mode.conf counts only with a mode on, and the link's switch
+    of it only with the link's console; init says so, warns while it counts on a slot signed with the public test key,
+    and drops it with the last mode. The updater's client badged for the gateway is in effector_gw's SLOT_UPDATE."""
+    if not raw_tools():
+        print("SKIP: remote-update check needs mkfs.fat and mtools", flush=True)
+        return
+    for words in (b"development\nremote-update\nlink-remote-update\n", b"remote-update\n"):
+        with tempfile.TemporaryDirectory(prefix="smoke-remote-", dir=ROOT / IMAGE) as temp:
+            image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "data/mode.conf": words})
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+            try:
+                log = vm.command("dmesg -s init", raw=True)
+                if words.startswith(b"development"):
+                    require(log, "[INIT] MODE: DEVELOPMENT; REMOTE UPDATE (data/mode.conf)")
+                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: link-remote-update (NO LINK CONSOLE)")
+                    if "(THE TEST KEY)" in log:  # the tests' images are signed with the public test key
+                        require(log, "[INIT] REMOTE UPDATE ON WITH THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED")
+                    for _ in range(60):
+                        if "effector_gw" in vm.services():
+                            break
+                        time.sleep(1)
+                    pids = vm.services()
+                    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+                    held = re.search(r"^SLOT=35 GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", vm.command(f"stat caps {pids['effector_gw']}", raw=True), re.M)
+                    assert held and held[1] == "1" and servers.get(int(held[2])) == pids["updater"], held
+                    # The last mode turned off takes the permission with it: a mode turned on again does not bring it back.
+                    require(vm.command("mode development off", raw=True), "MODE: NORMAL")
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] REMOTE-UPDATE OFF WITH THE LAST MODE")
+                    assert "remote-update" not in vm.command("cat data/mode.conf", raw=True), vm.command("cat data/mode.conf", raw=True)
+                else:
+                    require(log, "[INIT] MODE: NORMAL (data/mode.conf)")
+                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: remote-update (NEITHER development NOR maintenance)")
+                    assert "REMOTE UPDATE ON" not in log, log[-2000:]
+                assert "PANIC" not in vm.log, vm.log[-2000:]
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-remote-update-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: remote-update (751-KRN-0185): counted with the development mode, left out without a mode, its link switch "
+          "left out without the link's console, the test keys' warning, the gateway's updater client badged 1 in slot 35, "
+          "dropped with the last mode", flush=True)
 
 
 # The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
@@ -5345,7 +5389,8 @@ def effector_grants_check(vm):
     # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap.
     quota = re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
     assert quota and int(quota[1]) == 48 << 20, quota and quota[0]
-    assert set(gw) == {3, 5, 7, 10, 11, 12, 15, 38} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert set(gw) == {3, 5, 7, 10, 11, 12, 15, 35, 38} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert gw[35] == (1, "updater"), gw  # BADGE_UPDATE_GATEWAY: the updater's client, gated by remote-update (751-KRN-0185)
     assert gw[38][1] == "vfs_server" and gw[38][0] > 7, gw  # SLOT_APPS: a writable scope of data/apps/ (750-KRN-0169)
     require(vm.command("dmesg -s vfs_server", raw=True), ":/apps (WRITABLE)")
     assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (2, "compositor"), gw  # BADGE_REMOTE_EFFECTOR (800-KRN-0156)

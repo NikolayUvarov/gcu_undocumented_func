@@ -139,7 +139,9 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               replaced: [Option<(usize, usize)>; UNITS],
               placed: [Placed; UNITS], configuration: idl_init::Configuration,
               // The client of nnd init keeps, whose copies the shell holds and lends, revoked before each new shell (262-KRN-0178).
-              shell_nn: Option<usize> }
+              shell_nn: Option<usize>,
+              // Whether this boot's slot was signed with the public test key, which anyone can sign with (751-KRN-0185).
+              test_key: bool }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -804,6 +806,9 @@ impl Init {
                 // The screen, badged so that the gateway lights the Effector agent's mark too (800-KRN-0156).
                 grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_REMOTE_EFFECTOR)?, CLIENT);
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NAMED)?, CLIENT);
+                // The updater's client badged for the gateway (751-KRN-0185, 750-UPD-0020): it may stage and activate a
+                // release only while init's remote-update counts, which the updater asks at each such request.
+                if self.present("updater") { grants.add(SLOT_UPDATE, self.badged(&mut minted, "updater", mind::process::BADGE_UPDATE_GATEWAY)?, CLIENT); }
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
             // The Effector agent's session, only in a mode: the clock, the flow the policy gives program `effector`, TLS
@@ -1271,26 +1276,48 @@ impl Init {
         }
     }
 
-    // A mode turned on or off (750-KRN-0143): the shell's client may do either, the Mind's only turn the maintenance mode
-    // on. The file first, so that a restart keeps what the services follow; one log line, the audit record (MC-10.2).
+    // A mode or a permission turned on or off (750-KRN-0143, 751-KRN-0185): the shell's client may do either, the Mind's
+    // only turn the maintenance mode on and remote-update off (MC-12.6). The file first, so that a restart keeps what the
+    // services follow; one log line, the audit record (MC-10.2).
     fn set_mode(&mut self, which: idl_init::Mode, on: bool, reason: &str, badge: u16, sender: u64) -> core::result::Result<(), idl_init::Error> {
         use idl_init::Mode;
-        let name = match which { Mode::Development => "DEVELOPMENT", Mode::Maintenance => "MAINTENANCE" };
+        let name = match which { Mode::Development => "DEVELOPMENT", Mode::Maintenance => "MAINTENANCE", Mode::RemoteUpdate => "REMOTE-UPDATE", Mode::LinkRemoteUpdate => "LINK-REMOTE-UPDATE" };
         let by = match badge {
             mind::process::BADGE_MODE => "operator",
-            mind::process::BADGE_MIND if on && which == Mode::Maintenance => "mind",
+            mind::process::BADGE_MIND if (on && which == Mode::Maintenance) || (!on && which == Mode::RemoteUpdate) => "mind",
             _ => {
                 return Err(refused(sender, badge, "MODE CHANGE", format_args!("TURN {} {}", name, if on { "ON" } else { "OFF" }), "MC-12.6"));
             }
         };
         let mut modes = self.modes;
-        match which { Mode::Development => modes.development = on, Mode::Maintenance => modes.maintenance = on }
+        match which {
+            Mode::Development => modes.development = on,
+            Mode::Maintenance => modes.maintenance = on,
+            Mode::RemoteUpdate => modes.remote_update = on,
+            Mode::LinkRemoteUpdate => modes.link_remote_update = on,
+        }
+        // Each permission counts only with what it needs; turning one on without it is refused, and the last mode turned
+        // off takes remote-update with it, so that a mode turned on again does not bring it back unasked.
+        let why = match which {
+            Mode::RemoteUpdate if on && !(modes.development || modes.maintenance) => Some("NEITHER THE DEVELOPMENT NOR THE MAINTENANCE MODE IS ON"),
+            Mode::LinkRemoteUpdate if on && !self.link_console => Some("THE LINK'S CONSOLE IS OFF"),
+            _ => None,
+        };
+        if let Some(why) = why { mind::println!("[INIT] {} NOT TURNED ON: {}", name, why); return Err(idl_init::Error::Denied); }
+        if modes.remote_update && !(modes.development || modes.maintenance) { modes.remote_update = false; mind::println!("[INIT] REMOTE-UPDATE OFF WITH THE LAST MODE"); }
         (modes.by, modes.reason) = (wire_text(by), wire_text(reason));
         self.write_modes(&modes).map_err(|_| idl_init::Error::Failed)?;
         self.modes = modes;
         mind::println!("[INIT] MODE {} {} BY {} (PID {}, BADGE {}): {}", name, if on { "ON" } else { "OFF" }, by, sender, badge, reason);
+        self.warn_test_keys();
         self.follow_modes();
         Ok(())
+    }
+
+    // A release from the Effector server, allowed on a slot signed with the public test key: anyone can sign one, so
+    // the log and the shell say so while remote-update counts (751-KRN-0185, 751-ASR-0013).
+    fn warn_test_keys(&self) {
+        if self.modes.remote_update && self.test_key { mind::println!("[INIT] REMOTE UPDATE ON WITH THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED"); }
     }
 
     // A client of vfs_server with the user's rights for init's own file on the boot volume, dropped after use.
@@ -1475,13 +1502,26 @@ impl Init {
                 // The link's console (800-KRN-0155): the owner's word, counted only in the link's developer mode.
                 "link-console" if self.link_dev() => self.link_console = true,
                 "link-console" => mind::println!("[INIT] {}: WORD LEFT OUT: link-console (NO dev IN link.conf)", MODE_FILE),
+                // The owner's permissions (751-KRN-0185), each counted below only with what it needs.
+                "remote-update" => modes.remote_update = true,
+                "link-remote-update" => modes.link_remote_update = true,
                 other => mind::println!("[INIT] {}: WORD LEFT OUT: {}", MODE_FILE, other),
             }
+        }
+        if modes.remote_update && !(modes.development || modes.maintenance) {
+            modes.remote_update = false;
+            mind::println!("[INIT] {}: WORD LEFT OUT: remote-update (NEITHER development NOR maintenance)", MODE_FILE);
+        }
+        if modes.link_remote_update && !self.link_console {
+            modes.link_remote_update = false;
+            mind::println!("[INIT] {}: WORD LEFT OUT: link-remote-update (NO LINK CONSOLE)", MODE_FILE);
         }
         self.modes = modes;
         let name = match (modes.development, modes.maintenance) { (true, true) => "DEVELOPMENT AND MAINTENANCE", (true, false) => "DEVELOPMENT", (false, true) => "MAINTENANCE", _ => "NORMAL" };
         let (name, console) = match (name, self.link_console) { ("NORMAL", true) => ("LINK CONSOLE", ""), (name, true) => (name, " AND LINK CONSOLE"), (name, false) => (name, "") };
-        mind::println!("[INIT] MODE: {}{} ({})", name, console, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
+        let permits = match (modes.remote_update, modes.link_remote_update) { (true, true) => "; REMOTE UPDATE AND ITS SWITCH OVER THE LINK", (true, false) => "; REMOTE UPDATE", (false, true) => "; REMOTE UPDATE'S SWITCH OVER THE LINK", _ => "" };
+        mind::println!("[INIT] MODE: {}{}{} ({})", name, console, permits, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
+        self.warn_test_keys();
     }
 
     // data/mode.conf rewritten whole: one word a line, and who changed it last.
@@ -1491,6 +1531,8 @@ impl Init {
         if modes.development { let _ = core::fmt::Write::write_str(&mut text, "development\n"); }
         if modes.maintenance { let _ = core::fmt::Write::write_str(&mut text, "maintenance\n"); }
         if self.link_console { let _ = core::fmt::Write::write_str(&mut text, "link-console\n"); }
+        if modes.remote_update { let _ = core::fmt::Write::write_str(&mut text, "remote-update\n"); }
+        if modes.link_remote_update { let _ = core::fmt::Write::write_str(&mut text, "link-remote-update\n"); }
         let client = self.user_files()?;
         let files = Endpoint(client);
         let written = (|| -> Result<()> {
@@ -1686,7 +1728,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None };
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0 };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
