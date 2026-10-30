@@ -24,6 +24,7 @@ CONTRACT = "effector-agent 1.0"
 JSON_LIMIT = 64 * 1024
 ACK_LIMIT = 4 * 1024 * 1024  # a result with an artifact inline (a 2 MiB PNG as base64); the server takes 12 MiB
 FILE_LIMIT = 1024 * 1024
+BUNDLE_LIMIT = 64 * 1024 * 1024  # a release bundle for update_agent (751-EFF-0023): a whole release's boot files and applications
 MAX_SAMPLES = 64
 MAX_COMMANDS = 128
 MAX_AGENTS = 8
@@ -262,7 +263,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             agent, command_id = self._arg("agent_id"), self._arg("command_id")
             with fixture.lock:
                 command = fixture.commands.get(command_id)
-                if not command or command["agent_id"] != agent or command["action"] != "deliver_file" or command["status"] != "sent":
+                # deliver_file's file, or update_agent's release bundle (751-EFF-0023), for a command the agent was sent
+                if not command or command["agent_id"] != agent or command["action"] not in ("deliver_file", "update_agent") or command["status"] != "sent":
                     self._error(409, "no sent delivery")
                     return
                 self._download(fixture.files.get("command:" + command_id), fault)
@@ -291,7 +293,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
             self.close_connection = True
         else:
-            self._reply(200, raw=data)
+            # The agent streams a download into its gateway as it reads (a release into the updater): a slow reader,
+            # given a minute for each 64 KiB, since one TLS write is timed whole.
+            self.connection.settimeout(60)
+            self.record["status"] = 200
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            for at in range(0, len(data), 65536):
+                self.wfile.write(data[at:at + 65536])
 
     def _post(self):
         fixture = self.server.fixture
@@ -505,9 +516,10 @@ class EffectorFixture:
         with self.lock:
             return copy.deepcopy(self.results.get(command_id))
 
-    def publish(self, data, *, command_id=None, package_id=None):
-        if (command_id is None) == (package_id is None) or not isinstance(data, bytes) or len(data) > FILE_LIMIT:
-            raise ValueError("one fixture file id and at most 1 MiB required")
+    def publish(self, data, *, command_id=None, package_id=None, bundle=False):
+        limit = BUNDLE_LIMIT if bundle and command_id is not None else FILE_LIMIT
+        if (command_id is None) == (package_id is None) or not isinstance(data, bytes) or len(data) > limit:
+            raise ValueError("one fixture file id and at most 1 MiB (a command's bundle: 64 MiB) required")
         name = command_id if command_id is not None else package_id
         if not identifier(name):
             raise ValueError("invalid fixture file id")

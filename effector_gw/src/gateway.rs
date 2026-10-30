@@ -1,6 +1,7 @@
 //! The gateway's decisions and effects (750-EFF-0007), apart from IPC so the host can test them: each request of
 //! `idl/effector.wit` is checked against its deadline and the owner's policy, audited before it is answered (a failed
-//! audit write refuses it, MC-10.6), and done through `Machine`, the authorities `init` gives the service.
+//! audit write refuses it, MC-10.6), and done through `Machine`, the authorities `init` gives the service. A developer's
+//! release goes to `updater` as it arrives (751-EFF-0023), which checks it and asks `init` for `remote-update` itself.
 use alloc::{collections::VecDeque, string::String, vec, vec::Vec};
 use crate::audit;
 use crate::policy::{self, Ask, Deny, Policy};
@@ -47,6 +48,10 @@ pub struct Sample {
     pub services: Vec<Load>, pub volumes: Vec<(String, u64, u64)>,
 }
 
+/// The updater's view (the IDL's `update-state`, 1.5): its `status` as `update.wit` gives it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UpdateState { pub slot: u8, pub trial: bool, pub running: u64, pub recorded: u8, pub confirmed: bool, pub staged: u64, pub failure: String }
+
 /// The agent's mark on the screen (750-EFF-0015, `display.wit` 1.2's `remote-state`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mark { Unconnected, Reading, Changing }
@@ -85,11 +90,24 @@ pub trait Machine {
     fn load(&mut self) -> u32;
     /// Asks `init` to restart the machine, which it does only under the owner's `reboot on` (750-KRN-0154).
     fn reboot(&mut self) -> Result<(), Fail>;
+    /// The owner's `remote-update`, as `init` says it now (`init.wit` 1.11 `mode`); false when it does not say.
+    fn remote_update(&mut self) -> bool;
+    /// The updater's `install-begin` for the gateway's command `command`: its handle; `denied` while `remote-update` is off.
+    fn install_begin(&mut self, size: u64, sha256: &str, command: &str) -> Result<u32, Fail>;
+    fn install_write(&mut self, handle: u32, offset: u64, data: &[u8]) -> Result<(), Fail>;
+    /// The updater's `install-commit`: the bundle checked and its release staged in the other slot; the version.
+    fn install_commit(&mut self, handle: u32) -> Result<u64, Fail>;
+    /// The updater's `apply`: the trial's boot record written and `init` asked to restart, which it does at once.
+    fn apply(&mut self, tries: u8) -> Result<(), Fail>;
+    /// The updater's `status`; `None` without the gateway's client of it.
+    fn update_state(&mut self) -> Option<UpdateState>;
 }
 
 enum Out { Bytes(Vec<u8>), File(String) }
 struct Outgoing { handle: u32, command: String, size: u64, source: Out }
-struct Incoming { handle: u32, command: String, path: String, size: u64, sha256: [u8; 32], replace: bool, written: u64, hash: Sha256 }
+/// Where incoming bytes go: a file under the delivery root, hashed as they come, or the updater's own staging (its handle).
+enum Sink { File { path: String, replace: bool, hash: Sha256 }, Updater(u32) }
+struct Incoming { handle: u32, command: String, size: u64, sha256: [u8; 32], written: u64, sink: Sink }
 
 /// A delivered file as read back under its name (750-EFF-0021): what the server is told is what is there.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -311,7 +329,7 @@ impl Gateway {
         if badge != Badge::Session { return Err(Fail::Denied); }
         if self.out.as_ref().is_some_and(|t| t.handle == handle) { self.out = None; return Ok(()); }
         if let Some(i) = self.inc.take() {
-            if i.handle == handle { m.discard_temporary(&i.path); return Ok(()); }
+            if i.handle == handle { if let Sink::File { path, .. } = &i.sink { m.discard_temporary(path); } return Ok(()); }
             self.inc = Some(i);
         }
         Err(Fail::NotFound)
@@ -324,7 +342,7 @@ impl Gateway {
         self.admit(m, badge, o, &request, Some(Ask::Deliver(path, size)))?;
         if !replace && m.exists(path) { let _ = self.audited(m, Some(o), &request, "done", "exists"); return Err(Fail::Exists); }
         let handle = self.handle();
-        self.inc = Some(Incoming { handle, command: String::from(o.command), path: String::from(path), size, sha256: sha, replace, written: 0, hash: Sha256::new() });
+        self.inc = Some(Incoming { handle, command: String::from(o.command), size, sha256: sha, written: 0, sink: Sink::File { path: String::from(path), replace, hash: Sha256::new() } });
         Ok(handle)
     }
 
@@ -334,8 +352,10 @@ impl Gateway {
         let Some(i) = self.inc.as_mut().filter(|i| i.handle == handle) else { return Err(Fail::NotFound) };
         if offset != i.written { return Err(Fail::Bounds); }
         if data.len() > CHUNK || i.written + data.len() as u64 > i.size { return Err(Fail::Bounds); }
-        m.write_temporary(&i.path, offset, data)?;
-        i.hash.update(data);
+        match &mut i.sink {
+            Sink::File { path, hash, .. } => { m.write_temporary(path, offset, data)?; hash.update(data); }
+            Sink::Updater(h) => m.install_write(*h, offset, data)?,
+        }
         i.written += data.len() as u64;
         Ok(())
     }
@@ -344,14 +364,15 @@ impl Gateway {
     pub fn deliver_commit(&mut self, m: &mut dyn Machine, badge: Badge, handle: u32) -> Result<Delivered, Fail> {
         if badge != Badge::Session { return Err(Fail::Denied); }
         let Some(i) = self.inc.take() else { return Err(Fail::NotFound) };
-        if i.handle != handle { self.inc = Some(i); return Err(Fail::NotFound); }
-        let request = alloc::format!("deliver {} {} bytes", i.path, i.size);
+        if i.handle != handle || matches!(i.sink, Sink::Updater(_)) { self.inc = Some(i); return Err(Fail::NotFound); }
+        let Sink::File { path, replace, hash } = i.sink else { unreachable!() };
+        let request = alloc::format!("deliver {} {} bytes", path, i.size);
         let o = Origin { command: &i.command, initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
-        let published = if i.written != i.size || i.hash.finish() != i.sha256 { Err(Fail::Digest) } else { m.publish(&i.path, i.replace) };
-        if published.is_err() { m.discard_temporary(&i.path); }
+        let published = if i.written != i.size || hash.finish() != i.sha256 { Err(Fail::Digest) } else { m.publish(&path, replace) };
+        if published.is_err() { m.discard_temporary(&path); }
         // Read back under its name: a file that differs from what was announced stays, and is reported as `digest`.
-        let result = published.and_then(|()| read_back(m, &i.path, i.size)).and_then(|(size, sha256)| {
-            if size == i.size && sha256 == i.sha256 { Ok(Delivered { path: i.path.clone(), size, sha256 }) } else { Err(Fail::Digest) }
+        let result = published.and_then(|()| read_back(m, &path, i.size)).and_then(|(size, sha256)| {
+            if size == i.size && sha256 == i.sha256 { Ok(Delivered { path: path.clone(), size, sha256 }) } else { Err(Fail::Digest) }
         });
         // The audit's result field holds the read-back SHA-256's first 16 digits; the server gets all 64.
         let outcome = match &result { Ok(d) => alloc::format!("completed {}", &hex(&d.sha256)[..16]), Err(f) => String::from(fail_name(*f)) };
@@ -360,6 +381,56 @@ impl Gateway {
             return Err(Fail::Audit);
         }
         result
+    }
+
+    /// A developer's release for the updater (751-EFF-0023): the policy's `update apply`, the owner's `remote-update` as
+    /// `init` says it, then the updater's own `install-begin`, which checks that word again; each audited, before any byte.
+    pub fn update_begin(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, size: u64, sha256: &str) -> Result<u32, Fail> {
+        let request = alloc::format!("update-begin {} bytes", size);
+        if self.out.is_some() || self.inc.is_some() { self.audited(m, Some(o), &request, "busy", "refused"); return Err(Fail::Busy); }
+        let Some(sha) = unhex(sha256) else { self.audited(m, Some(o), &request, "malformed", "refused"); return Err(Fail::Malformed) };
+        self.admit(m, badge, o, &request, Some(Ask::Update(policy::Update::Apply)))?;
+        // With the owner's word off nothing reaches the updater, which asks `init` again itself.
+        if !m.remote_update() { let _ = self.audited(m, Some(o), &request, "remote-update", "off"); return Err(Fail::Denied); }
+        let begun = m.install_begin(size, sha256, o.command);
+        if !self.audited(m, Some(o), &request, "updater", match &begun { Ok(_) => "begun", Err(f) => fail_name(*f) }) && begun.is_ok() { return Err(Fail::Audit); }
+        let updater = begun?;
+        let handle = self.handle();
+        self.inc = Some(Incoming { handle, command: String::from(o.command), size, sha256: sha, written: 0, sink: Sink::Updater(updater) });
+        Ok(handle)
+    }
+
+    /// The whole bundle checked by the updater and its release staged in the other slot: the version. The transfer ends.
+    pub fn update_commit(&mut self, m: &mut dyn Machine, badge: Badge, handle: u32) -> Result<u64, Fail> {
+        if badge != Badge::Session { return Err(Fail::Denied); }
+        let Some(i) = self.inc.take() else { return Err(Fail::NotFound) };
+        let Sink::Updater(updater) = i.sink else { self.inc = Some(i); return Err(Fail::NotFound) };
+        if i.handle != handle { self.inc = Some(i); return Err(Fail::NotFound); }
+        let request = alloc::format!("update-commit {} bytes", i.size);
+        let o = Origin { command: &i.command, initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
+        let staged = if i.written != i.size { Err(Fail::Digest) } else { m.install_commit(updater) };
+        let outcome = match &staged { Ok(v) => alloc::format!("staged {}", v), Err(f) => String::from(fail_name(*f)) };
+        if !self.audited(m, Some(&o), &request, "commit", &outcome) && staged.is_ok() { return Err(Fail::Audit); }
+        staged
+    }
+
+    /// The staged release booted on trial with `tries` (`update apply`): audited before the updater is asked, as `init`
+    /// restarts the machine at once once it is; only a refusal comes back.
+    pub fn update_apply(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, tries: u8) -> Result<(), Fail> {
+        let request = alloc::format!("update-apply {} tries", tries);
+        if self.out.is_some() || self.inc.is_some() { self.audited(m, Some(o), &request, "busy", "refused"); return Err(Fail::Busy); }
+        if !(1..=9).contains(&tries) { self.audited(m, Some(o), &request, "bounds", "refused"); return Err(Fail::Bounds); }
+        self.admit(m, badge, o, &request, Some(Ask::Update(policy::Update::Apply)))?;
+        if !m.remote_update() { let _ = self.audited(m, Some(o), &request, "remote-update", "off"); return Err(Fail::Denied); }
+        if !self.audited(m, Some(o), &request, "updater", "asked") { return Err(Fail::Audit); }
+        let applied = m.apply(tries);
+        if let Err(f) = applied { let _ = self.audited(m, Some(o), &request, "done", fail_name(f)); }
+        applied
+    }
+
+    /// The updater's view, for the session and the owner.
+    pub fn update_state(&mut self, m: &mut dyn Machine, badge: Badge) -> UpdateState {
+        if badge == Badge::Other { UpdateState::default() } else { m.update_state().unwrap_or_default() }
     }
 
     /// Requests the policy may allow but this build cannot do yet: audited, then `unsupported` (or the denial).
@@ -374,7 +445,9 @@ impl Gateway {
     pub fn cancel(&mut self, m: &mut dyn Machine, badge: Badge, command: &str) -> Result<(), Fail> {
         if badge != Badge::Session { return Err(Fail::Denied); }
         if self.out.as_ref().is_some_and(|t| t.command == command) { self.out = None; }
-        else if self.inc.as_ref().is_some_and(|i| i.command == command) { let i = self.inc.take().unwrap(); m.discard_temporary(&i.path); }
+        else if self.inc.as_ref().is_some_and(|i| i.command == command) {
+            if let Some(Incoming { sink: Sink::File { path, .. }, .. }) = self.inc.take() { m.discard_temporary(&path); }
+        }
         else { return Err(Fail::NotFound); }
         let o = Origin { command, initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
         if self.audited(m, Some(&o), "cancel", "allow", "cancelled") { Ok(()) } else { Err(Fail::Audit) }
