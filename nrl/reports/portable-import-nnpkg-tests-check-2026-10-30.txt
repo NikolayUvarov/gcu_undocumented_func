@@ -1,0 +1,55 @@
+source: 007f0a4290349aade1972b948aee47223df4f185
+$ cargo test --manifest-path nnpkg/Cargo.toml --locked --target-dir /tmp/mind-nrl-nnpkg-target
+   Compiling libm v0.2.16
+   Compiling zmij v1.0.23
+   Compiling nrl-core v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nrl/crates/nrl-core)
+   Compiling serde_core v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling nrl-repr v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nrl/crates/nrl-repr)
+   Compiling nrl-runtime v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nrl/crates/nrl-runtime)
+   Compiling nnpkg v0.1.0 (/mnt/c/common_virtual/culture/mind-core-nrl/nnpkg)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.48s
+     Running unittests src/lib.rs (/tmp/mind-nrl-nnpkg-target/debug/build/nnpkg/c1e1612204fd8156/out/nnpkg-c1e1612204fd8156)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fixture.rs (/tmp/mind-nrl-nnpkg-target/debug/build/nnpkg/572feeeb38d9310b/out/fixture-572feeeb38d9310b)
+
+running 9 tests
+test the_reader_is_as_strict_as_serde_json ... ok
+test the_encoding_vector_comes_back_to_its_bits_and_bytes ... ok
+test every_object_file_is_in_the_writer_profile ... ok
+test the_parsers_answer_in_the_layout_loads_the_same_package ... ok
+test a_package_is_refused_as_the_design_says ... ok
+test the_runtime_scenarios_charge_as_nrl_pinned_them ... ok
+test the_pinned_model_loads_with_its_id_and_layout ... ok
+test floats_and_strings_are_written_as_serde_json_writes_them ... ok
+test a_made_up_answer_is_refused_without_a_panic ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+     Running tests/service.rs (/tmp/mind-nrl-nnpkg-target/debug/build/nnpkg/0a4486fc6d23ba99/out/service-0a4486fc6d23ba99)
+
+running 9 tests
+test budgets_refuse_the_whole_request_first ... ok
+test a_clock_that_went_back_between_jobs_poisons_the_session ... ok
+test a_worker_that_ends_without_answering_poisons_its_session ... ok
+test outputs_match_the_reference_and_charges_are_nrls ... ok
+test cancellation_and_the_deadline_end_the_job_and_the_session ... ok
+test a_numeric_failure_poisons_its_session_only ... ok
+test a_retired_badge_leaves_nothing_for_its_next_holder ... ok
+test a_session_answers_only_its_badge ... ok
+test memory_comes_back_and_each_badge_is_bounded ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+   Doc-tests nnpkg
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
