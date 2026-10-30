@@ -9372,12 +9372,12 @@ def effector_suite(args, disk):
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(13 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(15 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (13 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (15 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
@@ -9522,6 +9522,8 @@ def effector_update_suite(args):
             time.sleep(1)
             vm.collect()
         print(f"TIME: {len(bundle)} bytes downloaded, streamed to the updater, staged and applied in {time.monotonic() - started:.0f} s", flush=True)
+        # The server heard of the restart before it came (750-EFF-0006): a heartbeat saying shutting_down.
+        assert any(b.get("agent_id") == agent and b.get("system_state") == "shutting_down" for b in list(server.beats)), "no shutting_down heartbeat before the restart"
         vm.logged("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", since, timeout=300)
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)

@@ -44,7 +44,9 @@ Everything 1.1 did stays.
 - **`start_service`, `stop_service`, `restart_service`**: the command's `program_name` is a boot service's name.
 - **`exec_v1` with the command `reboot`** (the server's `exec`) restarts the machine under the owner's `reboot on`: the
   gateway answers, then asks `init` 10 s later, which checks the policy again (750-KRN-0154); the answer is
-  `completed` once the restart is admitted. Every other command is still `denied`: MIND runs none.
+  `completed` once the restart is admitted. Every other command is still `denied`: MIND runs none. Once that answer
+  is sent, and before an update's apply, the agent sends one heartbeat with `system_state` `shutting_down`. No heartbeat
+  or poll follows until the restart, or for 40 s if it does not come (750-EFF-0006).
 - **`performance_measure`**: the agents' fixed benchmarks `effector_bogomips_v1` on one thread, `effector_memcpy_v1`
   and `effector_seqio_v1`, run a slice at a time between heartbeats; the result carries the fields the server's
   `AcceptPerformance` checks. A task's 16 MiB of memory makes MIND's copy move 4 MiB buffers (8 MiB on Linux) and

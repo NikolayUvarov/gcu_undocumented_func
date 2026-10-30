@@ -33,6 +33,7 @@ const ACTION_S: u64 = 120; // a gateway request's budget when the command names 
 const LOAD_MS: usize = 10_000; // the load is read this often for the heartbeat and the poll
 const BENCH_SLICE_MS: u64 = 200; // performance_measure runs this long between heartbeats
 const REBOOT_DELAY_MS: u32 = 10_000; // the gateway asks init to restart this long after it answers: time to keep and send the result
+const QUIET_MS: usize = 40_000; // after the last heartbeat, how long the agent waits for the restart before it goes on
 const UPDATE_S: u64 = 1800; // an update's budget when the command names none: the download, the staging and the apply
 const RESTART_WAIT_MS: usize = 60_000; // after an apply the updater accepted, the restart comes within this or not at all
 const UPDATE_LOOK_MS: usize = 2000; // after the restart, the updater's view is read this often until it answers
@@ -215,6 +216,8 @@ struct Agent {
     held: Option<(String, String)>, // the command taken this run whose answer waits, and its action
     running: Option<Box<Running>>,
     update: Option<Box<UpdateWait>>,
+    restart_at: Option<usize>, // a restart the gateway admitted: once its answer is sent, the last heartbeat (750-EFF-0006)
+    quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
 }
 
 impl Agent {
@@ -643,7 +646,11 @@ impl Agent {
                 if command.trim() == "health" { return Some(self.health(id)); }
                 if command.trim() != "reboot" { return None; }
                 match gateway::reboot(GATEWAY, &o, REBOOT_DELAY_MS) {
-                    Ok(Ok(())) => { mind::println!("EFFECTOR: {}: THE MACHINE RESTARTS IN {} S", id, REBOOT_DELAY_MS / 1000); Final::Completed }
+                    Ok(Ok(())) => {
+                        mind::println!("EFFECTOR: {}: THE MACHINE RESTARTS IN {} S", id, REBOOT_DELAY_MS / 1000);
+                        self.restart_at = Some(now() + REBOOT_DELAY_MS as usize);
+                        Final::Completed
+                    }
                     Ok(Err(e)) => Final::Failed(failure(e)),
                     Err(_) => Final::Failed(Failure::Unsupported),
                 }
@@ -829,6 +836,8 @@ impl Agent {
         });
         if !kept { return self.update_answer(id, 1, &alloc::format!("version {} staged, not applied: the command could not be kept across the restart", staged), "io"); }
         mind::println!("EFFECTOR: {}: VERSION {} STAGED; APPLIED WITH {} TRIES: THE MACHINE RESTARTS", id, staged, tries);
+        // The server hears of the restart before it comes (750-EFF-0006): the apply restarts the machine at once.
+        self.last_heartbeat();
         let applied = gateway::update_apply(GATEWAY, o, tries);
         if let Ok(Err(e)) = applied {
             let _ = fs::remove(&self.path("update"));
@@ -839,6 +848,14 @@ impl Agent {
         while now() < until { mind::time::sleep(500); }
         let _ = fs::remove(&self.path("update"));
         self.update_answer(id, 1, &alloc::format!("the restart did not come: version {} stays staged", staged), "restart")
+    }
+
+    /// One heartbeat saying `shutting_down`, before a restart the agent knows of; then no heartbeat or poll until the
+    /// restart, or `QUIET_MS` if it does not come (750-EFF-0006).
+    fn last_heartbeat(&mut self) {
+        let outcome = self.heartbeat(true, None);
+        mind::println!("EFFECTOR: THE MACHINE RESTARTS: SHUTTING_DOWN SENT ({:?})", outcome);
+        self.quiet_until = now() + QUIET_MS;
     }
 
     /// An update's answer, kept in the private `result` file until it is acknowledged.
@@ -1074,7 +1091,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let hostname = String::from(config.hostname());
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
-        load: None, load_at: 0, busy_since: None, held: None, running: None, update: None });
+        load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0 });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -1146,7 +1163,10 @@ fn main(_info: &'static BootInfo) {
             if now() >= started + limit * 1000 { session.stop(ms); stopped_at = Some(now()); mind::println!("EFFECTOR: STOPPING"); }
         }
         if session.shutdown_done() || stopped_at.is_some_and(|s| now() > s + 10_000) { break; }
-        match session.heartbeat(ms) {
+        // A restart the gateway admitted: once no answer waits, the last heartbeat, then quiet until it comes (750-EFF-0006).
+        if agent.restart_at.is_some() && session.waiting().is_none() { agent.restart_at = None; agent.last_heartbeat(); }
+        let quiet = now() < agent.quiet_until;
+        match if quiet { Ok(None) } else { session.heartbeat(ms) } {
             Ok(Some(attempt)) => {
                 let outcome = agent.heartbeat(session.stopping(), session.waiting());
                 let _ = session.heartbeat_done(attempt, outcome, now() as u64, jitter());
@@ -1176,13 +1196,13 @@ fn main(_info: &'static BootInfo) {
             agent.load_at = now() + LOAD_MS;
         }
         // Telemetry every 30 s once the server knows the agent, the first 5 s after.
-        if session.registered() && !session.stopping() {
+        if session.registered() && !session.stopping() && !quiet {
             if agent.telemetry_at == 0 { agent.telemetry_at = now() + 5000; }
             if now() >= agent.telemetry_at { agent.telemetry(); agent.telemetry_at = now() + telemetry::PERIOD_MS as usize; }
         }
         agent.bench_step(&mut session);
         agent.update_step(&mut session);
-        match session.poll(now() as u64) {
+        match if quiet { Ok(None) } else { session.poll(now() as u64) } {
             Ok(Some(attempt)) => {
                 let (outcome, took_command) = agent.poll(&mut session);
                 let _ = session.poll_done(attempt, outcome, now() as u64, jitter());
