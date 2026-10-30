@@ -29,4 +29,4 @@
 
 ## Related
 
-[311](311-storefs-a-file-face.md), 311-STO-0032, [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md), [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.md).
+[311](311-storefs-a-file-face.md), 311-STO-0032, [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done), [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.md).

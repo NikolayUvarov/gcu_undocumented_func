@@ -6,7 +6,9 @@
 // speech models (251-STO-0014, models.rs). A console program: it asks the shell for the store's client (REQUEST_BLOCKSTORE),
 // the user's files (REQUEST_FILES) and the parser service (REQUEST_PARSE, for a model disk's MANIFEST.json). Makes, lists
 // and forgets memory domains, and runs any command in one (`-d <id>`, 308-STO-0023). Asks for a scrub and shows the last
-// one's findings (309-STO-0025).
+// one's findings (309-STO-0025). Reads and changes a directory tree under a name, each change one publication by
+// compare-and-swap (`tree`, 311-STO-0029). Copies named roots into a file as a CAR v1 and back, a damaged block repaired
+// from the copy (`export`, `import`, 309-STO-0031).
 use core::sync::atomic::{AtomicUsize, Ordering};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ, SLOT_FILE};
 use mind::cid::{Cid, Codec};
@@ -16,7 +18,9 @@ use mind::idl::blockstore::{self, Error, Update};
 use mind::idl::codec::{List, Text};
 use mind::ipc::Endpoint;
 
+mod car;
 mod models;
+mod tree;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE | REQUEST_PARSE);
 
@@ -25,13 +29,16 @@ mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE | REQUEST_PA
 static CLIENT: AtomicUsize = AtomicUsize::new(SLOT_BLOCKSTORE);
 const DOMAIN_CLIENT: usize = SLOT_BLOCKSTORE_READ;
 pub(crate) fn store() -> Endpoint { Endpoint(CLIENT.load(Ordering::Relaxed)) }
+// Whether the commands work in a memory domain (`-d`).
+pub(crate) fn in_domain() -> bool { CLIENT.load(Ordering::Relaxed) == DOMAIN_CLIENT }
 
 static mut BUILDER: Builder = Builder::new();
 static mut BUFFER: [u8; CHUNK] = [0; CHUNK];
 static mut DATA: [u8; CHUNK] = [0; CHUNK];
 
-/// The store's client as the blocks of `dag`; what the store says is kept for the message.
-struct Remote { last: Option<Error> }
+/// The store's client as the blocks of `dag`; what the store says is kept for the message, and how far a publication
+/// reached (`tree`).
+struct Remote { last: Option<Error>, durability: u8 }
 impl Remote {
     fn fail(&mut self, error: Error) -> dag::Error {
         self.last = Some(error);
@@ -169,11 +176,11 @@ fn domains(mut words: core::str::SplitWhitespace) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id>");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file>");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
-    let mut remote = Remote { last: None };
+    let mut remote = Remote { last: None, durability: 0 };
     let mut args = mind::process::args_str();
     // `-d <id>`: every command after it works in that memory domain, through a client the store lends for it.
     if let Some(after) = args.strip_prefix("-d ") {
@@ -196,6 +203,8 @@ fn main(_info: &'static BootInfo) {
             _ => mind::println!("blocks: names [prefix]"),
         },
         Some("models") => return models::command(rest, builder, buffer, data, &mut remote),
+        Some("tree") => return tree::command(rest, builder, buffer, data, &mut remote),
+        Some(which @ ("export" | "import")) => return car::command(which, rest, buffer, data, &mut remote),
         Some("domain") | Some("domains") => return domains(words),
         _ => {}
     }
@@ -350,6 +359,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file>"),
+        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file>"),
     }
 }

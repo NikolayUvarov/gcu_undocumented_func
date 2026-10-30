@@ -1,6 +1,6 @@
 # HTTP, pinned servers and JSON for services
 
-**Version:** 0.2 (2026-10-28) · **Track:** `NET`, tasks [750-NET-0019](../../issues-done/750-NET-0019-http-for-services.done) (HTTP), [750-NET-0020](../../issues-done/750-NET-0020-tls-with-two-pins.done) (pins), [750-NET-0021](../../issues-done/750-NET-0021-json-in-the-parser-service.done) (JSON) and [000-NET-0047](../../issues/000-NET-0047-http-for-api-clients.md) (API clients) for main tasks [750](../../issues/750-effector-agent.md) and [501](../../issues/501-effector.md) · **Roadmap:** track D · **Constitution:** MC-11.5, MC-11.11, MC-12.4, Appendix B.6
+**Version:** 0.2 (2026-10-28) · **Track:** `NET`, tasks [750-NET-0019](../../issues-done/750-NET-0019-http-for-services.done) (HTTP), [750-NET-0020](../../issues-done/750-NET-0020-tls-with-two-pins.done) (pins), [750-NET-0021](../../issues-done/750-NET-0021-json-in-the-parser-service.done) (JSON) and [000-NET-0047](../../issues-done/000-NET-0047-http-for-api-clients.done) (API clients) for main tasks [750](../../issues/750-effector-agent.md) and [501](../../issues/501-effector.md) · **Roadmap:** track D · **Constitution:** MC-11.5, MC-11.11, MC-12.4, Appendix B.6
 
 A service that talks to one server for as long as the machine runs, such as the Effector agent, needs more than `download` does. It posts JSON, reads chunked answers, keeps one connection, holds a long stream, trusts a server by a pin that can rotate, and has the JSON it receives read by a process that holds nothing (MC-11.11). This page describes what the network track gives it. The downloads guide ([downloads.md](downloads.md)) still describes `get` and `download`.
 
@@ -8,9 +8,10 @@ A service that talks to one server for as long as the machine runs, such as the 
 
 - **One transport for several requests.** `Connection::new(transport)` takes the caller's `Transport`: a TCP socket of its flow grant, or a session of the TLS service. So the network policy that applies to the caller applies to every request.
 - **`request(method, url, headers, body, parser, close_delimited)`:**
-  - sends `GET`, `POST` or `PUT` with `Host`, `User-Agent` and the caller's headers;
+  - sends `GET`, `POST`, `PUT`, `HEAD`, `PATCH` or `DELETE` with `Host`, `User-Agent` and the caller's headers (`Method::parse` reads a name, in capitals);
   - with a body, adds `Content-Length` and streams the body from a `Source`;
-  - reads the response head, skipping 1xx answers, and has the `Parser` read it (the parser service, `mind::parse::Service`, as for downloads).
+  - reads the response head, skipping 1xx answers, and has the `Parser` read it (the parser service, `mind::parse::Service`, as for downloads);
+  - ends the answer to `HEAD`, and a 204 or 304, at its head, whatever length or coding it names: the head's `length` is what a GET would get, and the connection serves the next request (000-NET-0047).
 - **The caller's headers.** At most 16, in a request head of at most 4 KiB. A header is refused (`Header`) when its name is not a token, when its value holds anything but visible ASCII, spaces and tabs (no CR or LF, so nothing can be injected), or when it is one the library keeps: `Host`, `Content-Length`, `Connection`, `Transfer-Encoding`, `TE`, `Trailer`, `Upgrade`, `Keep-Alive`, `Proxy-Connection`, `Expect`.
 - **`Response::read(out)`** gives the body in pieces, framed:
   - by `Content-Length`;
@@ -26,7 +27,7 @@ A service that talks to one server for as long as the machine runs, such as the 
 ## For API clients (000-NET-0047)
 
 - **Redirects: `mind::http::redirect(from, method, head, followed, out)`.** It reads a 301, 302, 303, 307 or 308 with its `Location`, resolves it against `from` into the caller's buffer, and says:
-  - the method and whether the body goes again: 303 makes any method GET without a body, and so do 301 and 302 for a POST, as browsers do; 307 and 308 keep both;
+  - the method and whether the body goes again: 303 makes any method but HEAD a GET without a body, and so do 301 and 302 for a POST, as browsers do; 307 and 308 keep both;
   - whether the next URL is on the same host and port.
 
   It refuses (`Redirect`) a redirect without a `Location`, one to another scheme, one from HTTPS to HTTP, and the eleventh (`REDIRECTS_MAX`, 10). The caller follows: a new host needs its own flow grant, which the library cannot give. A fragment is dropped.
@@ -106,11 +107,11 @@ With `--pin` it connects by `connect-pins`; with `--json` it prints a JSON body 
 
 ## Tested
 
-The tests and their results are in each task's resolution: [750-NET-0019](../../issues-done/750-NET-0019-http-for-services.done), [750-NET-0020](../../issues-done/750-NET-0020-tls-with-two-pins.done), [750-NET-0021](../../issues-done/750-NET-0021-json-in-the-parser-service.done), [000-NET-0047](../../issues/000-NET-0047-http-for-api-clients.md).
+The tests and their results are in each task's resolution: [750-NET-0019](../../issues-done/750-NET-0019-http-for-services.done), [750-NET-0020](../../issues-done/750-NET-0020-tls-with-two-pins.done), [750-NET-0021](../../issues-done/750-NET-0021-json-in-the-parser-service.done), [000-NET-0047](../../issues-done/000-NET-0047-http-for-api-clients.done).
 
 ## Not provided
 
-- **Methods other than GET, POST and PUT** (HEAD, PATCH, DELETE): `Method` gains them once the Effector agent no longer matches it exhaustively (a request to `EFF`).
+- **Methods other than GET, POST, PUT, HEAD, PATCH and DELETE** (OPTIONS, TRACE, CONNECT).
 - **Several connections at once from one `Connection`**, pipelining, HTTP/2, IPv6.
 - **Content codings other than gzip and deflate** (`br`, `zstd`): refused with `Encoding`.
 - **More than 8 TLS sessions in the system** (the TLS service's limit).

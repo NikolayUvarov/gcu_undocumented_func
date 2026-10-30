@@ -1,6 +1,6 @@
 # 000-EFF-0019 — The agent names a failed request's method by `Method::name()` — done
 
-**Type:** service · **Owner:** `EFF` · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** — (for `NET`'s [000-NET-0047](../issues/000-NET-0047-http-for-api-clients.md)) · **Constitution:** MC-12.4
+**Type:** service · **Owner:** `EFF` · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** — (for `NET`'s [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done)) · **Constitution:** MC-12.4
 
 ## Problem
 

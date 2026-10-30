@@ -37,7 +37,7 @@ impl Out<'_> {
     }
 }
 
-fn hex(digest: &[u8]) -> impl core::fmt::Display + '_ {
+pub(crate) fn hex(digest: &[u8]) -> impl core::fmt::Display + '_ {
     struct Hex<'a>(&'a [u8]);
     impl core::fmt::Display for Hex<'_> {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { self.0.iter().try_for_each(|b| write!(f, "{:02x}", b)) }

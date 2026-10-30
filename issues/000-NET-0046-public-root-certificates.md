@@ -52,4 +52,4 @@ Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85): Mozilla's p
 
 ## Related
 
-[351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), [000-NET-0047](000-NET-0047-http-for-api-clients.md), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md).
+[351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md).

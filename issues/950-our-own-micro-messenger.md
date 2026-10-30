@@ -118,4 +118,4 @@
 
 ## Related
 
-[253](253-telegram-and-whatsapp-text-client.md), [000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done), [000-NET-0045](../issues-done/000-NET-0045-secrets-per-program-in-keystore.done), [000-NET-0046](000-NET-0046-public-root-certificates.md), [000-NET-0047](000-NET-0047-http-for-api-clients.md), [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md), [800](800-mind-link.md) (`linkproto`, the shared crate's pattern).
+[253](253-telegram-and-whatsapp-text-client.md), [000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done), [000-NET-0045](../issues-done/000-NET-0045-secrets-per-program-in-keystore.done), [000-NET-0046](000-NET-0046-public-root-certificates.md), [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md), [800](800-mind-link.md) (`linkproto`, the shared crate's pattern).
