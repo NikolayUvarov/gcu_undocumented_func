@@ -51,6 +51,7 @@ const MARGIN_MS: usize = 5000; // past the kernel's deadline: had the trial not 
 const ASK_MS: usize = 1000; // while a trial waits, init is asked this often how the boot went (init.wit 1.4, 351-UPD-0021)
 const TRIES_MAX: u8 = 9;
 const RETRY_MS: usize = 30_000; // an automatic run the source did not answer is tried again after this
+const RECEIVED: usize = 9; // the buffer of an install call (update.wit 1.3) lands here
 // A bundle the gateway hands over lies in the other slot's INSTALL directory, which neither the bootloader nor a fetch
 // reads, until it is staged or dropped (751-UPD-0032).
 const INSTALL: &str = "INSTALL";
@@ -648,7 +649,7 @@ fn main(info: &'static BootInfo) {
         let wake = [ask_at, confirm_at, if confirm_at.is_none() { next_automatic } else { None }].into_iter().flatten().min();
         let wait = wake.map_or(0, |at| at.saturating_sub(mind::time::uptime_ms()).clamp(1, u32::MAX as usize) as u32);
         // Requests are checked against idl/update.wit before they are served (MC-2.4).
-        let Ok(request) = Endpoint::SERVICE.recv_timeout(0, wait) else { continue };
+        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };
         // The Effector gateway's client (BADGE_UPDATE_GATEWAY, update.wit 1.2) stages or activates a release only while
         // init's remote-update counts, asked at each such request so that the owner's change holds at once (751-KRN-0185).
         let allowed = |what: &str| -> Result<(), Error> {
@@ -668,7 +669,7 @@ fn main(info: &'static BootInfo) {
             mind::println!("[UPDATER] {} REFUSED (BADGE {}, PID {}): ONLY THE EFFECTOR GATEWAY HANDS OVER A BUNDLE (MC-12.6)", what, request.badge, request.sender);
             Err(Error::Denied)
         };
-        let _ = match api::decode(&request, 0, &mut scratch) {
+        let _ = match api::decode(&request, RECEIVED, &mut scratch) {
             Ok((api::Request::Check, call)) => { let offer = updater.check(); api::reply_check(call, offer.as_ref().map_err(|e| *e)) }
             Ok((api::Request::Fetch, call)) => api::reply_fetch(call, allowed("FETCH").and_then(|()| updater.fetch())),
             Ok((api::Request::Apply { tries }, call)) => api::reply_apply(call, allowed("APPLY").and_then(|()| updater.apply(tries))),
