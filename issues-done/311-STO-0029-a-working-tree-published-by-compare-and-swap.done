@@ -1,12 +1,12 @@
-# 311-STO-0029 — A working tree published by compare-and-swap: edits in memory, a new root under a name
+# 311-STO-0029 — A working tree published by compare-and-swap: edits in memory, a new root under a name — done
 
-**Type:** storage (`libmind` `worktree`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), directory nodes, done) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.9, MC-4.10, MC-4.13, MC-12.4
+**Type:** storage (`libmind` `worktree`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — ([311-STO-0027](311-STO-0027-directories-as-objects.done), directory nodes, done) · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.9, MC-4.10, MC-4.13, MC-12.4
 
-Split from [311](311-storefs-a-file-face.md) (2026-10-30), its second step: what `storefs` will do on a write, before there is a `storefs`.
+Split from [311](../issues/311-storefs-a-file-face.md) (2026-10-30), its second step: what `storefs` will do on a write, before there is a `storefs`.
 
 ## Problem
 
-After [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done) a directory is an object, but nothing makes one from edits. A writer must not change a published root in place (MC-4.9). It changes a working copy and publishes a new root, and must learn when another writer published first instead of overwriting that writer's work.
+After [311-STO-0027](311-STO-0027-directories-as-objects.done) a directory is an object, but nothing makes one from edits. A writer must not change a published root in place (MC-4.9). It changes a working copy and publishes a new root, and must learn when another writer published first instead of overwriting that writer's work.
 
 ## Plan
 
@@ -71,6 +71,17 @@ After [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done) a 
   - after `blocks collect` every file is still read.
 - docs/storage and the profile.
 
+## Resolution
+
+Done 2026-10-30, landed in round 54 (`main` 3fbdd30e, from `claude/relaxed-meitner-5bmhpz` 04ed7174; built in 254370a1, fixed in 3fe6d984).
+- **`libmind/src/worktree.rs`:** a working tree held in memory, at most 64 directories and 64 KiB, an edit past them refused with nothing changed; published as a new root by the name's compare-and-swap. A writer that read an older version is told of the conflict and publishes nothing.
+- **`blocks tree ls|cat|put|mkdir|rm|mv`**, each change one publication.
+- **Evidence:**
+  - `tests/worktree_host.rs`;
+  - QEMU `store` suite on x86 and aarch64: a tree made, listed, read back by SHA-256, its history, a conflict refused with the name unchanged, every file read after a collection, a move and two removals.
+- **Recorded in** docs/storage ("A working tree") and the profile.
+- **Next:** [311-STO-0032](../issues/311-STO-0032-storefs-a-vfs-view-of-a-named-root.md), `storefs`.
+
 ## Related
 
-[311](311-storefs-a-file-face.md), [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), [302](../issues-done/302-names-and-current-roots.done), [304](../issues-done/304-several-names-at-once.done).
+[311](../issues/311-storefs-a-file-face.md), [311-STO-0027](311-STO-0027-directories-as-objects.done), [302](302-names-and-current-roots.done), [304](304-several-names-at-once.done).

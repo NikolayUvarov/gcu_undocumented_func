@@ -2,7 +2,7 @@
 
 **Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** what `APP` and `KRN` agree to for the owner's input (below) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
-Split from [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.md) (2026-10-30): the part that needs the owner, once the volume key is off the medium.
+Split from [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done) (2026-10-30): the part that needs the owner, once the volume key is off the medium.
 
 ## Problem
 
@@ -33,4 +33,4 @@ Since 308-STO-0022 a medium's volume key is kept by `keystore`, under a key deri
 
 ## Related
 
-[308](308-encryption-at-rest.md), [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.md), 351-NET-0006, [305](../issues-done/305-recovery-without-the-store.done).
+[308](308-encryption-at-rest.md), [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done), 351-NET-0006, [305](../issues-done/305-recovery-without-the-store.done).

@@ -1,12 +1,12 @@
-# 309-STO-0031 — A copy of named roots in a file: export, import, and repair from it
+# 309-STO-0031 — A copy of named roots in a file: export, import, and repair from it — done
 
-**Type:** storage (`libmind` `car`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-6.8
+**Type:** storage (`libmind` `car`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [309](../issues/309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-6.8
 
-Split from [309](309-copies-scrub-and-repair.md) (2026-10-30), its second step, after the scrub. Unlike 309's live second store, it needs no second medium lent to the store, so it waits for no other track.
+Split from [309](../issues/309-copies-scrub-and-repair.md) (2026-10-30), its second step, after the scrub. Unlike 309's live second store, it needs no second medium lent to the store, so it waits for no other track.
 
 ## Problem
 
-The store keeps one copy on one medium. A damaged block is found by a read or a scrub ([309-STO-0025](../issues-done/309-STO-0025-scrub.done)), but there is nothing to repair it from. A lost medium, or a RAM disk after a reset, loses every name. And an instance cannot be moved to another machine ([313](313-persistent-actors.md)), as nothing carries its blocks and names there.
+The store keeps one copy on one medium. A damaged block is found by a read or a scrub ([309-STO-0025](309-STO-0025-scrub.done)), but there is nothing to repair it from. A lost medium, or a RAM disk after a reset, loses every name. And an instance cannot be moved to another machine ([313](../issues/313-persistent-actors.md)), as nothing carries its blocks and names there.
 
 ## Plan
 
@@ -68,6 +68,20 @@ The store keeps one copy on one medium. A damaged block is found by a read or a 
 - QEMU `store` (x86, aarch64): names exported to a file on the boot volume come back, whole, into a store that lost them (a RAM disk after a reset, or a blank store disk).
 - docs/storage and the profile.
 
+## Resolution
+
+Done 2026-10-30, landed in round 54 (`main` 3fbdd30e, from `claude/relaxed-meitner-5bmhpz` 04ed7174; built in 83f5cbe2 and aa352f88).
+- **`libmind/src/car.rs`:** CAR v1 with a names node. A copy is checked whole, every block against its CID and every root walked over its own sections, before anything of it is put.
+- **`blocks export|import|import --check`:**
+  - an import repairs a block the store holds damaged;
+  - it publishes a name only by compare-and-swap, leaving a name at another root as it is;
+  - a memory domain is not exported, as a copy is not sealed.
+- **Evidence:**
+  - `tests/car_host.rs`;
+  - QEMU `store` suite on x86 and aarch64: two names brought back whole after a reboot left the store blank;
+  - QEMU `storefaults` suite on x86 and aarch64: a damaged chunk repaired from an earlier copy, the next scrub clean.
+- **Recorded in** docs/storage ("Copies in a file") and the profile.
+
 ## Related
 
-[309](309-copies-scrub-and-repair.md), [309-STO-0025](../issues-done/309-STO-0025-scrub.done), [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), [313](313-persistent-actors.md) (a move through a copy of its store).
+[309](../issues/309-copies-scrub-and-repair.md), [309-STO-0025](309-STO-0025-scrub.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [313](../issues/313-persistent-actors.md) (a move through a copy of its store).
