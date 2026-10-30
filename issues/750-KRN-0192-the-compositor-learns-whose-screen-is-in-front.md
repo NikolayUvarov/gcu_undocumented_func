@@ -14,7 +14,7 @@
 
 ## Plan
 
-- **`COMPOSITOR_PULL` returns the PID of the screen's task in the mailbox's `arg1`,** on every pull that finds a screen in front. It returns 0 when none is.
+- **`COMPOSITOR_PULL` returns the PID of the screen's task in the mailbox's `arg2`,** where other calls return a second value, on every pull but a release. It returns 0 when no screen is in front.
 - **Nothing else changes in the call:** its result, its modes (`COMPOSITOR_FRAME`, `COMPOSITOR_RELEASE`) and the hold.
 - **`libmind::dev`:** `compositor_pull` and `compositor_pull_frame` return the frame state and that PID.
 - **ABI 26:** `ABI_VERSION` and the handoff step, as for every ABI change (MC-12.4). PIDs are never reused, so a PID names one task for the whole boot.

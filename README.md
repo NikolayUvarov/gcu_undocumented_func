@@ -676,7 +676,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 17 / 18 | PORT_IN / PORT_OUT | port-range handle, port; msg[1] = width 1/2/4, msg[0] = value |
 | 19 / 24 / 25 | IRQ_WAIT / IRQ_BIND / IRQ_ACK | IRQ handle (and endpoint handle for BIND) |
 | 20 | INPUT_EVENT | app byte, focus-owner byte, msg[0] = attention (Ctrl+Z), msg[1]/msg[2] = full event words (0: byte only) — input privilege |
-| 21 | COMPOSITOR_PULL | slot, mode → 0 unchanged, 1 dirty, 2 new screen in slot; in frame mode 3 while the focused task draws, and on 1 the task waits until the copy is released (000-KRN-0086) — display privilege |
+| 21 | COMPOSITOR_PULL | slot, mode → 0 unchanged, 1 dirty, 2 new screen in slot; in frame mode 3 while the focused task draws, and on 1 the task waits until the copy is released (000-KRN-0086); arg2 out: the PID whose screen is in front, 0 for none (750-KRN-0192) — display privilege |
 | 23 | IPC_REPLY | arg1 = saved reply handle or 0 for the last caller; msg = [cap handle, rights mask, data, data] |
 | 26 | MEM_PHYS | DMA handle → physical address |
 | 27 | PORT_IN_BLOCK | port-range handle, port; msg[2] = buffer, msg[3] = 16-bit words |
