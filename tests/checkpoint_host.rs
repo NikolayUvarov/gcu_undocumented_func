@@ -14,7 +14,7 @@ mod store;
 #[path = "../libmind/src/checkpoint.rs"]
 mod checkpoint;
 
-use checkpoint::{rebind, restore, save, Error, Label, Manifest, Names, Outcome, Restored, MAX};
+use checkpoint::{rebind, restore, save, Applied, Error, Label, Manifest, Names, Outcome, Restored, CLIENTS, MAX, OUTBOX};
 use cid::{Cid, Codec};
 use store::{hmac_sha256, Crypto, Device, Entry, Extent, Head, Pin, Update, BUFFER, SECTOR};
 
@@ -89,13 +89,19 @@ fn a_manifest_has_one_encoding_and_refuses_the_rest() {
     let mut long = out[..n].to_vec();
     long.push(0);
     assert_eq!(Manifest::decode(&long), Err(Error::Format));
-    for (at, value) in [(0, b'X'), (8, 2), (n - 1 - 4 - 1, 3)] {
+    for (at, value) in [(0, b'X'), (n - 1 - 4 - 1, 3)] {
         let mut bad = out[..n].to_vec();
         bad[at] = value;
         assert_eq!(Manifest::decode(&bad), Err(Error::Format), "byte {at}");
     }
+    // Another format version is refused by its number (313-STO-0026: format 1 is not read, nor converted).
+    for version in [1u16, 3] {
+        let mut bad = out[..n].to_vec();
+        bad[8..10].copy_from_slice(&version.to_le_bytes());
+        assert_eq!(Manifest::decode(&bad), Err(Error::Version(version)));
+    }
     let counts = 8 + 2 + 1 + 5 + 2 + 2 + 8 + 8 + 36;
-    for k in 0..3 {
+    for k in 0..5 {
         let mut bad = out[..n].to_vec();
         bad[counts + k] = 200;
         assert_eq!(Manifest::decode(&bad), Err(Error::Format));
@@ -215,4 +221,223 @@ fn authorities_are_checked_against_what_an_instance_holds() {
     assert_eq!(rebind(&m, |_| true).count(), 0);
     assert_eq!(rebind(&m, |a| a != "files").map(|l| l.as_str()).collect::<Vec<_>>(), vec!["files"]);
     assert_eq!(m.resources().iter().map(|l| l.as_str()).collect::<Vec<_>>(), vec!["blockstore"]);
+}
+
+
+// The state of the model services below: one count, as text.
+fn count_of(store: &mut impl checkpoint::Store, m: &Manifest) -> Result<u64, Error> {
+    let mut b = [0u8; 32];
+    let n = store.get(&m.state, &mut b)?;
+    Ok(core::str::from_utf8(&b[..n]).unwrap().parse().unwrap())
+}
+
+// A component's checkpoint restored, or a new one of contract "model" 1 at count 0.
+fn open(store: &mut impl checkpoint::Store, names: &Names, buffer: &mut [u8]) -> Result<(Manifest, u64, u64), Error> {
+    match restore(store, names, "model", 1, 1, buffer)? {
+        Restored::Found(m) => { let count = count_of(store, &m)?; Ok((m, m.epoch, count)) }
+        Restored::Fresh { epoch } => Ok((Manifest::new(Label::new("model").unwrap(), 1, 1, store.put(b"0")?), epoch, 0)),
+    }
+}
+
+// Puts the count as the state and saves the checkpoint after `from`.
+fn keep(store: &mut impl checkpoint::Store, names: &Names, m: &mut Manifest, from: u64, count: u64, buffer: &mut [u8]) -> Result<u64, Error> {
+    m.state = store.put(count.to_string().as_bytes())?;
+    m.sequence += 1;
+    save(store, names, m, from, buffer)
+}
+
+// The store with a stop: after `left` more calls, every call fails, as for an instance that ended there.
+struct Stopping<'s, S> { store: &'s mut S, left: usize }
+impl<S: checkpoint::Store> Stopping<'_, S> {
+    fn step(&mut self) -> Result<(), Error> { if self.left == 0 { return Err(Error::Store); } self.left -= 1; Ok(()) }
+}
+impl<S: checkpoint::Store> checkpoint::Store for Stopping<'_, S> {
+    fn put(&mut self, data: &[u8]) -> Result<Cid, Error> { self.step()?; self.store.put(data) }
+    fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, Error> { self.step()?; self.store.get(cid, out) }
+    fn snapshot(&mut self, names: [&str; 2]) -> Result<[(u64, Option<Cid>); 2], Error> { self.step()?; self.store.snapshot(names) }
+    fn commit(&mut self, names: [&str; 2], expected: u64, roots: [Cid; 2]) -> Result<u64, Error> { self.step()?; self.store.commit(names, expected, roots) }
+}
+
+// One request of a model service, in the protocol's order: restore, tell a repeat, apply in memory with the client's
+// record, put the state, commit, answer. None: the instance ended before it answered, or the operation is stale.
+fn serve(store: &mut impl checkpoint::Store, names: &Names, who: &str, op: u64, n: u64, buffer: &mut [u8]) -> Option<u64> {
+    let (mut m, from, count) = open(store, names, buffer).ok()?;
+    match m.applied(who, op) {
+        Applied::Repeat(answer) => return Some(answer),
+        Applied::Stale => return None,
+        Applied::New => {}
+    }
+    m.record(who, op, count + n).ok()?;
+    keep(store, names, &mut m, from, count + n, buffer).ok()?;
+    Some(count + n)
+}
+
+#[test]
+fn a_clients_operations_are_new_repeated_or_stale() {
+    let mut m = Manifest::new(Label::new("model").unwrap(), 1, 1, Cid::raw(b"0"));
+    assert_eq!(m.applied("shell", 1), Applied::New);
+    m.record("shell", 1, 10).unwrap();
+    m.sequence += 1;
+    assert_eq!((m.applied("shell", 1), m.applied("shell", 2), m.applied("other", 1)), (Applied::Repeat(10), Applied::New, Applied::New));
+    m.record("shell", 5, 50).unwrap();
+    m.sequence += 1;
+    assert_eq!((m.applied("shell", 4), m.applied("shell", 5)), (Applied::Stale, Applied::Repeat(50)));
+    // An id not above the client's last, an id 0, a label that is not one: refused, nothing recorded.
+    assert_eq!((m.record("shell", 5, 1), m.record("new", 0, 1), m.record("with space", 1, 1)), (Err(Error::Invalid), Err(Error::Invalid), Err(Error::Invalid)));
+    // CLIENTS are kept; another drops the one applied longest ago, whose next operation is then taken as new.
+    for k in 0..CLIENTS - 1 { m.record(&format!("c{k}"), 1, k as u64).unwrap(); m.sequence += 1; }
+    assert_eq!(m.clients().len(), CLIENTS);
+    m.record("late", 1, 99).unwrap();
+    assert_eq!((m.clients().len(), m.applied("shell", 5), m.applied("late", 1)), (CLIENTS, Applied::New, Applied::Repeat(99)));
+    // The table, the inbox and the outbox survive the encoding.
+    m.inbox = 77;
+    let s = m.send("peer", "hello").unwrap();
+    m.send("peer", "again").unwrap();
+    assert!(m.delivered(s) && !m.delivered(s));
+    let mut out = [0u8; MAX];
+    let n = m.encode(&mut out);
+    assert_eq!(Manifest::decode(&out[..n]), Ok(m));
+    // At most OUTBOX messages are owed: the next is refused until one is acknowledged.
+    while m.outbox().len() < OUTBOX { m.send("peer", "more").unwrap(); }
+    assert_eq!(m.send("peer", "full"), Err(Error::Invalid));
+    let n = m.encode(&mut out);
+    assert_eq!(Manifest::decode(&out[..n]), Ok(m));
+}
+
+#[test]
+fn a_manifests_clients_and_outbox_have_one_encoding() {
+    let mut m = Manifest::new(Label::new("model").unwrap(), 1, 1, Cid::raw(b"0"));
+    m.sequence = 3;
+    m.record("a", 2, 20).unwrap();
+    m.record("b", 1, 10).unwrap();
+    m.send("peer", "one").unwrap();
+    m.send("peer", "two").unwrap();
+    let mut out = [0u8; MAX];
+    let n = m.encode(&mut out);
+    // Each client: its label (1 + 1 bytes) and three u64; each message: its sequence and two labels ("peer", 3 letters).
+    let (client, message) = (2 + 3 * 8, 8 + 5 + 4);
+    let outbox = n - 2 * message;
+    let clients = outbox - 2 * client;
+    // A client twice, an operation 0, a client applied past the manifest's sequence; a message out of order or past the
+    // last sequence given: none of them a manifest this format writes.
+    let mut twice = out[..n].to_vec();
+    twice[clients + client + 1] = b'a';
+    let mut zero = out[..n].to_vec();
+    zero[clients + 2..clients + 10].fill(0);
+    let mut late = out[..n].to_vec();
+    late[clients + 2 + 16..clients + 2 + 24].copy_from_slice(&4u64.to_le_bytes());
+    let mut order = out[..n].to_vec();
+    order[outbox + message..outbox + message + 8].copy_from_slice(&1u64.to_le_bytes());
+    let mut past = out[..n].to_vec();
+    past[outbox + message..outbox + message + 8].copy_from_slice(&3u64.to_le_bytes());
+    for (what, bad) in [("twice", twice), ("zero", zero), ("late", late), ("order", order), ("past", past)] {
+        assert_eq!(Manifest::decode(&bad), Err(Error::Format), "{what}");
+    }
+    assert_eq!(Manifest::decode(&out[..n]), Ok(m));
+}
+
+#[test]
+fn a_service_stopped_anywhere_applies_each_operation_once() {
+    // A client sends operations 1 to 5, adding 10 to 50, and sends each again until it is answered. The service stops
+    // after each number of the store's calls in turn; then an answer is lost after the commit. Each operation is
+    // applied once, and every answer to it is the count just after it.
+    for stop in 0..7 {
+        let mut medium = Memory { data: vec![0; 512 * SECTOR] };
+        let mut room = Room::new();
+        let mut local = mount(&mut medium, &mut room);
+        let names = Names::of("model").unwrap();
+        let mut buffer = [0u8; MAX];
+        let mut total = 0;
+        for op in 1..=5u64 {
+            total += op * 10;
+            let first = serve(&mut Stopping { store: &mut local, left: stop }, &names, "shell", op, op * 10, &mut buffer);
+            if let Some(answer) = first { assert_eq!(answer, total, "stop {stop} op {op}"); }
+            // Sent again: applied now if it was not, or answered with the first result.
+            assert_eq!(serve(&mut local, &names, "shell", op, op * 10, &mut buffer), Some(total), "stop {stop} op {op}");
+            assert_eq!(serve(&mut local, &names, "shell", op, op * 10, &mut buffer), Some(total), "stop {stop} op {op}: lost answer");
+        }
+        let (m, _, count) = open(&mut local, &names, &mut buffer).unwrap();
+        assert_eq!((count, m.applied("shell", 5), m.applied("shell", 4)), (150, Applied::Repeat(150), Applied::Stale), "stop {stop}");
+        // A stale operation is refused, and changes nothing.
+        assert_eq!(serve(&mut local, &names, "shell", 3, 1000, &mut buffer), None);
+        assert_eq!(open(&mut local, &names, &mut buffer).unwrap().2, 150);
+    }
+}
+
+// Sends what `a` owes `b` and records each acknowledgement: `b` applies a message once, by `a`'s sequence, and
+// acknowledges a repeat. Returns how many `a` still owes; Err: an instance stopped.
+fn deliver(store: &mut impl checkpoint::Store, a: &Names, b: &Names, buffer: &mut [u8]) -> Result<usize, Error> {
+    let (mut sender, from, count) = open(store, a, buffer)?;
+    for message in sender.outbox().to_vec() {
+        let (mut receiver, rfrom, rcount) = open(store, b, buffer)?;
+        if receiver.applied("a", message.seq) == Applied::New {
+            receiver.record("a", message.seq, rcount + 1)?;
+            keep(store, b, &mut receiver, rfrom, rcount + 1, buffer)?;
+        }
+        sender.delivered(message.seq);
+    }
+    keep(store, a, &mut sender, from, count, buffer)?;
+    Ok(sender.outbox().len())
+}
+
+#[test]
+fn an_owed_message_is_sent_until_acknowledged_and_received_once() {
+    for stop in 0..14 {
+        let mut medium = Memory { data: vec![0; 512 * SECTOR] };
+        let mut room = Room::new();
+        let mut local = mount(&mut medium, &mut room);
+        let (a, b) = (Names::of("a").unwrap(), Names::of("b").unwrap());
+        let mut buffer = [0u8; MAX];
+        // `a` owes three messages, saved with its state before any is sent.
+        let (mut m, from, count) = open(&mut local, &a, &mut buffer).unwrap();
+        for what in ["one", "two", "three"] { m.send("b", what).unwrap(); }
+        keep(&mut local, &a, &mut m, from, count, &mut buffer).unwrap();
+        // The first delivery stops anywhere; delivering again until nothing is owed receives each message once.
+        let _ = deliver(&mut Stopping { store: &mut local, left: stop }, &a, &b, &mut buffer);
+        while deliver(&mut local, &a, &b, &mut buffer).unwrap() > 0 {}
+        assert_eq!(open(&mut local, &b, &mut buffer).unwrap().2, 3, "stop {stop}");
+        let (sender, ..) = open(&mut local, &a, &mut buffer).unwrap();
+        assert_eq!(sender.outbox().len(), 0);
+        // The sequence goes on from the last given: a message after these is new to `b`.
+        let mut sender = sender;
+        assert_eq!(sender.send("b", "four"), Ok(4));
+    }
+}
+
+#[test]
+fn a_save_before_the_first_request_claims_the_component() {
+    // Two instances restore the same checkpoint. The one that saves before taking a request holds the component; the
+    // other is fenced at its own first save, so it never answers a request.
+    let mut medium = Memory { data: vec![0; 256 * SECTOR] };
+    let mut room = Room::new();
+    let mut local = mount(&mut medium, &mut room);
+    let names = Names::of("model").unwrap();
+    let mut buffer = [0u8; MAX];
+    assert_eq!(serve(&mut local, &names, "shell", 1, 5, &mut buffer), Some(5));
+    let (mut old, old_from, _) = open(&mut local, &names, &mut buffer).unwrap();
+    let (mut new, new_from, _) = open(&mut local, &names, &mut buffer).unwrap();
+    let claimed = save(&mut local, &names, &mut new, new_from, &mut buffer).unwrap();
+    assert_eq!((claimed, new.sequence), (new_from + 1, 1), "a claim changes no state");
+    old.record("shell", 2, 6).unwrap();
+    assert_eq!(keep(&mut local, &names, &mut old, old_from, 6, &mut buffer), Err(Error::Fenced));
+    assert_eq!(serve(&mut local, &names, "shell", 2, 1, &mut buffer), Some(6));
+}
+
+#[test]
+fn a_checkpoint_of_format_1_is_refused_by_its_number() {
+    let mut medium = Memory { data: vec![0; 256 * SECTOR] };
+    let mut room = Room::new();
+    let mut local = mount(&mut medium, &mut room);
+    let names = Names::of("tally").unwrap();
+    let mut buffer = [0u8; MAX];
+    let mut m = manifest(&mut local, b"a=1\n");
+    save(&mut local, &names, &mut m, 0, &mut buffer).unwrap();
+    // The same manifest written as format 1 would have it, under the same names.
+    let mut old = [0u8; MAX];
+    let n = m.encode(&mut old);
+    old[8..10].copy_from_slice(&1u16.to_le_bytes());
+    let block = local.0.put(Codec::Raw, &old[..n]).unwrap();
+    let updates = [Update { name: names.manifest().as_bytes(), expected: 1, root: Some(block) }, Update { name: names.state().as_bytes(), expected: 1, root: Some(m.state) }];
+    local.0.commit(&updates, 7).unwrap();
+    assert_eq!(restore(&mut local, &names, "tally", 1, 1, &mut buffer), Err(Error::Version(1)));
 }

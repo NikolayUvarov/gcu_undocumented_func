@@ -1,8 +1,8 @@
 # Checkpoints: the contract and its protocol
 
-**Version:** 1 (2026-10-08) · **Track:** `STO`, main task [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-6.10, 6.11, 6.12, Appendix B.4
+**Version:** 2 (2026-10-30): format 2, operation IDs, the inbox and the outbox, `tally` 2 (313-STO-0026); 1 (2026-10-08) · **Track:** `STO`, main tasks [306](../../issues-done/306-checkpoints-and-rebinding.done) and [313](../../issues/313-persistent-actors.md) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-6.10, 6.11, 6.12, Appendix B.4
 
-A component that claims to save and restore its state follows a versioned checkpoint contract (MC-6.10). This document defines the checkpoint format and the protocol of `mind::checkpoint` (`libmind/src/checkpoint.rs`, format version 1), and the contract of its one user so far, the pilot program `tally`. Persistence is not assumed for any other component: no service checkpoints its state. What is implemented and tested is stated here and in the profile; anything else is plan (MC-12.3).
+A component that claims to save and restore its state follows a versioned checkpoint contract (MC-6.10). This document defines the checkpoint format and the protocol of `mind::checkpoint` (`libmind/src/checkpoint.rs`, format version 2), and the contract of its one user so far, the pilot program `tally`. Persistence is not assumed for any other component: no service checkpoints its state. What is implemented and tested is stated here and in the profile; anything else is plan (MC-12.3).
 
 ## The checkpoint
 
@@ -15,22 +15,26 @@ A checkpoint of component `c` is two objects in the block store, published under
 
 Both names change together or not at all, so the manifest always describes the state its name holds. A restore reads both names in one `snapshot` and refuses a checkpoint whose versions or roots disagree (`inconsistent`).
 
-**The manifest** (format version 1; every integer little-endian, every label one length byte and 1 to 32 printable ASCII bytes):
+**The manifest** (format version 2; every integer little-endian, every label one length byte and 1 to 32 printable ASCII bytes):
 
 | Field | Meaning |
 |---|---|
-| `MIND-CKP`, format version (u16) | another format version is refused, never read as this one |
+| `MIND-CKP`, format version (u16) | another format version is refused by its number (`version`), never read as this one; format 1 is not converted |
 | contract (label), contract version (u16) | the contract the component follows; a restorer accepts only its own |
 | schema (u16) | the state's schema version |
 | epoch (u64) | the generation of the instance that saved it: the version of the checkpoint's names it wrote |
 | sequence (u64) | the consistency point: how many requests the state includes |
 | state (CID, 36 bytes) | the state object's root |
-| counts (3 × u8) | resources (at most 8), authorities (at most 8), effects (at most 16) |
+| counts (5 × u8) | resources (at most 8), authorities (at most 8), effects (at most 16), clients (at most 16), messages owed (at most 16) |
+| inbox (u64) | how far an input queue was read: the number its source gave the last message taken |
+| sent (u64) | the last sequence given to a message, so none is given twice |
 | resources (labels) | logical names of what the state refers to: services, names. Never a handle or an address (MC-6.11) |
 | authorities (labels) | the rights the instance used, as text. Never a capability |
 | effects (id u64, outcome u8, label) | the effect journal: 0 pending, 1 done, 2 failed |
+| clients (label, operation u64, result u64, at u64) | each client's last operation applied, the result it was answered, and the sequence it was applied at |
+| outbox (sequence u64, destination label, what label) | the messages owed to others, in the order given; their bytes are in the state |
 
-A manifest decodes only if it is exactly one encoding: no bytes after the last field, counts within bounds, valid labels and outcomes.
+A manifest decodes only if it is exactly one encoding: no bytes after the last field, counts within bounds, valid labels and outcomes, each client once with an operation from 1 applied at a sequence not past the manifest's, messages in increasing order none past `sent`.
 
 ## The protocol
 
@@ -47,14 +51,24 @@ A manifest decodes only if it is exactly one encoding: no bytes after the last f
 
   If the instance ends between the two saves, the next instance finds the effect pending. Its outcome is unknown, so it must be reconciled with whoever can know it (the effect's target, an operator), and never tried again blindly (Appendix B.4). A component may refuse new effects while one is pending; `tally` does.
 - **Fencing (MC-6.12).** The checkpoint names' version is the instance's generation. A save names the epoch it restored from, and the commit is a compare-and-swap on both names. If another instance saved since, the save is refused (`fenced`) and nothing is written. The stale instance has lost the component and must stop accepting requests. Two instances can never both continue from the same checkpoint.
+- **Who is active.** An instance that takes requests one after another saves once before its first (a claim). An instance restored before that save is fenced at its own first save, so it never answers a request.
+- **Operations (format 2).** A request may carry its client's operation ID, increasing from 1.
+  - An ID above the client's last is new: applied, and recorded with its result in the same save.
+  - The ID equal to the last is a repeat: the client lost the answer. It is answered with the recorded result and not applied again.
+  - A lower ID is stale and refused.
+  - The manifest keeps the 16 clients applied most recently; another drops the one applied longest ago. A dropped client's next operation is taken as new, so repeats are told only for those 16.
+- **The inbox and the outbox (format 2).**
+  - A component that reads a numbered source keeps the number of the last message taken (`inbox`), in the save that applies it.
+  - A message to another is owed in the save that decides it (`send`), and sent after that save. It stays owed until its receiver acknowledges it (`delivered`, saved), and after a restore it is sent again.
+  - The receiver tells a repeat by the sender and the sequence, with its own clients table. So a message is applied once, and needs no reconciling, unlike an effect.
 - **Rebinding (MC-6.11).** Restore returns the recorded authorities as text. A restored instance takes its rights from its current grants: what `init` and the shell give it now, never from the checkpoint. `rebind` lists the recorded authorities the instance does not hold now. Protected actions that need them are refused or degraded, and the checkpoint cannot return a revoked right.
 - **Retention.** The checkpoint's names keep their last 4 versions, and those retain their manifests and states ([303](../../issues-done/303-retention-and-collection.done)). Recoverability is promised for the last 4 checkpoints, under the store's own durability (on the RAM disk, until the next reset). The code that reads them, `tally.elf`, is on the boot volume. Its schemas are versioned in the manifest.
 
-## The contract of `tally`, version 1
+## The contract of `tally`, version 2
 
-`tally` keeps named counters (`tally add <key> [n]`). Each run is a new instance: it restores, applies one request and saves.
+`tally` keeps named counters (`tally add <key> [n] [op <client> <id>]`). Each run is a new instance: it restores, applies one request and saves.
 
-| Item (MC-6.10) | `tally` 1 |
+| Item (MC-6.10) | `tally` 2 |
 |---|---|
 | Composition of state | Counters, at most 32 keys of at most 16 printable bytes. The object is one raw block of lines `key=count`, sorted by key (schema 1) |
 | Consistency boundary | One request (`add`, the two saves of an `effect`, `reconcile`); `sequence` counts them |
@@ -64,6 +78,8 @@ A manifest decodes only if it is exactly one encoding: no bytes after the last f
 | External effects | `effect <file>` writes `ram:<file>`. Its intent is saved first; `reconcile <id> done\|failed` settles a pending one, and no new effect begins while one is pending |
 | Verification | Restore checks the manifest's format, contract, schema and epoch against the names, and every block against its CID. `tally show` prints the epoch, sequence, counters and pending effects |
 | Fencing | A save from a stale epoch prints `FENCED` and writes nothing |
+| Repeated requests | An addition with an operation ID is applied once: sent again it prints `REPEATED <client> <id>: ANSWERED <count>, NOT APPLIED AGAIN`, and an older ID is refused. One without an ID is applied each time |
+| Format 1 | A checkpoint of format 1 is refused and named (`a checkpoint of format 1; this build reads format 2 and converts none`) |
 
 ## Evidence
 
@@ -73,13 +89,18 @@ A manifest decodes only if it is exactly one encoding: no bytes after the last f
   - a stale instance fenced;
   - another contract, contract version or schema, a state name moved alone, and a manifest that is not one, each refused;
   - effects coming back pending and reconciled, and a full journal keeping every pending effect;
-  - authorities checked against what an instance holds.
+  - authorities checked against what an instance holds;
+  - format 2 (313-STO-0026): a client's new, repeated and stale operations and the oldest client dropped; the outbox bounded; a client twice, an operation 0, a client past the sequence, a message out of order or past `sent` each refused; format 1 refused by its number, also at a restore;
+  - a model service stopped after each number of the store's calls in turn, its answer also lost after the commit: each of five operations applied once, every answer to it the count just after it, a stale one refused;
+  - three owed messages delivered with a stop after each number of calls in turn, then again until none is owed: each received once, and the next sequence above them;
+  - a save before the first request claims the component, and the instance restored before it is fenced.
 - The QEMU `store` suite (x86 and aarch64):
   - `tally` counts across instances, and the checkpoint's two names move together;
   - an instance that restored epoch 3 and stalled is fenced when another saves epoch 4;
-  - an effect cut short (its file written, its outcome not recorded) comes back pending, new effects are refused until it is reconciled, and the next effect completes.
+  - an effect cut short (its file written, its outcome not recorded) comes back pending, new effects are refused until it is reconciled, and the next effect completes;
+  - an addition sent again with the same operation is answered with its first result and not applied, also after the store restarted, and an older operation is refused.
 
 These are tests of one pilot, not a proof (MC-12.2). Not provided:
-- checkpoints of services (their inboxes, outboxes and unfinished replies: the persistent-execution profile of MC-6.10 for actors with queues);
+- a service with queues that uses format 2: the parts are in `mind::checkpoint` and checked on a model, and `tally` uses operation IDs alone. The first users are planned: the agent's sessions (260) and the messenger's client (950). A message's sending and acknowledgement are the model's, not the platform's;
 - migration of an instance to another place;
 - a test that a recorded authority the instance lacks is refused on the platform (the shell lends `tally` both rights; the refusal is host-tested).

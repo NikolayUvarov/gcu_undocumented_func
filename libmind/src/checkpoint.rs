@@ -4,26 +4,33 @@
 //! instance's generation: a save names the version it restored, so a stale instance's save is refused (fenced). The
 //! manifest lists resources by logical name and authorities as text, never as capabilities: a restored instance gets
 //! its rights from its current grants. Effects begun but not recorded come back pending, to be reconciled, not
-//! repeated. No system calls: tests/checkpoint_host.rs.
+//! repeated. Format 2 (313-STO-0026) keeps each client's last operation, so a repeated request is answered and not
+//! applied again; how far an input queue was read; and the messages owed to others, sent again until acknowledged.
+//! No system calls: tests/checkpoint_host.rs.
 use crate::cid::{self, Cid};
 
 pub const MAGIC: &[u8; 8] = b"MIND-CKP";
-/// The manifest format's version; another is refused, never read as this one.
-pub const FORMAT: u16 = 1;
+/// The manifest format's version; another is refused by its number, never read as this one.
+pub const FORMAT: u16 = 2;
 /// Bytes of a label (a contract, a resource, an authority, an effect) at most.
 pub const LABEL: usize = 32;
 pub const RESOURCES: usize = 8;
 pub const AUTHORITIES: usize = 8;
 pub const EFFECTS: usize = 16;
+pub const CLIENTS: usize = 16;
+pub const OUTBOX: usize = 16;
 /// Bytes of an encoded manifest at most.
-pub const MAX: usize = 8 + 2 + 1 + LABEL + 2 + 2 + 8 + 8 + cid::BYTES + 3 + (RESOURCES + AUTHORITIES) * (1 + LABEL) + EFFECTS * (8 + 1 + 1 + LABEL);
+pub const MAX: usize = 8 + 2 + 1 + LABEL + 2 + 2 + 8 + 8 + cid::BYTES + 5 + 8 + 8 + (RESOURCES + AUTHORITIES) * (1 + LABEL)
+    + EFFECTS * (8 + 1 + 1 + LABEL) + CLIENTS * (1 + LABEL + 8 + 8 + 8) + OUTBOX * (8 + 2 * (1 + LABEL));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     /// The store refused or failed; its own error is the caller's to keep.
     Store,
-    /// The manifest's block is not one of this format, or another format version.
+    /// The manifest's block is not one of this format.
     Format,
+    /// A manifest of another format version, the one found: not read as this one.
+    Version(u16),
     /// A checkpoint of another contract, or another version of it: not read as this one.
     Contract,
     /// A state of another schema version.
@@ -60,8 +67,24 @@ pub enum Outcome { Pending, Done, Failed }
 pub struct Effect { pub id: u64, pub what: Label, pub outcome: Outcome }
 impl Effect { pub const EMPTY: Effect = Effect { id: 0, what: Label::EMPTY, outcome: Outcome::Done }; }
 
+/// A client's last operation applied: its id, the result it was answered, and the sequence it was applied at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Client { pub who: Label, pub op: u64, pub result: u64, pub at: u64 }
+impl Client { pub const EMPTY: Client = Client { who: Label::EMPTY, op: 0, result: 0, at: 0 }; }
+
+/// What a client's operation is to the state: new, a repeat of the last one (answered with its result), or older.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Applied { New, Repeat(u64), Stale }
+
+/// A message owed to another: its sequence among this component's, where it goes and what it is (its bytes are in the
+/// state).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Message { pub seq: u64, pub to: Label, pub what: Label }
+impl Message { pub const EMPTY: Message = Message { seq: 0, to: Label::EMPTY, what: Label::EMPTY }; }
+
 /// A checkpoint's manifest: the contract it follows, the instance generation and consistency point it records, the
-/// state's root, and the resources, authorities and effects the state depends on.
+/// state's root, the resources, authorities and effects the state depends on, its clients' last operations, how far
+/// its input was read and the messages it owes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Manifest {
     pub contract: Label,
@@ -72,19 +95,31 @@ pub struct Manifest {
     /// The consistency point: requests applied to the state.
     pub sequence: u64,
     pub state: Cid,
+    /// How far an input queue was read: the number its source gave the last message taken.
+    pub inbox: u64,
+    // The last sequence a message was given, so none is given twice.
+    sent: u64,
     resources: [Label; RESOURCES],
     authorities: [Label; AUTHORITIES],
     effects: [Effect; EFFECTS],
-    counts: [u8; 3],
+    clients: [Client; CLIENTS],
+    outbox: [Message; OUTBOX],
+    counts: [u8; 5],
 }
 
 impl Manifest {
     pub fn new(contract: Label, contract_version: u16, schema: u16, state: Cid) -> Self {
-        Manifest { contract, contract_version, schema, epoch: 0, sequence: 0, state, resources: [Label::EMPTY; RESOURCES], authorities: [Label::EMPTY; AUTHORITIES], effects: [Effect::EMPTY; EFFECTS], counts: [0; 3] }
+        Manifest {
+            contract, contract_version, schema, epoch: 0, sequence: 0, state, inbox: 0, sent: 0, resources: [Label::EMPTY; RESOURCES],
+            authorities: [Label::EMPTY; AUTHORITIES], effects: [Effect::EMPTY; EFFECTS], clients: [Client::EMPTY; CLIENTS],
+            outbox: [Message::EMPTY; OUTBOX], counts: [0; 5],
+        }
     }
     pub fn resources(&self) -> &[Label] { &self.resources[..self.counts[0] as usize] }
     pub fn authorities(&self) -> &[Label] { &self.authorities[..self.counts[1] as usize] }
     pub fn effects(&self) -> &[Effect] { &self.effects[..self.counts[2] as usize] }
+    pub fn clients(&self) -> &[Client] { &self.clients[..self.counts[3] as usize] }
+    pub fn outbox(&self) -> &[Message] { &self.outbox[..self.counts[4] as usize] }
     /// Effects begun and never recorded: each must be reconciled before it is tried again (Appendix B.4).
     pub fn pending(&self) -> impl Iterator<Item = &Effect> { self.effects().iter().filter(|e| e.outcome == Outcome::Pending) }
     pub fn add_resource(&mut self, name: &str) -> Result<(), Error> {
@@ -123,6 +158,51 @@ impl Manifest {
         match self.effects[..n].iter_mut().find(|e| e.id == id) { Some(e) => { e.outcome = outcome; true } None => false }
     }
 
+    /// What operation `op` of client `who` is: new if above its last one (or the client is not kept), a repeat of the
+    /// last one with its result, or stale. Repeats are told only for the CLIENTS clients applied most recently.
+    pub fn applied(&self, who: &str, op: u64) -> Applied {
+        match self.clients().iter().find(|c| c.who.as_str() == who) {
+            Some(c) if op == c.op => Applied::Repeat(c.result),
+            Some(c) if op < c.op => Applied::Stale,
+            _ => Applied::New,
+        }
+    }
+    /// Records operation `op` of client `who` as applied at this sequence, with the result it is answered; the client
+    /// applied longest ago is dropped when CLIENTS are kept. Invalid for an id not above the client's last.
+    pub fn record(&mut self, who: &str, op: u64, result: u64) -> Result<(), Error> {
+        let label = Label::new(who).ok_or(Error::Invalid)?;
+        let n = self.counts[3] as usize;
+        let k = match self.clients[..n].iter().position(|c| c.who == label) {
+            Some(k) if op <= self.clients[k].op => return Err(Error::Invalid),
+            Some(k) => k,
+            None if op == 0 => return Err(Error::Invalid),
+            None if n < CLIENTS => { self.counts[3] += 1; n }
+            None => (0..n).min_by_key(|&k| self.clients[k].at).unwrap(),
+        };
+        self.clients[k] = Client { who: label, op, result, at: self.sequence };
+        Ok(())
+    }
+
+    /// Owes message `what` to `to`; returns its sequence, above every one given before. Invalid when OUTBOX are owed.
+    pub fn send(&mut self, to: &str, what: &str) -> Result<u64, Error> {
+        let (to, what) = (Label::new(to).ok_or(Error::Invalid)?, Label::new(what).ok_or(Error::Invalid)?);
+        let n = self.counts[4] as usize;
+        if n == OUTBOX { return Err(Error::Invalid); }
+        self.sent += 1;
+        self.outbox[n] = Message { seq: self.sent, to, what };
+        self.counts[4] += 1;
+        Ok(self.sent)
+    }
+    /// Message `seq` was acknowledged: it is owed no more. False if it was not owed.
+    pub fn delivered(&mut self, seq: u64) -> bool {
+        let n = self.counts[4] as usize;
+        let Some(k) = self.outbox[..n].iter().position(|m| m.seq == seq) else { return false };
+        self.outbox.copy_within(k + 1..n, k);
+        self.outbox[n - 1] = Message::EMPTY;
+        self.counts[4] -= 1;
+        true
+    }
+
     /// The canonical bytes; `out` holds MAX.
     pub fn encode(&self, out: &mut [u8]) -> usize {
         let mut w = Out { out, at: 0 };
@@ -135,11 +215,22 @@ impl Manifest {
         w.put(&self.sequence.to_le_bytes());
         w.put(&self.state.to_bytes());
         w.put(&self.counts);
+        w.put(&self.inbox.to_le_bytes());
+        w.put(&self.sent.to_le_bytes());
         for l in self.resources().iter().chain(self.authorities()) { w.label(l); }
         for e in self.effects() {
             w.put(&e.id.to_le_bytes());
             w.put(&[match e.outcome { Outcome::Pending => 0, Outcome::Done => 1, Outcome::Failed => 2 }]);
             w.label(&e.what);
+        }
+        for c in self.clients() {
+            w.label(&c.who);
+            for v in [c.op, c.result, c.at] { w.put(&v.to_le_bytes()); }
+        }
+        for m in self.outbox() {
+            w.put(&m.seq.to_le_bytes());
+            w.label(&m.to);
+            w.label(&m.what);
         }
         w.at
     }
@@ -147,21 +238,37 @@ impl Manifest {
     /// The manifest `bytes` encode, if they are exactly one of this format version.
     pub fn decode(bytes: &[u8]) -> Result<Manifest, Error> {
         let mut r = In { bytes, at: 0 };
-        if r.take(8)? != MAGIC || r.u16()? != FORMAT { return Err(Error::Format); }
+        if r.take(8)? != MAGIC { return Err(Error::Format); }
+        match r.u16()? { FORMAT => {} other => return Err(Error::Version(other)) }
         let contract = r.label()?;
         let (contract_version, schema, epoch, sequence) = (r.u16()?, r.u16()?, r.u64()?, r.u64()?);
         let state = Cid::from_bytes(r.take(cid::BYTES)?).map_err(|_| Error::Format)?;
         let mut m = Manifest::new(contract, contract_version, schema, state);
         (m.epoch, m.sequence) = (epoch, sequence);
-        let counts = r.take(3)?;
-        if counts[0] as usize > RESOURCES || counts[1] as usize > AUTHORITIES || counts[2] as usize > EFFECTS { return Err(Error::Format); }
+        let counts = r.take(5)?;
+        if counts[0] as usize > RESOURCES || counts[1] as usize > AUTHORITIES || counts[2] as usize > EFFECTS
+            || counts[3] as usize > CLIENTS || counts[4] as usize > OUTBOX { return Err(Error::Format); }
         m.counts.copy_from_slice(counts);
+        (m.inbox, m.sent) = (r.u64()?, r.u64()?);
         for k in 0..counts[0] as usize { m.resources[k] = r.label()?; }
         for k in 0..counts[1] as usize { m.authorities[k] = r.label()?; }
         for k in 0..counts[2] as usize {
             let id = r.u64()?;
             let outcome = match r.take(1)?[0] { 0 => Outcome::Pending, 1 => Outcome::Done, 2 => Outcome::Failed, _ => return Err(Error::Format) };
             m.effects[k] = Effect { id, what: r.label()?, outcome };
+        }
+        for k in 0..counts[3] as usize {
+            let who = r.label()?;
+            let (op, result, at) = (r.u64()?, r.u64()?, r.u64()?);
+            // Each client once, with an operation applied; at a sequence not past the manifest's.
+            if op == 0 || at > m.sequence || m.clients[..k].iter().any(|c| c.who == who) { return Err(Error::Format); }
+            m.clients[k] = Client { who, op, result, at };
+        }
+        for k in 0..counts[4] as usize {
+            let seq = r.u64()?;
+            // Owed in the order given, none past the last sequence given.
+            if seq == 0 || seq > m.sent || (k > 0 && seq <= m.outbox[k - 1].seq) { return Err(Error::Format); }
+            m.outbox[k] = Message { seq, to: r.label()?, what: r.label()? };
         }
         if r.at != bytes.len() { return Err(Error::Format); }
         Ok(m)
