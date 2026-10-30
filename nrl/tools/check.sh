@@ -88,6 +88,10 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- make-n
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-native-fixture "$nrl_check_dir/native-conformance"
 diff -r nrl/tests/fixtures/native-conformance-v0 "$nrl_check_dir/native-conformance"
 
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-native-model "$nrl_check_dir/model-base" nrl/tests/fixtures/model-v0/input.json "$nrl_check_dir/native-base.json"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-native-model "$nrl_check_dir/model-flat" nrl/tests/fixtures/model-v0/input.json "$nrl_check_dir/native-materialized.json"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-native-model "$nrl_check_dir/regression/selected-model" nrl/tests/fixtures/model-v0/plain-input.json "$nrl_check_dir/native-trained.json"
+
 if [[ "${1:-}" == "--expanded" ]]; then
     python3 nrl/tools/run_expanded_study.py --executable nrl/target/release/nrl-lab --output "$nrl_check_dir/expanded"
 fi
