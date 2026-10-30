@@ -1,7 +1,9 @@
 //! Rights of block store clients (issues 300-STO-0004, 302-STO-0001, 303-STO-0001..0004, 304-STO-0007, 300-STO-0018; Appendix B.6, MC-4.3, MC-4.7, MC-4.11): init
 //! mints each client's capability with a badge, and `blockstore` decides every request by it. No system calls:
 //! tests/blockstore_host.rs. Badges from `FIRST_DOMAIN_CLIENT` up are the clients `blockstore` mints for memory domains
-//! (308-STO-0023), each with the rights of the client that asked for it.
+//! (308-STO-0023), each with the rights of the client that asked for it. A store's recovery key in the form its owner
+//! writes down and types back (308-STO-0028).
+use crate::sha256;
 
 /// May read blocks and names (`get`, `has`, `resolve`, `history`, `snapshot`, `names`). Knowing a CID grants nothing: reading needs this right (MC-4.7).
 pub const BADGE_GET: u16 = 1;
@@ -35,3 +37,60 @@ pub fn allowed(badge: u16, operation: Operation) -> bool {
 
 /// A durability class (its number in idl/blockstore.wit's `durability`) as the log and the tools write it (307-STO-0019).
 pub fn class(durability: u8) -> &'static str { ["VOLATILE", "FLUSHED", "COPIED"].get(durability as usize).copied().unwrap_or("?") }
+
+/// Bytes of a store's recovery key (308-STO-0028).
+pub const RECOVERY_KEY: usize = 16;
+/// Bytes of its text form: 32 characters of Crockford's base32 in 8 groups of 4, joined by `-`.
+pub const RECOVERY_TEXT: usize = 39;
+// Crockford's base32: the digits and the letters but I, L, O and U.
+const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// Why a typed recovery key is not one: a mistake in typing it, told apart from a key that opens nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Typo {
+    /// A character no recovery key has (`U` among them).
+    Character,
+    /// Not 32 characters, the `-` and spaces aside.
+    Length,
+    /// The last 4 bytes are not the first 4 of the key's SHA-256.
+    Check,
+}
+
+/// A recovery key as its owner writes it down: its 16 bytes and the first 4 of their SHA-256, in Crockford's base32.
+pub fn recovery_text(key: &[u8; RECOVERY_KEY]) -> [u8; RECOVERY_TEXT] {
+    let mut bytes = [0u8; RECOVERY_KEY + 4];
+    bytes[..RECOVERY_KEY].copy_from_slice(key);
+    bytes[RECOVERY_KEY..].copy_from_slice(&sha256::digest(key)[..4]);
+    let mut text = [b'-'; RECOVERY_TEXT];
+    for k in 0..32 {
+        // The 5 bits from bit 5k on, the most significant first.
+        let bit = 5 * k;
+        let pair = (bytes[bit / 8] as u16) << 8 | bytes.get(bit / 8 + 1).copied().unwrap_or(0) as u16;
+        text[k + k / 4] = CROCKFORD[(pair >> (11 - bit % 8)) as usize & 31];
+    }
+    text
+}
+
+/// The recovery key a typed text gives: case, `-` and spaces aside, `I` and `L` read as 1 and `O` as 0.
+pub fn recovery_parse(text: &[u8]) -> Result<[u8; RECOVERY_KEY], Typo> {
+    let mut bytes = [0u8; RECOVERY_KEY + 4];
+    let mut k = 0;
+    for &c in text {
+        let symbol = match c.to_ascii_uppercase() {
+            b'-' | b' ' => continue,
+            b'I' | b'L' => 1,
+            b'O' => 0,
+            c => CROCKFORD.iter().position(|&s| s == c).ok_or(Typo::Character)? as u16,
+        };
+        if k == 32 { return Err(Typo::Length); }
+        let bit = 5 * k;
+        let pair = symbol << (11 - bit % 8);
+        bytes[bit / 8] |= (pair >> 8) as u8;
+        if let Some(b) = bytes.get_mut(bit / 8 + 1) { *b |= pair as u8; }
+        k += 1;
+    }
+    if k != 32 { return Err(Typo::Length); }
+    let key: [u8; RECOVERY_KEY] = bytes[..RECOVERY_KEY].try_into().unwrap();
+    if bytes[RECOVERY_KEY..] != sha256::digest(&key)[..4] { return Err(Typo::Check); }
+    Ok(key)
+}
