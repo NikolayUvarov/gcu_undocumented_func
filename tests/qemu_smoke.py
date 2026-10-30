@@ -2747,7 +2747,7 @@ def workers_check(vm):
 
 def nnd_check(vm):
     """262-KRN-0178: init starts the model service nnd with its endpoint, the log and read-only scopes of data/models/ and
-    of the model disk (models:, where there is one) alone; its line of data/memory.conf, read at each start, gives its
+    of the model disk (models:) alone, each where it exists, as init makes neither; its line of data/memory.conf, read at each start, gives its
     quota and up to one worker per CPU, and without one it has the default quota and no workers. The shell holds its
     client with the right to badge, which it lends for REQUEST_NN."""
     def ready(count):  # nnd's quota and most workers as its start number `count` says them
@@ -2769,18 +2769,23 @@ def nnd_check(vm):
     caps = vm.command(f"stat caps {pids['nnd']}", raw=True)
     held = {int(slot): (int(badge), named.get(servers.get(int(ep)), "?")) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
     slots = {int(slot) for slot in re.findall(r"^SLOT=(\d+) ", caps, re.M)}
-    assert slots - {2} == {1, 3, 12} and held[1][1] == "nnd" and held[12] == (0, "logd"), (held, caps)
-    for slot in {3, 2} & slots:  # read-only scopes: their badges are vfs_server's own, from 0x100
-        assert held[slot][1] == "vfs_server" and held[slot][0] >= 0x100, (slot, held)
+    assert slots - {2, 3} == {1, 12} and held[1][1] == "nnd" and held[12] == (0, "logd"), (held, caps)
     assert ready(1) == (16, 0) and quota(pids["nnd"]) == (0, 1, 16), quota(pids["nnd"])
     shell = vm.command(f"stat caps {pids['shell']}", raw=True)
     lent = re.search(r"^SLOT=41 GEN=0 KIND=1 RIGHTS=22 SIZE=0 BADGE=0 EP=(\d+)", shell, re.M)
     assert lent and servers.get(int(lent[1])) == pids["nnd"], shell
     # The owner's line, read at the restart, and again when init restarts nnd after its end.
     vm.command("mkdir data")
+    vm.command("mkdir data/models")
     require(vm.command("write data/memory.conf nnd 64"), "WROTE 7 BYTES")
     require(vm.command("svc restart nnd"), "nnd restarted: PID")
     assert ready(2) == (64, vm.cpus), ready(2)
+    caps = vm.command(f"stat caps {vm.services()['nnd']}", raw=True)
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    held = {int(slot): (int(badge), servers.get(int(ep))) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
+    for slot in {3, 2} & set(held):  # read-only scopes: their badges are vfs_server's own, from 0x100
+        assert held[slot][1] == vm.services()["vfs_server"] and held[slot][0] >= 0x100, (slot, held)
+    assert 3 in held, caps  # data/models/ exists now
     require(vm.command("dmesg -s init", raw=True), "[INIT] nnd: 64 MIB AND WORKERS BY data/memory.conf")
     require(vm.command("dmesg -s vfs_server", raw=True), ":/models (READ-ONLY)")  # each start's scope, made anew
     assert quota(vm.services()["nnd"]) == (32, 1, 64), quota(vm.services()["nnd"])  # NND_TASKS; the kernel bounds live workers by the CPUs

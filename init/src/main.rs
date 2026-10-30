@@ -398,10 +398,10 @@ impl Init {
         done
     }
 
-    // A client confined to `dir`, made if missing, writable or not (750-KRN-0120, for 800-KRN-0128 and 750-KRN-0119), asked
-    // of vfs_server through a client with `badge` that init drops at once. `dir` is on the boot volume, or names a volume
-    // whose root it stands for (`models:`, 262-KRN-0178).
-    fn scope(&mut self, badge: u16, dir: &str, writable: bool) -> Result<usize> {
+    // A client confined to `dir`, writable or not (750-KRN-0120, for 800-KRN-0128 and 750-KRN-0119), asked of vfs_server
+    // through a client with `badge` that init drops at once; `make` makes the directory if it is missing. `dir` is on the
+    // boot volume, or names a volume whose root it stands for (`models:`, 262-KRN-0178).
+    fn scope(&mut self, badge: u16, dir: &str, writable: bool, make: bool) -> Result<usize> {
         let keeper = self.keeper("vfs_server")?;
         let client = ipc::mint_badged(keeper, CLIENT, badge)?;
         let files = Endpoint(client);
@@ -409,7 +409,7 @@ impl Init {
             let (volume, path) = mind::fs::split(dir);
             let root = vfs::root(files, volume)?.map_err(|_| Error::NotFound)?;
             let dir = if path.is_empty() { Ok(Ok(root)) } else {
-                let dir = vfs::open_dir(files, root, path, true);
+                let dir = vfs::open_dir(files, root, path, make);
                 let _ = vfs::close(files, root);
                 dir
             };
@@ -980,9 +980,9 @@ impl Init {
             if let Err(error) = self.make_dir(badge, dir) { mind::println!("[INIT] {}: {} NOT MADE ({:?})", name, dir, error); }
         }
         let (mut scopes, mut taken) = ([0usize; 3], 0);
-        for &(child, badge, dir, writable) in scopes_of(name) {
+        for &(child, badge, dir, writable, make) in scopes_of(name) {
             if grants.count >= SPAWN_GRANTS_MAX { break; }
-            match self.scope(badge, dir, writable) {
+            match self.scope(badge, dir, writable, make) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(child, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
             }
@@ -990,7 +990,7 @@ impl Init {
         // In developer mode link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file
         // goes over the cable, not by writing the disk again (800-KRN-0173, for 800-LNK-0027). The user's badge writes there.
         if name == "link" && self.link_dev() && grants.count < SPAWN_GRANTS_MAX {
-            match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true) {
+            match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true, true) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, FIRMWARE_DIR, error),
             }
@@ -1000,7 +1000,7 @@ impl Init {
         if let Some(policy) = (name == "effector_gw" && grants.count < SPAWN_GRANTS_MAX).then(|| self.effector_policy()).flatten() {
             if let Some(root) = policy.deliver() {
                 let dir = root.trim_end_matches('/');
-                match self.scope(mind::fs::BADGE_USER, dir, true) {
+                match self.scope(mind::fs::BADGE_USER, dir, true, true) {
                     Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                     Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
                 }
@@ -1010,7 +1010,7 @@ impl Init {
         // (750-KRN-0169); the loader checks what it finds there before a run.
         if name == "effector_gw" && grants.count < SPAWN_GRANTS_MAX {
             if let Err(error) = self.make_dir(mind::fs::BADGE_USER, mind::effector::APPS_DIR) { mind::println!("[INIT] {}: {} NOT MADE ({:?})", name, mind::effector::APPS_DIR, error); }
-            match self.scope(mind::fs::BADGE_USER, mind::effector::APPS_DIR, true) {
+            match self.scope(mind::fs::BADGE_USER, mind::effector::APPS_DIR, true, true) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_APPS, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, mind::effector::APPS_DIR, error),
             }
@@ -1629,13 +1629,14 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
 // The directories a service gets confined clients of at each start (750-KRN-0120): its slot, the badge init asks with,
-// the directory on the boot volume (made if missing) and whether it may write there.
-fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool)] {
+// the directory, whether it may write there and whether init makes it if it is missing.
+fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
     match name {
-        "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true)],
-        "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false)],
-        // The models nnd reads, and nothing else of the volumes (262-KRN-0178): each scope's root is its directory.
-        "nnd" => &[(SLOT_VFS, mind::fs::BADGE_USER, NN_MODELS_DIR, false), (NND_MODELS, mind::fs::BADGE_USER, "models:", false)],
+        "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true, true)],
+        "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false, true)],
+        // The models nnd reads, and nothing else of the volumes (262-KRN-0178): each scope's root is its directory. Neither
+        // is made: a boot writes nothing to the boot volume for nnd, whose scope waits for the owner's data/models/.
+        "nnd" => &[(SLOT_VFS, mind::fs::BADGE_USER, NN_MODELS_DIR, false, false), (NND_MODELS, mind::fs::BADGE_USER, "models:", false, false)],
         _ => &[],
     }
 }

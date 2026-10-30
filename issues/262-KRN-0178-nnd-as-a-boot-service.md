@@ -54,11 +54,16 @@
   - `SLOT_NN` 41, in `LAUNCH_SLOTS`, moves `SLOT_DYNAMIC` to 42, and `CAP_SLOTS` grows to 106;
   - `REQUEST_NN` (`1 << 27`) in `mind::process`.
 - **`init`** (`init/src/main.rs`):
-  - `nnd` holds its endpoint, the log and two read-only scopes, made at each start:
+  - `nnd` holds its endpoint, the log and two read-only scopes, made at each start where each exists:
     - `data/models/` in `SLOT_VFS`;
-    - the model disk's root, `models:`, in slot 2, where there is a model disk.
+    - the model disk's root, `models:`, in slot 2.
 
     No network, device or lifecycle client.
+  - **`init` makes neither directory.** At first it made `data/models/` at each boot, and the first run on the machines failed twice:
+    - a boot test found the FAT's dirty bit set on its volume, x86 and aarch64;
+    - `fm`'s listing of `/` began with the new `data`.
+
+    So a boot writes nothing to the boot volume for `nnd`, and its `SLOT_VFS` scope comes once the owner makes `data/models/`.
   - At each start and restart `init` reads `nnd`'s line of `data/memory.conf` (`mind::memconf`, which the loader now reads through too). With a line, `nnd` gets:
     - its MiB as its quota;
     - the argument `--memory <MiB>`;
