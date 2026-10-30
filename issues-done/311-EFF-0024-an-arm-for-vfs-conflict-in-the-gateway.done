@@ -1,0 +1,34 @@
+# 311-EFF-0024 — An arm in `effector_gw` for `vfs.wit` 2.6's error `conflict` — done
+
+**Type:** service · **Owner:** `EFF` · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) (STO's), for [311-KRN-0189](../issues/311-KRN-0189-a-conflict-error-in-vfs-wit.md) · **Constitution:** MC-12.4
+
+**Asked by:** the kernel track (`KRN`) in `issues/requests-EFF.md`, 2026-10-30, "An arm for `vfs.wit` 2.6's error `conflict` in `effector_gw`", and in its message `EFF/2026-10-30T1116Z-KRN-update-wit-1-3-is-in-main.md`.
+
+## Problem
+
+- `vfs.wit` 2.6 (311-KRN-0189) appends an error `conflict`: a write or `flush` refused because another writer published the file first. `vfs_server` never answers it; STO's `storefs` will.
+- `effector_gw/src/main.rs` `vfs_fail` matches `vfs::Error` exhaustively, so the gateway would not build against 2.6, and 0189 could not land.
+
+## Plan
+
+- A last arm in `vfs_fail`, `#[allow(unreachable_patterns)] _ => Fail::Io`, as KRN proposed: it builds against 2.5 and 2.6 alike.
+- **Why `io`:** the gateway's write failed. `exists` would tell the server that the name is taken, which is not what happened.
+- No change to `effector.wit` or to what the server is told.
+
+## Acceptance criteria
+
+- [x] `effector_gw` builds for x86 and aarch64 against `vfs.wit` 2.5, without warnings.
+- [x] It builds against a `vfs.wit` with `conflict` appended (checked locally, with `libmind`'s own arm added, as 0189 will).
+- [x] The CI group "x86: network, TLS and Effector" passes.
+
+## Resolution
+
+- **`effector_gw/src/main.rs` `vfs_fail`:** a last arm `#[allow(unreachable_patterns)] _ => Fail::Io`, with a line saying why.
+- **Builds:** x86 and aarch64 against `vfs.wit` 2.5, without warnings.
+- **Against 2.6:** `conflict` appended to a local `vfs.wit`, regenerated with `scripts/mind_idl.py`, and `libmind`'s `fs.rs` given an arm as 0189 will. `effector_gw` built without warnings; nothing of that was committed.
+- **CI group "x86: network, TLS and Effector"** passed in 835 s through `scripts/ci_local.sh` on LEG9 (WSL2, Ubuntu 24.04): every `effector` check.
+- **Request taken** from `requests-EFF.md`.
+
+## Related
+
+[311-KRN-0189](../issues/311-KRN-0189-a-conflict-error-in-vfs-wit.md), [requests-EFF.md](../issues/requests-EFF.md).
