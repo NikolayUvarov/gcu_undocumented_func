@@ -182,7 +182,9 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [309](309-copies-scrub-and-repair.md) | Copies, scrub and repair | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
 | [311](311-storefs-a-file-face.md) | A file face: trees as objects, and `storefs`, a VFS view of a named root | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
+| [309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.md) | A copy of named roots in a file (CAR v1): export, import, and repair from it | `STO` | P2 | — | track B |
 | [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md) | A working tree published by compare-and-swap: edits in memory, a new root under a name; `blocks tree` | `STO` | P2 | — | track B |
+| [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md) | `storefs`: files and directories of a named root through `vfs.wit`, each flush a publication by compare-and-swap | `STO` | P2 | [requests-KRN.md](requests-KRN.md) (`storefs`) | track B |
 | [311-KRN-0189](311-KRN-0189-a-conflict-error-in-vfs-wit.md) | `vfs.wit` 2.6: an error `conflict`, for a write another writer published before (for `storefs`) | `KRN` | P2 | an arm in the shell (APP) and `effector_gw` (EFF) | track B |
 | [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.md) | `storefs` at boot, a client of it beside `vfs_server`'s, and `mind::fs` routing by volume | `KRN` | P2 | `storefs` building as a boot program (STO) | track B |
 | [312](312-the-minds-memory.md) | The Mind's memory: a journal, assertions and derived indexes | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (no personal data before it) | track B |

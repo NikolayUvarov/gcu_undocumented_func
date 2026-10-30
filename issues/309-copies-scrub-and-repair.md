@@ -21,6 +21,7 @@ One copy on one medium: a damaged block is found when it is read (300-STO-0005) 
 ## Tasks
 
 - [309-STO-0025](../issues-done/309-STO-0025-scrub.done): the scrub, which needs no second medium and does not wait for 307. Done 2026-10-29.
+- [309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.md): a copy of named roots in a file (CAR v1), imported back and repairing damaged blocks; needs no second medium.
 
 ## Acceptance criteria
 

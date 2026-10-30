@@ -35,13 +35,15 @@ impl Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry<'a> { pub name: &'a [u8], pub kind: Kind, pub size: u64, pub cid: Cid }
 
+/// Whether `name` may name an entry: 1 to NAME_MAX bytes of UTF-8 without `/` or NUL, neither `.` nor `..`.
+pub fn valid_name(name: &[u8]) -> bool {
+    (1..=NAME_MAX).contains(&name.len()) && core::str::from_utf8(name).is_ok() && !name.iter().any(|&b| b == b'/' || b == 0)
+        && name != b"." && name != b".."
+}
+
 impl Entry<'_> {
-    // A name of 1 to NAME_MAX bytes of UTF-8 without `/` or NUL, not `.` or `..`; a directory linked as `dag-cbor`.
-    fn valid(&self) -> bool {
-        let name = self.name;
-        (1..=NAME_MAX).contains(&name.len()) && core::str::from_utf8(name).is_ok() && !name.iter().any(|&b| b == b'/' || b == 0)
-            && name != b"." && name != b".." && (self.kind == Kind::File || self.cid.codec() == Codec::DagCbor)
-    }
+    // A valid name; a directory linked as `dag-cbor`.
+    fn valid(&self) -> bool { valid_name(self.name) && (self.kind == Kind::File || self.cid.codec() == Codec::DagCbor) }
 }
 
 // Counts the bytes of an encoding, so a directory over a block is refused before anything is written.
@@ -52,13 +54,16 @@ impl Sink for Count {
 
 /// Encodes a directory of `entries`, sorted by name with each name once, into `out`; returns its length. Entries that
 /// make no valid directory are refused (Format), and so is a directory over a block (TooLarge).
-pub fn encode(entries: &[Entry], out: &mut [u8; CHUNK]) -> Result<usize, Error> {
-    if !entries.iter().all(Entry::valid) || entries.windows(2).any(|w| w[0].name >= w[1].name) { return Err(Error::Format); }
-    let mut count = Count(0);
-    encode_with(entries.len(), |k| entries[k], &mut count);
-    if count.0 > CHUNK { return Err(Error::TooLarge); }
+pub fn encode(entries: &[Entry], out: &mut [u8; CHUNK]) -> Result<usize, Error> { encode_each(entries.len(), |k| entries[k], out) }
+
+/// As `encode`, the `count` entries given one by one, so no array of them is built (`worktree` reads them from a node).
+pub(crate) fn encode_each<'a>(count: usize, entry: impl Fn(usize) -> Entry<'a>, out: &mut [u8; CHUNK]) -> Result<usize, Error> {
+    if !(0..count).all(|k| entry(k).valid()) || (1..count).any(|k| entry(k - 1).name >= entry(k).name) { return Err(Error::Format); }
+    let mut n = Count(0);
+    encode_with(count, &entry, &mut n);
+    if n.0 > CHUNK { return Err(Error::TooLarge); }
     let mut o = Out { bytes: out, at: 0 };
-    encode_with(entries.len(), |k| entries[k], &mut o);
+    encode_with(count, &entry, &mut o);
     Ok(o.at)
 }
 
@@ -99,6 +104,8 @@ impl<'a> Dir<'a> {
     pub fn len(&self) -> usize { self.count }
     pub fn is_empty(&self) -> bool { self.count == 0 }
     pub fn entry(&self, i: usize) -> Entry<'a> { self.at(self.starts[i]) }
+    /// The node's bytes.
+    pub(crate) fn bytes(&self) -> &'a [u8] { self.bytes }
 
     /// The entry named `name`, by a binary search of the sorted names.
     pub fn find(&self, name: &[u8]) -> Option<Entry<'a>> {

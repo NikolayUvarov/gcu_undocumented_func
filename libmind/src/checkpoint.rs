@@ -6,6 +6,8 @@
 //! its rights from its current grants. Effects begun but not recorded come back pending, to be reconciled, not
 //! repeated. Format 2 (313-STO-0026) keeps each client's last operation, so a repeated request is answered and not
 //! applied again; how far an input queue was read; and the messages owed to others, sent again until acknowledged.
+//! Between components (313-STO-0030) the receiver reads the sender's checkpoint and applies what it owes once, the
+//! sender its client; the sender clears what the receiver's checkpoint shows applied. Each writes only its own.
 //! No system calls: tests/checkpoint_host.rs.
 use crate::cid::{self, Cid};
 
@@ -31,10 +33,10 @@ pub enum Error {
     Format,
     /// A manifest of another format version, the one found: not read as this one.
     Version(u16),
-    /// A checkpoint of another contract, or another version of it: not read as this one.
-    Contract,
-    /// A state of another schema version.
-    Schema,
+    /// A checkpoint of another contract, or another version of it, the version found: not read as this one.
+    Contract(u16),
+    /// A state of another schema version, the one found.
+    Schema(u16),
     /// The manifest and the state's name disagree (version or root): not restored.
     Inconsistent,
     /// Another instance saved since this one restored: it no longer holds the component (MC-6.12).
@@ -202,6 +204,34 @@ impl Manifest {
         self.counts[4] -= 1;
         true
     }
+    /// The messages owed to `to`, in sequence order.
+    pub fn owed<'m>(&'m self, to: &'m str) -> impl Iterator<Item = &'m Message> + 'm { self.outbox().iter().filter(move |m| m.to.as_str() == to) }
+
+    /// Applies the messages `sender` (its last checkpoint) owes `me`, this component, that it has not applied, in
+    /// sequence order: `from` is the sender as a client, each sequence its operation, so one applied before is not
+    /// applied again. `apply` gives each one's result to record; its error stops the rest. Returns how many it applied.
+    pub fn receive(&mut self, me: &str, from: &str, sender: &Manifest, mut apply: impl FnMut(&Message) -> Result<u64, Error>) -> Result<usize, Error> {
+        let mut applied = 0;
+        for m in sender.owed(me) {
+            if self.applied(from, m.seq) != Applied::New { continue; }
+            let result = apply(m)?;
+            self.record(from, m.seq, result)?;
+            applied += 1;
+        }
+        Ok(applied)
+    }
+    /// Clears the messages owed to `to` that `receiver`, its last checkpoint, shows applied: those up to the last
+    /// operation its clients table holds for `me`, this component. `each` sees each one; returns how many.
+    pub fn acknowledge(&mut self, me: &str, to: &str, receiver: &Manifest, mut each: impl FnMut(&Message)) -> usize {
+        let Some(last) = receiver.clients().iter().find(|c| c.who.as_str() == me).map(|c| c.op) else { return 0 };
+        let mut cleared = 0;
+        loop {
+            let Some(m) = self.owed(to).find(|m| m.seq <= last).copied() else { return cleared };
+            each(&m);
+            self.delivered(m.seq);
+            cleared += 1;
+        }
+    }
 
     /// The canonical bytes; `out` holds MAX.
     pub fn encode(&self, out: &mut [u8]) -> usize {
@@ -341,10 +371,17 @@ pub fn restore(store: &mut impl Store, names: &Names, contract: &str, version: u
     };
     let n = store.get(&manifest, &mut buffer[..MAX])?;
     let m = Manifest::decode(&buffer[..n])?;
-    if m.contract.as_str() != contract || m.contract_version != version { return Err(Error::Contract); }
-    if m.schema != schema { return Err(Error::Schema); }
+    if m.contract.as_str() != contract || m.contract_version != version { return Err(Error::Contract(m.contract_version)); }
+    if m.schema != schema { return Err(Error::Schema(m.schema)); }
     if m.state != state || m.epoch != mv { return Err(Error::Inconsistent); }
     Ok(Restored::Found(m))
+}
+
+/// Another component's last checkpoint, read and not restored: its manifest, checked as `restore` checks it, and its
+/// state's bytes in `state` (their length). None if it has none. Nothing is written, so its owner is never fenced.
+pub fn read(store: &mut impl Store, names: &Names, contract: &str, version: u16, schema: u16, buffer: &mut [u8], state: &mut [u8]) -> Result<Option<(Manifest, usize)>, Error> {
+    let Restored::Found(m) = restore(store, names, contract, version, schema, buffer)? else { return Ok(None) };
+    Ok(Some((m, store.get(&m.state, state)?)))
 }
 
 /// Saves `manifest` (its state's object already stored) as the next checkpoint after the one restored at epoch
