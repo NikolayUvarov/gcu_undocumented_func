@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM, SLOT_SERVICE};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 
+mod level;
 mod radio;
 mod serve;
 mod stage3;
