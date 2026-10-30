@@ -225,6 +225,10 @@ pub const REQUEST_NET_COUNTERS: u32 = 8388608; // a network card's read-only cli
 pub const REQUEST_SSH: u32 = 16777216; // the SSH service's client in SLOT_SSH, with a flow grant (351-KRN-0115, for 351-NET-0027)
 pub const REQUEST_OWN: u32 = 33554432; // its own directory, system/own/<name>/, in SLOT_OWN: from the loader itself, by its name (000-KRN-0170)
 pub const REQUEST_SECRETS: u32 = 67108864; // its own secrets' client of keystore in SLOT_SECRETS: from the loader itself, by its name (000-KRN-0182)
+pub const REQUEST_NN: u32 = 134217728; // the model service's client in SLOT_NN, badged for this start by the shell (262-KRN-0178, for 262-APP-0112)
+/// The badge of the updater's client init gives the Effector gateway (update.wit 1.2, 751-KRN-0185): `fetch`, `apply`
+/// and `rollback` only while init's `remote-update` counts, which the updater asks at each.
+pub const BADGE_UPDATE_GATEWAY: u16 = 1;
 // The badge of a loader client that may only list, inspect and start helpers (loader.wit 1.10, 109-KRN-0117): the updater's.
 pub const BADGE_HELPERS_ONLY: u16 = 1;
 

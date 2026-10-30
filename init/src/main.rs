@@ -32,11 +32,13 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
     "RTL8821CE BAR2 initially non-mastering; 1 MiB DMA below 4 GiB; read-only VFS for its firmware; a wlanhw endpoint for wlan; polled, no interrupt",
+    "a USB client for Bluetooth controllers; read-only VFS for its patch",
     "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
     "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
-    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
+    "observe privilege", "read-only scopes of data/models/ and models:; its quota and workers by its line of data/memory.conf, read at each start",
+    "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
     "screen; process control; input; the serial line"];
@@ -75,6 +77,11 @@ const FIRMWARE_DIR: &str = "data/firmware"; // the drivers' proprietary files; l
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
 const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
+const NND_MODELS: usize = 2; // nnd: a read-only scope of the model disk, models: (262-KRN-0178)
+const NN_MODELS_DIR: &str = "data/models"; // the owner's models on the boot volume, nnd's SLOT_VFS scope (262-KRN-0178)
+// nnd's task quota with its line: a ceiling on its live workers, which the kernel bounds by the online CPUs too; init
+// starts before the other CPUs and cannot count them (262-KRN-0178).
+const NND_TASKS: u16 = 32;
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -130,7 +137,11 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // What a service runs in place of its boot image until the next boot, in developer mode (800-KRN-0144): a
               // memory object init holds unmapped, and the image's length.
               replaced: [Option<(usize, usize)>; UNITS],
-              placed: [Placed; UNITS], configuration: idl_init::Configuration }
+              placed: [Placed; UNITS], configuration: idl_init::Configuration,
+              // The client of nnd init keeps, whose copies the shell holds and lends, revoked before each new shell (262-KRN-0178).
+              shell_nn: Option<usize>,
+              // Whether this boot's slot was signed with the public test key, which anyone can sign with (751-KRN-0185).
+              test_key: bool }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -254,7 +265,7 @@ impl Init {
 
     fn wired_cards(&self) -> [Option<&'static str>; 2] {
         let mut result = [None; 2]; let mut count = 0;
-        for name in ["virtio_net", "virtio_net#1", "rtl8168"] {
+        for name in ["virtio_net", "virtio_net#1", "rtl8168", "rtl8168#1"] {
             if self.plans[Self::index(name).unwrap()].is_some() && count < result.len() { result[count] = Some(name); count += 1; }
         }
         result
@@ -286,7 +297,7 @@ impl Init {
         if let Some(plan) = self.plans[index] {
             // A restart, or a start a safe start prepared: the device was stopped; the same capabilities are granted.
             if let Some(device) = self.devices[index] {
-                if matches!(name, "rtl8168" | "rtw89_wifi" | "rtw88_wifi") {
+                if matches!(services::base(name), "rtl8168" | "rtw89_wifi" | "rtw88_wifi") {
                     platform::registers_only(device)?;
                 } else { platform::resume(device)?; }
             }
@@ -332,16 +343,76 @@ impl Init {
         made
     }
 
-    // A client confined to `dir` on the boot volume, made if missing, writable or not (750-KRN-0120, for 800-KRN-0128
-    // and 750-KRN-0119), asked of vfs_server through a client with `badge` that init drops at once.
-    fn scope(&mut self, badge: u16, dir: &str, writable: bool) -> Result<usize> {
+    // The client of nnd init keeps for the shell, with the right to badge: the shell holds a copy, so that revoking this
+    // one's descendants ends every client an old shell minted (262-KRN-0178).
+    fn shell_nn(&mut self) -> Result<usize> {
+        if let Some(slot) = self.shell_nn { return Ok(slot); }
+        let slot = ipc::mint(self.keeper("nnd")?, CLIENT | CAP_BADGE, 0, 0)?;
+        self.shell_nn = Some(slot);
+        Ok(slot)
+    }
+
+    // nnd's line of data/memory.conf, read at each start as the loader reads a program's (262-KRN-0178): its MiB as its
+    // quota and its argument `--memory`, and the right to start workers, at most NND_TASKS live; without a line the
+    // default quota and none.
+    fn nnd_memory(&mut self, mut plan: Plan) -> Plan {
+        let mut text = [0u8; mind::memconf::MAX];
+        let length = self.read_boot_file(mind::memconf::FILE, &mut text);
+        let line = core::str::from_utf8(&text[..length]).ok().and_then(|text| mind::memconf::mib(text, "nnd"));
+        let mut args = mind::util::FixedBuf::<ARGS_KEPT>::new();
+        match line {
+            Some(mib) => {
+                let mib = if mib == 0 { (HEAP_MAX_BYTES >> 20) as u16 } else { mib };
+                plan.flags |= SPAWN_WORKERS;
+                plan.quota = Quota { tasks: NND_TASKS, endpoints: 1, memory_mib: mib };
+                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("--memory {}", mib));
+                mind::println!("[INIT] nnd: {} MIB AND WORKERS BY {}", mib, mind::memconf::FILE);
+            }
+            None => {
+                plan.flags &= !SPAWN_WORKERS;
+                plan.quota = Quota { endpoints: 1, ..Quota::default() };
+                mind::println!("[INIT] nnd: NO LINE IN {}: {} MIB, NO WORKERS", mind::memconf::FILE, HEAP_MAX_BYTES >> 20);
+            }
+        }
+        plan.args = ([0; ARGS_KEPT], args.as_str().len());
+        plan.args.0[..plan.args.1].copy_from_slice(args.as_str().as_bytes());
+        plan
+    }
+
+    // A file of the boot volume read into `text` through a reader's client of init's own; 0 bytes when it is absent.
+    fn read_boot_file(&mut self, path: &str, text: &mut [u8]) -> usize {
+        let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_READER).map_err(Into::into)) else { return 0 };
+        let files = Endpoint(client);
+        let mut done = 0;
+        if let Ok(Ok(root)) = vfs::root(files, "") {
+            if let Ok(Ok(file)) = vfs::open(files, root, path, 0) {
+                while done < text.len() {
+                    let want = (text.len() - done).min(mind::fs::CHUNK);
+                    match vfs::read(files, file, done as u32, want as u32, &mut text[done..done + want]) { Ok(Ok(got)) if got > 0 => done += got, _ => break }
+                }
+                let _ = vfs::close(files, file);
+            }
+            let _ = vfs::close(files, root);
+        }
+        let _ = ipc::drop_cap(client);
+        done
+    }
+
+    // A client confined to `dir`, writable or not (750-KRN-0120, for 800-KRN-0128 and 750-KRN-0119), asked of vfs_server
+    // through a client with `badge` that init drops at once; `make` makes the directory if it is missing. `dir` is on the
+    // boot volume, or names a volume whose root it stands for (`models:`, 262-KRN-0178).
+    fn scope(&mut self, badge: u16, dir: &str, writable: bool, make: bool) -> Result<usize> {
         let keeper = self.keeper("vfs_server")?;
         let client = ipc::mint_badged(keeper, CLIENT, badge)?;
         let files = Endpoint(client);
         let scoped = (|| -> Result<usize> {
-            let root = vfs::root(files, "")?.map_err(|_| Error::NotFound)?;
-            let dir = vfs::open_dir(files, root, dir, true);
-            let _ = vfs::close(files, root);
+            let (volume, path) = mind::fs::split(dir);
+            let root = vfs::root(files, volume)?.map_err(|_| Error::NotFound)?;
+            let dir = if path.is_empty() { Ok(Ok(root)) } else {
+                let dir = vfs::open_dir(files, root, path, make);
+                let _ = vfs::close(files, root);
+                dir
+            };
             let dir = dir?.map_err(|_| Error::NotFound)?;
             let made = vfs::scope(files, dir, writable, RECEIVED);
             let _ = vfs::close(files, dir);
@@ -483,14 +554,16 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, VIRTIO_BLK_DMA_BYTES)?, 0);
             }
             "rtl8168" | "rtw89_wifi" => {
-                let (id, class) = if name == "rtl8168" { (0x8168_10EC, 0x02_00_00) } else { (0xB852_10EC, 0x02_80_00) };
-                let device = platform::find_device_id(class, 0xFF_FF_00, id, 0)?;
+                // The instance's RTL8168 in PCI order: rtl8168#1 drives the DEXP's second port (211-KRN-0187).
+                let wired = BOOT_SERVICES[image] == "rtl8168";
+                let (id, class) = if wired { (0x8168_10EC, 0x02_00_00) } else { (0xB852_10EC, 0x02_80_00) };
+                let device = platform::find_device_id(class, 0xFF_FF_00, id, instance)?;
                 self.devices[index] = Some(device);
                 let registers = minted.mint(PLATFORM_DEVICE_BAR_IDLE, device, 2)?;
                 if cap_info(registers).0 != CAP_KIND_MMIO { return Err(Error::NotFound); }
                 grants.add(SLOT_DEV0, registers, 0);
                 let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", device));
-                if name == "rtl8168" {
+                if wired {
                     grants.copy(SLOT_MEM, self.dma(index, RTL8168_DMA_BYTES)?, 0);
                     if let Ok(irq) = minted.mint(PLATFORM_DEVICE_MSI, device, 0) { grants.add(SLOT_IRQ, irq, 0); }
                     grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL | CAP_BADGE);
@@ -515,6 +588,14 @@ impl Init {
                 if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
                 // Its idl/wlanhw.wit endpoint, whose client goes to wlan alone.
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+            }
+            // A USB Bluetooth controller's HCI driver (700-KRN-0176, for 700-BLT-0001): usb_host's client badged for the
+            // wireless controller interface alone, as usb_serial's is for converters, and a reader for its patch.
+            "bt_hci" => {
+                if !self.running(service_index("usb_host")) { return Err(Error::NotFound); }
+                grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", mind::usb::BADGE_BLUETOOTH)?, CLIENT);
+                // A reader's client of vfs_server for the controller's patch and configuration in data/firmware/rtl_bt/.
+                if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
             }
             "bcm_wifi" => {
                 // The MacBook Pro's Broadcom BCM4331 (14E4:4331), or a Broadcom network controller of class 02:80:00: BAR0 only (550-KRN-0059).
@@ -663,6 +744,10 @@ impl Init {
             }
             // The parser service holds its endpoint and the log only: it parses outside bytes for others (109-NET-0008).
             "parse" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "parse")?, ALL); }
+            // The model service (262-KRN-0178, docs/nn/runtime.md): its endpoint and the log; read-only scopes of the models
+            // (`scopes_of`); its quota and workers by data/memory.conf at each start (`nnd_memory`). No network, device or
+            // lifecycle client.
+            "nnd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "nnd")?, ALL); }
             // The TPM service alone holds the TPM's registers (351-KRN-0043); without a TPM it runs and says so.
             "tpm" => {
                 if let Ok(slot) = minted.mint(PLATFORM_MMIO, PLATFORM_TPM, 0) { grants.add(SLOT_DEV0, slot, 0); }
@@ -721,6 +806,9 @@ impl Init {
                 // The screen, badged so that the gateway lights the Effector agent's mark too (800-KRN-0156).
                 grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_REMOTE_EFFECTOR)?, CLIENT);
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NAMED)?, CLIENT);
+                // The updater's client badged for the gateway (751-KRN-0185, 750-UPD-0020): it may stage and activate a
+                // release only while init's remote-update counts, which the updater asks at each such request.
+                if self.present("updater") { grants.add(SLOT_UPDATE, self.badged(&mut minted, "updater", mind::process::BADGE_UPDATE_GATEWAY)?, CLIENT); }
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
             // The Effector agent's session, only in a mode: the clock, the flow the policy gives program `effector`, TLS
@@ -812,6 +900,9 @@ impl Init {
                 // shell's own `update` command and no program (351-KRN-0116).
                 if self.present("ssh") { grants.copy(SLOT_SSH, self.keeper("ssh")?, CLIENT | CAP_BADGE); }
                 if self.present("updater") { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
+                // The model service's, with the right to badge, lent for REQUEST_NN with a badge for each start: a copy of the
+                // client init keeps, revoked before a new shell starts (262-KRN-0178).
+                if self.present("nnd") { grants.copy(SLOT_NN, self.shell_nn()?, CLIENT | CAP_BADGE); }
                 // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
                 grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
                 // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148).
@@ -843,6 +934,8 @@ impl Init {
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
             // The endpoint a check's parser serves (109-KRN-0117).
             "updater" => Quota { endpoints: 1, ..Quota::default() },
+            // The endpoint of nnd's probe for workers; its memory and workers come with its line of data/memory.conf.
+            "nnd" => Quota { endpoints: 1, ..Quota::default() },
             // The endpoint where the programs link starts send their output (800-LNK-0009, 800-KRN-0137).
             "link" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
@@ -864,6 +957,14 @@ impl Init {
 
     fn spawn(&mut self, index: usize, plan: Plan) -> Result<u64> {
         let name = unit_name(index);
+        let plan = if name == "nnd" { self.nnd_memory(plan) } else { plan };
+        // A new shell starts with no client of nnd the old one minted or lent: every copy of the kept one goes (262-KRN-0178).
+        if let Some(kept) = self.shell_nn.filter(|_| name == "shell" && self.starts[index] > 0) {
+            match ipc::revoke(kept) {
+                Ok(removed) => mind::println!("[INIT] shell: {} CLIENTS OF nnd THE OLD SHELL HELD OR LENT REVOKED", removed),
+                Err(error) => mind::println!("[INIT] shell: THE OLD SHELL'S CLIENTS OF nnd NOT REVOKED ({:?})", error),
+            }
+        }
         let mut grants = plan.grants; let mut receiver = None;
         // The shell serves its commands in SLOT_COMMANDS: its slot 1 is its client of init (800-KRN-0148).
         let serves = if name == "shell" { SLOT_COMMANDS } else { SLOT_SERVICE };
@@ -879,9 +980,9 @@ impl Init {
             if let Err(error) = self.make_dir(badge, dir) { mind::println!("[INIT] {}: {} NOT MADE ({:?})", name, dir, error); }
         }
         let (mut scopes, mut taken) = ([0usize; 3], 0);
-        for &(child, badge, dir, writable) in scopes_of(name) {
+        for &(child, badge, dir, writable, make) in scopes_of(name) {
             if grants.count >= SPAWN_GRANTS_MAX { break; }
-            match self.scope(badge, dir, writable) {
+            match self.scope(badge, dir, writable, make) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(child, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
             }
@@ -889,7 +990,7 @@ impl Init {
         // In developer mode link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file
         // goes over the cable, not by writing the disk again (800-KRN-0173, for 800-LNK-0027). The user's badge writes there.
         if name == "link" && self.link_dev() && grants.count < SPAWN_GRANTS_MAX {
-            match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true) {
+            match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true, true) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, FIRMWARE_DIR, error),
             }
@@ -899,7 +1000,7 @@ impl Init {
         if let Some(policy) = (name == "effector_gw" && grants.count < SPAWN_GRANTS_MAX).then(|| self.effector_policy()).flatten() {
             if let Some(root) = policy.deliver() {
                 let dir = root.trim_end_matches('/');
-                match self.scope(mind::fs::BADGE_USER, dir, true) {
+                match self.scope(mind::fs::BADGE_USER, dir, true, true) {
                     Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                     Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
                 }
@@ -909,7 +1010,7 @@ impl Init {
         // (750-KRN-0169); the loader checks what it finds there before a run.
         if name == "effector_gw" && grants.count < SPAWN_GRANTS_MAX {
             if let Err(error) = self.make_dir(mind::fs::BADGE_USER, mind::effector::APPS_DIR) { mind::println!("[INIT] {}: {} NOT MADE ({:?})", name, mind::effector::APPS_DIR, error); }
-            match self.scope(mind::fs::BADGE_USER, mind::effector::APPS_DIR, true) {
+            match self.scope(mind::fs::BADGE_USER, mind::effector::APPS_DIR, true, true) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_APPS, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, mind::effector::APPS_DIR, error),
             }
@@ -1175,26 +1276,48 @@ impl Init {
         }
     }
 
-    // A mode turned on or off (750-KRN-0143): the shell's client may do either, the Mind's only turn the maintenance mode
-    // on. The file first, so that a restart keeps what the services follow; one log line, the audit record (MC-10.2).
+    // A mode or a permission turned on or off (750-KRN-0143, 751-KRN-0185): the shell's client may do either, the Mind's
+    // only turn the maintenance mode on and remote-update off (MC-12.6). The file first, so that a restart keeps what the
+    // services follow; one log line, the audit record (MC-10.2).
     fn set_mode(&mut self, which: idl_init::Mode, on: bool, reason: &str, badge: u16, sender: u64) -> core::result::Result<(), idl_init::Error> {
         use idl_init::Mode;
-        let name = match which { Mode::Development => "DEVELOPMENT", Mode::Maintenance => "MAINTENANCE" };
+        let name = match which { Mode::Development => "DEVELOPMENT", Mode::Maintenance => "MAINTENANCE", Mode::RemoteUpdate => "REMOTE-UPDATE", Mode::LinkRemoteUpdate => "LINK-REMOTE-UPDATE" };
         let by = match badge {
             mind::process::BADGE_MODE => "operator",
-            mind::process::BADGE_MIND if on && which == Mode::Maintenance => "mind",
+            mind::process::BADGE_MIND if (on && which == Mode::Maintenance) || (!on && which == Mode::RemoteUpdate) => "mind",
             _ => {
                 return Err(refused(sender, badge, "MODE CHANGE", format_args!("TURN {} {}", name, if on { "ON" } else { "OFF" }), "MC-12.6"));
             }
         };
         let mut modes = self.modes;
-        match which { Mode::Development => modes.development = on, Mode::Maintenance => modes.maintenance = on }
+        match which {
+            Mode::Development => modes.development = on,
+            Mode::Maintenance => modes.maintenance = on,
+            Mode::RemoteUpdate => modes.remote_update = on,
+            Mode::LinkRemoteUpdate => modes.link_remote_update = on,
+        }
+        // Each permission counts only with what it needs; turning one on without it is refused, and the last mode turned
+        // off takes remote-update with it, so that a mode turned on again does not bring it back unasked.
+        let why = match which {
+            Mode::RemoteUpdate if on && !(modes.development || modes.maintenance) => Some("NEITHER THE DEVELOPMENT NOR THE MAINTENANCE MODE IS ON"),
+            Mode::LinkRemoteUpdate if on && !self.link_console => Some("THE LINK'S CONSOLE IS OFF"),
+            _ => None,
+        };
+        if let Some(why) = why { mind::println!("[INIT] {} NOT TURNED ON: {}", name, why); return Err(idl_init::Error::Denied); }
+        if modes.remote_update && !(modes.development || modes.maintenance) { modes.remote_update = false; mind::println!("[INIT] REMOTE-UPDATE OFF WITH THE LAST MODE"); }
         (modes.by, modes.reason) = (wire_text(by), wire_text(reason));
         self.write_modes(&modes).map_err(|_| idl_init::Error::Failed)?;
         self.modes = modes;
         mind::println!("[INIT] MODE {} {} BY {} (PID {}, BADGE {}): {}", name, if on { "ON" } else { "OFF" }, by, sender, badge, reason);
+        self.warn_test_keys();
         self.follow_modes();
         Ok(())
+    }
+
+    // A release from the Effector server, allowed on a slot signed with the public test key: anyone can sign one, so
+    // the log and the shell say so while remote-update counts (751-KRN-0185, 751-ASR-0013).
+    fn warn_test_keys(&self) {
+        if self.modes.remote_update && self.test_key { mind::println!("[INIT] REMOTE UPDATE ON WITH THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED"); }
     }
 
     // A client of vfs_server with the user's rights for init's own file on the boot volume, dropped after use.
@@ -1379,13 +1502,26 @@ impl Init {
                 // The link's console (800-KRN-0155): the owner's word, counted only in the link's developer mode.
                 "link-console" if self.link_dev() => self.link_console = true,
                 "link-console" => mind::println!("[INIT] {}: WORD LEFT OUT: link-console (NO dev IN link.conf)", MODE_FILE),
+                // The owner's permissions (751-KRN-0185), each counted below only with what it needs.
+                "remote-update" => modes.remote_update = true,
+                "link-remote-update" => modes.link_remote_update = true,
                 other => mind::println!("[INIT] {}: WORD LEFT OUT: {}", MODE_FILE, other),
             }
+        }
+        if modes.remote_update && !(modes.development || modes.maintenance) {
+            modes.remote_update = false;
+            mind::println!("[INIT] {}: WORD LEFT OUT: remote-update (NEITHER development NOR maintenance)", MODE_FILE);
+        }
+        if modes.link_remote_update && !self.link_console {
+            modes.link_remote_update = false;
+            mind::println!("[INIT] {}: WORD LEFT OUT: link-remote-update (NO LINK CONSOLE)", MODE_FILE);
         }
         self.modes = modes;
         let name = match (modes.development, modes.maintenance) { (true, true) => "DEVELOPMENT AND MAINTENANCE", (true, false) => "DEVELOPMENT", (false, true) => "MAINTENANCE", _ => "NORMAL" };
         let (name, console) = match (name, self.link_console) { ("NORMAL", true) => ("LINK CONSOLE", ""), (name, true) => (name, " AND LINK CONSOLE"), (name, false) => (name, "") };
-        mind::println!("[INIT] MODE: {}{} ({})", name, console, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
+        let permits = match (modes.remote_update, modes.link_remote_update) { (true, true) => "; REMOTE UPDATE AND ITS SWITCH OVER THE LINK", (true, false) => "; REMOTE UPDATE", (false, true) => "; REMOTE UPDATE'S SWITCH OVER THE LINK", _ => "" };
+        mind::println!("[INIT] MODE: {}{}{} ({})", name, console, permits, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
+        self.warn_test_keys();
     }
 
     // data/mode.conf rewritten whole: one word a line, and who changed it last.
@@ -1395,6 +1531,8 @@ impl Init {
         if modes.development { let _ = core::fmt::Write::write_str(&mut text, "development\n"); }
         if modes.maintenance { let _ = core::fmt::Write::write_str(&mut text, "maintenance\n"); }
         if self.link_console { let _ = core::fmt::Write::write_str(&mut text, "link-console\n"); }
+        if modes.remote_update { let _ = core::fmt::Write::write_str(&mut text, "remote-update\n"); }
+        if modes.link_remote_update { let _ = core::fmt::Write::write_str(&mut text, "link-remote-update\n"); }
         let client = self.user_files()?;
         let files = Endpoint(client);
         let written = (|| -> Result<()> {
@@ -1491,11 +1629,14 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
 // The directories a service gets confined clients of at each start (750-KRN-0120): its slot, the badge init asks with,
-// the directory on the boot volume (made if missing) and whether it may write there.
-fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool)] {
+// the directory, whether it may write there and whether init makes it if it is missing.
+fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
     match name {
-        "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true)],
-        "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false)],
+        "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true, true)],
+        "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false, true)],
+        // The models nnd reads, and nothing else of the volumes (262-KRN-0178): each scope's root is its directory. Neither
+        // is made: a boot writes nothing to the boot volume for nnd, whose scope waits for the owner's data/models/.
+        "nnd" => &[(SLOT_VFS, mind::fs::BADGE_USER, NN_MODELS_DIR, false, false), (NND_MODELS, mind::fs::BADGE_USER, "models:", false, false)],
         _ => &[],
     }
 }
@@ -1519,7 +1660,7 @@ fn boot_order() -> impl Iterator<Item = usize> {
 
 // What a safe start leaves out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
 // run was most likely in. Their plans are prepared and their devices stopped, so `svc start` starts them (000-KRN-0131).
-const SAFE_LEFT_OUT: [&str; 6] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi"];
+const SAFE_LEFT_OUT: [&str; 7] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
 
@@ -1588,7 +1729,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent };
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0 };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).

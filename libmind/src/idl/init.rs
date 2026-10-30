@@ -14,7 +14,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 10, 0);
+pub const VERSION: (u8, u8, u8) = (1, 11, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -56,12 +56,15 @@ impl Wire for Boot {
 
 /// The machine's modes (1.5, 750-KRN-0143): in the development mode and in the maintenance mode init runs the
 /// Effector agent's services (750-EFF-0013); in neither, the normal mode, it runs none and grants them nothing.
+/// Since 1.11 (751-KRN-0185), two permissions beside them: `remote-update`, the owner's leave for a release from the
+/// Effector server, which counts only with either mode on; and `link-remote-update`, the owner's leave for the link's
+/// console to switch `remote-update`, which counts only with `dev` in link.conf and `link-console`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Mode { #[default] Development = 0, Maintenance = 1 }
+pub enum Mode { #[default] Development = 0, Maintenance = 1, RemoteUpdate = 2, LinkRemoteUpdate = 3 }
 impl Mode {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Development), 1 => Some(Self::Maintenance), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Development), 1 => Some(Self::Maintenance), 2 => Some(Self::RemoteUpdate), 3 => Some(Self::LinkRemoteUpdate), _ => None } }
 }
 impl Wire for Mode {
     const MAX: usize = 1;
@@ -71,13 +74,14 @@ impl Wire for Mode {
 
 /// Which modes are on, as data/mode.conf keeps them across restarts, and who made the last change and why: `disk`
 /// (the file as the disk was written), `operator` (a client badged `BADGE_MODE`, the shell's) or `mind` (one badged
-/// `BADGE_MIND`).
+/// `BADGE_MIND`). `remote-update` and `link-remote-update` (1.11) say whether each permission counts now: the file's
+/// word and what it needs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ModeState { pub development: bool, pub maintenance: bool, pub by: Text<16>, pub reason: Text<120> }
+pub struct ModeState { pub development: bool, pub maintenance: bool, pub remote_update: bool, pub link_remote_update: bool, pub by: Text<16>, pub reason: Text<120> }
 impl Wire for ModeState {
-    const MAX: usize = <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<16> as Wire>::MAX + <Text<120> as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.development.encode(w)?; self.maintenance.encode(w)?; self.by.encode(w)?; self.reason.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { development: Wire::decode(r)?, maintenance: Wire::decode(r)?, by: Wire::decode(r)?, reason: Wire::decode(r)? }) }
+    const MAX: usize = <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<16> as Wire>::MAX + <Text<120> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.development.encode(w)?; self.maintenance.encode(w)?; self.remote_update.encode(w)?; self.link_remote_update.encode(w)?; self.by.encode(w)?; self.reason.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { development: Wire::decode(r)?, maintenance: Wire::decode(r)?, remote_update: Wire::decode(r)?, link_remote_update: Wire::decode(r)?, by: Wire::decode(r)?, reason: Wire::decode(r)? }) }
 }
 
 /// This boot's plan (1.9, 173-KRN-0035): the services in the order init tried them, as data/services.txt set it:
@@ -213,14 +217,15 @@ pub fn mode(endpoint: Endpoint) -> Result<core::result::Result<ModeState, Error>
     };
     let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 142, false, false)?;
+    let length = wire::buffer_reply(&reply, 144, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <ModeState as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Turns a mode on or off (1.5): init writes data/mode.conf, starts or stops the Effector services at once with no
 /// restart, and logs the change with the caller's badge, PID and `reason`. A client badged `BADGE_MODE` may turn
-/// either mode on or off; one badged `BADGE_MIND` may only turn the maintenance mode on; others get `denied`.
+/// either mode, and since 1.11 either permission, on or off; one badged `BADGE_MIND` may only turn the maintenance
+/// mode on and `remote-update` off (MC-12.6); others get `denied`, the Effector services' and the link's among them.
 pub fn set_mode(endpoint: Endpoint, which: Mode, on: bool, reason: &str) -> Result<core::result::Result<(), Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
@@ -362,7 +367,7 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
         }
         8 => {
             let mut copy = [0u8; 1];
-            let (call, length) = wire::take_buffer(request, cap, 142, &mut copy)?;
+            let (call, length) = wire::take_buffer(request, cap, 144, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Mode, call))

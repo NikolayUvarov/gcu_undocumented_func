@@ -554,11 +554,24 @@ fn main(info: &'static BootInfo) {
         let wait = wake.map_or(0, |at| at.saturating_sub(mind::time::uptime_ms()).clamp(1, u32::MAX as usize) as u32);
         // Requests are checked against idl/update.wit before they are served (MC-2.4).
         let Ok(request) = Endpoint::SERVICE.recv_timeout(0, wait) else { continue };
+        // The Effector gateway's client (BADGE_UPDATE_GATEWAY, update.wit 1.2) stages or activates a release only while
+        // init's remote-update counts, asked at each such request so that the owner's change holds at once (751-KRN-0185).
+        let allowed = |what: &str| -> Result<(), Error> {
+            if request.badge != mind::process::BADGE_UPDATE_GATEWAY { return Ok(()); }
+            match wire::with_timeout(ASK_MS as u32, || init::mode(Endpoint(SLOT_LIFECYCLE))) {
+                Ok(Ok(modes)) if modes.remote_update => Ok(()),
+                other => {
+                    let why = if matches!(other, Ok(Ok(_))) { "REMOTE-UPDATE IS OFF" } else { "INIT DID NOT SAY" };
+                    mind::println!("[UPDATER] {} REFUSED TO THE EFFECTOR GATEWAY (PID {}): {} (MC-12.6)", what, request.sender, why);
+                    Err(Error::Denied)
+                }
+            }
+        };
         let _ = match api::decode(&request, 0) {
             Ok((api::Request::Check, call)) => { let offer = updater.check(); api::reply_check(call, offer.as_ref().map_err(|e| *e)) }
-            Ok((api::Request::Fetch, call)) => api::reply_fetch(call, updater.fetch()),
-            Ok((api::Request::Apply { tries }, call)) => api::reply_apply(call, updater.apply(tries)),
-            Ok((api::Request::Rollback, call)) => api::reply_rollback(call, updater.rollback()),
+            Ok((api::Request::Fetch, call)) => api::reply_fetch(call, allowed("FETCH").and_then(|()| updater.fetch())),
+            Ok((api::Request::Apply { tries }, call)) => api::reply_apply(call, allowed("APPLY").and_then(|()| updater.apply(tries))),
+            Ok((api::Request::Rollback, call)) => api::reply_rollback(call, allowed("ROLLBACK").and_then(|()| updater.rollback())),
             Ok((api::Request::Status, call)) => api::reply_status(call, &updater.state()),
             Ok((api::Request::Metadata, call)) => api::reply_metadata(call, &updater.metadata()),
             Err(reason) if request.is_call => wire::reject(reason),

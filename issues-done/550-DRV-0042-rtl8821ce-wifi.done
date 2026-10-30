@@ -1,6 +1,6 @@
-# 550-DRV-0042 — `rtw88_wifi`: the DEXP's RTL8821CE Wi-Fi as a `wlanhw` radio
+# 550-DRV-0042 — `rtw88_wifi`: the DEXP's RTL8821CE Wi-Fi as a `wlanhw` radio — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 (the maintainer's first, 2026-10-27) · **Status:** in progress (2026-10-27): runs on the DEXP · **Blocked by:** — (`KRN`'s 550-KRN-0172 is in `fast-test`) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-10.2, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 (the maintainer's first, 2026-10-27) · **Status:** done (2026-10-30) · **Blocked by:** — (`KRN`'s 550-KRN-0172 is in `fast-test`) · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-10.2, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -107,15 +107,38 @@ A new boot service, `rtw88_wifi`, ported from Linux v6.12's `rtw88` (`adc218676e
 ## Acceptance criteria
 
 - [x] Host tests: the tables and their conditions, the eFuse decoding, the firmware header, the descriptors (`tests/rtw88_tables_host.rs`, `tests/rtw88_driver_host.rs`).
-- [ ] On the DEXP:
+- [x] On the DEXP:
   - the driver logs the chip, its MAC address and the firmware's version;
   - `wifi scan` lists the networks around;
   - `wlan` joins the kept network, and `ip` shows an address;
   - the server's Effector agent connects.
 
   Evidence for the DEXP only (MC-12.1).
-- [ ] `hwdocs/rtl8821ce.md`: the sources, hashes and what was run. `THIRD_PARTY.md` and `LICENSES/BSD-3-Clause-rtw88.txt` record the adaptation.
+- [x] `hwdocs/rtl8821ce.md`: the sources, hashes and what was run. `THIRD_PARTY.md` and `LICENSES/BSD-3-Clause-rtw88.txt` record the adaptation.
+
+## Resolution
+
+Done on 2026-10-30 by the `DRV` track. Evidence for the DEXP only (MC-12.1).
+
+**On the DEXP,** release 202610290937 in slot A, put over the cable on 2026-10-30 and confirmed:
+- **The driver logs** the chip (cut 4, one path), its MAC address `1C:79:2D:F0:6B:A5` and the firmware's version, 24.11, running.
+- **The firmware** was written again into `data/firmware/rtw88/` by `effector485 put` (800-LNK-0027), and the machine restarted. The driver read that copy; it reads no other.
+- **`wifi`** listed 15 networks around (its `READY` line, `MODE=LIST ROWS=15`), started over the cable.
+  - It has no text command `scan`: the list is its screen's.
+  - The criterion's `wifi scan` is met by that list.
+- **`wlan`** joined the kept network CoolNet2 on its first try, by itself.
+- **`netstack`** got 192.168.2.141/24 by DHCP.
+- **The Effector agent** connected to hesere, pinned. Its delivery receipt and `health` answered through the server.
+- **The radio:** in the first 170 s, 427 of 447 frames sent were acknowledged, with no bad FCS.
+
+**The record:**
+- [hwdocs/rtl8821ce.md](../hwdocs/rtl8821ce.md) now holds the sources with their hashes and a table of what was run.
+- `THIRD_PARTY.md` and `LICENSES/BSD-3-Clause-rtw88.txt` record the adaptation.
+
+**Not done here:**
+- 5 GHz and 802.11n: the driver serves 2.4 GHz, 802.11b/g, on its one path.
+- The eFuse's country code is unset (`FF FF`), and the log prints it as is.
 
 ## Related
 
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (`rtw89_wifi`), [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) (`bcm_wifi`), [211-DRV-0041](211-DRV-0041-the-dexps-rtl8168h.md), [211-DRV-0040](../issues-done/211-DRV-0040-more-scratchpad-pages.done).
+[213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md) (`rtw89_wifi`), [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) (`bcm_wifi`), [211-DRV-0041](../issues/211-DRV-0041-the-dexps-rtl8168h.md), [211-DRV-0040](211-DRV-0040-more-scratchpad-pages.done).

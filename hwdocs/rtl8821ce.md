@@ -1,8 +1,28 @@
 # RTL8821CE: what rtw88_wifi ports from Linux rtw88 v6.12
 
-Task: [550-DRV-0042](../issues/550-DRV-0042-rtl8821ce-wifi.md). The driver is `rtw88_wifi`. Its tables come from `scripts/hardware/rtw88_tables.py`, and its firmware from `scripts/firmware/rtl8821ce.py`. The licence and the sources are recorded in [THIRD_PARTY.md](../THIRD_PARTY.md) and [LICENSES/BSD-3-Clause-rtw88.txt](../LICENSES/BSD-3-Clause-rtw88.txt).
+Task: [550-DRV-0042](../issues-done/550-DRV-0042-rtl8821ce-wifi.done). The driver is `rtw88_wifi`. Its tables come from `scripts/hardware/rtw88_tables.py`, and its firmware from `scripts/firmware/rtl8821ce.py`. The licence and the sources are recorded in [THIRD_PARTY.md](../THIRD_PARTY.md) and [LICENSES/BSD-3-Clause-rtw88.txt](../LICENSES/BSD-3-Clause-rtw88.txt).
 
 The specification below was written before the code. It follows rtw88's code paths, resolved for the 8821C on PCIe, and cites `file:line` in Linux v6.12 (`adc218676eef`). Statements marked **[vendor]** come from Realtek's out-of-tree halmac headers. Those marked **[inferred]** are a reading, not code facts. Nothing in it has been run on a chip until the DEXP's results are recorded in the task (MC-12.1, MC-12.3).
+
+## Sources and hashes
+
+| What | Where from | Pinned by |
+|---|---|---|
+| The driver's code paths | Linux `adc218676eef25575469234709c2d87185ca223a` (v6.12), `drivers/net/wireless/realtek/rtw88/` | the `file:line` citations below |
+| The MAC, BB, AGC and RF tables | that commit's `rtw8821c_table.c`, SHA-256 `ebc2547ddd66b7df434e0ef91319eddf5565c452863c4a0fd64660839d3e9a0c` | `scripts/hardware/rtw88_tables.py` refuses another file; `--check` compares the committed tables |
+| The firmware `rtw88/rtw8821c_fw.bin`, 139,472 bytes | linux-firmware `599764611a8ac213c6aa6dad17c941c2f46b53cb`, SHA-256 `2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0` | `scripts/firmware/rtl8821ce.py`; fetched, never committed |
+| The retry limit and the TX report's retry count | Realtek's halmac headers, github.com/tomaspinho/rtl8821ce, field positions only | **[vendor]**, copies in `../vendor/` |
+
+## What was run
+
+Evidence for the maintainer's DEXP desktop only (the RTL8821CE at PCI 03:00.0, `10EC:C821`), MC-12.1:
+
+| Date (UTC) | What ran | Seen |
+|---|---|---|
+| 2026-10-27 | A disk from `fast-test` 4986bc7e | The firmware download stopped at its first reserved page: `BCN_VALID` never set. Fixed in 2ca6b542: the beacon ring's descriptor gets its second segment |
+| 2026-10-27 | 2ca6b542's driver over the cable (`effector485 replace`) | Cut 4, one path; firmware 24.11 running (`MCUFW_CTRL C078`); eFuse RFE 0, crystal 0x20; IQK done; `wlan` joined the kept network on channel 8; DHCP; the Effector agent connected |
+| 2026-10-27 | Release 202610272251 in slot B, over the cable | The driver from the boot image; Wi-Fi joins by itself after a restart |
+| 2026-10-30 | Release 202610290937 in slot A, over the cable; the firmware written again by `effector485 put` into `data/firmware/rtw88/` (800-LNK-0027), then a restart | Firmware 24.11 read and running; `wlan` joined CoolNet2 on its first try; DHCP 192.168.2.141/24; the agent connected; `wifi` listed 15 networks; in the first 170 s, 427 of 447 frames sent were acknowledged, with no bad FCS |
 
 ---
 
