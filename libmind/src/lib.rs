@@ -20,6 +20,7 @@ pub mod cid;
 pub mod control;
 pub mod dag;
 pub mod tree;
+pub mod worktree;
 pub mod debug;
 pub mod deadline;
 pub mod dev;
