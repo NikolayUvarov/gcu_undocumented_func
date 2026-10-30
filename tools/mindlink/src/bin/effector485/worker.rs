@@ -31,7 +31,7 @@ pub fn explain(e: Error) -> String {
         Error::Protocol => "the other end answered out of protocol".into(),
         Error::Refused(c) => format!("refused: {} (code {c})", match c {
             code::NOT_FOUND => "no such file, directory or run",
-            code::DENIED => "not allowed (a bad name, or on MIND Core a program without \"run\" in link.conf)",
+            code::DENIED => "not allowed (a bad name, or on MIND Core a program without \"run\" in link.conf, keys without \"dev\" and init's input capability)",
             code::IO => "the other end's storage failed",
             code::MISMATCH => "SHA-256 does not match",
             code::BAD_REQUEST => "the other end did not take the request",
@@ -364,6 +364,32 @@ fn execute(c: &mut Client<BusLine>, state: &Shared, id: &str, kind: &str, p: &Va
                 op.result.set("run", Value::Num(run as f64));
             });
             return Ok(());
+        }
+        // Keys on the other end's machine (800-LNK-0032): each chord or character in one INPUT, pace_ms apart.
+        "key" | "type" => {
+            let mut keyboard = mindlink::keys::Keyboard::new();
+            let groups = if kind == "type" { keyboard.text(p.str("text").unwrap_or("")) }
+                         else { p.str("names").unwrap_or("").split_whitespace().map(|n| keyboard.chord(n)).collect() };
+            let groups = match groups { Ok(g) => g, Err(e) => { with(state, id, |op| op.fail(&e)); return Ok(()); } };
+            let pace = p.num("pace_ms").map_or(20, |v| v.max(0.0) as u64);
+            let (mut sent, max) = (0usize, c.input_max());
+            for (i, group) in groups.iter().enumerate() {
+                if cancelled(state, id) { with(state, id, |op| { op.result.set("events", Value::Num(sent as f64)); op.finish("cancelled"); }); return Ok(()); }
+                if i > 0 && pace > 0 { std::thread::sleep(Duration::from_millis(pace)); }
+                for frame in group.chunks(max) {
+                    let posted = match c.input(frame) {
+                        Err(Error::Refused(code::DENIED)) => {
+                            with(state, id, |op| op.fail("the other end takes no keys: MIND Core needs dev in link.conf and init's input capability for link (800-LNK-0032)"));
+                            return Ok(());
+                        }
+                        r => r? as usize,
+                    };
+                    sent += posted;
+                    if posted < frame.len() { with(state, id, |op| op.fail(&format!("the other end posted {posted} of {} events; {sent} in all", frame.len()))); return Ok(()); }
+                }
+            }
+            set("events", Value::Num(sent as f64));
+            note(format!("{sent} events posted, {} {}\n", groups.len(), if kind == "type" { "characters" } else { "chords" }));
         }
         "log" => {
             let (mut cursor, max) = (p.num("from").unwrap_or(0.0) as u64, p.num("max_bytes").unwrap_or(65536.0) as u64);

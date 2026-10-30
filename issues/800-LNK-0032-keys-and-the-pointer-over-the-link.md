@@ -1,6 +1,6 @@
 # 800-LNK-0032 — Keys and the pointer over the link: INPUT (channel 4) in the developer mode
 
-**Type:** protocol, service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-30) · **Blocked by:** `KRN`: the input capability for `link` in the developer mode only (asked on `internal-dev-messages`, 2026-10-30) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.8, MC-10.2, MC-12.1
+**Type:** protocol, service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-30) · **Blocked by:** `KRN`: the input capability for `link` in the developer mode only (asked on `internal-dev-messages`, 2026-10-30) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.8, MC-10.2, MC-12.1
 
 **Asked by:** the tools track (`APP`) in `issues/requests-LNK.md`, 2026-10-30, section 3, "keys over the link". The maintainer (2026-10-30): "do it, it was a requirement" ([000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md): key presses by name, as QEMU's `sendkey` names them, and text at a set pace).
 
@@ -34,6 +34,27 @@
 5. **On the MacBook Pro:** APP's five checks above, outputs to APP (MC-12.1: evidence for that machine and image only).
 
 **What stays 000-KRN-0108's:** the firmware's menus, the boot, and a hung machine. The link reaches only a running MIND Core.
+
+## Progress (2026-10-30)
+
+**Done, on `claude/LNK-link`:**
+- **The protocol** (`docs/link/protocol.md`, EN and RU): INPUT's payload, 1 to 64 input words, answered with the number posted; a word of 0 is the attention key.
+  - **`linkproto`:** `Client::input`, `Files::input` (UNSUPPORTED by default), the payload's checks.
+- **The master's side** in `tools/mindlink`:
+  - the library `mindlink::keys` builds the words with MIND Core's own PS/2 decoder (`libmind/src/keys.rs`, included as the host tests do), so a chord equals `sendkey`'s events, its legacy byte too;
+  - `mindlink key` and `mindlink type`;
+  - `effector485`'s operations `key` and `type`, under its queue and reservations.
+- **`link` on MIND Core** posts the words through `SYSCALL_INPUT_EVENT`. It refuses DENIED without `dev` (`INPUT REFUSED: link.conf HAS NO "dev"`) or without the input capability (`INPUT REFUSED: INIT GAVE LINK NO INPUT CAPABILITY`), posting none.
+- **`mindlink serve`** answers UNSUPPORTED.
+- **The QEMU `link` suite** runs `keys`:
+  - without `dev`, the keys are refused, logged, and none reaches it;
+  - with `dev`, the same until KRN's grant, with a SKIP naming it; afterwards it checks the events `sendkey` would give.
+
+**Open:**
+- `KRN`'s grant of the input capability to `link` in `dev`;
+- the positive QEMU check, which turns on by itself with that grant;
+- the MacBook Pro's criterion;
+- the master's pointer commands.
 
 ## Acceptance criteria
 
