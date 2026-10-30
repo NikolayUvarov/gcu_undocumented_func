@@ -4281,13 +4281,19 @@ def escrow_check(vm):
 
 
 def services_suite(vm):
-    # The shell's fixed grants 13..15 (issue 151): sysmon's authority view (badged), the keyboard driver, the compositor.
+    # The shell's fixed grants 13..15 (issue 151): sysmon's authority view (badged), the keyboard driver, the compositor;
+    # the clock's client that may set it (211-KRN-0051) and audio_gw's that may change the levels (000-KRN-0118).
     real = vm.services()
     caps = vm.command(f"stat caps {real['shell']}", raw=True)
     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
-    for slot, service, badge in [(13, "sysmon", 1), (14, "ps2_kbd", 0), (15, "compositor", 0)]:
+    for slot, service, badge in [(13, "sysmon", 1), (14, "ps2_kbd", 0), (15, "compositor", 0), (2, "rtc", 1), (4, "audio_gw", 1)]:
         found = re.search(fr"^SLOT={slot} GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE={badge} EP=(\d+)", caps, re.M)
         assert found and servers.get(int(found[1])) == real[service], (slot, service, caps)
+    # Programs get the loader's plain clients of the clock and of audio_gw (its slots 2 and 4).
+    loader = vm.command(f"stat caps {real['loader']}", raw=True)
+    for slot, service in [(2, "rtc"), (4, "audio_gw")]:
+        found = re.search(fr"^SLOT={slot} GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE=0 EP=(\d+)", loader, re.M)
+        assert found and servers.get(int(found[1])) == real[service], (slot, service, loader)
     output = vm.command("ps")
     for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts", "sysmon"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
@@ -12093,7 +12099,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
+    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,download,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -12282,6 +12288,9 @@ def main():
                 continue
             if suite == "net":
                 net_suite(args, disk)
+                continue
+            if suite == "download":  # net's downloads, `get` and the API clients' checks alone (000-NET-0047)
+                download_check(args, disk)
                 continue
             if suite == "tls":
                 tls_suite(args, disk)
