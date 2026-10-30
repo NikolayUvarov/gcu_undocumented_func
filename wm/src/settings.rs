@@ -82,7 +82,9 @@ pub const PICTURES: [&str; 4] = ["bmp", "png", "jpg", "jpeg"];
 /// Browsing for the picture (000-APP-0072): a directory (`""` the boot disk's root, `ram:`, `data/x`), its directories
 /// and pictures, the one chosen, and why it could not be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Browser { pub dir: String, pub entries: Vec<(String, bool)>, pub selected: usize, pub problem: Option<String> }
+/// `why`: what made Settings offer the choice instead of taking the file typed (it is the picture already, or cannot be
+/// shown).
+pub struct Browser { pub dir: String, pub entries: Vec<(String, bool)>, pub selected: usize, pub problem: Option<String>, pub why: Option<String> }
 
 impl Browser {
     /// `dir` read through `lister`: `..` first below a root, then its directories and its pictures, each sorted; the
@@ -105,7 +107,7 @@ impl Browser {
             Err(why) => problem = Some(why),
         }
         if dir.is_empty() { entries.push((String::from("ram:"), true)); }
-        Self { dir: String::from(dir), entries, selected: 0, problem }
+        Self { dir: String::from(dir), entries, selected: 0, problem, why: None }
     }
     /// The path of entry `name` here.
     pub fn path(&self, name: &str) -> String {
@@ -356,7 +358,7 @@ impl Settings {
             Code::F(3) if self.row == FILE => { self.browse(); Outcome::Stay }
             _ if self.row == FILE => match self.file.key(key) {
                 Edit::Submit if self.file.as_str().trim().is_empty() => { self.browse(); Outcome::Stay }
-                Edit::Submit => self.changed(config, FILE, 0),
+                Edit::Submit => self.take_file(config),
                 _ => Outcome::Stay,
             },
             Code::Left if STEPPED.contains(&self.row) => self.changed(config, self.row, -1),
@@ -366,6 +368,22 @@ impl Settings {
             Code::Char if key.char() == Some(' ') => self.changed(config, self.row, 0),
             _ => Outcome::Stay,
         }
+    }
+
+    // Enter on the file's row: the file typed becomes the picture; when it is the picture already, the choice of
+    // another opens in its directory, the file chosen there (the maintainer, 2026-10-30: no name to erase first).
+    fn take_file(&mut self, config: &Config) -> Outcome {
+        match self.change(config, FILE, 0) {
+            Some(c) => { self.message = None; Outcome::Changed(c) }
+            None => { let why = self.why(config, FILE, 0); self.offer(why); Outcome::Stay }
+        }
+    }
+
+    /// The choice of a picture instead of the file typed, saying why: it is the picture already, or wm could not show
+    /// it (000-APP-0072).
+    pub fn offer(&mut self, why: String) {
+        self.browse();
+        if let Some(b) = self.browser.as_mut() { b.why = Some(why); }
     }
 
     // Browsing for the picture (000-APP-0072): from the directory of the file named, else data/.
@@ -476,7 +494,7 @@ impl Settings {
         };
         match row {
             FILE if file.is_empty() => String::from("Type the image's file here (BMP, PNG or JPEG), then Enter; F3 or Enter: browse"),
-            FILE => format!("{} is the picture already", file),
+            FILE => format!("{} is the picture already: choose another, or Esc", file),
             3..=6 | 9 | 15 => format!("{} is at its {} already: {}", ROWS[row], if step < 0 { "lowest" } else { "highest" }, value),
             _ => format!("{} stays as it is", ROWS[row]),
         }
@@ -510,6 +528,8 @@ impl Settings {
             (self.row, self.on_pages, self.message) = (cy - 1, false, None);
             if self.row != FILE { return self.changed(config, self.row, 0); }
             if self.file.as_str().trim().is_empty() { self.browse(); return Outcome::Stay; }
+            // The picture's own file clicked: the choice of another (a file typed but not taken waits for Enter).
+            if self.change(config, FILE, 0).is_none() { return self.take_file(config); }
         }
         // A page to read says so.
         if ![0, KEYBOARD, DATE, NETWORK, SCREEN].contains(&self.page) { self.to_read(); }
@@ -580,6 +600,7 @@ impl Settings {
                 (None, false) => String::from("No picture here: a directory, or Backspace to go up"),
                 (None, true) => format!("{} pictures here", b.entries.iter().filter(|e| !e.1).count()),
             };
+            if let Some(why) = &b.why { grid.text_max(x, inner.bottom().saturating_sub(3), why, w, theme.accent); }
             grid.text_max(x, inner.bottom().saturating_sub(2), &note, w, theme.accent);
         } else if self.page == 0 {
             grid.text(x, inner.y, "The desktop background, kept in data/wm.conf:", theme.dialog);
