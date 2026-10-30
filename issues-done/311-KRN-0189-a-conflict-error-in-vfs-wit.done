@@ -1,6 +1,6 @@
-# 311-KRN-0189 — `vfs.wit` 2.6: an error `conflict`, for a write another writer published before
+# 311-KRN-0189 — `vfs.wit` 2.6: an error `conflict`, for a write another writer published before — done
 
-**Type:** service interface (`idl/vfs.wit`, `libmind` `fs`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** made (2026-10-30); closes once landed · **Blocked by:** — (the arms are in `main`: the shell's 311-APP-0116, `effector_gw`'s 311-EFF-0024) · **Main task:** [311](311-storefs-a-file-face.md) (STO's), for 311-STO-0032 · **Constitution:** MC-11.10, MC-12.4
+**Type:** service interface (`idl/vfs.wit`, `libmind` `fs`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — (the arms are in `main`: the shell's 311-APP-0116, `effector_gw`'s 311-EFF-0024) · **Main task:** [311](../issues/311-storefs-a-file-face.md) (STO's), for 311-STO-0032 · **Constitution:** MC-11.10, MC-12.4
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-30, "`storefs`: started by `init`, reached by a files client, and a `conflict` error in `vfs.wit`", and in its message to KRN of 10:53.
 
@@ -37,6 +37,18 @@
   - `docs/idl/README.md`: the row reads 2.6.0 and names 2.5's `adopt`.
 - **Left:** the gate's builds of every program and its files groups, x86 and aarch64.
 
+## Resolution
+
+- **Landed** in round 57, `main` ad3f64ff (`claude/youthful-mendel-mf1soy` 0e9d814c, in 2b850df4).
+- **`idl/vfs.wit` 2.6.0:** `conflict` appended, code 12; `libmind/src/idl/vfs.rs` regenerated.
+- **`mind::fs::Error::Conflict`** (`libmind/src/fs.rs`), mapped from it; `Invalid` as a system error code.
+- **Its users' last arms:** the shell's `files::text` (311-APP-0116), `effector_gw`'s `vfs_fail` (311-EFF-0024) and `link`'s `io`.
+- **Tests:**
+  - `tests/idl_fuzz_host.rs`: code 12 decodes as `Conflict` and 13 is refused; `mind::fs` maps every code to the error of its own name;
+  - round 57's gate: every program built against 2.6 on x86 and aarch64, and `x86: files and block writes` and `aarch64: files and the block store` passed unchanged.
+- **Docs:** `docs/idl/README.md` (2.6.0, with 2.5's `adopt`).
+- **What is left is STO's:** `storefs` answering `conflict` on the wire (311-STO-0032).
+
 ## Related
 
-[311](311-storefs-a-file-face.md), 311-STO-0032, [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done), [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.md).
+[311](../issues/311-storefs-a-file-face.md), 311-STO-0032, [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done), [311-KRN-0190](../issues/311-KRN-0190-storefs-at-boot-and-its-clients.md).
