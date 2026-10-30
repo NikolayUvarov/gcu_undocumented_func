@@ -9,8 +9,9 @@
 //! Between components (313-STO-0030) the receiver reads the sender's checkpoint and applies what it owes once, the
 //! sender its client; the sender clears what the receiver's checkpoint shows applied. Each writes only its own.
 //! A move (313-STO-0033) releases the component, both names to a release record by one compare-and-swap, so no instance
-//! in this store saves it again, and its last checkpoint, which the names' history keeps, goes to a copy; restored in
-//! another store, a manifest takes its names' version there as its epoch. No system calls: tests/checkpoint_host.rs.
+//! in this store saves it again, and its last checkpoint, which the names' history keeps, goes to a copy; imported into
+//! a store that never held its names, a manifest takes their first version as its epoch. No system calls:
+//! tests/checkpoint_host.rs.
 use crate::cid::{self, Cid};
 
 pub const MAGIC: &[u8; 8] = b"MIND-CKP";
@@ -98,8 +99,8 @@ pub struct Manifest {
     pub contract: Label,
     pub contract_version: u16,
     pub schema: u16,
-    /// The generation of the instance that saved it: the version of the checkpoint's names it wrote; restored, their
-    /// version in this store.
+    /// The generation of the instance that saved it: the version of the checkpoint's names it wrote; restored after a
+    /// move, their first version in this store.
     pub epoch: u64,
     /// The consistency point: requests applied to the state.
     pub sequence: u64,
@@ -396,8 +397,8 @@ impl Restored {
 }
 
 /// The last checkpoint of `component`, if it follows `contract` at `version` with state of `schema`, and its two names
-/// agree; its epoch is their version, also for a manifest saved in another store and moved in. Released if both names
-/// hold a release, never fresh. `buffer` holds MAX. Its authorities are text: the caller checks them against what it
+/// agree; its epoch is their version. A manifest of another epoch is taken only at their first version, moved in from
+/// another store; elsewhere Inconsistent. Released if both names hold a release, never fresh. `buffer` holds MAX. Its authorities are text: the caller checks them against what it
 /// holds now (`rebind`).
 pub fn restore(store: &mut impl Store, names: &Names, contract: &str, version: u16, schema: u16, buffer: &mut [u8]) -> Result<Restored, Error> {
     let [(mv, manifest), (sv, state)] = store.snapshot([names.manifest(), names.state()])?;
@@ -414,8 +415,8 @@ pub fn restore(store: &mut impl Store, names: &Names, contract: &str, version: u
     let mut m = Manifest::decode(&buffer[..n])?;
     if m.contract.as_str() != contract || m.contract_version != version { return Err(Error::Contract(m.contract_version)); }
     if m.schema != schema { return Err(Error::Schema(m.schema)); }
-    if m.state != state { return Err(Error::Inconsistent); }
-    // A manifest moved in records its epoch in the store it came from: here the names' version is its epoch.
+    // Another epoch only at the names' first version, as an import into a store that never held them publishes it.
+    if m.state != state || (m.epoch != mv && mv != 1) { return Err(Error::Inconsistent); }
     m.epoch = mv;
     Ok(Restored::Found(m))
 }

@@ -43,12 +43,12 @@ A component's checkpoint lives in one store. A copy of its names ([309-STO-0031]
   - `Release`, with its one encoding.
 
   The `Store` trait is unchanged: a release is a commit of both names to the record's root.
-- **A restore takes the names' version as the epoch.** The check that the manifest's epoch is that version is dropped, since a manifest moved in records its epoch in the store it came from. Invariant 4 holds by the checks kept: both names at one version (a state name moved alone), and the manifest's state root that of the state's name (a manifest and a state that disagree, also once both names moved again). What is no longer told apart: a manifest published again by hand at another version is restored as a moved one. The docs say the epoch is the names' version.
+- **A manifest of another epoch is restored only at its names' first version** (the session's review, 2026-10-30). A manifest moved in records its epoch in the store it came from, and an import into a store that never held its names publishes them at version 1. So restore takes a manifest whose epoch is not its names' version only when they are at 1, and its epoch is then 1. Anywhere else it is still `Inconsistent`, so an older manifest and state published again by hand at a later version of existing names are refused (a host test). The first build dropped the epoch check wholesale, and lost that. The other checks hold invariant 4 as before: both names at one version (a state name moved alone), and the manifest's state root that of the state's name. A move into a store where the names already exist (removed: they come in at a later version) is refused, and stays under "Not provided".
 - **The copy is written after the release, never before.** Written before, a copy of a component whose release was then refused could be imported while the source was still active. It is a copy of both names at the version before the release, each at its root: `car::write`, a copy of the roots given, which `car::export` now uses for the current ones. The names node records the source's version.
 - **A second move writes the same copy:** the restore is refused (`Released`), `released` gives the record, and the names, versions and roots are the same, so are the bytes. The host and QEMU tests compare them.
 - **`tally [as <name>] move <file>`** (a component without `as` moves too) checks the files authority before the release. It prints `RELEASED <name> EPOCH <e>: …`, then `MOVED <name> EPOCH <e-1> TO <file>: …; SHA-256 <hex>`; a second move `RELEASED <name> EPOCH <e> BEFORE: …`. A copy not written whole is removed. A component with no checkpoint is not moved. Every other run of a released component prints `tally: RELEASED: … (MC-6.12)`: MC-6.12 asks that a migration prevent the old and the new owner from both accepting commands.
 - **`tally`'s contract stays 3:** its manifest and state are unchanged, and the release record is `mind::checkpoint`'s, the same for every contract (docs/storage/checkpoints.md says why).
-- **The move in needs nothing new:** `blocks import` publishes both names at the destination's versions, and the next `tally as <name>` restores them.
+- **The move in needs nothing new:** `blocks import` publishes both names at version 1 of a store that never held them, and the next `tally as <name>` restores them.
 - **A move back** into the store a component left: the import finds both names at the record, another root, and leaves them (a conflict), so the component stays released there. Host-tested, and said under "Not provided".
 - **The QEMU check, `tally_move_check`,** runs after `store_copy_check`, with a reboot of its own done the same way (`reboot_blank_store`, now shared by both). The stalled instance holds 15 s. The suite writes the release record itself from its format and compares its CID with both names' root.
 - **The host tests** bring `worktree` and `car` into `tests/checkpoint_host.rs`, so a move runs through the store's logic on both sides. A move is stopped after every number of calls of either store, until a stop it does not reach.
@@ -56,9 +56,12 @@ A component's checkpoint lives in one store. A copy of its names ([309-STO-0031]
 ## Progress (2026-10-30)
 
 - **Built** in a worktree by an agent of the storage session, for the session to review and merge. On this session's container (x86, TCG, 4 CPUs):
-  - `tests/checkpoint_host.rs` (18 tests, 3 of them new) passes, also built with `-O -C debug-assertions=on`; `car`, `blockstore` pass; `scripts/host_tests.sh` whole exits 0;
+  - `tests/checkpoint_host.rs` (19 tests, 4 of them new) passes, also built with `-O -C debug-assertions=on`; `car`, `blockstore` pass; `scripts/host_tests.sh` whole exits 0;
   - the QEMU `store` suite (x86) passes, `tally_move_check` among it.
-- **The tests can fail** (experiments on a copy of `checkpoint.rs`): a release record restored as a fresh start fails two host tests; a release that commits nothing, so the source goes on saving, fails three.
+- **The tests can fail** (experiments on a copy of `checkpoint.rs`):
+  - a release record restored as a fresh start fails two host tests;
+  - a release that commits nothing, so the source goes on saving, fails three;
+  - a manifest of another epoch taken at any version fails two host tests, the refusal of a republished one among them; taken at none, as before this task, it fails two, the move stopped anywhere among them.
 - **Not yet:** the aarch64 run and the profile.
 
 ## Acceptance criteria

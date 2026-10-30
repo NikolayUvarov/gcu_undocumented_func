@@ -798,23 +798,19 @@ fn a_moved_in_checkpoint_is_restored_and_saved_and_its_names_still_checked() {
     let names = Names::of("model").unwrap();
     let mut buffer = [0u8; MAX];
     let medium = || Memory { data: vec![0; 512 * SECTOR] };
-    let (mut a, mut b, mut c, mut d) = (medium(), medium(), medium(), medium());
-    let (mut ra, mut rb, mut rc, mut rd) = (Room::new(), Room::new(), Room::new(), Room::new());
+    let (mut a, mut b, mut c, mut d, mut e) = (medium(), medium(), medium(), medium(), medium());
+    let (mut ra, mut rb, mut rc, mut rd, mut re) = (Room::new(), Room::new(), Room::new(), Room::new(), Room::new());
     let (mut source, mut destination) = (mount(&mut a, &mut ra), mount(&mut b, &mut rb));
     let last = component(&mut source, &names, &mut buffer);
     let count = count_of(&mut source, &last).unwrap();
     let copy = move_out(&mut source, &names, &mut buffer).unwrap();
-    // The destination held a component of this name, removed at version 5: the copy comes in at 6, its epoch here.
-    for op in 1..=4 { serve(&mut destination, &names, "other", op, 1, &mut buffer).unwrap(); }
-    let removal = [names.manifest(), names.state()].map(|n| Update { name: n.as_bytes(), expected: 4, root: None });
-    destination.0.commit(&removal, 7).unwrap();
-    assert_eq!(restore(&mut destination, &names, "model", 1, 1, &mut buffer), Ok(Restored::Fresh { epoch: 5 }));
+    // Into a store that never held its names: they come in at version 1, its epoch here, though it recorded 4.
     let Ok(Restored::Found(landed)) = move_in(&mut destination, &copy, &names, &mut buffer) else { panic!() };
-    assert_eq!((landed.epoch, at(landed, last.epoch), count_of(&mut destination, &landed)), (6, last, Ok(count)));
+    assert_eq!((landed.epoch, at(landed, last.epoch), count_of(&mut destination, &landed)), (1, last, Ok(count)));
     // Saved again here from that epoch; an instance restored before that save is fenced.
     let (mut stale, stale_from, _) = open(&mut destination, &names, &mut buffer).unwrap();
     assert_eq!(serve(&mut destination, &names, "shell", 4, 40, &mut buffer), Some(100));
-    assert_eq!(open(&mut destination, &names, &mut buffer).unwrap().1, 7);
+    assert_eq!(open(&mut destination, &names, &mut buffer).unwrap().1, 2);
     assert_eq!(keep(&mut destination, &names, &mut stale, stale_from, 0, &mut buffer), Err(Error::Fenced));
     // The state's name moved alone: refused. The manifest's name moved along to the same manifest: its state and the
     // state's name still disagree, refused.
@@ -832,4 +828,31 @@ fn a_moved_in_checkpoint_is_restored_and_saved_and_its_names_still_checked() {
     let moved = copy_of(&mut source, &[manifest, Named { name: names.state(), version: r.epoch, root: other }]).unwrap();
     assert_eq!(move_in(&mut mount(&mut c, &mut rc), &alone, &names, &mut buffer), Err(Error::Inconsistent));
     assert_eq!(move_in(&mut mount(&mut d, &mut rd), &moved, &names, &mut buffer), Err(Error::Inconsistent));
+    // Into a store that held its names, removed there at version 5: they come in at 6, not their first version, and it
+    // is refused (not provided).
+    let mut held = mount(&mut e, &mut re);
+    for op in 1..=4 { serve(&mut held, &names, "other", op, 1, &mut buffer).unwrap(); }
+    let removal = [names.manifest(), names.state()].map(|n| Update { name: n.as_bytes(), expected: 4, root: None });
+    held.0.commit(&removal, 7).unwrap();
+    assert_eq!(restore(&mut held, &names, "model", 1, 1, &mut buffer), Ok(Restored::Fresh { epoch: 5 }));
+    assert_eq!(move_in(&mut held, &copy, &names, &mut buffer), Err(Error::Inconsistent));
+    assert_eq!(held.0.snapshot(names.manifest().as_bytes()), Ok((6, Some(r.manifest))));
+}
+
+#[test]
+fn an_older_checkpoint_published_again_by_hand_at_a_later_version_is_refused() {
+    // Four saves; then the manifest and state of epoch 2, which the names' history keeps, published again over both
+    // names at version 5. Its epoch is not their version, and they are not at their first: not restored, nothing saved.
+    let mut medium = Memory { data: vec![0; 512 * SECTOR] };
+    let mut room = Room::new();
+    let mut local = mount(&mut medium, &mut room);
+    let names = Names::of("model").unwrap();
+    let mut buffer = [0u8; MAX];
+    for op in 1..=4 { serve(&mut local, &names, "shell", op, op, &mut buffer).unwrap(); }
+    let at_2 = |local: &Local, name: &str| local.0.history(name.as_bytes()).unwrap().iter().find(|v| v.version == 2).and_then(|v| v.root()).unwrap();
+    let older = [names.manifest(), names.state()].map(|n| Update { name: n.as_bytes(), expected: 4, root: Some(at_2(&local, n)) });
+    assert_eq!(local.0.commit(&older, 7).unwrap()[..2], [5, 5]);
+    assert_eq!(restore(&mut local, &names, "model", 1, 1, &mut buffer), Err(Error::Inconsistent));
+    assert_eq!(serve(&mut local, &names, "shell", 5, 5, &mut buffer), None);
+    assert_eq!(local.0.snapshot(names.manifest().as_bytes()).unwrap().0, 5);
 }
