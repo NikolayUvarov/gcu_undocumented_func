@@ -2105,6 +2105,54 @@ fn the_picture_is_chosen_by_browsing() {
     assert!(wm.status().contains("BROWSE=data:.."), "{}", wm.status());
 }
 
+// The maintainer (2026-10-30): Enter on the file of the picture shown, or a click on it, offers the choice of another in
+// its directory, the file chosen there, rather than a line saying so; a file wm could not show offers it too.
+#[test]
+fn the_picture_already_shown_offers_the_choice_of_another() {
+    use settings::{Outcome, Settings};
+    fn files(dir: &str) -> Result<Vec<(String, bool)>, String> {
+        let list: &[(&str, bool)] = match dir {
+            "data" => &[("sky.bmp", false), ("pics", true), ("Moon.PNG", false)],
+            _ => return Err("NotFound".into()),
+        };
+        Ok(list.iter().map(|&(n, d)| (String::from(n), d)).collect())
+    }
+    let config = Config { picture: Picture::Image("data/sky.bmp".into()), ..Config::default() };
+    let screen = |s: &Settings| {
+        let mut cells = vec![Cell::BLANK; 160 * 50];
+        let mut grid = Grid::new(&mut cells, 160, 50);
+        s.draw(&mut grid, &DARK, &config);
+        (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect::<String>()).collect::<Vec<_>>().join("\n")
+    };
+    let mut s = Settings::new(&config, (160, 50));
+    s.lister = files;
+    s.on_pages = false;
+    s.key(key(KEY_DOWN), &config);
+    assert_eq!((s.row, s.file.as_str()), (1, "data/sky.bmp"), "the row names the picture's file");
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+    let b = s.browser.as_ref().expect("Enter on the picture's own file browses");
+    assert_eq!((b.dir.as_str(), b.entries[b.selected].0.as_str()), ("data", "sky.bmp"), "in its directory, on it");
+    assert_eq!(b.why.as_deref(), Some("data/sky.bmp is the picture already: choose another, or Esc"));
+    assert!(screen(&s).contains("data/sky.bmp is the picture already: choose another, or Esc"), "{}", screen(&s));
+    // Another taken from there.
+    s.key(key(KEY_UP), &config);
+    match s.key(key(KEY_ENTER), &config) { Outcome::Changed(c) => assert_eq!(c.picture, Picture::Image("data/Moon.PNG".into())), other => panic!("{:?}", other) }
+    assert!(s.browser.is_none());
+    // A click on the row of the picture's own file does the same; a new name typed there waits for Enter.
+    let inner = s.area().inner();
+    let moon = Config { picture: Picture::Image("data/Moon.PNG".into()), ..config.clone() };
+    assert_eq!(s.click(inner.x + 20, inner.y + 2, &moon), Outcome::Stay);
+    assert!(s.browser.as_ref().is_some_and(|b| b.why.is_some()), "a click on the picture's own file browses");
+    s.key(key(KEY_ESC), &moon);
+    s.key(key(KEY_BACKSPACE), &moon);
+    assert_eq!(s.click(inner.x + 20, inner.y + 2, &moon), Outcome::Stay);
+    assert!(s.browser.is_none(), "a name being typed is not taken by a click");
+    // A file wm could not show: the choice, saying why.
+    s.offer(String::from("data/Moon.PNG: not a picture wm reads; the pattern instead"));
+    let b = s.browser.as_ref().unwrap();
+    assert_eq!((b.dir.as_str(), b.why.as_deref()), ("data", Some("data/Moon.PNG: not a picture wm reads; the pattern instead")));
+}
+
 // 000-APP-0086: the safe start's notice offers the shell's window; a click on the status line runs it while it shows,
 // and not once another notice took its place.
 #[test]

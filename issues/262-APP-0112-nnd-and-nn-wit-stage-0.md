@@ -1,12 +1,12 @@
 # 262-APP-0112 — The model service `nnd` and `idl/nn.wit` 1.0: stage 0 of 262, for NRL's native integration
 
-**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed on 2026-10-29 with `NRL` and `KRN`; the code follows) · **Blocked by:** for the native part, `nnd` as a boot service with its grants and the shell's badged client ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), which the agreed design unblocks); a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed on 2026-10-29 with `NRL` and `KRN`; `idl/nn.wit`, `nnd`, its checks and the shell's badged clients are written; the native model suite is left) · **Blocked by:** nothing for the native part: `nnd` as a boot service with its grants and the shell's slot ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)) are in `main` since landing round 50 (2026-10-30); later, a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-28, from NRL's request `issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11` on `codex/NRL-lab` (41633c21) and its messages `APP/2026-10-26T1740Z-NRL-native-nnd-interface-and-smoke-harness.md` and `APP/2026-10-26T1828Z-NRL-runtime-v0-ready-native-integration-pending.md` on `internal-dev-messages`.
 
 ## Problem
 
-- **What is in `main`.** `KRN` made the memory and the CPUs for large models: 262-KRN-0160 to 0165, ABI 19 and 20. Nothing serves models yet: there is no `nnd` and no `idl/nn.wit`.
+- **What was in `main` when this was recorded (2026-10-28).** `KRN` made the memory and the CPUs for large models: 262-KRN-0160 to 0165, ABI 19 and 20. Nothing served models: there was no `nnd` and no `idl/nn.wit`.
 - **What `NRL` has.** On its branch, `nrl-runtime` version 0: a checked `no_std` executor of stateless feed-forward models, with owner- and model-bound sessions, budgets and cooperative cancellation. Its Rust API is linked code, not an IPC interface.
 - **What T11 needs.** NRL's T11 (900-NRL-0017) closes only when such a model runs on MIND Core through `nnd`, with:
   - authenticated client identity;
@@ -63,7 +63,7 @@
   - `--memory <MiB>` its quota (asked of `KRN`);
   - a probe worker telling whether it may start workers.
 
-  It runs once 262-KRN-0178 gives it its boot image and grants.
+  Since 262-KRN-0178 landed (2026-10-30), `init` starts it at boot with those grants.
 - **Host tests:** 18 in `nnpkg/tests/`, on `NRL`'s pinned bundle, in `scripts/host_tests.sh`:
   - the encoding vector back to its bits and bytes, and 200 000 floats and strings as `serde_json` writes them;
   - every object file in the profile, and the model ID `1b23aaf4…`;
@@ -73,7 +73,7 @@
   - 20 000 made-up answers of the parser refused without a panic;
   - the badge rules, budgets, cancellation, the deadline, retirement and memory.
 - **Left:**
-  - item 4, the shell's part (minting, keeping, revoking and retiring a badge; `nn`), which waits for 262-KRN-0178's slot and `REQUEST_NN`;
+  - item 4, the shell's part (minting, keeping, revoking and retiring a badge; `nn`), which waited for 262-KRN-0178's slot and `REQUEST_NN` (written 2026-10-30, below);
   - item 5, `nncheck` and the suite;
   - the profile entry, after the native run.
 
