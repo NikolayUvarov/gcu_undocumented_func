@@ -853,7 +853,13 @@ impl Agent {
     /// One heartbeat saying `shutting_down`, before a restart the agent knows of; then no heartbeat or poll until the
     /// restart, or `QUIET_MS` if it does not come (750-EFF-0006).
     fn last_heartbeat(&mut self) {
-        let outcome = self.heartbeat(true, None);
+        // The connection may have closed while the agent worked (an update's staging takes minutes on a slow machine):
+        // a failed try drops it, and the next opens a new one.
+        let mut outcome = Outcome::Retry;
+        for _ in 0..3 {
+            outcome = self.heartbeat(true, None);
+            if outcome != Outcome::Retry { break; }
+        }
         mind::println!("EFFECTOR: THE MACHINE RESTARTS: SHUTTING_DOWN SENT ({:?})", outcome);
         self.quiet_until = now() + QUIET_MS;
     }
