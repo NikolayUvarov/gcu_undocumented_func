@@ -70,6 +70,8 @@ A driver's proprietary file thus goes to a running machine with no disk written 
 | `reboot` | restarts the other end's machine. On MIND Core, `link.conf` must hold the word `dev` |
 | `log [-f]` | the other end's log; `-f` follows it |
 | `console` | lines from standard input to the other end's console, its output back; Ctrl-D ends |
+| `key <chord>... [--pace <ms>]` | presses keys on the other end's machine, as its keyboard would (800-LNK-0032): QEMU's `sendkey` names joined by `-` (`ctrl-alt-f6`, `alt-0`, `shift-a`, `ret`), a chord every `--pace` ms (default 20). MIND Core: `dev` in `link.conf` and the input capability from `init` |
+| `type <text> [--pace <ms>]` | types the text there as the US keys give it, a character every `--pace` ms; a character no US key gives goes as itself. `--pace 0` sends as many as a frame holds at once |
 | `sniff [<seconds>]` | the line's raw bytes in hex as they come (default 10 s): on an RS-485 pair, listen on one converter while the other sends, to check the wiring and the rate |
 | `board <line>` | one line to a [multi-device](multi-device.md) board's control port (`type …`, `key …`, `move …`, `status`), and its answer |
 | `serve <dir> [--log <file>] [--console <command>] [--run]` | the slave: files in `<dir>` and its directories, the log read from `<file>`, a console running `<command>` through `/bin/sh -c`. Without `--console` there is no console. `--run` lets the master start programs in `<dir>`, as the user who serves: as good as a shell for whoever holds the cable. A program put over the link gets its owner's execute bit when it is run |

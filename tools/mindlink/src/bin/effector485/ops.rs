@@ -21,10 +21,11 @@ pub const RUN_TIMEOUT_MAX: u64 = 86_400;
 const ENDED_KEPT: usize = 500;
 
 /// The kinds, and the fields each needs besides `kind`, `idempotency_key` and `reason`.
-pub const KINDS: [(&str, &[&str]); 16] = [
+pub const KINDS: [(&str, &[&str]); 18] = [
     ("hello", &[]), ("put", &["file"]), ("get", &["name", "file"]), ("list", &[]), ("stat", &["name"]), ("mkdir", &["name"]),
     ("move", &["from", "to"]), ("delete", &["name"]), ("rmdir", &["name"]), ("run", &["name"]), ("install", &["file"]),
     ("uninstall", &["name"]), ("log", &[]), ("reboot", &[]), ("shell", &["line"]), ("replace", &["unit"]),
+    ("key", &["names"]), ("type", &["text"]),
 ];
 /// The kinds that only read the other end: they pass a lease that is not theirs.
 pub const READS: [&str; 5] = ["hello", "log", "list", "stat", "get"];

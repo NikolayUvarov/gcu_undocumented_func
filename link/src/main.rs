@@ -7,8 +7,9 @@
 // words as arguments: `baud=<rate>`, and `run`, without which it starts no program (800-LNK-0009). Files may lie in
 // directories below data/link/ (800-LNK-0010). With `dev`, the developer mode (800-LNK-0012, the maintainer's decision
 // of 2026-10-21): it also starts the built-in programs by name, lends them the network, the Wi-Fi station and the
-// system monitor where init granted it those, and restarts the machine on REBOOT. Everything from the line is checked by linkproto before use (MC-11.4);
-// hellos, files, programs and refusals are logged (MC-10.2).
+// system monitor where init granted it those, and restarts the machine on REBOOT; and posts the master's key events where
+// init gave it the input capability (800-LNK-0032). Everything from the line is checked by linkproto before use (MC-11.4);
+// hellos, files, programs, input and refusals are logged (MC-10.2).
 mod names;
 
 use linkproto::app::{FileService, Files, RunOutput, COMMAND_MAX, EXIT_UNKNOWN, RUN_ENDED, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
@@ -348,6 +349,23 @@ impl Programs {
         Ok(())
     }
 
+    /// INPUT (800-LNK-0032): the master's events posted as the keyboard drivers post them, a word of 0 the attention key,
+    /// through the input capability init gives link with `dev` (KRN). Without either, refused DENIED with none posted.
+    fn input(&mut self, words: &[u64]) -> Result<u32, u8> {
+        if !self.dev { mind::println!("[LINK] INPUT REFUSED: link.conf HAS NO \"dev\""); return Err(code::DENIED); }
+        let mut posted = 0u32;
+        for &w in words {
+            let r = if w == 0 { mind::dev::input_key(0, 0, true) } else { mind::dev::input_key(w as usize, w as usize, false) };
+            match r {
+                Ok(()) => posted += 1,
+                Err(mind::sys::Error::Rights) if posted == 0 => { mind::println!("[LINK] INPUT REFUSED: INIT GAVE LINK NO INPUT CAPABILITY"); return Err(code::DENIED); }
+                Err(e) => { mind::println!("[LINK] INPUT: {} OF {} EVENTS POSTED, THEN {:?}", posted, words.len(), e); return Ok(posted); }
+            }
+        }
+        mind::println!("[LINK] INPUT: {} EVENTS FROM THE MASTER", posted);
+        Ok(posted)
+    }
+
     fn output(&mut self, id: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> {
         self.pump();
         let run = self.find(id)?;
@@ -653,6 +671,8 @@ impl Files for Store {
     }
 
     fn reboot(&mut self) -> Result<(), u8> { programs().reboot() }
+
+    fn input(&mut self, words: &[u64]) -> Result<u32, u8> { programs().input(words) }
 
     fn command(&mut self, line: &str) -> Result<u32, u8> { programs().command(line) }
 
