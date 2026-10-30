@@ -7070,9 +7070,6 @@ def listen_suite(vm, starts):
     shared = len(set(lines.values())) == 1
     # QEMU's "none" backend feeds the AC97 microphone with silence at the real rate ("wav" has no capture).
     require(vm.command("run listen 1 &"), "PID=1 NAME=listen BACKGROUND")
-    # Nothing typed while it records: each `logs` scrolls the 1280x800 console. With `logs` every 0.25 s, 2 runs of 4
-    # on x86 TCG overflowed audio_gw's capture ring (16 buffers, 341 ms) while the compositor's frames took up to 285 ms.
-    time.sleep(2)
     log = ""
     for _ in range(40):
         log += vm.command("logs 1")
