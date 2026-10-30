@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -49,7 +49,7 @@ An object larger than a block is a Merkle-DAG named by one root CID (`libmind/sr
   So the same bytes always give the same root, however they are written. One node of height 1 covers 4 MiB, height 2 covers 1 GiB, height 3 covers 256 GiB.
 - **One encoding.** A node is accepted only if re-encoding it gives exactly its bytes. Integers must be in their shortest form, keys in DAG-CBOR's order with no others, and arrays of definite length. Each link is tag 42 over the identity multibase prefix and a supported CID (MC-4.2).
 - **The reader trusts no store.** `size` and `read_at` check every node and chunk on the way from the root against its CID. They also check it against its place in the shape: the link count, the children's types (chunks under height 1, nodes above) and sizes, and the chunk lengths. A block that does not match is refused as corrupt, and a tree out of shape is refused as such.
-- **In the block store:** `put` names the content type. A `dag-cbor` block is stored only if `decode` accepts it, and a record typed as a node that does not decode is corrupt (301-STO-0002).
+- **In the block store:** `put` names the content type. A `dag-cbor` block is stored only if `decode` accepts it (or `tree::decode`, below), and a record typed as a node that does not decode is corrupt (301-STO-0002).
 - Names, retention and collection are below.
 
 Evidence: `tests/dag_host.rs`.
@@ -57,6 +57,46 @@ Evidence: `tests/dag_host.rs`.
 - Non-canonical nodes, trees out of shape and forged blocks are refused.
 
 On the platform, the QEMU `store` suite (x86 and aarch64, 300-STO-0003) stores an object of 4 MiB + 1 byte through the running store with `blocks pattern`. It gets the reference's root and reads back equal. The `storefaults` suite damages a chunk of a stored object on the store's medium; reading the object then fails as corrupt (300-STO-0005, below).
+
+## Directories as objects — host-tested (311-STO-0027)
+
+A directory is a set of named files and subdirectories under one root CID (`libmind/src/tree.rs`), the first step of [311](../../issues/311-storefs-a-file-face.md).
+
+- **A directory node** is one DAG-CBOR block `{"v": 1, "entries": [[name, kind, size, link], ...]}`, its keys in DAG-CBOR's order. Each entry is an array of four:
+  - `name`: 1 to 255 bytes of UTF-8, without `/` or NUL, neither `.` nor `..`;
+  - `kind`: 0 a file, 1 a directory;
+  - `size`: a file's bytes, or a directory's number of entries;
+  - `link`: the CID, written as an object's node writes its links. A file is `raw` or `dag-cbor` (an object, above); a directory is `dag-cbor`.
+
+  The entries are sorted by the names' bytes, each name once. The empty directory is `{"v": 1, "entries": []}`. `"v"` is the schema's version, and another is refused (MC-4.13).
+- **One encoding.** A node is accepted only if re-encoding it gives exactly its bytes, as for an object's nodes.
+- **One block at most.** A directory over 16 KiB is refused: 54 entries with names of 255 bytes, about 350 with names of a few. Larger directories, sharded, are not built.
+- **The walk** (`tree::walk`) visits every block under a root, a file's or a directory's:
+  - a file is walked as an object (`dag::walk`);
+  - directories are kept on a stack of at most 32 from the root down; a deeper tree is refused as out of shape. A parent is read again from its CID on the way back, so the walk holds one block;
+  - each directory node is checked against its CID and the schema, and each entry against what it names: its kind against the block it links, its size against the file's bytes or the directory's entries;
+  - it returns the bytes of the files under the root; a file named twice counts twice. `tree::size` gives the same from the directory nodes and each file's root block alone;
+  - **its work is bounded:** a walk is given a number of steps (an entry gone through, a block visited, a file's blocks included) and stops with `too-large` once it has taken them.
+- **In the block store:**
+  - `put` takes a `dag-cbor` block that is an object's node or a directory, and refuses anything else (`invalid`); a mount counts a record of neither as corrupt.
+  - The store's walk is the tree's. A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`.
+  - **A walk in the store takes at most four steps for each block its index can hold, and 64 more.** A tree that needs more is refused as out of shape (`invalid`), with nothing written. So a walk's work is bounded by the medium's size (MC-5.1). By count, not run here: a 3 GiB object of distinct chunks takes about 199 000 steps of the about 790 000 its index's 225 654 slots give. A collection marks every block a retained directory reaches, so a directory's files are retained by the name or pin that holds it.
+  - An owner is charged the bytes of the files under a directory it retains; a mount reads them again with `tree::size`.
+- **Not built yet:** a working tree in memory, the publication of a changed tree by compare-and-swap, `storefs` (a `vfs.wit` provider) and the shell's commands. The store built for the platform takes directories, but no program there makes or reads one yet, and no QEMU suite tests them (MC-12.1, 12.3).
+
+Evidence: host tests of the code, not a proof (MC-12.2).
+- `tests/tree_host.rs`:
+  - a node's bytes equal an encoding written in the test from the schema, and decode back to the same entries;
+  - every byte of a valid node changed to every other value is refused, or reads as exactly what it encodes;
+  - names unsorted or twice, bad names, kinds and links, and a node over a block are refused;
+  - the walk of a nested tree visits exactly its blocks;
+  - a missing block is `not-found`, a changed one `corrupt`; an entry that disagrees with its object, and a tree past the depth, are out of shape;
+  - a walk and a sizing take exactly the steps counted, and one step fewer stops them.
+- `tests/blockstore_host.rs`:
+  - a published tree keeps its files across a collection and a mount, an unretained one is freed, and a removed one goes;
+  - a tree missing a file's block is `incomplete` for a publication, a pin and a commit;
+  - a directory node is stored and found again by a mount, and a `dag-cbor` block of neither schema is refused;
+  - a tree that takes one step more than the store gives is refused for a publication, a pin and a commit, and one within is published.
 
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
 
@@ -211,7 +251,7 @@ The platform's cipher is the crate, tested by its own project. On the platform, 
 
 A medium that outlives the machine's memory keeps no key: `keystore` keeps it as the store's own secret.
 - **Key source 2, kept.** The superblock holds an id of 8 random bytes where the key would be, zeros after it, and the check as before. The key is `blockstore`'s secret `volume-<id in hex>` in `keystore` (`keystore.wit` 1.4's `secret-put` and `secret-get`), sealed there under a key from the device key.
-- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take ([308-KRN-0183](../../issues/308-KRN-0183-a-secrets-client-for-blockstore.md), the kernel session's). Until it does, every medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
+- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take ([308-KRN-0183](../../issues-done/308-KRN-0183-a-secrets-client-for-blockstore.done), the kernel session's). Until it does, every medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
 - **Which key is kept.** At the first mount of a blank medium, or of a partition with no key yet:
   - a RAM disk keeps its key in its superblock, as nothing of it outlives a reset and a restarted store must find it;
   - any other medium's key is kept, if it is random and `keystore` keeps it;
@@ -325,12 +365,12 @@ The policy (MC-4.5, MC-4.11, Appendix B.3):
   - pin records of ended pins.
 - **A collection runs** when a put, a publication, a removal or a pin finds no room, and on `collect` (`BADGE_PUT`). It cannot free what anything retains, so it needs no right beyond storing.
 
-**Accounts and quotas (303-STO-0002, MC-4.11).** What a name's version or a pin retains is charged to an owner: the badge of the client that published or pinned it. The account is the bytes of the distinct roots the owner retains, through the kept versions of names and through its pins, each root counted once however many names and pins hold it. A root's bytes are its object's size; blocks shared between different objects are counted in each. A publication or a pin that would take the account past the owner's quota is refused with `quota`, and nothing is written. `usage` reports the caller's account, quota, names and pins; `pins` lists the first 32 of its pins. The store holds 64 pins in all (the service's static table); a pin past them is refused with `full`.
+**Accounts and quotas (303-STO-0002, MC-4.11).** What a name's version or a pin retains is charged to an owner: the badge of the client that published or pinned it. The account is the bytes of the distinct roots the owner retains, through the kept versions of names and through its pins, each root counted once however many names and pins hold it. A root's bytes are its object's size (a directory's: the bytes of the files under it); blocks shared between different objects are counted in each. A publication or a pin that would take the account past the owner's quota is refused with `quota`, and nothing is written. `usage` reports the caller's account, quota, names and pins; `pins` lists the first 32 of its pins. The store holds 64 pins in all (the service's static table); a pin past them is refused with `full`.
 
 The quota is fixed: three quarters of the medium for every owner. Nobody grants it yet, so it bounds what one owner can take, not what several can take together.
 
 A collection:
-- **Mark.** It walks every retained object (`dag::walk`): each node is read, checked against its CID and the shape, and marked, and each chunk is marked. If an object lacks a block or holds a corrupt node, the collection refuses (`incomplete`, `corrupt`) and frees nothing. A block the object still needs is never freed because another went missing.
+- **Mark.** It walks every retained object (`tree::walk`, a file with `dag::walk`): each node is read, checked against its CID and the shape, and marked, and each chunk is marked. If an object lacks a block or holds a corrupt node, the collection refuses (`incomplete`, `corrupt`) and frees nothing. A block the object still needs is never freed because another went missing.
 - **Sweep.** One pass over the medium frees what is not marked or leased. Each record is freed in a crash-safe order:
   1. a one-sector marker over its frame (`MIND-DEL`, the sectors it covers, a SHA-256), sealed like any record, flushed;
   2. zeros over its other sectors;

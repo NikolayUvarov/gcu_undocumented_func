@@ -20,6 +20,11 @@ Programs keep their data as files on FAT, which has no history, no snapshots, no
 - **What moves:** the programs' own data directories (000-KRN-0170) can live here. FAT stays for the boot volume and for exchange with other systems, as a projection with an authorized import (MC-11.10).
 - `APP`'s part, a request: `fm` and the shell over `storefs`.
 
+## Tasks
+
+- [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done): directories as objects, their walk, and the store's reachability through them. Done 2026-10-30.
+- [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md): a working tree in memory, published by compare-and-swap; `blocks tree`.
+
 ## Acceptance criteria
 
 - QEMU: the shell's file commands on a `storefs` mount; a cut in the middle of a publish leaves the old root; two writers, one of them told of the conflict.

@@ -46,7 +46,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -165,8 +165,14 @@ class VM:
             time.sleep(wait)
 
     def services(self):
-        # Real service PIDs from the ps table (the harness does not translate its rows).
-        return {name: int(pid) for pid, name in re.findall(r"^(\d+) ([\w#-]+) ", self.command("ps", raw=True), re.M) if name in SERVICES}
+        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one.
+        found, live = {}, set()
+        for pid, name, state in re.findall(r"^(\d+) ([\w#-]+) (\S+)", self.command("ps", raw=True), re.M):
+            if name in SERVICES and (state != "EXITED" or name not in live):
+                found[name] = int(pid)
+                if state != "EXITED":
+                    live.add(name)
+        return found
 
     def service_logs(self, name, until=None):
         # Service log; with `until`, wait for the line (drivers initialize in parallel with the test).
@@ -291,11 +297,20 @@ class VM:
             self.hmp(f"sendkey {key} 30")
             time.sleep(.06)
 
-    def screenshot(self):
+    def screenshot(self, still=False):
+        # `still`: the guest paused while QEMU reads the screen, which it otherwise reads as the guest writes it. QMP's
+        # own screendump then, so that the guest stops only for the dump, not for the monitor's typing pace.
         path = ROOT / (self.disk + ".ppm")
         try:
-            # Relative inside the tree (no drive letter for HMP on Windows); a disk elsewhere (/tmp) is named in full.
-            self.hmp(f"screendump {(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path).as_posix()}")
+            if still:
+                self.qmp("stop")
+                try:
+                    self.qmp("screendump", filename=str(path))
+                finally:
+                    self.qmp("cont")
+            else:
+                # Relative inside the tree (no drive letter for HMP on Windows); a disk elsewhere (/tmp) is named in full.
+                self.hmp(f"screendump {(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path).as_posix()}")
             data = path.read_bytes()
             # Retain a viewable artifact outside the build tree.
             (Path(tempfile.gettempdir()) / "mind-core-clock.ppm").write_bytes(data)
@@ -2649,6 +2664,7 @@ def smp_suite(vm):
     require(vm.service_logs("init", "rtc RESTARTED"), "rtc RESTARTED")
     assert heap_used(vm) == baseline
     workers_check(vm)
+    nnd_check(vm)
     if vm.arch == "aarch64":
         # No WFI state in QEMU's monitor: with every CPU idle the emulator uses little processor time.
         vm.serial()
@@ -2727,6 +2743,61 @@ def workers_check(vm):
     require(vm.command("rm data/memory.conf"), "OK")
     held = f"held, the program and its {cpus - 1} workers ran on {cpus} CPUs, and killing it ended them" if cpus > 1 else "one CPU: no held check"
     print(f"PASS: workers (262-KRN-0163): none without the owner's line; {cpus} counted on a shared page and one more refused; one that faulted ended alone; {held}; kbench: a worker starts in {rows['worker start'][0] / 1e6:.1f} ms and answers a call in {rows['worker call and reply'][0] / 1000:.1f} µs", flush=True)
+
+
+def nnd_check(vm):
+    """262-KRN-0178: init starts the model service nnd with its endpoint, the log and read-only scopes of data/models/ and
+    of the model disk (models:) alone, each where it exists, as init makes neither; its line of data/memory.conf, read at each start, gives its
+    quota and up to one worker per CPU, and without one it has the default quota and no workers. The shell holds its
+    client with the right to badge, which it lends for REQUEST_NN."""
+    def ready(count):  # nnd's quota and most workers as its start number `count` says them
+        for _ in range(60):
+            lines = re.findall(r"\[NND\] READY: QUOTA (\d+) MIB, (\d+) WORKERS AT MOST", vm.command("dmesg -s nnd", raw=True))
+            if len(lines) >= count:
+                return tuple(map(int, lines[count - 1]))
+            time.sleep(1)
+        raise AssertionError((count, vm.command("dmesg -s nnd", raw=True)[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
+
+    def quota(pid):
+        found = re.search(r"QUOTA TASKS=\d+/(\d+) ENDPOINTS=\d+/(\d+) MEMORY=\d+/(\d+)", vm.command(f"stat {pid}", raw=True))
+        assert found, vm.command(f"stat {pid}", raw=True)
+        return int(found[1]), int(found[2]), int(found[3]) >> 20
+
+    pids = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    named = {pid: n for n, pid in pids.items()}
+    caps = vm.command(f"stat caps {pids['nnd']}", raw=True)
+    held = {int(slot): (int(badge), named.get(servers.get(int(ep)), "?")) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
+    slots = {int(slot) for slot in re.findall(r"^SLOT=(\d+) ", caps, re.M)}
+    assert slots - {2, 3} == {1, 12} and held[1][1] == "nnd" and held[12] == (0, "logd"), (held, caps)
+    assert ready(1) == (16, 0) and quota(pids["nnd"]) == (0, 1, 16), quota(pids["nnd"])
+    shell = vm.command(f"stat caps {pids['shell']}", raw=True)
+    lent = re.search(r"^SLOT=41 GEN=0 KIND=1 RIGHTS=22 SIZE=0 BADGE=0 EP=(\d+)", shell, re.M)
+    assert lent and servers.get(int(lent[1])) == pids["nnd"], shell
+    # The owner's line, read at the restart, and again when init restarts nnd after its end.
+    vm.command("mkdir data")
+    vm.command("mkdir data/models")
+    require(vm.command("write data/memory.conf nnd 64"), "WROTE 7 BYTES")
+    require(vm.command("svc restart nnd"), "nnd restarted: PID")
+    assert ready(2) == (64, vm.cpus), ready(2)
+    caps = vm.command(f"stat caps {vm.services()['nnd']}", raw=True)
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    held = {int(slot): (int(badge), servers.get(int(ep))) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
+    for slot in {3, 2} & set(held):  # read-only scopes: their badges are vfs_server's own, from 0x100
+        assert held[slot][1] == vm.services()["vfs_server"] and held[slot][0] >= 0x100, (slot, held)
+    assert 3 in held, caps  # data/models/ exists now
+    require(vm.command("dmesg -s init", raw=True), "[INIT] nnd: 64 MIB AND WORKERS BY data/memory.conf")
+    require(vm.command("dmesg -s vfs_server", raw=True), ":/models (READ-ONLY)")  # each start's scope, made anew
+    assert quota(vm.services()["nnd"]) == (32, 1, 64), quota(vm.services()["nnd"])  # NND_TASKS; the kernel bounds live workers by the CPUs
+    require(vm.command(f"kill {vm.services()['nnd']}", raw=True), "KILLED PID=")
+    assert ready(3) == (64, vm.cpus), ready(3)
+    require(vm.command("rm data/memory.conf"), "OK")
+    require(vm.command("svc restart nnd"), "nnd restarted: PID")
+    assert ready(4) == (16, 0), ready(4)
+    require(vm.command("dmesg -s init", raw=True), "[INIT] nnd: NO LINE IN data/memory.conf: 16 MIB, NO WORKERS")
+    models = "and the model disk's " if 2 in slots else ""
+    print(f"PASS: nnd (262-KRN-0178): its endpoint, the log and read-only scopes of data/models/ {models}alone; 16 MiB and no workers without a line, "
+          f"64 MiB and {vm.cpus} workers with one, read again at a restart and after its end; the shell holds its client with the right to badge", flush=True)
 
 
 def held_check(vm, cpus):
@@ -2820,13 +2891,14 @@ def isolation_suite(vm):
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
     # 000-KRN-0086: the compositor copies whole frames only. app2 numbers its frames in their colour and draws the bottom
     # half 3 ms before the top: a frame copied mid-drawing shows a bottom half newer than the top. The compositor's own
-    # copy runs from the top, so a screen caught during it may show the top newer.
+    # copy runs from the top, so a screen caught during it may show the top newer. The guest is paused for each screen:
+    # QEMU reads it while the guest writes it otherwise, and a copy overtaking that read also shows the bottom newer.
     vm.send("run app2\n")
     pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
     vm.send("F\n")
     seen, until = [], time.monotonic() + 4
     while time.monotonic() < until:
-        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        _, size, _, pixels = vm.screenshot(still=True).split(b"\n", 3)
         width, height = map(int, size.split())
         def number(y):
             r, g, b = pixels[(y * width + width // 2) * 3:][:3]
@@ -3643,8 +3715,21 @@ def store_suite(vm):
     require(tally("effect fy.txt"), "tally: effect refused: effect 1 is pending; reconcile it first")
     require(tally("reconcile 1 done"), "RECONCILED 1 SAVED EPOCH 6")
     require(tally("effect fy.txt"), "EFFECT 2 DONE SAVED EPOCH 8")
+    # 313-STO-0026: an addition sent with an operation ID is applied once. Sent again, also after the store restarted,
+    # it is answered with its first result; an older one is refused.
+    require(tally("add plums 2 op shell 1"), "SAVED EPOCH 9 SEQUENCE 9: plums = 2")
+    require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+    require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
+    require(tally("add plums 5 op shell 2"), "SAVED EPOCH 10 SEQUENCE 10: plums = 7")
+    require(tally("add plums 5 op shell 1"), "tally: operation 1 of shell is older than its last: refused")
+    shown = tally("show")
+    for line in ("TALLY EPOCH 10 SEQUENCE 10", "plums = 7"):
+        require(shown, line)
     print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
-          "effect cut short comes back pending and is reconciled before another begins", flush=True)
+          "effect cut short comes back pending and is reconciled before another begins, an operation sent again is "
+          "applied once (also after the store restarted)", flush=True)
     store_domains_check(vm)
     fm_store_check(vm)
 
@@ -4626,25 +4711,22 @@ def link_suite(args):
                     if power == "NETWORK":
                         # 800-KRN-0142: the broker made netcheck's grant for a launch-only client.
                         assert re.search(r"\[NETPOLICY\] GRANT \d+ TO netcheck: .*, ASKED BY A LAUNCH-ONLY CLIENT", vm.command("dmesg -s netpolicy", raw=True)), "launch-only"
-            # 800-LNK-0015: the shell's lines over the link, through the client init grants with dev (800-KRN-0148). Until
-            # the shell takes the link's lines (800-APP-0102), a line is not answered within link's minute: SKIP.
-            ip = link(port, "sh", "ip", ok=None, timeout=200)
-            if "did not answer" in ip:
-                print("SKIP: link: sh: the shell does not take the link's lines yet (800-APP-0102)", flush=True)
-            else:
-                assert re.search(r"^CARD \d", ip, re.M), ip
-                require(link(port, "sh", "ps"), "link")
-                # Never from the link, whatever the developer mode allows (800-NET-0038).
-                require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
-                # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
-                link(port, "sh", "tpm", "seal", "link-suite-secret-7", ok=None)
-                logged = vm.command("dmesg -s link", raw=True)
-                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
-                assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
-                assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
-                # 800-LNK-0019: without `link-console` in data/mode.conf a script from the link is refused, `mode` always.
-                require(link(port, "sh", "msh", "/data/link/console.msh", ok=False), "refused")
-                require(link(port, "sh", "mode", ok=False), "refused")
+            # 800-LNK-0015: the shell's lines over the link, through the client init grants with dev (800-KRN-0148), which
+            # the shell takes (800-APP-0102).
+            ip = link(port, "sh", "ip", timeout=200)
+            assert re.search(r"^CARD \d", ip, re.M), ip
+            require(link(port, "sh", "ps"), "link")
+            # Never from the link, whatever the developer mode allows (800-NET-0038).
+            require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
+            # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
+            link(port, "sh", "tpm", "seal", "link-suite-secret-7", ok=None)
+            logged = vm.command("dmesg -s link", raw=True)
+            assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
+            assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
+            assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
+            # 800-LNK-0019: without `link-console` in data/mode.conf a script from the link is refused, `mode` always.
+            require(link(port, "sh", "msh", "/data/link/console.msh", ok=False), "refused")
+            require(link(port, "sh", "mode", ok=False), "refused")
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
@@ -4708,7 +4790,6 @@ def link_suite(args):
             vm.close()
     # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
     # (800-APP-0108), its line logged whole; `mode` stays refused.
-    console = False
     with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
         image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n", "data/mode.conf": b"link-console\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
@@ -4720,23 +4801,19 @@ def link_suite(args):
             script = Path(temp) / "console.msh"
             script.write_text('#!msh\nprint("THE LINK CONSOLE RAN THIS SCRIPT")\n')
             require(link(port, "put", str(script)), "put ")
-            ran = link(port, "sh", "msh", "/data/link/console.msh", ok=None, timeout=200)
-            if "did not answer" in ran:
-                print("SKIP: link: console: the shell does not take the link's lines yet (800-APP-0102)", flush=True)
-            else:
-                require(ran, "THE LINK CONSOLE RAN THIS SCRIPT")
-                assert re.search(r"\[LINK\] COMMAND \d+: msh /data/link/console\.msh", vm.command("dmesg -s link", raw=True)), "the whole line is logged"
-                require(vm.command("dmesg -s shell", raw=True), "[SHELL] FOR THE LINK'S CONSOLE THE SHELL RAN MSH")
-                require(link(port, "sh", "mode", ok=False), "refused")
-                console = True
+            require(link(port, "sh", "msh", "/data/link/console.msh", timeout=200), "THE LINK CONSOLE RAN THIS SCRIPT")
+            assert re.search(r"\[LINK\] COMMAND \d+: msh /data/link/console\.msh", vm.command("dmesg -s link", raw=True)), "the whole line is logged"
+            require(vm.command("dmesg -s shell", raw=True), "[SHELL] FOR THE LINK'S CONSOLE THE SHELL RAN MSH")
+            require(link(port, "sh", "mode", ok=False), "refused")
         finally:
             vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
           "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again; "
-          "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line"
-          + ("; with link-console a script put over the link ran as the console's, refused without it, mode refused in both" if console else ""), flush=True)
+          "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line; the shell's lines over the "
+          "link answered, a policy change refused and a secret kept out of the log; with link-console a script put over the link "
+          "ran as the console's, refused without it, mode refused in both", flush=True)
 
 
 def modes_suite(args):
@@ -4816,6 +4893,7 @@ def modes_suite(args):
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
+    remote_update_check(args)
     modes_lifecycle_check(args)
     installed_apps_check(args)
     if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
@@ -4828,6 +4906,49 @@ def modes_suite(args):
           "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
           "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
           "change, which init logs with its clause (MC-12.6)", flush=True)
+
+
+def remote_update_check(args):
+    """751-KRN-0185: the owner's permission remote-update in data/mode.conf counts only with a mode on, and the link's switch
+    of it only with the link's console; init says so, warns while it counts on a slot signed with the public test key,
+    and drops it with the last mode. The updater's client badged for the gateway is in effector_gw's SLOT_UPDATE."""
+    if not raw_tools():
+        print("SKIP: remote-update check needs mkfs.fat and mtools", flush=True)
+        return
+    for words in (b"development\nremote-update\nlink-remote-update\n", b"remote-update\n"):
+        with tempfile.TemporaryDirectory(prefix="smoke-remote-", dir=ROOT / IMAGE) as temp:
+            image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "data/mode.conf": words})
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+            try:
+                log = vm.command("dmesg -s init", raw=True)
+                if words.startswith(b"development"):
+                    require(log, "[INIT] MODE: DEVELOPMENT; REMOTE UPDATE (data/mode.conf)")
+                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: link-remote-update (NO LINK CONSOLE)")
+                    if "(THE TEST KEY)" in log:  # the tests' images are signed with the public test key
+                        require(log, "[INIT] REMOTE UPDATE ON WITH THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED")
+                    for _ in range(60):
+                        if "effector_gw" in vm.services():
+                            break
+                        time.sleep(1)
+                    pids = vm.services()
+                    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+                    held = re.search(r"^SLOT=35 GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", vm.command(f"stat caps {pids['effector_gw']}", raw=True), re.M)
+                    assert held and held[1] == "1" and servers.get(int(held[2])) == pids["updater"], held
+                    # The last mode turned off takes the permission with it: a mode turned on again does not bring it back.
+                    require(vm.command("mode development off", raw=True), "MODE: NORMAL")
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] REMOTE-UPDATE OFF WITH THE LAST MODE")
+                    assert "remote-update" not in vm.command("cat data/mode.conf", raw=True), vm.command("cat data/mode.conf", raw=True)
+                else:
+                    require(log, "[INIT] MODE: NORMAL (data/mode.conf)")
+                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: remote-update (NEITHER development NOR maintenance)")
+                    assert "REMOTE UPDATE ON" not in log, log[-2000:]
+                assert "PANIC" not in vm.log, vm.log[-2000:]
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-remote-update-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: remote-update (751-KRN-0185): counted with the development mode, left out without a mode, its link switch "
+          "left out without the link's console, the test keys' warning, the gateway's updater client badged 1 in slot 35, "
+          "dropped with the last mode", flush=True)
 
 
 # The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
@@ -5278,7 +5399,8 @@ def effector_grants_check(vm):
     # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap.
     quota = re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
     assert quota and int(quota[1]) == 48 << 20, quota and quota[0]
-    assert set(gw) == {3, 5, 7, 10, 11, 12, 15, 38} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert set(gw) == {3, 5, 7, 10, 11, 12, 15, 35, 38} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert gw[35] == (1, "updater"), gw  # BADGE_UPDATE_GATEWAY: the updater's client, gated by remote-update (751-KRN-0185)
     assert gw[38][1] == "vfs_server" and gw[38][0] > 7, gw  # SLOT_APPS: a writable scope of data/apps/ (750-KRN-0169)
     require(vm.command("dmesg -s vfs_server", raw=True), ":/apps (WRITABLE)")
     assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (2, "compositor"), gw  # BADGE_REMOTE_EFFECTOR (800-KRN-0156)
@@ -6158,16 +6280,18 @@ def updater_parser_check(vm, https):
     print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
 
 
-def update_releases(temp, arch, changed=None, minimum6=None):
+def update_releases(temp, arch, changed=None, minimum6=None, gateway=None):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
     TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6, and so does
-    the loader, so that slot B boots through its own (351-UPD-0010). Returns the volumes, the server, release 5's channel,
-    release 6's and that one with its signature changed, release 6's manifest, its boot files (name, digest) with the
-    loader's last, and a channel maker."""
+    the loader, so that slot B boots through its own (351-UPD-0010); `gateway`, if named, is both releases' effector_gw.
+    Returns the volumes, the server, release 5's channel, release 6's and that one with its signature changed, release
+    6's manifest, its boot files (name, digest) with the loader's last, and a channel maker."""
     volume = temp / "release5"
     (volume / "EFI/BOOT").mkdir(parents=True)
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
         shutil.copyfile(ROOT / IMAGE / name, volume / name)
+    if gateway:
+        shutil.copyfile(gateway, volume / "effector_gw.elf")
     sign_manifest.sign_volume(volume, version=5)  # the version under the boot key (351-UPD-0024)
     newer = temp / "release6"
     shutil.copytree(volume, newer)
@@ -6387,6 +6511,123 @@ def update_suite(args):
           "raises the version floor to 6, and a record booting slot A's release 5 boots slot B instead; booted back in "
           "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
           "is consistent", flush=True)
+
+
+def install_suite(args, stub_elf):
+    """751-UPD-0032: the Effector gateway's client hands the updater a release as one bundle (update.wit 1.3). The
+    updater's stand-in sits in effector_gw's place (it then holds the updater's client badged for the gateway and acts
+    as the gateway) on a raw image with release 5 in slot A, confirmed, and the development mode on; the gateway's
+    directory holds bundles of release 6 and the list it hands over. With the owner's remote-update off, every
+    install-begin and install-commit is denied and the updater says so. With it on: a bundle with one byte of a boot file
+    changed is refused (`digest`), one whose manifest is signed by another key (`signature`), and one cut after its first
+    piece (`digest`: not the size begun); release 6's own, its second piece written twice as a resumed transfer would, is
+    staged in slot B and the bundle removed; the gateway applies it, and the machine boots slot B on trial and confirms it."""
+    if not raw_tools() or not stub_elf:
+        print("SKIP: install suite needs mkfs.fat, fsck.fat, mtools and the updater's stand-in", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-install-"))
+    arch = args.arch
+    volume, _, server, kept, _, _, manifest6, boot_files, _ = update_releases(temp, arch, gateway=stub_elf)
+    # The bundles: release 6's as release.py makes it, one with a byte of its first boot file changed, one whose
+    # manifest is signed by a key that is not the boot key (no blobs: the updater stops at the signature).
+    bundles = temp / "bundles"
+    bundles.mkdir()
+    paths = release_tool.bundle(server, bundles / "good.zip", arches=[arch])
+    entries = [(path, (server / path).read_bytes()) for path in paths]
+    changed = f"blobs/{boot_files[0][1]}"
+    release_tool.write_bundle(bundles / "flipped.zip", [(p, d[:-1] + bytes([d[-1] ^ 1]) if p == changed else d) for p, d in entries])
+    signature = f"releases/6/{arch}/MANIFEST.SIG"
+    other = hashlib.sha256(b"MIND Core install suite: not the boot key").digest()
+    release_tool.write_bundle(bundles / "forged.zip", [(p, sign_manifest.sign(other, manifest6) if p == signature else d) for p, d in entries if not p.startswith("blobs/")])
+    size = {name: (bundles / name).stat().st_size for name in ("flipped.zip", "forged.zip", "good.zip")}
+    sha = {name: hashlib.sha256((bundles / name).read_bytes()).hexdigest() for name in size}
+    listed = ["flipped.zip", "forged.zip", "good.zip short", "good.zip apply"]
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    gateway = layout / "system/effector_gw"
+    gateway.mkdir(parents=True)
+    for name in size:
+        shutil.copyfile(bundles / name, gateway / name)
+    (gateway / "install.txt").write_text("".join(f"{line.split()[0]} {sha[line.split()[0]]} {' '.join(line.split()[1:])}\n" for line in listed))
+    for name, data in {**MODES_EFFECTOR_FILES, "data/mode.conf": b"development\n"}.items():
+        (layout / name).parent.mkdir(parents=True, exist_ok=True)
+        (layout / name).write_bytes(data)
+    # Room for both slots, the bundles and the one being staged.
+    image = boot_slots.Image.create(temp / "install.img", layout, megabytes=256)
+    cpu = ["-cpu", "max" if arch == "aarch64" else "qemu64,+rdrand"]
+
+    def logged(vm, name, line, timeout):
+        # A service's lines, read with dmesg (the shell holds the serial line); a read a kernel line lands in is made again.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            try:
+                log = vm.command(f"dmesg -s {name}", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            if line in log:
+                return log
+            time.sleep(2)
+        raise AssertionError((name, line, log[-3000:]))
+
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    try:
+        log = logged(vm, "effector_gw", "[GATEWAY-STUB] DONE", 300)
+        for line in listed:
+            name = line.split()[0]
+            require(log, f"[GATEWAY-STUB] {name}: {size[name]} BYTES, BEGIN Ok(Err(Denied)), WRITTEN Ok(0), COMMIT Ok(Err(Denied))")
+        log = vm.command("dmesg -s updater", raw=True)
+        for call in ("INSTALL-BEGIN", "INSTALL-COMMIT"):
+            assert len(re.findall(rf"\[UPDATER\] {call} REFUSED TO THE EFFECTOR GATEWAY \(PID \d+\): REMOTE-UPDATE IS OFF \(MC-12.6\)", log)) == len(listed), log[-3000:]
+        assert "[UPDATER] INSTALL:" not in log, log[-3000:]
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-install-off-{args.cpus}cpu.log").write_text(vm.log)
+    image.write("data/mode.conf", b"development\nremote-update\n")
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    try:
+        log = logged(vm, "effector_gw", "[GATEWAY-STUB] good.zip: APPLY WAITS FOR data/apply", 1200)
+        for name, committed in (("flipped.zip", "Ok(Err(Digest))"), ("forged.zip", "Ok(Err(Signature))"), ("good.zip", "Ok(Ok(6))")):
+            assert re.search(rf"\[GATEWAY-STUB\] {re.escape(name)}: {size[name]} BYTES, BEGIN Ok\(Ok\(\d+\)\), WRITTEN Ok\(\d+\), COMMIT {re.escape(committed)}", log), (name, log[-3000:])
+        require(log, f"[GATEWAY-STUB] good.zip: {size['good.zip']} BYTES, BEGIN Ok(Ok(3)), WRITTEN Ok(32768), COMMIT Ok(Err(Digest))")
+        log = vm.command("dmesg -s updater", raw=True)
+        for line in (f"[UPDATER] INSTALL: A BUNDLE OF {size['flipped.zip']} BYTES, SHA-256 {sha['flipped.zip'][:16]}, FOR THE GATEWAY'S COMMAND test-1: HANDLE 1",
+                     f"[UPDATER] INSTALL: {boot_files[0][0]} IS NOT AS THE MANIFEST LISTS IT", "[UPDATER] INSTALL: REFUSED: Digest",
+                     "[UPDATER] INSTALL: REFUSED: Signature",
+                     f"[UPDATER] INSTALL: COMMAND test-3: 32768 OF {size['good.zip']} BYTES: NOT THE SIZE OR SHA-256 BEGUN",
+                     f"[UPDATER] INSTALL: WRITTEN AGAIN FROM BYTE 32768 OF {size['good.zip']}",
+                     f"[UPDATER] INSTALL: COMMAND test-4: {size['good.zip']} OF {size['good.zip']} BYTES, SHA-256 AS BEGUN",
+                     "FROM THE GATEWAY'S BUNDLE", "[UPDATER] INSTALL: VERSION 6 STAGED IN SLOT B"):
+            require(log, line)
+        assert "REFUSED TO THE EFFECTOR GATEWAY" not in log, log[-3000:]
+        vm.collect(); vm.output = ""
+        require(vm.command("mkdir data/apply"), "OK")
+        out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        require(out, f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}")
+        log = logged(vm, "updater", "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 120)
+        require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        require(logged(vm, "effector_gw", "[GATEWAY-STUB] DONE", 120), "[GATEWAY-STUB] BOOTED FROM SLOT B: NOTHING TO HAND OVER")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-install-on-{args.cpus}cpu.log").write_text(vm.log)
+    records = boot_slots.records(image.path)
+    assert boot_slots.newest(records)[1]["slot"] == "B" and boot_slots.newest(records)[1]["confirmed"], records
+    assert image.read("MIND/B/MANIFEST") == manifest6, "slot B's manifest"
+    for name, digest in boot_files:
+        assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
+    assert image.read("MIND/B/INSTALL/BUNDLE.ZIP") is None and image.read("MIND/A/INSTALL/BUNDLE.ZIP") is None
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: install (751-UPD-0032): with remote-update off every install-begin and install-commit of the gateway's "
+          "client is denied and logged; with it on, a bundle with a changed boot file (digest), one with a manifest signed "
+          "by another key (signature) and one cut short (digest) are refused, and release 6's bundle, a piece written "
+          "again, is staged in slot B and removed; the gateway applies it, and slot B boots on trial and is confirmed", flush=True)
 
 
 def mindlink_tool():
@@ -8876,13 +9117,15 @@ def tls_suite(args, disk):
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
-        # loader's, badged BADGE_KEY_LOADER in its slot 8, asks only for programs' secrets clients (000-KRN-0182).
+        # loader's, badged BADGE_KEY_LOADER in its slot 8, asks only for programs' secrets clients (000-KRN-0182); the
+        # block store's, badged BADGE_KEY_BLOCKSTORE in its slot 3, reaches only its own secrets (308-KRN-0183).
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         real = vm.services()
         keystore = [ep for ep, server in servers.items() if server == real["keystore"]]
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
-        assert {"tls", "ssh", "loader"} <= set(holders) <= {"tls", "ssh", "wlan", "loader"}, holders
+        assert {"tls", "ssh", "loader", "blockstore"} <= set(holders) <= {"tls", "ssh", "wlan", "loader", "blockstore"}, holders
         assert re.search(fr"^SLOT=8 GEN=\d+ KIND=1 .*BADGE=4 EP={keystore[0]}\b", vm.command(f"stat caps {real['loader']}", raw=True), re.M)
+        assert re.search(fr"^SLOT=3 GEN=\d+ KIND=1 .*BADGE=5 EP={keystore[0]}\b", vm.command(f"stat caps {real['blockstore']}", raw=True), re.M)
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
         assert re.search(fr"^SLOT=4 GEN=\d+ KIND=1 .*BADGE=3 EP={keystore[0]}\b", vm.command(f"stat caps {real['ssh']}", raw=True), re.M)
         # The shell holds the SSH service's client in SLOT_SSH (34) and the updater's in SLOT_UPDATE (35), ABI 12.
@@ -8922,13 +9165,20 @@ def device_key_check(args, cpu):
         return
     with tempfile.TemporaryDirectory(prefix="smoke-key-", dir=ROOT / IMAGE) as temp:
         # 000-NET-0045: netcheck's secret from a file; netpeer, the same program by another name; a copy run by a path.
+        # 308-KRN-0183: a blank store disk, whose volume key the store keeps in keystore, and netcheck as netcopy, under
+        # whose name the store's file is copied (no program runs by a boot service's name: the loader refuses it).
         netcheck = (ROOT / IMAGE / "netcheck.elf").read_bytes()
-        image, start, fs_sectors = raw_fat_image(Path(temp), extra={"secret.txt": SECRET, "netpeer.elf": netcheck, "tmp/netcheck.elf": netcheck})
+        image, start, fs_sectors = raw_fat_image(Path(temp), extra={"secret.txt": SECRET, "netpeer.elf": netcheck, "tmp/netcheck.elf": netcheck,
+                                                                    "netcopy.elf": netcheck})
         part = f"{image}@@{start * 512}"
+        store = Path(temp) / "store.img"
+        with store.open("wb") as f:
+            f.truncate(32 << 20)
 
         def boot():
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
-                    extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+                    extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
+                           "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"])
             try:
                 log = vm.service_logs("keystore", "PUBLIC KEY")
                 name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
@@ -8954,13 +9204,16 @@ def device_key_check(args, cpu):
             # 108: a change of the network policy is kept on the disk too.
             require(policy_answer(vm, "netpolicy add kept 10.0.2.2 tcp 7", "y"), "NETPOLICY: ADDED 1 LINE(S)")
             secrets_first_boot(vm)
+            volume = service_secrets_first_boot(vm)
         finally:
             vm.close()
         kept = secrets_file(part, Path(temp), "netcheck")
+        service_secrets_file(part, Path(temp))
         vm, log, second = boot()
         try:
             require(vm.command("netpolicy"), "kept 10.0.2.2 tcp 7")
             secrets_second_boot(vm)
+            service_secrets_second_boot(vm, volume)
         finally:
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key (ON DISK, NOT SEALED)")
@@ -8969,7 +9222,11 @@ def device_key_check(args, cpu):
         damaged.write_bytes(b"MINDKEY1" + bytes(64))
         subprocess.run(["mcopy", "-o", "-i", part, str(damaged), "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
         vm, log, third = boot()
-        vm.close()
+        try:
+            # The store's volume key was sealed under the old device key: it opens no more (308-KRN-0183).
+            require(service_log(vm, "keystore", "SECRETS OF SERVICE blockstore"), "[KEYSTORE] SECRETS OF SERVICE blockstore DO NOT OPEN UNDER THIS DEVICE KEY AND NAME: NOT READ")
+        finally:
+            vm.close()
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
         assert third != first, (first, third)
         fsck_volume(image, start, fs_sectors)
@@ -8979,6 +9236,62 @@ def device_key_check(args, cpu):
           f"after a reboot (SHA-256 checked); netpeer, the same program by another name, finds none, nor opens netcheck's file "
           f"copied under its name; a copy run by a path gets no secrets client; the file ({kept} bytes) is sealed, and the value "
           "is in no log line and no command line", flush=True)
+    print(f"PASS: the block store's own secrets in keystore (308-KRN-0183): its client from init in slot 3 (BADGE_KEY_BLOCKSTORE), "
+          f"the volume key of its blank disk kept as {volume} and read back at the next boot, not on the medium; no program runs by the "
+          "store's name, another program's client sees none of it nor opens the store's file copied under its name; under a new device "
+          "key it opens no more", flush=True)
+
+
+def service_log(vm, name, until, tries=120):
+    """The system log's lines of service `name` (not drained, unlike `logs`), once `until` is among them."""
+    text = ""
+    for _ in range(tries):
+        text = vm.command(f"dmesg -s {name}", raw=True, timeout=60)
+        if until in text:
+            break
+        time.sleep(.5)
+    return text
+
+
+def service_secrets_first_boot(vm):
+    """308-KRN-0183: the block store holds keystore's client badged BADGE_KEY_BLOCKSTORE in slot 3, and keystore keeps
+    the volume key of its blank disk as the service's secret; no program runs by the store's name, and a program's
+    client (netcopy) sees none of it. Returns the secret's name."""
+    real = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    caps = vm.command(f"stat caps {real['blockstore']}", raw=True)
+    held = [(int(badge), servers.get(int(ep))) for badge, ep in re.findall(r"^SLOT=3 GEN=\d+ KIND=1 RIGHTS=\d+ SIZE=0 BADGE=(\d+) EP=(\d+)", caps, re.M)]
+    assert held == [(5, real["keystore"])], (held, caps)
+    log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+    assert re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE FROM \w+, KEPT BY KEYSTORE, NOT ON THE MEDIUM", log), log
+    require(log, "SEALED, KEY KEPT BY KEYSTORE")
+    kept = re.search(r"\[KEYSTORE\] SECRET (volume-[0-9a-f]{16}) OF SERVICE blockstore KEPT FOR PID (\d+)", service_log(vm, "keystore", "OF SERVICE blockstore"))
+    assert kept and int(kept[2]) == real["blockstore"], vm.command("dmesg -s keystore", raw=True)
+    refused = vm.command(f"blockstore secret-get:{kept[1]}")
+    assert "NETCHECK" not in refused and "STARTED PID" not in refused, refused
+    require_all(vm.command(f"netcopy secret-get:{kept[1]} secrets"), f"NETCHECK secret-get:{kept[1]} Missing", "NETCHECK secrets OK (NONE)")
+    assert " FOR blockstore" not in vm.command("dmesg -s keystore", raw=True, timeout=60), "a program's secrets client named after the store"
+    return kept[1]
+
+
+def service_secrets_file(part, temp):
+    """The block store's sealed file read from the disk on the host, then copied under the program netcopy's name, as
+    which it must not open."""
+    out = temp / "blockstore-service.kept"
+    subprocess.run(["mcopy", "-o", "-i", part, "::/system/keystore/services/blockstore.kept", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
+    assert out.read_bytes()[:8] == b"MINDSEC1", out.read_bytes()[:64]
+    subprocess.run(["mcopy", "-o", "-i", part, str(out), "::/system/keystore/secrets/netcopy.kept"], env=MTOOLS_ENV, check=True, capture_output=True)
+
+
+def service_secrets_second_boot(vm, volume):
+    """After the reboot: the store mounts its disk with the key keystore kept; netcopy does not open the store's file
+    copied under its name."""
+    log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+    require(log, "SEALED, KEY KEPT BY KEYSTORE")
+    assert "VOLUME KEY MADE" not in log, log
+    require(service_log(vm, "keystore", f"SECRET {volume} OF SERVICE blockstore READ"), f"[KEYSTORE] SECRET {volume} OF SERVICE blockstore READ BY PID")
+    require(vm.command(f"netcopy secret-get:{volume}"), f"NETCHECK secret-get:{volume} NoKey")
+    require(service_log(vm, "keystore", "SECRETS OF netcopy DO"), "[KEYSTORE] SECRETS OF netcopy DO NOT OPEN UNDER THIS DEVICE KEY AND NAME: NOT READ")
 
 
 # 000-NET-0045: a secret that must appear in no log line, no command line and not in the clear on the disk.
@@ -11582,6 +11895,10 @@ def main():
         if suite == "updater":
             updater_suite(args, args.updater_elf)
             update_suite(args)
+            install_suite(args, args.updater_elf)
+            continue
+        if suite == "install":
+            install_suite(args, args.updater_elf)
             continue
         if suite == "update":
             update_suite(args)
@@ -11749,7 +12066,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "bigmem": big_memory_check}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "nnd": nnd_check, "bigmem": big_memory_check}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

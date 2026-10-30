@@ -4,9 +4,10 @@
 // into a staged, verified slot and nothing more. It checks a channel's signature with the release key built into it, a
 // manifest's with the boot key, and every file it stages by size and SHA-256; the parser service reads the
 // metadata (MC-11.11). It writes only the slot that did not boot and the boot records (vfs_server's update zone), and
-// confirms a trial boot on the disk once the kernel's deadline has passed without a restart. Holds: its endpoint, the
-// clock, the boot disk's client badged for the update zone, the parser, init's client badged for a restart, the log,
-// the flow grant the policy gives it and the TLS client.
+// confirms a trial boot on the disk once the kernel's deadline has passed without a restart. The Effector gateway may hand
+// it a release as a bundle (751-UPD-0032), which it checks as any source. Holds: its endpoint, the clock, the boot
+// disk's client badged for the update zone, the parser, init's client badged for a restart, the log, the flow grant the
+// policy gives it and the TLS client.
 extern crate alloc;
 
 #[allow(dead_code)]
@@ -14,6 +15,7 @@ extern crate alloc;
 mod slots;
 mod plan;
 mod source;
+mod bundle;
 mod keys { include!(concat!(env!("OUT_DIR"), "/keys.rs")); }
 
 use alloc::format;
@@ -28,9 +30,10 @@ use mind::idl::{init, wire};
 use mind::ipc::Endpoint;
 use mind::parse::{read_channel, read_manifest, Refused, Session};
 use mind::release::{self, Channel, CHANNEL_MAX, MANIFEST_MAX};
+use mind::zip; // the names a bundle may hold (bundle.rs)
 use slots::{Record, RECORD};
 use plan::Kind;
-use source::{copy, sha256, Source};
+use source::{copy, sha256, Bundle, Source};
 
 #[cfg(target_arch = "x86_64")]
 const ARCH: &str = "x86_64";
@@ -48,6 +51,11 @@ const MARGIN_MS: usize = 5000; // past the kernel's deadline: had the trial not 
 const ASK_MS: usize = 1000; // while a trial waits, init is asked this often how the boot went (init.wit 1.4, 351-UPD-0021)
 const TRIES_MAX: u8 = 9;
 const RETRY_MS: usize = 30_000; // an automatic run the source did not answer is tried again after this
+const RECEIVED: usize = 9; // the buffer of an install call (update.wit 1.3) lands here
+// A bundle the gateway hands over lies in the other slot's INSTALL directory, which neither the bootloader nor a fetch
+// reads, until it is staged or dropped (751-UPD-0032).
+const INSTALL: &str = "INSTALL";
+const BUNDLE_MAX: u64 = 256 << 20;
 
 /// What the updater does by itself, from update.txt.
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
@@ -143,11 +151,17 @@ struct Updater {
     /// The channel it holds (351-UPD-0025): the last one read from the source, else the running slot's; and which.
     held: Option<(Channel, Held)>,
     failure: String,
+    /// The bundle the gateway is handing over, and the last handle given.
+    install: Option<Install>, handles: u32,
 }
 
 /// Where the channel the updater holds came from.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Held { Source, Slot(u8) }
+enum Held { Source, Bundle, Slot(u8) }
+
+/// A bundle begun (`install-begin`): its size and SHA-256 as the gateway named them, the gateway's command, its file
+/// in the staging and the bytes written so far.
+struct Install { handle: u32, size: u64, sha256: [u8; 32], command: String, file: File, written: u64 }
 
 /// Whether a channel's expiry has passed, or the clock cannot be read (MC-9.4).
 fn expired(channel: &Channel) -> bool { plan::expired(release::expires_unix(&channel.expires), mind::rtc::unix_time()) }
@@ -206,7 +220,10 @@ impl Updater {
     fn hold(&mut self, channel: Channel, from: Held) {
         if self.held == Some((channel, from)) { return; }
         self.held = Some((channel, from));
-        let from = match from { Held::Source => String::from("FROM THE SOURCE"), Held::Slot(slot) => format!("KEPT IN SLOT {}", slot as char) };
+        let from = match from {
+            Held::Source => String::from("FROM THE SOURCE"), Held::Bundle => String::from("FROM THE GATEWAY'S BUNDLE"),
+            Held::Slot(slot) => format!("KEPT IN SLOT {}", slot as char),
+        };
         let (expires, clock) = (core::str::from_utf8(&channel.expires).unwrap_or(""), mind::rtc::unix_time());
         mind::println!("[UPDATER] METADATA: CHANNEL {} VERSION {}, MINIMUM {}, EXPIRES {}, {}{}", channel.name.as_str(), channel.version,
             channel.minimum, expires, from, match clock {
@@ -220,7 +237,7 @@ impl Updater {
         let Some((channel, from)) = self.held else { return Metadata::default() };
         Metadata { channel: Text::new(channel.name.as_str()).unwrap_or_default(), version: channel.version, minimum: channel.minimum,
                    expires: Text::new(core::str::from_utf8(&channel.expires).unwrap_or("")).unwrap_or_default(), expired: expired(&channel),
-                   checked: from == Held::Source }
+                   checked: !matches!(from, Held::Slot(_)) }
     }
 
     fn state(&self) -> State {
@@ -235,13 +252,21 @@ impl Updater {
         Err(error)
     }
 
-    /// The channel, its signature, form and expiry, and its version against the running one; with the file as read.
-    fn read_channel(&mut self, parser: &mut Session) -> Result<(Channel, Vec<u8>), Error> {
-        let Some(source) = &self.config.source else { return Err(Error::NoSource) };
+    /// The source update.txt names, lent to `f` and put back.
+    fn with_source<T>(&mut self, f: impl FnOnce(&mut Self, &Source) -> Result<T, Error>) -> Result<T, Error> {
+        let Some(source) = self.config.source.take() else { return Err(Error::NoSource) };
+        let result = f(self, &source);
+        self.config.source = Some(source);
+        result
+    }
+
+    /// The channel update.txt names as `source` holds it: its signature, form and expiry, and its version against the
+    /// running one; with the file as read.
+    fn read_channel(&mut self, source: &Source, from: Held, parser: &mut Session) -> Result<(Channel, Vec<u8>), Error> {
         let bytes = source.small(&format!("channels/{}", self.config.channel), CHANNEL_MAX, parser)?;
         let channel = channel_of(&bytes, parser.endpoint())?;
         if channel.name.as_str() != self.config.channel { return Err(Error::Malformed); }
-        self.hold(channel, Held::Source);
+        self.hold(channel, from);
         // A clock that cannot be read cannot show the channel current (MC-9.4: expiry handled by a set policy).
         if expired(&channel) { return Err(Error::Expired); }
         self.minimum = self.minimum.max(channel.minimum);
@@ -251,7 +276,7 @@ impl Updater {
 
     fn check(&mut self) -> Result<Offer, Error> {
         let mut parser = parser();
-        let (channel, _) = match self.read_channel(&mut parser) { Ok(read) => read, Err(error) => return self.fail("check", error) };
+        let (channel, _) = match self.with_source(|u, source| u.read_channel(source, Held::Source, &mut parser)) { Ok(read) => read, Err(error) => return self.fail("check", error) };
         let expires = core::str::from_utf8(&channel.expires).unwrap_or("");
         mind::println!("[UPDATER] CHECK {}: VERSION {}, MINIMUM {}, EXPIRES {}; RUNNING {}{}", channel.name.as_str(), channel.version, channel.minimum, expires,
             self.running, if self.running != 0 && self.running < channel.minimum { " (BELOW THE MINIMUM)" } else { "" });
@@ -270,16 +295,17 @@ impl Updater {
     }
 
     fn fetch(&mut self) -> Result<u64, Error> {
-        match self.stage() { Ok(version) => { self.failure.clear(); Ok(version) } Err(error) => self.fail("fetch", error) }
+        match self.with_source(|u, source| u.stage(source, Held::Source)) { Ok(version) => { self.failure.clear(); Ok(version) } Err(error) => self.fail("fetch", error) }
     }
 
-    fn stage(&mut self) -> Result<u64, Error> {
+    /// The newer release `source` holds, checked and staged in the other slot; `from` names the source in the log.
+    fn stage(&mut self, source: &Source, from: Held) -> Result<u64, Error> {
         self.may_stage()?;
+        let step = if from == Held::Bundle { "INSTALL" } else { "FETCH" };
         let mut parser = parser();
-        let (channel, channel_file) = self.read_channel(&mut parser)?;
+        let (channel, channel_file) = self.read_channel(source, from, &mut parser)?;
         if channel.version <= self.running { return Err(Error::Older); }
         let digest = channel.manifest(ARCH).ok_or(Error::Missing)?;
-        let Some(source) = &self.config.source else { return Err(Error::NoSource) };
         let release = format!("releases/{}/{}", channel.version, ARCH);
         let manifest = source.small(&format!("{}/MANIFEST", release), MANIFEST_MAX, &mut parser)?;
         if mind::sha256::digest(&manifest) != digest { return Err(Error::Digest); }
@@ -288,10 +314,11 @@ impl Updater {
         let files = slot_files(&manifest, parser.endpoint())?;
         let slot = self.other();
         let applications = files.iter().filter(|f| kind(f.path.as_str()) == Kind::Application).count();
-        mind::println!("[UPDATER] FETCH: VERSION {} INTO SLOT {}: {} BOOT FILES AND {} APPLICATIONS, MANIFEST {}", channel.version, slot,
+        mind::println!("[UPDATER] {}: VERSION {} INTO SLOT {}: {} BOOT FILES AND {} APPLICATIONS, MANIFEST {}", step, channel.version, slot,
                        files.len() - applications, applications, short(&digest));
         // The channel goes first and comes back last: a slot holds one only once all of it is there. A boot file the
-        // manifest does not list goes too (the bootloader refuses a slot with one); a listed one is resumed.
+        // manifest does not list goes too (the bootloader refuses a slot with one); a listed one is resumed. A directory
+        // stays: INSTALL holds the bundle being read.
         let dir = Dir::create(&format!("MIND/{}", slot)).map_err(|_| Error::Write)?;
         self.staged = 0;
         let mut stale = Vec::new();
@@ -311,7 +338,7 @@ impl Updater {
                 if let Some((from, held)) = self.held(f) {
                     file.truncate(0).map_err(|_| Error::Write)?;
                     if copy(&held, &mut file, 0, f.size as usize).is_ok() && file.flush().is_ok() && whole(&file) {
-                        mind::println!("[UPDATER] FETCH: {} OF {}: {}, {} BYTES COPIED FROM {} IN {} MS", index + 1, files.len(), f.path.as_str(), f.size, from,
+                        mind::println!("[UPDATER] {}: {} OF {}: {}, {} BYTES COPIED FROM {} IN {} MS", step, index + 1, files.len(), f.path.as_str(), f.size, from,
                                        mind::time::uptime_ms() - started);
                         continue;
                     }
@@ -329,19 +356,20 @@ impl Updater {
             if !whole(&file) {
                 // Not the file: the next fetch starts it again.
                 let _ = file.truncate(0);
-                mind::println!("[UPDATER] FETCH: {} IS NOT AS THE MANIFEST LISTS IT", f.path.as_str());
+                mind::println!("[UPDATER] {}: {} IS NOT AS THE MANIFEST LISTS IT", step, f.path.as_str());
                 return Err(Error::Digest);
             }
             let _ = file.flush();
             // Each file in the log, so that a slow or stalled fetch shows how far it got (351-UPD-0018).
-            mind::println!("[UPDATER] FETCH: {} OF {}: {}, {} BYTES IN {} MS", index + 1, files.len(), f.path.as_str(), f.size, mind::time::uptime_ms() - started);
+            mind::println!("[UPDATER] {}: {} OF {}: {}, {} BYTES IN {} MS", step, index + 1, files.len(), f.path.as_str(), f.size, mind::time::uptime_ms() - started);
         }
         for (name, data) in [("MANIFEST", &manifest), ("MANIFEST.SIG", &signature), ("CHANNEL", &channel_file)] {
             let mut file = File::create(&format!("MIND/{}/{}", slot, name)).map_err(|_| Error::Write)?;
             if file.write_at(0, data) != Ok(data.len()) || file.flush().is_err() { return Err(Error::Write); }
         }
         self.staged = channel.version;
-        mind::println!("[UPDATER] FETCH: VERSION {} STAGED IN SLOT {}: {} FILES, {} BYTES FETCHED", channel.version, slot, files.len(), fetched);
+        mind::println!("[UPDATER] {}: VERSION {} STAGED IN SLOT {}: {} FILES, {} BYTES {}", step, channel.version, slot, files.len(), fetched,
+                       if from == Held::Bundle { "FROM THE BUNDLE" } else { "FETCHED" });
         Ok(channel.version)
     }
 
@@ -447,6 +475,70 @@ impl Updater {
         result.or_else(|error| self.fail("rollback", error))
     }
 
+    fn bundle_dir(&self) -> String { format!("MIND/{}/{}", self.other(), INSTALL) }
+
+    /// The bundle in the staging and its directory removed; `why` in the log when there was one.
+    fn drop_bundle(&mut self, why: &str) {
+        self.install = None;
+        let (dir, path) = (self.bundle_dir(), format!("{}/BUNDLE.ZIP", self.bundle_dir()));
+        let had = File::open(&path).is_ok();
+        let _ = mind::fs::remove(&path);
+        let _ = mind::fs::remove(&dir);
+        if had && !why.is_empty() { mind::println!("[UPDATER] INSTALL: THE BUNDLE IN {} REMOVED: {}", dir, why); }
+    }
+
+    /// A bundle of `size` bytes with SHA-256 `sha256` begun in the staging, for the gateway's command `command`.
+    fn install_begin(&mut self, size: u64, sha256: &str, command: &str) -> Result<u32, Error> {
+        let result = (|| {
+            self.may_stage()?;
+            let sha256 = hex::<32>(sha256.as_bytes()).ok_or(Error::Malformed)?;
+            if size == 0 || size > BUNDLE_MAX { return Err(Error::Malformed); }
+            self.drop_bundle("ANOTHER BEGUN");
+            Dir::create(&format!("MIND/{}", self.other())).and_then(|_| Dir::create(&self.bundle_dir())).map_err(|_| Error::Write)?;
+            let file = File::create(&format!("{}/BUNDLE.ZIP", self.bundle_dir())).map_err(|_| Error::Write)?;
+            self.handles = self.handles.wrapping_add(1).max(1);
+            mind::println!("[UPDATER] INSTALL: A BUNDLE OF {} BYTES, SHA-256 {}, FOR THE GATEWAY'S COMMAND {}: HANDLE {}", size, short(&sha256), command, self.handles);
+            self.install = Some(Install { handle: self.handles, size, sha256, command: String::from(command), file, written: 0 });
+            Ok(self.handles)
+        })();
+        result.or_else(|error| self.fail("install", error))
+    }
+
+    /// The bundle's bytes at `offset`, at most the bytes written so far: what lay at and past it goes.
+    fn install_write(&mut self, handle: u32, offset: u64, bytes: &[u8]) -> Result<(), Error> {
+        let result = (|| {
+            let install = self.install.as_mut().filter(|i| i.handle == handle).ok_or(Error::Malformed)?;
+            if offset > install.written || offset + bytes.len() as u64 > install.size { return Err(Error::Malformed); }
+            if offset < install.written {
+                mind::println!("[UPDATER] INSTALL: WRITTEN AGAIN FROM BYTE {} OF {}", offset, install.size);
+                install.file.truncate(offset as usize).map_err(|_| Error::Write)?;
+            }
+            if install.file.write_at(offset as usize, bytes) != Ok(bytes.len()) { return Err(Error::Write); }
+            install.written = offset + bytes.len() as u64;
+            Ok(())
+        })();
+        result.or_else(|error| self.fail("install", error))
+    }
+
+    /// The bundle checked by size and SHA-256, its release staged as `fetch` stages a source's, and the bundle removed.
+    fn install_commit(&mut self, handle: u32) -> Result<u64, Error> {
+        if !self.install.as_ref().is_some_and(|i| i.handle == handle) { return self.fail("install", Error::Malformed); }
+        let Some(install) = self.install.take() else { return self.fail("install", Error::Malformed) };
+        let result = (|| {
+            let _ = install.file.flush();
+            let whole = install.written == install.size && sha256(&install.file) == Some(install.sha256);
+            mind::println!("[UPDATER] INSTALL: COMMAND {}: {} OF {} BYTES{}", install.command, install.written, install.size,
+                           if whole { ", SHA-256 AS BEGUN" } else { ": NOT THE SIZE OR SHA-256 BEGUN" });
+            drop(install.file);
+            if !whole { return Err(Error::Digest); }
+            let bundle = Bundle::open(&format!("{}/BUNDLE.ZIP", self.bundle_dir()))?;
+            mind::println!("[UPDATER] INSTALL: THE BUNDLE HOLDS {} FILES", bundle.len());
+            self.stage(&Source::Bundle(bundle), Held::Bundle)
+        })();
+        self.drop_bundle("");
+        match result { Ok(version) => { self.failure.clear(); Ok(version) } Err(error) => self.fail("install", error) }
+    }
+
     /// On a trial boot the kernel restarts the machine at its deadline unless init confirmed the boot: once init says it
     /// did, or past that deadline, the record says so on the disk; `why` says which.
     fn confirm(&mut self, why: &str) {
@@ -493,7 +585,8 @@ impl Updater {
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let slot = match info.boot_slot.slot { BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
-    let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None, failure: String::new() };
+    let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None,
+                                failure: String::new(), install: None, handles: 0 };
     if keys::RELEASE_TEST_KEY || keys::BOOT_TEST_KEY {
         mind::println!("[UPDATER] KEYS: {}{}", if keys::RELEASE_TEST_KEY { "THE TEST RELEASE KEY " } else { "" }, if keys::BOOT_TEST_KEY { "THE TEST BOOT KEY" } else { "" });
     }
@@ -519,6 +612,8 @@ fn main(info: &'static BootInfo) {
             recorded.map_or(String::from("NONE"), |(_, r)| format!("SLOT {} {}, FLOOR {}", r.slot as char, if r.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" }, plan::floor(updater.records()))));
         if let Some(channel) = kept { updater.hold(channel, Held::Slot(slot)); }
         updater.raise_floor();
+        // A transfer a restart cut is not resumed: the gateway begins it again.
+        updater.drop_bundle("LEFT BY A RESTART");
         if updater.trial {
             let seconds = if info.boot_slot.deadline_s == 0 { TRIAL_DEADLINE_S } else { info.boot_slot.deadline_s } as usize;
             let at = seconds * 1000 + MARGIN_MS;
@@ -527,6 +622,7 @@ fn main(info: &'static BootInfo) {
         }
     }
     let mut next_automatic = Some(0);
+    let mut scratch: alloc::boxed::Box<[u8; api::REQUEST_MAX]> = alloc::vec![0u8; api::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     loop {
         let now = mind::time::uptime_ms();
         // init answers once it has confirmed or refused the boot (init.wit 1.4); until then the call times out.
@@ -553,14 +649,41 @@ fn main(info: &'static BootInfo) {
         let wake = [ask_at, confirm_at, if confirm_at.is_none() { next_automatic } else { None }].into_iter().flatten().min();
         let wait = wake.map_or(0, |at| at.saturating_sub(mind::time::uptime_ms()).clamp(1, u32::MAX as usize) as u32);
         // Requests are checked against idl/update.wit before they are served (MC-2.4).
-        let Ok(request) = Endpoint::SERVICE.recv_timeout(0, wait) else { continue };
-        let _ = match api::decode(&request, 0) {
+        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };
+        // The Effector gateway's client (BADGE_UPDATE_GATEWAY, update.wit 1.2) stages or activates a release only while
+        // init's remote-update counts, asked at each such request so that the owner's change holds at once (751-KRN-0185).
+        let allowed = |what: &str| -> Result<(), Error> {
+            if request.badge != mind::process::BADGE_UPDATE_GATEWAY { return Ok(()); }
+            match wire::with_timeout(ASK_MS as u32, || init::mode(Endpoint(SLOT_LIFECYCLE))) {
+                Ok(Ok(modes)) if modes.remote_update => Ok(()),
+                other => {
+                    let why = if matches!(other, Ok(Ok(_))) { "REMOTE-UPDATE IS OFF" } else { "INIT DID NOT SAY" };
+                    mind::println!("[UPDATER] {} REFUSED TO THE EFFECTOR GATEWAY (PID {}): {} (MC-12.6)", what, request.sender, why);
+                    Err(Error::Denied)
+                }
+            }
+        };
+        // Only the gateway's client hands over a bundle; its word is asked at begin and at commit.
+        let gateway = |what: &str| -> Result<(), Error> {
+            if request.badge == mind::process::BADGE_UPDATE_GATEWAY { return allowed(what); }
+            mind::println!("[UPDATER] {} REFUSED (BADGE {}, PID {}): ONLY THE EFFECTOR GATEWAY HANDS OVER A BUNDLE (MC-12.6)", what, request.badge, request.sender);
+            Err(Error::Denied)
+        };
+        let _ = match api::decode(&request, RECEIVED, &mut scratch) {
             Ok((api::Request::Check, call)) => { let offer = updater.check(); api::reply_check(call, offer.as_ref().map_err(|e| *e)) }
-            Ok((api::Request::Fetch, call)) => api::reply_fetch(call, updater.fetch()),
-            Ok((api::Request::Apply { tries }, call)) => api::reply_apply(call, updater.apply(tries)),
-            Ok((api::Request::Rollback, call)) => api::reply_rollback(call, updater.rollback()),
+            Ok((api::Request::Fetch, call)) => api::reply_fetch(call, allowed("FETCH").and_then(|()| updater.fetch())),
+            Ok((api::Request::Apply { tries }, call)) => api::reply_apply(call, allowed("APPLY").and_then(|()| updater.apply(tries))),
+            Ok((api::Request::Rollback, call)) => api::reply_rollback(call, allowed("ROLLBACK").and_then(|()| updater.rollback())),
             Ok((api::Request::Status, call)) => api::reply_status(call, &updater.state()),
             Ok((api::Request::Metadata, call)) => api::reply_metadata(call, &updater.metadata()),
+            Ok((api::Request::InstallBegin { size, sha256, command }, call)) =>
+                api::reply_install_begin(call, gateway("INSTALL-BEGIN").and_then(|()| updater.install_begin(size, sha256.as_str(), command.as_str()))),
+            Ok((api::Request::InstallWrite { handle, offset, bytes }, call)) => {
+                let written = if request.badge == mind::process::BADGE_UPDATE_GATEWAY { updater.install_write(handle, offset, bytes) } else { Err(Error::Denied) };
+                api::reply_install_write(call, written)
+            }
+            Ok((api::Request::InstallCommit { handle }, call)) =>
+                api::reply_install_commit(call, gateway("INSTALL-COMMIT").and_then(|()| updater.install_commit(handle))),
             Err(reason) if request.is_call => wire::reject(reason),
             Err(_) => Ok(()),
         };

@@ -1,6 +1,6 @@
 # 700-KRN-0176 — The boot image `bt_hci` and init's grant for a USB Bluetooth controller (ABI 25, handoff 25)
 
-**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (made, then taken out of the branch until DRV's fix; see Progress) · **Blocked by:** the drivers track's fix of `usb_host`'s buffer table ([requests-DRV.md](requests-DRV.md), 2026-10-28) · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
+**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (2026-10-30: back in the branch with ABI 25, together with 262-KRN-0178) · **Blocked by:** — (DRV's fix is [700-DRV-0044](../issues-done/700-DRV-0044-usb-hosts-buffer-table-sized-by-the-highest-badge.done), in `main`) · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
 
 **Asked by:** the Bluetooth track (`BLT`) on 2026-10-28, for [700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), in `KRN/2026-10-28T0329Z-BLT-the-boot-image-bt-hci-and-its-grant.md` on `internal-dev-messages`. The maintainer's order for the DEXP: Wi-Fi, Ethernet, the screen, then Bluetooth "to connect devices".
 
@@ -43,12 +43,27 @@ The DEXP's RTL8821CE has a Bluetooth half, `0BDA:C821`, on its xHCI.
   - [000-KRN-0182](../issues-done/000-KRN-0182-a-programs-secrets-client.done) took ABI 24 meanwhile, so this task comes back with **ABI 25 and handoff 25**, one above every ABI so far.
   - `fast-test` 5a8aaf1a's ABI 23 and handoff 23 are never used again.
 
+## Progress (2026-10-30)
+
+- **Back in the branch.** DRV sized `usb_host`'s buffer table by the highest badge ([700-DRV-0044](../issues-done/700-DRV-0044-usb-hosts-buffer-table-sized-by-the-highest-badge.done), in `main`).
+- **What came back,** as d53bc153 had it:
+  - the image after `rtw88_wifi`;
+  - `init`'s grant;
+  - `SAFE_LEFT_OUT` and `CONFIGURABLE`;
+  - the build line;
+  - the README and profile rows.
+- **One ABI step with `nnd`.** It shares **ABI 25 and handoff 25** with [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)'s image: two images and one transition, so a loader of handoff 24 or older is refused by name. `BOOT_IMAGES` is 46.
+
+## Landed (2026-10-30)
+
+In `main` since landing round 50 (8e2b16e0, 2026-10-30), with ABI 25 and handoff 25; the `usb` suite passed in that round's gate with `bt_hci` in the images (groups `x86: keys, shell, tools` and `aarch64: programs, shell and four CPUs`). Left: BLT's run on the DEXP.
+
 ## Acceptance criteria
 
 - **Builds:** x86 and aarch64.
 - **Host tests:**
-  - `tests/boot_abi_host.rs`: handoff 23, the 45th image after `rtw88_wifi` and after `usb_host` and `vfs_server`, `BootInfo`'s size;
-  - `tests/runtime.rs`: ABI 23;
+  - `tests/boot_abi_host.rs`: handoff 25, the image after `rtw88_wifi` and after `usb_host` and `vfs_server`, `BootInfo`'s size;
+  - `tests/runtime.rs`: ABI 25;
   - `tests/services_host.rs` and `tests/shell_host.rs`.
 - **QEMU, x86:** the boot suite passes, and with no Bluetooth controller in the machine `bt_hci` holds its client and waits.
 - **QEMU, x86:** the `usb` suite passes with `bt_hci` in the images.

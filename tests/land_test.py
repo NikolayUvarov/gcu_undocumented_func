@@ -73,7 +73,7 @@ def test_summary_and_verdict():
 def test_a_failed_build_stops_its_lane():
     class Effector:
         def __init__(self): self.commands = []
-        def run(self, machine, command, timeout, reason, key):
+        def run(self, machine, command, timeout, reason, key, queue_ttl=None):
             self.commands.append(command)
             group = command.split('--group "')[1].split('"')[0]
             return ("completed", 0, "") if group == "build (x86)" else ("completed", 0, f"PASS   5s       {group}\n")
@@ -100,8 +100,19 @@ def test_a_pool_takes_the_longest_first():
     assert land.pick(queue, "acc1", {"x86"}, {"a": 100, "b": 400, "c": 900}) == ("aarch64", "b")  # the host part: un-rizen
     assert land.pick(queue, "rz-3", {"x86"}, {"a": 100, "b": 400, "c": 900}) == ("host", "c")
     assert land.pick(queue, "pcu", set(), {"a": 900, "b": 1}) == ("aarch64", "b")  # PCU gates aarch64 alone
+    # A group a machine cannot run is left to the others, however long it is.
+    assert land.pick([("aarch64", "aarch64: 16 CPUs"), ("aarch64", "b")], "pcu", set(), {"aarch64: 16 CPUs": 900, "b": 1}) == ("aarch64", "b")
+    assert land.pick([("aarch64", "aarch64: 16 CPUs")], "rz-2", set(), {}) == ("aarch64", "aarch64: 16 CPUs")
     assert land.pick(queue, "acc2", set(), {"a": 900, "b": 1}, broken={"x86"}) == ("aarch64", "b")
     assert land.pick(queue, "i9", set(), {}, broken={"x86"}) is None
+    # A machine Effector lists as off gives no lane (round 47).
+    endpoints = [{"id": land.MACHINES["rz"]["agent"], "online": True}, {"id": land.MACHINES["acc1"]["agent"], "online": False, "last_seen": "20:07"}]
+    assert land.online_lanes(["rz", "rz-2", "acc1", "pcu"], endpoints) == (["rz", "rz-2"], {"acc1": "20:07", "pcu": "never"})
+    # Each machine's load once, before the gate; and how long each lane worked, after it.
+    endpoints[0]["load"] = {"cpu_cores": 16, "load_percent": 7.8}
+    assert land.machine_loads(["rz", "rz-2", "pcu"], endpoints) == {"rz": "16 cores, 8% busy", "pcu": "? cores, load unknown"}
+    results = [{"lane": "rz", "seconds": 600}, {"lane": "rz", "seconds": 300}, {"lane": "pcu", "seconds": 120}, {"lane": "-", "seconds": 0}]
+    assert land.lane_minutes(results) == {"rz": (15, 2), "pcu": (2, 1)}
 
 
 def test_a_pool_gives_a_failed_builds_groups_to_another_lane():
@@ -110,7 +121,7 @@ def test_a_pool_gives_a_failed_builds_groups_to_another_lane():
             threading = __import__("threading")
             self.commands, self.lock, self.pcu_failed = [], threading.Lock(), threading.Event()
             if not wait: self.pcu_failed.set()
-        def run(self, machine, command, timeout, reason, key):
+        def run(self, machine, command, timeout, reason, key, queue_ttl=None):
             group = command.split('--group "')[1].split('"')[0]
             lane = reason.split(" on ")[-1]
             if lane == "acc1":  # acc1 holds one group while PCU takes the other and fails its build, whatever the threads' order

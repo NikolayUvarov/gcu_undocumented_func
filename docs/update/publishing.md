@@ -29,6 +29,7 @@ channels/<channel>                          the signed channel file (the release
 python3 scripts/release.py stage 7 /tmp/release-7          # checks each volume, then copies it as version 7
 python3 scripts/release.py publish /tmp/release-7 updates@example.org:/srv/mind --channel stable --minimum 5
 python3 scripts/release.py check /srv/mind --channel stable   # on the server, or on a copy
+python3 scripts/release.py bundle /srv/mind /tmp/mind-7.zip --arch x86_64   # one file for the Effector gateway
 ```
 
 - `stage` refuses a volume whose manifest does not verify. Releases are made from signed builds only.
@@ -43,6 +44,12 @@ python3 scripts/release.py check /srv/mind --channel stable   # on the server, o
   - the channel's signature; then its fields as the device reads them (UTF-8 JSON of `channel`, `version`, `minimum`, `expires` and `manifests`, each of its type and range: 1 ≤ minimum ≤ version < 2^64, `expires` a real time as `YYYY-MM-DDTHH:MM:SSZ`, 1 to 4 architectures with 64 lower-case hex digits each), its one encoding and its expiry. A body signed with the release key that is not a channel gets a reason, never an exception (351-UPD-0014);
   - every manifest it names: its hash and its boot signature;
   - every blob those manifests list: its size and hash.
+- `bundle` runs `check` first, then writes one ZIP of stored entries with fixed dates (751-UPD-0032):
+  - the channel file;
+  - the manifest and signature of each architecture asked for (all the channel names, by default);
+  - the blobs those manifests list.
+
+  The Effector gateway streams it to the updater (`update.wit` 1.3 `install-…`), which checks it as any source ([updater.md](updater.md)). The same release makes the same file.
 
 ## Keys and who holds them (MC-9.6)
 

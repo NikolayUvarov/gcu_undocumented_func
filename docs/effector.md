@@ -1,6 +1,6 @@
 # Remote build and test machines through Effector
 
-**Version:** 1.3 (2026-10-23): renewing a reservation extends its command's run time, and a run has an hour after the reservation ends (rule 3); 1.2 (2026-10-23): a reservation's lease is no limit; an operation still ends at its `timeout_seconds` until the service stops cutting commands; work in parts of an hour or two, the maintainer's word (rule 3); 1.1 (2026-10-23): 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
+**Version:** 1.4 (2026-10-30): the MIND Core machines and their agents (section 1); 1.3 (2026-10-23): renewing a reservation extends its command's run time, and a run has an hour after the reservation ends (rule 3); 1.2 (2026-10-23): a reservation's lease is no limit; an operation still ends at its `timeout_seconds` until the service stops cutting commands; work in parts of an hour or two, the maintainer's word (rule 3); 1.1 (2026-10-23): 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
 
 The maintainer lends agents real machines for builds and tests through **Effector**, a service that runs commands on registered computers.
 
@@ -113,6 +113,24 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - the host tests: `scripts/models.py` and `tests/models_host.rs` read TOML with `tomllib` (Python 3.11). `scripts/ci_local.sh` now names it among the missing tools for the host part. Run the host part on un-rizen or i9;
   - the Effector suites: `tests/effector_server.py` answers 400 to every POST without a query, as Python 3.10's `parse_qs` refuses an empty query in strict mode (`issues/requests-EFF.md`). The groups with them, x86 "boot, display, network, TLS, shell, memory, clock" and aarch64 "files, network and TLS", run elsewhere until EFF's fix.
 - **Setting up another machine.** `scripts/setup_build_env.sh` installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone. Run it once as root, for example from Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
+
+### The MIND Core machines (1.4)
+
+These run MIND Core itself with its own agent (`effector` and `effector_gw`, main task 750), not Linux. They are for checks on real hardware, never for builds or gates.
+
+| Agent ID | What it is | What its agent does | Use |
+|---|---|---|---|
+| `mind_353abc18de2dbd0e` (`mind-mbp2`, host name `mind-macbook-pro`) | MacBook Pro A1398 (2012, Core i7-3615QM, 8 GB), MIND Core from a USB stick, on Wi-Fi (BCM4331: slow, with frame loss) | what the owner's policy there allows of contract 1.3 ([protocol.md](effector/protocol.md)): `exec` `health`; `screenshot`; `collect_logs` `ring` and `boot` with `program_name` "MIND Core"; `collect_file` and `deliver_file` under the owner's roots; the services the policy names; `performance_measure` | Checks of MIND Core on the Mac. It is shared with the cable's runs (`effector485`, the `LNK` track). |
+| `mind_09dca8b4def0f6e6` (host name `mind-n100`) | the maintainer's DEXP desktop, MIND Core from a USB stick, on Wi-Fi (RTL8821CE) | the same, by its own owner's policy | Checks of MIND Core on the DEXP. |
+
+- **Everything else is refused** (`denied`):
+  - `exec` other than `health`, and `reboot` under the owner's `reboot on`. So there are no shell lines yet: the test account's `msh` (501) is not built;
+  - `deploy`;
+  - `update_agent`, until 751.
+- **One command at a time.** While an answer waits for the server to take it, the agent takes no new command.
+  - A large log over the Mac's Wi-Fi can hold it for an hour (750-EFF-0025).
+  - Give `collect_logs` `boot` there `timeout_seconds` of 300 or more, or collect `ring`.
+- **Restarts and services** go only as far as the owner's policy allows. Not on a machine another track is using: say so on `internal-dev-messages` first.
 
 ## 2. The key
 
@@ -233,6 +251,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
   - **Builds:** a lane builds a part's image the first time it takes one of its groups.
   - **The estimates** are the seconds below, then the gate's own records of the same groups; `--dry-run` prints the schedule they give.
   - **A gate started again** on the same candidate gives each lane the groups it took before, in the same order (`$LAND_WORK/gate-<commit>-taken.json`), so Effector answers with the results it holds.
+  - **A machine that is off** gives no lane: the gate asks Effector which machines are online as it starts and logs the others. A lane's tree that waits half an hour in its queue leaves that lane out too (round 47: `acc-1` and `acc-2` went off at 20:07, and their trees waited in the queue).
 - **The long groups are split** (2026-10-29) so that none runs much past 15 minutes. Each suite was timed alone on `3e07edb8`, in seconds:
 
 | Group before | Its suites alone | The groups now |
@@ -245,6 +264,13 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 
 - **What it gives,** in simulation with these estimates: about 56 minutes with `pool`'s six lanes and 63 with `pool-no-i9`'s five, against 64 to 70 for rounds 41 to 43 with fixed lists (49 with a third lane on `un-rizen-service`, which its timing tests did not bear). The tests take about 233 minutes in all, and each lane builds its images first. More lanes are the next step, such as `x32-128` once it is stable.
 - **What it gave** in round 44 (2026-10-29, candidate e6678d4a, `pool`): every group once in 41.5 minutes, the builds included; with the one group that failed run again alone, 48.5.
+- **Before each pool gate** `land.py` logs each machine's cores and load as Effector last heard them, and after it the minutes and groups of each lane, so that how evenly the machines were loaded is on record (2026-10-30, the maintainer's ask). A build runs at `nice 10`, below the suites beside it.
+- **One lane on i9.** A second lane there was tried on 2026-10-30: every x86 group of `main` 15597f46 in two lanes, 55 and 56 minutes. 5 of 24 groups failed:
+  - three in the first six minutes, while the other lane's build held every core;
+  - `RAM above 4 GiB`, where 4 digits of a typed line never reached the guest (000-KRN-0188);
+  - `TSC measured again`.
+
+  `un-rizen`'s two lanes on the same 16 cores stay; i9 keeps one.
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 

@@ -2,8 +2,11 @@
 /// slot, and nothing more (MC-9.2–9.4, MC-3.11). It checks a channel's signature with the release key built into it,
 /// a manifest's with the boot key, and every file it stages by size and SHA-256, before a boot record names the slot.
 /// The parser service reads the metadata (MC-11.11). The source, the channel and what the updater does by itself are
-/// in `update.txt` on the boot volume. A request runs to its end before the next one is read.
-package mind:update@1.1.0;
+/// in `update.txt` on the boot volume. A request runs to its end before the next one is read. A client badged
+/// `BADGE_UPDATE_GATEWAY` (`mind::process`: the Effector gateway's, 1.2, 751-KRN-0185) may `fetch`, `apply` and `rollback`
+/// only while init's `remote-update` counts (`init.wit` 1.11 `mode`), which the updater asks at each; else `denied`. That
+/// client alone may hand it a release as a bundle (`install-…`, 1.3, 751-UPD-0032), which it checks as any source.
+package mind:update@1.3.0;
 
 interface update {
     /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;
@@ -14,7 +17,9 @@ interface update {
     /// passed, or the clock cannot be read (for `apply`, the channel kept with the staged release); `older`: the channel names the running version or an older one; `digest`:
     /// a file not as its manifest lists it; `write`: the slot or a boot record could not be written; `not-staged`: no
     /// verified newer release in the other slot; `no-fallback`: no slot to roll back to, or its version is not known or
-    /// is below the minimum; `denied`: init refused the restart; `no-parser`: the parser service did not answer.
+    /// is below the minimum; `denied`: init refused the restart, or a call the client's badge or init's `remote-update` does
+/// not allow; `no-parser`: the parser service did not answer. For a bundle (1.3): `malformed` also a handle not begun,
+/// bytes past its size, or not a ZIP of stored entries; `digest` also a bundle not of the size or SHA-256 begun.
     enum error { no-source, no-slot, trial, network, missing, malformed, signature, expired, older, digest, write, not-staged, no-fallback, denied, no-parser }
 
     /// What a channel offers: its name, latest version, minimum and expiry, and the running version (0: not known).
@@ -49,4 +54,15 @@ interface update {
     status: func() -> state;
     /// The channel the updater holds (above); added in 1.1.
     metadata: func() -> metadata;
+    /// Begins a bundle of `size` bytes with SHA-256 `sha256` (64 hex digits) in the updater's own staging, for the
+    /// gateway's command `command` (named in the log, MC-10.3); one begun before goes. From `BADGE_UPDATE_GATEWAY` only,
+    /// while `remote-update` counts. The bundle is one ZIP of stored entries holding what `scripts/release.py bundle`
+    /// writes: the channel update.txt names, its manifests and their signatures, and the blobs they list. A handle.
+    install-begin: func(size: u64, sha256: string<64>, command: string<64>) -> result<u32, error>;
+    /// The bundle's bytes at `offset`, which is at most the bytes written so far: what lay at and past it goes, so that a
+    /// cut transfer resumes.
+    install-write: func(handle: u32, offset: u64, bytes: bytes<32768>) -> result<_, error>;
+    /// Checks the bundle's size and SHA-256 (`remote-update` asked again), stages the release it holds in the other slot
+    /// as `fetch` stages a source's, with the same checks, and removes it. Returns the version staged; `apply` follows.
+    install-commit: func(handle: u32) -> result<u64, error>;
 }

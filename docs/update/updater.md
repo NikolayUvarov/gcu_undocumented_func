@@ -36,7 +36,10 @@ The public keys are built in: `$MIND_RELEASE_PUBLIC_KEY` and `$MIND_BOOT_PUBLIC_
 | `rollback` | The same check of the other slot. The channel kept there must show a version not below the highest minimum the updater has seen (the running slot's channel, and the last check). Then it writes the record that boots that slot on trial, falling back to the running one, and asks `init` to restart. |
 | (the floor) | Not a request: once the running slot is confirmed, the updater raises the version floor to the highest minimum a checked channel named, if the running slot's own manifest names that version or above; never down. It writes the newer record again, one on, with that floor (`plan::raise`), and every other record it writes carries the floor on. Records of format 1 it names at start and does not read (`RECORD MIND/BOOT0 OF FORMAT 1, NOT READ`). The bootloader boots no slot below it ([slots.md](slots.md#the-version-floor-351-upd-0024)). A rollback to a release at or above the minimum stays allowed. |
 | `status` | The running slot, whether it is on trial, its version, the slot the newer record names and whether it is confirmed, the version staged in the other slot, and the last failure. |
-| `metadata` (1.1) | The channel the updater holds, checked with the release key: the one it last read from the source, or else the one kept in the running slot. Its name, version, minimum and expiry, whether the expiry has passed, and whether it came from the source. |
+| `metadata` (1.1) | The channel the updater holds, checked with the release key: the one it last read from the source, a bundle's, or else the one kept in the running slot. Its name, version, minimum and expiry, whether the expiry has passed, and whether it was read since the updater started. |
+| `install-begin` (1.3) | From the Effector gateway's client (`BADGE_UPDATE_GATEWAY`) only, while `init`'s `remote-update` counts; any other client gets `denied` (751-UPD-0032). Begins a bundle of the size and SHA-256 named, in `MIND/<other slot>/INSTALL/BUNDLE.ZIP`, which neither the bootloader nor a fetch reads. The gateway's command ID goes into the log (MC-10.3). A bundle begun before is dropped, and so is one a restart left. |
+| `install-write` (1.3) | The bundle's bytes at an offset no further than the bytes written so far: what lay at and past it goes, so that a cut transfer resumes. |
+| `install-commit` (1.3) | Asks `remote-update` again, checks the bundle's size and SHA-256 (`digest`), reads it as a ZIP of stored entries (`malformed` otherwise: compressed, encrypted, ZIP64, a name that leaves the tree or repeats, a range outside the file), then stages the release it holds as `fetch` stages a source's, with the same checks, and removes the bundle. The bundle holds what `release.py bundle` writes: the channel `update.txt` names, its manifests and signatures, and the blobs they list. The gateway calls `apply` next, which asks `remote-update` again. |
 
 The other slot is not written while the running slot is on trial and not yet confirmed on the disk: it is then the fallback. A request runs to its end before the next one is read.
 
@@ -115,6 +118,15 @@ tries 3                                   # tries of a trial boot for an automat
 
 - **A caller of `idl/update.wit`.** No program holds a client of the updater: the shell's `update` command is the tools track's (351-APP-0029, numbered on its branch from [requests-APP.md](../../issues/requests-APP.md)), and the slot for its client is asked of the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)). So `check`, `fetch`, `apply`, `rollback`, `status` and `metadata` run only through the automatic policy in the tests. `rollback`, `status` and `metadata` have not run on the platform, nor `apply`'s refusal of an expired staged release: the automatic run checks the source first.
 - **The directory source's other refusals, in QEMU.** The `linkupdate` suite (351-KRN-0141) fetches a release from `data/link/rel/`, boots it on trial and confirms it, and refuses an expired channel and one with a changed signature. An older channel, a changed boot file and a resumed file go through the same `stage()` as over HTTPS, where the `update` suite shows each, but none of them has run from a directory.
+- **The Effector gateway's own side of `install`** (751-EFF-0023). The `install` suite (run with `updater`, 751-UPD-0032) streams bundles through a stand-in: `tests/updater_stub` in effector_gw's place, holding the gateway's client.
+  - With `remote-update` off, every `install-begin` and `install-commit` is `denied` and logged.
+  - With it on:
+    - a bundle with one byte of a boot file changed is refused (`digest`);
+    - so is one whose manifest is signed by another key (`signature`), and one cut after its first piece (`digest`);
+    - release 6's bundle, a piece written twice, is staged in slot B and removed;
+    - `apply` boots slot B on trial, and the trial is confirmed.
+
+  It has passed in QEMU on x86 and aarch64. The bundle's reader also runs in the host tests (`tests/updater_host.rs`) on a bundle `release.py bundle` wrote and on hostile archives. No client of another badge has run against the install calls: the shell's `update` command is not there yet.
 - **SSH** (351-NET-0004).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).

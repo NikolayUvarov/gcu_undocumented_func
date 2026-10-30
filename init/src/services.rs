@@ -6,14 +6,27 @@ pub const MAX: usize = 4096;
 
 // What the file may turn off or order: services init starts after vfs_server, the essential ones aside (the core,
 // loader, the link, the Effector services, which data/mode.conf decides, the shell, and tpm, which seals the device key).
-pub const CONFIGURABLE: [&str; 22] = ["blockstore", "gpio", "battery", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bcm_wifi",
-                                      "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater"];
+pub const CONFIGURABLE: [&str; 24] = ["blockstore", "gpio", "battery", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi",
+                                      "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater"];
 // What one cannot work without: turning the second off turns the first off, and the first starts after it.
 pub const NEEDS: [(&str, &str); 6] = [("netpolicy", "netstack"), ("tls", "netstack"), ("tls", "keystore"), ("ssh", "netstack"), ("ssh", "keystore"), ("tts", "audio_gw")];
 // What init grants the first only when the second already runs: the first starts after it.
-pub const BEFORE: [(&str, &str); 17] = [("wlan", "bcm_wifi"), ("wlan", "rtw88_wifi"), ("wlan", "wlansim"), ("wlan", "keystore"), ("netstack", "virtio_net"), ("netstack", "rtl8168"),
+pub const BEFORE: [(&str, &str); 19] = [("wlan", "bcm_wifi"), ("wlan", "rtw88_wifi"), ("wlan", "wlansim"), ("wlan", "keystore"), ("netstack", "virtio_net"), ("netstack", "rtl8168"),
                                         ("netstack", "wlan"), ("updater", "tls"), ("updater", "parse"), ("updater", "netpolicy"), ("shell", "battery"),
-                                        ("shell", "wlan"), ("shell", "ssh"), ("shell", "updater"), ("shell", "blockstore"), ("shell", "gpio"), ("shell", "video_gw")];
+                                        ("shell", "wlan"), ("shell", "ssh"), ("shell", "updater"), ("shell", "blockstore"), ("shell", "gpio"), ("shell", "video_gw"),
+                                        ("shell", "nnd"), ("blockstore", "keystore")];
+// Images that start later than their place in BOOT_SERVICES, each right after the one named: the block store's secrets
+// client is keystore's (308-KRN-0183), and nothing before keystore needs the store.
+pub const LATE: [(&str, &str); 1] = [("blockstore", "keystore")];
+
+// The images in init's start order: BOOT_SERVICES' order from 1, each of LATE moved to just after the one it follows.
+pub fn start_images(images: &'static [&'static str]) -> impl Iterator<Item = usize> {
+    let late = |i: usize| LATE.iter().any(|(name, _)| *name == images[i]);
+    (1..images.len()).filter(move |&i| !late(i)).flat_map(move |i| {
+        let moved = LATE.iter().filter(move |(_, after)| *after == images[i]).filter_map(move |(name, _)| images.iter().position(|n| n == name));
+        core::iter::once(i).chain(moved)
+    })
+}
 
 // A unit's image name: `virtio_net#1` is an instance of `virtio_net`.
 pub fn base(name: &str) -> &str { name.split('#').next().unwrap_or(name) }
