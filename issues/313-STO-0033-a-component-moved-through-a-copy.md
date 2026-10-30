@@ -1,12 +1,12 @@
 # 313-STO-0033 — A component moved to another store through a copy, active in one place only
 
-**Type:** storage (`libmind` `checkpoint`, `tally`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — (uses [309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.md)'s copies, on this branch) · **Main task:** [313](313-persistent-actors.md) · **Constitution:** MC-6.10, MC-6.11, MC-6.12, Appendix B.4
+**Type:** storage (`libmind` `checkpoint`, `tally`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — (uses [309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)'s copies, on this branch) · **Main task:** [313](313-persistent-actors.md) · **Constitution:** MC-6.10, MC-6.11, MC-6.12, Appendix B.4
 
 Split from [313](313-persistent-actors.md) (2026-10-30), its third step: "a move to another machine through a copy of its store, and a rebind".
 
 ## Problem
 
-A component's checkpoint lives in one store. A copy of its names ([309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.md)) can be carried to another store, but two things stand in the way:
+A component's checkpoint lives in one store. A copy of its names ([309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)) can be carried to another store, but two things stand in the way:
 - **It is not restored there.** An import publishes the names at that store's versions. `restore` then refuses a manifest whose epoch is not its names' version (`Inconsistent`).
 - **Nothing ends the component at the source.** An instance there could go on taking requests after the copy was made. Two places would then both be active, which fencing (MC-6.12) exists to prevent.
 
@@ -47,4 +47,4 @@ A component's checkpoint lives in one store. A copy of its names ([309-STO-0031]
 
 ## Related
 
-[313](313-persistent-actors.md), [313-STO-0026](../issues-done/313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done), [313-STO-0030](313-STO-0030-messages-between-components.md), [309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.md), [306](../issues-done/306-checkpoints-and-rebinding.done).
+[313](313-persistent-actors.md), [313-STO-0026](../issues-done/313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done), [313-STO-0030](../issues-done/313-STO-0030-messages-between-components.done), [309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done), [306](../issues-done/306-checkpoints-and-rebinding.done).

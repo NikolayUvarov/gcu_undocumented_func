@@ -58,4 +58,4 @@ Done in `main` 3e07edb8 (landing round 43, 2026-10-29), from `claude/relaxed-mei
   - QEMU `store` on aarch64 (keys from RNDR): two domains, one forgotten and its records collected; on x86's qemu64, none made and `no-random`;
   - the `boot` suite's store disk on x86 with `+rdrand`: a domain forgotten before a reboot unreadable after it, then collected.
   - Run by the round's gate on every group, and before it on this session's container (x86) and `i9_4e6882212251` (aarch64).
-- **Not provided:** forgetting against copies already read, or against a flash medium's spare blocks, which may keep an erased key record (MC-4.8); the volume key that wraps the domains' keys is still in the clear in the superblock until [308-STO-0022](../issues/308-STO-0022-the-volume-key-held-by-keystore.md).
+- **Not provided:** forgetting against copies already read, or against a flash medium's spare blocks, which may keep an erased key record (MC-4.8); the volume key that wraps the domains' keys is still in the clear in the superblock until [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.done).

@@ -345,7 +345,8 @@ impl Scheduler {
         }
         if now >= self.next_expiry { self.expire(now); }
         if let Some((_, pid, _, _)) = self.held.filter(|&(_, _, since, _)| ns.saturating_sub(since) >= HOLD_NS) {
-            let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PID {} HELD FOR THE COMPOSITOR'S COPY {} MS, LET GO\n", pid, HOLD_NS / 1_000_000));
+            // Kept in the ring, not printed: under load it came in the middle of the echo of a typed command.
+            let _ = core::fmt::Write::write_fmt(&mut crate::klog::Kept, format_args!("MIND CORE KERNEL: PID {} HELD FOR THE COMPOSITOR'S COPY {} MS, LET GO\n", pid, HOLD_NS / 1_000_000));
             self.release_held();
         }
         self.wake_idle(cpu, every);

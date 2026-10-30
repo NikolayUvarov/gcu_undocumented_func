@@ -65,7 +65,7 @@ Done 2026-10-30, landed in round 51 (`main` 57c2fd3d, from `claude/relaxed-meitn
   - `tests/checkpoint_host.rs`: the one encoding and its refusals; the model service stopped after each of the store's calls; owed messages each received once; the claim fencing an instance restored before it;
   - QEMU `store` suite on x86 and aarch64: an addition sent again applied once, also after the store restarted, and an older one refused.
 - **Recorded in** [docs/storage/checkpoints.md](../docs/storage/checkpoints.md) (version 2) and the profile.
-- **Next:** [313-STO-0030](../issues/313-STO-0030-messages-between-components.md), messages between components on the platform.
+- **Next:** [313-STO-0030](313-STO-0030-messages-between-components.done), messages between components on the platform.
 
 ## Related
 

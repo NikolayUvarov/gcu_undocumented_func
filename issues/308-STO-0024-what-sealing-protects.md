@@ -17,7 +17,7 @@ docs/profile/threat-model.md and the profile's Article 4 row say:
   - each record's place, size, domain and nonce;
   - the superblock;
   - which sectors are written and when.
-- **Until [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.md):** the key lies on the same medium, so there is no confidentiality.
+- **Until [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done):** the key lies on the same medium, so there is no confidentiality.
 - **A running system that is compromised is outside this model,** and so are copies already handed out.
 - **Per configuration** (MC-12.1): which machine has a TPM, and which runs on a RAM disk.
 

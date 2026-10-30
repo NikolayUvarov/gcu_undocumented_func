@@ -254,6 +254,38 @@ fn requests_with_bodies_on_one_connection() {
 }
 
 #[test]
+fn head_patch_and_delete_on_one_connection() {
+    // HEAD's answer ends at its head, whatever length or coding it names; the next answer is read whole (000-NET-0047).
+    let url = Url::parse(SERVICE).unwrap();
+    let mut answers = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n".to_vec();
+    answers.extend_from_slice(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+    answers.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+    answers.extend_from_slice(b"HTTP/1.1 204 No Content\r\n\r\n");
+    let mut connection = Connection::new(Scripted::new(&answers));
+    let mut response = connection.request(Method::Head, &url, &[], None, &mut Local, false).unwrap();
+    assert_eq!((response.status, response.length), (200, Some(5)));
+    assert_eq!(read_all(&mut response, 3).unwrap(), b"");
+    let mut response = connection.request(Method::Head, &url, &[], None, &mut Local, false).unwrap();
+    assert_eq!((response.status, response.head.chunked), (200, true));
+    assert_eq!(read_all(&mut response, 3).unwrap(), b"");
+    let mut patch: &[u8] = b"{}";
+    let mut response = connection.request(Method::Patch, &url, &[], Some((2, &mut patch)), &mut Local, false).unwrap();
+    assert_eq!(read_all(&mut response, 3).unwrap(), b"ok");
+    let response = connection.request(Method::Delete, &url, &[], None, &mut Local, false).unwrap();
+    assert_eq!(response.status, 204);
+    assert!(connection.open());
+    assert_eq!(connection.served(), 4);
+    let sent = String::from_utf8(connection.transport().sent.clone()).unwrap();
+    let host = "Host: hesere.uz\r\nUser-Agent: MIND-Core\r\n";
+    assert_eq!(sent, format!("HEAD /effector/api/v1/heartbeat HTTP/1.1\r\n{host}\r\nHEAD /effector/api/v1/heartbeat HTTP/1.1\r\n{host}\r\n\
+                              PATCH /effector/api/v1/heartbeat HTTP/1.1\r\n{host}Content-Length: 2\r\n\r\n{{}}\
+                              DELETE /effector/api/v1/heartbeat HTTP/1.1\r\n{host}\r\n"));
+    // The names both ways, in capitals only.
+    for method in [Method::Get, Method::Post, Method::Put, Method::Head, Method::Patch, Method::Delete] { assert_eq!(Method::parse(method.name()), Some(method)); }
+    assert_eq!((Method::parse("TRACE"), Method::parse("delete")), (None, None));
+}
+
+#[test]
 fn a_hundred_requests_on_one_connection() {
     let url = Url::parse(SERVICE).unwrap();
     let mut answers = Vec::new();
@@ -393,6 +425,8 @@ fn redirects_follow_their_rules() {
     assert_eq!(follow(301, "/a", Method::Post, 0), Ok(Some(("https://api.test/a".into(), Method::Get, false, true))));
     assert_eq!(follow(302, "/a", Method::Put, 0), Ok(Some(("https://api.test/a".into(), Method::Put, true, true))));
     assert_eq!(follow(303, "/a", Method::Put, 0), Ok(Some(("https://api.test/a".into(), Method::Get, false, true))));
+    assert_eq!(follow(303, "/a", Method::Head, 0), Ok(Some(("https://api.test/a".into(), Method::Head, true, true))));
+    assert_eq!(follow(301, "/a", Method::Delete, 0), Ok(Some(("https://api.test/a".into(), Method::Delete, true, true))));
     assert_eq!(follow(307, "/a", Method::Post, 0), Ok(Some(("https://api.test/a".into(), Method::Post, true, true))));
     assert_eq!(follow(308, "/a", Method::Post, 9), Ok(Some(("https://api.test/a".into(), Method::Post, true, true))));
     // References: absolute, scheme-relative, absolute path, relative to the path's directory.

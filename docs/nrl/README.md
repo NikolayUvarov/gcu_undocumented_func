@@ -4,9 +4,11 @@
 
 An extensible Rust system that inspects, converts, fine-tunes and runs trained neural networks on MIND Core and on a development host. Its first research question is whether spline representations make blocks smaller or faster than plain compression (`pruned`, `svd`) at a bounded loss of quality. A negative answer is a valid result.
 
-## Current branch status (2026-10-26)
+## Current branch status (2026-10-30)
 
 T06–T10 are complete for the declared bounded host profiles. Five requested autonomous extensions, 900-NRL-0020–0024, add optimizer recovery, incremental generation, full embedding training, a complete supported-model QSL bridge and a larger licensed study. The complete `bash nrl/tools/check.sh --expanded` run passes on `b44fbc0d`: **95 host tests**, zero failures/skips, four portable release builds and all CLI cycles including the larger study. New independent fixtures regenerate exactly under the pinned reference environments. [Final evidence](../../nrl/reports/five-extensions-2026-10-26.json), [raw check log](../../nrl/reports/five-extensions-check-2026-10-26.txt). Native service integration and the full repository landing gate remain pending.
+
+Service update (2026-10-30): APP's `nnpkg`, `nnd` and `nn.wit` are implemented; KRN's boot grants landed in round 50. Remaining native work is APP's client/badge lifecycle, selection of the two granted file scopes and actual named-target model execution. 900-NRL-0026 adds live-export differential checking through the real portable parser/runtime/service on the host. [Current contract and scope](../../nrl/specs/portable-import-check-v0.md). T11 remains open; the service is no longer absent. Current check on `007f0a42`: **102 NRL tests + 18 nnpkg tests, 70 live-export cases, three CLI profiles and six portable builds pass**. [Evidence](../../nrl/reports/portable-import-2026-10-30.json).
 
 | Work | Current scope and outcome | Evidence |
 |---|---|---|

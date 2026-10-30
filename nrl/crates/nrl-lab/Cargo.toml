@@ -10,3 +10,4 @@ nrl-repr.workspace = true
 nrl-runtime.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+nnpkg = { path = "../../../nnpkg" }

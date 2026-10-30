@@ -53,9 +53,9 @@ pub struct Options {
 }
 
 impl Options {
-    /// The method to send: -X's, else POST with a body, else GET.
+    /// The method to send: -X's, else HEAD for -I, else POST with a body, else GET.
     pub fn method(&self) -> &str {
-        match &self.method { Some(m) => m, None if self.data.is_some() || !self.form.is_empty() => "POST", None => "GET" }
+        match &self.method { Some(m) => m, None if self.head => "HEAD", None if self.data.is_some() || !self.form.is_empty() => "POST", None => "GET" }
     }
 }
 
@@ -123,7 +123,9 @@ pub fn parse(words: &[String]) -> Result<Options, String> {
             "-I" | "--head" => o.head = true,
             "-X" | "--request" => {
                 let m = value()?.to_ascii_uppercase();
-                if !matches!(m.as_str(), "GET" | "POST" | "PUT") { return Err(alloc::format!("-X {}: GET, POST or PUT", m)); }
+                if !matches!(m.as_str(), "GET" | "POST" | "PUT" | "HEAD" | "PATCH" | "DELETE") { return Err(alloc::format!("-X {}: GET, POST, PUT, HEAD, PATCH or DELETE", m)); }
+                // A HEAD's answer has no body: its head is what there is to show.
+                o.head |= m == "HEAD";
                 o.method = Some(m);
             }
             "-H" | "--header" => { if o.headers.len() == HEADERS_MAX { return Err("more than 14 headers".to_string()); } let h = header(value()?)?; o.headers.push(h); }
@@ -147,7 +149,7 @@ pub fn parse(words: &[String]) -> Result<Options, String> {
     }
     o.url = url.ok_or_else(|| "no URL".to_string())?;
     if o.data.is_some() && !o.form.is_empty() { return Err("-d and -F do not go together".to_string()); }
-    if o.head && (o.data.is_some() || !o.form.is_empty()) { return Err("-I sends no body".to_string()); }
+    if o.head && (o.data.is_some() || !o.form.is_empty()) { return Err("-I (HEAD) sends no body".to_string()); }
     if o.resume && o.output == Output::Console { return Err("-c needs -o or -O".to_string()); }
     Ok(o)
 }

@@ -16,6 +16,12 @@ pub fn keep(text: &str) {
     BUSY.store(false, Ordering::Release);
 }
 
+/// Writes into the ring alone: for a note that would cut into a line typed on the console (000-KRN-0186's hold).
+pub struct Kept;
+impl core::fmt::Write for Kept {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result { keep(text); Ok(()) }
+}
+
 /// The kept lines, oldest first, and whether older ones were dropped.
 pub fn copy(out: &mut alloc::vec::Vec<u8>) -> bool {
     while BUSY.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { core::hint::spin_loop(); }

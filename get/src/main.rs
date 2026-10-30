@@ -126,7 +126,7 @@ fn connect(url: &Url, deadline: usize) -> Result<Connection<Timed>, Fail> {
     Ok(Connection::new(Timed { link, deadline }))
 }
 
-fn method(name: &str) -> Method { match name { "POST" => Method::Post, "PUT" => Method::Put, _ => Method::Get } }
+fn method(name: &str) -> Method { Method::parse(name).unwrap_or(Method::Get) }
 
 // A file to send, read a piece at a time.
 struct FileSource { file: File, at: usize }
@@ -336,7 +336,7 @@ fn head_text(h: &http::Head) -> String {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("get — an HTTP request from the console or a script, as wget and curl make them (000-NET-0048).\nUsage: get [options] URL\n  -o FILE  save the body (the user's files: ram:, data/, log:)   -O  save it in ram: under the URL's last name\n  -c  resume a saved file   -I  the head alone   -X GET|POST|PUT   -H 'Name: value' (up to 14)\n  -d TEXT | -d @FILE  a body (POST)   -F name=value | -F name=@FILE  a multipart form (POST, up to 8)\n  -L  follow redirects (the default; --no-location stops, --max-redirs N, 10 at most)   -s  silent   -w  the status, bytes and time\n  -f  exit 22 on an HTTP error   -m, --max-time S   --insecure-http  plain http:// (not encrypted)\nExit statuses as curl's: 0, 1 not https, 2 usage, 3 URL, 6 host, 7 connection, 22 HTTP error (-f), 23 write, 26 read,\n28 time, 35 TLS, 47 redirects, 56 receive, 60 certificate.\nIt reaches only what the network policy gives `get` (a line naming the host and port, or a browsing grant).");
+    mind::about!("get — an HTTP request from the console or a script, as wget and curl make them (000-NET-0048).\nUsage: get [options] URL\n  -o FILE  save the body (the user's files: ram:, data/, log:)   -O  save it in ram: under the URL's last name\n  -c  resume a saved file   -I  the head alone (HEAD)   -X GET|POST|PUT|HEAD|PATCH|DELETE   -H 'Name: value' (up to 14)\n  -d TEXT | -d @FILE  a body (POST)   -F name=value | -F name=@FILE  a multipart form (POST, up to 8)\n  -L  follow redirects (the default; --no-location stops, --max-redirs N, 10 at most)   -s  silent   -w  the status, bytes and time\n  -f  exit 22 on an HTTP error   -m, --max-time S   --insecure-http  plain http:// (not encrypted)\nExit statuses as curl's: 0, 1 not https, 2 usage, 3 URL, 6 host, 7 connection, 22 HTTP error (-f), 23 write, 26 read,\n28 time, 35 TLS, 47 redirects, 56 receive, 60 certificate.\nIt reaches only what the network policy gives `get` (a line naming the host and port, or a browsing grant).");
     let code = match args::split(mind::process::args_str()).and_then(|words| args::parse(&words)) {
         Err(why) => { mind::println!("GET: {} (help get)", why); args::USAGE }
         Ok(options) => match run(&options) {
