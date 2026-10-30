@@ -1,6 +1,6 @@
 # 311-STO-0032 — `storefs`: files and directories of a named root, through `vfs.wit`
 
-**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** how a files client reaches it and the error it reports a conflict with ([requests-KRN.md](requests-KRN.md), "`storefs`", 2026-10-30) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
+**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** 311-KRN-0189 (`vfs.wit` 2.6 `conflict`) and 311-KRN-0190 (`storefs` at boot and its clients), the kernel track's, from the request of 2026-10-30 · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md).
 
@@ -50,6 +50,14 @@ A tree in the store is read and changed only through `blocks tree`, one command 
 - **The service, `storefs/src/main.rs`:** the logic behind `vfs.wit` 2.5's generated server code, as `vfs_server` dispatches it; each request's PID and badge are its client. The state (786 KiB) and the buffers are statics. Pending with 311-KRN-0190: the store's client, looked for in `SLOT_BLOCKSTORE` as `tally` and `blocks` look for theirs, and the badge rule, the user's badge (`mind::fs::BADGE_USER`) writing every volume and every other badge reading. `check`, `scope`, `format`, `fill` and `adopt` are `denied`: they are `vfs_server`'s. `volume` gives the label `MIND STORE`, FAT type 0, no room, and the chunk as the cluster. When a table is full, the handles of ended clients are closed unpublished (`fs::forget`), as `vfs_server` frees them. It logs one line, `[STOREFS] READY …`, which names a missing store client. Built into the x86 and aarch64 images as `storefs.elf` (`02_build.sh` after `blocks`; `scripts/build_aarch64.sh` takes that list), on this session's container; the x86 QEMU `store` suite passes with it in the image, where nothing starts it.
 - **Not in the logic:** `check`, `scope`, `format`, `fill` and `adopt`; `modified` stamps, which a tree does not keep.
 - **Host tests** (tests/storefs_host.rs, the store's logic on a simulated medium): each call and its refusals, each change of a directory one version; a file flushed and read back by SHA-256, and 400 random writes, truncations and flushes against a model; a directory's flush; a reader's open root, file and directory following a writer; two writers, the second told of the conflict and writing again through the same root; a change of a directory refused by a conflict on its own call; a flush stopped at each of its 9 writes, made or torn, leaving the old root or the new; the rights; each bound and each client's share, and a second client getting its share; a root that is not a directory; the error mapping against the generated `vfs.wit` 2.5. Each of 22 changes of the logic made a test fail: among them a conflict ignored, handles open to every client, a tree that does not follow, or follows with unpublished data, a stale file that answers, a removal, move or made directory that waits, `FILE_MAX` and each share left out.
+
+## Progress (2026-10-30)
+
+- **Merged by the session** (3feb85d9, 17007ec8, 9af247ac). The kernel track chose way (b) on 2026-10-30: `mind::fs` asks `vfs_server` first, and `storefs` for a volume `vfs_server` answers `not-found`.
+- **Tested:**
+  - `scripts/host_tests.sh` whole (`storefs` 12) on eea5d440;
+  - both images built with `storefs.elf`, and `store`, `storefaults` and `vfs` still pass on x86 and aarch64, on `un-rizen_2a8b108d5593` through Effector.
+- **Not run:** nothing starts the service until 311-KRN-0190. The QEMU criteria wait for it, and for APP's lending to programs.
 
 ## Acceptance criteria
 
