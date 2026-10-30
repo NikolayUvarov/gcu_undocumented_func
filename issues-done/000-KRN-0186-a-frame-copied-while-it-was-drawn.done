@@ -1,10 +1,10 @@
-# 000-KRN-0186 — The compositor copied a frame its program was drawing
+# 000-KRN-0186 — The compositor copied a frame its program was drawing — done
 
-**Type:** kernel track (`compositor`, the isolation suite's check) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.2
+**Type:** kernel track (`compositor`, the isolation suite's check) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.2
 
 ## Problem
 
-- **What the check asks** ([000-KRN-0086](../issues-done/000-KRN-0086-the-compositor-copies-whole-frames.done)): `app2` numbers its frames in their colour and draws the bottom half 3 ms before the top. A screen whose bottom half is newer than its top shows a frame copied while it was drawn.
+- **What the check asks** ([000-KRN-0086](000-KRN-0086-the-compositor-copies-whole-frames.done)): `app2` numbers its frames in their colour and draws the bottom half 3 ms before the top. A screen whose bottom half is newer than its top shows a frame copied while it was drawn.
 - **It failed twice on 2026-10-29:**
   - in round 45's gate, on `un-rizen`'s second lane while the first ran other groups: top 238, bottom 241;
   - in this session's container, with the guest paused for each screen (QMP `stop`, `screendump`, `cont`): top 9, bottom 12.
@@ -50,7 +50,19 @@
 - **The acceptance runs** (2026-10-29, `claude/youthful-mendel-mf1soy` 46efb7b5): `un-rizen`, both of the track's lanes at once.
   - Each lane built the tree, then ran `x86: protection probes` ten times.
   - All 20 runs passed. Each run took 423 to 436 screens, the guest paused for each, and frames reached 169 to 191.
-- **Left:** landing; then the issue closes.
+- **Landed:** round 48 (`main` e99730b1), and the narrower hold of round 49 (`main` 1a4632b5).
+
+## Resolution
+
+- **The cause.** The hold ran out in the middle of the compositor's copy. The kernel's 50 ms bound in the guest's time, slow framebuffer writes under TCG and the copy made as drawn after `FORCE_MS` each let a program draw over a copy in progress.
+- **The fix,** in `main` 1a4632b5 (rounds 48 and 49):
+  - **The compositor** reads the screen into its shadow under the hold, releases it, then writes the framebuffer (`compositor/src/main.rs`).
+  - **The kernel** (`kernel/src/scheduler.rs`):
+    - holds a task the compositor found drawing when it next sleeps or waits for a message;
+    - ends a hold when the compositor releases it, waits or ends, at a change of focus, or after 1 s, which it logs.
+  - **The check** pauses the guest for each screen.
+- **Evidence:** the acceptance runs on `un-rizen` (20 of 20, two lanes at once), the runs in this container listed above, and the gates of rounds 48 and 49.
+- **Not settled.** In round 49's first try, `x86: RAM above 4 GiB` on `un-rizen` ran out its operation's 3500 s with no result. Its logs were gone before they could be read. It passed when run again alone there, and every suite of that group passed in this container on 1a4632b5.
 
 ## Acceptance criteria
 
@@ -59,4 +71,4 @@
 
 ## Related
 
-[000-KRN-0086](../issues-done/000-KRN-0086-the-compositor-copies-whole-frames.done); round 45's gate (LANDING/ on `internal-dev-messages`).
+[000-KRN-0086](000-KRN-0086-the-compositor-copies-whole-frames.done); round 45's gate (LANDING/ on `internal-dev-messages`).
