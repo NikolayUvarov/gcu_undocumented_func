@@ -45,6 +45,23 @@
   - another badge is `denied`.
 - **`tests/updater_stub`** answers the three calls.
 
+## Progress
+
+**2026-10-30, on `claude/youthful-mendel-mf1soy`:**
+- **`update.wit` 1.3:** the three calls. `install-write` takes `bytes<32768>`, not `list<u8, 4096>`: the same `&[u8]` on the client's side, and a piece of the gateway's own `read` (`effector.wit`, 32 KiB) passes through whole. `tests/idl_fuzz_host.rs` decodes it with a scratch buffer.
+- **`tests/updater_stub`** answers them: from `BADGE_UPDATE_GATEWAY` only, the word asked at begin and commit, the bundle hashed as it comes and kept nowhere (so a write resumes only at its end or from 0), version 1 answered; `apply` asks init to restart the machine.
+- **`scripts/release.py bundle DEST OUT [--channel] [--arch]`**, after `check`: the channel, the manifests and signatures, the blobs they list; stored, fixed dates. `tests/release_test.py` checks its entries, that it holds only what the channel's manifest lists, that the same release makes the same file, and that a layout that does not verify is not bundled.
+- **The updater:**
+  - the bundle lies in `MIND/<other slot>/INSTALL/BUNDLE.ZIP`: in its zone, a directory that `stage()` keeps and the bootloader does not read;
+  - `install-write` at most at the bytes written so far, the rest truncated;
+  - `install-commit` checks size and SHA-256 (`digest`), reads the ZIP in place (`updater/src/bundle.rs`), and stages through the same `stage()` as `fetch`, its lines named `INSTALL`;
+  - the bundle is removed after a commit, at a new begin and at start.
+- **Host tests:** `tests/updater_host.rs` reads a bundle `release.py bundle` wrote, every entry as the server holds it, and refuses a byte past the end record, a count one more, a compressed or encrypted entry, a local name that differs, and Python's deflated, escaping, repeated and absolute names.
+
+**Left:**
+- the QEMU `update` suite's install run, x86 and aarch64: a gateway-badged client's bundle staged and applied, the word off (`denied`, logged), a bundle with one byte changed (`digest`) and a manifest not signed by the boot key (`signature`), both now checked there rather than on the host, where the signature check needs the updater's built-in keys;
+- "another badge is `denied`" has no client to run it in QEMU: the shell holds the updater's unbadged client for its `update` command (351-APP-0029), which no program uses yet.
+
 ## Related
 
 [751](751-system-updates-at-a-developers-request.md), [751-KRN-0185](751-KRN-0185-the-remote-update-permission-in-init.md), [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md), 751-EFF-0023, [751-ASR-0013](751-ASR-0013-the-remote-update-path-threat-model-and-refusals.md).
