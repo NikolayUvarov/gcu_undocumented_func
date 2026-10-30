@@ -1,6 +1,6 @@
 # 000-NET-0047 — HTTP for API clients in `libmind`: bodies, multipart, redirects, compression, a streaming body, Server-Sent Events
 
-**Type:** network (`libmind` `http`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (landed in round 39; HEAD, PATCH and DELETE left) · **Blocked by:** — · **Main task:** — (for 253, 255, 260, 261 and 000-NET-0048) · **Constitution:** MC-6.6, MC-11.5, MC-11.11, MC-12.1
+**Type:** network (`libmind` `http`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (landed in round 39; HEAD, PATCH and DELETE made 2026-10-30, their aarch64 run and landing left) · **Blocked by:** — · **Main task:** — (for 253, 255, 260, 261 and 000-NET-0048) · **Constitution:** MC-6.6, MC-11.5, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md).
 
@@ -92,6 +92,38 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
 ## Progress (2026-10-28)
 
 Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85): `parse.wit` 2.0, redirects, content codings, multipart bodies, Server-Sent Events, chunked uploads and Retry-After, with `webcheck --api` against the stand-in in the `tls` suite, x86 and aarch64, and the host tests `http`, `sse`, `multipart` and `http_coding`. Left: HEAD, PATCH and DELETE checked against the stand-in.
+
+## Progress (2026-10-30): HEAD, PATCH and DELETE
+
+On `claude/youthful-mendel-mf1soy` (f7fd71f5, 240b4f71). The Effector agent no longer matches `Method` exhaustively (000-EFF-0019), so nothing waited.
+
+- **`mind::http`:**
+  - `Method` gains `Head`, `Patch` and `Delete`, and `Method::parse` reads a name, in capitals only;
+  - the answer to HEAD ends at its head, whatever length or chunked coding it names, as 204 and 304 do (RFC 9112 6.3). Its head's `length` is what a GET would get;
+  - a 303 keeps HEAD, while any other method becomes GET.
+- **`get`:**
+  - `-I` sends HEAD;
+  - `-X` takes HEAD, PATCH and DELETE. `-X HEAD` shows the head as `-I` does;
+  - `-X TRACE` is refused (usage, 2).
+- **The stand-in** (`tests/http_api_stub.py`):
+  - it answers HEAD with GET's head and no body;
+  - PATCH as PUT;
+  - DELETE: the echo, and 204 for `/api/item`.
+- **`webcheck --api`** adds a run on one connection:
+  - HEAD of `/api/echo`, a length named;
+  - HEAD of `/api/events`, chunked named;
+  - a GET after them, answered whole;
+  - PATCH with a merge-patch body;
+  - DELETE of the echo, and DELETE of `/api/item`, answered 204;
+  - six answers served on the one connection.
+- **The suite:** `--suites download` runs the net suite's download checks alone (`download_check`).
+- **Host tests:**
+  - `tests/http_host.rs`: HEAD with a length and with chunked, then PATCH and DELETE, on one connection; the exact requests sent; 303 and 301 with HEAD and DELETE; the names both ways (21 tests pass);
+  - `tests/get_host.rs`: `-I`, `-X head`, `-X PATCH`, `-X DELETE`; `-X TRACE` and `-X HEAD -d` refused.
+- **Docs:** [docs/network/services.md](../docs/network/services.md), [docs/network/downloads.md](../docs/network/downloads.md).
+- **x86, QEMU under TCG** (4 CPUs, locally): `--suites download` passed whole, 14 checks, with the new lines, and `get`'s `-X PATCH`, `-X DELETE` and `-X DELETE -I` (204).
+
+Left: the same run on aarch64, and landing.
 
 ## Related
 

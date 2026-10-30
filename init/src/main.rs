@@ -141,7 +141,9 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // The client of nnd init keeps, whose copies the shell holds and lends, revoked before each new shell (262-KRN-0178).
               shell_nn: Option<usize>,
               // Whether this boot's slot was signed with the public test key, which anyone can sign with (751-KRN-0185).
-              test_key: bool }
+              test_key: bool,
+              // A safe start, after an unfinished run or asked at the bootloader: link gets no input (800-KRN-0191).
+              safe: bool }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -535,7 +537,10 @@ impl Init {
                     grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_DEVELOPER)?, CLIENT);
                     // The shell's commands, badged so that the shell applies the link's rule to them (800-KRN-0148).
                     grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
-                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}/ TO WRITE", FIRMWARE_DIR);
+                    // Keys and the pointer from the cable (800-KRN-0191); not in a safe start, whose asker is at the machine.
+                    if !self.safe { grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0); }
+                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}{}/ TO WRITE",
+                                   if self.safe { "NO INPUT IN A SAFE START; " } else { "INPUT; " }, FIRMWARE_DIR);
                 }
             }
             "virtio_blk" => {
@@ -871,8 +876,10 @@ impl Init {
                 flags |= SPAWN_SCREEN;
                 // Badged: an unbadged copy could be badged for reboot by whoever holds it (351-KRN-0022).
                 grants.add(SLOT_INIT, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_LIFECYCLE)?, CLIENT);
-                for (slot, service) in [(SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
-                // The clock's client that may set it (211-KRN-0051); programs get the plain one from the loader.
+                for (slot, service) in [(SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
+                // The clients that may set the clock (211-KRN-0051) and the audio levels (000-KRN-0118); programs get the
+                // plain ones from the loader.
+                grants.add(SLOT_AUDIO, self.badged(&mut minted, "audio_gw", mind::audio::BADGE_LEVELS)?, CLIENT);
                 grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
@@ -1729,7 +1736,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0 };
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
@@ -1757,6 +1764,7 @@ fn boot(info: &'static BootInfo) {
     if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
     // A safe start asked at the bootloader (173-KRN-0036): the service configuration is not read.
     let asked = info.boot_flags & BOOT_SAFE != 0;
+    init.safe = safe || asked;
     let (healthy, mounted) = boot_services(&mut init, info, safe, asked);
     if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
     // Applications may not take the frames a service restart needs (MC-6.5): a reserve only the system band uses.

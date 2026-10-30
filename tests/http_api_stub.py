@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A stand-in for the APIs MIND Core's clients talk to (000-NET-0047), over HTTPS with the suites' test certificates:
 a JSON POST, a multipart upload, redirect chains, gzip and deflate bodies and a bomb, a stream of Server-Sent Events, a
-chunked upload, and Retry-After in both forms. `webcheck --api` checks each (tests/qemu_smoke.py, `api_runs`). For `get`
+chunked upload, Retry-After in both forms, and HEAD, PATCH and DELETE. `webcheck --api` checks each (tests/qemu_smoke.py, `api_runs`). For `get`
 (000-NET-0048, `get_runs`): an echo of the request, a redirect to the same host and to another, and a slow answer.
 
 The bodies the guest decodes and the events it reads are made here from fixed rules, so the suite knows what to expect.
@@ -34,7 +34,8 @@ class Api(http.server.BaseHTTPRequestHandler):
             self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _json(self, status, value):
         self._send(status, json.dumps(value, separators=(",", ":")).encode(), [("Content-Type", "application/json")])
@@ -60,6 +61,23 @@ class Api(http.server.BaseHTTPRequestHandler):
     def do_PUT(self):
         data = self._body()
         self._echo(data) if self.path == "/api/echo" else self._send(404)
+
+    def do_PATCH(self):
+        self.do_PUT()
+
+    def do_HEAD(self):
+        # GET's head alone: its Content-Length or chunked coding is named, no body follows (RFC 9110 9.3.2).
+        self.do_GET()
+
+    def do_DELETE(self):
+        data = self._body()
+        if self.path == "/api/echo":
+            self._echo(data)
+        elif self.path == "/api/item":
+            self.send_response(204)
+            self.end_headers()
+        else:
+            self._send(404)
 
     def do_POST(self):
         data = self._body()
@@ -125,6 +143,8 @@ class Api(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
+            if self.command == "HEAD":
+                return
             stream = b"retry: 3000\n\n" + b"".join(
                 (b": keep-alive\r\n" if i % 100 == 0 else b"") + b"event: delta\nid: %d\ndata: {\"n\":%d,\n%s" % (i, i, b"data: \"text\":\"piece %d\"}\r\n\r\n" % i)
                 for i in range(EVENTS)) + b"event: done\ndata: [DONE]\n\n"
