@@ -57,6 +57,10 @@
   - **EFF (751-EFF-0023):** the gateway's install through its client.
 - **The test keys, decided** (the maintainer, 2026-10-30; `main` 793a9755, 751 and 751-ASR-0013): `remote-update` is not refused on a slot that trusts the public test keys, as the work goes through this path now. The warning stays.
 
+## Landed (2026-10-30)
+
+In `main` since landing round 50 (8e2b16e0, 2026-10-30). Left: switching `remote-update` through the shell's `mode` (the shell's `mode` command knows `development` and `maintenance` only: the tools track's), and the refusals from the Mind's, the gateway's and the link's badges in the `modes` suite.
+
 ## Acceptance criteria
 
 - **Host tests:** `data/mode.conf`'s words read and refused as above; `tests/runtime.rs` with the new ABI.
