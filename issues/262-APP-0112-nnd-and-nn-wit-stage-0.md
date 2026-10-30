@@ -1,12 +1,12 @@
 # 262-APP-0112 — The model service `nnd` and `idl/nn.wit` 1.0: stage 0 of 262, for NRL's native integration
 
-**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed on 2026-10-29 with `NRL` and `KRN`; the code follows) · **Blocked by:** for the native part, `nnd` as a boot service with its grants and the shell's badged client ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), which the agreed design unblocks); a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed on 2026-10-29 with `NRL` and `KRN`; `idl/nn.wit`, `nnd`, its checks and the shell's badged clients are written; the native model suite is left) · **Blocked by:** nothing for the native part: `nnd` as a boot service with its grants and the shell's slot ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)) are in `main` since landing round 50 (2026-10-30); later, a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-28, from NRL's request `issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11` on `codex/NRL-lab` (41633c21) and its messages `APP/2026-10-26T1740Z-NRL-native-nnd-interface-and-smoke-harness.md` and `APP/2026-10-26T1828Z-NRL-runtime-v0-ready-native-integration-pending.md` on `internal-dev-messages`.
 
 ## Problem
 
-- **What is in `main`.** `KRN` made the memory and the CPUs for large models: 262-KRN-0160 to 0165, ABI 19 and 20. Nothing serves models yet: there is no `nnd` and no `idl/nn.wit`.
+- **What was in `main` when this was recorded (2026-10-28).** `KRN` made the memory and the CPUs for large models: 262-KRN-0160 to 0165, ABI 19 and 20. Nothing served models: there was no `nnd` and no `idl/nn.wit`.
 - **What `NRL` has.** On its branch, `nrl-runtime` version 0: a checked `no_std` executor of stateless feed-forward models, with owner- and model-bound sessions, budgets and cooperative cancellation. Its Rust API is linked code, not an IPC interface.
 - **What T11 needs.** NRL's T11 (900-NRL-0017) closes only when such a model runs on MIND Core through `nnd`, with:
   - authenticated client identity;
@@ -63,7 +63,7 @@
   - `--memory <MiB>` its quota (asked of `KRN`);
   - a probe worker telling whether it may start workers.
 
-  It runs once 262-KRN-0178 gives it its boot image and grants.
+  Since 262-KRN-0178 landed (2026-10-30), `init` starts it at boot with those grants.
 - **Host tests:** 18 in `nnpkg/tests/`, on `NRL`'s pinned bundle, in `scripts/host_tests.sh`:
   - the encoding vector back to its bits and bytes, and 200 000 floats and strings as `serde_json` writes them;
   - every object file in the profile, and the model ID `1b23aaf4…`;
@@ -73,9 +73,31 @@
   - 20 000 made-up answers of the parser refused without a panic;
   - the badge rules, budgets, cancellation, the deadline, retirement and memory.
 - **Left:**
-  - item 4, the shell's part (minting, keeping, revoking and retiring a badge; `nn`), which waits for 262-KRN-0178's slot and `REQUEST_NN`;
+  - item 4, the shell's part (minting, keeping, revoking and retiring a badge; `nn`), which waited for 262-KRN-0178's slot and `REQUEST_NN` (written 2026-10-30, below);
   - item 5, `nncheck` and the suite;
   - the profile entry, after the native run.
+
+**Progress (2026-10-30): the shell's part (item 4), with 262-KRN-0178 in `main` since landing round 50.**
+- **The badges** (`shell/src/nnclients.rs`, no system calls): the lowest free of 32 taken per start; kept with the copy while the program runs; owed a retirement once it ends or its start fails; free again only when `nnd` has answered; none lent before `nnd` answered the shell's `retire-all`.
+- **The system calls** (`shell/src/nnctl.rs`):
+  - the copy minted with `CAP_WRITE | CAP_GRANT` alone and lent last before the commit, which moved into a method of its own so that a failed commit revokes the copy and owes the badge;
+  - each 100 ms (a second after `nnd` did not answer), and before each start that asks: the ended programs' copies revoked and dropped, then `retire` for each owed badge;
+  - `retire-all` before the first badge is lent, so a restarted shell clears what the old one's clients held;
+  - a start refused with no badge free; without `nnd`'s answer to `retire-all`, the program runs without the client.
+- **`nn [status]` and `nn models`** in the shell; the script word `nn`.
+- **`nncheck`**, the first part of item 5: its client's badge and rights, `nnd`'s status, `retire` and `retire-all` refused (`owner`), and `hold`.
+- **Tests:**
+  - three host tests in `tests/shell_host.rs`;
+  - the QEMU check `nn_clients_check` in the suite `nnd` (with `KRN`'s `nnd_check`), added to the shell lanes of `scripts/ci_local.sh` and CI on x86 and aarch64.
+  - **Its run:** passed on x86 QEMU with 4 CPUs, TCG (branch 8f3a60e6, 2026-10-30). It shows, on that configuration only:
+    - `nncheck` gets badge 1 with rights 6 (no right to badge); its `retire` and `retire-all` are refused `owner`;
+    - nnd retires the badge after each exit, and the next start takes badge 1 again;
+    - with two held, the shell keeps copies badged 1 and 2 beside its own, and `nn status` names their PIDs;
+    - `dzen-clock`, which does not ask, has no `SLOT_NN`;
+    - once the first ends, its copy is gone from the shell and badge 1 is retired and taken again while 2 is held;
+    - after the shell is killed and `init` starts it again, the old shell's programs, still running, hold no client, the new shell retired every badge, and the next start gets badge 1.
+  - on aarch64 QEMU (`virt`, 4 CPUs, TCG) the `nnd` suite passed too, on the branch's 70e0220b.
+- **Left:** `nn load | run | bench`; `nncheck`'s native steps (section 8, steps 1–9) with `NRL`'s model on the image; `nnd`'s two scopes; the profile entry after the native run.
 
 ## Acceptance criteria
 

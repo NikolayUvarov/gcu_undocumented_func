@@ -1280,6 +1280,16 @@ def shell_suite(vm):
                 return seen
             time.sleep(.01)
         raise AssertionError(f"Timeout waiting for {fragment!r} and a prompt: {vm.output[-3000:]}")
+    # 000-APP-0115 (for 000-KRN-0188): a line of 200 characters written to the serial line at once arrives whole; the
+    # shell's loop used to keep 64 bytes of one pass and drop the rest, the newline with it. The shell's own `write` and
+    # `cat`, so no program starts and the PIDs below keep their ordinals.
+    marker = "".join("0123456789ABCDEF"[i % 16] for i in range(179))
+    vm.process.stdin.write(f"write ram:serial.txt {marker}\r".encode())
+    vm.process.stdin.flush()
+    vm.expect("WROTE 180 BYTES TO ram:serial.txt", timeout=20)  # with its newline
+    require(vm.command("cat ram:serial.txt"), marker)
+    require(vm.command("rm ram:serial.txt"), "OK")  # msh's sum of ram: below counts every file there
+    vm.output = ""
     # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
     keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
     # Delete: "cpusX", Left, Delete -> "cpus".
@@ -2798,6 +2808,89 @@ def nnd_check(vm):
     models = "and the model disk's " if 2 in slots else ""
     print(f"PASS: nnd (262-KRN-0178): its endpoint, the log and read-only scopes of data/models/ {models}alone; 16 MiB and no workers without a line, "
           f"64 MiB and {vm.cpus} workers with one, read again at a restart and after its end; the shell holds its client with the right to badge", flush=True)
+
+
+def nn_clients_check(vm):
+    """262-APP-0112, the shell's part of 262-KRN-0178 (docs/nn/runtime.md section 1): a program that asks for nnd
+    (REQUEST_NN) gets a copy of the shell's client badged for that start alone, without the right to badge, which the
+    shell keeps; one that does not ask gets none. A badged client may not retire. The lowest free badge goes first; when
+    its program ends, the shell revokes its copy and nnd retires the badge before the next start takes it again. At the
+    shell's start nnd retired an earlier shell's badges, and a restarted shell leaves no client of the old one's."""
+    def nnd_endpoint():
+        caps = vm.command(f"stat caps {vm.services()['shell']}", raw=True)
+        return int(re.search(r"^SLOT=41 GEN=\d+ KIND=1 .*BADGE=0 EP=(\d+)", caps, re.M)[1])
+
+    def shell_copies(endpoint):  # the badges of the copies of nnd's client the shell keeps, its own (0) with them
+        caps = vm.command(f"stat caps {vm.services()['shell']}", raw=True)
+        return sorted(int(b) for b, ep in re.findall(r"^SLOT=\d+ GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M) if int(ep) == endpoint)
+
+    def client(pid):  # the badge and rights of `pid`'s SLOT_NN, or None; `pid` as the harness numbers programs
+        found = re.search(r"^SLOT=41 GEN=\d+ KIND=1 RIGHTS=(\d+) SIZE=\d+ BADGE=(\d+) EP=(\d+)", vm.command(f"stat caps {pid}"), re.M)
+        return found and (int(found[2]), int(found[1]), int(found[3]))
+
+    def retired(count):  # nnd's retirements of a badge so far, waited for until there are `count`
+        for _ in range(100):
+            found = re.findall(r"\[NND\] BADGE (\d+) RETIRED", vm.command("dmesg -s nnd", raw=True))
+            if len(found) >= count:
+                return [int(b) for b in found]
+            time.sleep(.1)
+        raise AssertionError((count, vm.command("dmesg -s nnd", raw=True)[-1500:], vm.command("dmesg -s shell", raw=True)[-1500:]))
+
+    def nncheck(badge):  # one start in the foreground: its client's badge, every check held
+        out = vm.command("nncheck", raw=True, timeout=20)
+        for line in (f"NNCHECK CLIENT BADGE={badge} RIGHTS=6 OK", "NNCHECK RETIRE Ok(Err(Owner)) REFUSED", "NNCHECK RETIRE-ALL Ok(Err(Owner)) REFUSED", "NNCHECK DONE"):
+            require(out, line)
+
+    def background():  # the program's PID as the harness numbers programs
+        return int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", vm.command("run nncheck hold 120 &", raw=True))[1])
+
+    endpoint = nnd_endpoint()
+    require(vm.command("dmesg -s shell", raw=True), "[SHELL] NND: THE BADGES OF AN EARLIER SHELL RETIRED")
+    before = len(retired(0))
+    nncheck(1)
+    assert retired(before + 1)[-1] == 1
+    nncheck(1)  # the retired badge again, the lowest free one
+    assert retired(before + 2)[-1] == 1
+    first, second = background(), background()
+    assert client(first) == (1, 6, endpoint) and client(second) == (2, 6, endpoint), (client(first), client(second))
+    assert shell_copies(endpoint) == [0, 1, 2], shell_copies(endpoint)
+    status = vm.command("nn status", raw=True)
+    for line in (f"BADGE 1: PID {first}", f"BADGE 2: PID {second}", "SHELL: 2 BADGES LENT, 0 OWED A RETIREMENT, 30 FREE"):
+        require(status, line)
+    clock = int(re.search(r"STARTED PID=(\d+) NAME=dzen-clock BACKGROUND", vm.command("run dzen-clock &", raw=True))[1])
+    assert client(clock) is None, vm.command(f"stat caps {clock}")  # it did not ask
+    # The first ends: its copy revoked, its badge retired, and the next start takes badge 1 while 2 is still held.
+    require(vm.command(f"kill {first}"), f"KILLED PID={first}")
+    assert retired(before + 3)[-1] == 1
+    assert shell_copies(endpoint) == [0, 2], shell_copies(endpoint)
+    nncheck(1)
+    assert retired(before + 4)[-1] == 1
+    # A restarted shell: init revokes what the old one minted, and the new one retires every badge before it lends one.
+    third = background()
+    assert client(third) == (1, 6, endpoint), client(third)
+    vm.send(f"kill {vm.services()['shell']}\n", raw=True)
+    vm.expect("MIND> ", timeout=60, after="MIND CORE v1.6")
+    for _ in range(100):
+        if vm.command("dmesg -s shell", raw=True).count("[SHELL] NND: THE BADGES OF AN EARLIER SHELL RETIRED") >= 2:
+            break
+        time.sleep(.1)
+    else:
+        raise AssertionError(vm.command("dmesg -s shell", raw=True)[-1500:])
+    assert client(second) is None and client(third) is None, (client(second), client(third))  # still running, without their copies
+    assert shell_copies(endpoint) == [0], shell_copies(endpoint)
+    nncheck(1)
+    for pid in (second, third, clock):
+        vm.command(f"kill {pid}")
+    require(vm.command("nn status", raw=True), "SHELL: 0 BADGES LENT, 0 OWED A RETIREMENT, 32 FREE")
+    print("PASS: nnd's clients (262-APP-0112): a program that asks gets a copy badged for its start, without the right to badge, "
+          "and one that does not gets none; a badged client may not retire; the lowest free badge first, retired and taken again "
+          "once its program ends, its copy revoked; a restarted shell leaves the old one's clients none and retires every badge", flush=True)
+
+
+def nnd_suite(vm):
+    """The model service: KRN's boot service (262-KRN-0178), then the shell's clients of it (262-APP-0112)."""
+    nnd_check(vm)
+    nn_clients_check(vm)
 
 
 def held_check(vm, cpus):
@@ -6638,6 +6731,7 @@ def update_suite(args):
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
                                        "channel stable\nautomatic apply\nevery 20\ntries 3\n")
+    (layout / "update0.msh").write_text("#!msh\nupdate status\n")  # 351-APP-0029: without `requires: lifecycle`
     image = boot_slots.Image.create(temp / "update.img", layout)
     first = boot_slots.records(image.path)
     (server / "channels/stable").write_bytes(channel(6, 5, "2020-01-01T00:00:00Z"))
@@ -6742,6 +6836,20 @@ def update_suite(args):
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/B/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        # 351-APP-0029: the shell's `update` shows the updater's view and the channel it holds (update.wit 1.1), says
+        # check's refusal, asks before a rollback and is refused to a script without `requires: lifecycle`.
+        out = vm.command("update", raw=True, timeout=60)
+        for line in ("UPDATE: RUNNING SLOT B, VERSION 6\n", "UPDATE: THE NEWER BOOT RECORD NAMES SLOT B, CONFIRMED", "UPDATE: CHANNEL stable: VERSION 6, MINIMUM 6, EXPIRES "):  # release 6 raised it (351-UPD-0024)
+            require(out.replace("\r", ""), line)
+        require(out, ", READ FROM THE SOURCE")
+        require(vm.command("update check", raw=True, timeout=60), "UPDATE: THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE")
+        require(vm.command("update apply 10", raw=True), "USAGE: UPDATE [STATUS | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]")
+        vm.send("update rollback\n")
+        require(vm.expect("(Y/N)", timeout=30), "ROLL BACK TO SLOT A? ")
+        vm.send_bytes(b"n")
+        require(vm.expect("MIND> ", timeout=30), "UPDATE: NOT ROLLED BACK")
+        require(vm.command("msh /update0.msh", raw=True), "SCRIPT FAILED: update needs `requires: lifecycle` in the script (LINE 2)")
+        assert "[SHELL] UPDATE ROLLBACK" not in vm.command("dmesg -s shell", raw=True)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -6782,6 +6890,18 @@ def update_suite(args):
             require(log, line)
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
+        # 351-APP-0029: `update` names the channel kept in slot A, expired; `apply` asks about the release slot B holds
+        # from before the restart, and declined, writes nothing.
+        out = vm.command("update", raw=True, timeout=60)
+        for line in ("UPDATE: RUNNING SLOT A, VERSION 5", "UPDATE: CHANNEL stable: VERSION 5, ", ", KEPT IN THE RUNNING SLOT, NOT READ FROM THE SOURCE",
+                     "UPDATE: THE CHANNEL HAS EXPIRED, OR THE CLOCK CANNOT BE READ: FETCH AND APPLY WAIT FOR A CURRENT ONE, ROLLBACK STAYS POSSIBLE"):
+            require(out, line)
+        vm.send("update apply 2\n")
+        # The updater names the release staged there (its `staged`), so the question names its version.
+        require(vm.expect("(Y/N)", timeout=30), "APPLY VERSION 6 (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 2 TRIES, FALLING BACK TO SLOT A.")
+        vm.send_bytes(b"n")
+        require(vm.expect("MIND> ", timeout=30), "UPDATE: NOT APPLIED")
+        assert "[UPDATER] APPLY:" not in vm.command("dmesg -s updater", raw=True)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -6794,8 +6914,11 @@ def update_suite(args):
           "its applications are in slot B, "
           "the one it changed fetched and the others copied from slot A, and the trial runs them from there; release 6's minimum "
           "raises the version floor to 6, and a record booting slot A's release 5 boots slot B instead; booted back in "
-          "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
-          "is consistent", flush=True)
+          "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the shell's "
+          "`update` shows the updater's view and the channel it holds, read from the source, then kept and expired, says "
+          "check's refusal, asks before a rollback and an apply, which declined write nothing, and is refused to a script "
+          "without requires: lifecycle (351-APP-0029); "
+          "the file system is consistent", flush=True)
 
 
 def install_suite(args, stub_elf):
@@ -8296,6 +8419,11 @@ def wifi_join_check(vm):
     run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90, "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # 550-APP-0117 (for 550-DRV-0042, 0045): the networks as text, the joined one marked, then their count.
+    scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
+    scanned += vm.command("dmesg -s wifi", raw=True)
+    assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 -\d+ DBM WPA2( REMEMBERED)? JOINED', scanned), scanned[-2000:]
+    assert re.search(r"\[WIFI\] SCAN: \d+ NETWORKS?", scanned), scanned[-2000:]
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
     # network, and its gateway answers a ping through the WPA2 link.
     require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
@@ -8334,7 +8462,8 @@ def wifi_join_check(vm):
     run("wifi countries", 30, "[WIFI] COUNTRIES: NO CATALOGUE IN THIS STATION")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
-          "station's reason, MIND-TEST joined, wifi status and wifi leave; wifi country: no catalogue in this station", flush=True)
+          "station's reason, MIND-TEST joined, wifi status, wifi scan (MIND-TEST marked joined) and wifi leave; wifi country: no "
+          "catalogue in this station", flush=True)
     # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
     sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
     offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))
@@ -12408,7 +12537,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "nnd": nnd_check, "bigmem": big_memory_check}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "nnd": nnd_suite, "bigmem": big_memory_check}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

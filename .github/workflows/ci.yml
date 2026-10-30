@@ -70,7 +70,7 @@ jobs:
           - name: scheduling, isolation, heap
             args: --suites busy,smp,isolation,heap
           - name: keys, shell, tools
-            args: --suites keys,shell,tools,bench,windows,tablet,usb,ehci
+            args: --suites keys,shell,tools,bench,windows,tablet,usb,ehci,nnd
           - name: the window manager
             args: --suites wm
           - name: files and block writes
@@ -174,7 +174,7 @@ jobs:
             smoke: true
           - group: programs, shell and four CPUs
             # devicetree: virt without ACPI (210-KRN-0029); efivar: UEFI variables through AAVMF (351-KRN-0028)
-            suites: normal,shell,bench,smp,busy,usb,devicetree,efivar
+            suites: normal,shell,bench,smp,busy,usb,devicetree,efivar,nnd
           - group: files and the block store
             suites: vfs,store,storefaults
           - group: network, TLS and Effector

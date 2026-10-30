@@ -102,6 +102,7 @@ USER_CRATES=(
     "nnd:nnd:nnd.elf"
     "tpm:tpm:tpm.elf"
     "netcheck:netcheck:netcheck.elf"
+    "nncheck:nncheck:nncheck.elf"
     "webcheck:webcheck:webcheck.elf"
     "effector:effector:effector.elf"
     "effector_gw:effector_gw:effector_gw.elf"

@@ -76,7 +76,7 @@ X86_GROUPS=(
     "x86: network, TLS and Effector|$X86 --suites net,tls,effector"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,link,modes"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
-    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,tablet,usb,ehci"
+    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,tablet,usb,ehci,nnd"
     "x86: the window manager|$X86 --suites wm"
     "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults"
     "x86: the updater and an update through the link|$X86 --suites updater,linkupdate"
@@ -100,7 +100,7 @@ X86_GROUPS=(
 A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
-    "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,bench,smp,busy,usb,devicetree,efivar"
+    "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,bench,smp,busy,usb,devicetree,efivar,nnd"
     "aarch64: files and the block store|$A64 --suites vfs,store,storefaults"
     "aarch64: network, TLS and Effector|$A64 --suites net,tls,effector"
     "aarch64: the updater and the modes|$A64 --suites updater,modes"
