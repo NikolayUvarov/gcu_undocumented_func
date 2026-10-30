@@ -137,12 +137,16 @@ fn main(info: &'static BootInfo) {
     let mut stub = Stub { install: None, handles: 0, staged: 0 };
     let mut scratch: Box<[u8; api::REQUEST_MAX]> = alloc::vec![0u8; api::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     let mut rebooting = false;
+    // It answers update.wit only in the updater's place, which alone holds the firmware privilege: in another service's
+    // place (the policy broker's, in the updater suite) it receives nothing, as a service that never answers.
+    let updater = kind(SLOT_FIRMWARE) == CAP_KIND_FIRMWARE;
     loop {
         if let Some(dir) = root.filter(|_| !rebooting).and_then(|root| vfs::open_dir(files, root, "data/reboot", false).ok()?.ok()) {
             let _ = vfs::close(files, dir);
             rebooting = true;
             restart();
         }
+        if !updater { mind::time::sleep(200); continue; }
         if let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, 200) { stub.serve(&request, &mut scratch); }
     }
 }

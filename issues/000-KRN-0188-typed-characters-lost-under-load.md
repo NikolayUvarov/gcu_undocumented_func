@@ -1,6 +1,6 @@
 # 000-KRN-0188 — Characters typed on the serial line lost under load
 
-**Type:** kernel track (the serial console's input path, the QEMU harness) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.2
+**Type:** kernel track (the serial console's input path, the QEMU harness) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** the tools track's change ([requests-APP.md](requests-APP.md)) · **Main task:** — · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -19,6 +19,16 @@
   - the shell's read.
 - Count the drops where they happen and log them, then make the path not drop: back-pressure, or a ring that holds a line.
 - Reproduce on purpose with four busy loops on the host and a long typed line, before and after the fix.
+
+## Cause (2026-10-30)
+
+- **Not the kernel, not QEMU: the shell's loop.**
+  - The shell reads the UART while it has a byte and decodes each into `Events`, a list of 64. `Events::push` drops what does not fit.
+  - QEMU refills the 16550's FIFO at each read of its receive register, from the mux's buffer and from the host, so one pass of the loop can read far more than the FIFO's 16 bytes.
+  - So whatever arrives while the shell is held, past 64 bytes of one pass, is lost: about 0.65 s at the harness's pace of one byte per 10 ms. That matches losing 4 digits of a long line on a loaded host.
+- **Reproduced without load.** `echo` and 190 characters written to QEMU's stdin at once, on x86 in QEMU (4 CPUs, KVM): the shell's echo held 64 bytes, and the newline was lost.
+- **Fixed in a local tree.** Bounding the read by the room left in `Events`, the rest left in the UART, gave 10 runs of 10 with the 195-byte line whole.
+- **The change is the tools track's** (`shell/`): it is recorded, with the patch, in [requests-APP.md](requests-APP.md). This task then adds the criterion's check to the `shell` suite.
 
 ## Acceptance criteria
 
