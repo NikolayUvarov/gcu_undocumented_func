@@ -3,6 +3,7 @@
 // its 8-byte header; a frame is sent as the station built it (its sequence number and duration kept) at the rate asked,
 // and its transmit status read back. Register facts come from the stage-4 and stage-5 fact sheets (b43 and brcmsmac,
 // described).
+use crate::level::{levels, LNA_GAIN};
 use crate::stage3::Core;
 use crate::txwait;
 use core::sync::atomic::{fence, AtomicU8, Ordering};
@@ -48,8 +49,8 @@ const TX_CORES: u16 = 0x00C0;
 pub const CORES_OFF: u8 = 0b100;
 // The external LNA's control taken from the PHY and held off on every core, by the RF control override in PHY 0x84C,
 // 0x86C and 0x88C. Under the PHY's own control the receiver missed a fifth of an access point's beacons at -45 dBm and
-// lost 5% of data frames after 7 tries; held off, 5% and 2% (550-DRV-0039). Frames still go out under it. The levels
-// read are then about 20 dB lower, without the LNA's gain.
+// lost 5% of data frames after 7 tries; held off, 5% and 2% (550-DRV-0039). Frames still go out under it. The PHY still
+// counts the LNA's gain in the levels it reports, so LNA_GAIN is added back to each (550-DRV-0045).
 pub const RF_CONTROL_HELD: u16 = 0x0400;
 const RF_CONTROL: [u16; 3] = [0x84C, 0x86C, 0x88C];
 // The cores the radio switches off when it comes up: CORES_OFF, or another set for a test (data/wifi-ofdm.txt, 550-DRV-0029).
@@ -115,6 +116,8 @@ pub struct Radio<'a> {
     pub mac: [u8; 6],
     // The RF control overrides the PHY had before they were held, said once the start's lines are out (550-DRV-0039).
     pub lna_was: Option<[u16; 3]>,
+    // The dB added to every level read: LNA_GAIN while the LNA is held off (550-DRV-0045).
+    level_gain: i8,
     channel: u8,
     filter: Filter,
     queue: Pages, head: usize, count: usize,
@@ -187,7 +190,7 @@ impl<'a> Radio<'a> {
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
         let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, tx_generation: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default(), lna_was: None };
+                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default(), lna_was: None, level_gain: 0 };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -239,10 +242,11 @@ impl<'a> Radio<'a> {
                        now[0], now[1], now[2], was[0], was[1], was[2]);
     }
 
-    // The three cores' RF control overrides set to `v`, with the MAC suspended.
-    pub fn rf_control(&self, v: u16) {
+    // The three cores' RF control overrides set to `v`, with the MAC suspended, and the levels' correction with them.
+    pub fn rf_control(&mut self, v: u16) {
         let suspended = self.c.suspend();
         for reg in RF_CONTROL { self.c.phy_w(reg, v); }
+        self.level_gain = if v == RF_CONTROL_HELD { LNA_GAIN } else { 0 };
         if suspended { self.c.enable(); }
     }
 
@@ -373,8 +377,9 @@ impl<'a> Radio<'a> {
         let outcome = if status & 1 != 0 { 1 } else if phy0 & 0x0300 != 0 { 2 } else { 0 };
         self.counts.frames[kind][outcome] += 1;
         let pad = if status & 4 != 0 { 2 } else { 0 };
+        let power = levels([s[9], s[10], s[11]], self.level_gain);
         // An OFDM frame whose PLCP header held: its rate and length, and its powers when its FCS failed.
-        let strong = [s[9], s[10], s[11]].iter().any(|&p| (BAD_FCS_FLOOR..0).contains(&(p as i8)));
+        let strong = power.iter().any(|p| (BAD_FCS_FLOOR..0).contains(p));
         if kind == 1 && outcome == 1 && !strong { self.counts.ofdm_weak += 1; }
         else if kind == 1 && outcome < 2 && length >= pad + 6 + 4 {
             let rate = rx_rate(true, s[OFFSET + pad]);
@@ -382,7 +387,7 @@ impl<'a> Radio<'a> {
             let mpdu = length - pad - 6 - 4;
             self.counts.ofdm_lengths[if mpdu <= 64 { 0 } else if mpdu <= 256 { 1 } else { 2 }][outcome] += 1;
             if outcome == 1 {
-                for i in 0..3 { self.counts.bad_fcs_power[i] += s[9 + i] as i8 as i32; }
+                for i in 0..3 { self.counts.bad_fcs_power[i] += power[i] as i32; }
                 if phy0 & 0x000C != 0 { self.counts.bad_fcs_clipped += 1; }
             }
         }
@@ -391,12 +396,12 @@ impl<'a> Radio<'a> {
         let (plcp0, start, end) = (s[OFFSET + pad], OFFSET + pad + 6, OFFSET + length - 4);
         let ofdm = kind == 1;
         if ofdm {
-            for i in 0..3 { self.counts.ofdm_power[i] += s[9 + i] as i8 as i32; }
+            for i in 0..3 { self.counts.ofdm_power[i] += power[i] as i32; }
             if phy0 & 0x000C != 0 { self.counts.ofdm_clipped += 1; }
         }
         let own = if self.filter.own == [0; 6] { self.mac } else { self.filter.own };
         if s[start] == 0xD4 && s[start + 4..start + 10] == own { if ofdm { self.counts.acks_ofdm += 1 } else { self.counts.acks_cck += 1 } }
-        let signal = [s[9], s[10], s[11]].map(|v| v as i8).into_iter().max().unwrap_or(0);
+        let signal = power.into_iter().max().unwrap_or(0);
         let heard = signal < 0 && signal > -128;
         if !ofdm && heard {
             self.counts.cck_heard += 1;
