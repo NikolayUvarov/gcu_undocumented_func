@@ -46,7 +46,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -1482,6 +1482,7 @@ def shell_suite(vm):
     require(vm.command("cat ram:script.txt"), "ENTRIES, ")
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
+    storefs_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
     # machine off without stopping the services: QEMU ends. The suite's last step.
     for name in ("poweroff", "shutdown"):
@@ -2510,6 +2511,26 @@ def vfs_check(vm):
     require(vm.command("ls data"), "n.txt")
     print("PASS: files: RAM disk with Cyrillic names and text, mkdir with parents, move, remove; boot files and the disk outside data/ are not writable, .. is refused", flush=True)
     search_check(vm)
+
+
+def storefs_check(vm):
+    """311-KRN-0190: storefs runs at boot with the block store's client, and the shell reaches a store volume through the
+    same mind::fs calls as a FAT one; a program without storefs's client finds no store volume, and asks nobody."""
+    ready = vm.service_logs("storefs", "READY VOLUMES")
+    require(ready, "[STOREFS] READY VOLUMES fs/<NAME>:")
+    assert "NO STORE CLIENT" not in ready, ready
+    require(vm.command("mkdir notes:docs"), "OK")
+    require(vm.command("write notes:docs/a.txt from the store"), "WROTE 15 BYTES")
+    require(vm.command("cat notes:docs/a.txt"), "from the store")
+    listing = vm.command("ls notes:docs")
+    require(listing, "a.txt")
+    require(listing, "1 FILES, 15 BYTES")
+    # find is a console program: the shell lends it no storefs client yet (APP's part), so mind::fs asks nobody.
+    require(vm.command("find notes:"), "FIND: notes:: NOTFOUND")
+    require(vm.command("rm notes:docs/a.txt"), "OK")
+    require(vm.command("ls ram:"), "ENTRIES")
+    print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
+          "vfs_server's volumes as before; a program without storefs's client gets NotFound", flush=True)
 
 
 def search_check(vm):
