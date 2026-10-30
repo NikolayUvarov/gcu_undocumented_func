@@ -178,7 +178,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [307](307-the-stores-own-partition.md) | A durable medium on real machines: the store's own partition (track B, eighth step) | main task, `STO` | P1 | [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md) (waits for `DRV`'s bounded client) | track B |
 | [308](308-encryption-at-rest.md) | Encryption at rest, and the key's lifecycle, before any personal data | main task, `STO` | P1 | [307](307-the-stores-own-partition.md) (a medium worth sealing) | track B |
 | [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) | A recovery key and a passphrase for the store's volume key | `STO` | P2 | what `APP` and `KRN` agree for the owner's input | track B |
-| [308-STO-0024](308-STO-0024-what-sealing-protects.md) | The threat model and the profile: what sealing at rest protects, and what it does not | `STO` | P2 | — | track B |
 | [309](309-copies-scrub-and-repair.md) | Copies, scrub and repair | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
 | [311](311-storefs-a-file-face.md) | A file face: trees as objects, and `storefs`, a VFS view of a named root | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
@@ -319,6 +318,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [308-STO-0024](../issues-done/308-STO-0024-what-sealing-protects.done) | The threat model and the profile: what sealing at rest protects, and what it does not | the threat model and the Article 4 rows (x86, aarch64) name what is sealed and what not, where the volume key is, the configurations tested and what forgetting a domain holds against, each statement on a named test; the recovery key goes with 308-STO-0028 |
 | [550-DRV-0045](../issues-done/550-DRV-0045-the-levels-with-the-lna-held-off.done) | `bcm_wifi`: the levels read with the BCM4331's external LNA held off get its 18 dB back | the MacBook Pro on release 202610301115: beacons −43 to −44 dBm (were −61), 94.9% heard, −45/−47 on `wm`'s screen (4 bars by `wifi`'s thresholds) |
 | [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done) | HTTP for API clients in `libmind`: bodies, multipart, redirects, gzip, a streaming body, Server-Sent Events, `Retry-After`, and HEAD, PATCH and DELETE | rounds 39 and 54 (`main` 8721ef86, 3fbdd30e): `webcheck --api` against the stand-in in the `tls` suite, x86 and aarch64, and the host tests; `get -I`, `-X PATCH`, `-X DELETE` |
 | [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done) | The volume key held by `keystore`, under the device key the TPM seals | the key a store disk's secret in `keystore`, never on the medium; with swtpm the disk opens under TPM A's sealed device key and not under B's, on x86 and aarch64 (round 54) |
