@@ -70,10 +70,10 @@ Done on the tools branch (7e5087e), on the requests of 2026-10-10:
     - the default's paler text.
 - **Docs:** `docs/tools` (EN, RU).
 
-Not done here: the network traffic ([000-APP-0049](../issues/000-APP-0049-network-traffic-on-wms-background.md)), and progressive JPEG, which is refused by name.
+Not done here: the network traffic ([000-APP-0049](../issues-done/000-APP-0049-network-traffic-on-wms-background.done)), and progressive JPEG, which is refused by name.
 
 ## Related
 
 - [000-APP-0047](000-APP-0047-wm-desktop-background.done): the background.
 - [000-APP-0048](../issues/000-APP-0048-wm-settings.md): Settings.
-- [000-APP-0049](../issues/000-APP-0049-network-traffic-on-wms-background.md): the network traffic.
+- [000-APP-0049](../issues-done/000-APP-0049-network-traffic-on-wms-background.done): the network traffic.

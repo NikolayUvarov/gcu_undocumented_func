@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (1 request waiting, 2026-10-30) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (2 requests waiting, 2026-10-30) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -73,3 +73,15 @@ Recorded by the kernel track (KRN), 2026-10-30, for [000-KRN-0188](000-KRN-0188-
   A byte yields at most two events, and `vt.poll` one more, hence 3.
 - **What showed the fix.** In a local tree only, with this change: the same 195-byte line written at once, 10 times, arrived whole every time (`echo` of 195 bytes, then the shell's answer).
 - **What then shows it in the suites.** 000-KRN-0188's criterion: a 200-character line typed 50 times under four busy loops on the host arrives whole every time, x86 and aarch64. The kernel track can add that check to the `shell` suite once the change is in.
+
+## An arm for `vfs.wit` 2.6's error `conflict` in the shell (for 311-KRN-0189)
+
+Recorded by the kernel track (KRN), 2026-10-30, for 311-KRN-0189 (STO's `storefs`, 311-STO-0032).
+
+- **What changes.** `vfs.wit` 2.6 appends an error `conflict`: a write or `flush` refused because another writer published the file first. `mind::fs::Error` gets `Conflict` with it. `vfs_server` never answers it; `storefs` will.
+- **Why the shell.** `shell/src/files.rs` `text` matches `mind::fs::Error` exhaustively, so the shell will not build with 2.6 until it has an arm.
+- **What is asked.** One of these:
+  - **now:** a last arm `#[allow(unreachable_patterns)] _ => "REFUSED",`, which builds against `main` as it is and against 2.6;
+  - **after 2.6 is in `main`:** `Error::Conflict => "CHANGED BY ANOTHER WRITER; READ IT AGAIN"`, or the shell's own words.
+- 311-KRN-0189 lands once the arm is in `main`, or in the same landing round as it.
+
