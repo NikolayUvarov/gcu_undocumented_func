@@ -1,6 +1,6 @@
 # 000-APP-0096 — `wm`'s network line counts every card, the Wi-Fi station's too
 
-**Type:** tools (`wm`, `shell`, interface) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 2a33a71b (2026-10-20), the 250 ms bound since 1d841622 (2026-10-21), checked in QEMU; the MacBook Pro's run left · **Blocked by:** — · **Main task:** — (split from [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md)) · **Roadmap:** track D, G · **Constitution:** MC-3.11, MC-12.3, MC-12.4
+**Type:** tools (`wm`, `shell`, interface) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 2a33a71b (2026-10-20), the 250 ms bound since 1d841622 (2026-10-21), checked in QEMU; the MacBook Pro's run left · **Blocked by:** — · **Main task:** — (split from [000-APP-0049](../issues-done/000-APP-0049-network-traffic-on-wms-background.done)) · **Roadmap:** track D, G · **Constitution:** MC-3.11, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-20, from the maintainer's report: "now we have network working but desktop widget with date time cpu load says 'no network counters'".
 
@@ -64,4 +64,4 @@
 
 ## Related
 
-[000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md) (the line, the card client), [000-NET-0015](000-NET-0015-a-card-read-only-client.md) (`BADGE_COUNTERS`), [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done) (the station's card).
+[000-APP-0049](../issues-done/000-APP-0049-network-traffic-on-wms-background.done) (the line, the card client), [000-NET-0015](000-NET-0015-a-card-read-only-client.md) (`BADGE_COUNTERS`), [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done) (the station's card).
