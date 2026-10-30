@@ -474,7 +474,15 @@ The design is [docs/nn/runtime.md](../nn/runtime.md) 1.0; the interface is `idl/
   - the clients' state: holds, sessions, budgets, jobs, retirement.
 - **Where its work runs.** A package is parsed in a worker that holds only its bytes. A job runs in a worker of its own.
 - **Its host tests** run on NRL's pinned bundle (`cargo test --manifest-path nnpkg/Cargo.toml`, in `scripts/host_tests.sh`).
-- **Not running yet.** `nnd` is built with the programs, but it runs only once `KRN` gives it its boot image and grants and the shell its badged client ([262-KRN-0178](../../issues/262-KRN-0178-nnd-as-a-boot-service.md)). Run by hand (in the shell, or from `wm`'s menu, in `console`'s window), it says that it is `init`'s service and ends. No native run is claimed yet (MC-12.3).
+- **A boot service.** `init` starts it with its grants ([262-KRN-0178](../../issues/262-KRN-0178-nnd-as-a-boot-service.md)). Run by hand (in the shell, or from `wm`'s menu, in `console`'s window), it says that it is `init`'s service and ends.
+- **Its clients, through the shell** (docs/nn/runtime.md section 1):
+  - a program that asks for it (`REQUEST_NN`; in a script, the word `nn`) gets a copy of the shell's client badged for that start alone, the lowest free of 32 badges, without the right to badge;
+  - the shell keeps that copy; when the program has ended, it revokes it, which takes every copy made from it, and asks `nnd` to retire the badge; the badge is free again only after `nnd` answers;
+  - with no badge free, the start is refused (`EVERY CLIENT OF THE MODEL SERVICE IS IN USE`);
+  - at its start the shell retires every badge an earlier shell lent, and lends none before `nnd` has answered.
+- **`nn [status]`, `nn models`** in the shell: `nnd`'s memory, workers, models, sessions and badges, then each badge the shell lent and to which PID.
+- **`nncheck [hold SECONDS]`**, the test program: its client's badge and rights, `nnd`'s status, and its `retire` and `retire-all` refused (`owner`).
+- **No model is claimed to run in the system yet** (MC-12.3): loading and running `NRL`'s model natively is the `nnd` suite's next part.
 
 ## 5. Phases
 

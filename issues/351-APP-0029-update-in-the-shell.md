@@ -1,6 +1,6 @@
 # 351-APP-0029 — `update` in the shell and `msh`
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (written and taken out again, 2026-10-28; below) · **Blocked by:** the updater refusing every call that lends a buffer ([requests-UPD.md](requests-UPD.md), 2026-10-28); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the service) is done · **Main task:** [351](351-self-update.md) (phase 2) · **Roadmap:** track G · **Constitution:** MC-9.2, MC-12.4
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (back on the tools branch in dc67e0c5, 2026-10-30; the `update` suite's run left) · **Blocked by:** — (the updater takes buffer calls since `main` 57c2fd3d, 751-UPD-0032) · **Main task:** [351](351-self-update.md) (phase 2) · **Roadmap:** track G · **Constitution:** MC-9.2, MC-12.4
 
 _Numbered 351-APP-0016 in the tools branch's commits until main's own 109-APP-0016 (2026-10-09); renumbered at the merge._
 
@@ -46,3 +46,12 @@ The `updater` service ([351-UPD-0007](../issues-done/351-UPD-0007-updater-servic
   - The updater receives with no capability slot (`recv_timeout(0, …)`), so every call that lends a buffer is refused: `check`, `status`, `metadata`.
   - The change is the update track's, requested in [requests-UPD.md](requests-UPD.md).
 - **Taken out** in 39432555, so that 800-APP-0108 and 750-APP-0109 land without it. It comes back by reverting that commit once the updater's change is in `main`, with the suite's checks; then `fetch` and an agreed `apply` from the shell are still to be shown in QEMU. In the `update` suite the automatic policy does both, so that needs a run without `automatic apply`.
+
+## Progress (2026-10-30)
+
+- **The updater takes buffer calls.** It receives a caller's buffer in slot 9 since `main` 57c2fd3d, with KRN's 6a7ca80d for 751-UPD-0032 and `update.wit` 1.3. So `check`, `status` and `metadata` answer the shell's client now.
+- **The command is back** in dc67e0c5, which reverts 39432555, with its host tests and its `update` suite checks. The help keeps the newer lines on pipes and redirection beside `update`'s.
+- **Built** against `update.wit` 1.3; the host tests `tests/shell_host.rs` pass (21).
+- **Left:**
+  - the QEMU `update` suite;
+  - KRN's suggestion for 751-UPD-0032: the shell's client calling `install-begin` is `denied`.

@@ -3,7 +3,8 @@
 //! commands (shell/src/clients.rs, 211-APP-0044); `>`, `>>`, `<` and `|` (shell/src/redirect.rs, pipe.rs, 000-APP-0074); the lines on
 //! the way to the first frame (shell/src/start.rs, 000-APP-0075); a safe start told from the boot's log
 //! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031); `ping`'s options and
-//! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029).
+//! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029); the badges of
+//! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -28,6 +29,8 @@ mod pick;
 mod pipe;
 #[path = "../shell/src/updates.rs"]
 mod updates;
+#[path = "../shell/src/nnclients.rs"]
+mod nnclients;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -450,4 +453,63 @@ fn update_takes_its_requests_and_says_what_the_updater_holds() {
     assert_eq!(updates::refused(&staged), None);
     assert_eq!(updates::error(8), "THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE");
     assert_eq!(updates::error(99), "THE UPDATER ANSWERED AN ERROR");
+}
+
+// The badges of nnd's clients (262-APP-0112, docs/nn/runtime.md section 1): none before nnd answered retire-all, the
+// lowest free one first, and a badge back among the free ones only once its retirement is answered.
+#[test]
+fn a_badge_is_lent_after_retire_all_and_the_lowest_free_first() {
+    use nnclients::{Badges, Held, CLIENTS};
+    let mut b = Badges::new();
+    assert_eq!(b.take(), None, "no badge before nnd answered retire-all");
+    b.ready = true;
+    assert_eq!(b.take(), Some(1));
+    assert_eq!(b.state(1), Some(Held::Starting));
+    b.lent(1, 40, 900);
+    assert_eq!(b.take(), Some(2));
+    b.lent(2, 41, 901);
+    assert_eq!(b.state(1), Some(Held::Lent { pid: 40, copy: 900 }));
+    assert_eq!(b.state(0), None);
+    assert_eq!(b.state(CLIENTS as u16 + 1), None);
+    for badge in 3..=CLIENTS as u16 { assert_eq!(b.take(), Some(badge)); }
+    assert_eq!(b.take(), None, "every badge held: the start is refused");
+}
+
+#[test]
+fn an_ended_programs_badge_is_owed_until_retired_then_reused() {
+    use nnclients::{Badges, Held};
+    let mut b = Badges::new();
+    b.ready = true;
+    for pid in [40, 41, 42] { let badge = b.take().unwrap(); b.lent(badge, pid, 900 + badge as usize); }
+    let mut revoked = Vec::new();
+    b.ended(&mut |pid| pid != 41, &mut |badge, pid, copy| revoked.push((badge, pid, copy)));
+    assert_eq!(revoked, vec![(2, 41, 902)], "the copy of the program that ended goes to be revoked");
+    assert_eq!(b.state(2), Some(Held::Owed));
+    revoked.clear();
+    b.ended(&mut |pid| pid != 41, &mut |badge, pid, copy| revoked.push((badge, pid, copy)));
+    assert!(revoked.is_empty(), "an owed badge is not revoked again");
+    assert_eq!(b.owed().collect::<Vec<_>>(), vec![2]);
+    assert_eq!(b.take(), Some(4), "an owed badge is not taken");
+    b.lent(4, 43, 904);
+    b.retired(2);
+    assert_eq!(b.state(2), None);
+    assert_eq!(b.take(), Some(2), "a retired badge is reused, the lowest free first");
+    b.retired(1);
+    assert_eq!(b.state(1), Some(Held::Lent { pid: 40, copy: 901 }), "a lent badge is not freed by a retirement");
+}
+
+#[test]
+fn a_failed_start_owes_its_badge_and_a_starting_one_is_not_ended() {
+    use nnclients::{Badges, Held};
+    let mut b = Badges::new();
+    b.ready = true;
+    let badge = b.take().unwrap();
+    let mut asked = 0;
+    b.ended(&mut |_| { asked += 1; false }, &mut |_, _, _| panic!("a start not committed has no program to end"));
+    assert_eq!(asked, 0);
+    b.owe(badge);
+    assert_eq!(b.state(badge), Some(Held::Owed));
+    assert_eq!(b.take(), Some(2), "a failed start's badge waits for its retirement");
+    b.retired(badge);
+    assert_eq!(b.take(), Some(1));
 }
