@@ -1,6 +1,6 @@
 # The remote update's threats
 
-**Version:** 0.2 (2026-10-29: KRN's review, 751-KRN-0185); 0.1 (2026-10-29, [751-ASR-0013](../../issues/751-ASR-0013-the-remote-update-path-threat-model-and-refusals.md)) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.6, MC-7.5, MC-9.3, MC-9.4, MC-3.8, MC-3.11, MC-10.3, MC-12.3
+**Version:** 0.3 (2026-10-30: the maintainer's decision on the test keys); 0.2 (2026-10-29: KRN's review, 751-KRN-0185); 0.1 (2026-10-29, [751-ASR-0013](../../issues/751-ASR-0013-the-remote-update-path-threat-model-and-refusals.md)) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.6, MC-7.5, MC-9.3, MC-9.4, MC-3.8, MC-3.11, MC-10.3, MC-12.3
 
 This document covers a developer agent installing a release on a machine through Effector, under the owner's permission `remote-update` ([751](../../issues/751-system-updates-at-a-developers-request.md)). It lists what an attacker could do with that path, what is meant to stop each attack, and what nothing stops.
 
@@ -34,7 +34,8 @@ The update path as it stands (`updater`, the slots, the signed manifest and chan
 Hence:
 - **The test keys are for the maintainer's development machines only,** and only while 751's phase of active development lasts.
 - **Before `remote-update` is turned on anywhere else,** the disk must trust only the maintainer's own release key and boot key, held outside the repository. That disk is written with `$MIND_RELEASE_KEY`, `$MIND_BOOT_SIGNING_KEY` and their public halves (publishing.md).
-- **Nothing in 751 enforces this.** `init` does not refuse the word on a disk that trusts the test keys. Making it refuse is open, below. Until then, `docs/profile` must not describe the path as protected.
+- **Nothing in 751 enforces this.** `init` does not refuse the word on a disk that trusts the test keys. `docs/profile` must not describe the path as protected.
+- **The maintainer's decision (2026-10-30):** the word is not refused on such a disk, because the work goes through this path now. `init`'s warning stays (751-KRN-0185).
 
 ## Attacks and what is meant to stop them
 
@@ -56,9 +57,10 @@ Hence:
 
 ## Open
 
-1. **Refusing the word on a disk that trusts the test keys.**
-   - **The warning is planned** in 751-KRN-0185: with the word on and a slot that trusts the public test release key, `init` logs and the shell shows `REMOTE UPDATE ON WITH THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED`.
-   - **The refusal, once the maintainer's own keys exist,** is the maintainer's decision, asked by KRN on 2026-10-29.
+1. **The word on a disk that trusts the test keys.**
+   - **Decided (the maintainer, 2026-10-30): not refused,** because the work goes through this path now. A refusal later would be a new decision.
+   - **The warning stays,** as planned in 751-KRN-0185: with the word on and a slot that trusts the public test release key, `init` logs and the shell shows `REMOTE UPDATE ON WITH THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED`.
+   - **So the risk above holds** on every disk written with the test keys and the word: whoever reaches the server installs any code.
 2. **What the owner sees while the word is on:**
    - the shell's notice (APP);
    - the agent's mark, red (751-EFF-0023);
