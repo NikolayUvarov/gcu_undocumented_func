@@ -33,7 +33,10 @@ Everything 1.1 did stays.
   the result gains `"artifact":{"name","content_type","encoding":"base64","size","sha256","metadata"?,"data"}`, `data`
   last. A screenshot is `image/png`, at most 1280x800 and 2 MiB, with `metadata` `width` and `height`; a log is
   `text/plain; charset=utf-8`, `truncated` when the policy cut it. An artifact above 8 MiB is refused (`failed: bounds`),
-  so the ACK stays below the server's 12 MiB.
+  so the ACK stays below the server's 12 MiB. An answer sent after the command's run time (its `timeout_seconds`, or
+  the server's default for its kind, from when the agent took it) carries no artifact: it is `completed` with `stdout`
+  `not sent: the server had ended the command; NAME SIZE SHA256`. The server keeps nothing of a late answer but its
+  status, and the agent is free for the next command at once (750-EFF-0025).
 - **`collect_logs`** takes `path` (JSON, or the payload itself): `ring` (the system log) and `boot` (the last boot's
   log) are logs, any other path is a file under the policy's `collect` roots.
 - **`deliver_file`** takes `path`, `size`, `sha256` (64 lower-case hex digits), `overwrite` and `max_bytes`; the bytes

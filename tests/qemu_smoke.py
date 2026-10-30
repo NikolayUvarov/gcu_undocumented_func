@@ -9081,6 +9081,16 @@ def effector_actions_check(vm, server, agent, until, beats):
     until(f"EFFECTOR: ACK {log_id} completed WITH ring.log")
     text = base64.b64decode(server.operation(log_id)["result"]["artifact"]["data"]).decode()
     assert "[INIT] MODE: DEVELOPMENT" in text and f"{shot_id} open-screen" in text, text[-1500:]
+    # Past its run time an answer goes without its artifact, naming it, and the agent is free at once (750-EFF-0025): the
+    # first ACK fails, and the retry, 5 s or more later, comes after the command's 3 s.
+    server.inject("/api/commands/ack", "ack_500")
+    late_id = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 3}, program="mind")
+    until(f"EFFECTOR: ACK {late_id} completed LATE, WITHOUT ring.log")
+    late = server.operation(late_id)["result"]
+    assert late["status"] == "completed" and "artifact" not in late, late.keys()
+    assert re.fullmatch(r"not sent: the server had ended the command; ring\.log \d+ [0-9a-f]{64}", late["stdout"]), late["stdout"]
+    after_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
+    until(f"EFFECTOR: ACK {after_id} completed WITH ITS RESULT ACCEPTED")
     # A file delivered under the policy's root, checked by size and SHA-256 before it takes its name; one outside refused.
     delivery = b"delivered by the Effector fixture\n" * 2000
     published = server.publish(delivery, command_id="deliver-1")

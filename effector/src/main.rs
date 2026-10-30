@@ -163,7 +163,7 @@ impl bench::Disk for BenchFile<'_> {
 }
 
 /// What the artifact file's first line says: `<command> <size> <sha256> <truncated 0|1> <name>`.
-struct Kept { command: String, size: usize, sha256: String, truncated: bool, name: String, start: usize }
+struct Kept { command: String, size: usize, sha256: String, truncated: bool, name: String, start: usize, ends_unix: u64 }
 
 fn failure(e: gateway::Error) -> session::Failure {
     use session::Failure as F;
@@ -393,6 +393,20 @@ impl Agent {
         let file = File::open(&self.path("artifact")).ok()?;
         let kept = kept(&file)?;
         if kept.command != ack.record.id.as_str() || file.size() != kept.start + kept.size { return None; }
+        // Past the command's run time the server has ended it and keeps nothing of a late answer but its status: the
+        // answer goes at once, naming the artifact, rather than tying the agent up sending megabytes (750-EFF-0025).
+        if kept.ends_unix != 0 && mind::rtc::unix_time().is_some_and(|t| t >= kept.ends_unix) {
+            let line = alloc::format!("not sent: the server had ended the command; {} {} {}", kept.name, kept.size, kept.sha256);
+            let mut buf = [0u8; 1024];
+            let result = wire::exec_result(&mut buf, 0, &line, "").ok()?.to_vec();
+            let result = core::str::from_utf8(&result).ok()?;
+            let mut body = [0u8; 1536];
+            let body = wire::ack(&mut body, ack.record.id.as_str(), result).ok()?.to_vec();
+            let Some(status) = self.request(Method::Post, "/api/commands/ack", "", Some(&body)) else { return Some(Outcome::Retry) };
+            let ok = status == 200 && self.answer(wire::ok_answer).is_ok();
+            mind::println!("EFFECTOR: ACK {} completed LATE, WITHOUT {} ({} BYTES) {}", ack.record.id.as_str(), kept.name, kept.size, if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
+            return Some(session::outcome(status, ok));
+        }
         // A PNG's width and height, from its header chunk.
         let mut head = [0u8; 24];
         let picture = (kind == Artifact::Screen && file.read_at(kept.start, &mut head).ok() == Some(24))
@@ -620,7 +634,7 @@ impl Agent {
             "collect_logs" => self.collect_logs(id, payload, &o),
             "screenshot" => {
                 let opened = gateway::open_screen(GATEWAY, &o);
-                self.capture(id, opened, Artifact::Screen, "screenshot.png")
+                self.capture(id, opened, Artifact::Screen, "screenshot.png", &o)
             }
             // The server's `exec` with the command `reboot`: the gateway's restart, under the owner's `reboot on`.
             "exec_v1" => {
@@ -671,18 +685,21 @@ impl Agent {
             "ring" | "boot" => (gateway::open_log(GATEWAY, o, &path), alloc::format!("{}.log", path)),
             p => (gateway::open_file(GATEWAY, o, p), String::from(p.rsplit(['/', ':']).next().unwrap_or("collected.log"))),
         };
-        self.capture(id, opened, Artifact::Log, &name)
+        self.capture(id, opened, Artifact::Log, &name, o)
     }
 
     /// An opened transfer kept as the answer's artifact, then closed.
-    fn capture(&mut self, id: &str, opened: mind::sys::Result<core::result::Result<gateway::Transfer, gateway::Error>>, kind: Artifact, name: &str) -> session::Final {
+    fn capture(&mut self, id: &str, opened: mind::sys::Result<core::result::Result<gateway::Transfer, gateway::Error>>, kind: Artifact, name: &str, o: &gateway::Origin) -> session::Final {
         use session::{Failure, Final};
         let opened = match opened {
             Ok(Ok(t)) => t,
             Ok(Err(e)) => { mind::println!("EFFECTOR: {}: THE GATEWAY ANSWERED {:?}", id, e); return Final::Failed(failure(e)) }
             Err(e) => { mind::println!("EFFECTOR: {}: NO ANSWER FROM THE GATEWAY: {:?}", id, e); return Final::Failed(Failure::Unsupported) }
         };
-        let kept = self.keep(id, &opened, name);
+        // The run time's end in Unix seconds, so that it holds across a restart: an answer later than it goes without
+        // its artifact (750-EFF-0025).
+        let ends_unix = mind::rtc::unix_time().map_or(0, |t| t + o.deadline_ms.saturating_sub(now() as u64) / 1000);
+        let kept = self.keep(id, &opened, name, ends_unix);
         if let Err(f) = kept { mind::println!("EFFECTOR: {}: {} BYTES NOT KEPT: {}", id, opened.size, f.name()); }
         let _ = gateway::close(GATEWAY, opened.handle);
         match kept { Ok(()) => Final::Captured(kind), Err(f) => Final::Failed(f) }
@@ -691,11 +708,11 @@ impl Agent {
     /// Copies an open transfer into the private `artifact` file, after a header line naming the command, checking the
     /// SHA-256 the gateway announced: it stays there until its answer is acknowledged.
     #[inline(never)]
-    fn keep(&mut self, id: &str, t: &gateway::Transfer, name: &str) -> Result<(), session::Failure> {
+    fn keep(&mut self, id: &str, t: &gateway::Transfer, name: &str, ends_unix: u64) -> Result<(), session::Failure> {
         use session::Failure;
         if t.size > INLINE_MAX { return Err(Failure::Bounds); }
         let name: String = name.chars().filter(|c| c.is_ascii_graphic() && *c != '"' && *c != '\\').take(64).collect();
-        let header = alloc::format!("{} {} {} {} {}\n", id, t.size, t.sha256.as_str(), t.truncated as u8, if name.is_empty() { "artifact" } else { &name });
+        let header = alloc::format!("{} {} {} {} {} {}\n", id, t.size, t.sha256.as_str(), t.truncated as u8, if name.is_empty() { "artifact" } else { &name }, ends_unix);
         let mut file = File::open_mode(&self.path("artifact"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE).map_err(|_| Failure::Io)?;
         file.write_at(0, header.as_bytes()).map_err(|_| Failure::Io)?;
         let mut piece = alloc::vec![0u8; PIECE];
@@ -935,8 +952,10 @@ fn kept(file: &File) -> Option<Kept> {
     let line = core::str::from_utf8(&head[..end]).ok()?;
     let mut w = line.split(' ');
     let (command, size, sha256, truncated, name) = (w.next()?, w.next()?.parse().ok()?, w.next()?, w.next()?, w.next()?);
+    // When the command's run time ends, in Unix seconds (750-EFF-0025); 0, or a file kept before it: not known.
+    let ends_unix = match w.next() { Some(t) => t.parse().ok()?, None => 0 };
     if w.next().is_some() || sha256.len() != 64 { return None; }
-    Some(Kept { command: String::from(command), size, sha256: String::from(sha256), truncated: truncated == "1", name: String::from(name), start: end + 1 })
+    Some(Kept { command: String::from(command), size, sha256: String::from(sha256), truncated: truncated == "1", name: String::from(name), start: end + 1, ends_unix })
 }
 
 fn read_file(path: &str, max: usize) -> Option<Vec<u8>> {
