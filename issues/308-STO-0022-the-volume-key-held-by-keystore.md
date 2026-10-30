@@ -36,6 +36,16 @@ After [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done) the record
 - **The recovery key and the passphrase** are still to come, with `APP`: [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md).
 - **Recorded in [docs/storage](../docs/storage/README.md)** (0.16). The profile does not change until the platform runs it.
 
+## Progress (2026-10-30)
+
+- **The store's QEMU checks pass on 0a8c342b, on `un-rizen_2a8b108d5593` through Effector:** the `tls` suite's TPM check (x86 `tpm-crb`, aarch64 `tpm-tis-device`, swtpm) gets a blank store disk.
+  - It is made at a boot without a TPM: its key kept by `keystore`, an object put and named.
+  - It mounts, and the object reads back, after TPM A sealed the device key, and again under A.
+  - Under TPM B's new device key it is not mounted (the secret named in the log), and the object is not read (`key`).
+- **The `tls` suite's device key check (308-KRN-0183)** shows the key kept, read back after a reboot and not on the medium.
+- **`store`, `storefaults` and `vfs` pass on both architectures** on the same commit.
+- **docs/storage 0.18 and the profile** (README, evidence and threat model, x86 and aarch64) say so. The recovery key and the passphrase are [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md).
+
 ## Acceptance criteria
 
 Changed on 2026-10-30: the recovery key and the passphrase moved to [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md), as they need `APP` and `KRN` for what the owner sees and types.
