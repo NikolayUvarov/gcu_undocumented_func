@@ -45,6 +45,7 @@ Effector cannot do it, and its parts are not built:
 6. **The phases:**
    - **During active development:** the maintainer's disks are written with `remote-update`. A developer agent then updates them without asking each time.
    - **Afterwards:** the default disk is written without it, and only the owner turns it on, as above. When that switch happens is the maintainer's decision, recorded here when it is made.
+   - **The test keys (the maintainer, 2026-10-30):** `remote-update` is not refused on a disk that trusts the public test keys, because the work goes through it now. `init`'s warning stays (751-KRN-0185), and the risk is in [the threat model](../docs/assurance/remote-update-threats.md).
 7. **What shows it:**
    - the `mode` command and the notice above the first prompt;
    - the Effector agent's mark on the screen, red while it is on (750-EFF-0015);
