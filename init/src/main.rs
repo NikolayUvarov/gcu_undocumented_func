@@ -1627,7 +1627,11 @@ impl Init {
             let Some(index) = Self::index(name) else { continue };
             present += 1;
             if on && !self.running(index) {
-                if let Err(error) = self.start_service(index) { mind::println!("[INIT] {} NOT STARTED FOR THE MODE: {:?}", name, error); }
+                match self.start_service(index) {
+                    // A service a mode started is part of this boot's plan (173-KRN-0035), also one that ended at once.
+                    Ok(_) => self.placed[index].off = Off::No,
+                    Err(error) => mind::println!("[INIT] {} NOT STARTED FOR THE MODE: {:?}", name, error),
+                }
             } else if !on && self.running(index) {
                 let _ = self.stop_service(index, idl_init::StopReason::Stop);
             }
@@ -1844,8 +1848,6 @@ fn boot(info: &'static BootInfo) {
     let mounted = mounted.unwrap_or_else(|| wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted()));
     // The machine's modes, once the boot volume is there; the Effector services follow them (750-KRN-0143).
     if mounted { init.read_modes(); init.follow_modes(); }
-    // The Effector services a mode started are part of this boot's plan (173-KRN-0035).
-    for index in MODE_SERVICES.iter().filter_map(|&name| Init::index(name)) { if init.running(index) { init.placed[index].off = Off::No; } }
     if healthy && mounted {
         if platform::confirm_boot() == Ok(true) { init.boot.confirmed = true; mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
     } else if info.boot_slot.trial != 0 {
