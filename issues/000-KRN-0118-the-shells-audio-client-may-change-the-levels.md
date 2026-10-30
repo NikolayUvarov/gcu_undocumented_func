@@ -1,6 +1,6 @@
 # 000-KRN-0118 — The shell's audio client may change the levels: `BADGE_AUDIO_LEVELS`
 
-**Type:** `init`, `libmind` · **Owner:** kernel session · **Priority:** P1 (the maintainer's report of 2026-10-30: the microphone is too quiet; APP raised 000-APP-0076 and 0077) · **Status:** in progress (the badge made; the setters are DRV's) · **Blocked by:** for the second criterion only, the drivers track's `audio.wit` 1.2 (the request "The output volume and the microphone's sensitivity in `audio.wit`" in [requests-DRV.md](requests-DRV.md)) · **Main task:** — · **Constitution:** MC-3.4
+**Type:** `init`, `libmind` · **Owner:** kernel session · **Priority:** P1 (the maintainer's report of 2026-10-30: the microphone is too quiet; APP raised 000-APP-0076 and 0077) · **Status:** in progress (the badge in `main` 3fbdd30e; the setters are DRV's) · **Blocked by:** for the second criterion only, the drivers track's `audio.wit` 1.2 (the request "The output volume and the microphone's sensitivity in `audio.wit`" in [requests-DRV.md](requests-DRV.md)) · **Main task:** — · **Constitution:** MC-3.4
 
 ## Problem
 
@@ -17,7 +17,7 @@ The tools track's request of 2026-10-14 is in [requests-KRN.md](requests-KRN.md)
 
 ## Acceptance criteria
 
-- [ ] `caps` shows the shell's audio client with the badge, and the client of a program the shell starts (`say`) without it.
+- [x] `caps` shows the shell's audio client with the badge, and the client of a program the shell starts (`say`) without it.
 - [ ] With `audio.wit` 1.2, `say` cannot change the volume and the shell can (the `audio` suite, with the drivers track's check).
 
 ## Progress (2026-10-30)
@@ -32,6 +32,10 @@ The `services` suite now checks:
 - the loader's slots 2 and 4 are plain, as are the copies programs get from them.
 
 Left: the second criterion, with DRV's `audio.wit` 1.2.
+
+## Landed (2026-10-30)
+
+In round 54 (`main` 3fbdd30e). The `services` suite's badge checks passed in the gate of 485a7129 (`x86: services, storage, audio`, QEMU under TCG), which meets the first criterion. The second waits for DRV's `audio.wit` 1.2.
 
 ## Related
 

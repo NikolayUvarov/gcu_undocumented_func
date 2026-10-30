@@ -72,3 +72,7 @@
 ## Related
 
 [000-KRN-0086](000-KRN-0086-the-compositor-copies-whole-frames.done); round 45's gate (LANDING/ on `internal-dev-messages`).
+
+## After (2026-10-30)
+
+The note "task held for the compositor's copy" went to the serial line and the screen through the kernel's panic writer. In round 52 it cut into a command the aarch64 RAM-above-4-GiB group was typing, and that group failed. It now goes to the kernel's log ring only (`klog::Kept`, 783ad529, `main` 3fbdd30e): `dmesg` still shows it, and the serial line no longer carries it.

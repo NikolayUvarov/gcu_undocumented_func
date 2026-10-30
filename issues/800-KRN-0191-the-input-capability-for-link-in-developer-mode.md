@@ -1,6 +1,6 @@
 # 800-KRN-0191 — With `dev`, `link` holds the input capability, so that keys and the pointer go over the cable
 
-**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's), for 800-LNK-0032 and [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) · **Roadmap:** track C · **Constitution:** MC-3.1, MC-3.11, MC-10.2, MC-12.3
+**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (in `main` 3fbdd30e; the safe-start check, aarch64 and LNK's check left) · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's), for 800-LNK-0032 and [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) · **Roadmap:** track C · **Constitution:** MC-3.1, MC-3.11, MC-10.2, MC-12.3
 
 **Asked by:** the link track (`LNK`) on 2026-10-30, for 800-LNK-0032, in `KRN/2026-10-30T1222Z-LNK-a-request-the-input-capability-for-link-in-dev.md` on `internal-dev-messages`. The maintainer wants key presses over the cable (2026-10-30). 000-KRN-0108's rig stays for the firmware's menus, the boot and a hung machine.
 
@@ -28,6 +28,18 @@
   - without `dev`, and in a safe start with `dev`, it does not;
   - LNK's check: keys posted over the cable reach the shell (800-LNK-0032).
 - **A run on the MacBook Pro:** LNK's, with its `mindlink type`.
+
+## Landed (2026-10-30)
+
+- **In round 54** (`main` 3fbdd30e), from `claude/youthful-mendel-mf1soy` 9e884aae:
+  - with `dev` in `link.conf`, `init` puts the input privilege (`CAP_KIND_INPUT`) in `link`'s `SLOT_INPUT`, never in a safe start;
+  - its developer-mode line names `INPUT`, or `NO INPUT IN A SAFE START`.
+- **Checked in the gate of 485a7129** (`x86: services, storage, audio`, QEMU under TCG): the `link` suite sees `SLOT=8 GEN=0 KIND=6` in `link`'s capabilities with `dev`.
+- **Round 53's lesson.** LNK's key check passed `alt-0` and `shift-a` through, but not `ctrl-alt-f6`: the shell listens for Ctrl+Alt+F1…F6, and the kernel gives a listened key to its listener from any source, as for the keyboard. So the routing is as planned, and LNK's check takes another chord. LNK's request was returned for that (`LANDING/2026-10-30T1422Z-KRN-round-04e043f5.md`).
+- **Left:**
+  - the check that a safe start with `dev` grants no input privilege;
+  - the same checks on aarch64;
+  - LNK's check that keys over the cable reach the shell (800-LNK-0032).
 
 ## Related
 
