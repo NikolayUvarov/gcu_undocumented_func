@@ -5898,7 +5898,8 @@ def effector_grants_check(vm):
     """750-KRN-0119: in a mode init starts effector_gw, then effector, each with exactly the grants of `mind::effector`'s
     table: the gateway its endpoint, its private directory (BADGE_EFFECTOR_GW), the volumes to read, sysmon and the log to
     read, and the compositor to capture the screen (750-KRN-0153); the session the clock, its private directory (BADGE_EFFECTOR), data/effector/ (a scope), its flow, TLS without the device certificate,
-    the parser and the gateway badged as its session. The session keeps the owner's token in its private directory."""
+    the parser, the gateway badged as its session and init's client for its stop notice (750-KRN-0194). The session keeps
+    the owner's token in its private directory."""
     for name in ("effector_gw", "effector"):
         for _ in range(60):
             if name in vm.services():
@@ -5928,7 +5929,8 @@ def effector_grants_check(vm):
     # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
     assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw
     require(vm.command("dmesg -s vfs_server", raw=True), ":/inbox (WRITABLE)")  # vfs_server names the directory alone
-    assert {2, 3, 4, 7, 12, 18, 20, 28} == set(session), session
+    assert {2, 3, 4, 7, 11, 12, 18, 20, 28} == set(session), session
+    assert session[11] == (7, "init"), session  # BADGE_NOTICE: init's client for its stop notice alone (750-KRN-0194)
     assert session[2][1] == "rtc" and session[4] == (1, "effector_gw") and session[20] == (1, "tls") and session[28][1] == "parse", session
     assert session[3] == (6, "vfs_server") and session[7][1] == "vfs_server" and session[7][0] > 7, session  # 7: a scope of data/effector/
     assert session[18][1] == "netstack", session

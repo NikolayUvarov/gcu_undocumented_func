@@ -151,6 +151,27 @@ def test_a_pool_gives_a_failed_builds_groups_to_another_lane():
         assert [g for lane, g in again.effector.commands if lane == "acc1" and not g.startswith("=build")] == ["=" + g for g in taken["acc1"]]
 
 
+def test_a_tree_waits_for_an_earlier_runs_operations_in_its_clone():
+    old, other, mine = ({"id": i, "reason": f"{land.TRACK} landing gate {tag}: x86: a on {lane}"}
+                        for i, tag, lane in (("1", "land-old", "rz"), ("2", "land-old", "rz-2"), ("3", "land-new", "rz")))
+
+    class Effector:
+        def __init__(self):
+            self.views, self.runs = [[old, other, mine], [other, mine]], []  # the earlier run's group on rz ends after one look
+        def active(self, machine):
+            return self.views.pop(0) if len(self.views) > 1 else self.views[0]
+        def run(self, machine, command, timeout, reason, key, queue_ttl=None):
+            self.runs.append((len(self.views), reason))
+            return "completed", 0, "TREE " + "a" * 40
+    sleep, land.time.sleep = land.time.sleep, lambda seconds: None
+    try:
+        gate = land.Gate("a" * 40, "land-new", Effector(), pathlib.Path(os.devnull))
+        assert gate.tree("rz") and gate.effector.runs == [(1, f"{land.TRACK} landing gate land-new: the tree on rz")], gate.effector.runs
+        assert gate.earlier("rz-2") == ["2"] and gate.earlier("rz") == []
+    finally:
+        land.time.sleep = sleep
+
+
 def git(*args, cwd):
     return subprocess.run(["git", *args], cwd=cwd, env=ENV, capture_output=True, text=True, check=True).stdout.strip()
 
