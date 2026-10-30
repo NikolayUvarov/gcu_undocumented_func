@@ -67,9 +67,11 @@ impl core::fmt::Display for Version {
 }
 
 pub fn state(out: &mut impl Write, view: &View) {
+    // A trial boot is over once the newer record names the running slot confirmed, as the updater stages again then.
+    let trial = view.trial && !(view.recorded == view.slot && view.confirmed);
     let _ = match view.slot {
         0 => writeln!(out, "UPDATE: RUNNING FROM THE VOLUME'S ROOT, NOT A SLOT, VERSION {}", Version(view.running)),
-        slot => writeln!(out, "UPDATE: RUNNING SLOT {}{}, VERSION {}", slot as char, if view.trial { " ON TRIAL" } else { "" }, Version(view.running)),
+        slot => writeln!(out, "UPDATE: RUNNING SLOT {}{}, VERSION {}", slot as char, if trial { " ON TRIAL" } else { "" }, Version(view.running)),
     };
     let _ = match view.recorded {
         0 => writeln!(out, "UPDATE: NO BOOT RECORD NAMES A SLOT"),
