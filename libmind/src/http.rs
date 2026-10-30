@@ -326,7 +326,7 @@ pub fn redirect(from: &Url, method: Method, head: &Head, followed: u32, out: &mu
     written.map_err(|_| Error::Redirect)?;
     let next = Url::parse(core::str::from_utf8(&out[..length]).map_err(|_| Error::Redirect)?).map_err(|_| Error::Redirect)?;
     if from.https && !next.https { return Err(Error::Redirect); }
-    let to_get = head.status == 303 || (matches!(head.status, 301 | 302) && method == Method::Post);
+    let to_get = (head.status == 303 && method != Method::Head) || (matches!(head.status, 301 | 302) && method == Method::Post);
     let method = if to_get { Method::Get } else { method };
     Ok(Some(Redirected { length, method, keep_body: !to_get, same_host: next.host.eq_ignore_ascii_case(from.host) && next.port == from.port && next.https == from.https }))
 }
@@ -389,13 +389,20 @@ pub fn get(transport: &mut impl Transport, url: &Url, offset: u64, sink: &mut im
     Ok(Got { start, end: position, total })
 }
 
-/// A request method (750-NET-0019).
+/// A request method (750-NET-0019; HEAD, PATCH and DELETE: 000-NET-0047). The answer to HEAD never has a body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Method { Get, Post, Put }
+pub enum Method { Get, Post, Put, Head, Patch, Delete }
 
 impl Method {
     /// The method as a request line names it.
-    pub fn name(self) -> &'static str { match self { Method::Get => "GET", Method::Post => "POST", Method::Put => "PUT" } }
+    pub fn name(self) -> &'static str {
+        match self { Method::Get => "GET", Method::Post => "POST", Method::Put => "PUT", Method::Head => "HEAD", Method::Patch => "PATCH", Method::Delete => "DELETE" }
+    }
+
+    /// The method a request line names, in capitals as RFC 9110 spells it.
+    pub fn parse(name: &str) -> Option<Method> {
+        [Method::Get, Method::Post, Method::Put, Method::Head, Method::Patch, Method::Delete].into_iter().find(|m| m.name() == name)
+    }
 }
 
 /// Bounds of a request and a response: the caller's headers, the request head, a chunk-size line (extensions
@@ -552,7 +559,8 @@ impl<T: Transport> Connection<T> {
             if n < 2 { self.open = false; return Err(Error::Head); }
             let parsed = parser.head(&raw[..n - 2]).map_err(|e| { self.open = false; e })?;
             if (100..200).contains(&parsed.status) { continue; } // 100 Continue and the like: the real answer follows
-            let framing = if parsed.status == 204 || parsed.status == 304 { Framing::Done }
+            // The answer to HEAD, 204 and 304 end at their head, whatever length or coding they name (RFC 9112 6.3).
+            let framing = if method == Method::Head || parsed.status == 204 || parsed.status == 304 { Framing::Done }
                 else if parsed.chunked { Framing::ChunkSize }
                 else if let Some(length) = parsed.length { if length == 0 { Framing::Done } else { Framing::Length(length) } }
                 else if close_delimited { Framing::Close }
