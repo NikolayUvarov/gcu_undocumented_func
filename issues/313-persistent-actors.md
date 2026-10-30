@@ -16,7 +16,7 @@ From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-
 
 ## Tasks
 
-- [313-STO-0026](313-STO-0026-operation-ids-and-queues-in-a-checkpoint.md): operation IDs and queues in a checkpoint, manifest format 2, `tally` as the pilot.
+- [313-STO-0026](../issues-done/313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done): operation IDs and queues in a checkpoint, manifest format 2, `tally` as the pilot. Done 2026-10-30.
 - [313-STO-0030](313-STO-0030-messages-between-components.md): messages between components on the platform, pulled by the receiver and acknowledged through its clients table; `tally` as the pilot.
 
 ## Acceptance criteria

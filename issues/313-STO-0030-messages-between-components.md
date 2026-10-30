@@ -1,12 +1,12 @@
 # 313-STO-0030 — Messages between components on the platform: an outbox read by its receiver, acknowledged through the receiver's clients
 
-**Type:** storage (`libmind` `checkpoint`, `tally`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [313-STO-0026](313-STO-0026-operation-ids-and-queues-in-a-checkpoint.md) (manifest format 2) · **Main task:** [313](313-persistent-actors.md) · **Constitution:** MC-6.10, MC-6.12, MC-12.4, Appendix B.4
+**Type:** storage (`libmind` `checkpoint`, `tally`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([313-STO-0026](../issues-done/313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done), manifest format 2, done) · **Main task:** [313](313-persistent-actors.md) · **Constitution:** MC-6.10, MC-6.12, MC-12.4, Appendix B.4
 
 Split from [313](313-persistent-actors.md) (2026-10-30), its second step. It holds no personal data, so it does not wait for [308](308-encryption-at-rest.md).
 
 ## Problem
 
-[313-STO-0026](313-STO-0026-operation-ids-and-queues-in-a-checkpoint.md) put an outbox and a clients table in a checkpoint, but a message's sending and acknowledgement are checked on a host model alone (docs/storage/checkpoints.md, "Not provided"). No component on the platform owes another a message. So nothing shows that one is applied once by its receiver across restarts of either side and of the store.
+[313-STO-0026](../issues-done/313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done) put an outbox and a clients table in a checkpoint, but a message's sending and acknowledgement are checked on a host model alone (docs/storage/checkpoints.md, "Not provided"). No component on the platform owes another a message. So nothing shows that one is applied once by its receiver across restarts of either side and of the store.
 
 ## Plan
 
@@ -39,4 +39,4 @@ Split from [313](313-persistent-actors.md) (2026-10-30), its second step. It hol
 
 ## Related
 
-[313](313-persistent-actors.md), [313-STO-0026](313-STO-0026-operation-ids-and-queues-in-a-checkpoint.md), [306](../issues-done/306-checkpoints-and-rebinding.done), [docs/storage/checkpoints.md](../docs/storage/checkpoints.md).
+[313](313-persistent-actors.md), [313-STO-0026](../issues-done/313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done), [306](../issues-done/306-checkpoints-and-rebinding.done), [docs/storage/checkpoints.md](../docs/storage/checkpoints.md).
