@@ -98,16 +98,16 @@ impl From<worktree::Error> for Error {
 }
 
 impl Error {
-    /// The error of `vfs.wit` 2.5 that says it. A conflict is `io` until 2.6 has `conflict`: as a write that did not
-    /// reach the medium, it stored nothing under the name, so no client takes its data for stored; `invalid` or `denied`
-    /// would blame the request or its rights. The bounds are `no-space`, the tables' `handles`.
+    /// The error of `vfs.wit` 2.6 that says it: a conflict is `conflict` (311-KRN-0189), so the client reads the file
+    /// again and writes once more. The bounds are `no-space`, the tables' `handles`.
     pub fn wire(self) -> vfs::Error {
         match self {
             Error::NotFound => vfs::Error::NotFound, Error::Exists => vfs::Error::Exists, Error::NotEmpty => vfs::Error::NotEmpty,
             Error::Invalid => vfs::Error::Invalid, Error::Denied => vfs::Error::Denied, Error::Name => vfs::Error::Name,
             Error::NotDirectory => vfs::Error::NotDirectory, Error::IsDirectory => vfs::Error::IsDirectory, Error::Handles => vfs::Error::Handles,
             Error::Full | Error::TooLarge | Error::Store(dag::Error::Full) => vfs::Error::NoSpace,
-            Error::Conflict { .. } | Error::Store(_) => vfs::Error::Io,
+            Error::Conflict { .. } => vfs::Error::Conflict,
+            Error::Store(_) => vfs::Error::Io,
         }
     }
 }

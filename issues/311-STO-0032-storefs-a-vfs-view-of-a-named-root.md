@@ -1,6 +1,6 @@
 # 311-STO-0032 — `storefs`: files and directories of a named root, through `vfs.wit`
 
-**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** 311-KRN-0189 (`vfs.wit` 2.6 `conflict`) and 311-KRN-0190 (`storefs` at boot and its clients), the kernel track's, from the request of 2026-10-30 · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
+**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.md) (`storefs` at boot and its clients), the kernel track's, from the request of 2026-10-30; [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done) (`vfs.wit` 2.6 `conflict`) is done · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
 
@@ -41,7 +41,7 @@ A tree in the store is read and changed only through `blocks tree`, one command 
 - **The bounds:** `TREES` = 4, `HANDLES` = 64, `FILES` = 32, `CHUNKS` = 16, `FILE_MAX` = 64 MiB, `PATH` = 512 bytes of a handle's path from its root (two names of 255 bytes), `PAGE` = 16 entries a `list`. Each is refused with nothing changed; a call's directories are dropped if one of them is refused.
 - **Each client's share** (the storage session's review): a client, by PID and badge, holds at most half of each table: `TREES_EACH` = 2, `HANDLES_EACH` = 32, `FILES_EACH` = 16, `CHUNKS_EACH` = 8 (128 KiB). Past its share a request is refused as past the table (`handles`, or `Full` for chunks), nothing changed, so a second client always finds its own share free. A tree, its files and their chunks count for the client that opened its root.
 - **Volumes:** 1 to 16 bytes of `A-Z a-z 0-9 . _ -`, the case ignored as `vfs_server` ignores it, so the store's name is `fs/` and the volume in lower case. Another name is `not-found`.
-- **Errors are the logic's own** (`fs::Error`), with `wire()` to `vfs.wit` 2.5's:
+- **Errors are the logic's own** (`fs::Error`), with `wire()` to `vfs.wit`'s (2.5 when built, 2.6 since 311-KRN-0189, below):
   - each one `vfs.wit` has is itself; the tables' bounds are `handles`, and `Full`, `TooLarge` and a store with no room are `no-space`;
   - **`Conflict` is `io`** until `vfs.wit` 2.6 has `conflict`: nothing of the write was stored under the name, as for a write that did not reach a medium, so no client takes its data for stored. `invalid` or `denied` would blame the request or its rights, and a retry of an `io` flush is refused again with nothing published;
   - the store's other errors (a block missing, corrupt or out of shape) are `io`.
@@ -58,6 +58,7 @@ A tree in the store is read and changed only through `blocks tree`, one command 
   - `scripts/host_tests.sh` whole (`storefs` 12) on eea5d440;
   - both images built with `storefs.elf`, and `store`, `storefaults` and `vfs` still pass on x86 and aarch64, on `un-rizen_2a8b108d5593` through Effector.
 - **Off the images** since 2026-10-30 (the landing round of 16:17 returned it): on a disk, `storefs.elf` was listed as a program the user runs (`wm`'s menu, `list -l`). It stays out of `02_build.sh` until 311-KRN-0190 makes it a boot image.
+- **`vfs.wit` 2.6** (311-KRN-0189, round 57, `main` ad3f64ff): a conflict is now `conflict` on the wire, not `io`, so a client reads the file again and writes once more. `tests/storefs_host.rs` checks the mapping against the generated 2.6 enum. Merged with `main` as a3d171b7, and taken up on this branch at once, because the check of 2.5 failed on the merge.
 - **Not run:** nothing starts the service until 311-KRN-0190. The QEMU criteria wait for it, and for APP's lending to programs.
 
 ## Acceptance criteria

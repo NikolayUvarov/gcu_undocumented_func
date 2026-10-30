@@ -6,7 +6,7 @@
 //! writers from one version the second is told of the conflict, nothing of it is published, and it writes again and
 //! publishes; a publication stopped at each write of the medium leaves the old root or the new one; a client's handles
 //! refused to another, a read-only volume refused a change, and a handle allowing no more than its parent; each bound,
-//! and each client's share, refused with nothing changed; the errors as `vfs.wit` 2.5 has them.
+//! and each client's share, refused with nothing changed; the errors as `vfs.wit` 2.6 has them.
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -23,10 +23,10 @@ mod worktree;
 #[path = "../storefs/src/fs.rs"]
 mod fs;
 
-/// `vfs.wit` 2.5's errors, as fs.rs maps to them: checked against the generated libmind/src/idl/vfs.rs below.
+/// `vfs.wit` 2.6's errors, as fs.rs maps to them: checked against the generated libmind/src/idl/vfs.rs below.
 mod vfs {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum Error { NotFound = 0, Exists = 1, NotEmpty = 2, Invalid = 3, Denied = 4, NoSpace = 5, ReadOnly = 6, Io = 7, Handles = 8, Name = 9, NotDirectory = 10, IsDirectory = 11 }
+    pub enum Error { NotFound = 0, Exists = 1, NotEmpty = 2, Invalid = 3, Denied = 4, NoSpace = 5, ReadOnly = 6, Io = 7, Handles = 8, Name = 9, NotDirectory = 10, IsDirectory = 11, Conflict = 12 }
 }
 
 use cid::Cid;
@@ -516,7 +516,7 @@ fn of_two_writers_from_one_version_the_second_is_told_of_the_conflict_and_writes
         assert_eq!(listed(&mut fs, s, OTHER, second)[0], entry("a", File, 2));
         let conflict = fs.close(s, OTHER, g);
         assert_eq!(conflict, Err(Error::Conflict { read, current: read + 1 }));
-        assert_eq!(conflict.unwrap_err().wire(), vfs::Error::Io);
+        assert_eq!(conflict.unwrap_err().wire(), vfs::Error::Conflict);
         assert_eq!(fs.stat(s, OTHER, g), Err(Error::Invalid));
         // Nothing of it is published: the name is at the first writer's tree, with the versions it keeps.
         let (version_now, tree) = published(s, "fs/home");
@@ -881,10 +881,10 @@ fn a_client_holds_at_most_half_of_each_table_and_another_still_gets_its_share() 
 
 #[test]
 fn the_errors_are_vfs_wits() {
-    // The stand-in above is vfs.wit 2.5's enum as generated; 2.6 adds `conflict`, and this mapping changes with it.
+    // The stand-in above is vfs.wit 2.6's enum as generated, `conflict` among it (311-KRN-0189).
     let generated = include_str!("../libmind/src/idl/vfs.rs");
-    assert!(generated.contains("pub const VERSION: (u8, u8, u8) = (2, 5, 0);"));
-    assert!(generated.contains("pub enum Error { #[default] NotFound = 0, Exists = 1, NotEmpty = 2, Invalid = 3, Denied = 4, NoSpace = 5, ReadOnly = 6, Io = 7, Handles = 8, Name = 9, NotDirectory = 10, IsDirectory = 11 }"));
+    assert!(generated.contains("pub const VERSION: (u8, u8, u8) = (2, 6, 0);"));
+    assert!(generated.contains("pub enum Error { #[default] NotFound = 0, Exists = 1, NotEmpty = 2, Invalid = 3, Denied = 4, NoSpace = 5, ReadOnly = 6, Io = 7, Handles = 8, Name = 9, NotDirectory = 10, IsDirectory = 11, Conflict = 12 }"));
     let modes = include_str!("../libmind/src/fs.rs");
     for (name, value) in [("MODE_WRITE", WRITE), ("MODE_CREATE", CREATE), ("MODE_TRUNCATE", TRUNCATE), ("MODE_NEW", NEW)] {
         assert!(modes.contains(&format!("pub const {name}: u8 = {value};")), "{name}");
@@ -894,7 +894,7 @@ fn the_errors_are_vfs_wits() {
         (Error::NotFound, V::NotFound), (Error::Exists, V::Exists), (Error::NotEmpty, V::NotEmpty), (Error::Invalid, V::Invalid),
         (Error::Denied, V::Denied), (Error::Name, V::Name), (Error::NotDirectory, V::NotDirectory), (Error::IsDirectory, V::IsDirectory),
         (Error::Handles, V::Handles), (Error::Full, V::NoSpace), (Error::TooLarge, V::NoSpace), (Error::Store(dag::Error::Full), V::NoSpace),
-        (Error::Conflict { read: 1, current: 2 }, V::Io), (Error::Store(dag::Error::Corrupt), V::Io), (Error::Store(dag::Error::NotFound), V::Io),
+        (Error::Conflict { read: 1, current: 2 }, V::Conflict), (Error::Store(dag::Error::Corrupt), V::Io), (Error::Store(dag::Error::NotFound), V::Io),
     ] {
         assert_eq!(error.wire(), wire, "{error:?}");
     }

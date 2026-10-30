@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// storefs (issue 311-STO-0032, docs/storage; MC-3.4, 4.1, 4.3, 4.9): `vfs.wit` 2.5 over the store's names `fs/<volume>`,
+// storefs (issue 311-STO-0032, docs/storage; MC-3.4, 4.1, 4.3, 4.9): `vfs.wit` 2.6 over the store's names `fs/<volume>`,
 // each a directory tree, through fs.rs (its logic: tests/storefs_host.rs). A handle belongs to the client that opened it,
 // by the PID and badge of its request. A files client asks vfs_server first and storefs for a volume vfs_server answers
 // `not-found` (the kernel track's way (b), 2026-10-30), so the boot disk, `ram`, `log` and `models` are refused here.
