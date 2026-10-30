@@ -1,6 +1,6 @@
 # 750-KRN-0194 — `init` warns a service before it stops it: `init.wit` 1.12 `stop-notice`, with a bound
 
-**Type:** `init`, IDL (`init.wit` 1.12) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md), for 750-EFF-0006 · **Roadmap:** track G · **Constitution:** MC-6.8, MC-10.2, MC-12.4
+**Type:** `init`, IDL (`init.wit` 1.12) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in `main` (round 57); closes once EFF's check passes · **Blocked by:** — · **Main task:** [750](750-effector-agent.md), for 750-EFF-0006 · **Roadmap:** track G · **Constitution:** MC-6.8, MC-10.2, MC-12.4
 
 **Asked by:** EFF on 2026-10-30, in `KRN/2026-10-30T1457Z-EFF-a-request-init-warns-a-service-before-it-stops-it.md` on `internal-dev-messages`, for the last criterion of 750-EFF-0006. The Effector server asks that an agent's last heartbeat say `system_state: "shutting_down"` (its 81-mindcore-01).
 
@@ -28,6 +28,9 @@
   - it saves the reply (`IPC_SAVE_REPLY`), one per service PID;
   - a second call from the same PID replaces the first, which is answered `failed`;
   - only a boot service may ask, and others are refused `denied`.
+- **`effector`'s client:** `init` gives it a client of its own, badged `BADGE_NOTICE` (`mind::process`, 7), in `SLOT_LIFECYCLE` (11).
+  - With it `effector` may only ask for the notice.
+  - Every lifecycle change from that client is refused and logged (MC-3.4).
 - **When `init` answers:**
   - for `stop` of that service: `stop`;
   - for `restart` of it or `replace`: `restart`;
@@ -54,6 +57,17 @@
   - a service that did not ask stops at once, as now;
   - `reboot` gives the notice once, and the restart follows within the bound.
 - **EFF's check:** the last heartbeat says `shutting_down`, in its `effector` suite.
+
+## Progress
+
+- **2026-10-30, made** (`claude/youthful-mendel-mf1soy` afdb038e):
+  - `init.wit` 1.12 `stop-notice` and `stop-reason`, regenerated; `StopReason` in the IDL fuzzer;
+  - `init`: the held call per unit, the reasons, the 2 s bound with its two log lines, `reboot()`'s single wait, and `effector`'s client badged `BADGE_NOTICE`;
+  - `docs/idl/README.md` (1.12.0) and `docs/profile/bootstrap.md` (`effector`'s slot 11);
+  - the `modes` suite checks `effector`'s client in slot 11.
+- **Tested:** the x86 build, host tests and the `modes` suite (x86, QEMU TCG); the stops, restarts and reboots of the Effector services behave as before while nobody asks.
+- **Landed** in round 57, `main` ad3f64ff: `aarch64: the updater and the modes` and `x86: services, storage, audio` (with `modes`) passed there.
+- **Left:** the notice itself, which needs `effector` to ask (750-EFF-0006), and EFF's check.
 
 ## Related
 

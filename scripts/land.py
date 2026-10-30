@@ -497,6 +497,10 @@ class Effector:
         reply = self.call("GET", "/api/v1/endpoints")
         return reply.get("endpoints", []) if isinstance(reply, dict) else reply
 
+    def active(self, machine):
+        reply = self.call("GET", f"/api/v1/operations?agent_id={machine['agent']}&status=active")
+        return reply.get("operations", []) if isinstance(reply, dict) else reply
+
     def run(self, machine, command, timeout, reason, key, queue_ttl=6 * 3600):
         body = {"agent_id": machine["agent"], "kind": "exec", "command": command, "timeout_seconds": timeout, "reason": reason,
                 "idempotency_key": key, "queue_ttl_seconds": queue_ttl, **({"run_as": machine["run_as"]} if machine["run_as"] else {})}
@@ -539,8 +543,25 @@ class Gate:
         with self.lock:
             print(f"{time.strftime('%H:%M:%S')} {text}", flush=True)
 
+    def earlier(self, name):
+        """IDs of another run's operations still queued or running in this lane's clone. Stopping a gate here leaves its
+        operations running there: round 56 checked out its tree under round 55's and read their results as its own."""
+        mark = re.compile(rf"^{TRACK} landing gate (\S+): .* on {re.escape(name)}$")
+        try:
+            ops = self.effector.active(self.lane(name)[0])
+        except (Exception, SystemExit) as error:
+            self.log(f"{name}: its active operations not listed ({error}); the tree goes ahead")
+            return []
+        return [op.get("id") for op in ops if (m := mark.match(op.get("reason") or "")) and m[1] != self.tag]
+
     def tree(self, name):
         machine, clone, _ = self.lane(name)
+        waited = False
+        while ids := self.earlier(name):
+            if not waited:
+                self.log(f"{name}: waits for an earlier run's operations in its clone to end: {', '.join(ids)}")
+                waited = True
+            time.sleep(60)
         command = self.prelude(name) + (
             f"[ -d {clone}/.git ] || {{ mkdir -p {os.path.dirname(clone)} && git clone -q {URL} {clone}; }} || exit 3\n"
             f"cd {clone} || exit 3\ngit merge --abort 2>/dev/null; git reset -q --hard\n"
