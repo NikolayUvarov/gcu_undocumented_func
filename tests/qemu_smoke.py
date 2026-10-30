@@ -3609,6 +3609,53 @@ def cid_raw(data):
     return "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(data).digest()).decode().lower().rstrip("=")
 
 
+def cbor_head(major, value):
+    """A CBOR head in its shortest form (RFC 8949), as DAG-CBOR requires."""
+    if value < 24:
+        return bytes([major << 5 | value])
+    size = next(n for n in (1, 2, 4, 8) if value < 1 << 8 * n)
+    return bytes([major << 5 | {1: 24, 2: 25, 4: 26, 8: 27}[size]]) + value.to_bytes(size, "big")
+
+
+def cbor_text(text):
+    return cbor_head(3, len(text)) + text.encode()
+
+
+def cbor_link(cid):
+    """A DAG-CBOR link: tag 42 over the identity multibase prefix 0 and the CID's binary form."""
+    return cbor_head(6, 42) + cbor_head(2, len(cid) + 1) + b"\0" + cid
+
+
+def cid_binary(codec, data):
+    """A CIDv1's binary form: version 1, the codec (0x55 raw, 0x71 dag-cbor), sha2-256 and its 32 bytes."""
+    return bytes([1, codec, 0x12, 0x20]) + hashlib.sha256(data).digest()
+
+
+def cid_text(cid):
+    return "b" + base64.b32encode(cid).decode().lower().rstrip("=")
+
+
+def uvarint(value):
+    """An unsigned varint of multiformats (LEB128), in its shortest form."""
+    out = bytearray()
+    while True:
+        out.append(value & 0x7f | (0x80 if value > 0x7f else 0))
+        value >>= 7
+        if not value:
+            return bytes(out)
+
+
+def car_v1(names, blocks):
+    """A copy of named roots (309-STO-0031) written here from the CAR v1 and DAG-CBOR specifications, not from libmind: a
+    header `{"roots": [link], "version": 1}` naming the names node `{"v": 1, "names": [[name, version, root], ...]}`,
+    sorted by name, then the node's section and a section for each (CID, block) of `blocks`."""
+    node = (cbor_head(5, 2) + cbor_text("v") + cbor_head(0, 1) + cbor_text("names") + cbor_head(4, len(names))
+            + b"".join(cbor_head(4, 3) + cbor_text(name) + cbor_head(0, version) + cbor_link(root) for name, version, root in sorted(names)))
+    root = cid_binary(0x71, node)
+    head = cbor_head(5, 2) + cbor_text("roots") + cbor_head(4, 1) + cbor_link(root) + cbor_text("version") + cbor_head(0, 1)
+    return uvarint(len(head)) + head + b"".join(uvarint(len(cid) + len(block)) + cid + block for cid, block in [(root, node), *blocks])
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -3846,6 +3893,7 @@ def store_suite(vm):
     fm_store_check(vm)
     tally_messages_check(vm)
     store_tree_check(vm)
+    store_copy_check(vm)
 
 
 def run_tally(vm, args):
@@ -3986,6 +4034,61 @@ def store_tree_check(vm):
     print("PASS: blocks tree: a move and two removals, each published; a directory with entries is not removed", flush=True)
 
 
+def store_copy_check(vm):
+    """309-STO-0031: names exported to a file on the boot volume come back whole into a store that lost them. The store's
+    medium is a RAM disk, blank after a reboot; the boot volume is QEMU's virtual FAT, whose writes the snapshot overlay
+    keeps across the guest's reboot. `home` (store_tree_check's tree) and `list/n00` are exported; after the reboot an
+    import publishes each at its root, every file reads back (SHA-256 checked here), an import again changes nothing, and
+    a name published elsewhere since is left as it is."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    vm.command("mkdir data")
+    snap = blocks("snapshot home list/n00")
+    home = re.search(r"^home VERSION (\d+) ROOT (\S+)\r?$", snap, re.M)
+    left = re.search(r"^list/n00 VERSION 1 ROOT (\S+)\r?$", snap, re.M)
+    assert home and left, snap
+    out = blocks("export data/names.car list/n00 home")
+    require_all(out, f"EXPORT home VERSION {home[1]} ROOT {home[2]}", f"EXPORT list/n00 VERSION 1 ROOT {left[1]}")
+    written = re.search(r"^EXPORTED 2 NAMES, (\d+) BLOCKS, (\d+) BYTES TO data/names.car; SHA-256 ([0-9a-f]{64})\r?$", out, re.M)
+    assert written, out
+    require_all(blocks("import --check data/names.car"), f"NAME home VERSION {home[1]} ROOT {home[2]}", f"NAME list/n00 VERSION 1 ROOT {left[1]}",
+                f"CHECKED data/names.car: 2 NAMES, {written[1]} BLOCKS, {written[2]} BYTES; SHA-256 {written[3]}")
+    # The reboot: the RAM disk starts blank, the boot volume keeps the file.
+    vm.send("reboot\n")
+    vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=180)
+    vm.expect("MIND>", timeout=120)
+    time.sleep(1); vm.collect(); vm.output = ""
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 ")
+    require(blocks("resolve home"), "blocks: resolve home: NotFound")
+    out = blocks("import data/names.car")
+    require_all(out, f"PUBLISHED home VERSION 1 ROOT {home[2]} (VOLATILE)", f"PUBLISHED list/n00 VERSION 1 ROOT {left[1]} (VOLATILE)")
+    counts = re.search(rf"^IMPORTED data/names.car: 2 NAMES, {written[1]} BLOCKS \((\d+) STORED, 0 REPAIRED, (\d+) HELD\), {written[2]} BYTES; SHA-256 {written[3]}\r?$", out, re.M)
+    assert counts and int(counts[1]) > 0 and int(counts[1]) + int(counts[2]) == int(written[1]), out
+    require(blocks("snapshot home list/n00"), f"home VERSION 1 ROOT {home[2]}")
+    # Every file reads back whole: the tree's, as store_tree_check left it, and list/n00's.
+    big = bytes((i * 31 + 7) % 251 for i in range(20000))
+    assert [(k, n) for k, _, _, n in re.findall(r"^(FILE|DIR) (\d+) (\S+) (\S+)\r?$", blocks("tree ls home docs"), re.M)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
+    for path, data in (("docs/a.txt", b"first file\n"), ("docs/c.bin", big)):
+        require(blocks(f"tree cat home {path} ram:back.bin"), f"READ {len(data)} BYTES SHA-256 {hashlib.sha256(data).hexdigest()}")
+    require(blocks(f"get {left[1]} ram:left.txt"), "GOT 5 BYTES")
+    require(vm.command("cat ram:left.txt"), "left")
+    # Imported again: every name at its root, every block held, nothing published.
+    require_all(blocks("import data/names.car"), f"SAME home VERSION 1 ROOT {home[2]}", f"SAME list/n00 VERSION 1 ROOT {left[1]}",
+                f"(0 STORED, 0 REPAIRED, {written[1]} HELD)")
+    # A name published since at another root: left as it is, and reported.
+    require(vm.command("write ram:other.txt other"), "WROTE 6 BYTES")
+    other = cid_raw(b"other\n")
+    require(blocks("put ram:other.txt"), f"PUT {other} SIZE 6")
+    require(blocks(f"publish list/n00 {other} 1"), "PUBLISHED list/n00 VERSION 2")
+    require_all(blocks("import data/names.car"), f"SAME home VERSION 1 ROOT {home[2]}",
+                f"CONFLICT list/n00: VERSION 2 ROOT {other}, NOT {left[1]}; LEFT AS IT IS")
+    require(blocks("resolve list/n00"), f"list/n00 VERSION 2 ROOT {other}")
+    print("PASS: copies in a file: two names exported to the boot volume come back whole into the store a reboot left "
+          "blank (each at its root, every file read back), an import again changes nothing, and a name published since at "
+          "another root is left as it is", flush=True)
+
+
 def store_domains_check(vm):
     """308-STO-0023: memory domains on the store's RAM disk. Where the processor gives random numbers (RNDR on aarch64's
     `max`), a domain is made; its blocks and names are its own, a domain's client makes no domain, and a forgotten
@@ -4013,6 +4116,8 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 309-STO-0031: a copy in a file is in the clear and would outlive the domain's forgetting, so none is made.
+    require(blocks(f"-d {first} export ram:dom.car secret"), "blocks: export: a memory domain is not copied")
     out = blocks("domains")
     for line in (f"DOMAIN {first} LIVE", f"DOMAIN {second} LIVE"):
         require(out, line)
@@ -4210,6 +4315,38 @@ def block_record(chunk):
     return lambda opened: opened[:8] == b"MIND-BLK" and opened[16:52] == cid
 
 
+def store_copy_repair_check(vm, blocks, data, root):
+    """309-STO-0031: `obj` (`data`, the pattern's first 100 000 bytes: a node over 7 chunks, `root`) is exported to a file
+    on the RAM volume: the CAR v1 this suite writes from the specifications, byte for byte (its SHA-256). A chunk then
+    damaged on the store's medium is found by a scrub; an import of the copy reads it, finds it corrupt and stores it
+    again, a collection frees the damaged copy, and the next scrub finds nothing."""
+    chunks = [data[k:k + 16384] for k in range(0, len(data), 16384)]
+    node = (cbor_head(5, 3) + cbor_text("v") + cbor_head(0, 1) + cbor_text("size") + cbor_head(0, len(data)) + cbor_text("links")
+            + cbor_head(4, len(chunks)) + b"".join(cbor_link(cid_binary(0x55, c)) for c in chunks))
+    assert cid_text(cid_binary(0x71, node)) == root
+    copy = car_v1([("obj", 1, cid_binary(0x71, node))], [(cid_binary(0x71, node), node), *((cid_binary(0x55, c), c) for c in chunks)])
+    digest = hashlib.sha256(copy).hexdigest()
+    require_all(blocks("export ram:obj.car obj"), f"EXPORT obj VERSION 1 ROOT {root}",
+                f"EXPORTED 1 NAMES, 8 BLOCKS, {len(copy)} BYTES TO ram:obj.car; SHA-256 {digest}")
+    require_all(blocks("import --check ram:obj.car"), f"NAME obj VERSION 1 ROOT {root}",
+                f"CHECKED ram:obj.car: 1 NAMES, 8 BLOCKS, {len(copy)} BYTES; SHA-256 {digest}")
+    # The fourth chunk changes on the medium: a scrub finds it.
+    assert poke(vm, sealed_record(vm, block_record(chunks[3])), 44 + 84 + 100, GDB_PORT) >= 1
+    require(blocks("scrub"), "1 CORRUPT, 0 DAMAGED SECTORS;")
+    found = f"[BLOCKSTORE] SCRUB: BLOCK {cid_raw(chunks[3])} AT SECTOR"
+    require(vm.service_logs("blockstore", found), found)
+    # The import repairs it from the copy, the name left at its root; the collection frees the damaged copy.
+    require_all(blocks("import ram:obj.car"), f"SAME obj VERSION 1 ROOT {root}",
+                f"IMPORTED ram:obj.car: 1 NAMES, 8 BLOCKS (0 STORED, 1 REPAIRED, 7 HELD), {len(copy)} BYTES; SHA-256 {digest}",
+                "COLLECTED 1 BLOCKS: THE DAMAGED COPIES FREED")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] CORRUPT"), f"[BLOCKSTORE] CORRUPT {cid_raw(chunks[3])}")
+    require(blocks("scrub"), "0 CORRUPT, 0 DAMAGED SECTORS;")
+    require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
+    print("PASS: a copy in a file: obj exported as the CAR v1 written here from the specifications (SHA-256), a chunk "
+          "damaged on the medium found by a scrub and repaired by an import of the copy, the next scrub clean", flush=True)
+
+
 def store_faults_suite(vm):
     """300-STO-0005: damage on the block store's own medium, injected from the host into the RAM disk's bytes in guest
     memory (no program can reach that medium). A flipped byte in a chunk is refused when read and when mounting; a
@@ -4249,6 +4386,9 @@ def store_faults_suite(vm):
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
     assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
     require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
+    # 309-STO-0031: a copy in a file repairs what a scrub finds. Here, while the medium is otherwise whole: the damaged
+    # frame below leaves 33 sectors damaged for good, and the suite's end leaves a store that is not mounted.
+    store_copy_repair_check(vm, blocks, data, root)
     # A byte of the fifth chunk, found when a new instance mounts the medium.
     assert poke(vm, sealed_record(vm, block_record(chunk(4))), 44 + 84 + 100, GDB_PORT) >= 1
     require(restart(), "CORRUPT=1 DAMAGED=0")
@@ -12398,10 +12538,12 @@ def main():
                 svc_boot_check(args)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
-            # line, and audio_gw must keep playing without interrupts (issue 096).
+            # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
+            # its end (309-STO-0031): its RAM disk store starts blank, and the snapshot overlay keeps the boot volume's files.
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
-                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults" else (), tablet=suite == "tablet", usb_input=suite == "usb")
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults" else (), tablet=suite == "tablet", usb_input=suite == "usb",
+                    reboot=suite == "store")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
