@@ -27,6 +27,10 @@
   - `netstack`'s wired cards are `virtio_net`, `virtio_net#1`, `rtl8168`, `rtl8168#1`, two at most.
 - **Docs:** the README's and the profile's rows name the instance.
 
+## Landed (2026-10-30)
+
+In `main` since landing round 50 (8e2b16e0, 2026-10-30). Left: DRV's run on the DEXP (211-DRV-0041).
+
 ## Acceptance criteria
 
 - **Host tests:** `tests/services_host.rs` with the new unit, `netstack` after it; `tests/svc_host.rs`.

@@ -54,6 +54,10 @@ The DEXP's RTL8821CE has a Bluetooth half, `0BDA:C821`, on its xHCI.
   - the README and profile rows.
 - **One ABI step with `nnd`.** It shares **ABI 25 and handoff 25** with [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)'s image: two images and one transition, so a loader of handoff 24 or older is refused by name. `BOOT_IMAGES` is 46.
 
+## Landed (2026-10-30)
+
+In `main` since landing round 50 (8e2b16e0, 2026-10-30), with ABI 25 and handoff 25; the `usb` suite passed in that round's gate with `bt_hci` in the images (groups `x86: keys, shell, tools` and `aarch64: programs, shell and four CPUs`). Left: BLT's run on the DEXP.
+
 ## Acceptance criteria
 
 - **Builds:** x86 and aarch64.

@@ -91,6 +91,10 @@
   - **APP's shell part:** the badge per start, kept and revoked at the program's end, `retire`, and `retire-all` at its start. With it come the criteria about `REQUEST_NN`, a badge's reuse and a restart of the shell.
   - **`nnd`'s two scopes,** for loading models.
 
+## Landed (2026-10-30)
+
+In `main` since landing round 50 (8e2b16e0, 2026-10-30), with ABI 25 and handoff 25. Left as above: APP's shell part (the badge per start and its revocation) with the criteria about `REQUEST_NN`, a badge's reuse and the shell's restart; `nnd`'s two scopes; NRL's and APP's native run.
+
 ## Acceptance criteria
 
 - **Host tests:**

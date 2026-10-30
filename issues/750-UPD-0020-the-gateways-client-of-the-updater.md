@@ -36,6 +36,10 @@ From the request "A client of `updater` for the Effector gateway (750)" in reque
   - the `update` suite's run of a gateway-badged client (staged, then refused once the word is off);
   - the install of a developer's release the gateway receives (751-EFF-0023's `install`), with EFF.
 
+## Landed (2026-10-30)
+
+The gateway's client is in `main` since landing round 50 (8e2b16e0, 2026-10-30). The release the gateway hands over is [751-UPD-0032](751-UPD-0032-install-a-developers-release-from-the-gateway.md)'s `install` (`update.wit` 1.3), on the kernel session's branch with its QEMU suite on x86; this task's criteria follow from it.
+
 ## Acceptance criteria
 
 - In the `update` suite, a client with the gateway's badge checks, fetches and stages a test release.
