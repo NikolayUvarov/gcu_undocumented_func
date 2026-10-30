@@ -6554,7 +6554,7 @@ def update_suite(args):
         # 351-APP-0029: the shell's `update` shows the updater's view and the channel it holds (update.wit 1.1), says
         # check's refusal, asks before a rollback and is refused to a script without `requires: lifecycle`.
         out = vm.command("update", raw=True, timeout=60)
-        for line in ("UPDATE: RUNNING SLOT B, VERSION 6\n", "UPDATE: THE NEWER BOOT RECORD NAMES SLOT B, CONFIRMED", "UPDATE: CHANNEL stable: VERSION 6, MINIMUM 5, EXPIRES "):
+        for line in ("UPDATE: RUNNING SLOT B, VERSION 6\n", "UPDATE: THE NEWER BOOT RECORD NAMES SLOT B, CONFIRMED", "UPDATE: CHANNEL stable: VERSION 6, MINIMUM 6, EXPIRES "):  # release 6 raised it (351-UPD-0024)
             require(out.replace("\r", ""), line)
         require(out, ", READ FROM THE SOURCE")
         require(vm.command("update check", raw=True, timeout=60), "UPDATE: THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE")
