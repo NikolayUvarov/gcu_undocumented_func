@@ -14,13 +14,13 @@
 
 1. **Enter on the picture's own file** opens the browser in its directory, on that file. The browser's line says why: `<file> is the picture already: choose another, or Esc`.
 2. **A click on that row** does the same. A name being typed there still waits for Enter.
-3. **A file wm could not read or show,** taken from the row or the browser, opens the browser again while Settings is open. It says what went wrong.
+3. **A file wm could not read or show,** taken from the row or the browser, opens the browser again while Settings is open. It says what went wrong. A kind stepped on the Picture row keeps the notice alone, so the arrows go on stepping (`wm` suite).
 4. **A host test** in `tests/wm_host.rs`.
 
 ## Acceptance criteria
 
 - [x] Enter and a click on the picture's own file open the browser in its directory, on the file, with the reason shown; another picture is taken from there (host test `the_picture_already_shown_offers_the_choice_of_another`, 2026-10-30).
-- [x] A file wm could not show offers the browser with its reason (same test, `Settings::offer`).
+- [x] A file wm could not show, from the file's row, offers the browser with its reason; from the Picture row it does not (same test, `Settings::not_shown`).
 - [ ] The maintainer checks it on a machine.
 
 ## Related
