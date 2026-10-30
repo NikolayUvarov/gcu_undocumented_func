@@ -34,7 +34,7 @@ Why it took an hour is not yet read from the Mac's log. What the code and the co
 
 ## Acceptance criteria
 
-- [ ] The `effector` QEMU suite, x86 and aarch64: a capture whose run time passes before its acknowledgement is sent is acknowledged without its artifact, and the agent takes the next command at once.
+- [x] The `effector` QEMU suite, x86 and aarch64: a capture whose run time passes before its acknowledgement is sent is acknowledged without its artifact, and the agent takes the next command at once.
 - [ ] On the MacBook Pro through hesere: a `collect_logs` `boot` with a short `timeout_seconds` holds the agent no longer than its acknowledgement's one try.
 
 ## Related
@@ -50,4 +50,4 @@ Why it took an hour is not yet read from the Mac's log. What the code and the co
 - **Plan item 3, already so.** The heartbeat and the ACK share the agent's loop, so a heartbeat goes between an ACK's tries. A late answer is now one small try, not megabytes of base64.
 - **Plan item 2 (the Mac's log of 06:29–07:28) is not read yet.** The change does not depend on it.
 - **`docs/effector/protocol.md`** states the rule, and `docs/effector/README.md` the header's new field.
-- **The `effector` QEMU suite** gained a check. The first ACK of a `collect_logs` `ring` with `timeout_seconds` 3 is refused once (an injected 500). Its retry, 5 s or more later, must answer `completed LATE` without the artifact, and the next command must be taken at once. Not run yet.
+- **The `effector` QEMU suite** gained a check. The first ACK of a `collect_logs` `ring` with `timeout_seconds` 3 is refused once (an injected 500). Its retry, 5 s or more later, must answer `completed LATE` without the artifact, and the next command must be taken at once. It passes in `x86: network, TLS and Effector` and `aarch64: network, TLS and Effector` (LEG9, `scripts/ci_local.sh`, 2026-10-30): `ACK cmd-8 completed LATE, WITHOUT ring.log (13214 BYTES) ACCEPTED`, 5 s after the refused try.
