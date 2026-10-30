@@ -1,6 +1,6 @@
 # 311-EFF-0024 — An arm in `effector_gw` for `vfs.wit` 2.6's error `conflict` — done
 
-**Type:** service · **Owner:** `EFF` · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) (STO's), for [311-KRN-0189](../issues/311-KRN-0189-a-conflict-error-in-vfs-wit.md) · **Constitution:** MC-12.4
+**Type:** service · **Owner:** `EFF` · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) (STO's), for [311-KRN-0189](311-KRN-0189-a-conflict-error-in-vfs-wit.done) · **Constitution:** MC-12.4
 
 **Asked by:** the kernel track (`KRN`) in `issues/requests-EFF.md`, 2026-10-30, "An arm for `vfs.wit` 2.6's error `conflict` in `effector_gw`", and in its message `EFF/2026-10-30T1116Z-KRN-update-wit-1-3-is-in-main.md`.
 
@@ -31,4 +31,4 @@
 
 ## Related
 
-[311-KRN-0189](../issues/311-KRN-0189-a-conflict-error-in-vfs-wit.md), [requests-EFF.md](../issues/requests-EFF.md).
+[311-KRN-0189](311-KRN-0189-a-conflict-error-in-vfs-wit.done), [requests-EFF.md](../issues/requests-EFF.md).

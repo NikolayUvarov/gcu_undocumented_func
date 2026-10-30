@@ -2,7 +2,7 @@
 
 **Type:** driver · **Owner:** `DRV` track (open) · **Priority:** P2 · **Status:** in progress · **Blocked by:** [requests-KRN.md](requests-KRN.md) (the kernel hands out the TPM's registers, `PLATFORM_TPM`) · **Main task:** [351](351-self-update.md) · **Roadmap:** track A · **Constitution:** MC-11.9, MC-1.5
 
-Recorded by the storage session at the maintainer's request (2026-10-09), for [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md) and [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md). Numbered from 0015 so as not to meet numbers the kernel session gives drivers.
+Recorded by the storage session at the maintainer's request (2026-10-09), for [351-NET-0006](../issues-done/351-NET-0006-device-key-sealed-by-a-tpm.done) and [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md). Numbered from 0015 so as not to meet numbers the kernel session gives drivers.
 
 ## Problem
 
@@ -27,7 +27,7 @@ In QEMU with `swtpm`, `keystore` seals and unseals a secret through the service,
 
 ## Related
 
-[351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md), [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md).
+[351-NET-0006](../issues-done/351-NET-0006-device-key-sealed-by-a-tpm.done), [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md).
 
 ## Progress (2026-10-09)
 
