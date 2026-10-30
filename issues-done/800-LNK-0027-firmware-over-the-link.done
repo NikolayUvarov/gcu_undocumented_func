@@ -1,6 +1,6 @@
-# 800-LNK-0027 — Proprietary firmware onto the machine over the link, so that no disk is written again for it
+# 800-LNK-0027 — Proprietary firmware onto the machine over the link, so that no disk is written again for it — done
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-27) · **Blocked by:** — (`KRN`'s 800-KRN-0173, merged into this branch) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-10.2, MC-12.3
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** done (2026-10-30) · **Blocked by:** — (`KRN`'s 800-KRN-0173, merged into this branch) · **Main task:** [800](../issues/800-mind-link.md) · **Constitution:** MC-2.3, MC-10.2, MC-12.3
 
 ## Problem
 
@@ -69,8 +69,25 @@ The maintainer (2026-10-27): `effector485` was built to close the question of wr
 
 - [x] Host tests of the name rules: names under `firmware/` go to `data/firmware/`, a put finishes in its own place, a move between the places and a change of the place itself are refused (`tests/link_names_host.rs`). That such names are unsupported without the grant is in `Store::scope`, not host-tested.
 - [x] The `link` QEMU suite (x86, 2026-10-27, with `linkupdate`): `mindlink put` of a file into `firmware/test/` lands in `data/firmware/test/` with `dev`; it comes back by `get`, and a move out of the place is refused.
-- [ ] On the DEXP: `proprietary.sh link` puts `rtw8821c_fw.bin` over `effector485`; after a restart `rtw88_wifi` reads it. Evidence for the DEXP only (MC-12.1).
+- [x] On the DEXP: `proprietary.sh link` puts `rtw8821c_fw.bin` over `effector485`; after a restart `rtw88_wifi` reads it. Evidence for the DEXP only (MC-12.1).
+
+## Resolution
+
+Done on 2026-10-30 by the `LNK` track. Evidence for the DEXP only (MC-12.1).
+
+**On the DEXP,** after release 202610290937 went over the cable (slot A, confirmed):
+1. **`stat firmware/rtw88/rtw8821c_fw.bin`** through `effector485`: 139,472 bytes, SHA-256 `2ef409bc…f3f0`, the pinned file the disk's write had put there.
+2. **`scripts/proprietary.sh link effector485`** under a reservation: each file was compared over the cable, and the two held already were skipped ("the other end holds these 139472 bytes already").
+3. **So the file was written again** with the daemon's `put … force=true`: sent whole from offset 0, into `firmware/rtw88/`.
+4. **The machine restarted** through `effector485 reboot`.
+5. **`rtw88_wifi` read that copy:** firmware 24.11 running, `MCUFW_CTRL C078`. It reads no other file. Wi-Fi then joined by itself, and the Effector agent connected.
+
+With the Bluetooth files of 2026-10-28 (new files, written over the cable), this is the whole path: fetched on the maintainer's machine, put over the link into `data/firmware/`, read by the driver at its next start, and no disk written.
+
+**Left, not part of these criteria:**
+- `link_update.py --firmware` (the plan's point 3) is not made: `proprietary.sh link` before `link_update.py` does the same.
+- AGENTS.md's proprietary-file rule names only the copy onto a written disk. A sentence for this path is the maintainer's text, to be proposed by `LNK`.
 
 ## Related
 
-[800-LNK-0016](800-LNK-0016-replace-a-service-over-the-link.md) (`replace`), [800-LNK-0026](800-LNK-0026-several-machines-on-one-line.md), `550-DRV-0042` (the drivers track).
+[800-LNK-0016](../issues/800-LNK-0016-replace-a-service-over-the-link.md) (`replace`), [800-LNK-0026](../issues/800-LNK-0026-several-machines-on-one-line.md), `550-DRV-0042` (the drivers track, done on 2026-10-30).

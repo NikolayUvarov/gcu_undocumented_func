@@ -4642,25 +4642,22 @@ def link_suite(args):
                     if power == "NETWORK":
                         # 800-KRN-0142: the broker made netcheck's grant for a launch-only client.
                         assert re.search(r"\[NETPOLICY\] GRANT \d+ TO netcheck: .*, ASKED BY A LAUNCH-ONLY CLIENT", vm.command("dmesg -s netpolicy", raw=True)), "launch-only"
-            # 800-LNK-0015: the shell's lines over the link, through the client init grants with dev (800-KRN-0148). Until
-            # the shell takes the link's lines (800-APP-0102), a line is not answered within link's minute: SKIP.
-            ip = link(port, "sh", "ip", ok=None, timeout=200)
-            if "did not answer" in ip:
-                print("SKIP: link: sh: the shell does not take the link's lines yet (800-APP-0102)", flush=True)
-            else:
-                assert re.search(r"^CARD \d", ip, re.M), ip
-                require(link(port, "sh", "ps"), "link")
-                # Never from the link, whatever the developer mode allows (800-NET-0038).
-                require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
-                # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
-                link(port, "sh", "tpm", "seal", "link-suite-secret-7", ok=None)
-                logged = vm.command("dmesg -s link", raw=True)
-                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
-                assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
-                assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
-                # 800-LNK-0019: without `link-console` in data/mode.conf a script from the link is refused, `mode` always.
-                require(link(port, "sh", "msh", "/data/link/console.msh", ok=False), "refused")
-                require(link(port, "sh", "mode", ok=False), "refused")
+            # 800-LNK-0015: the shell's lines over the link, through the client init grants with dev (800-KRN-0148), which
+            # the shell takes (800-APP-0102).
+            ip = link(port, "sh", "ip", timeout=200)
+            assert re.search(r"^CARD \d", ip, re.M), ip
+            require(link(port, "sh", "ps"), "link")
+            # Never from the link, whatever the developer mode allows (800-NET-0038).
+            require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
+            # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
+            link(port, "sh", "tpm", "seal", "link-suite-secret-7", ok=None)
+            logged = vm.command("dmesg -s link", raw=True)
+            assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
+            assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
+            assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
+            # 800-LNK-0019: without `link-console` in data/mode.conf a script from the link is refused, `mode` always.
+            require(link(port, "sh", "msh", "/data/link/console.msh", ok=False), "refused")
+            require(link(port, "sh", "mode", ok=False), "refused")
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
@@ -4724,7 +4721,6 @@ def link_suite(args):
             vm.close()
     # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
     # (800-APP-0108), its line logged whole; `mode` stays refused.
-    console = False
     with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
         image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n", "data/mode.conf": b"link-console\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
@@ -4736,23 +4732,19 @@ def link_suite(args):
             script = Path(temp) / "console.msh"
             script.write_text('#!msh\nprint("THE LINK CONSOLE RAN THIS SCRIPT")\n')
             require(link(port, "put", str(script)), "put ")
-            ran = link(port, "sh", "msh", "/data/link/console.msh", ok=None, timeout=200)
-            if "did not answer" in ran:
-                print("SKIP: link: console: the shell does not take the link's lines yet (800-APP-0102)", flush=True)
-            else:
-                require(ran, "THE LINK CONSOLE RAN THIS SCRIPT")
-                assert re.search(r"\[LINK\] COMMAND \d+: msh /data/link/console\.msh", vm.command("dmesg -s link", raw=True)), "the whole line is logged"
-                require(vm.command("dmesg -s shell", raw=True), "[SHELL] FOR THE LINK'S CONSOLE THE SHELL RAN MSH")
-                require(link(port, "sh", "mode", ok=False), "refused")
-                console = True
+            require(link(port, "sh", "msh", "/data/link/console.msh", timeout=200), "THE LINK CONSOLE RAN THIS SCRIPT")
+            assert re.search(r"\[LINK\] COMMAND \d+: msh /data/link/console\.msh", vm.command("dmesg -s link", raw=True)), "the whole line is logged"
+            require(vm.command("dmesg -s shell", raw=True), "[SHELL] FOR THE LINK'S CONSOLE THE SHELL RAN MSH")
+            require(link(port, "sh", "mode", ok=False), "refused")
         finally:
             vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
           "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again; "
-          "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line"
-          + ("; with link-console a script put over the link ran as the console's, refused without it, mode refused in both" if console else ""), flush=True)
+          "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line; the shell's lines over the "
+          "link answered, a policy change refused and a secret kept out of the log; with link-console a script put over the link "
+          "ran as the console's, refused without it, mode refused in both", flush=True)
 
 
 def modes_suite(args):
