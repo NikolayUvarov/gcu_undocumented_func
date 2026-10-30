@@ -224,9 +224,36 @@ fn the_command_line_without_a_screen() {
     assert_eq!(parse("join MIND-TEST --passphrase-file /data/wifijoin.txt"),
                Ok(Some(Command::Join { ssid: b"MIND-TEST".to_vec(), file: Some("/data/wifijoin.txt".into()), remember: false })));
     assert_eq!(parse("join \"Cafe guests\" --remember"), Ok(Some(Command::Join { ssid: b"Cafe guests".to_vec(), file: None, remember: true })));
-    for wrong in ["join", "join --remember", "join A --passphrase-file", "join A --passphrase-file f --passphrase-file g", "join A B", "scan", "status now"] {
+    assert_eq!(parse("scan"), Ok(Some(Command::Scan)));
+    for wrong in ["join", "join --remember", "join A --passphrase-file", "join A --passphrase-file f --passphrase-file g", "join A B", "scan now", "status now"] {
         assert_eq!(parse(wrong), Err(headless::USAGE), "{wrong}");
     }
+}
+
+// 550-APP-0117 (for 550-DRV-0042, 0045): `wifi scan` as text, strongest first, the joined one marked, then the count.
+#[test]
+fn a_scan_without_a_screen_lists_the_networks_strongest_first() {
+    let mut demo = Demo::new();
+    let (code, text) = headless::networks(&mut demo);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(code, headless::JOINED);
+    assert_eq!(lines.len(), 11, "{text}");
+    assert_eq!(lines[0], "[WIFI] NETWORK \"MIND-Lab\" 02:4D:49:4E:44:01 CHANNEL 6 -48 DBM WPA2");
+    assert_eq!(lines[3], "[WIFI] NETWORK \"Cafe guests\" 02:43:41:46:45:04 CHANNEL 1 -71 DBM OPEN");
+    assert_eq!(lines[4], "[WIFI] NETWORK (hidden) 02:48:49:44:45:05 CHANNEL 6 -77 DBM WPA2");
+    assert_eq!(lines[6], "[WIFI] NETWORK \"Caf\\xE9 TKIP\" 02:54:4B:49:50:07 CHANNEL 9 -84 DBM OTHER", "a byte that is not UTF-8 shown as join's names show it");
+    assert_eq!(lines[10], "[WIFI] SCAN: 10 NETWORKS");
+    let levels: Vec<u32> = lines[..10].iter().map(|l| l.split(" -").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap()).collect();
+    assert!(levels.windows(2).all(|w| w[0] <= w[1]), "strongest first: {levels:?}");
+    // Joined and remembered: marked on its own line, the other MIND-Lab not.
+    let _ = join_with(&mut demo, b"MIND-Lab", DEMO_PASSPHRASE, true);
+    let (_, text) = headless::networks(&mut demo);
+    assert!(text.lines().next().unwrap().ends_with("-48 DBM WPA2 REMEMBERED JOINED"), "{text}");
+    let other = text.lines().find(|l| l.contains("02:4D:49:4E:44:02")).unwrap();
+    assert!(other.ends_with("-63 DBM WPA2 REMEMBERED"), "the other access point of the network: {other}");
+    // No station: 3 and its reason.
+    let (code, text) = headless::networks(&mut Absent(String::from("no station client")));
+    assert_eq!((code, text.as_str()), (headless::NO_STATION, "[WIFI] NO STATION: no station client"));
 }
 
 #[test]

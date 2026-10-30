@@ -1280,6 +1280,14 @@ def shell_suite(vm):
                 return seen
             time.sleep(.01)
         raise AssertionError(f"Timeout waiting for {fragment!r} and a prompt: {vm.output[-3000:]}")
+    # 000-APP-0115 (for 000-KRN-0188): a line of 200 characters written to the serial line at once arrives whole; the
+    # shell's loop used to keep 64 bytes of one pass and drop the rest, the newline with it.
+    marker = "".join("0123456789ABCDEF"[i % 16] for i in range(193))
+    vm.process.stdin.write(f"logger {marker}\r".encode())
+    vm.process.stdin.flush()
+    vm.expect("MIND> ", timeout=20, after=marker)
+    require(vm.command("dmesg -s shell"), marker)
+    vm.output = ""
     # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
     keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
     # Delete: "cpusX", Left, Delete -> "cpus".
@@ -7994,6 +8002,11 @@ def wifi_join_check(vm):
     run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90, "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # 550-APP-0117 (for 550-DRV-0042, 0045): the networks as text, the joined one marked, then their count.
+    scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
+    scanned += vm.command("dmesg -s wifi", raw=True)
+    assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 -\d+ DBM WPA2( REMEMBERED)? JOINED', scanned), scanned[-2000:]
+    assert re.search(r"\[WIFI\] SCAN: \d+ NETWORKS?", scanned), scanned[-2000:]
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
     # network, and its gateway answers a ping through the WPA2 link.
     require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
@@ -8032,7 +8045,8 @@ def wifi_join_check(vm):
     run("wifi countries", 30, "[WIFI] COUNTRIES: NO CATALOGUE IN THIS STATION")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
-          "station's reason, MIND-TEST joined, wifi status and wifi leave; wifi country: no catalogue in this station", flush=True)
+          "station's reason, MIND-TEST joined, wifi status, wifi scan (MIND-TEST marked joined) and wifi leave; wifi country: no "
+          "catalogue in this station", flush=True)
     # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
     sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
     offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))

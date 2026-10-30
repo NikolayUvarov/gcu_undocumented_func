@@ -1437,11 +1437,13 @@ impl Shell {
     }
 }
 
-// UART events decoded in one pass of the main loop (the 16550 FIFO holds 16 bytes; a sequence yields at most two).
+// UART events decoded in one pass of the main loop: the loop reads only what they have room for, as QEMU refills the
+// 16550's FIFO at each read (000-APP-0115); a byte yields at most two.
 struct Events { list: [Option<Event>; 64], len: usize }
 impl Events {
     fn new() -> Self { Self { list: [None; 64], len: 0 } }
     fn push(&mut self, event: Event) { if self.len < self.list.len() { self.list[self.len] = Some(event); self.len += 1; } }
+    fn room(&self) -> usize { self.list.len() - self.len }
     fn as_slice(&self) -> impl Iterator<Item = &Event> { self.list[..self.len].iter().flatten() }
     fn clear(&mut self) { self.len = 0; }
 }
@@ -1539,7 +1541,11 @@ fn main(info: &'static BootInfo) {
         shell.show_log(false);
         step(&mut start, "NEW LINES OF THE LOG (LOGD)");
         let now = mind::time::uptime_ms() as u64;
-        while let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) {
+        // Only as many bytes as this pass's events hold (000-APP-0115, for 000-KRN-0188): QEMU refills the FIFO at each
+        // read, and the rest waits in the UART for the next pass rather than being dropped. A byte gives at most two
+        // events and the poll below one more.
+        while events.room() >= 3 {
+            let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) else { break };
             vt.feed(byte, now, &mut |event| events.push(event));
         }
         step(&mut start, "THE SERIAL LINE");
