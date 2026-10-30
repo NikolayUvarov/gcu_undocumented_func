@@ -955,6 +955,28 @@ fn a_tree_missing_a_files_block_is_incomplete() {
 }
 
 #[test]
+fn a_tree_that_needs_more_steps_than_the_store_gives_is_refused() {
+    use tree::Kind::{Directory, File};
+    // A walk takes at most four steps for each block the index holds, and 64 more: 320 for 64 slots. A directory whose
+    // entries all name one subdirectory of one file takes 1 + 4 per entry.
+    let mut medium = Memory::new(512);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let x = store.put(Codec::Raw, b"x").unwrap();
+    let sub = directory(&mut store, &[entry("f", File, 1, x)]);
+    let names: Vec<String> = (0..100).map(|k| format!("e{k:03}")).collect();
+    let wide = |n: usize| names[..n].iter().map(|name| entry(name, Directory, 1, sub)).collect::<Vec<_>>();
+    let (within, past) = (directory(&mut store, &wide(79)), directory(&mut store, &wide(80)));
+    assert_eq!(store.publish(b"within", 0, &within, OWNER), Ok(1));
+    assert_eq!(store.usage(OWNER).retained, 79);
+    // Refused as a tree out of shape, with nothing written; so are a pin and a commit of it.
+    assert_eq!(store.publish(b"past", 0, &past, OWNER), Err(Error::Invalid));
+    assert_eq!(store.pin(&past, OWNER), Err(Error::Invalid));
+    assert_eq!(store.commit(&[Update { name: b"past", expected: 0, root: Some(past) }], OWNER), Err(Error::Invalid));
+    assert_eq!(store.resolve(b"past"), Err(Error::NotFound));
+}
+
+#[test]
 fn a_collection_stopped_in_the_middle_is_finished_by_the_next_mount() {
     let mut medium = Memory::new(64);
     let x;

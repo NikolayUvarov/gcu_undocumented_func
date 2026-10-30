@@ -248,18 +248,18 @@ fn a_walk_visits_exactly_the_blocks_of_a_tree() {
     let total = inner_total + huge.size;
     let mut buffer = Box::new([0u8; CHUNK]);
     let mut seen = HashSet::new();
-    assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, cid| { seen.insert(*cid); Ok(()) }), Ok(total));
+    assert_eq!(walk(&mut blocks, &root, &mut buffer, u64::MAX, |_, cid| { seen.insert(*cid); Ok(()) }), Ok(total));
     // Every block stored, and nothing else.
     assert_eq!(seen, blocks.blocks.keys().copied().collect());
-    assert_eq!(size(&mut blocks, &root, &mut buffer), Ok(total));
+    assert_eq!(size(&mut blocks, &root, &mut buffer, u64::MAX), Ok(total));
     // A file is a root too, walked as `dag` walks it.
     let (mut by_tree, mut by_dag) = (Vec::new(), Vec::new());
-    assert_eq!(walk(&mut blocks, &huge.cid, &mut buffer, |_, cid| { by_tree.push(*cid); Ok(()) }), Ok(huge.size));
+    assert_eq!(walk(&mut blocks, &huge.cid, &mut buffer, u64::MAX, |_, cid| { by_tree.push(*cid); Ok(()) }), Ok(huge.size));
     assert_eq!(dag::walk(&mut blocks, &huge.cid, &mut buffer, |_, cid| { by_dag.push(*cid); Ok(()) }), Ok(huge.size));
     assert_eq!(by_tree, by_dag);
-    assert_eq!(size(&mut blocks, &huge.cid, &mut buffer), Ok(huge.size));
+    assert_eq!(size(&mut blocks, &huge.cid, &mut buffer, u64::MAX), Ok(huge.size));
     // A visit that refuses stops the walk with its error.
-    assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, _| Err(Error::Full)), Err(Error::Full));
+    assert_eq!(walk(&mut blocks, &root, &mut buffer, u64::MAX, |_, _| Err(Error::Full)), Err(Error::Full));
 }
 
 #[test]
@@ -267,12 +267,12 @@ fn a_missing_block_is_not_found_and_a_changed_one_corrupt() {
     let (mut blocks, root, total, [sub, small, big]) = sample();
     let mut buffer = Box::new([0u8; CHUNK]);
     let has = |b: &mut Memory, cid: &Cid| if b.has(cid)? { Ok(()) } else { Err(Error::NotFound) };
-    assert_eq!(walk(&mut blocks, &root, &mut buffer, has), Ok(total));
+    assert_eq!(walk(&mut blocks, &root, &mut buffer, u64::MAX, has), Ok(total));
     // Each block missing in turn, the chunks too.
     let all: Vec<Cid> = blocks.blocks.keys().copied().collect();
     for cid in &all {
         let data = blocks.blocks.remove(cid).unwrap();
-        assert_eq!(walk(&mut blocks, &root, &mut buffer, has), Err(Error::NotFound), "{cid}");
+        assert_eq!(walk(&mut blocks, &root, &mut buffer, u64::MAX, has), Err(Error::NotFound), "{cid}");
         blocks.blocks.insert(*cid, data);
     }
     // The root, a directory below it, a file of one chunk and a file's root node, each answered with other bytes.
@@ -281,8 +281,8 @@ fn a_missing_block_is_not_found_and_a_changed_one_corrupt() {
         let last = forged.len() - 1;
         forged[last] ^= 1;
         blocks.replace.insert(cid, forged);
-        assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, _| Ok(())), Err(Error::Corrupt), "{cid}");
-        assert_eq!(size(&mut blocks, &root, &mut buffer), Err(Error::Corrupt), "{cid}");
+        assert_eq!(walk(&mut blocks, &root, &mut buffer, u64::MAX, |_, _| Ok(())), Err(Error::Corrupt), "{cid}");
+        assert_eq!(size(&mut blocks, &root, &mut buffer, u64::MAX), Err(Error::Corrupt), "{cid}");
         blocks.replace.clear();
     }
 }
@@ -304,16 +304,16 @@ fn entries_that_disagree_with_their_objects_are_refused() {
         ("a directory named as a file", Kind::File, 1, one),
     ] {
         let root = put_dir(&mut blocks, &[Entry { name: b"e", kind, size: claimed, cid }]);
-        assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, _| Ok(())), Err(Error::Shape), "{case}");
-        assert_eq!(size(&mut blocks, &root, &mut buffer), Err(Error::Shape), "{case}");
+        assert_eq!(walk(&mut blocks, &root, &mut buffer, u64::MAX, |_, _| Ok(())), Err(Error::Shape), "{case}");
+        assert_eq!(size(&mut blocks, &root, &mut buffer, u64::MAX), Err(Error::Shape), "{case}");
     }
     // A directory of another version, as the root or below it; a node of neither schema.
     let other = blocks.put(Codec::DagCbor, &unhex("a261760267656e747269657380")).unwrap();
     let below = put_dir(&mut blocks, &[Entry { name: b"d", kind: Kind::Directory, size: 0, cid: other }]);
     let neither = blocks.put(Codec::DagCbor, &unhex("a1617601")).unwrap();
     for (root, error) in [(other, Error::Version), (below, Error::Version), (neither, Error::Format)] {
-        assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, _| Ok(())), Err(error));
-        assert_eq!(size(&mut blocks, &root, &mut buffer), Err(error));
+        assert_eq!(walk(&mut blocks, &root, &mut buffer, u64::MAX, |_, _| Ok(())), Err(error));
+        assert_eq!(size(&mut blocks, &root, &mut buffer, u64::MAX), Err(error));
     }
 }
 
@@ -329,9 +329,9 @@ fn a_tree_past_the_depth_is_refused() {
     }
     let mut buffer = Box::new([0u8; CHUNK]);
     // DEPTH directories from the root down, and one more.
-    assert_eq!(walk(&mut blocks, &chain[DEPTH - 1], &mut buffer, |_, _| Ok(())), Ok(3));
-    assert_eq!(walk(&mut blocks, &chain[DEPTH], &mut buffer, |_, _| Ok(())), Err(Error::Shape));
-    assert_eq!(size(&mut blocks, &chain[DEPTH], &mut buffer), Err(Error::Shape));
+    assert_eq!(walk(&mut blocks, &chain[DEPTH - 1], &mut buffer, u64::MAX, |_, _| Ok(())), Ok(3));
+    assert_eq!(walk(&mut blocks, &chain[DEPTH], &mut buffer, u64::MAX, |_, _| Ok(())), Err(Error::Shape));
+    assert_eq!(size(&mut blocks, &chain[DEPTH], &mut buffer, u64::MAX), Err(Error::Shape));
 }
 
 #[test]
@@ -351,6 +351,30 @@ fn files_past_u64_bytes_are_refused() {
     // Three of them are 3 * 2^62 bytes; four are more than u64.
     let three = put_dir(&mut blocks, &entries[..3]);
     let four = put_dir(&mut blocks, &entries);
-    assert_eq!(size(&mut blocks, &three, &mut buffer), Ok(3 << 62));
-    assert_eq!(size(&mut blocks, &four, &mut buffer), Err(Error::TooLarge));
+    assert_eq!(size(&mut blocks, &three, &mut buffer, u64::MAX), Ok(3 << 62));
+    assert_eq!(size(&mut blocks, &four, &mut buffer, u64::MAX), Err(Error::TooLarge));
 }
+
+#[test]
+fn a_walk_takes_at_most_the_steps_it_is_given() {
+    // A directory of 300 entries that all name the same subdirectory of one file: few blocks, many steps.
+    let mut blocks = Memory::default();
+    let inner = [file(&mut blocks, "f", b"x")];
+    let sub = dir(&mut blocks, "s", &inner);
+    let names: Vec<String> = (0..300).map(|k| format!("e{k:03}")).collect();
+    let wide: Vec<Entry> = names.iter().map(|n| Entry { name: n.as_bytes(), ..sub }).collect();
+    let root = put_dir(&mut blocks, &wide);
+    let mut buffer = [0u8; CHUNK];
+    // Each of the 300 entries is a step, its subdirectory a block visited, that one's entry a step and its file a block.
+    let needed = 1 + 300 * 4;
+    assert_eq!(walk(&mut blocks, &root, &mut buffer, needed, |_, _| Ok(())), Ok(300));
+    assert_eq!(walk(&mut blocks, &root, &mut buffer, needed - 1, |_, _| Ok(())), Err(Error::TooLarge));
+    // Sizing reads no file's blocks: its steps are the entries and the directories.
+    assert_eq!(size(&mut blocks, &root, &mut buffer, 1 + 300 * 3), Ok(300));
+    assert_eq!(size(&mut blocks, &root, &mut buffer, 300 * 3), Err(Error::TooLarge));
+    // A file's walk is counted too: each block it visits.
+    let (big, _) = store(&mut blocks, &pattern(9, 3 * CHUNK));
+    assert_eq!(walk(&mut blocks, &big, &mut buffer, 4, |_, _| Ok(())), Ok(3 * CHUNK as u64));
+    assert_eq!(walk(&mut blocks, &big, &mut buffer, 3, |_, _| Ok(())), Err(Error::TooLarge));
+}
+

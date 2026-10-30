@@ -1105,7 +1105,8 @@ impl<'a, D: Device> Store<'a, D> {
     // Walks the object or directory tree `root` through the store; `visit` sees the store and each block's CID.
     fn walk(&mut self, root: &Cid, visit: impl FnMut(&mut Self, &Cid) -> Result<(), dag::Error>) -> Result<u64, Error> {
         let scratch = self.scratch.take().ok_or(Error::Device)?;
-        let walked = tree::walk(self, root, scratch, visit);
+        let steps = self.steps();
+        let walked = tree::walk(self, root, scratch, steps, visit);
         self.scratch = Some(scratch);
         walked.map_err(|e| match e {
             dag::Error::NotFound => Error::Incomplete,
@@ -1115,21 +1116,25 @@ impl<'a, D: Device> Store<'a, D> {
         })
     }
 
+    // Steps a walk may take: four for each block the index can hold. A tree that needs more is refused as out of shape,
+    // so no root keeps the store at it longer than its medium's worth.
+    fn steps(&self) -> u64 { 4 * self.limit() as u64 + 64 }
+
     // The size of every retained object, for the owners' accounts: read from each root (a directory's from its nodes), in
     // its domain, once a mount is done.
     fn size_retained(&mut self) {
         let Some(scratch) = self.scratch.take() else { return };
-        let current = self.domain;
+        let (current, steps) = (self.domain, self.steps());
         for i in 0..self.names {
             self.domain = self.heads[i].domain;
             for k in 0..self.heads[i].count as usize {
-                if let Some(root) = self.heads[i].kept[k].root() { self.heads[i].kept[k].size = tree::size(self, &root, scratch).unwrap_or(0); }
+                if let Some(root) = self.heads[i].kept[k].root() { self.heads[i].kept[k].size = tree::size(self, &root, scratch, steps).unwrap_or(0); }
             }
         }
         for i in 0..self.pinned {
             self.domain = self.pins[i].domain;
             let root = self.pins[i].root();
-            self.pins[i].size = tree::size(self, &root, scratch).unwrap_or(0);
+            self.pins[i].size = tree::size(self, &root, scratch, steps).unwrap_or(0);
         }
         self.domain = current;
         self.scratch = Some(scratch);

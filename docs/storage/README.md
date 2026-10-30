@@ -75,10 +75,12 @@ A directory is a set of named files and subdirectories under one root CID (`libm
   - a file is walked as an object (`dag::walk`);
   - directories are kept on a stack of at most 32 from the root down; a deeper tree is refused as out of shape. A parent is read again from its CID on the way back, so the walk holds one block;
   - each directory node is checked against its CID and the schema, and each entry against what it names: its kind against the block it links, its size against the file's bytes or the directory's entries;
-  - it returns the bytes of the files under the root; a file named twice counts twice. `tree::size` gives the same from the directory nodes and each file's root block alone.
+  - it returns the bytes of the files under the root; a file named twice counts twice. `tree::size` gives the same from the directory nodes and each file's root block alone;
+  - **its work is bounded:** a walk is given a number of steps (an entry gone through, a block visited, a file's blocks included) and stops with `too-large` once it has taken them.
 - **In the block store:**
   - `put` takes a `dag-cbor` block that is an object's node or a directory, and refuses anything else (`invalid`); a mount counts a record of neither as corrupt.
-  - The store's walk is the tree's. A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`. A collection marks every block a retained directory reaches, so a directory's files are retained by the name or pin that holds it.
+  - The store's walk is the tree's. A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`.
+  - **A walk in the store takes at most four steps for each block its index can hold, and 64 more.** A tree that needs more is refused as out of shape (`invalid`), with nothing written. So a walk's work is bounded by the medium's size (MC-5.1). By count, not run here: a 3 GiB object of distinct chunks takes about 199 000 steps of the about 790 000 its index's 225 654 slots give. A collection marks every block a retained directory reaches, so a directory's files are retained by the name or pin that holds it.
   - An owner is charged the bytes of the files under a directory it retains; a mount reads them again with `tree::size`.
 - **Not built yet:** a working tree in memory, the publication of a changed tree by compare-and-swap, `storefs` (a `vfs.wit` provider) and the shell's commands. The store built for the platform takes directories, but no program there makes or reads one yet, and no QEMU suite tests them (MC-12.1, 12.3).
 
@@ -88,11 +90,13 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - every byte of a valid node changed to every other value is refused, or reads as exactly what it encodes;
   - names unsorted or twice, bad names, kinds and links, and a node over a block are refused;
   - the walk of a nested tree visits exactly its blocks;
-  - a missing block is `not-found`, a changed one `corrupt`; an entry that disagrees with its object, and a tree past the depth, are out of shape.
+  - a missing block is `not-found`, a changed one `corrupt`; an entry that disagrees with its object, and a tree past the depth, are out of shape;
+  - a walk and a sizing take exactly the steps counted, and one step fewer stops them.
 - `tests/blockstore_host.rs`:
   - a published tree keeps its files across a collection and a mount, an unretained one is freed, and a removed one goes;
   - a tree missing a file's block is `incomplete` for a publication, a pin and a commit;
-  - a directory node is stored and found again by a mount, and a `dag-cbor` block of neither schema is refused.
+  - a directory node is stored and found again by a mount, and a `dag-cbor` block of neither schema is refused;
+  - a tree that takes one step more than the store gives is refused for a publication, a pin and a commit, and one within is published.
 
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
 

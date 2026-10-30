@@ -142,14 +142,16 @@ pub fn decode(bytes: &[u8]) -> Result<Dir<'_>, Error> {
 /// Visits every block under `root`, a file or a directory: each directory node (then read and checked against its CID
 /// and the schema) and every block of each file (`dag::walk`). Each entry's size is checked against its object: a
 /// file's bytes, a directory's entries. The directories on the way down are a stack of (CID, next entry), each read
-/// again on the way back, so `buffer` is the only block held. Returns the bytes of the files under the root.
-pub fn walk<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], visit: impl FnMut(&mut B, &Cid) -> Result<(), Error>) -> Result<u64, Error> {
-    tour(blocks, root, buffer, true, visit)
+/// again on the way back, so `buffer` is the only block held. Returns the bytes of the files under the root; TooLarge
+/// once it has taken `steps` steps (an entry gone through, a block visited), so its work is bounded whatever the tree.
+pub fn walk<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], steps: u64, visit: impl FnMut(&mut B, &Cid) -> Result<(), Error>) -> Result<u64, Error> {
+    tour(blocks, root, buffer, true, steps, visit)
 }
 
-/// The bytes of the files under `root`, as `walk` returns them, from the directory nodes and each file's root alone.
-pub fn size<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK]) -> Result<u64, Error> {
-    tour(blocks, root, buffer, false, |_, _| Ok(()))
+/// The bytes of the files under `root`, as `walk` returns them, from the directory nodes and each file's root alone,
+/// within `steps` steps (an entry gone through, a directory visited).
+pub fn size<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], steps: u64) -> Result<u64, Error> {
+    tour(blocks, root, buffer, false, steps, |_, _| Ok(()))
 }
 
 // The entries of the directory `cid` names; none for a file (a `raw` one is not read).
@@ -164,7 +166,11 @@ fn file<B: Blocks>(blocks: &mut B, cid: &Cid, buffer: &mut [u8; CHUNK], whole: b
     if whole { dag::walk(blocks, cid, buffer, visit) } else { dag::size(blocks, cid, buffer) }
 }
 
-fn tour<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], whole: bool, mut visit: impl FnMut(&mut B, &Cid) -> Result<(), Error>) -> Result<u64, Error> {
+fn tour<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], whole: bool, steps: u64, mut visit: impl FnMut(&mut B, &Cid) -> Result<(), Error>) -> Result<u64, Error> {
+    // Each entry and each block visited is a step, the walks of files' included.
+    let left = core::cell::Cell::new(steps);
+    let step = || left.get().checked_sub(1).map(|n| left.set(n)).ok_or(Error::TooLarge);
+    let mut visit = |b: &mut B, cid: &Cid| { step()?; visit(b, cid) };
     let Some(count) = entries(blocks, root, buffer)? else { return file(blocks, root, buffer, whole, &mut visit) };
     visit(blocks, root)?;
     // The directories from the root down: each one's CID, the entries its parent says it has, the next entry.
@@ -181,6 +187,7 @@ fn tour<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], whole: 
         };
         if dir.len() as u64 != count { return Err(Error::Shape); }
         if next == dir.len() { depth -= 1; continue; }
+        step()?;
         stack[depth - 1].2 += 1;
         let Entry { kind, size, cid, .. } = dir.entry(next);
         match kind {
