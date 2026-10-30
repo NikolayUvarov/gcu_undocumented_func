@@ -96,7 +96,7 @@
     - `dzen-clock`, which does not ask, has no `SLOT_NN`;
     - once the first ends, its copy is gone from the shell and badge 1 is retired and taken again while 2 is held;
     - after the shell is killed and `init` starts it again, the old shell's programs, still running, hold no client, the new shell retired every badge, and the next start gets badge 1.
-  - aarch64 is not run yet.
+  - on aarch64 QEMU (`virt`, 4 CPUs, TCG) the `nnd` suite passed too, on the branch's 70e0220b.
 - **Left:** `nn load | run | bench`; `nncheck`'s native steps (section 8, steps 1–9) with `NRL`'s model on the image; `nnd`'s two scopes; the profile entry after the native run.
 
 ## Acceptance criteria
