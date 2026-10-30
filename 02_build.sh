@@ -82,7 +82,6 @@ USER_CRATES=(
     "link:link:link.elf"
     "blockstore:blockstore:blockstore.elf"
     "blocks:blocks:blocks.elf"
-    "storefs:storefs:storefs.elf"
     "tally:tally:tally.elf"
     "gpio:gpio:gpio.elf"
     "battery:battery:battery.elf"

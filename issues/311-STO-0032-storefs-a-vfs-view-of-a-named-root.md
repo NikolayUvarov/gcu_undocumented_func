@@ -57,6 +57,7 @@ A tree in the store is read and changed only through `blocks tree`, one command 
 - **Tested:**
   - `scripts/host_tests.sh` whole (`storefs` 12) on eea5d440;
   - both images built with `storefs.elf`, and `store`, `storefaults` and `vfs` still pass on x86 and aarch64, on `un-rizen_2a8b108d5593` through Effector.
+- **Off the images** since 2026-10-30 (the landing round of 16:17 returned it): on a disk, `storefs.elf` was listed as a program the user runs (`wm`'s menu, `list -l`). It stays out of `02_build.sh` until 311-KRN-0190 makes it a boot image.
 - **Not run:** nothing starts the service until 311-KRN-0190. The QEMU criteria wait for it, and for APP's lending to programs.
 
 ## Acceptance criteria
