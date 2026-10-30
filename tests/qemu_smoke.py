@@ -2842,7 +2842,7 @@ def nn_clients_check(vm):
             require(out, line)
 
     def background():  # the program's PID as the harness numbers programs
-        return int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", vm.command("nncheck hold 120 &", raw=True))[1])
+        return int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", vm.command("run nncheck hold 120 &", raw=True))[1])
 
     endpoint = nnd_endpoint()
     require(vm.command("dmesg -s shell", raw=True), "[SHELL] NND: THE BADGES OF AN EARLIER SHELL RETIRED")
