@@ -34,7 +34,8 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "RTL8821CE BAR2 initially non-mastering; 1 MiB DMA below 4 GiB; read-only VFS for its firmware; a wlanhw endpoint for wlan; polled, no interrupt",
     "a USB client for Bluetooth controllers; read-only VFS for its patch",
     "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
-    "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
+    "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
+    "its endpoint, which badges its clients; the block store's client that may get, put and publish", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
     "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
     "observe privilege", "read-only scopes of data/models/ and models:; its quota and workers by its line of data/memory.conf, read at each start",
@@ -646,6 +647,15 @@ impl Init {
                 if self.present("keystore") { grants.add(3, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_BLOCKSTORE)?, CLIENT); }
                 else { mind::println!("[INIT] BLOCKSTORE STARTS WITHOUT ITS SECRETS CLIENT: KEYSTORE DOES NOT RUN (MC-6.8)"); }
             }
+            // The store's file face (311-STO-0032): `vfs.wit` over the store's trees, with the block store's client that
+            // may get, put and publish where `tally` and `blocks` find theirs. It badges its own clients, as the store
+            // does, so its endpoint keeps the right to (311-KRN-0190). Without the store it says so, and serves nothing.
+            "storefs" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "storefs")?, ALL | CAP_BADGE);
+                if self.present("blockstore") {
+                    grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH)?, CLIENT);
+                }
+            }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 // It badges the file clients it hands out (idl/vfs.wit), so its endpoint keeps the right to (000-KRN-0073).
@@ -927,6 +937,8 @@ impl Init {
                     // One that may only get, for programs that only read (300-KRN-0024).
                     grants.add(SLOT_BLOCKSTORE_READ, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET)?, CLIENT);
                 }
+                // storefs's client that writes, as vfs_server's does (BADGE_USER); the shell lends it on (311-KRN-0190).
+                if self.present("storefs") { grants.add(SLOT_STOREFS, self.badged(&mut minted, "storefs", mind::fs::BADGE_USER)?, CLIENT); }
                 // The firmware's variables (the boot order), lent on with the user's consent (351-KRN-0027).
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
                 if self.present("gpio") { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }

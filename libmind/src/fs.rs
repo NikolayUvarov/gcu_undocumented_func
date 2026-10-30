@@ -72,20 +72,34 @@ impl From<Error> for crate::sys::Error {
 // A generated call: the IPC failure and the service's error both become `Error`.
 fn call<T>(result: crate::sys::Result<core::result::Result<T, vfs::Error>>) -> Result<T> { result?.map_err(Error::from) }
 
-struct Client { roots: [(u32, bool); 4] } // root handles of "", "ram", "log" and "models", opened once
+mod volumes;
+pub use volumes::{on_vfs, VFS_VOLUMES};
+
+// A root handle, opened once per volume, and the slot of the server it belongs to.
+#[derive(Clone, Copy)]
+struct Root { name: [u8; 16], len: usize, handle: u32, server: usize }
+const ROOTS: usize = 6; // vfs_server's four, and two of storefs's, which holds at most two trees for a client
+struct Client { roots: [Option<Root>; ROOTS] }
 struct State(UnsafeCell<Option<Client>>);
 unsafe impl Sync for State {} // processes are single-threaded
 static STATE: State = State(UnsafeCell::new(None));
 
-// The VFS capability calls go to: SLOT_VFS, or the one a launcher lent (`use_endpoint`).
+// The VFS capability calls go to: SLOT_VFS (and SLOT_STOREFS for storefs's volumes), or the one a launcher lent
+// (`use_endpoint`) for every volume.
 static ENDPOINT: AtomicUsize = AtomicUsize::new(SLOT_VFS);
-fn endpoint() -> Endpoint { Endpoint(ENDPOINT.load(Ordering::Relaxed)) }
+
+// The slot `volume`'s calls go to: a lent client's for every volume; else vfs_server's for its own, and storefs's for the
+// others when the program holds its client. Without one a store volume is NotFound, and nothing is asked.
+fn server(volume: &str) -> Result<usize> {
+    let store = (crate::dev::cap_info(SLOT_STOREFS).0 == CAP_KIND_ENDPOINT).then_some(SLOT_STOREFS);
+    volumes::route(volume, ENDPOINT.load(Ordering::Relaxed), SLOT_VFS, store).ok_or(Error::NotFound)
+}
 
 /// Sends all later calls to `endpoint` (e.g. a VFS capability a launcher lent in `SLOT_FILE`, which may write where the
 /// program's own may not). Handles are bound to the capability they were opened with, so the roots are opened again.
 pub fn use_endpoint(endpoint: Endpoint) {
     ENDPOINT.store(endpoint.0, Ordering::Relaxed);
-    if let Some(c) = unsafe { &mut *STATE.0.get() } { c.roots = [(0, false); 4]; }
+    if let Some(c) = unsafe { &mut *STATE.0.get() } { c.roots = [None; ROOTS]; }
 }
 
 // With a scoped client (`use_scope`): the volume and the directory its root stands for.
@@ -126,7 +140,7 @@ fn locate(path: &str) -> Result<(&str, &str)> {
 
 fn client() -> Result<&'static mut Client> {
     let slot = unsafe { &mut *STATE.0.get() };
-    if slot.is_none() { *slot = Some(Client { roots: [(0, false); 4] }); }
+    if slot.is_none() { *slot = Some(Client { roots: [None; ROOTS] }); }
     Ok(slot.as_mut().unwrap())
 }
 
@@ -138,11 +152,18 @@ pub fn split(path: &str) -> (&str, &str) {
     match path.find(':') { Some(i) if !path[..i].contains('/') => (&path[..i], path[i + 1..].trim_start_matches('/')), _ => ("", path.trim_start_matches('/')) }
 }
 
-fn root(volume: &str) -> Result<u32> {
-    let index = match volume { "" => 0, v if v.eq_ignore_ascii_case("ram") => 1, v if v.eq_ignore_ascii_case("log") => 2, v if v.eq_ignore_ascii_case("models") => 3, _ => return Err(Error::NotFound) };
+// The root of `volume` and its server's slot, opened once.
+fn root(volume: &str) -> Result<(u32, usize)> {
     let c = client()?;
-    if !c.roots[index].1 { let handle = call(vfs::root(endpoint(), volume))?; c.roots[index] = (handle, true); }
-    Ok(c.roots[index].0)
+    if let Some(r) = c.roots.iter().flatten().find(|r| r.name[..r.len].eq_ignore_ascii_case(volume.as_bytes())) { return Ok((r.handle, r.server)); }
+    if volume.len() > 16 { return Err(Error::NotFound); }
+    let server = server(volume)?;
+    let free = c.roots.iter().position(|r| r.is_none()).ok_or(Error::Handles)?;
+    let handle = call(vfs::root(Endpoint(server), volume))?;
+    let mut r = Root { name: [0; 16], len: volume.len(), handle, server };
+    r.name[..r.len].copy_from_slice(volume.as_bytes());
+    c.roots[free] = Some(r);
+    Ok((handle, server))
 }
 
 /// What `metadata` and `File::metadata` report: size, FAT modification stamp (see `fat_time`), `ENTRY_*` bits.
@@ -154,74 +175,78 @@ pub struct Metadata { pub size: u32, pub modified: u32, pub attributes: u8, pub 
 pub struct VolumeInfo { pub label: [u8; 11], pub fat_bits: u8, pub bytes: u64, pub free: u64, pub cluster: u32, pub writable: bool }
 impl VolumeInfo { pub fn label(&self) -> &str { core::str::from_utf8(&self.label).unwrap_or("").trim_end() } }
 
-fn stat(handle: u32) -> Result<Metadata> {
-    let e = call(vfs::stat(endpoint(), handle))?;
+fn stat(server: usize, handle: u32) -> Result<Metadata> {
+    let e = call(vfs::stat(Endpoint(server), handle))?;
     Ok(Metadata { size: e.size, modified: e.modified, attributes: e.attributes, is_dir: e.directory })
 }
 
-fn close(handle: u32) { let _ = vfs::close(endpoint(), handle); }
+fn close(server: usize, handle: u32) { let _ = vfs::close(Endpoint(server), handle); }
 
-/// A directory handle.
-pub struct Dir { handle: u32, owned: bool }
+/// A directory handle, and the slot of the server that holds it.
+pub struct Dir { handle: u32, owned: bool, server: usize }
 
 impl Dir {
-    /// The root of a volume (`""`: the boot disk, `"ram"`, `"models"`: the model disk, read-only).
-    pub fn root(volume: &str) -> Result<Self> { Ok(Self { handle: root(volume)?, owned: false }) }
+    /// The root of a volume (`""`: the boot disk, `"ram"`, `"models"`: the model disk, read-only; another: storefs's).
+    pub fn root(volume: &str) -> Result<Self> { let (handle, server) = root(volume)?; Ok(Self { handle, owned: false, server }) }
     /// A directory by path (`ram:docs`, `data/notes`).
     pub fn open(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; Self::root(volume)?.dir(rest, false) }
     /// The same, made with its parents if missing.
     pub fn create(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; Self::root(volume)?.dir(rest, true) }
     /// A directory below this one.
     pub fn dir(&self, path: &str, create: bool) -> Result<Self> {
-        if path.is_empty() { return Ok(Self { handle: self.handle, owned: false }); }
-        Ok(Self { handle: call(vfs::open_dir(endpoint(), self.handle, path, create))?, owned: true })
+        if path.is_empty() { return Ok(Self { handle: self.handle, owned: false, server: self.server }); }
+        Ok(Self { handle: call(vfs::open_dir(self.endpoint(), self.handle, path, create))?, owned: true, server: self.server })
     }
     /// A file below this one with `MODE_*` bits.
     pub fn file(&self, path: &str, mode: u8) -> Result<File> {
-        let handle = call(vfs::open(endpoint(), self.handle, path, mode))?;
-        let size = stat(handle).map(|m| m.size as usize).unwrap_or(0);
-        Ok(File { handle, size, position: 0 })
+        let handle = call(vfs::open(self.endpoint(), self.handle, path, mode))?;
+        let size = stat(self.server, handle).map(|m| m.size as usize).unwrap_or(0);
+        Ok(File { handle, size, position: 0, server: self.server })
     }
     /// Calls `visit` for every entry; returns their number.
     pub fn list(&self, mut visit: impl FnMut(&DirEntry)) -> Result<usize> {
         let mut start = 0u32;
         loop {
-            let entries = call(vfs::list(endpoint(), self.handle, start))?;
+            let entries = call(vfs::list(self.endpoint(), self.handle, start))?;
             if entries.is_empty() { return Ok(start as usize); }
             for e in entries.as_slice() { visit(&DirEntry { name: e.name.as_str().as_bytes(), size: e.size, is_dir: e.directory, flags: e.attributes, modified: e.modified }); }
             start += entries.len() as u32;
         }
     }
     /// Removes a file or an empty directory below this one.
-    pub fn remove(&self, path: &str) -> Result<()> { call(vfs::remove(endpoint(), self.handle, path)) }
+    pub fn remove(&self, path: &str) -> Result<()> { call(vfs::remove(self.endpoint(), self.handle, path)) }
     /// Renames or moves `from` (below this directory) to `to` below `target` (the same volume).
-    pub fn rename(&self, from: &str, target: &Dir, to: &str) -> Result<()> { call(vfs::rename(endpoint(), self.handle, from, target.handle, to)) }
-    pub fn metadata(&self) -> Result<Metadata> { stat(self.handle) }
+    pub fn rename(&self, from: &str, target: &Dir, to: &str) -> Result<()> {
+        if target.server != self.server { return Err(Error::Invalid); }
+        call(vfs::rename(self.endpoint(), self.handle, from, target.handle, to))
+    }
+    pub fn metadata(&self) -> Result<Metadata> { stat(self.server, self.handle) }
+    fn endpoint(&self) -> Endpoint { Endpoint(self.server) }
     /// The volume this directory is on.
     pub fn volume(&self) -> Result<VolumeInfo> {
-        let v = call(vfs::volume(endpoint(), self.handle))?;
+        let v = call(vfs::volume(self.endpoint(), self.handle))?;
         let mut label = [b' '; 11];
         for (i, b) in v.label.as_str().bytes().take(11).enumerate() { label[i] = b; }
         Ok(VolumeInfo { label, fat_bits: v.fat_bits, bytes: v.bytes, free: v.free, cluster: v.cluster, writable: v.writable })
     }
     /// Writes what is cached for this volume to the disk.
-    pub fn flush(&self) -> Result<()> { call(vfs::flush(endpoint(), self.handle)) }
+    pub fn flush(&self) -> Result<()> { call(vfs::flush(self.endpoint(), self.handle)) }
     /// Writes a new empty volume labelled `label` over the RAM disk (`self` is the root of `ram`; needs the user's
     /// client). Handles below the root end; roots stay valid.
-    pub fn format(&self, label: &str) -> Result<()> { call(vfs::format(endpoint(), self.handle, label)) }
+    pub fn format(&self, label: &str) -> Result<()> { call(vfs::format(self.endpoint(), self.handle, label)) }
     /// A client confined to this directory (vfs.wit `scope`), received in the caller's fixed slot `receive`; it may
     /// change files only if `writable` and this handle may. For a launcher that gives a program one directory.
-    pub fn scope(&self, writable: bool, receive: usize) -> Result<usize> { call(vfs::scope(endpoint(), self.handle, writable, receive)).map(|()| receive) }
+    pub fn scope(&self, writable: bool, receive: usize) -> Result<usize> { call(vfs::scope(self.endpoint(), self.handle, writable, receive)).map(|()| receive) }
     /// Checks this directory's volume without changing it; `visit` sees the report (idl/vfs.wit `report`).
     pub fn check<T>(&self, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> {
-        Ok(visit(&call(vfs::check(endpoint(), self.handle))?))
+        Ok(visit(&call(vfs::check(self.endpoint(), self.handle))?))
     }
 }
 
-impl Drop for Dir { fn drop(&mut self) { if self.owned { close(self.handle); } } }
+impl Drop for Dir { fn drop(&mut self) { if self.owned { close(self.server, self.handle); } } }
 
-/// An open file (the handle belongs to the process and is closed in Drop).
-pub struct File { handle: u32, size: usize, position: usize }
+/// An open file (the handle belongs to the process and is closed in Drop), and the slot of the server that holds it.
+pub struct File { handle: u32, size: usize, position: usize, server: usize }
 
 impl File {
     /// Opens a file to read.
@@ -238,7 +263,7 @@ impl File {
         let mut done = 0;
         while done < buffer.len() {
             let want = (buffer.len() - done).min(CHUNK);
-            let got = call(vfs::read(endpoint(), self.handle, (offset + done) as u32, want as u32, &mut buffer[done..done + want]))?;
+            let got = call(vfs::read(self.endpoint(), self.handle, (offset + done) as u32, want as u32, &mut buffer[done..done + want]))?;
             done += got;
             if got < want { break; }
         }
@@ -251,7 +276,7 @@ impl File {
     /// 262-KRN-0162).
     pub fn fill(&self, offset: u64, target: usize) -> Result<u64> {
         let lent = crate::ipc::mint(target, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0)?;
-        let result = call(vfs::fill(endpoint(), self.handle, offset, lent));
+        let result = call(vfs::fill(self.endpoint(), self.handle, offset, lent));
         let _ = crate::ipc::revoke(lent);
         let _ = crate::ipc::drop_cap(lent);
         result
@@ -261,7 +286,7 @@ impl File {
         let mut done = 0;
         while done < data.len() {
             let n = (data.len() - done).min(CHUNK);
-            let wrote = call(vfs::write(endpoint(), self.handle, (offset + done) as u32, &data[done..done + n]))? as usize;
+            let wrote = call(vfs::write(self.endpoint(), self.handle, (offset + done) as u32, &data[done..done + n]))? as usize;
             if wrote == 0 { return Err(Error::NoSpace); }
             done += wrote;
         }
@@ -270,13 +295,14 @@ impl File {
     }
     pub fn write(&mut self, data: &[u8]) -> Result<usize> { let n = self.write_at(self.position, data)?; self.position += n; Ok(n) }
     /// Sets the size (shorter frees space, longer reads zeros).
-    pub fn truncate(&mut self, size: usize) -> Result<()> { call(vfs::truncate(endpoint(), self.handle, size as u32))?; self.size = size; self.position = self.position.min(size); Ok(()) }
-    pub fn metadata(&self) -> Result<Metadata> { stat(self.handle) }
+    pub fn truncate(&mut self, size: usize) -> Result<()> { call(vfs::truncate(self.endpoint(), self.handle, size as u32))?; self.size = size; self.position = self.position.min(size); Ok(()) }
+    pub fn metadata(&self) -> Result<Metadata> { stat(self.server, self.handle) }
     /// Writes what is cached for this file's volume to the disk.
-    pub fn flush(&self) -> Result<()> { call(vfs::flush(endpoint(), self.handle)) }
+    pub fn flush(&self) -> Result<()> { call(vfs::flush(self.endpoint(), self.handle)) }
+    fn endpoint(&self) -> Endpoint { Endpoint(self.server) }
 }
 
-impl Drop for File { fn drop(&mut self) { close(self.handle); } }
+impl Drop for File { fn drop(&mut self) { close(self.server, self.handle); } }
 
 /// Directory entry: `flags` are `ENTRY_*`, `modified` is FAT date << 16 | FAT time (see `fat_time`).
 pub struct DirEntry<'a> { pub name: &'a [u8], pub size: u32, pub is_dir: bool, pub flags: u8, pub modified: u32 }
@@ -312,10 +338,10 @@ pub fn metadata(path: &str) -> Result<Metadata> {
     match File::open(path) { Ok(file) => file.metadata(), Err(Error::IsDirectory) => Dir::open(path)?.metadata(), Err(e) => Err(e) }
 }
 
-/// The volume `name` (`""`, `"ram"`, `"log"` or `"models"`).
+/// The volume `name` (`""`, `"ram"`, `"log"`, `"models"` or a store volume).
 pub fn volume(name: &str) -> Result<VolumeInfo> { Dir::root(name)?.volume() }
 
-/// Checks volume `name` (`""`, `"ram"`, `"log"` or `"models"`) without changing it.
+/// Checks volume `name` (`""`, `"ram"`, `"log"`, `"models"` or a store volume) without changing it.
 pub fn check<T>(name: &str, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> { Dir::root(name)?.check(visit) }
 
 /// A program's own directory, `system/own/<name>/` (000-KRN-0170): the loader scopes it into SLOT_OWN for a program it
