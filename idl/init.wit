@@ -4,7 +4,9 @@
 /// the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
 /// may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
 /// Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
-package mind:init@1.11.0;
+/// A client badged `BADGE_NOTICE` (the Effector agent's, 1.12, 750-KRN-0194) may ask `stop-notice` and what any client
+/// may ask; it gets `denied` (`rights` for `run`) for every lifecycle change.
+package mind:init@1.12.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -79,4 +81,12 @@ interface init {
     /// read) or `unreadable` (no boot volume when init looked). Any client may ask.
     enum configuration { absent, read, ignored, unreadable }
     configuration: func() -> result<configuration, error>;
+    /// Why the caller is about to be stopped (1.12, 750-KRN-0194): `stop` by name, `restart` (by name, `replace` or the
+    /// machine's restart), or `power-off`.
+    enum stop-reason { stop, restart, power-off }
+    /// Waits until init decides to stop the caller, and says why (1.12, 750-KRN-0194). The caller then has 2 s to end on
+    /// its own; that end is not restarted, and past the 2 s init kills it as before. Only a running boot service may ask,
+    /// and init holds one call for each: a second one replaces the first, which is answered `failed`. Errors: denied (not
+    /// a running boot service), failed.
+    stop-notice: func() -> result<stop-reason, error>;
 }
