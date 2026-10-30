@@ -126,7 +126,7 @@ tries 3                                   # tries of a trial boot for an automat
     - release 6's bundle, a piece written twice, is staged in slot B and removed;
     - `apply` boots slot B on trial, and the trial is confirmed.
 
-  It has passed on x86 in QEMU. The bundle's reader also runs in the host tests (`tests/updater_host.rs`) on a bundle `release.py bundle` wrote and on hostile archives. No client of another badge has run against the install calls: the shell's `update` command is not there yet.
+  It has passed in QEMU on x86 and aarch64. The bundle's reader also runs in the host tests (`tests/updater_host.rs`) on a bundle `release.py bundle` wrote and on hostile archives. No client of another badge has run against the install calls: the shell's `update` command is not there yet.
 - **SSH** (351-NET-0004).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).

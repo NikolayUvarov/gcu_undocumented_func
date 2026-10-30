@@ -68,12 +68,18 @@
     - release 6's bundle, its second piece written twice: staged in slot B, then the bundle is removed;
     - `apply` (the word asked again) boots slot B on trial, and the trial is confirmed.
   - The two refusals the plan put on the host (`digest`, `signature`) are checked here, where the updater's built-in keys are.
-  - **x86: passed** locally in QEMU (about 3 minutes, 2026-10-30).
+  - **x86: passed** locally in QEMU (about 3 minutes, 2026-10-30), and on `i9` in the group `x86: the updater and an update through the link` (76d068d3, 16 minutes for the group).
+  - **aarch64: passed** on `PCU` in the group `aarch64: the updater and the modes` (76d068d3, 26 minutes for the group).
 - **Fixed on the way:** the updater received its requests with no slot for a caller's buffer, so the first buffer call (`install-begin`) was refused `invalid`. It now receives into slot 9, as the other services do; the stand-in too. This is also the tools track's request of 2026-10-28 in [requests-UPD.md](requests-UPD.md): `check`, `status` and `metadata` lend a buffer too, and 351-APP-0029 waited for it.
 
+- **Fixed on the way, too:** the stand-in served `update.wit` wherever it ran, so in the policy broker's place (the `updater` suite's silent-broker check) it answered `init`. It now serves only where it holds the firmware privilege, which the updater alone holds (76d068d3).
+
 **Left:**
-- the `install` suite on aarch64;
 - "another badge is `denied`" has no client to run it in QEMU: the shell holds the updater's unbadged client for its `update` command (351-APP-0029), which no program uses yet.
+
+## Landed (2026-10-30)
+
+In `main` since landing round 51 (57c2fd3d, 2026-10-30): `update.wit` 1.3, the updater's `install`, `release.py bundle` and the `install` suite, with the updater's receive slot. Left as above: "another badge is `denied`", once APP's `update` command (351-APP-0029) holds the shell's client.
 
 ## Related
 
