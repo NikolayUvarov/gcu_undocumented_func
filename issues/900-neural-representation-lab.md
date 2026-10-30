@@ -4,16 +4,18 @@
 
 **Recorded by:** the tools track, 2026-10-23, at the maintainer's request: "add this task as a separate track for neural networks". The source is the maintainer's handoff of 2026-10-23, version 1.0. It is kept as it was written, in Russian, in [docs/nrl/HANDOFF_RU.md](../docs/nrl/HANDOFF_RU.md). This issue is its statement in English, read against this repository: the Constitution of edition 1.6, the APIs that exist and the tasks that already plan the hardware.
 
-## Current branch status (2026-10-29)
+## Current branch status (2026-10-30)
 
 T06–T10 are complete for the declared bounded host profiles. Five requested autonomous extensions, 900-NRL-0020–0024, add optimizer recovery, incremental generation, full embedding training, a complete supported-model QSL bridge and a larger licensed study. The complete `bash nrl/tools/check.sh --expanded` run passes on `b44fbc0d`: **95 host tests**, zero failures/skips, four portable release builds and all CLI cycles including the larger study. New independent fixtures regenerate exactly under the pinned reference environments. [Final evidence](../nrl/reports/five-extensions-2026-10-26.json), [raw check log](../nrl/reports/five-extensions-check-2026-10-26.txt). This source reached main on 2026-10-28. Native service integration remains pending; new changes still use the landing queue.
 
 900-NRL-0025 now supplies the pinned native-service handoff: unchanged MIT graph, independent f64 reference/tolerance, exact writer encoding vectors and 16 host runtime scenarios. **99 host tests**, four portable builds and all standard CLI cycles pass on `50caca7e`; independent PyTorch regeneration matches. [Current evidence](../nrl/reports/native-conformance-2026-10-29.json), [contract](../nrl/specs/native-conformance-v0.md). APP/KRN received the handoff; native T11 remains open.
 
+Service update (2026-10-30): APP's `nnpkg`, `nnd` and `nn.wit` are implemented; KRN's boot grants landed in round 50. Remaining native work is APP's client/badge lifecycle, selection of the two granted file scopes and actual named-target model execution. 900-NRL-0026 adds live-export differential checking through the real portable parser/runtime/service on the host. [Current contract and scope](../nrl/specs/portable-import-check-v0.md). T11 remains open; the service is no longer absent. Current check on `007f0a42`: **102 NRL tests + 18 nnpkg tests, 70 live-export cases, three CLI profiles and six portable builds pass**. [Evidence](../nrl/reports/portable-import-2026-10-30.json).
+
 | Work | Current scope and outcome | Evidence |
 |---|---|---|
 | T06–T10 | Real trained decoder, resumable local fitting, shared metrics, measured mixed-plan search and student-input recovery | [Previous recovery](../nrl/reports/recovery-2026-10-26.json) |
-| T11 — partial | Portable sessions/budgets and pinned MIT reference/encoding/conformance handoff ready; native nnd/IDL/target evidence awaits APP/KRN | [Native boundary](../nrl/specs/native-boundary-v0.md), [handoff](../nrl/specs/native-conformance-v0.md) |
+| T11 — partial | Portable sessions/pinned handoff; APP importer/service/IDL and KRN grants exist; client/scopes/native model suite pending | [Native boundary](../nrl/specs/native-boundary-v0.md), [handoff](../nrl/specs/native-conformance-v0.md) |
 | T07/T10 extension | Shared AdamW, complete moments and exact checkpoint continuation; matched refreshed-input SGD comparison; dense fallback | [Saved optimizer comparison](../nrl/reports/adamw-example-2026-10-26/summary.json) |
 | T12 host | Prepared full forward and incremental sessions; exact logits/tokens and rollback, including a late numerical failure | [Generation contract](../nrl/specs/prepared-generation-v0.md), [paired study](../nrl/reports/generation-before-promotion-2026-10-26.json) |
 | T13 extension | Analytic lookup/mean/projection/L2 backward, graded contrastive AdamW, validation selection, standalone export and explicit trained-table retrieval profile | [Saved training and metrics](../nrl/reports/embedding-training-example-2026-10-26/summary.json) |
