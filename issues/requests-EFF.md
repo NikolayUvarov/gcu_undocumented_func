@@ -85,4 +85,3 @@ Recorded by the kernel track (KRN), 2026-10-30, for 311-KRN-0189 (STO's `storefs
   - **now:** a last arm `#[allow(unreachable_patterns)] _ => Fail::Io,`, which builds against 2.5 and 2.6 alike;
   - **after 2.6 is in `main`:** `vfs::Error::Conflict => …`, with the `Fail` the gateway chooses. `Fail::Exists` would tell a client the name is taken, which is not what happened.
 - 311-KRN-0189 lands once the arm is in `main`, or in the same landing round as it.
-
