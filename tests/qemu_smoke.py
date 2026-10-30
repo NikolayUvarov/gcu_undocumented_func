@@ -4759,7 +4759,7 @@ def link_suite(args):
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
-                rtc = ROOT / "usb_root" / "rtc.elf"
+                rtc = ROOT / IMAGE / "rtc.elf"  # the image of the architecture under test
                 require(link(port, "replace", "rtc", str(rtc)), "started again from replace/rtc.elf")
                 digest = hashlib.sha256(rtc.read_bytes()).hexdigest()
                 replaced = vm.command("dmesg -s init", raw=True)
