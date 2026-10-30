@@ -55,7 +55,7 @@
 - **Left:**
   - **APP:** the shell's `mode remote-update` and `mode link-remote-update`, and the shell's notice of the test keys.
   - **EFF (751-EFF-0023):** the gateway's install through its client.
-  - **The maintainer's decision on the test keys** (refusing the word on such a slot once the owner's own keys exist).
+- **The test keys, decided** (the maintainer, 2026-10-30; `main` 793a9755, 751 and 751-ASR-0013): `remote-update` is not refused on a slot that trusts the public test keys, as the work goes through this path now. The warning stays.
 
 ## Acceptance criteria
 
