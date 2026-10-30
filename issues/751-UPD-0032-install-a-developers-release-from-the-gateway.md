@@ -77,6 +77,10 @@
 **Left:**
 - "another badge is `denied`" has no client to run it in QEMU: the shell holds the updater's unbadged client for its `update` command (351-APP-0029), which no program uses yet.
 
+## Landed (2026-10-30)
+
+In `main` since landing round 51 (57c2fd3d, 2026-10-30): `update.wit` 1.3, the updater's `install`, `release.py bundle` and the `install` suite, with the updater's receive slot. Left as above: "another badge is `denied`", once APP's `update` command (351-APP-0029) holds the shell's client.
+
 ## Related
 
 [751](751-system-updates-at-a-developers-request.md), [751-KRN-0185](751-KRN-0185-the-remote-update-permission-in-init.md), [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md), 751-EFF-0023, [751-ASR-0013](751-ASR-0013-the-remote-update-path-threat-model-and-refusals.md).
