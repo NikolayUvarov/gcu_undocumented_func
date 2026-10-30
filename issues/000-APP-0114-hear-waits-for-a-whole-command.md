@@ -1,6 +1,6 @@
 # 000-APP-0114 — `hear` and `voice` wait for a whole command, and `listen` plays a quiet recording back so it is heard
 
-**Type:** tools (`hear`, `voice`, `listen`, `mind::voice`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer's report, 2026-10-30) · **Status:** in progress · **Blocked by:** — (the microphone's gain at the device: [000-APP-0077](000-APP-0077-microphone-sensitivity.md)) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4, MC-12.1
+**Type:** tools (`hear`, `voice`, `listen`, `mind::voice`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer's report, 2026-10-30) · **Status:** in progress (done in QEMU; the MacBook Pro's run left) · **Blocked by:** — (the microphone's gain at the device: [000-APP-0077](000-APP-0077-microphone-sensitivity.md)) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4, MC-12.1
 
 ## Problem
 
@@ -44,6 +44,18 @@ The causes in our code:
   - `hear` takes a whole command said at arm's length;
   - `listen`'s playback is heard;
   - `hear --save data/media/heard.wav` keeps what it heard, for APP to study through Effector's `collect` (the owner's policy collects `data/media/`).
+
+## Progress (2026-10-30)
+
+- **Done** as planned, in b845f70b.
+- **Host tests** (`tests/voice_host.rs`, 22 tests) passed, with `a_commands_pause_keeps_its_words_together`:
+  - two words 300–500 ms apart are one utterance at 600 ms and two at 200 ms, and a second apart they are two;
+  - `playback_gain` was checked at 0, at full scale and at its limits.
+- **The QEMU `listen` suite** passed on x86 with 4 CPUs (TCG, this session's container): `hear --wav` and `voice on --wav` recognize what they did before, phrases a second apart.
+- **The QEMU `audio` suite** passed on its second run. The first failed on `beep`'s notes, 0.676 s against 0.55–0.65 s in the recorded sound, at a load average of 4.4 in the container. This change does not touch `beep` or `audio_gw`.
+- **Left:** the MacBook Pro.
+  - The maintainer's run: `hear`, then a command at arm's length; and `listen 3`, whose playback should now be heard.
+  - With `hear --save data/media/heard.wav`, APP can collect the recording through Effector and see what the microphone gives.
 
 ## Related
 

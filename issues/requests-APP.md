@@ -49,42 +49,11 @@ For existing [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md), NRL agrees 
 
 ## The shell drops serial input past 64 events in one pass of its loop (for 000-KRN-0188)
 
-Recorded by the kernel track (KRN), 2026-10-30, for [000-KRN-0188](000-KRN-0188-typed-characters-lost-under-load.md).
-
-- **What happens.** A line written to QEMU's serial line faster than the shell's loop reads it loses everything past the 64th byte of one pass, the newline included.
-  - Reproduced on x86 in QEMU (4 CPUs, KVM, `main` with the kernel branch's 6a7ca80d): `echo` and 190 characters written to QEMU's stdin at once. The shell's echo held 64 bytes (`echo ` and 59 characters), and no command ran.
-  - Under host load the harness's one byte per 10 ms does the same once the shell is held for about 0.65 s. That is likely the `RAM above 4 GiB` failure of 2026-10-30, where 4 of 64 hex digits were lost (000-KRN-0188).
-- **Why, as read from the code.**
-  - `shell/src/main.rs`'s loop reads the UART while it has a byte (`while let Some(byte) = … Uart::read`) and decodes into `Events`, a list of 64.
-  - `Events::push` drops what does not fit. Its comment assumes the 16550's FIFO bounds a pass at 16 bytes.
-  - QEMU refills the FIFO at each read of the receive register, from its own buffer and from the host, so one pass can read far more.
-- **What is asked.** Read only as many bytes as the pass's events hold, and leave the rest in the UART: QEMU's flow control, and a FIFO, hold it until the next pass. For example:
-
-  ```rust
-  // in the main loop, in place of `while let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) { … }`
-  while events.room() >= 3 {
-      let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) else { break };
-      vt.feed(byte, now, &mut |event| events.push(event));
-  }
-  // in `impl Events`
-  fn room(&self) -> usize { self.list.len() - self.len }
-  ```
-
-  A byte yields at most two events, and `vt.poll` one more, hence 3.
-- **What showed the fix.** In a local tree only, with this change: the same 195-byte line written at once, 10 times, arrived whole every time (`echo` of 195 bytes, then the shell's answer).
-- **What then shows it in the suites.** 000-KRN-0188's criterion: a 200-character line typed 50 times under four busy loops on the host arrives whole every time, x86 and aarch64. The kernel track can add that check to the `shell` suite once the change is in.
+Numbered on 2026-10-30 as [000-APP-0115](000-APP-0115-the-shell-reads-serial-input-it-can-hold.md).
 
 ## An arm for `vfs.wit` 2.6's error `conflict` in the shell (for 311-KRN-0189)
 
-Recorded by the kernel track (KRN), 2026-10-30, for 311-KRN-0189 (STO's `storefs`, 311-STO-0032).
-
-- **What changes.** `vfs.wit` 2.6 appends an error `conflict`: a write or `flush` refused because another writer published the file first. `mind::fs::Error` gets `Conflict` with it. `vfs_server` never answers it; `storefs` will.
-- **Why the shell.** `shell/src/files.rs` `text` matches `mind::fs::Error` exhaustively, so the shell will not build with 2.6 until it has an arm.
-- **What is asked.** One of these:
-  - **now:** a last arm `#[allow(unreachable_patterns)] _ => "REFUSED",`, which builds against `main` as it is and against 2.6;
-  - **after 2.6 is in `main`:** `Error::Conflict => "CHANGED BY ANOTHER WRITER; READ IT AGAIN"`, or the shell's own words.
-- 311-KRN-0189 lands once the arm is in `main`, or in the same landing round as it.
-
+Numbered on 2026-10-30 as [311-APP-0116](311-APP-0116-the-shell-names-a-vfs-conflict.md).
 
 ### NRL service follow-up (2026-10-30)
 
