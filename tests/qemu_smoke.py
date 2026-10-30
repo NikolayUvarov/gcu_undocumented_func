@@ -6612,7 +6612,8 @@ def update_suite(args):
                      "UPDATE: THE CHANNEL HAS EXPIRED, OR THE CLOCK CANNOT BE READ: FETCH AND APPLY WAIT FOR A CURRENT ONE, ROLLBACK STAYS POSSIBLE"):
             require(out, line)
         vm.send("update apply 2\n")
-        require(vm.expect("(Y/N)", timeout=30), "APPLY THE RELEASE IN SLOT B (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 2 TRIES, FALLING BACK TO SLOT A.")
+        # The updater names the release staged there (its `staged`), so the question names its version.
+        require(vm.expect("(Y/N)", timeout=30), "APPLY VERSION 6 (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 2 TRIES, FALLING BACK TO SLOT A.")
         vm.send_bytes(b"n")
         require(vm.expect("MIND> ", timeout=30), "UPDATE: NOT APPLIED")
         assert "[UPDATER] APPLY:" not in vm.command("dmesg -s updater", raw=True)
