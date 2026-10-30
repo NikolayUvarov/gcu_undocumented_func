@@ -130,7 +130,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - of two writers from one version, the second is told of the conflict with both versions, and nothing of it is published. A collection after the lease frees its nodes, and every version kept stays whole;
   - a medium stopped at each write of a publication, the write not made or only its first sector, mounts with the old root or the new one, each whole, never a mix;
   - 2400 random edits read, and publish, as a model of them does.
-- The QEMU `store` suite, run on x86 with this change (aarch64 not yet):
+- The QEMU `store` suite (x86 and aarch64):
   - `blocks tree` makes two directories and three files under a name, one of them two blocks under a node, and lists them;
   - each file reads back, its SHA-256 checked by the suite, and the name's history holds each root;
   - a change read at an older version is refused as a conflict, and the name is unchanged;

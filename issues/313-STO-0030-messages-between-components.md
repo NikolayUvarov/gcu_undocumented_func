@@ -40,6 +40,15 @@ Split from [313](313-persistent-actors.md) (2026-10-30), its second step. It hol
 - **The QEMU check, `tally_messages_check`,** runs at the end of `store_suite`. It shares `run_tally` and `restart_store` with the checks of 313-STO-0026. `a`'s next save there is `tally as a add apples 0`.
 - **A sender started afresh** (its checkpoint removed) gives sequences from 1 again, which a receiver that kept its record takes as applied. This is stated under "Not provided" in docs/storage/checkpoints.md.
 
+## Progress (2026-10-30)
+
+- **Built** in a worktree by an agent of the storage session and merged. The host tests and the QEMU checks pass:
+  - on this session's container (x86, TCG), by the agent;
+  - on `un-rizen_2a8b108d5593` through Effector (x86 and aarch64, TCG), on 254370a1;
+  - `scripts/host_tests.sh` whole, on 3fe6d984.
+- **The profile** (README, evidence; x86 and aarch64) and docs/storage say so.
+- **Closes when landed.**
+
 ## Acceptance criteria
 
 - Host tests (`tests/checkpoint_host.rs`):

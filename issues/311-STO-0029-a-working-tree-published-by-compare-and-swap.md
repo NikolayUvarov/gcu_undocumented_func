@@ -47,6 +47,15 @@ After [311-STO-0027](311-STO-0027-directories-as-objects.md) a directory is an o
 - **Host tests:** besides the plan's cases, 2400 random edits against a model of the tree. The stopped publication is cut at the medium: each write in turn not made, or made in its first sector alone.
 - **The QEMU check waits out the leases** (62 s by the guest's clock, as the collection check before it does), so the collection frees something and the files read after it are evidence.
 
+## Progress (2026-10-30)
+
+- **Built** in a worktree by an agent of the storage session and merged. The host tests and the QEMU checks pass:
+  - on this session's container (x86, TCG), by the agent;
+  - on `un-rizen_2a8b108d5593` through Effector (x86 and aarch64, TCG), on 254370a1;
+  - `scripts/host_tests.sh` whole, on 3fe6d984.
+- **The profile** (README, evidence; x86 and aarch64) and docs/storage say so.
+- **Closes when landed.**
+
 ## Acceptance criteria
 
 - Host tests (`tests/worktree_host.rs`, through the block store's own logic on a simulated medium):
