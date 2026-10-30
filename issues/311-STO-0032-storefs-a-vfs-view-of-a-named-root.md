@@ -2,7 +2,7 @@
 
 **Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** 311-KRN-0189 (`vfs.wit` 2.6 `conflict`) and 311-KRN-0190 (`storefs` at boot and its clients), the kernel track's, from the request of 2026-10-30 · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
 
-Split from [311](311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md).
+Split from [311](311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
 
 ## Problem
 
@@ -74,4 +74,4 @@ A tree in the store is read and changed only through `blocks tree`, one command 
 
 ## Related
 
-[311](311-storefs-a-file-face.md), [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.md), `vfs_server` (the kernel session's), 000-KRN-0170 (the programs' data directories).
+[311](311-storefs-a-file-face.md), [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done), `vfs_server` (the kernel session's), 000-KRN-0170 (the programs' data directories).

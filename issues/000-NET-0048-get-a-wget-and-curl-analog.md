@@ -1,6 +1,6 @@
 # 000-NET-0048 — `get`, an analog of `wget` and `curl`
 
-**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** open · **Blocked by:** [000-NET-0047](000-NET-0047-http-for-api-clients.md), [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md) (a host named at run time), [000-NET-0046](000-NET-0046-public-root-certificates.md) (public sites) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
+**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** open · **Blocked by:** [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md) (a host named at run time), [000-NET-0046](000-NET-0046-public-root-certificates.md) (public sites) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md), at the maintainer's request: "an analog of wget/curl".
 
@@ -86,4 +86,4 @@ Still left: what the Progress section lists (`-u`, a host refused at run time, H
 
 ## Related
 
-[000-NET-0047](000-NET-0047-http-for-api-clients.md), [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md), [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done).
+[000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md), [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done).

@@ -78,4 +78,4 @@
 
 ## Related
 
-[351](351-self-update.md), [docs/update/publishing.md](../docs/update/publishing.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md), [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md), [000-NET-0047](000-NET-0047-http-for-api-clients.md) (the client side), [950](950-our-own-micro-messenger.md), [100003](100003-improve-the-system-from-the-phone.md).
+[351](351-self-update.md), [docs/update/publishing.md](../docs/update/publishing.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md), [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md), [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done) (the client side), [950](950-our-own-micro-messenger.md), [100003](100003-improve-the-system-from-the-phone.md).
