@@ -6,7 +6,7 @@ Split from [308](../issues/308-encryption-at-rest.md) (2026-10-28).
 
 ## Problem
 
-Every record of the store is plain on its medium: blocks, CIDs, names, pins, commits. A medium read in another machine gives all of it away. [308](../issues/308-encryption-at-rest.md) seals the records before any personal data is stored. This task is its format and its cipher; where the key lives is [308-STO-0022](../issues/308-STO-0022-the-volume-key-held-by-keystore.md).
+Every record of the store is plain on its medium: blocks, CIDs, names, pins, commits. A medium read in another machine gives all of it away. [308](../issues/308-encryption-at-rest.md) seals the records before any personal data is stored. This task is its format and its cipher; where the key lives is [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.done).
 
 ## Plan
 
@@ -26,7 +26,7 @@ Every record of the store is plain on its medium: blocks, CIDs, names, pins, com
 
   A block found corrupt at a read is named by its CID from the index; one found at a mount, by its place.
 - **The cipher is the RustCrypto `chacha20poly1305` crate** (0.10, already in `tls`), behind a trait in `store.rs`. The host tests drive the store through a stand-in of that trait, and the crate is tested by its own project.
-- **The volume key, for now:** it is made at the first mount and kept in the superblock in the clear. That is **no confidentiality:** whoever reads the medium reads the key. The format, the cipher and their cost are exercised until [308-STO-0022](../issues/308-STO-0022-the-volume-key-held-by-keystore.md) moves the key out. The profile and docs/storage say so.
+- **The volume key, for now:** it is made at the first mount and kept in the superblock in the clear. That is **no confidentiality:** whoever reads the medium reads the key. The format, the cipher and their cost are exercised until [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.done) moves the key out. The profile and docs/storage say so.
 - **`make_usb_image.py` writes a superblock with no key yet;** the store makes the key at its first mount.
 
 ## Acceptance criteria
@@ -41,7 +41,7 @@ Every record of the store is plain on its medium: blocks, CIDs, names, pins, com
 
 ## Related
 
-[308](../issues/308-encryption-at-rest.md), [308-STO-0022](../issues/308-STO-0022-the-volume-key-held-by-keystore.md), [308-STO-0023](308-STO-0023-memory-domains.done), [300-STO-0005](300-STO-0005-corruption-on-the-platform.done) (`storefaults`).
+[308](../issues/308-encryption-at-rest.md), [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.done), [308-STO-0023](308-STO-0023-memory-domains.done), [300-STO-0005](300-STO-0005-corruption-on-the-platform.done) (`storefaults`).
 
 ## Resolution
 
@@ -54,7 +54,7 @@ Done in `main` f274041c (landing round 40, candidate 8016f87f, 2026-10-29), from
   - the nonce is derived: an HMAC-SHA-256 of the associated data and the sealed bytes (Plan, "Changed while building");
   - layout 2 is refused by its number (`NOT MOUNTED: A STORE OF LAYOUT 2; …`), with no conversion code.
 - **The superblock** holds the key's source, the volume key and a check. A key that does not open the check is refused at mount with `key` (`idl/blockstore.wit` 2.1). The key is made at the first mount, from RDRAND or RNDR where there is one, else derived from the medium and the time, and the log says which.
-- **The key is in the clear in the superblock:** no confidentiality yet, as docs/storage and the profile say. [308-STO-0022](../issues/308-STO-0022-the-volume-key-held-by-keystore.md) moves it.
+- **The key is in the clear in the superblock:** no confidentiality yet, as docs/storage and the profile say. [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.done) moves it.
 - **Corrupt and damaged:** a frame that does not open is corrupt; sectors outside frames are damaged. A collection frees a record that does not open unless the index names its place. A put no longer refuses bytes that look like a record's magic.
 - **The cipher** is RustCrypto `chacha20poly1305` 0.10 with its portable backends (`blockstore/.cargo/config.toml`), recorded in THIRD_PARTY.md.
 - **`make_usb_image.py`** writes the partition's superblock with no key yet (source 0); the store makes the key at its first mount.
