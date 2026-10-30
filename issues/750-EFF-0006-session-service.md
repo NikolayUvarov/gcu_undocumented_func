@@ -143,5 +143,5 @@ The service runs as a program started from the shell (`effector data/effector/ef
   - before an update's apply (751-EFF-0023).
 
   After it, no heartbeat, poll or telemetry goes until the restart, or for 40 s if it does not come; then the agent goes on as before. Logged as `EFFECTOR: THE MACHINE RESTARTS: SHUTTING_DOWN SENT`.
-- **Checked in the `effector-update` QEMU suite.** The fixture holds that heartbeat before the trial boot. The `exec` `reboot` path has no QEMU check yet, because the suite's policy refuses `reboot`.
+- **Checked in the `effector-update` QEMU suite, x86 and aarch64** (LEG9, 2026-10-30). The fixture holds that heartbeat before the trial boot. On aarch64 the staging takes minutes, and the server's connection had closed meanwhile, so the heartbeat now tries up to three times, each on a new connection. The `exec` `reboot` path has no QEMU check yet, because the suite's policy refuses `reboot`.
 - **Still open: a stop by `init`** (`svc stop`, the shell's `reboot`, a restart the updater asks for alone) gives the agent no warning: `init` kills it. This needs a notice from `init` before the kill (KRN), requested on internal-dev-messages.
