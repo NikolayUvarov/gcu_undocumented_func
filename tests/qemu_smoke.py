@@ -3911,6 +3911,7 @@ def store_suite(vm):
     print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
           "effect cut short comes back pending and is reconciled before another begins, an operation sent again is "
           "applied once (also after the store restarted)", flush=True)
+    tally_publish_check(vm)
     store_domains_check(vm)
     fm_store_check(vm)
     tally_messages_check(vm)
@@ -3940,6 +3941,41 @@ def reboot_blank_store(vm):
     vm.expect("MIND>", timeout=120)
     time.sleep(1); vm.collect(); vm.output = ""
     require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 ")
+
+
+def tally_publish_check(vm):
+    """313-STO-0036: an effect its target can tell. `tally as p publish board <word>` puts the word as a raw block and
+    publishes it under `board` by compare-and-swap from the version it reads, its intent and key saved first. Each run
+    first asks the store about a publication left pending: cut after the intent's save, the name is where it was, and
+    it is published now, one version more; cut after the swap, it is done, and nothing is published again; a version
+    `blocks publish` made in between fails it, and the name is not published over."""
+    def tally(args):
+        return run_tally(vm, args)
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def kept():
+        return re.findall(r"^board VERSION (\d+) ROOT (\S+)\r?$", blocks("history board"), re.M)
+    first, second, third = (cid_raw(w) for w in (b"first", b"second", b"third"))
+    require(tally("as p publish board first crash-before"), "EFFECT 1 BEGUN; ENDING BEFORE ITS SWAP")
+    require(blocks("history board"), "blocks: history board: NotFound")
+    require_all(tally("as p show"), "RECONCILED 1 NOT DONE: PUBLISHED NOW AT 1", "TALLY EPOCH 2 SEQUENCE 2")
+    assert kept() == [("1", first)]
+    require(tally("as p publish board second crash-after"), "EFFECT 2 SWAPPED; ENDING BEFORE ITS OUTCOME IS RECORDED")
+    assert kept() == [("2", second), ("1", first)]
+    shown = tally("as p show")
+    require_all(shown, "RECONCILED 2 DONE: board AT 2", "TALLY EPOCH 4 SEQUENCE 4")
+    assert "PENDING" not in shown and kept() == [("2", second), ("1", first)], shown
+    require(tally("as p publish board third"), "EFFECT 3 DONE: board AT 3")
+    # Another writer between the intent and the next run: failed, never published over.
+    require(tally("as p publish board fourth crash-before"), "EFFECT 4 BEGUN; ENDING BEFORE ITS SWAP")
+    require(blocks(f"publish board {first} 3"), "PUBLISHED board VERSION 4")
+    shown = tally("as p show")
+    require_all(shown, "RECONCILED 4 FAILED: board CHANGED BY ANOTHER WRITER", "TALLY EPOCH 8 SEQUENCE 8")
+    assert "PENDING" not in shown and kept() == [("4", first), ("3", third), ("2", second), ("1", first)], shown
+    print("PASS: an effect its target can tell: tally's publication cut after its intent is published by the next run, "
+          "one version more; cut after its swap, it is found done and not published again; a version another writer "
+          "published in between fails it", flush=True)
 
 
 def tally_messages_check(vm):
