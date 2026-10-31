@@ -276,7 +276,12 @@ pub struct Refused { pub error: Error, pub version: u64, pub at: u64, pub checke
 /// nor within one boot its monotonic time. So a head published again at a later version, a rewrite, is refused, and so
 /// is a journal whose name was removed and published again. The contents are not read. `buffer` holds a block.
 pub fn check(store: &mut impl Store, name: &str, steps: u64, buffer: &mut [u8; CHUNK]) -> Result<Checked, Refused> {
-    let done = down(store, name, steps, buffer, |_, _, _| {})?;
+    check_each(store, name, steps, buffer, |_, _, _| {})
+}
+
+/// As `check`, `each` hearing the store, each entry and its CID as it is read (an index's build and search, 312-STO-0035).
+pub fn check_each<S: Store>(store: &mut S, name: &str, steps: u64, buffer: &mut [u8; CHUNK], each: impl FnMut(&mut S, &Entry, &Cid)) -> Result<Checked, Refused> {
+    let done = down(store, name, steps, buffer, each)?;
     if done.first != 1 { return Err(Refused { error: Error::TooLarge, version: done.version, at: done.first - 1, checked: done.entries }); }
     Ok(done)
 }
