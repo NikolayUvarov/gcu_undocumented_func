@@ -1,7 +1,7 @@
 //! The requests above the frames, little-endian: hello; files put and got by offset and checked by SHA-256 at the end,
 //! an interrupted put resumed; directories made, listed, moved and removed; the log from a cursor; console bytes;
-//! programs started, their output read from a cursor, stopped. `Client` is the master's side, `Files` and
-//! `FileService` the slave's. docs/link/protocol.md describes each payload.
+//! programs started, their output read from a cursor, stopped; input events posted on the slave's machine. `Client`
+//! is the master's side, `Files` and `FileService` the slave's. docs/link/protocol.md describes each payload.
 use crate::endpoint::{channel, code, kind, Error, Line, Master, Service};
 use crate::frame::MAX_PAYLOAD;
 use crate::sha256::Sha256;
@@ -12,6 +12,8 @@ pub const COMMAND_MAX: usize = 240;
 /// REPLACE's unit and path at most: MIND Core's `init.wit` `replace`.
 pub const UNIT_MAX: usize = 16;
 pub const REPLACE_PATH_MAX: usize = 64;
+/// The most input events one INPUT carries (800-LNK-0032), 8 bytes each.
+pub const INPUT_MAX: usize = 64;
 /// The smallest payload an end agrees to: a stat's answer and a listing's line fit.
 pub const MIN_PAYLOAD: usize = 64;
 /// The bytes a data request or answer carries besides the data: an offset.
@@ -265,6 +267,19 @@ impl<L: Line> Client<L> {
         self.master.call(channel::CONTROL, kind::REBOOT, &[], &mut [0u8; 8]).map(|_| ())
     }
 
+    /// The most input events one INPUT can carry at the payload agreed in the hello.
+    pub fn input_max(&self) -> usize { INPUT_MAX.min((self.chunk + DATA_HEAD) / 8) }
+
+    /// Input events posted on the other end's machine, in order (800-LNK-0032): how many it posted.
+    pub fn input(&mut self, words: &[u64]) -> Result<u32, Error> {
+        if words.is_empty() || words.len() > self.input_max() { return Err(Error::TooBig); }
+        let mut p = [0u8; INPUT_MAX * 8];
+        for (i, w) in words.iter().enumerate() { p[8 * i..8 * i + 8].copy_from_slice(&w.to_le_bytes()); }
+        let mut r = [0u8; 16];
+        let n = self.master.call(channel::INPUT, kind::INPUT, &p[..8 * words.len()], &mut r)?;
+        u32_at(&r[..n], 0).ok_or(Error::Protocol)
+    }
+
     /// Console bytes to the other end, its console's output since the last call back into `out`.
     pub fn console(&mut self, input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
         let mut r = [0u8; MAX_PAYLOAD];
@@ -310,6 +325,8 @@ pub trait Files {
     fn replace(&mut self, _unit: &str, _path: &str) -> Result<(), u8> { Err(code::UNSUPPORTED) }
     /// Restarts the machine once this request is answered.
     fn reboot(&mut self) -> Result<(), u8> { Err(code::UNSUPPORTED) }
+    /// Posts input events (1 to INPUT_MAX words; 0 is the attention key) in order: how many it posted.
+    fn input(&mut self, _words: &[u64]) -> Result<u32, u8> { Err(code::UNSUPPORTED) }
 }
 
 /// A store kept elsewhere (a static, so a large buffer is off the stack).
@@ -335,6 +352,7 @@ impl<F: Files + ?Sized> Files for &mut F {
     fn command(&mut self, line: &str) -> Result<u32, u8> { (**self).command(line) }
     fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> { (**self).replace(unit, path) }
     fn reboot(&mut self) -> Result<(), u8> { (**self).reboot() }
+    fn input(&mut self, words: &[u64]) -> Result<u32, u8> { (**self).input(words) }
 }
 
 /// A file's name as the slave takes it: one component, printable, none of `/ \ :` and not `.` or `..`.
@@ -485,6 +503,15 @@ impl<F: Files> Service for FileService<F> {
                 Ok(8 + n)
             }
             (channel::CONSOLE, kind::CONSOLE) => self.files.console(p, reply),
+            (channel::INPUT, kind::INPUT) => {
+                if p.is_empty() || p.len() % 8 != 0 || p.len() > INPUT_MAX * 8 { return Err(code::BAD_REQUEST); }
+                let mut words = [0u64; INPUT_MAX];
+                let n = p.len() / 8;
+                for (i, w) in words[..n].iter_mut().enumerate() { *w = u64_at(p, 8 * i).ok_or(code::BAD_REQUEST)?; }
+                let posted = self.files.input(&words[..n])?;
+                reply[..4].copy_from_slice(&posted.to_le_bytes());
+                Ok(4)
+            }
             (channel::PROGRAMS, kind::RUN) => {
                 let len = *p.first().ok_or(code::BAD_REQUEST)? as usize;
                 let path = path_name(p.get(1..1 + len).ok_or(code::BAD_REQUEST)?).ok_or(code::DENIED)?;

@@ -58,6 +58,11 @@ commands: submit <kind> [<field>=<value>...] --key <idempotency key> --reason <r
                 log [from=<cursor>] [max_bytes=<n>]
                 reboot                                         restarts the other end (MIND Core: dev in link.conf)
                 shell line=<line> [timeout_seconds=<n>]        one line for the other end's shell (MIND Core: dev)
+                key names=<chord> <chord>... [pace_ms=<n>]     presses keys on the other end's machine as its keyboard
+                                                               would, QEMU's sendkey names (ctrl-alt-f6 alt-0), a chord
+                                                               every pace_ms (default 20; MIND Core: dev and init's
+                                                               input capability, 800-LNK-0032)
+                type text=<text> [pace_ms=<n>]                 types the text there, a character every pace_ms
                 replace unit=<service> file=<path here> [name=<there>] | unit=<service> back=true
                                                                starts a service from the file, unverified, until the
                                                                next boot; back=true: from its boot image (MIND Core: dev)
@@ -331,7 +336,7 @@ fn field(name: &str, value: &str) -> Value {
     match value {
         "true" => Value::Bool(true),
         "false" => Value::Bool(false),
-        v if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) && matches!(name, "timeout_seconds" | "from" | "max_bytes") => Value::Num(v.parse().unwrap()),
+        v if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) && matches!(name, "timeout_seconds" | "from" | "max_bytes" | "pace_ms") => Value::Num(v.parse().unwrap()),
         v => s(v),
     }
 }

@@ -94,10 +94,14 @@ pub fn up<'q, R: Regs>(mut r: R, mut region: Region, file: &[u8], queue: &'q mut
     let cck = phy::init(&mut r, &chip, b).map_err(|e| (Stage::Phy, e))?;
     h2c.packet(&mut r, &mut region, &mut h2c_ring, 0x0d, &h2c::general_info()).map_err(|e| (Stage::Commands, e))?;
     h2c.packet(&mut r, &mut region, &mut h2c_ring, 0x11, &h2c::phydm_info(b.rfe, cut)).map_err(|e| (Stage::Commands, e))?;
-    let coex_board = coex::Board { rfe: b.rfe, shared: b.shared };
+    let coex_board = coex::Board { rfe: b.rfe, bt: b.btcoex, shared: b.shared };
     coex::power_on(&mut r, &coex_board);
     h2c.command(&mut r, &coex::H2C_BT_WIFI_CONTROL).map_err(|e| (Stage::Coex, e))?;
-    coex::wifi_only(&mut r, &coex_board).map_err(|e| (Stage::Coex, e))?;
+    coex::init(&mut r, &coex_board).map_err(|e| (Stage::Coex, e))?;
+    say(format_args!("ANTENNA: {}", match coex_board.mode() {
+        coex::Mode::FreeRun => "FREE RUN, THE BLUETOOTH ON ITS OWN ANTENNA GRANTED BY THE PTA",
+        coex::Mode::WifiOnly => "THE WI-FI'S ALONE",
+    }));
     mac::rcr(&mut r, false);
     mac::station(&mut r, &b.mac);
     let mut radio = Radio {

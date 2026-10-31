@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright(c) 2018-2019 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw88.txt.
 // Adapted from Linux v6.12 rtw88 util.c (ltecoex_read_reg, ltecoex_reg_write), coex.c (rtw_coex_power_on_setting,
-// __rtw_coex_init_hw_config with wifi_only, rtw_coex_set_ant_path for COEX_SET_ANT_WONLY, rtw_coex_set_gnt_wl/bt,
-// rtw_coex_set_wl_pri_mask, rtw_coex_table) and rtw8821c.c (rtw8821c_coex_cfg_init, _cfg_ant_switch, _cfg_gnt_debug).
-//! The antenna the Wi-Fi shares with the card's Bluetooth: given to the Wi-Fi alone, as rtw88's Wi-Fi-only path does.
+// __rtw_coex_init_hw_config with wifi_only, rtw_coex_set_ant_path for COEX_SET_ANT_WONLY and COEX_SET_ANT_2G_FREERUN,
+// rtw_coex_action_freerun's table, rtw_coex_set_gnt_wl/bt, rtw_coex_set_wl_pri_mask, rtw_coex_table) and rtw8821c.c
+// (rtw8821c_coex_cfg_init, _cfg_ant_switch, _cfg_gnt_debug, table_nsant_8821c).
+//! The antenna the Wi-Fi shares with the card's Bluetooth: the Wi-Fi's alone on a card without Bluetooth, as rtw88's
+//! Wi-Fi-only path does; on a card whose Bluetooth has an antenna of its own, rtw88's free run (700-DRV-0046).
 
 use crate::io::{Error, Regs};
 
@@ -23,8 +25,17 @@ pub fn lte_write<R: Regs>(r: &mut R, at: u32, value: u32) -> Result<(), Error> {
     Ok(())
 }
 
-/// What the board says of the Bluetooth: its RFE type, whether the antenna is shared.
-pub struct Board { pub rfe: u8, pub shared: bool }
+/// What the board says of the Bluetooth: its RFE type, whether the card has one (`btcoex`), whether the antenna is shared.
+pub struct Board { pub rfe: u8, pub bt: bool, pub shared: bool }
+
+/// How the antenna is set at start: the Wi-Fi's alone, or rtw88's free run beside a Bluetooth on its own antenna. A
+/// shared antenna needs rtw88's arbitration by the Bluetooth's state, which this driver does not run: the Wi-Fi keeps it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode { WifiOnly, FreeRun }
+
+impl Board {
+    pub fn mode(&self) -> Mode { if self.bt && !self.shared { Mode::FreeRun } else { Mode::WifiOnly } }
+}
 
 /// rtw_coex_power_on_setting, the parts that write.
 pub fn power_on<R: Regs>(r: &mut R, b: &Board) {
@@ -52,9 +63,11 @@ fn rfk_idle<R: Regs>(r: &mut R, b: &Board) {
     }
 }
 
-/// __rtw_coex_init_hw_config with Wi-Fi alone: the Wi-Fi granted the antenna and its switch set to it. The H2C command
-/// it sends (BT_WIFI_CONTROL) is the caller's: `h2c_bt_wifi_control`.
-pub fn wifi_only<R: Regs>(r: &mut R, b: &Board) -> Result<(), Error> {
+/// __rtw_coex_init_hw_config with the board's mode. Wi-Fi alone: the Wi-Fi granted the antenna and its switch set to it.
+/// Free run (COEX_SET_ANT_2G_FREERUN with table 100): the Wi-Fi still granted by software, the Bluetooth by the PTA, the
+/// switch at WLG_BT, and the PTA's tables open to both. The H2C command it sends (BT_WIFI_CONTROL) is the caller's.
+pub fn init<R: Regs>(r: &mut R, b: &Board) -> Result<(), Error> {
+    let free = b.mode() == Mode::FreeRun;
     r.set8(0x550, 1 << 3);
     r.mask8(0x790, 0x3f, 5);
     r.w8(0x778, 1);
@@ -67,19 +80,25 @@ pub fn wifi_only<R: Regs>(r: &mut R, b: &Board) -> Result<(), Error> {
     r.set8(0x6cc, 1 << 3 | 1 << 4);
     r.set8(0x6cf, 1 << 3);
     rfk_idle(r, b);
-    // GNT_BT software low, GNT_WL software high, in both fields each.
+    // GNT_WL software high in both its fields; GNT_BT software low, or the PTA's (0) in free run.
     let v = lte_read(r, 0x38)?;
-    lte_write(r, 0x38, v & !0xff00 | 0x7700)?;
+    lte_write(r, 0x38, v & !0xff00 | if free { 0x3300 } else { 0x7700 })?;
     r.set8(0x73, 1 << 2);
     if !matches!(b.rfe, 5 | 6 | 13 | 14) {
         r.clr32(0x4c, 1 << 23);
         r.set32(0x4c, 1 << 24);
         r.mask8(0xcb4, 0xff, 0x77);
-        r.mask32(0xcb4, 0xf000_0000, 2);
+        // WLG, or WLG_BT in free run (3 on module types other than 2 and 4, whose switch is the other way).
+        r.mask32(0xcb4, 0xf000_0000, if !free { 2 } else if matches!(b.rfe, 2 | 4) { 2 } else { 3 });
         r.set8(0x67, 1 << 5);
         r.set8(0x67, 1 << 4);
     }
     r.w16(0xaa, 0x8003);
+    if free {
+        r.w32(0x6c0, 0xffff_ffff);
+        r.w32(0x6c4, 0xffff_ffff);
+        r.w32(0x6c8, 0xf0ff_ffff);
+    }
     Ok(())
 }
 

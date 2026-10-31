@@ -245,6 +245,8 @@ function what(o) {
   const p = o.params || {};
   switch (o.kind) {
     case "shell": return p.line;
+    case "key": return p.names;
+    case "type": return p.text;
     case "run": return [p.name, p.args].filter(Boolean).join(" ");
     case "replace": return p.back ? `${p.unit} ← boot image` : `${p.unit} ← ${p.file || p.name}`;
     case "put": case "install": return [p.file, p.name].filter(Boolean).join(" → ");

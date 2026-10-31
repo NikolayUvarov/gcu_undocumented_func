@@ -14,7 +14,7 @@ mod store;
 
 // store.rs names these as crate::cid, crate::dag, crate::sha256 and crate::tree, so the host tests build it from the
 // libmind files.
-use mind::{cid, dag, sha256, tree};
+use mind::{cid, dag, journal, sha256, tree};
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;

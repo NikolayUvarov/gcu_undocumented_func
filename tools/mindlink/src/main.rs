@@ -1,6 +1,6 @@
 //! mindlink: MIND Link's end on Linux, WSL and Windows (800-LNK-0004, 0007). As master it moves files and directories,
-//! starts programs and reads their output, follows the log and types at the other end's console; `serve` plays the
-//! slave over a directory. docs/link/mindlink.md says how to use it.
+//! starts programs and reads their output, follows the log, types at the other end's console and presses keys on its
+//! machine (800-LNK-0032); `serve` plays the slave over a directory. docs/link/mindlink.md says how to use it.
 mod dir;
 #[cfg(unix)]
 #[path = "port_unix.rs"]
@@ -45,6 +45,10 @@ commands: hello                       the other end's name and version
           reboot                      restart the other end's machine (MIND Core: link.conf must hold the word dev)
           log [-f]                    the other end's log; -f follows it
           console                     type at the other end's console (lines from standard input, Ctrl-D ends)
+          key <chord>... [--pace <ms>]  press keys on the other end's machine, as its keyboard would: QEMU's sendkey
+                                      names joined by - (ctrl-alt-f6, alt-0, shift-a, ret), one chord at a time, --pace
+                                      ms apart (default 20; MIND Core: dev in link.conf and init's input capability)
+          type <text> [--pace <ms>]   type the text there, a character's keys every --pace ms (default 20)
           sniff [<seconds>]           the line's raw bytes as they come, in hex, for a check of the wiring (default 10 s)
           board <line>                a MIND Link board's control port: one command (hello, status, type <text>,
                                       key <chord>, move <dx> <dy>, click, abs <x> <y>; docs/link/multi-device.md)
@@ -67,7 +71,7 @@ pub fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).co
 fn refusal(c: u8) -> &'static str {
     match c {
         code::NOT_FOUND => "no such file or directory",
-        code::DENIED => "not allowed (a name's parts are joined by /, none is . or .., none holds \\ or :; on MIND Core a program needs \"run\" in link.conf, a shell line \"dev\")",
+        code::DENIED => "not allowed (a name's parts are joined by /, none is . or .., none holds \\ or :; on MIND Core a program needs \"run\" in link.conf, a shell line \"dev\", keys \"dev\" and init's input capability)",
         code::IO => "the other end's storage failed",
         code::MISMATCH => "SHA-256 does not match: the file was not kept",
         code::BAD_REQUEST => "the other end did not take the request",
@@ -188,6 +192,7 @@ fn main() {
         ("log", []) => log(&mut c, false),
         ("log", ["-f"]) => log(&mut c, true),
         ("console", []) => console(&mut c),
+        ("key" | "type", rest) if !rest.is_empty() => keys(&mut c, cmd == "type", rest),
         _ => { eprintln!("{USAGE}"); std::process::exit(2); }
     };
     if let Err(e) = result { die(explain(e)); }
@@ -368,6 +373,36 @@ fn log(c: &mut Client<port::Port>, follow: bool) -> Result<(), Error> {
             std::thread::sleep(Duration::from_millis(300));
         }
     }
+}
+
+/// `key` and `type` (800-LNK-0032): each chord or character's events in one INPUT, `--pace` ms apart; with 0, as many
+/// as a frame holds at once.
+fn keys(c: &mut Client<port::Port>, text: bool, args: &[&str]) -> Result<(), Error> {
+    let mut pace = 20u64;
+    let mut words: Vec<&str> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if *a == "--pace" { pace = it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| die("--pace takes milliseconds")); } else { words.push(a); }
+    }
+    if words.is_empty() { die(if text { "type takes a text" } else { "key takes chords: ctrl-alt-f6 alt-0 …" }); }
+    let mut keyboard = mindlink::keys::Keyboard::new();
+    let groups = if text { keyboard.text(&words.join(" ")) } else { words.iter().map(|w| keyboard.chord(w)).collect() }.unwrap_or_else(|e| die(e));
+    let count = groups.len();
+    let groups: Vec<Vec<u64>> = if pace == 0 { vec![groups.concat()] } else { groups };
+    let (mut sent, max) = (0usize, c.input_max());
+    for (i, group) in groups.iter().enumerate() {
+        if i > 0 && pace > 0 { std::thread::sleep(Duration::from_millis(pace)); }
+        for frame in group.chunks(max) {
+            let posted = match c.input(frame) {
+                Err(Error::Refused(code::DENIED)) => die("the other end takes no keys: MIND Core needs dev in link.conf and init's input capability for link (800-LNK-0032)"),
+                r => r?,
+            } as usize;
+            sent += posted;
+            if posted < frame.len() { die(format!("the other end posted {posted} of {} events; {sent} in all", frame.len())); }
+        }
+    }
+    println!("{sent} events posted, {count} {}", if text { "characters" } else { "chords" });
+    Ok(())
 }
 
 fn console(c: &mut Client<port::Port>) -> Result<(), Error> {

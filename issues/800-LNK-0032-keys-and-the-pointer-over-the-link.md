@@ -1,6 +1,6 @@
 # 800-LNK-0032 — Keys and the pointer over the link: INPUT (channel 4) in the developer mode
 
-**Type:** protocol, service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-30) · **Blocked by:** `KRN`: the input capability for `link` in the developer mode only (asked on `internal-dev-messages`, 2026-10-30) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.8, MC-10.2, MC-12.1
+**Type:** protocol, service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-30) · **Blocked by:** `KRN`: the input capability for `link` in the developer mode only (asked on `internal-dev-messages`, 2026-10-30) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.8, MC-10.2, MC-12.1
 
 **Asked by:** the tools track (`APP`) in `issues/requests-LNK.md`, 2026-10-30, section 3, "keys over the link". The maintainer (2026-10-30): "do it, it was a requirement" ([000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md): key presses by name, as QEMU's `sendkey` names them, and text at a set pace).
 
@@ -35,11 +35,47 @@
 
 **What stays 000-KRN-0108's:** the firmware's menus, the boot, and a hung machine. The link reaches only a running MIND Core.
 
+## Progress (2026-10-30)
+
+**Done, on `claude/LNK-link`:**
+- **The protocol** (`docs/link/protocol.md`, EN and RU): INPUT's payload, 1 to 64 input words, answered with the number posted; a word of 0 is the attention key.
+  - **`linkproto`:** `Client::input`, `Files::input` (UNSUPPORTED by default), the payload's checks.
+- **The master's side** in `tools/mindlink`:
+  - the library `mindlink::keys` builds the words with MIND Core's own PS/2 decoder (`libmind/src/keys.rs`, included as the host tests do), so a chord equals `sendkey`'s events, its legacy byte too;
+  - `mindlink key` and `mindlink type`;
+  - `effector485`'s operations `key` and `type`, under its queue and reservations.
+- **`link` on MIND Core** posts the words through `SYSCALL_INPUT_EVENT`. It refuses DENIED without `dev` (`INPUT REFUSED: link.conf HAS NO "dev"`) or without the input capability (`INPUT REFUSED: INIT GAVE LINK NO INPUT CAPABILITY`), posting none.
+- **`mindlink serve`** answers UNSUPPORTED.
+- **The QEMU `link` suite** runs `keys`:
+  - without `dev`, the keys are refused, logged, and none reaches it;
+  - with `dev`, the same until KRN's grant, with a SKIP naming it; afterwards it checks the events `sendkey` would give.
+
+**Tested** (LEG9, WSL2, Ubuntu 24.04; QEMU on the host):
+- **Host tests:**
+  - `linkproto`: 23 tests, 2 of them new: INPUT over a lossy line, and its bounds;
+  - `mindlink`'s keys against PS/2's events;
+  - `mindlink` and `effector485` against `mindlink serve`, which refuses keys;
+  - all of `scripts/host_tests.sh`.
+- **Builds:** the x86 and aarch64 images, and `mindlink` and `effector485` for Linux and Windows, without warnings.
+- **The QEMU `link` suite, x86 and aarch64:** PASS. Both refusals are checked, and the check that keys arrive SKIPs until KRN's grant. The suite now runs on aarch64 too (`rtc.elf` from the tested architecture's image), though it is in no aarch64 CI group.
+
+**2026-10-31, with KRN's grant** (800-KRN-0191, in `main`: `link` holds the input capability in slot 8 with `dev`):
+- **What the landing round showed.** The request was returned (round 04e043f5) because the positive check, running for the first time, waited for Ctrl+Alt+F6 in `keys`. The shell listens for Ctrl+Alt+F1…F6 (INPUT_LISTEN, the screenshot on F6), so the kernel hands that chord to the shell whatever has the focus.
+- **The check now:**
+  - Ctrl+Alt+F7, Alt+0 and Shift+A reach `keys` in that order, and `type hi` gives h and i. The suite waits for the lines and checks their order, since `expect` ran past a line that came in the same piece;
+  - Ctrl+Alt+F6 over the link reaches its listener, the shell. The shell's console line `SCREENSHOT data/media/…` is awaited (up to 180 s under TCG), and its log says `(CTRL+ALT+F6)`;
+  - `[LINK] INPUT: N EVENTS FROM THE MASTER` is logged.
+- **The QEMU `link` suite, x86 and aarch64,** on `main` 435e47ff merged: PASS, with no SKIP.
+
+**Open:**
+- the MacBook Pro's criterion;
+- the master's pointer commands.
+
 ## Acceptance criteria
 
-- [ ] `protocol.md` (EN, RU) defines `INPUT`'s payload; host tests cover it and the key names.
-- [ ] The QEMU `link` suite on x86 and aarch64: keys over the link reach `wm` and the shell; refused without `dev`.
-- [ ] `mindlink key`, `mindlink type` and `effector485`'s `key` and `type` are documented in `mindlink.md` and `effector485.md` (EN, RU).
+- [x] `protocol.md` (EN, RU) defines `INPUT`'s payload; host tests cover it and the key names.
+- [x] The QEMU `link` suite on x86 and aarch64: keys over the link reach `wm` and the shell; refused without `dev`.
+- [x] `mindlink key`, `mindlink type` and `effector485`'s `key` and `type` are documented in `mindlink.md` and `effector485.md` (EN, RU).
 - [ ] On the MacBook Pro: Ctrl+Alt+F6 and Alt+0 sent over the cable, with their effect on the screen and in the log.
 
 ## Related
