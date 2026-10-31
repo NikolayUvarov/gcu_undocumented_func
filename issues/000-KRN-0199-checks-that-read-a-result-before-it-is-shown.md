@@ -37,7 +37,7 @@ In round 64 (candidate fbda1685), the group "x86: no PIT", the `normal` suite, f
 ## Progress (2026-10-31)
 
 - `tests/qemu_smoke.py`: the three colour checks of the `normal` suite and its two row checks; the `isolation` suite's two row checks after a fault; the two x86 idle checks; the `busy` suite's first run-time check.
-- The `normal`, `isolation`, `smp` and `busy` suites passed locally (x86, QEMU TCG, 4 CPUs; `smp` with `-cpu max`, all CPUs `HLT`; `busy`: the loop took 1.01 of the time the other tasks left its CPU).
+- The `normal`, `isolation`, `smp` and `busy` suites passed locally (x86, QEMU TCG, 4 CPUs; `smp` with `-cpu max`, all CPUs `HLT`; `busy`: the loop took 1.01 of the time the other tasks left its CPU, and 1.00 measured against its CPU's idle time).
 
 ## Related
 
