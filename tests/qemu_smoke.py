@@ -510,23 +510,46 @@ def center_pixel_soon(vm, want, seconds=5):
     return seen
 
 
-# aarch64 idle check (issue 208): an idle virt with 4 CPUs uses about 0.45-0.6 s of host processor time a second
-# under TCG, one vCPU that spins instead of waiting in WFI about 1 s on its own. The lowest of a few samples is
-# compared, so one sample that meets a busy host or a burst of wakeups does not fail the check.
-IDLE_LIMIT = .85
+# aarch64 idle check (issue 208, 000-KRN-0197): QEMU shows no WFI state, so the check looks at its threads. A vCPU that
+# spins instead of waiting in WFI keeps its thread running or waiting to run the whole second, on any host and under
+# any load; an idle one sleeps between wakeups. QEMU's processor time in all grows with the host's slowness (0.85-1.05 s
+# a second on PCU's 4 cores) and is only reported. The lowest of a few samples is compared, so one sample that meets a
+# burst of wakeups does not fail the check.
+IDLE_THREAD_LIMIT = .6
 
 
-def idle_cpu_seconds(vm, samples=3):
-    return min(qemu_cpu_seconds(vm, 1) for _ in range(samples))
+def idle_thread_share(vm, samples=3):
+    """(share, processor time): the lowest of `samples` 1 s samples of `busiest_thread_share`."""
+    return min(busiest_thread_share(vm, 1) for _ in range(samples))
 
 
-def qemu_cpu_seconds(vm, seconds):
-    """Processor time QEMU used in `seconds` of wall time (user and system, all its threads)."""
+def busiest_thread_share(vm, seconds):
+    """(share, processor time) over `seconds` of wall time: the share the busiest QEMU thread ran or waited to run, from
+    its schedstat, and the processor time QEMU used in all (user and system, all its threads)."""
+    def runnable():
+        shares = {}
+        for thread in Path(f"/proc/{vm.process.pid}/task").iterdir():
+            try:
+                ran, waited, _ = (thread / "schedstat").read_text().split()
+            except (OSError, ValueError):
+                continue  # a thread that ended meanwhile
+            shares[thread.name] = int(ran) + int(waited)
+        return shares
     def total():
         fields = Path(f"/proc/{vm.process.pid}/stat").read_text().rpartition(")")[2].split()
         return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
-    start = total(); time.sleep(seconds)
-    return total() - start
+    before, used, start = runnable(), total(), time.monotonic()
+    time.sleep(seconds)
+    after, used, wall = runnable(), total() - used, time.monotonic() - start
+    return max((after[t] - before[t] for t in after.keys() & before.keys()), default=0) / 1e9 / wall, used
+
+
+def idle_check(vm):
+    """The aarch64 idle check; returns the busiest thread's share for the suite's line."""
+    share, used = idle_thread_share(vm)
+    assert share < IDLE_THREAD_LIMIT, (f"idle QEMU: a thread ran or waited to run {share:.0%} of a second ({used:.2f} s "
+                                       "of processor time in all): a CPU does not wait in WFI")
+    return share
 
 
 def gibibytes(memory):
@@ -1025,10 +1048,10 @@ def normal_suite(vm):
     vm.serial()
     assert task_rows_reaped(vm) == {}
     # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
-    # state for aarch64: there the emulator's own processor time over a second shows the CPU mostly asleep.
+    # state for aarch64: there no QEMU thread stays runnable for most of a second.
+    idle = "HLT"
     if vm.arch == "aarch64":
-        used = idle_cpu_seconds(vm)
-        assert used < IDLE_LIMIT, f"idle QEMU used at least {used:.2f} s of processor time a second: a CPU does not wait in WFI"
+        idle = f"WFI (a thread runnable {idle_check(vm):.0%})"
     else:
         for _ in range(10):
             registers = vm.hmp("info registers")
@@ -1043,7 +1066,7 @@ def normal_suite(vm):
     online = vm.command("cpus")
     assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
     assert heap_used(vm) == baseline
-    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
+    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, {idle}, {vm.cpus} CPUs", flush=True)
     if vm.cpus > 8:
         monitors_every_cpu(vm)
         clocks_on_many_cpus(vm)
@@ -2726,11 +2749,11 @@ def smp_suite(vm):
     assert heap_used(vm) == baseline
     workers_check(vm)
     nnd_check(vm)
+    kept, idle = ("register", "WFI") if vm.arch == "aarch64" else ("SIMD", "HLT")
     if vm.arch == "aarch64":
-        # No WFI state in QEMU's monitor: with every CPU idle the emulator uses little processor time.
+        # No WFI state in QEMU's monitor: with every CPU idle no QEMU thread stays runnable for most of a second.
         vm.serial()
-        used = idle_cpu_seconds(vm)
-        assert used < IDLE_LIMIT, f"idle QEMU used at least {used:.2f} s of processor time a second: a CPU does not wait in WFI"
+        idle = f"WFI (a thread runnable {idle_check(vm):.0%})"
     else:
         for cpu in range(vm.cpus):
             vm.hmp(f"cpu {cpu}")
@@ -2742,7 +2765,6 @@ def smp_suite(vm):
             else:
                 raise AssertionError(f"CPU {cpu} did not halt when idle: {regs}")
         vm.serial()
-    kept, idle = ("register", "WFI") if vm.arch == "aarch64" else ("SIMD", "HLT")
     print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, {kept} preservation, supervisor reserve under load, remote kill, all CPUs {idle}", flush=True)
     revocation_steps_check(vm)
 
