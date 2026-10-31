@@ -1,15 +1,16 @@
 //! Copies of named roots in a file (issue 309-STO-0031; MC-4.4, 4.8, 6.8): a CAR v1, the IPLD content archive, so other
 //! tools read it. A header (a varint length, then DAG-CBOR `{"roots": [cid], "version": 1}`) whose one root is the
 //! names node; then sections, each a varint length, a CID and its block: the names node first, then every block under
-//! each name's root in the order `tree::walk` visits them. The names node is `{"v": 1, "names": [[name, version, root],
-//! ...]}`, sorted by name. A copy is checked whole before anything of it is put: the header and the names node only if
-//! exactly their encoding, every block against its CID, and each root walked over the copy's own sections, so a copy
-//! cut short or missing a block is refused. An import puts each block, a copy the store holds damaged replaced, and
-//! publishes each name by compare-and-swap, never over another root. No heap and no system calls: tests/car_host.rs.
+//! each name's root in the order `journal::walk` visits them (a journal's, or `tree::walk`'s for any other root). The
+//! names node is `{"v": 1, "names": [[name, version, root], ...]}`, sorted by name. A copy is checked whole before
+//! anything of it is put: the header and the names node only if exactly their encoding, every block against its CID,
+//! and each root walked over the copy's own sections, so a copy cut short or missing a block is refused. An import puts
+//! each block, a copy the store holds damaged replaced, and publishes each name by compare-and-swap, never over another
+//! root. No heap and no system calls: tests/car_host.rs.
 use crate::cid::{self, Cid, Codec};
 use crate::dag::{self, Blocks, In, Out, Same, Sink, CHUNK, LINK};
+use crate::journal;
 use crate::sha256::{Sha256, DIGEST};
-use crate::tree;
 use crate::worktree::Names;
 
 /// The CAR format's version.
@@ -448,7 +449,7 @@ fn verify<S: Source>(source: S, buffer: &mut [u8; CHUNK], block: &mut [u8; CHUNK
     };
     for k in 0..roots.len() {
         // Every step takes a section or fails, so the copy bounds the walk.
-        if let Err(e) = tree::walk(&mut sections, &roots.get(k).root, buffer, u64::MAX, |s, cid| s.visit(cid)) {
+        if let Err(e) = journal::walk(&mut sections, &roots.get(k).root, buffer, u64::MAX, |s, cid| s.visit(cid)) {
             let error = sections.failed.take().unwrap_or(match e { dag::Error::NotFound => Error::Missing, dag::Error::Corrupt => Error::Corrupt, _ => Error::Block });
             return Err(Refused { error, at: sections.reader.at });
         }
@@ -464,7 +465,7 @@ fn verify<S: Source>(source: S, buffer: &mut [u8; CHUNK], block: &mut [u8; CHUNK
 }
 
 /// Reads and checks a whole copy, putting nothing: the header and the names node, each exactly its encoding; each name's
-/// root walked (`tree::walk`) over the copy's sections, each the next one the walk visits, read whole and checked against
+/// root walked (`journal::walk`) over the copy's sections, each the next one the walk visits, read whole and checked against
 /// its CID, and each node against its schema and place; then the copy's end. `each` hears each name. `buffer` and `block`
 /// hold a block each.
 pub fn check<S: Source>(source: S, buffer: &mut [u8; CHUNK], block: &mut [u8; CHUNK], mut each: impl FnMut(Named)) -> Result<Checked, Refused> {
@@ -559,7 +560,7 @@ pub fn import<S: Store, R: Source>(store: &mut S, mut source: R, buffer: &mut [u
 pub struct Exported { pub names: usize, pub blocks: u64, pub bytes: u64, pub digest: [u8; DIGEST] }
 
 /// Writes a copy of `names` to `target`: their current roots read at one point (`each` hears each name, sorted, with
-/// its version and root), the names node, then every block under each root as `tree::walk` visits it within `steps`,
+/// its version and root), the names node, then every block under each root as `journal::walk` visits it within `steps`,
 /// each read from the store and checked against its CID. Nothing is written for names the store does not take, more
 /// than NAMES or one twice (Name), or a name with no root (Missing).
 pub fn export<S: Store, T: Target>(store: &mut S, names: &[&str], target: T, steps: u64, buffer: &mut [u8; CHUNK], block: &mut [u8; CHUNK],
@@ -596,7 +597,7 @@ fn write_each<'a, B: Blocks, T: Target>(store: &mut B, count: usize, named: impl
     writer.section(&root, &node[..len])?;
     let (mut blocks, mut failed) = (0, None);
     for i in 0..count {
-        let walked = tree::walk(store, &named(i).root, buffer, steps, |s, cid| {
+        let walked = journal::walk(store, &named(i).root, buffer, steps, |s, cid| {
             let len = s.get(cid, &mut block[..])?;
             if !cid.matches(&block[..len]) { return Err(dag::Error::Corrupt); }
             writer.section(cid, &block[..len]).map_err(|e| { failed = Some(e); dag::Error::Store })?;
