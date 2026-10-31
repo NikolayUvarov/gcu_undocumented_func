@@ -137,6 +137,7 @@ class VM:
         # One QMP command (the tablet's events: input-send-event); the reply.
         if self.qmp_file is None:
             connection = socket.socket(socket.AF_UNIX)
+            connection.settimeout(60)  # a QEMU that stops answering fails the suite instead of holding it (000-KRN-0196)
             for _ in range(100):  # QEMU creates the socket as it starts
                 try:
                     connection.connect(str(self.qmp_path))
@@ -12083,14 +12084,20 @@ def no_serial_check(args, disk):
                 time.sleep(2)
                 if not sock.exists():
                     continue
-                with socket.socket(socket.AF_UNIX) as client:
-                    client.connect(str(sock))
-                    lines = client.makefile("rw")
-                    lines.readline()  # the greeting
-                    for command in ({"execute": "qmp_capabilities"}, {"execute": "screendump", "arguments": {"filename": str(picture)}}):
-                        lines.write(json.dumps(command) + "\n"); lines.flush()
-                        while not any(key in json.loads(lines.readline()) for key in ("return", "error")):
-                            pass
+                # QEMU serves one QMP client at a time: each try closes its connection and gives up after 10 s, so a
+                # connection QEMU has not taken yet cannot hold the check for ever (000-KRN-0196).
+                try:
+                    with socket.socket(socket.AF_UNIX) as client:
+                        client.settimeout(10)
+                        client.connect(str(sock))
+                        with client.makefile("rw") as lines:
+                            lines.readline()  # the greeting
+                            for command in ({"execute": "qmp_capabilities"}, {"execute": "screendump", "arguments": {"filename": str(picture)}}):
+                                lines.write(json.dumps(command) + "\n"); lines.flush()
+                                while not any(key in json.loads(lines.readline()) for key in ("return", "error")):
+                                    pass
+                except (OSError, ValueError):
+                    continue
                 if not picture.exists():
                     continue
                 _, size, _, pixels = picture.read_bytes().split(b"\n", 3)
