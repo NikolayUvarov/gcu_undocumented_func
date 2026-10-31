@@ -115,6 +115,8 @@ Still left: `ask(host, port, why)` and the user's answers, which need the shell'
   - the IDL fuzzer with the new types;
   - `netpolicy_host`.
 - **QEMU** (the `net` suite's `browse_check`): a question whose program ended leaves the list; one no one answers is refused at 60 s.
+  - **Run locally,** x86, QEMU TCG, ef234cc8: the check alone passed, both ends with the broker's lines.
+  - **Still to run:** the whole x86 and aarch64 network groups on the machines.
 - **Left:**
   - the user's answer through the shell (APP), and with it the checks of `once`, `session` and `always`;
   - the profile's MC-11.6 row, once the whole path is tested.
