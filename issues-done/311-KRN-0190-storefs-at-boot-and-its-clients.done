@@ -1,6 +1,6 @@
-# 311-KRN-0190 — `storefs` at boot, a client of it beside `vfs_server`'s, and `mind::fs` routing by volume
+# 311-KRN-0190 — `storefs` at boot, a client of it beside `vfs_server`'s, and `mind::fs` routing by volume — done
 
-**Type:** `init` (start and grants), `common/abi.rs` (a slot, ABI), `libmind` `fs` · **Owner:** `KRN` · **Priority:** P2 · **Status:** made (2026-10-30); closes once landed, the shell's part aside · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.md) (STO's), for 311-STO-0032 · **Constitution:** MC-3.1, MC-3.4, MC-6.1, MC-12.4
+**Type:** `init` (start and grants), `common/abi.rs` (a slot, ABI), `libmind` `fs` · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) (STO's), for 311-STO-0032 · **Constitution:** MC-3.1, MC-3.4, MC-6.1, MC-12.4
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-30, "`storefs`: started by `init`, reached by a files client, and a `conflict` error in `vfs.wit`", and in its message to KRN of 10:53. The kernel track chose the way in, (b), in its answer of 11:15.
 
@@ -72,6 +72,24 @@ STO offered two ways in: (a) `vfs_server` forwards the volumes it does not hold,
   - the shell's part: its client lent to programs. APP waits for a client of `storefs` that does not write (`requests-APP.md`), so programs get none for now.
   - `storefs` answering `conflict` (311-STO-0032).
 
+## Resolution
+
+- **Landed** in round 62, `main` 74cf7265 (`claude/youthful-mendel-mf1soy` 0164ec3c), as the progress above says. Round 60 returned 4ca310f1 first.
+- **Every criterion, checked on the Effector machines** in the round's gate (every group, x86 and aarch64):
+  - `storefs` ready at boot on both, with the store's client (`storefs_check` in the `shell` suite);
+  - the shell's `mkdir`, `write`, `cat`, `ls` and `rm` on `notes:` through `mind::fs`;
+  - `find notes:` from a program without a client: `NOTFOUND`, and nothing asked of `storefs`;
+  - `files and block writes` (x86) and `files and the block store` (aarch64) unchanged;
+  - host tests: `fs_routing`, `runtime`, `boot_abi`.
+- **A race the branch's run found** (37cd4d9c, 173-KRN-0035's plan):
+  - `init` marked the Effector services in the boot plan only if they were still alive after it followed the modes;
+  - in the services suite's safe start `effector` exits at once, as it has no network grant;
+  - it now marks them when the start succeeds.
+- **What round 60 found** (2df4ef36): where `wlan` runs, the shell's 33 grants overflowed `init`'s list of 32. `SPAWN_GRANTS_MAX` is now `SLOT_DYNAMIC`, in the same ABI 27.
+- **What is left is other tracks':**
+  - **APP:** the shell lends a client of `storefs` to programs, once STO gives one that does not write (`requests-APP.md`);
+  - **STO:** `storefs` answering `conflict` (311-STO-0032).
+
 ## Related
 
-[311](311-storefs-a-file-face.md), 311-STO-0032, [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done), [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done).
+[311](../issues/311-storefs-a-file-face.md), 311-STO-0032, [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done), [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done).

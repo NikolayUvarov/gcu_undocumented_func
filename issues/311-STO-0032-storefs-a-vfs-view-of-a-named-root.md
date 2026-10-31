@@ -1,6 +1,6 @@
 # 311-STO-0032 — `storefs`: files and directories of a named root, through `vfs.wit`
 
-**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.md) (`storefs` at boot and its clients), the kernel track's, from the request of 2026-10-30; [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done) (`vfs.wit` 2.6 `conflict`) is done · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
+**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done) (`storefs` at boot and its clients) is done; [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done) (`vfs.wit` 2.6 `conflict`) is done) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
 

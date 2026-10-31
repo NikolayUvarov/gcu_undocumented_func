@@ -1,6 +1,6 @@
 # 000-KRN-0196 — A QMP read without a time limit holds a gate lane for an hour
 
-**Type:** tests · **Owner:** `KRN` · **Priority:** P1 · **Status:** made (2026-10-31); closes once landed · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
+**Type:** tests · **Owner:** `KRN` · **Priority:** P1 · **Status:** landed (2026-10-31, round 62); closes once the group has run on i9 · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -29,12 +29,16 @@
 - [x] `no_serial_check` closes each connection and bounds each try to 10 s; a socket error or a broken reply counts as a try.
 - [x] `VM.qmp` reads with a time limit of 60 s.
 - [ ] `x86: RAM above 4 GiB` (with `no_serial_check` in its `display` suite) passes locally (done) and on i9.
-- [ ] The landing gate runs it with no hour-long lane.
+- [x] The landing gate runs it with no hour-long lane (round 62, on rz: i9 was off).
 
 ## Progress
 
 - **2026-10-31, made** on `claude/youthful-mendel-mf1soy`.
 - **Tested locally (x86, QEMU TCG, 4 CPUs):** `x86: RAM above 4 GiB` PASS in 1119 s, with `no_serial_check`'s line.
+- **2026-10-31, landed** in round 62, `main` 74cf7265. i9 was off from 02:51 UTC, so the group ran on rz:
+  - the first run gave up after 902 s: the shell gave no prompt after `run record -t 3 data/rec.avi &` within the command's limit, while the machine ran a second gate lane and the host tests (load; 226's gate timing);
+  - alone it passed in 992 s, with `no_serial_check`'s line;
+  - no lane waited an hour.
 - **Left:** a gate that runs the group on i9.
 
 ## Related
