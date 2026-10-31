@@ -3707,6 +3707,20 @@ def car_v1(names, blocks):
     return uvarint(len(head)) + head + b"".join(uvarint(len(cid) + len(block)) + cid + block for cid, block in [(root, node), *blocks])
 
 
+def journal_entry(seq, boot, monotonic, calendar, clock, source, kind, content, prev):
+    """A journal's entry (312-STO-0034) written here from its schema and the DAG-CBOR specification, not from libmind:
+    `{"v": 1, "seq", "boot", "kind", "prev", "clock", "source", "content", "calendar", "monotonic"}`, its keys in
+    DAG-CBOR's order (shorter first, then by their bytes), `prev` (a link) absent for the first; `content` and `prev`
+    are CIDs' binary forms."""
+    fields = [("v", cbor_head(0, 1)), ("seq", cbor_head(0, seq)), ("boot", cbor_head(0, boot)), ("kind", cbor_text(kind))]
+    if prev:
+        fields.append(("prev", cbor_link(prev)))
+    fields += [("clock", cbor_head(0, clock)), ("source", cbor_text(source)), ("content", cbor_link(content)),
+               ("calendar", cbor_head(0, calendar)), ("monotonic", cbor_head(0, monotonic))]
+    assert [k for k, _ in fields] == sorted((k for k, _ in fields), key=lambda k: (len(k), k))
+    return cbor_head(5, len(fields)) + b"".join(cbor_text(k) + v for k, v in fields)
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -3946,6 +3960,7 @@ def store_suite(vm):
     store_tree_check(vm)
     store_copy_check(vm)
     tally_move_check(vm)
+    store_journal_check(vm)
 
 
 def run_tally(vm, args):
@@ -4214,11 +4229,73 @@ def tally_move_check(vm):
           "outbox at the new store's next epoch, a repeated operation answered from the record", flush=True)
 
 
+def store_journal_check(vm):
+    """312-STO-0034: a journal through `blocks journal`. Three notes are appended, each entry published by
+    compare-and-swap at the name's next version; `check` reads them whole from the head, and `list` prints them newest
+    first, each entry's CID the one this suite computes from the schema with the times printed, linking the one before.
+    Once the leases have ended, a collection frees a block nothing retains and keeps every entry and content. An older
+    head published again by hand with `blocks publish` is refused by `check`, and nothing is appended after it."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    notes = ["the first note", "a second one", "and the third"]
+    entries = []
+    for seq, note in enumerate(notes, 1):
+        out = blocks(f"journal append diary note {note}")
+        found = re.search(rf"^APPENDED diary SEQUENCE {seq} BOOT 1 ENTRY (\S+) CONTENT {cid_raw(note.encode())} \((VOLATILE|FLUSHED|COPIED)\)\r?$", out, re.M)
+        assert found, out
+        entries.append(found[1])
+    whole = "CHECKED diary: 3 ENTRIES, SEQUENCE 1 TO 3, AT VERSION 3: WHOLE"
+
+    def listed():
+        out = blocks("journal list diary")
+        require(out, "3 ENTRIES OF diary AT VERSION 3, NEWEST FIRST")
+        rows = re.findall(r"^ENTRY (\d+) (\S+) BOOT (\d+) MONOTONIC (\d+) CALENDAR (\d+) (NONE|CHIP|NETWORK)\r?\n"
+                          r"  SOURCE (\S+) KIND (\S+) CONTENT (\S+) TEXT (.*?)\r?$", out, re.M)
+        assert [(int(r[0]), r[1]) for r in rows] == [(3, entries[2]), (2, entries[1]), (1, entries[0])], out
+        # Each entry is the schema's encoding of what was printed, the content's CID and the entry before.
+        prev, before = None, 0
+        for seq, cid, boot, monotonic, calendar, clock, source, kind, content, text in reversed(rows):
+            note = notes[int(seq) - 1].encode()
+            assert (boot, source, kind, content, text) == ("1", "blocks", "note", cid_raw(note), note.decode()), out
+            assert int(monotonic) >= before and (clock != "NONE" or calendar == "0"), out
+            data = journal_entry(int(seq), 1, int(monotonic), int(calendar), ["NONE", "CHIP", "NETWORK"].index(clock), source, kind,
+                                 cid_binary(0x55, note), prev)
+            assert cid_text(cid_binary(0x71, data)) == cid, (seq, data.hex(), out)
+            prev, before = cid_binary(0x71, data), int(monotonic)
+        return rows[0][5]
+    require(blocks("journal check diary"), whole)
+    clock = listed()
+    print(f"INFO: the journal's calendar time came from {clock}", flush=True)
+    # Leases run 60 s by the guest's clock (303-STO-0017): after them a collection frees what nothing retains, and keeps
+    # the journal's entries and contents, which its name retains through its head.
+    require(vm.command("write ram:jloose.txt not in the journal"), "WROTE 19 BYTES")
+    loose = cid_raw(b"not in the journal\n")
+    require(blocks("put ram:jloose.txt"), f"PUT {loose} SIZE 19")
+    since = guest_seconds(vm)
+    time.sleep(55)
+    while guest_seconds(vm) < since + 62: time.sleep(2)
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    require(blocks(f"get {loose} ram:x.txt"), "blocks: get: NotFound")
+    require(blocks("journal check diary"), whole)
+    listed()
+    print("PASS: a journal: three entries appended, each at the name's next version; checked whole from its head and "
+          "listed newest first, each entry the schema's encoding computed here; after a collection every entry and "
+          "content is still there", flush=True)
+    # The second entry published again by hand as the head: a rewrite from an older point, refused at once.
+    require(blocks(f"publish diary {entries[1]} 3"), "PUBLISHED diary VERSION 4")
+    require(blocks("journal check diary"), "REFUSED diary AT VERSION 4: SEQUENCE 4, AFTER 0 ENTRIES CHECKED: Sequence(2)")
+    require(blocks("journal append diary note after it"), "blocks: journal append diary: Sequence(2)")
+    require(blocks("resolve diary"), f"diary VERSION 4 ROOT {entries[1]}")
+    print("PASS: a journal's older head published again by hand is refused by the check, and nothing is appended after it", flush=True)
+
+
 def store_domains_check(vm):
     """308-STO-0023: memory domains on the store's RAM disk. Where the processor gives random numbers (RNDR on aarch64's
-    `max`), a domain is made; its blocks and names are its own, a domain's client makes no domain, and a forgotten
-    domain is gone at once, its records then collected, while another domain stands. Without a random source (x86's
-    qemu64), no domain is made, and the store says why."""
+    `max`), a domain is made; its blocks, names and journal (312-STO-0034) are its own, a domain's client makes no
+    domain, and a forgotten domain is gone at once, its journal with it and its records then collected, while another
+    domain stands. Without a random source (x86's qemu64), no domain is made, and the store says why."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
@@ -4241,6 +4318,10 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 312-STO-0034: a journal in a domain is written through the domain's client, and is the domain's alone.
+    require(blocks(f"-d {first} journal append log note in a domain"), "APPENDED log SEQUENCE 1 BOOT 1 ENTRY")
+    require(blocks(f"-d {first} journal check log"), "CHECKED log: 1 ENTRIES, SEQUENCE 1 TO 1, AT VERSION 1: WHOLE")
+    require(blocks("journal check log"), "blocks: journal log: NotFound")
     # 309-STO-0031: a copy in a file is in the clear and would outlive the domain's forgetting, so none is made.
     require(blocks(f"-d {first} export ram:dom.car secret"), "blocks: export: a memory domain is not copied")
     out = blocks("domains")
@@ -4251,14 +4332,15 @@ def store_domains_check(vm):
     require(blocks(f"domain forget {first}"), f"DOMAIN {first} FORGOTTEN")
     require(vm.service_logs("blockstore", "FORGOTTEN BY PID"), f"[BLOCKSTORE] DOMAIN {first} FORGOTTEN BY PID")
     require(blocks(f"-d {first} resolve secret"), f"blocks: domain {first}: NotFound")
+    require(blocks(f"-d {first} journal check log"), f"blocks: domain {first}: NotFound")
     require(blocks("domains"), f"DOMAIN {first} FORGOTTEN")
     collected = blocks("collect")
     assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
     out = blocks("domains")
     assert f"DOMAIN {first} " not in out and f"DOMAIN {second} LIVE" in out, out
     require(blocks(f"-d {second} get {note} ram:again.txt"), "GOT 12 BYTES")
-    print("PASS: memory domains: two made with keys from the processor; a domain's block and name are its own, its client "
-          "makes no domain; a forgotten domain is gone at once and its records collected, the other one whole", flush=True)
+    print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
+          "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole", flush=True)
 
 
 def fm_store_check(vm):

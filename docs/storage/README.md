@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.22 (2026-10-30): a journal checked from its head, `blocks journal` (312-STO-0034); 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -49,7 +49,7 @@ An object larger than a block is a Merkle-DAG named by one root CID (`libmind/sr
   So the same bytes always give the same root, however they are written. One node of height 1 covers 4 MiB, height 2 covers 1 GiB, height 3 covers 256 GiB.
 - **One encoding.** A node is accepted only if re-encoding it gives exactly its bytes. Integers must be in their shortest form, keys in DAG-CBOR's order with no others, and arrays of definite length. Each link is tag 42 over the identity multibase prefix and a supported CID (MC-4.2).
 - **The reader trusts no store.** `size` and `read_at` check every node and chunk on the way from the root against its CID. They also check it against its place in the shape: the link count, the children's types (chunks under height 1, nodes above) and sizes, and the chunk lengths. A block that does not match is refused as corrupt, and a tree out of shape is refused as such.
-- **In the block store:** `put` names the content type. A `dag-cbor` block is stored only if `decode` accepts it (or `tree::decode`, below), and a record typed as a node that does not decode is corrupt (301-STO-0002).
+- **In the block store:** `put` names the content type. A `dag-cbor` block is stored only if `decode` accepts it (or `tree::decode` or `journal::decode`, below), and a record typed as a node that does not decode is corrupt (301-STO-0002).
 - Names, retention and collection are below.
 
 Evidence: `tests/dag_host.rs`.
@@ -78,8 +78,8 @@ A directory is a set of named files and subdirectories under one root CID (`libm
   - it returns the bytes of the files under the root; a file named twice counts twice. `tree::size` gives the same from the directory nodes and each file's root block alone;
   - **its work is bounded:** a walk is given a number of steps (an entry gone through, a block visited, a file's blocks included) and stops with `too-large` once it has taken them.
 - **In the block store:**
-  - `put` takes a `dag-cbor` block that is an object's node or a directory, and refuses anything else (`invalid`); a mount counts a record of neither as corrupt.
-  - The store's walk is the tree's. A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`.
+  - `put` takes a `dag-cbor` block that is an object's node, a directory or a journal's entry (312-STO-0034, below), and refuses anything else (`invalid`); a mount counts a record of none of them as corrupt.
+  - The store's walk is the tree's, and a journal's for a journal's entry (below). A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`.
   - **A walk in the store takes at most four steps for each block its index can hold, and 64 more.** A tree that needs more is refused as out of shape (`invalid`), with nothing written. So a walk's work is bounded by the medium's size (MC-5.1). By count, not run here: a 3 GiB object of distinct chunks takes about 199 000 steps of the about 790 000 its index's 225 654 slots give. A collection marks every block a retained directory reaches, so a directory's files are retained by the name or pin that holds it.
   - An owner is charged the bytes of the files under a directory it retains; a mount reads them again with `tree::size`.
 - **Not built yet:** the `storefs` service (a `vfs.wit` provider); its logic is host-tested (below). On the platform, `blocks tree` makes and reads directories through a working tree (next section).
@@ -268,7 +268,7 @@ A copy of named roots in a file (`libmind/src/car.rs`, the second step of [309](
 
 - **The format is CAR v1**, the IPLD content archive, so other tools read it:
   - a header: a varint length, then DAG-CBOR `{"roots": [link], "version": 1}`. Its one root is the names node;
-  - sections, each a varint length, a CID's binary form and its block: the names node first, then every block under each name's root, in the order `tree::walk` visits them. A block met twice is written twice.
+  - sections, each a varint length, a CID's binary form and its block: the names node first, then every block under each name's root, in the order the store's walk visits them (`tree::walk`, or a journal's, below). A block met twice is written twice.
 - **The names node** is one DAG-CBOR block `{"v": 1, "names": [[name, version, root], ...]}`:
   - 1 to 8 names (one `snapshot` reads 8 at one point), sorted by their bytes, each once, each a name the store takes;
   - `version`: the one the name was at in the store it was exported from, from 1;
@@ -277,7 +277,7 @@ A copy of named roots in a file (`libmind/src/car.rs`, the second step of [309](
 - **A copy is checked whole** before anything of it is put:
   - the header and the names node only if re-encoding them gives exactly their bytes. A CAR of another version (CAR v2) is refused;
   - every section's CID a supported one, its length at most a CID and a block (16 KiB) in its shortest form, its bytes matching its CID;
-  - each name's root is walked (`tree::walk`) over the copy's own sections. Each block the walk visits must be the next section, and each node it reads is checked against its schema and its place. So a copy cut short at any byte, even at a section's end, missing a block, or with one out of the walk's order, is refused, and so is a section after the last;
+  - each name's root is walked (`tree::walk`, or a journal's walk) over the copy's own sections. Each block the walk visits must be the next section, and each node it reads is checked against its schema and its place. So a copy cut short at any byte, even at a section's end, missing a block, or with one out of the walk's order, is refused, and so is a section after the last;
   - a refusal names its error and the byte its section starts at.
 - **`blocks export <file> <name>...`** reads the names' current roots at one point (`snapshot`). It then writes the copy, each block read from the store and checked against its CID, each walk within the steps the store gives its own. It prints `EXPORT <name> VERSION <v> ROOT <cid>` for each name, then `EXPORTED <n> NAMES, <b> BLOCKS, <bytes> BYTES TO <file>; SHA-256 <hex>`.
   - A name that does not exist or is removed, one the store does not take, one given twice, or more than 8 are refused, and nothing is written.
@@ -312,6 +312,65 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 - The QEMU `store` suite (x86 and aarch64): a tree and a file under two names exported to the boot volume; after a reboot, with the store's RAM disk blank, an import publishes each at its root and every file reads back (its SHA-256 checked by the suite). An import again changes nothing, and a name published since at another root is left as it is.
 
 Not run on aarch64 yet.
+
+## A journal, checked from its head — host-tested, run in QEMU on x86 and aarch64 (312-STO-0034)
+
+A journal is an ordered record under a name, which a reader checks whole from its head (`libmind/src/journal.rs`), the first step of [312](../../issues/312-the-minds-memory.md): every entry there, none reordered, changed or dropped, and the record never rewritten from an older point. It is a client's use of `put`, `publish`, `snapshot` and `get`: `blockstore.wit` and the store's layout do not change.
+
+- **An entry** is one DAG-CBOR block `{"v": 1, "seq", "boot", "kind", "prev", "clock", "source", "content", "calendar", "monotonic"}`, its keys in DAG-CBOR's order:
+  - `seq`: its sequence, from 1;
+  - `boot` and `monotonic`: the boot it was written in, as the journal counts them from 1 (below), and the monotonic time in it, in nanoseconds;
+  - `calendar` and `clock`: the calendar time, seconds since 1970-01-01 UTC, and the clock it came from: 0 none (the time is then 0), 1 the clock chip, 2 the network;
+  - `source`: the program that wrote it, as the writer gives it; `kind`: a short label. Each is 1 to 32 bytes of `!` to `~`;
+  - `content`: a link to the content, a file or a directory (above);
+  - `prev`: a link to the entry before, a `dag-cbor` CID, absent for the first and only for it.
+
+  `"v"` is the schema's version, and another is refused (MC-4.13). **One encoding:** an entry is accepted only if re-encoding it gives exactly its bytes; at most 250 bytes.
+- **Appending** (`journal::append`): the writer puts the content first, a file of any size as an object. The append reads the name's version and head, puts an entry of sequence `version + 1` linking the head, and publishes it by compare-and-swap from the version read. So an entry's sequence is the name's version it is published at.
+  - Of two writers that read the same head, the second is refused with `conflict`, nothing published; it reads the new head and appends after it, so the journal never forks. The entry it put is retained by nothing, and a collection frees it once its lease (60 s) has ended.
+  - **The boot** is counted by the journal: the head's, or the next when the head's monotonic time is past the writer's (its clock started again); the first entry's is 1. No boot identity exists on the platform (no system call names the boot), so a new boot whose clock has already passed the head's is counted as the same boot.
+  - A head the check would refuse at once (no entry of this schema, or not at its version) takes no entry, and nor does a removed name.
+- **The check from the head** (`journal::check`) reads the name's version and root, then each entry down to the first, within a bound of steps (`blocks` gives the store's own: four for each block its index holds, and 64). Each entry is read and checked against its CID and the schema. It refuses:
+  - a sequence that is not the name's version at the head, or not one less than the entry above it below; the schema puts the first, and only it, at 1 with no link before;
+  - a block missing (`missing`) or corrupt (`corrupt`), and a block that is no entry of this schema (`format`, `version`);
+  - a boot that goes back, and a monotonic time that goes back within one boot (`time`); the same time twice is not going back.
+
+  So a head published again at a later version, a rewrite, is refused, as a checkpoint's epoch is (313-STO-0033), and so is a journal whose name was removed and published again (`removed` while it stays removed). The check never orders by the calendar time, and does not read the contents.
+- **The block store retains a journal whole.** It takes an entry as a typed `dag-cbor` block, as it takes `dag`'s nodes and `tree`'s directories. Its walk (`journal::walk`; `tree::walk` for any other root) follows the links to the entries before one after another, never nested: `tree` bounds a path at 32 directories, and a journal is longer.
+  - Each entry is visited, then its content's blocks (`tree::walk`), all within one walk's steps. An entry linking one that is not one less in sequence, or no entry, and a content that is an entry, are out of shape (`invalid`).
+  - So a publication, a pin or a commit of a head needs every entry and every content (`incomplete`), and a collection keeps every block a kept head retains. `dag::complete` is an object's; the store's own check of a publication is this walk.
+  - An owner is charged the bytes of the contents under each version its name keeps, at its root, as for directories (above): the four heads a journal's name keeps are charged about four times its contents. A mount reads them again (`journal::size`).
+- **Copies** (309-STO-0031) walk a journal as the store does: `blocks export` writes every entry and content in the walk's order, and a check of the copy reads them all. An import publishes the name at the versions of the store it comes into (1 into an empty one), so `check` there refuses the head as one published again: a journal's order is checked in the store it was written in.
+- **A memory domain** (308-STO-0023): a journal in a domain is written through the domain's client (`blocks -d <id> journal …`), is the domain's alone, and is forgotten with it. Nothing new is needed for this.
+- **`blocks journal`:**
+  - `append <name> <kind> <text>`: the text's words joined by one space, as a `raw` block; `append <name> <kind> -f <file>`: a file, as an object. The source is `blocks`; the calendar time is the clock chip's, read through the `rtc` service, or none. It prints `APPENDED <name> SEQUENCE <s> BOOT <b> ENTRY <cid> CONTENT <cid> (<durability>)`. A conflict prints `CONFLICT <name>: ANOTHER WRITER APPENDED; READING THE HEAD AGAIN`, and the append is made after the new head, up to 8 times;
+  - `check <name>` prints `CHECKED <name>: <n> ENTRIES, SEQUENCE <first> TO <last>, AT VERSION <v>: WHOLE`, or `REFUSED <name> AT VERSION <v>: SEQUENCE <s>, AFTER <n> ENTRIES CHECKED: <error>`;
+  - `list <name> [n]` prints the last n entries (10 if not given), newest first, each checked as `check` checks it, on two lines: `ENTRY <seq> <cid> BOOT <b> MONOTONIC <ns> CALENDAR <s> <NONE|CHIP|NETWORK>`, then `  SOURCE <source> KIND <kind> CONTENT <cid>`, with `TEXT <text>` for a `raw` content of at most 96 printable bytes; then `<k> ENTRIES OF <name> AT VERSION <v>, NEWEST FIRST`;
+  - with `-d <domain>`, as every command of the tool.
+- **What it does not give:**
+  - **The source and the calendar time are the writer's claims,** and so is the boot the journal counts. The store records the publisher's badge in a name record, but `history` does not return it. A source attested by the store is a later step, on the wire.
+  - **A writer with the name's rights can append anything.** The check shows the order and completeness of what was published, not that the entries are true (MC-4.12).
+  - **A journal is as durable as its store** (the classes above: on the RAM disk nothing outlives a reset). A copy carries it whole, since a copy is of a name's object; in another store it is checked at that store's versions (above).
+  - **Each append walks the whole journal,** as every publication walks its root (MC-4.4), and a collection walks each version a name keeps: their work grows with the journal's length. A journal is bounded by one walk's steps, two an entry with a content of one block.
+  - **The check does not read the contents:** a content's block damaged after its entry was published is found by a read of it or a scrub.
+
+Evidence: host tests of the code, not a proof (MC-12.2).
+- `tests/journal_host.rs`, through the store's own logic on a simulated medium:
+  - two entries are byte for byte what the reference library `dag-cbor` 0.3.3 encodes, with the same CIDs. Numbers in every integer form and labels of 1 and 32 bytes encode as the schema written in the test does, and read back. Every byte of an entry changed to every other value is refused or reads as exactly what it encodes. Every cut, another version, keys out of order, missing or extra, longer forms, a sequence and a link before that disagree, a link before as `raw`, a clock of none of the three, a calendar time without a clock, and labels that are none are refused;
+  - 1000 entries appended check whole, also after a remount and after a collection once the leases ended, which frees a block nothing retains and keeps every entry. The last five are listed newest first with their contents, and the owner is charged the contents of the four kept heads, also after the mount;
+  - the check refuses, each with the place it stopped:
+    - an entry's block erased on the medium (`missing`, the entries above it checked); the store then takes no entry after it, and no collection frees anything;
+    - an entry changed, another entry with the same links: answered by a store that lies (`corrupt`), or written into the store with the entries above it again and published (its head's sequence);
+    - an older head published again, and the last head published again;
+    - a name removed (`removed`), then published again with a new journal's first entry, or with the old head;
+    - a monotonic time that goes back within one boot, and a boot that goes back. A new boot's clock starting again is not refused, and an append counts it;
+  - of two writers that read one head, the second is refused with `conflict`, nothing published, and appends after the first's entry; the check passes, and the refused entry is freed by a collection after its lease;
+  - a journal in a memory domain is the domain's alone, mounts again, and is gone with the domain's forgetting, its records collected, the volume's journal of the same name whole;
+  - an append stopped after each of the store's calls (the content's put, the head, its entry, the entry's put, the publication), and on a medium stopped at each write of it, not made or only its first sector: the check passes on whatever the head is, the old one or the new;
+  - the store's walk visits each entry, then its content, from the head down, over 96 entries (three times `tree::DEPTH`), and one step fewer stops it. A link to an entry not one less, a link to a directory, and a content that is an entry are `invalid`; an entry of another version is no block the store takes; an entry whose content is not stored is not published; a journal whose walk takes more steps than the store gives is refused;
+  - an export and the copy's check carry every entry and content. Imported into an empty store, the name is at version 1 there and the check refuses its head; where it was written, it checks whole;
+  - what a store that lies answers is refused: a gap, an entry of another version below the head, an entry's bytes under a `raw` CID, a directory, bytes not the block's. A check reads within its steps or is refused at the entry past them; a listing reads as many as asked.
+- The QEMU `store` suite (x86 and aarch64): `blocks journal append` three times, each at the name's next version. `check` and `list` print them, each entry's CID the one the suite computes from the schema and the times listed, linking the one before. Once the leases have ended, a collection frees a block nothing retains, and the journal still checks and lists whole. The second entry published again by hand with `blocks publish` is refused by `check` (`Sequence(2)` at version 4), and nothing is appended after it. Where a memory domain is made (aarch64), a journal in it is the domain's alone and is gone with its forgetting.
 
 ## Names — run on the platform (302, 303-STO-0003, 0004)
 
@@ -547,7 +606,7 @@ The policy (MC-4.5, MC-4.11, Appendix B.3):
 The quota is fixed: three quarters of the medium for every owner. Nobody grants it yet, so it bounds what one owner can take, not what several can take together.
 
 A collection:
-- **Mark.** It walks every retained object (`tree::walk`, a file with `dag::walk`): each node is read, checked against its CID and the shape, and marked, and each chunk is marked. If an object lacks a block or holds a corrupt node, the collection refuses (`incomplete`, `corrupt`) and frees nothing. A block the object still needs is never freed because another went missing.
+- **Mark.** It walks every retained object (`tree::walk`, a file with `dag::walk`, a journal entry after entry): each node is read, checked against its CID and the shape, and marked, and each chunk is marked. If an object lacks a block or holds a corrupt node, the collection refuses (`incomplete`, `corrupt`) and frees nothing. A block the object still needs is never freed because another went missing.
 - **Sweep.** One pass over the medium frees what is not marked or leased. Each record is freed in a crash-safe order:
   1. a one-sector marker over its frame (`MIND-DEL`, the sectors it covers, a SHA-256), sealed like any record, flushed;
   2. zeros over its other sectors;
@@ -672,7 +731,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 | [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), and copies in a file with repair from them ([309-STO-0031](../../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)); copies on a second medium after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues/311-storefs-a-file-face.md) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
-| [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | after 308 |
+| [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | the journal built ([312-STO-0034](../../issues/312-STO-0034-a-journal-checked-from-its-head.md), above); no personal data before 308 |
 | [313](../../issues/313-persistent-actors.md) | Checkpoints of services with queues, an effect journal | after 308 |
 | [314](../../issues/314-models-mapped-from-the-store.md) | Models mapped read-only from the store | after 307 |
 | [315](../../issues/315-memory-across-machines.md) | Memory across machines | an intention only |

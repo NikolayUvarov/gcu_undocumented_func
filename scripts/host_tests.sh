@@ -28,6 +28,10 @@ cargo test --quiet --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target"
 # The store's tests seal every record and time 100 000 puts: optimized, its checks of overflow and assertions kept (308-STO-0021).
 rustc --edition=2021 -O -C debug-assertions=on --test tests/blockstore_host.rs -o "$OUT/blockstore-tests"
 "$OUT/blockstore-tests"
+# The journal's tests append 1000 entries, each published after the store's walk of the whole chain: optimized, its
+# checks of overflow and assertions kept, they take seconds, not a minute (312-STO-0034).
+rustc --edition=2021 -O -C debug-assertions=on --test tests/journal_host.rs -o "$OUT/journal-tests"
+"$OUT/journal-tests"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"
