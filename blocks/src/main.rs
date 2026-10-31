@@ -9,7 +9,8 @@
 // one's findings (309-STO-0025). Reads and changes a directory tree under a name, each change one publication by
 // compare-and-swap (`tree`, 311-STO-0029). Copies named roots into a file as a CAR v1 and back, a damaged block repaired
 // from the copy (`export`, `import`, 309-STO-0031). Appends to a journal under a name and checks it from its head
-// (`journal`, 312-STO-0034).
+// (`journal`, 312-STO-0034). Builds a text index of a journal, searches it with each answer checked against the journal,
+// and checks it by a rebuild (`index`, 312-STO-0035).
 use core::sync::atomic::{AtomicUsize, Ordering};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ, SLOT_FILE};
 use mind::cid::{Cid, Codec};
@@ -20,6 +21,7 @@ use mind::idl::codec::{List, Text};
 use mind::ipc::Endpoint;
 
 mod car;
+mod index;
 mod journal;
 mod models;
 mod tree;
@@ -178,7 +180,7 @@ fn domains(mut words: core::str::SplitWhitespace) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n]");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name]");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -208,6 +210,7 @@ fn main(_info: &'static BootInfo) {
         Some("tree") => return tree::command(rest, builder, buffer, data, &mut remote),
         Some(which @ ("export" | "import")) => return car::command(which, rest, buffer, data, &mut remote),
         Some("journal") => return journal::command(rest, builder, buffer, data, &mut remote),
+        Some("index") => return index::command(rest, &mut remote),
         Some("domain") | Some("domains") => return domains(words),
         _ => {}
     }
@@ -362,6 +365,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n]"),
+        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name]"),
     }
 }

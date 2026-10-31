@@ -1,6 +1,6 @@
-# 000-KRN-0198 — Two waits of the x86 suites are short for a loaded host: the loader's error and a program's start
+# 000-KRN-0198 — Two waits of the x86 suites are short for a loaded host: the loader's error and a program's start — done
 
-**Type:** tests · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (made 2026-10-31; runs on the machines left) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
+**Type:** tests · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -34,6 +34,17 @@ In round 62 (candidate 74cf7265), two groups on `un-rizen-service` failed their 
 
   These two waits are not changed. The groups run there again.
 - **`un-rizen-service`'s second lane, cf0161af, alone on its lane:** "x86: RAM above 4 GiB" passed in 1000 s and "x86: boot, display, shell, memory, clock" in 688 s.
+
+## Resolution
+
+- **Landed** in `main` 36d05f12 (round 63, candidate 8ea4b135; `claude/youthful-mendel-mf1soy` f47e13fe).
+- **What changed:**
+  - the `boot` suite waits 120 s for the loader's start and then 60 s for its error (`loader_error`), instead of 30 s from QEMU's start;
+  - the `vfs` suite waits 30 s for the prompt after `run record -t 3 data/rec.avi &`.
+- **Every criterion:**
+  - both groups passed on `acc-1` (955 s and 698 s) and on `un-rizen`'s second lane alone (1000 s and 688 s);
+  - round 63's gate ran them with neither wait failing: "x86: RAM above 4 GiB" in 1180 s on `un-rizen`, "x86: boot, display, shell, memory, clock" in 710 s on `acc-2`.
+- **Not changed here:** the other 8 s prompt waits that failed while the kernel track's own runs overloaded `un-rizen` (load average 58 on 16 cores): `dmesg -s wifi`, `dmesg -s vfs_server`. In round 63, `svc start tts` failed the same way on `un-rizen` while both lanes there ran, and passed alone. These belong to the gate's load, not to one wait.
 
 ## Related
 

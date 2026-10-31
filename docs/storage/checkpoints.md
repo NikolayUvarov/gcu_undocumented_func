@@ -1,8 +1,8 @@
 # Checkpoints: the contract and its protocol
 
-**Version:** 4 (2026-10-30): a component moved to another store through a copy, active in one place only (313-STO-0033); 3 (2026-10-30): messages between components, `tally` 3 (313-STO-0030); 2 (2026-10-30): format 2, operation IDs, the inbox and the outbox, `tally` 2 (313-STO-0026); 1 (2026-10-08) · **Track:** `STO`, main tasks [306](../../issues-done/306-checkpoints-and-rebinding.done) and [313](../../issues/313-persistent-actors.md) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-6.10, 6.11, 6.12, Appendix B.4
+**Version:** 5 (2026-10-31): format 3, an effect with a key its target tells it by, reconciled by asking the target, `tally` 4 (313-STO-0036); 4 (2026-10-30): a component moved to another store through a copy, active in one place only (313-STO-0033); 3 (2026-10-30): messages between components, `tally` 3 (313-STO-0030); 2 (2026-10-30): format 2, operation IDs, the inbox and the outbox, `tally` 2 (313-STO-0026); 1 (2026-10-08) · **Track:** `STO`, main tasks [306](../../issues-done/306-checkpoints-and-rebinding.done) and [313](../../issues/313-persistent-actors.md) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-6.6, 6.10, 6.11, 6.12, Appendix B.4
 
-A component that claims to save and restore its state follows a versioned checkpoint contract (MC-6.10). This document defines the checkpoint format and the protocol of `mind::checkpoint` (`libmind/src/checkpoint.rs`, format version 2), and the contract of its one user so far, the pilot program `tally`. Persistence is not assumed for any other component: no service checkpoints its state. What is implemented and tested is stated here and in the profile; anything else is plan (MC-12.3).
+A component that claims to save and restore its state follows a versioned checkpoint contract (MC-6.10). This document defines the checkpoint format and the protocol of `mind::checkpoint` (`libmind/src/checkpoint.rs`, format version 3), and the contract of its one user so far, the pilot program `tally`. Persistence is not assumed for any other component: no service checkpoints its state. What is implemented and tested is stated here and in the profile; anything else is plan (MC-12.3).
 
 ## The checkpoint
 
@@ -15,11 +15,11 @@ A checkpoint of component `c` is two objects in the block store, published under
 
 Both names change together or not at all, so the manifest always describes the state its name holds. A restore reads both names in one `snapshot` and refuses a checkpoint whose versions or roots disagree (`inconsistent`). After a move out (below), both names hold one release record instead.
 
-**The manifest** (format version 2; every integer little-endian, every label one length byte and 1 to 32 printable ASCII bytes):
+**The manifest** (format version 3; every integer little-endian, every label one length byte and 1 to 32 printable ASCII bytes):
 
 | Field | Meaning |
 |---|---|
-| `MIND-CKP`, format version (u16) | another format version is refused by its number (`version`), never read as this one; format 1 is not converted |
+| `MIND-CKP`, format version (u16) | another format version is refused by its number (`version`), never read as this one; formats 1 and 2 are not converted |
 | contract (label), contract version (u16) | the contract the component follows; a restorer accepts only its own |
 | schema (u16) | the state's schema version |
 | epoch (u64) | the generation of the instance that saved it: the version of the checkpoint's names it wrote |
@@ -30,13 +30,15 @@ Both names change together or not at all, so the manifest always describes the s
 | sent (u64) | the last sequence given to a message, so none is given twice |
 | resources (labels) | logical names of what the state refers to: services, names. Never a handle or an address (MC-6.11) |
 | authorities (labels) | the rights the instance used, as text. Never a capability |
-| effects (id u64, outcome u8, label) | the effect journal: 0 pending, 1 done, 2 failed |
+| effects (id u64, outcome u8, label, key) | the effect journal: 0 pending, 1 done, 2 failed; each with the key its target tells it by (below) |
 | clients (label, operation u64, result u64, at u64) | each client's last operation applied, the result it was answered, and the sequence it was applied at |
 | outbox (sequence u64, destination label, what label) | the messages owed to others, in the order given; their bytes are in the state |
 
-A manifest decodes only if it is exactly one encoding: no bytes after the last field, counts within bounds, valid labels and outcomes, each client once with an operation from 1 applied at a sequence not past the manifest's, messages in increasing order none past `sent`.
+**An effect's key** (format 3) is a kind byte: 0, none; 1, a publication by compare-and-swap, followed by the name (one length byte and 1 to 64 bytes of `A-Z a-z 0-9 . _ / -`, a name of the store), the version it publishes from (`from`, u64) and the root it publishes (CID, 36 bytes).
 
-**The release record** (313-STO-0033), one raw block of 90 bytes: `MIND-RLS`, the format version (u16, 2; another is refused by its number), the epoch of the component's last checkpoint in this store (u64), and the CIDs of that checkpoint's manifest and state (36 bytes each). It decodes only if it is exactly that encoding. The manifest's format is unchanged: a build without the record would refuse it as not a manifest (`format`), never take the component as fresh.
+A manifest decodes only if it is exactly one encoding: no bytes after the last field, counts within bounds, valid labels and outcomes, keys of a known kind with a name of the store, each client once with an operation from 1 applied at a sequence not past the manifest's, messages in increasing order none past `sent`.
+
+**The release record** (313-STO-0033), one raw block of 90 bytes: `MIND-RLS`, the format version (u16, 2, the layout format 3 left as it was; another is refused by its number), the epoch of the component's last checkpoint in this store (u64), and the CIDs of that checkpoint's manifest and state (36 bytes each). It decodes only if it is exactly that encoding. The manifest's format is unchanged: a build without the record would refuse it as not a manifest (`format`), never take the component as fresh.
 
 ## The protocol
 
@@ -53,6 +55,13 @@ A manifest decodes only if it is exactly one encoding: no bytes after the last f
   2. After the effect, it records the outcome and saves again.
 
   If the instance ends between the two saves, the next instance finds the effect pending. Its outcome is unknown, so it must be reconciled with whoever can know it (the effect's target, an operator), and never tried again blindly (Appendix B.4). A component may refuse new effects while one is pending; `tally` does.
+- **Effects with a key (format 3, 313-STO-0036).** An effect whose target can tell whether it happened records the key it tells it by, in the same save as its intent, before the effect begins. The one target built is a publication by compare-and-swap: `root` under a name of the store from version `from`, which the store applies at most once and its history tells afterwards. `reconcile` asks the target (a `Target`: the name's current version, a version it keeps, the swap) about each pending effect with a key:
+  - **Done:** the name is at `from + 1` with the key's root, or past it and its history holds `from + 1` with that root. Settled done.
+  - **Not done:** the name is still at `from`. The component does the effect now, by the same compare-and-swap from `from`. If another instance's swap came first, this one is refused and the target is asked again: done. Whichever comes first, the name takes that root at `from + 1` once. Settled done.
+  - **Failed:** `from + 1` holds another root, or removed the name. Another writer changed it: settled failed, never tried again.
+  - **Unknown:** the name is past `from + 1` and the history no longer holds that version (the store keeps 4; a removal keeps only itself), or it is below `from` (the target forgot the name). The effect stays pending for a person, as one without a key does.
+
+  A component reconciles at restore, before it applies a request, and saves what it learned. Fencing holds as before. An instance that saved the intent and stalled is fenced at its next save once another has saved since; its late swap from `from` is refused, because the name has moved, or it is the one swap that lands, and the other instance's swap is then refused and told done. An effect without a key stays pending until a person reconciles it.
 - **Fencing (MC-6.12).** The checkpoint names' version is the instance's generation. A save names the epoch it restored from, and the commit is a compare-and-swap on both names. If another instance saved since, the save is refused (`fenced`) and nothing is written. The stale instance has lost the component and must stop accepting requests. Two instances can never both continue from the same checkpoint.
 - **Who is active.** An instance that takes requests one after another saves once before its first (a claim). An instance restored before that save is fenced at its own first save, so it never answers a request.
 - **Operations (format 2).** A request may carry its client's operation ID, increasing from 1.
@@ -82,7 +91,7 @@ A manifest decodes only if it is exactly one encoding: no bytes after the last f
 - **Rebinding (MC-6.11).** Restore returns the recorded authorities as text. A restored instance takes its rights from its current grants: what `init` and the shell give it now, never from the checkpoint. `rebind` lists the recorded authorities the instance does not hold now. Protected actions that need them are refused or degraded, and the checkpoint cannot return a revoked right.
 - **Retention.** The checkpoint's names keep their last 4 versions, and those retain their manifests and states ([303](../../issues-done/303-retention-and-collection.done)). Recoverability is promised for the last 4 checkpoints, under the store's own durability (on the RAM disk, until the next reset). After a release, the last checkpoint is the version before it, kept while nothing changes the names by hand. The code that reads them, `tally.elf`, is on the boot volume. Its schemas are versioned in the manifest.
 
-## The contract of `tally`, version 3
+## The contract of `tally`, version 4
 
 `tally` keeps named counters (`tally add <key> [n] [op <client> <id>]`). Each run is a new instance of one component: it restores, applies one request and saves. The component is `tally`, or `tally.<name>` with `tally as <name> …`, each with its own checkpoint (`checkpoint/tally`, `checkpoint/tally.<name>`). Named components move amounts to each other as messages:
 - `tally as a send <key> <n> to b` moves `n` out of `a`'s count into a message owed to `tally.b`. The count drops at once; the message holds the amount. It prints `OWED <key> <n> TO b <seq>`. More than `a` holds is refused, and so is a 17th message owed.
@@ -94,20 +103,25 @@ A component moves to another store (313-STO-0033):
 - Afterwards every run of `a` in that store is refused: `tally: RELEASED: a was moved out of this store at epoch <e>; nothing restored or saved here (MC-6.12)`. An instance that restored before the release prints `FENCED` at its save.
 - `blocks import <file>` into a store that never held `a`'s names, then the next `tally as a …` there, goes on from the checkpoint at epoch 1 of that store.
 
-`tally`'s contract stays version 3: what a checkpoint holds and how a request is applied are unchanged. A release is `mind::checkpoint`'s record, the same for every contract, and a restore refuses it by itself.
+A publication is an effect with a key (313-STO-0036):
+- `tally publish <name> <word>` puts the word as a raw block and publishes it under `<name>`, a name of the store, from the version it reads: the intent and its key are saved first, then the swap, then the outcome. It prints `EFFECT <id> DONE: <name> AT <v>`, or `EFFECT <id> FAILED: <name> CHANGED BY ANOTHER WRITER` when the name moved between the read and the swap. `crash-before` ends the instance after the intent's save (`EFFECT <id> BEGUN; ENDING BEFORE ITS SWAP`), `crash-after` after the swap (`EFFECT <id> SWAPPED; ENDING BEFORE ITS OUTCOME IS RECORDED`), each before the outcome's save.
+- Every run but a move first reconciles the publications pending, and saves what it learned before it applies its request: `RECONCILED <id> DONE: <name> AT <v>`, `RECONCILED <id> NOT DONE: PUBLISHED NOW AT <v>`, `RECONCILED <id> FAILED: <name> CHANGED BY ANOTHER WRITER` or `RECONCILED <id> UNKNOWN: <name> PAST ITS HISTORY; RECONCILE IT BY HAND`. An unknown one stays pending: `show` lists it (`EFFECT <id> PUBLISH <name> FROM <v> PENDING: RECONCILE IT BY HAND`), new effects are refused, and `reconcile <id> done|failed` settles it, as it settles an `effect <file>`.
+- A move is refused while a publication is pending: its name is in this store, and a run in the store the component moves to would ask that one. Any other run reconciles it first.
 
-| Item (MC-6.10) | `tally` 3 |
+`tally`'s contract is version 4: `publish` and the reconciling that begins each run are new, and its manifests are of format 3. Contract 3 is refused by its number; the state's schema stays 2. A release is `mind::checkpoint`'s record, the same for every contract, and a restore refuses it by itself.
+
+| Item (MC-6.10) | `tally` 4 |
 |---|---|
 | Composition of state | Counters, at most 32 keys of at most 16 printable bytes, and the amounts owed. The object is one raw block: lines `key=count`, sorted by key, then `<seq> <n>` for each message owed, in the outbox's order (schema 2). A message's key is its `what`, its receiver its destination |
-| Consistency boundary | One request (`add`, `send`, a `receive` that applies, the two saves of an `effect`, `reconcile`); `sequence` counts them |
-| Dependencies | The block store. A resource is recorded as `blockstore`. The checkpoints of the components it owes or receives from, read and never written |
-| Authorities used | `blockstore` (the shell's client) and `files` (for effects) |
+| Consistency boundary | One request (`add`, `send`, a `receive` that applies, the two saves of an `effect` or a `publish`, `reconcile`, and the save of what a run reconciled first); `sequence` counts them |
+| Dependencies | The block store. A resource is recorded as `blockstore`. The checkpoints of the components it owes or receives from, read and never written. The names it publishes, in the same store |
+| Authorities used | `blockstore` (the shell's client, which is also what `publish` writes through and reconciling asks) and `files` (for `effect`) |
 | Permissible loss | A request whose save did not return `SAVED`. Nothing after `SAVED` (to the store's durability) |
-| External effects | `effect <file>` writes `ram:<file>`. Its intent is saved first; `reconcile <id> done\|failed` settles a pending one, and no new effect begins while one is pending |
-| Verification | Restore checks the manifest's format, contract and schema, its state root against the state's name, the two names' versions against each other and its epoch against them (any epoch at their first version: moved in), and every block against its CID. A sender's state read by a receiver is checked the same way, and its amounts against its outbox. `tally show` prints the epoch, sequence, counters, pending effects and messages owed |
-| Fencing | A save from a stale epoch prints `FENCED` and writes nothing. A component writes only its own checkpoint. A component moved out of a store is refused there by its release |
-| Repeated requests | An addition with an operation ID is applied once: sent again it prints `REPEATED <client> <id>: ANSWERED <count>, NOT APPLIED AGAIN`, and an older ID is refused. One without an ID is applied each time. A client named `tally.<name>` is refused: a component's operations are its messages |
-| Earlier versions | Each is refused and named, none converted: format 1 (`a checkpoint of format 1; this build reads format 2 and converts none`), contract 2 (`a checkpoint of contract version 2; this build follows tally 3 and converts none`), schema 1 (`a state of schema 1; this build reads schema 2 and converts none`) |
+| External effects | `effect <file>` writes `ram:<file>`: its intent is saved first, and `reconcile <id> done\|failed` settles a pending one. `publish <name> <word>` publishes a name of the store by compare-and-swap: its intent and key are saved first, and a pending one is reconciled by asking the store at the start of each run; only one the store can no longer tell needs `reconcile`. No new effect begins while one is pending |
+| Verification | Restore checks the manifest's format, contract and schema, its state root against the state's name, the two names' versions against each other and its epoch against them (any epoch at their first version: moved in), and every block against its CID. A sender's state read by a receiver is checked the same way, and its amounts against its outbox. `tally show` prints the epoch, sequence, counters, pending effects (a publication with its name and version) and messages owed |
+| Fencing | A save from a stale epoch prints `FENCED` and writes nothing. A component writes only its own checkpoint. A component moved out of a store is refused there by its release. A publication's swap from its version lands once at most, whichever instance makes it |
+| Repeated requests | An addition with an operation ID is applied once: sent again it prints `REPEATED <client> <id>: ANSWERED <count>, NOT APPLIED AGAIN`, and an older ID is refused. One without an ID is applied each time. A client named `tally.<name>` is refused: a component's operations are its messages. A publication left pending is not made again blindly: the store is asked, and it is made only if the name is still at its version |
+| Earlier versions | Each is refused and named, none converted: formats 1 and 2 (`a checkpoint of format 2; this build reads format 3 and converts none`), contracts 2 and 3 (`a checkpoint of contract version 3; this build follows tally 4 and converts none`), schema 1 (`a state of schema 1; this build reads schema 2 and converts none`) |
 
 ## Evidence
 
@@ -130,21 +144,32 @@ A component moves to another store (313-STO-0033):
     - a move (release, copy, import, restore) stopped after each number of the source's calls in turn, then of the destination's, then run again whole: after each stop the component is active at the source or at the destination, never both; released at the source, its last checkpoint is read there, and the copy written again is the same; it lands with the source's last sequence, clients, inbox, outbox, pending effect and state at the destination's version, a repeat is answered from the record, and the next save is the next epoch there;
     - a released component refused at the source by a restore (by the release's epoch), a read and a second release; an instance restored before the release fenced at its save; its copy imported back into the source left as a conflict on both names, the component still released; a release from a stale epoch fenced, releasing nothing; the last checkpoint is the names' version before the release in their history, and after a collection with every lease ended the same copy is written again; the release record's one encoding, another format refused by its number;
     - a moved-in checkpoint restored at epoch 1 in a store that never held its names (it recorded 4), saved again at 2, and a stale instance there fenced; a state name moved alone, and then the manifest's name moved after it, refused; a copy of the manifest's name alone, or with the state's name at another root, not restored where it lands; the copy imported into a store where its names were removed at version 5 comes in at 6 and is refused;
-    - the manifest and state of epoch 2 published again by hand over both names at version 5: refused (`inconsistent`), and nothing saved.
+    - the manifest and state of epoch 2 published again by hand over both names at version 5: refused (`inconsistent`), and nothing saved;
+  - effects with a key (313-STO-0036), a model publishing a root under a name of the store at version 2:
+    - its run stopped after each number of the store's calls in turn, from its restore to its outcome's save, then a new instance that reconciles: once the intent is saved, the name ends at version 3 with the root, never at 4, and the effect is settled done (told not done and published now if the stop came before the swap, done after it); before the intent's save, nothing changed;
+    - the same with the stopped instance resuming late, its swap before each number of the new instance's calls in turn and its outcome's save after the new instance's: the late swap lands or is refused, one swap of the two lands, the name moves once, and the late save is fenced;
+    - another root or a removal at version 3: failed, never published over; its own root at 3 and two versions since: done; five versions past 2, or a removal after its own root: unknown, left pending, then settled by hand and asked no more; a target that forgot the name: unknown;
+    - format 3's one encoding, and its refusals: every truncation, a trailing byte, a key of another kind, a name past 64 bytes, empty, or with a byte the store's names do not take; format 2 refused by its number, also at a restore (format 1 too); the largest manifest the format holds is `MAX` bytes.
 - The QEMU `store` suite (x86 and aarch64):
   - `tally` counts across instances, and the checkpoint's two names move together;
   - an instance that restored epoch 3 and stalled is fenced when another saves epoch 4;
   - an effect cut short (its file written, its outcome not recorded) comes back pending, new effects are refused until it is reconciled, and the next effect completes;
   - an addition sent again with the same operation is answered with its first result and not applied, also after the store restarted, and an older operation is refused;
   - messages between components (313-STO-0030): `tally.a` moves 3 of its 10 to `tally.b`; `b` applies it once, and reading it again applies and saves nothing while `a`'s names stay where they were; after the store restarted, `a`'s next save clears the message and the two still count 10; two messages owed at once are applied in order; more than `a` holds is refused, and so is a request whose client is a component's name;
-  - a move through a copy (313-STO-0033), run on x86: `tally.a` counts 7 with two operations, owes 2 to `b`, and is moved to a file on the boot volume. An instance that restored before is fenced; every later run of `a` (show, add, a repeated operation, receive) is refused by the release; both names hold the release record the suite writes itself from its format, and the history keeps the last checkpoint; moved again, the copy is the same (SHA-256). After a reboot left the store's RAM disk blank, `blocks import` publishes both names at version 1, and `a` goes on at epoch 1, sequence 3, count 5, the message still owed; a repeated operation is answered from the record, and the next is saved at epoch 2.
+  - an effect its target can tell (313-STO-0036): `tally as p publish` cut after its intent's save is reconciled `NOT DONE` by the next run and published, and `blocks history` shows one version more; cut after its swap, it is reconciled `DONE` and nothing is published again; a version `blocks publish` made in between makes it `FAILED`, and the name is not published over;
+  - a move through a copy (313-STO-0033): `tally.a` counts 7 with two operations, owes 2 to `b`, and is moved to a file on the boot volume. An instance that restored before is fenced; every later run of `a` (show, add, a repeated operation, receive) is refused by the release; both names hold the release record the suite writes itself from its format, and the history keeps the last checkpoint; moved again, the copy is the same (SHA-256). After a reboot left the store's RAM disk blank, `blocks import` publishes both names at version 1, and `a` goes on at epoch 1, sequence 3, count 5, the message still owed; a repeated operation is answered from the record, and the next is saved at epoch 2.
 
 These are tests of one pilot, not a proof (MC-12.2). Not provided:
-- a service with queues that uses format 2: the parts are in `mind::checkpoint`, and `tally`, one request a run, uses operation IDs and messages between its components. The first users are planned: the agent's sessions (260) and the messenger's client (950). The inbox, and a message pushed to its receiver and acknowledged by it (`delivered`), are checked on a model alone;
+- a service with queues that uses format 2's parts (kept in format 3): they are in `mind::checkpoint`, and `tally`, one request a run, uses operation IDs and messages between its components. The first users are planned: the agent's sessions (260) and the messenger's client (950). The inbox, and a message pushed to its receiver and acknowledged by it (`delivered`), are checked on a model alone;
 - a sender started afresh, its checkpoint removed, while a receiver keeps its record of it: its sequences start from 1 again, and the receiver would take them as applied;
 - components' names kept apart by the store: its rights are a client's (by badge), not a name's, so that each component writes only its own checkpoint is `tally`'s code, not a right the store checks ("owners apart from badges" in the profile);
 - a check between two stores: a copy imported into two stores, or copied by hand from an active component's names, is active in each. Only the release in the source's store, and the copy written after it, keep a component in one place;
 - a move into a store where the component's names already exist. Moved back into a store it was moved out of, the import finds its names at the release record, another root, and leaves them as they are (a conflict), so it stays released there. Where its names were removed, the import publishes them at a later version than 1, and the restore refuses it (`inconsistent`);
 - messages between components in two stores: in the source's store, a read of a component moved out is refused (`released`), so what it owes and what is owed to it wait until sender and receiver are in one store;
-- a move run on aarch64;
-- a test that a recorded authority the instance lacks is refused on the platform (the shell lends `tally` both rights; the refusal is host-tested).
+- a test that a recorded authority the instance lacks is refused on the platform (the shell lends `tally` both rights; the refusal is host-tested);
+- effects with a key (313-STO-0036):
+  - one target, a name in the store. A publication in the component's own store could instead go into the checkpoint's own commit ([304](../../issues-done/304-several-names-at-once.done)), and then nothing is left to reconcile; the keyed effect stands for a target outside that commit: here a name of the same store's, later another store or a service that keeps operation IDs (a clients table, as format 2's, is the same shape);
+  - no target that cannot tell: a file written through `vfs` keeps no version, so `effect <file>` still needs a person;
+  - history bounds the answer: past the 4 versions the store keeps of the name, or after its removal, the outcome is unknown again;
+  - the root is put before the intent, and only its lease retains it until it is published (60 s, [303](../../issues-done/303-retention-and-collection.done)): a reconcile after a collection freed it is refused by the store, and the effect stays pending for a person;
+  - the key names no store: run in the store a component moved to, a reconcile would ask that one. `tally` refuses to move while a publication is pending; a copy made by hand (`blocks export`) is not checked.
