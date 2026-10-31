@@ -116,7 +116,15 @@ Still left: `ask(host, port, why)` and the user's answers, which need the shell'
   - `netpolicy_host`.
 - **QEMU** (the `net` suite's `browse_check`): a question whose program ended leaves the list; one no one answers is refused at 60 s.
   - **Run locally,** x86, QEMU TCG, ef234cc8: the check alone passed, both ends with the broker's lines.
-  - **Still to run:** the whole x86 and aarch64 network groups on the machines.
+  - **On the Effector machines, 32ea39e1** (`main` f7f1d0fe merged), every group PASS:
+    - host tests (`un-rizen`);
+    - "x86: network, TLS and Effector" (`acc-2`);
+    - "aarch64: network, TLS and Effector" (PCU);
+    - "aarch64: network above 4 GiB" (`acc-1`);
+    - "aarch64: GICv2 with GICv2m" (`un-rizen`);
+    - "x86: services, storage, audio" (`acc-1`).
+
+    The question's line was in the `net` suite on x86 and aarch64.
 - **Left:**
   - the user's answer through the shell (APP), and with it the checks of `once`, `session` and `always`;
   - the profile's MC-11.6 row, once the whole path is tested.
