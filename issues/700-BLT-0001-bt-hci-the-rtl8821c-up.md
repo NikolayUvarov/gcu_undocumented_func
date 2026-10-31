@@ -55,7 +55,7 @@ The stack comes next, as its own tasks: `bt_host`, L2CAP, ATT/GATT, SMP, HID, th
 ## Acceptance criteria
 
 - [x] Host tests of the HCI encodings and the patch's making (`tests/bt_hci_host.rs`).
-- [ ] On the DEXP:
+- [x] On the DEXP:
   - `bt_hci` claims `0BDA:C821` and logs the ROM's version;
   - the patch is downloaded, and the version after the reset differs;
   - it logs the address;
@@ -75,7 +75,10 @@ The stack comes next, as its own tasks: `bt_host`, L2CAP, ATT/GATT, SMP, HID, th
   - `ADDRESS 1C:79:2D:F0:6B:A6`.
 - **A round heard 15 LE devices and a BR/EDR one** (`CLASS 0C043C AUDIO`). Later ones heard named devices: `"BRAVIA 4K GB"`, `"[TV] Samsung AU7100 65 TV"`.
 - **Why it heard nothing before:** `rtw88_wifi` granted the air to the Wi-Fi alone (700-DRV-0046).
-- **What closes this task:** a release that carries both, run on the DEXP. The QEMU criterion is also still to record.
+- **Then in a release:** 202610302359 (2026-10-31, tree `d83c98c5`) carries both. The DEXP's rounds heard 14 and 15 LE and 1 BR/EDR devices, with 0 event packets dropped (DRV's 700-DRV-0047).
+- **What is left:** the QEMU criterion's record.
+  - KRN ran the boot and `usb` suites with `bt_hci` holding its client and waiting (`BLT/2026-10-30T0723Z-KRN-…`).
+  - The `keys` and `link` suites are still to name, with `bt_hci`'s line when no controller comes.
 
 ## Related
 
