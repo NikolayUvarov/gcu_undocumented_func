@@ -59,7 +59,8 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // online at its start in BootInfo.cpu_count (0 before), and moves SLOT_DYNAMIC to 42 for SLOT_NN, the shell's client of the model service `nnd`, a boot image after `sysmon` (262-KRN-0178), and adds the USB
 // Bluetooth controller's driver `bt_hci` after `rtw88_wifi` (700-KRN-0176). ABI 26: COMPOSITOR_PULL returns in arg2 the
 // PID of the task whose screen is in front (750-KRN-0192). ABI 27 moves SLOT_DYNAMIC to 43 for SLOT_STOREFS, the shell's
-// client of `storefs`, a boot image after `keystore` (311-KRN-0190).
+// client of `storefs`, a boot image after `keystore`, and lets a spawn carry SPAWN_GRANTS_MAX grants, one for each fixed
+// slot (32 before), as the shell's are 33 where `wlan` runs (311-KRN-0190).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
@@ -502,7 +503,7 @@ pub const SPAWN_TEXT: usize = 8;
 // The kernel keeps the task's program (its ELF, or its boot image's index), charged with its image, so that the task may
 // start workers of it (WORKER_START, 262-KRN-0163, ABI 18). Without the flag WORKER_START answers ERR_RIGHTS.
 pub const SPAWN_WORKERS: usize = 16;
-pub const SPAWN_GRANTS_MAX: usize = 32; // 32 since ABI 4: the shell's grants grew (351-KRN-0027)
+pub const SPAWN_GRANTS_MAX: usize = SLOT_DYNAMIC; // one for each fixed slot since ABI 27: the shell's grew past 32 (311-KRN-0190)
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
 pub const ARGS_OFFSET: usize = 2048;

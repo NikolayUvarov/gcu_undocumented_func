@@ -63,6 +63,10 @@ STO offered two ways in: (a) `vfs_server` forwards the volumes it does not hold,
   - the x86 build;
   - host tests `runtime`, `boot_abi`, `fs_routing`, `vfs_zone`, `idl`;
   - the `shell` suite whole, with `storefs_check`.
+- **2026-10-31, returned by round 60** (candidate b08d3a62):
+  - **The cause.** Where `wlan` runs (both network groups, aarch64's network above 4 GiB), the shell's grants with `SLOT_STOREFS` are 33, one more than `SPAWN_GRANTS_MAX` (32). `init`'s list ran past its end at the shell's start, `init` panicked and the system halted (`INIT EXITED`).
+  - **The fix.** `SPAWN_GRANTS_MAX` is `SLOT_DYNAMIC` (43), one grant for each fixed slot, in the same ABI 27, as no slot below `SLOT_DYNAMIC` can be granted twice.
+  - **Also red in that round:** the busy suite's 80 %, aarch64's idle check with GICv2, x86's colour check above 4 GiB, and the services suite's gateway stub and link. They are checked again against round 61, which runs the same groups without this request.
 - **Left:**
   - the machines' run on x86 and aarch64 once STO's `storefs/` is in `main`;
   - the shell's part: its client lent to programs. APP waits for a client of `storefs` that does not write (`requests-APP.md`), so programs get none for now.
