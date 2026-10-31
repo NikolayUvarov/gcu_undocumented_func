@@ -87,7 +87,7 @@ fn put_file(path: &str, builder: &mut Builder, data: &mut [u8; CHUNK], remote: &
 }
 
 // The clocks now: the monotonic one, and the calendar time from the clock chip if the rtc service gives it.
-fn now() -> Reading {
+pub(crate) fn now() -> Reading {
     let monotonic = mind::time::monotonic_ns();
     match mind::rtc::local_now_in(mind::rtc::Zone::UTC) {
         // Days since 2000-01-01 and seconds since midnight; 10957 days from 1970-01-01.
