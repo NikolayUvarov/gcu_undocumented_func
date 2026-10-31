@@ -38,6 +38,7 @@
 - **PCU, f4c42ea3:** "aarch64: GICv2 with GICv2m" passed in 880 s. The busiest thread was runnable 47% in the `normal` suite and 45% in the `smp` suite.
 
   These figures led to the limit of 0.9 instead of 0.6: an idle thread there waits for the host's 4 cores, and a spinning one is runnable all of the second whatever the host.
+- **`un-rizen-service`, f4c42ea3:** both groups passed: GICv2 727 s, at 14% and 15%; "16 CPUs" 429 s, at 37%. The 16-CPU run was under a load average of 58 on 16 cores (two KRN lanes and another track's run).
 
 ## Related
 
