@@ -113,7 +113,7 @@ On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the
 - boot mode **UEFI**; CSM or "Legacy" **off**;
 - **Secure Boot off**: the bootloader is not signed yet (issue [350](../issues/350-signed-boot-images.md));
 - SATA mode **AHCI**, not RAID, Intel RST or VMD;
-- **network boot off**: PXE, "Network Stack" or "UEFI Network", HTTP boot. It is the firmware's own code and runs before our bootloader, outside what MIND Core guarantees; MIND Core never boots over the network ([351-KRN-0195](../issues/351-KRN-0195-no-firmware-network-boot-before-the-loader.md), [threat model](profile/threat-model.md));
+- **network boot off**: PXE, "Network Stack" or "UEFI Network", HTTP boot. It is the firmware's own code and runs before our bootloader, outside what MIND Core guarantees; MIND Core never boots over the network ([351-KRN-0195](../issues-done/351-KRN-0195-no-firmware-network-boot-before-the-loader.done), [threat model](profile/threat-model.md));
 
 **The disk:**
 
