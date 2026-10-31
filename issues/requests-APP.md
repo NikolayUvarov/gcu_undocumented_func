@@ -77,7 +77,7 @@ APP's ALL reply of 2026-10-29 accepts the 0025 corrections in design 1.0 and own
 
 ## The shell lends a `storefs` client to programs (for 311-KRN-0190), once `storefs` can make one that does not write
 
-**Asked by:** KRN, 2026-10-30, for the storage track's 311-STO-0032. **Blocked by:** `storefs` minting a client that does not write, or serving `scope` (STO; both refused today). **Constitution:** MC-3.1, MC-3.4.
+**Asked by:** KRN, 2026-10-30, for the storage track's 311-STO-0032. **Blocked by:** `storefs` minting a client that does not write, or serving `scope` (STO; both refused today; [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md) serves `scope` and `adopt`). **Constitution:** MC-3.1, MC-3.4.
 
 - **What is in place:** with 311-KRN-0190, `init` gives the shell a `storefs` client badged `mind::fs::BADGE_USER` in `SLOT_STOREFS` (42, a launch slot). `mind::fs` asks it for every volume but `vfs_server`'s (`""`, `ram`, `log`, `models`), so the shell's own `ls`, `cat`, `write`, `mkdir` and `rm` reach a store volume such as `notes:`.
 - **Do not lend that client as it is:** a copy keeps its badge, and `storefs` lets `BADGE_USER` write.
