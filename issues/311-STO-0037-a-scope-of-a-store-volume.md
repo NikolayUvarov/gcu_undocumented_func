@@ -1,6 +1,6 @@
 # 311-STO-0037 — A scope of a store volume: a subtree as a capability, read-only or writable, from `storefs`
 
-**Type:** storage (`storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-3.1, MC-3.4, MC-4.7
+**Type:** storage (`storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md) (the shell lending a scope), for the QEMU criteria · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-3.1, MC-3.4, MC-4.7
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-31): "rights: a mount is a capability for a subtree (MC-4.7)". It is what APP's request "The shell lends a `storefs` client to programs" in [requests-APP.md](requests-APP.md) waits for: "`storefs` minting a client that does not write, or serving `scope`". Until a program holds a client of `storefs`, [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md)'s QEMU checks of two writers and of a cut publication cannot run.
 
@@ -50,6 +50,9 @@ Split from [311](311-storefs-a-file-face.md) (2026-10-31): "rights: a mount is a
   - `storefs` built for x86 and aarch64 as `02_build.sh` and `scripts/build_aarch64.sh` build a crate, with no warning; its state in `.bss`;
   - each of 11 changes of the logic made a test fail: a scope writable when its handle is not, another volume allowed, a second user allowed, `adopt` by another task allowed, a scope nobody took up never ended, an ended scope's handles still served, the share not counted, a badge given while in use, a scope's root at its volume's root, a scope's root that writes whatever its scope says, and `adopt` that does not take a scope up.
 - **Not run:** `scripts/host_tests.sh` whole, the images and QEMU (the session's). The QEMU criteria wait for APP's lending ([requests-APP.md](requests-APP.md)), so the issue stays open.
+
+- **Landed** in `main` f7f1d0fe (round fbda1685) as 855121e4, with `storefs` 19 host tests and the `store` and `shell` suites on x86 and aarch64 (`un-rizen_2a8b108d5593`, QEMU TCG) on that commit, as the landing request of 06:29 says.
+- **Open for its QEMU criteria:** a scope reaches a program only once the shell lends one, the tools track's [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md). APP is told on `internal-dev-messages`.
 
 ## Acceptance criteria
 
