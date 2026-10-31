@@ -1047,16 +1047,15 @@ def normal_suite(vm):
     vm.keys(f"kill {clock}\n")
     vm.serial()
     assert task_rows_reaped(vm) == {}
-    # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
-    # state for aarch64: there no QEMU thread stays runnable for most of a second.
+    # Idle: the CPU sleeps in HLT (a sample may catch it handling a tick or drawing the last output, so it is sampled
+    # for up to 2 s; one that spins never halts). QEMU shows no WFI state for aarch64: there no QEMU thread stays
+    # runnable for most of a second.
     idle = "HLT"
     if vm.arch == "aarch64":
         idle = f"WFI (a thread runnable {idle_check(vm):.0%})"
     else:
-        for _ in range(10):
-            registers = vm.hmp("info registers")
-            if "HLT=1" in registers:
-                break
+        deadline = time.monotonic() + 2
+        while "HLT=1" not in (registers := vm.hmp("info registers")) and time.monotonic() < deadline:
             time.sleep(.02)
         require(registers, "HLT=1")
     cpus = vm.hmp("info cpus")
@@ -2755,14 +2754,13 @@ def smp_suite(vm):
         vm.serial()
         idle = f"WFI (a thread runnable {idle_check(vm):.0%})"
     else:
+        # A CPU still drawing the last output (the compositor's frame copy) halts once it is done; one that spins never.
         for cpu in range(vm.cpus):
             vm.hmp(f"cpu {cpu}")
-            for _ in range(10):
-                regs = vm.hmp("info registers")
-                if "HLT=1" in regs:
-                    break
+            deadline = time.monotonic() + 2
+            while "HLT=1" not in (regs := vm.hmp("info registers")) and time.monotonic() < deadline:
                 time.sleep(.02)
-            else:
+            if "HLT=1" not in regs:
                 raise AssertionError(f"CPU {cpu} did not halt when idle: {regs}")
         vm.serial()
     print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, {kept} preservation, supervisor reserve under load, remote kill, all CPUs {idle}", flush=True)

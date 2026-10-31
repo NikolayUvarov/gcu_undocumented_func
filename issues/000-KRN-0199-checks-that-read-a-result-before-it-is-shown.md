@@ -1,4 +1,4 @@
-# 000-KRN-0199 — Checks that read a result before a loaded host shows it: the colour after `fg`, a program's row after it ended
+# 000-KRN-0199 — Checks that read a result before a loaded host shows it: the colour after `fg`, a program's row after it ended, an idle CPU's halt
 
 **Type:** tests · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
 
@@ -9,20 +9,25 @@ In round 64 (candidate fbda1685), the group "x86: no PIT", the `normal` suite, f
 - **On lane 2:** `fg must preserve state, not restart`. The suite reads the centre pixel at once after `FOREGROUND PID=3`. On a loaded host the compositor shows the program's frame later, and the pixel was still the other copy's colour. The two checks before it read the same way, one after a sleep of 150 ms.
 - **On lane 1:** `assert set(task_rows(vm)) == {1, 3, 4, 5}` after `PID=2 EXITED. SHELL RESUMED.`. `ps` listed the ended program as `29 clock EXITED`: the boot CPU reaps a program that ended when it is idle, later under load (000-KRN-0168). `task_rows_reaped` waits for that, and the other suites use it already.
 - **The same reading** follows a program's fault in the `isolation` suite (`{1}` after a fault), which has not failed yet.
+- **In round 65** (candidate 370e905c), the group "x86: x2APIC" failed on `acc-2`: `CPU 0 did not halt when idle`, in the `smp` suite after `nnd_check`.
+  - CPU 0 was at CPL 3, in a loop over two buffers 4 MiB apart with a count of `0x3E8000`, a 1280×800 frame: the compositor's copy of a whole frame (000-KRN-0086), drawing the last command's output.
+  - The check samples each CPU 10 times, 20 ms apart: about 200 ms in all, short for a frame or two on that host. The `normal` suite's check of the boot CPU samples the same way.
+  - Neither request of that round adds work in the guest: STO's adds the `blocks` program's assertions and a library, LNK's the host's side of the link.
 
 ## Plan
 
 - The three colour checks wait up to 5 s for the colour they want (`center_pixel_soon`), as the display check does already. A program that restarted, or input that did not reach it, shows a wrong colour that never changes, so the check still fails then.
 - The four row checks after a program ended or was killed use `task_rows_reaped`.
+- The x86 idle checks (`normal` for the boot CPU, `smp` for each CPU) sample `info registers` for up to 2 s until `HLT=1`. A CPU whose idle loop spins never shows it, so the check still fails then.
 
 ## Acceptance criteria
 
 - [ ] The `normal` and `isolation` suites pass on x86 with the waits, in QEMU locally and in a landing round's gate.
-- [ ] Nothing waits where a wrong result could still turn right: each wait is for a colour, or for a row of a program that has ended.
+- [ ] Nothing waits where a wrong result could still turn right: each wait is for a colour, for a row of a program that has ended, or for `HLT=1`.
 
 ## Progress (2026-10-31)
 
-- `tests/qemu_smoke.py`: the three colour checks of the `normal` suite and its two row checks; the `isolation` suite's two row checks after a fault.
+- `tests/qemu_smoke.py`: the three colour checks of the `normal` suite and its two row checks; the `isolation` suite's two row checks after a fault; the two x86 idle checks.
 - The `normal` and `isolation` suites passed locally (x86, QEMU TCG, 4 CPUs).
 
 ## Related
