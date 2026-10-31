@@ -1,6 +1,6 @@
 # 000-NET-0036 — The stack keeps a frame ring lent until the driver says whether it holds it
 
-**Type:** network (stack) · **Owner:** `NET` track · **Priority:** P1 · **Status:** in progress (built; its checks pass; the 16-CPU group stops at its idle check) · **Blocked by:** for the last criterion, "aarch64: 16 CPUs" failing its idle check on PCU before it reaches the network (`KRN`, the other half of 000-KRN-0129) · **Main task:** — (for [000-KRN-0129](000-KRN-0129-virtio-net-faults-on-aarch64-with-16-cpus.md)) · **Roadmap:** D · **Constitution:** MC-2.3, MC-6.1, MC-12.1, MC-12.2
+**Type:** network (stack) · **Owner:** `NET` track · **Priority:** P1 · **Status:** in progress (every criterion met on cf0161af; closes once 000-KRN-0197 is in `main`) · **Blocked by:** 000-KRN-0197 landing (the idle check, the other half of 000-KRN-0129) · **Main task:** — (for [000-KRN-0129](000-KRN-0129-virtio-net-faults-on-aarch64-with-16-cpus.md)) · **Roadmap:** D · **Constitution:** MC-2.3, MC-6.1, MC-12.1, MC-12.2
 
 From the kernel track's request "The stack revokes a frame ring the driver may already map (000-KRN-0129)" in requests-NET.md (2026-10-20), which this task takes from that file.
 
@@ -49,6 +49,15 @@ From the kernel track's request "The stack revokes a frame ring the driver may a
 
 - **"aarch64: 16 CPUs" passed once on PCU**, its idle check too. This was gate 25 on `7dc99fed`, the branch with `main` bd7fd447.
 - **One pass of the five the criterion asks for,** so the criterion stays open. The kernel track's idle check has not been changed to say why it passed this time.
+
+## Progress (2026-10-31): the idle check measures a thread
+
+- **000-KRN-0197** changed the idle check: it no longer compares QEMU's processor time, which PCU's 4 cores kept above the limit with 16 vCPUs, but the share of a second QEMU's busiest thread was runnable.
+- **"aarch64: 16 CPUs" passed 5 times in a row on PCU** at `claude/youthful-mendel-mf1soy` cf0161af (`main` 74cf7265 with 0197 and 0198):
+  - one branch run of the group, then four runs of its suite on the same tree;
+  - 296 to 301 s each, at 40% to 42%;
+  - each `normal` suite started its first `clock` as `PID=1`, so `virtio_net` did not restart.
+- **The third criterion is met by that run.** It closes with this task once 0197 is in `main`: until then `main`'s check still fails the group on PCU.
 
 ## Related
 

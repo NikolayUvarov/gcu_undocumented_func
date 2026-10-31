@@ -41,6 +41,7 @@
 - **PCU, cf0161af (the limit 0.9, `NOT_ON` gone):** both groups passed:
   - GICv2 in 884 s, at 46% and 45%;
   - "16 CPUs" in 301 s, at 41%. PCU had not run it since round 45.
+- **PCU, cf0161af, four more runs of the 16-CPU group's suite** (`--cpus 16 --suites normal`) on the same tree: each passed, in 296 to 301 s, at 40%, 41%, 42% and 41%. That makes five in a row with the run above, which 000-KRN-0129 and 000-NET-0036 asked for.
 - **`un-rizen-service`, f4c42ea3:** both groups passed: GICv2 727 s, at 14% and 15%; "16 CPUs" 429 s, at 37%. The 16-CPU run was under a load average of 58 on 16 cores (two KRN lanes and another track's run).
 
 ## Related

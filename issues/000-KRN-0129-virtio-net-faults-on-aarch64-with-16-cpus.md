@@ -34,6 +34,12 @@ On aarch64, vector 36 is ESR class 0x24, a data abort from EL0: the driver touch
 - **Made to happen every time** on x86 with a 400 ms delay in the driver before its answer: `FAULT PID=15 CPU=2 VECTOR=14 ERROR=0x4 RIP=0x8000002e21 ADDR=0x8006036040`, a read of the unmapped ring.
 - **A fix** that keeps an unanswered ring lent until the next kick says whether the driver has it removed the fault in that boot. The code is the network track's, so it went there as a request, with the record and the proposed patch ([requests-NET.md](requests-NET.md)).
 
+## Progress (2026-10-31)
+
+- **The network track's fix** (000-NET-0036) has been in `main` since gate 22.
+- **The idle check** that kept "aarch64: 16 CPUs" from passing on PCU now measures QEMU's busiest thread (000-KRN-0197).
+- **The group passed 5 times in a row on PCU** at cf0161af, at 40% to 42%, with no `virtio_net` restart. This task and 000-NET-0036 close once 0197 is in `main`.
+
 ## Acceptance criteria
 
 - [x] The fault's cause is named, with its record (above).
