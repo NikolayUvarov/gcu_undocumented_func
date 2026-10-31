@@ -47,7 +47,7 @@ The store keeps objects and names, and a name's history keeps 4 versions. Nothin
 
 - **The source and the calendar time are the writer's claims.** The store records the publisher's badge in a name record, but `history` does not return it. A source attested by the store is a later step, on the wire.
 - **A writer with the name's rights can append anything.** The check shows the order and completeness of what was published, not that the entries are true (MC-4.12).
-- **A journal is as durable as its store** (307-STO-0019's classes). A copy (309-STO-0031) carries it whole, since a copy is of a name's object.
+- **A journal is as durable as its store** (307-STO-0019's classes). A copy (309-STO-0031) carries it whole, since a copy is of a name's object. But an import publishes the name at the versions of the store it comes into, so the check there refuses the head (see the decisions below): a journal's order is checked in the store it was written in.
 
 ## Decisions while building (2026-10-30)
 
