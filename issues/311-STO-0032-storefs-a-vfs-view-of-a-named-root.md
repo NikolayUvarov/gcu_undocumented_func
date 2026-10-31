@@ -1,6 +1,6 @@
 # 311-STO-0032 — `storefs`: files and directories of a named root, through `vfs.wit`
 
-**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done) (`storefs` at boot and its clients) is done; [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done) (`vfs.wit` 2.6 `conflict`) is done) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
+**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md) (a scope, so a program can hold a client), then APP's lending in [requests-APP.md](requests-APP.md), for two of the QEMU checks ([311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done) and [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done) are done) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
 
@@ -60,6 +60,12 @@ A tree in the store is read and changed only through `blocks tree`, one command 
 - **Off the images** since 2026-10-30 (the landing round of 16:17 returned it): on a disk, `storefs.elf` was listed as a program the user runs (`wm`'s menu, `list -l`). It stays out of `02_build.sh` until 311-KRN-0190 makes it a boot image.
 - **`vfs.wit` 2.6** (311-KRN-0189, round 57, `main` ad3f64ff): a conflict is now `conflict` on the wire, not `io`, so a client reads the file again and writes once more. `tests/storefs_host.rs` checks the mapping against the generated 2.6 enum. Merged with `main` as a3d171b7, and taken up on this branch at once, because the check of 2.5 failed on the merge. In `main` 791f5aac (round 011b72a8).
 - **Not run:** nothing starts the service until 311-KRN-0190. The QEMU criteria wait for it, and for APP's lending to programs.
+
+## Progress (2026-10-31)
+
+- **At boot:** 311-KRN-0190 (round 62, `main` 74cf7265) starts `storefs` after `blockstore` on x86 and aarch64, and gives the shell a client badged `mind::fs::BADGE_USER` in `SLOT_STOREFS` (42).
+- **The first QEMU criterion** is the `shell` suite's `storefs_check` (the kernel track's): `mkdir`, `write`, `cat`, `ls` and `rm` of the shell on the store volume `notes:`, through `mind::fs`.
+- **The other two wait** for a program that holds a client of `storefs`: two writers need one that keeps a file open while the shell writes, and a cut needs a writer stopped in its publication. A program holds none until `storefs` makes a narrower client than the shell's ([311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md)) and the shell lends it (APP).
 
 ## Acceptance criteria
 
