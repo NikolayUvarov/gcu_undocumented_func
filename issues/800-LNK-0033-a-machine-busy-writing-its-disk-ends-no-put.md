@@ -37,6 +37,17 @@ What the code shows:
 - [x] The QEMU `link` suite passes on x86.
 - [ ] The daemon on LEG9 runs the new build. A slot update of the DEXP over the cable ends without a lost put.
 
+## Progress (2026-10-31)
+
+- **The new daemon on LEG9:** `effector485.exe` built from this branch (SHA-256 `b25cdc3f…`), with 800-LNK-0032's `key` and `type`. It runs since 07:11 UTC, after the build of 2026-10-24. The old files are kept as `effector485-1024.exe` and `mindlink-1022.exe`.
+  - `run-effector.cmd`'s `taskkill` did not stop the old daemon (it ran from the earlier session). It was stopped by its PID, then started again.
+  - Its queue was read back, numbering on from 3871.
+- **On the DEXP through it,** release 202610302359, under a reservation:
+  - 24 puts of 12 release images (8.4 MB) twice, 15 to 47 s each, and their removal;
+  - all 26 operations completed;
+  - no `no answer from the other end` line in the daemon's log (27 before, 27 after).
+- **How much that shows:** before, a put was lost about once in 50 to 100 files, so 24 make the change likely to hold, not certain. The next slot updates of the DEXP and the MacBook Pro over the cable are the rest of the criterion.
+
 ## Related
 
 [800-LNK-0011](800-LNK-0011-effector485.md) (the daemon), [800-LNK-0032](800-LNK-0032-keys-and-the-pointer-over-the-link.md), [docs/link/mindlink.md](../docs/link/mindlink.md).
