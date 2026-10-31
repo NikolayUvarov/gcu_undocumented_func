@@ -1,11 +1,11 @@
 //! `net`: diagnostics of the network card driver (idl/net.wit) through the client init grants the shell.
 use core::fmt::Write;
 use mind::abi::SLOT_NET;
-use mind::idl::net;
+use mind::idl::{net, wire};
 use mind::ipc::Endpoint;
 
 const SOURCE: [u8; 4] = [10, 0, 2, 15]; // the address QEMU user networking hands out
-const ARP_TRIES: usize = 100; // 10 ms apart
+const ARP_WAIT_MS: u64 = 1000; // how long an ARP request waits for its answer, by the clock (000-APP-0119)
 
 fn mac(out: &mut impl Write, mac: &[u8]) { for (i, byte) in mac.iter().enumerate() { let _ = write!(out, "{}{:02X}", if i == 0 { "" } else { ":" }, byte); } }
 
@@ -47,17 +47,21 @@ fn arp(out: &mut impl Write, endpoint: Endpoint, own: [u8; 6], target: [u8; 4]) 
     frame[22..28].copy_from_slice(&own); frame[28..32].copy_from_slice(&SOURCE); frame[38..42].copy_from_slice(&target);
     if !matches!(net::send(endpoint, &frame), Ok(Ok(()))) { let _ = writeln!(out, "NET: SEND FAILED"); return; }
     let mut buffer = [0u8; 1514];
-    for _ in 0..ARP_TRIES {
-        match net::receive(endpoint, &mut buffer) {
-            Ok(Ok(len)) => {
-                let reply = &buffer[..len.min(buffer.len())];
-                if reply.len() >= 42 && reply[12..14] == [0x08, 0x06] && reply[20..22] == [0, 2] && reply[28..32] == target {
-                    let _ = write!(out, "ARP {}.{}.{}.{} IS AT ", target[0], target[1], target[2], target[3]); mac(out, &reply[22..28]);
-                    let _ = writeln!(out);
-                    return;
-                }
+    // A second from the request by the clock, however many frames come or the machine is loaded (000-APP-0119): the
+    // driver answers `wait` once a frame is there, so no frame means no buffer call; one that keeps no more waiters
+    // answers 0 at once, and the frames are then looked for every 10 ms.
+    let deadline = mind::time::uptime_ms() as u64 + ARP_WAIT_MS;
+    while let Some(left) = deadline.checked_sub(mind::time::uptime_ms() as u64).filter(|&left| left > 0) {
+        if !matches!(wire::with_timeout(left as u32, || net::wait(endpoint)), Ok(n) if n > 0) {
+            mind::time::sleep(10);
+        }
+        while let Ok(Ok(len)) = net::receive(endpoint, &mut buffer) {
+            let reply = &buffer[..len.min(buffer.len())];
+            if reply.len() >= 42 && reply[12..14] == [0x08, 0x06] && reply[20..22] == [0, 2] && reply[28..32] == target {
+                let _ = write!(out, "ARP {}.{}.{}.{} IS AT ", target[0], target[1], target[2], target[3]); mac(out, &reply[22..28]);
+                let _ = writeln!(out);
+                return;
             }
-            _ => { mind::time::sleep(10); }
         }
     }
     let _ = writeln!(out, "ARP {}.{}.{}.{}: NO ANSWER", target[0], target[1], target[2], target[3]);
