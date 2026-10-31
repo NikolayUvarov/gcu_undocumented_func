@@ -5214,15 +5214,26 @@ def link_suite(args):
             vm.send("run keys\n")
             require(vm.expect("[KEYS] READY"), "[KEYS] LISTEN")
             start = len(vm.log)
-            keyed = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, "key", "ctrl-alt-f6", "alt-0", "shift-a"],
+            # Ctrl+Alt+F7, as nothing listens for it: the shell takes Ctrl+Alt+F1…F6 whatever has the focus (INPUT_LISTEN).
+            keyed = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, "key", "ctrl-alt-f7", "alt-0", "shift-a"],
                                    capture_output=True, text=True, timeout=120)
             took_keys = keyed.returncode == 0
             if took_keys:
                 require(keyed.stdout, "events posted, 3 chords")
-                for line in ("code=F(6) mods=CA", "code=Char mods=A char=0 U+0030", "code=Char mods=S char=A U+0041"):
-                    vm.expect(line)
+                # The lines in the log since `run keys`, in order: expect() runs past a line that came in the same piece.
+                def keys_in_order(*lines):
+                    for _ in range(40):
+                        vm.collect()
+                        got = vm.log[start:]
+                        at = [got.find(line) for line in lines]
+                        if -1 not in at:
+                            assert at == sorted(at), (lines, got[-2000:])
+                            return
+                        time.sleep(.25)
+                    raise AssertionError(f"keys over the link: {lines} not all in {got[-2000:]!r}")
+                keys_in_order("code=F(7) mods=CA", "code=Char mods=A char=0 U+0030", "code=Char mods=S char=A U+0041")
                 require(link(port, "type", "hi"), "events posted, 2 characters")
-                vm.expect("code=Char mods=- char=i U+0069")
+                keys_in_order("code=Char mods=- char=h U+0068", "code=Char mods=- char=i U+0069")
             else:
                 require(keyed.stderr, "takes no keys")
                 time.sleep(1.5)
@@ -5234,6 +5245,13 @@ def link_suite(args):
             keys_logged = vm.command("dmesg -s link", raw=True)
             if took_keys:
                 assert re.search(r"\[LINK\] INPUT: \d+ EVENTS FROM THE MASTER", keys_logged), keys_logged[-2000:]
+                # A listened chord over the link goes to its listener as the keyboard's does: the shell's screenshot.
+                require(link(port, "key", "ctrl-alt-f6"), "events posted, 1 chords")
+                # The shell writes the picture before its prompt comes back: slow under TCG, so its console line is awaited first.
+                vm.expect("SCREENSHOT data/media/", timeout=180)
+                time.sleep(.1); vm.collect(); vm.output = ""
+                shot = vm.command("dmesg -s shell", raw=True)
+                assert re.search(r"\[SHELL\] SCREENSHOT \S+: .*\(CTRL\+ALT\+F6\)", shot), shot[-2000:]
             else:
                 require(keys_logged, "[LINK] INPUT REFUSED: INIT GAVE LINK NO INPUT CAPABILITY")
                 print("SKIP: link: keys over the link reaching a program need init's input capability for link with dev (KRN, asked for 800-LNK-0032)", flush=True)
