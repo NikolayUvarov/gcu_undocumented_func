@@ -20,7 +20,7 @@ On the MacBook Pro the system log began `STARTED 2022-01-01 04:28:29 BY THE MACH
   - The year in register 9; the century register only where the FADT names one.
 - **The PL031.** The seconds since 1970 into its load register (RTCLR, offset 0x08).
 - **Reading on the Mac.** Check the CMOS read against the firmware's `GetTime` (the hardware report could carry both) before writing anything there.
-- **The user's command** is `APP`'s: `date set YYYY-MM-DD HH:MM[:SS]` in the shell ([requests-APP.md](requests-APP.md)). Time zones and network time are later work: a time zone setting for `date`, and NTP over `netstack` (`NET`).
+- **The user's command** is `APP`'s: `date set YYYY-MM-DD HH:MM[:SS]` in the shell ([requests-APP.md](requests-APP.md)). Time zones and network time are later work: a time zone setting for `date`, and network time over `netstack` ([111](111-network-time.md), `NET`).
 
 ## Acceptance criteria
 
