@@ -1,6 +1,6 @@
-# 700-DRV-0046 — `rtw88_wifi` lets the card's Bluetooth on air: rtw88's free run on a card whose Bluetooth has its own antenna
+# 700-DRV-0046 — `rtw88_wifi` lets the card's Bluetooth on air: rtw88's free run on a card whose Bluetooth has its own antenna — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-10-31) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [700](../issues/700-bluetooth.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -31,8 +31,8 @@
 
 ## Acceptance criteria
 
-- [ ] The x86 build and all of `scripts/host_tests.sh` pass.
-- [ ] On the DEXP, with this `rtw88_wifi`:
+- [x] The x86 build and all of `scripts/host_tests.sh` pass.
+- [x] On the DEXP, with this `rtw88_wifi`:
   - the log says the free run;
   - Wi-Fi joins and works as before;
   - `bt_hci`'s rounds hear devices.
@@ -50,6 +50,17 @@
 
 A restart of the DEXP returns to the boot images until a release carries this.
 
+## Resolution
+
+- **The change:** `rtw88_wifi/src/coex.rs` (`Board::mode`, `init`), and `radio.rs` passing the eFuse's `btcoex` and logging the mode (c8470201). Host tests and the x86 and aarch64 builds passed.
+- **On the DEXP, in release 202610302359** (2026-10-31 00:17 UTC, slot A, confirmed over the cable):
+  - **The tree:** `[INIT] BUILD: … COMMIT d83c98c5095b`, release 202610301115's tree (`ff0da96d`, ABI 25) with this change and its fellows (700-DRV-0046, 700-DRV-0047, BLT's 700-BLT-0002) applied, as on this branch.
+  - **The Wi-Fi:** `[RTW88] ANTENNA: FREE RUN …`, `[WLAN] AUTO-JOIN CoolNet2: JOINED (TRY 1)`, DHCP 192.168.2.141 at 5.7 s, −56 dBm. Every frame sent was acknowledged (`SENT 20 (20 ACKED)`, `22 (22 ACKED)`). The agent reconnected to hesere.
+  - **`bt_hci`'s rounds:**
+    - `14 LE AND 1 BR/EDR DEVICES HEARD; 25 EVENTS IN THE LE SCAN, 14 IN THE INQUIRY; 0 EVENT PACKETS DROPPED` at 26 s, with no inquiry complete in 12 s;
+    - `15 LE AND 1 BR/EDR …; 0 EVENT PACKETS DROPPED` at 346 s, with `INQUIRY COMPLETE AFTER 8972 MS, STATUS 00`.
+  - **Evidence for the DEXP and that release only** (MC-12.1).
+
 ## Related
 
-[700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), [550-DRV-0042](../issues-done/550-DRV-0042-rtl8821ce-wifi.done) (the driver), [hwdocs/rtl8821ce.md](../hwdocs/rtl8821ce.md). Linux v6.12 rtw88 `coex.c` and `rtw8821c.c`, as `coex.rs` names them.
+[700-BLT-0001](../issues/700-BLT-0001-bt-hci-the-rtl8821c-up.md), [550-DRV-0042](../issues-done/550-DRV-0042-rtl8821ce-wifi.done) (the driver), [hwdocs/rtl8821ce.md](../hwdocs/rtl8821ce.md). Linux v6.12 rtw88 `coex.c` and `rtw8821c.c`, as `coex.rs` names them.
