@@ -1,6 +1,6 @@
-# 000-KRN-0196 — A QMP read without a time limit holds a gate lane for an hour
+# 000-KRN-0196 — A QMP read without a time limit holds a gate lane for an hour — done
 
-**Type:** tests · **Owner:** `KRN` · **Priority:** P1 · **Status:** landed (2026-10-31, round 62); closes once the group has run on i9 · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
+**Type:** tests · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -28,7 +28,7 @@
 
 - [x] `no_serial_check` closes each connection and bounds each try to 10 s; a socket error or a broken reply counts as a try.
 - [x] `VM.qmp` reads with a time limit of 60 s.
-- [ ] `x86: RAM above 4 GiB` (with `no_serial_check` in its `display` suite) passes locally (done) and on i9.
+- [x] `x86: RAM above 4 GiB` (with `no_serial_check` in its `display` suite) passes locally (done) and on i9.
 - [x] The landing gate runs it with no hour-long lane (round 62, on rz: i9 was off).
 
 ## Progress
@@ -40,6 +40,14 @@
   - alone it passed in 992 s, with `no_serial_check`'s line;
   - no lane waited an hour.
 - **Left:** a gate that runs the group on i9.
+
+## Resolution
+
+- **Landed** in round 62 (`main` 74cf7265):
+  - `no_serial_check` closes each QMP connection and gives up a try after 10 s;
+  - `VM.qmp` reads with a limit of 60 s.
+- **On i9:** "x86: RAM above 4 GiB" passed in 1452 s, its `no_serial_check` line with it ("without COM1 … the shell still draws"), and no lane waited an hour. That was `claude/youthful-mendel-mf1soy` 32ea39e1 (`main` f7f1d0fe), through Effector, Ubuntu 24.04 under WSL2, TCG.
+- **In the gates since:** round 62 on `un-rizen`, round 63 on `un-rizen` and round 64 on `acc-1`. None had an hour-long lane.
 
 ## Related
 

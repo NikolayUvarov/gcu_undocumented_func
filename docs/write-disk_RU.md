@@ -113,6 +113,7 @@ python3 tests/usb_image_smoke.py --qemu qemu-system-x86_64 --firmware OVMF.fd
 - режим загрузки **UEFI**; CSM или «Legacy» **выключить**;
 - **Secure Boot выключить**: загрузчик пока не подписан (задача [350](../issues/350-signed-boot-images.md));
 - режим SATA **AHCI**, а не RAID, Intel RST или VMD;
+- **загрузку по сети выключить**: PXE, «Network Stack» или «UEFI Network», HTTP boot. Это собственный код прошивки, он работает до нашего загрузчика, вне того, что гарантирует MIND Core; MIND Core никогда не загружается по сети ([351-KRN-0195](../issues/351-KRN-0195-no-firmware-network-boot-before-the-loader.md), [модель угроз](profile/threat-model.md));
 
 **Диск:**
 

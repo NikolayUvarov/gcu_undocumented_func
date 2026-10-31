@@ -1,6 +1,6 @@
 # 351-KRN-0195 — The firmware's own network boot stays off: named in the threat model, refused by `efivar`
 
-**Type:** docs, `efivar` · **Owner:** `KRN` · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-12.3
+**Type:** docs, `efivar` · **Owner:** `KRN` · **Priority:** P3 · **Status:** open (made; the aarch64 run and the machines' firmware left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-12.3
 
 **Asked by:** the maintainer on 2026-10-30, after a public advisory on EDK II's PXE driver (CVE-2026-97631). The priority is low: nothing in MIND Core boots over the network, and our machines can turn it off in their firmware today.
 
@@ -31,12 +31,29 @@
 
 ## Acceptance criteria
 
-- [ ] The threat model (both profiles) names the firmware's network boot as out of scope, to be turned off.
-- [ ] The disk-writing guide, in English and Russian, has the step.
-- [ ] `efivar boot` marks network entries. `efivar bootorder` and `efivar bootnext` refuse them with a message naming the entry.
-- [ ] Host tests of the device-path classifier: a disk path, a MAC + IPv4 path, an IPv6 path, a URI path and a malformed path.
-- [ ] The `efivar` suite on x86 (OVMF with a network card that has a boot ROM) lists a `(network)` entry and sees `bootnext` refuse it.
-- [ ] A task in `issues-human/`: network boot turned off in the firmware of the maintainer's machines.
+- [x] The threat model (both profiles) names the firmware's network boot as out of scope, to be turned off.
+- [x] The disk-writing guide, in English and Russian, has the step.
+- [x] `efivar boot` marks network entries. `efivar bootorder` and `efivar bootnext` refuse them with a message naming the entry.
+- [x] Host tests of the device-path classifier: a disk path, a MAC + IPv4 path, an IPv6 path, a URI path and a malformed path.
+- [x] The `efivar` suite on x86 (OVMF with a network card that has a boot ROM) lists a `(network)` entry and sees `bootnext` refuse it.
+- [x] A task in `issues-human/`: network boot turned off in the firmware of the maintainer's machines.
+
+## Progress (2026-10-31)
+
+- **The classifier,** `libmind/src/firmware/boot_path.rs` (a child of `firmware.rs`, so the host tests build it alone, as `fs/volumes.rs` is):
+  - `path_kind` reads the device path node by node to its end node. A MAC (`0x0B`), IPv4 (`0x0C`), IPv6 (`0x0D`) or URI (`0x18`) messaging node in any instance makes it `Network`. A node shorter than its header, one past the path's end, or no end node makes it `Malformed`;
+  - `option_path` and `option_kind` find the path in a `Boot####` variable after its description.
+- **`efivar`:**
+  - `efivar boot` marks such an entry `(network)`, after `(inactive)` where both apply;
+  - `bootnext` and `bootorder` refuse a network entry, and one whose path cannot be read, before writing: `efivar: REFUSED: Boot0002 (UEFI PXEv4 (MAC:525400123456)) boots from the network, before and outside MIND Core's guarantees; turn network boot off in the firmware's setup (351-KRN-0195)`. An entry that is not set is the firmware's to skip, as before.
+- **Host tests,** `tests/boot_path_host.rs`, 8: a disk path, MAC + IPv4, MAC alone, IPv6, URI (behind IPv4 and alone), a network instance after a disk instance, malformed paths (empty, no end node, the end node cut, a node of length 2, 0 or past the end), and a `Boot####` read past its description or cut short.
+- **The `efivar` check** (x86's `boot` suite, aarch64's `efivar` suite) finds the `(network)` entry and sees both commands refuse it, with `BootNext` and `BootOrder` unchanged. On x86 it requires one; on aarch64 it checks one when AAVMF lists one.
+  - **Run locally,** x86, QEMU TCG with OVMF: OVMF's `Boot0002 UEFI PXEv4 (MAC:525400123456)` for QEMU's default card was marked and refused; the rest of the check passed as before.
+- **Docs:** both threat models; the disk-writing guide's firmware settings, in English and Russian; the x86 evidence row; a task for the maintainer in `issues-human/` (section 13).
+
+**Left:**
+- the `efivar` suite on aarch64, to see whether AAVMF lists a network entry;
+- the maintainer's machines' firmware (`issues-human/`, section 13).
 
 ## Related
 
