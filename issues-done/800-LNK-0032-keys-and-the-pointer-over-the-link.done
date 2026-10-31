@@ -1,8 +1,8 @@
-# 800-LNK-0032 — Keys and the pointer over the link: INPUT (channel 4) in the developer mode
+# 800-LNK-0032 — Keys and the pointer over the link: INPUT (channel 4) in the developer mode — done (the keys; the pointer is 800-LNK-0035)
 
-**Type:** protocol, service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-30) · **Blocked by:** `KRN`: the input capability for `link` in the developer mode only (asked on `internal-dev-messages`, 2026-10-30) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.8, MC-10.2, MC-12.1
+**Type:** protocol, service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** done (2026-10-31) · **Blocked by:** `KRN`: the input capability for `link` in the developer mode only (asked on `internal-dev-messages`, 2026-10-30) · **Main task:** [800](../issues/800-mind-link.md) · **Constitution:** MC-3.8, MC-10.2, MC-12.1
 
-**Asked by:** the tools track (`APP`) in `issues/requests-LNK.md`, 2026-10-30, section 3, "keys over the link". The maintainer (2026-10-30): "do it, it was a requirement" ([000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md): key presses by name, as QEMU's `sendkey` names them, and text at a set pace).
+**Asked by:** the tools track (`APP`) in `issues/requests-LNK.md`, 2026-10-30, section 3, "keys over the link". The maintainer (2026-10-30): "do it, it was a requirement" ([000-KRN-0108](../issues/000-KRN-0108-tests-on-a-real-machine-through-effector.md): key presses by name, as QEMU's `sendkey` names them, and text at a set pace).
 
 ## Problem
 
@@ -67,17 +67,28 @@
   - `[LINK] INPUT: N EVENTS FROM THE MASTER` is logged.
 - **The QEMU `link` suite, x86 and aarch64,** on `main` 435e47ff merged: PASS, with no SKIP.
 
-**Open:**
-- the MacBook Pro's criterion;
-- the master's pointer commands.
+**Split off:** the master's pointer commands, [800-LNK-0035](../issues/800-LNK-0035-the-pointer-over-the-link.md).
 
 ## Acceptance criteria
 
 - [x] `protocol.md` (EN, RU) defines `INPUT`'s payload; host tests cover it and the key names.
 - [x] The QEMU `link` suite on x86 and aarch64: keys over the link reach `wm` and the shell; refused without `dev`.
 - [x] `mindlink key`, `mindlink type` and `effector485`'s `key` and `type` are documented in `mindlink.md` and `effector485.md` (EN, RU).
-- [ ] On the MacBook Pro: Ctrl+Alt+F6 and Alt+0 sent over the cable, with their effect on the screen and in the log.
+- [x] On the MacBook Pro: Ctrl+Alt+F6 and Alt+0 sent over the cable, with their effect on the screen and in the log.
+
+## Resolution
+
+- **The code,** in `main` through two landings: 6c3fd0a8 (the payload, `mindlink key`/`type`, `effector485`'s operations, `link`'s posting) and f52fca85 (the suite's check with KRN's grant), with KRN's 800-KRN-0191 grant of the input capability to `link` in `dev`.
+- **QEMU:** the `link` suite on x86 and aarch64, with no SKIP.
+- **On the MacBook Pro** (2026-10-31, release 202610310825 = `main` 1c68b668, slot B confirmed over the cable):
+  - **The grant:** `init` logged `link: DEVELOPER MODE (link.conf: dev): … INPUT …`.
+  - **Ctrl+Alt+F6** through the maintainer's `effector485` (`key names=ctrl-alt-f6`): `[LINK] INPUT: 5 EVENTS FROM THE MASTER`, then `[SHELL] SCREENSHOT data/media/screen-001.bmp: 2880x1800, 15552054 BYTES (CTRL+ALT+F6)`.
+  - **Typed and pressed over the cable:** `keys` and Return in the shell, then Alt+0, Shift+A, Ctrl+Alt+F7 and the text `hi`.
+    - The compositor put `keys`' screen in front, then redrew it after the chords.
+    - The maintainer read on the Mac's screen `code=Char mods=A char=0 U+0030`, `code=Char mods=S char=A U+0041`, `code=F(7) mods=CA`, `code=Char mods=- char=h U+0068` and `code=Char mods=- char=i U+0069`.
+    - Esc over the cable closed `keys` and gave the shell the screen back.
+  - **Evidence for this machine and this release only** (MC-12.1).
 
 ## Related
 
-[800-LNK-0001](../issues-done/800-LNK-0001-the-link-protocol.done) (channel 4 reserved), [800-LNK-0005](800-LNK-0005-the-rp2-multi-device-firmware.md) (the multi-device's HID), [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) (the rig), [000-LNK-0031](000-LNK-0031-apps-checks-on-the-macbook-pro-over-the-cable.md).
+[800-LNK-0001](../issues-done/800-LNK-0001-the-link-protocol.done) (channel 4 reserved), [800-LNK-0005](../issues/800-LNK-0005-the-rp2-multi-device-firmware.md) (the multi-device's HID), [000-KRN-0108](../issues/000-KRN-0108-tests-on-a-real-machine-through-effector.md) (the rig), [000-LNK-0031](../issues/000-LNK-0031-apps-checks-on-the-macbook-pro-over-the-cable.md).
