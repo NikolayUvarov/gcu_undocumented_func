@@ -4,6 +4,7 @@ PHDRS {
     rodata PT_LOAD FLAGS(4);
     data PT_LOAD FLAGS(6);
     dynamic PT_DYNAMIC FLAGS(6);
+    stack PT_GNU_STACK FLAGS(6);
 }
 SECTIONS {
     . = 0;
@@ -21,5 +22,8 @@ SECTIONS {
     .data : { *(.data .data.*) *(.got .got.*) } :data
     .dynamic : { *(.dynamic) } :data :dynamic
     .bss (NOLOAD) : { *(.bss .bss.*) } :data
+    /* tally's stack, PT_GNU_STACK's size (262-KRN-0164): 256 KiB, as a save that reads another component's checkpoint
+       holds several manifests of format 3 at once, past the 64 KiB a program gets otherwise (313-STO-0036). */
+    .stack (NOLOAD) : { . = . + 0x40000; } :stack
     /DISCARD/ : { *(.eh_frame) }
 }

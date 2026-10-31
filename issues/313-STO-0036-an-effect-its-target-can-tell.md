@@ -31,6 +31,41 @@ Split from [313](313-persistent-actors.md) (2026-10-31): "an effect journal (the
 - **No target that cannot tell:** a file written through `vfs` keeps no version, so `effect <file>` still needs a person.
 - **History bounds the answer:** past 4 versions of the name, the outcome is unknown again.
 
+## Decisions while building (2026-10-31)
+
+- **The key in format 3** follows each effect's label: a kind byte, then for a publication the name's length byte and bytes, `from` (u64) and the root (CID). In `mind::checkpoint` it is `Key::None` or `Key::Publication(Publication)`, recorded by `begin_keyed`; `begin` records `Key::None`. A publication's name is checked as the store checks its names (1 to 64 of `A-Z a-z 0-9 . _ / -`), by `Publication::new`, which `decode` uses too, so a manifest holds no name the store would refuse. `checkpoint` repeats the store's rule rather than take in its code. `MAX` grows by 110 bytes an effect, and a host test encodes the largest manifest at exactly `MAX`.
+- **The release record stays at version 2** (`RELEASE_FORMAT`, apart from the manifest's `FORMAT`): its layout did not change, so its number does not. The suite's own release record (`tally_move_check`) is unchanged.
+- **The `Target` trait** has three calls: `head` (one name's current version and root, a snapshot), `version` (one version from the history, if kept: its root, or none for a removal) and `publish` (the swap; a conflict is `None`). Reconciling reads the head, and the history only past `from + 1`, as the session's design asked. `tally` implements it over the store's client it already holds (`blockstore`): `snapshot`, `history`, `publish`. No change to `blockstore.wit` or the store.
+- **What the target tells** is `Told`: `Done`, `NotDone`, `Now`, `Failed`, `Unknown`. `Publication::tell` asks; `Publication::apply` swaps from `from` (`Now` if it lands) and, refused, asks again. `reconcile` applies a `NotDone` and settles `Done` and `Now` done, `Failed` failed; `Unknown` and the target's errors leave the effect pending. A `NotDone` after a refusal, which a store whose versions only grow never gives, leaves it pending too.
+- **A removal.** `from + 1` that removed the name is failed. A removal past `from + 1` keeps only itself in the store's history, so `from + 1`'s root is no longer told: unknown, not failed, since the publication may have landed before the removal. The Plan's "or the name was removed" is read as "`from + 1` removed it".
+- **A name below `from`** (a store that forgot it: started blank, or another store): unknown.
+- **`tally`:**
+  - every run but `move` reconciles first, `show` included, before its request, and saves what it learned in a save of its own (one step of `sequence`); a fenced save prints `FENCED` and the run ends. The `RECONCILED` lines are printed as the store tells them, before that save, so a publication made now is reported even if the save is then fenced. The version printed is `from + 1`;
+  - `publish <name> <word>` takes one word, as the shell splits the line. It checks the name first, puts the word as a raw block, reads the version with `head`, and records the effect as `publish` with its key. A swap refused because the name moved between the read and the swap is asked again: `FAILED`, or `DONE` if another instance made it. A store error at the swap leaves the effect pending without a save, and the next run asks;
+  - `show` lists a publication still pending as `EFFECT <id> PUBLISH <name> FROM <v> PENDING: RECONCILE IT BY HAND`. `reconcile <id> done|failed` settles any pending effect, one with a key the store could not tell included;
+  - **`move` is refused while a publication is pending.** The key names no store, so after a move the store it lands in would be asked about a name in another. Any other run reconciles it first. This is not in the Plan; the move came first (313-STO-0033), and without the refusal a move would carry the hole across.
+- **The root is put before the intent,** and only its lease retains it until it is published (60 s, 303). A reconcile after a collection freed it is refused by the store (`incomplete`), and the effect stays pending for a person. checkpoints.md says so under "Not provided"; nothing else is done about it here.
+- **`tally`'s stack is 256 KiB** (`PT_GNU_STACK` in `tally/linker.ld`, as `init` asks, 262-KRN-0164). Each manifest is about 1.8 KiB larger with its keys, and a save that reads a receiver's checkpoint holds several at once. The frames of the path `main`, `acknowledge`, `restore`, `Manifest::decode` add up to 56 KiB at the commit this was built on and 80 KiB with format 3, past the 64 KiB a program gets by default. The first QEMU run overflowed there: `tally as a send apples 3 to b` ended with no output. By the same sum, `receive` by a component that owes, through its save's `acknowledge`, would have needed about 71 KiB already before this task; the suite never runs it, and it was not tried.
+- **The QEMU check** `tally_publish_check` runs right after the store suite's first `tally` checks, as the component `tally.p` with the name `board`, so its epochs are its own.
+- **The host tests' model** runs the protocol in `intend` (restore, reconcile, read the name, save the intent with its key), the swap, and `record` (the outcome saved); `settle` is a new instance that reconciles. `Between` makes a stalled instance's late swap before each number of another instance's calls in turn.
+
+## Progress (2026-10-31)
+
+- **Built** in a worktree by an agent of the storage session, for the session to review and merge. On the agent's container (an x86 host of 4 CPUs, shared with another agent's builds and QEMU runs; QEMU under TCG for both architectures):
+  - `tests/checkpoint_host.rs`: 23 tests pass, 4 of them new (2.3 s). `scripts/host_tests.sh` whole exits 0, run beside the aarch64 build;
+  - the QEMU `store` suite on x86: its first run failed in `tally_messages_check`, `tally as a send apples 3 to b` ending with no output, a stack overflow (see "`tally`'s stack is 256 KiB" above). With the larger stack it passes whole, 16 checks, `tally_publish_check` among them (9 min);
+  - the aarch64 image builds (`ARCH=aarch64 ./02_build.sh`), and its QEMU `store` suite passes whole, 16 checks (8 min).
+- **The tests can fail.** Each change below was made to a copy of the code, and the checkpoint host tests were run on it:
+  - reconciling taking a name past `from + 1` as not done, without reading the history: 1 fails (the failed and unknown cases);
+  - a not-done publication swapped from the version read again, not from `from`: 2 fail (the stalled instance resuming late; the failed and unknown cases);
+  - the key not saved with the intent (written only once the effect is settled): 4 fail;
+  - decoding accepting format 2: 3 fail;
+  - a refused swap taken as failed, the target not asked again: 2 fail;
+  - any root at `from + 1` taken as done: 1 fails; a name below `from` taken as not done: 1 fails;
+  - a publication's name bytes not checked: 1 fails; reconciling that settles nothing it was told: 3 fail; `MAX` without the keys: 1 fails;
+  - a key of another kind read as none: 1 fails. At first none failed, as the bad kind byte was followed by a publication's bytes, which the check for trailing bytes refuses anyway; a case with the kind byte last was added.
+- **The profile:** the Article 6 rows (x86, aarch64) and their evidence say what ran.
+
 ## Acceptance criteria
 
 - **Host** (`tests/checkpoint_host.rs`), through the block store's logic on a simulated medium:

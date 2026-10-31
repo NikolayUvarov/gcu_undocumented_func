@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // tally: named counters kept across instances by checkpoints in the block store (306-STO-0009, the pilot of
-// docs/storage/checkpoints.md, contract "tally" 3). Each run is a new instance of one component, `tally`, or
+// docs/storage/checkpoints.md, contract "tally" 4). Each run is a new instance of one component, `tally`, or
 // `tally.<name>` run `as <name>`: it restores the last checkpoint, applies one request and saves the next, fenced if
 // another instance saved first (MC-6.12). Effects (writing a file) are journaled before they begin and come back pending
 // if the instance ends first (Appendix B.4). An addition sent with an operation ID is applied once: sent again, it is
@@ -9,12 +9,14 @@
 // receiver reads the sender's checkpoint and applies it once, the sender clears it once the receiver's checkpoint shows
 // it applied, and each writes only its own checkpoint (313-STO-0030). A component moves to another store through a copy:
 // `move` releases it, so no instance in this store saves it again, and writes its last checkpoint to a file that `blocks
-// import` brings into another store, where the next run goes on from it (313-STO-0033). A console program: it asks the
-// shell for the store's client and the user's files, and holds nothing a checkpoint could hand back.
+// import` brings into another store, where the next run goes on from it (313-STO-0033). `publish` puts a word and
+// publishes it under a name by compare-and-swap, an effect with a key: each run first asks the store what became of
+// such an effect left pending, does it now if it was not done, and saves what it learned (313-STO-0036). A console
+// program: it asks the shell for the store's client and the user's files, and holds nothing a checkpoint could hand back.
 use core::fmt::Write;
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
 use mind::car::{self, Named};
-use mind::checkpoint::{self, read, rebind, release, released, restore, save, Applied, Error, Label, Manifest, Message, Names, Outcome, Restored, FORMAT, LABEL, MAX, OUTBOX};
+use mind::checkpoint::{self, read, rebind, reconcile, release, released, restore, save, Applied, Error, Key, Label, Manifest, Message, Names, Outcome, Publication, Restored, Target, Told, FORMAT, LABEL, MAX, OUTBOX};
 use mind::cid::{Cid, Codec};
 use mind::dag::{self, CHUNK};
 use mind::fs::File;
@@ -26,7 +28,7 @@ mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE);
 
 const STORE: Endpoint = Endpoint(SLOT_BLOCKSTORE);
 const CONTRACT: &str = "tally";
-const VERSION: u16 = 3;
+const VERSION: u16 = 4;
 /// The state's schema: lines `key=count`, sorted by key, then `<seq> <n>` for each message owed, in the outbox's order
 /// (its key and receiver are the manifest's).
 const SCHEMA: u16 = 2;
@@ -61,6 +63,28 @@ impl checkpoint::Store for Remote {
         match blockstore::commit(STORE, &updates) {
             Ok(Ok(done)) => done.versions.as_slice().first().copied().ok_or(Error::Store),
             Ok(Err(blockstore::Error::Conflict)) => Err(Error::Fenced),
+            _ => Err(Error::Store),
+        }
+    }
+}
+
+/// The store's client as a publication's target: the same client, its names' versions and compare-and-swap.
+impl Target for Remote {
+    fn head(&mut self, name: &str) -> Result<(u64, Option<Cid>), Error> {
+        let Ok(Ok(heads)) = blockstore::snapshot(STORE, &[Text::new(name).unwrap_or_default()]) else { return Err(Error::Store) };
+        heads.as_slice().first().map(|h| (h.version, Cid::from_bytes(h.root.as_slice()).ok())).ok_or(Error::Store)
+    }
+    fn version(&mut self, name: &str, version: u64) -> Result<Option<Option<Cid>>, Error> {
+        match blockstore::history(STORE, name) {
+            Ok(Ok(kept)) => Ok(kept.as_slice().iter().find(|k| k.version == version).map(|k| Cid::from_bytes(k.root.as_slice()).ok())),
+            Ok(Err(blockstore::Error::NotFound)) => Ok(None),
+            _ => Err(Error::Store),
+        }
+    }
+    fn publish(&mut self, name: &str, expected: u64, root: &Cid) -> Result<Option<u64>, Error> {
+        match blockstore::publish(STORE, name, expected, &root.to_bytes()) {
+            Ok(Ok(done)) => Ok(Some(done.version)),
+            Ok(Err(blockstore::Error::Conflict)) => Ok(None),
             _ => Err(Error::Store),
         }
     }
@@ -102,7 +126,7 @@ impl Write for Writer<'_> {
     }
 }
 
-/// The counters and the amounts owed: the state of contract "tally" 3, schema 2.
+/// The counters and the amounts owed: the state of contract "tally" 4, schema 2.
 struct Counters { keys: [Label; KEYS], counts: [u64; KEYS], len: usize, owed: [(u64, u64); OUTBOX], owing: usize }
 impl Counters {
     const EMPTY: Counters = Counters { keys: [Label::EMPTY; KEYS], counts: [0; KEYS], len: 0, owed: [(0, 0); OUTBOX], owing: 0 };
@@ -266,7 +290,12 @@ fn commit(names: &Names, i: &mut Instance, buffer: &mut [u8], state: &mut [u8]) 
 fn show(i: &Instance) {
     mind::println!("TALLY EPOCH {} SEQUENCE {}", i.manifest.epoch, i.manifest.sequence);
     for k in 0..i.counters.len { mind::println!("{} = {}", i.counters.keys[k], i.counters.counts[k]); }
-    for e in i.manifest.pending() { mind::println!("EFFECT {} {} PENDING: RECONCILE BEFORE TRYING AGAIN", e.id, e.what); }
+    for e in i.manifest.pending() {
+        match e.key {
+            Key::Publication(p) => mind::println!("EFFECT {} PUBLISH {} FROM {} PENDING: RECONCILE IT BY HAND", e.id, p.name(), p.from),
+            Key::None => mind::println!("EFFECT {} {} PENDING: RECONCILE BEFORE TRYING AGAIN", e.id, e.what),
+        }
+    }
     for m in i.manifest.outbox() { mind::println!("OWED {} {} TO {} {}", m.what, i.counters.amount(m.seq).unwrap_or(0), short(&m.to), m.seq); }
 }
 
@@ -345,12 +374,61 @@ fn receive(names: &Names, i: &mut Instance, buffer: &mut [u8], state: &mut [u8],
     if let Ok(1..) = applied { mind::println!("SAVED EPOCH {} SEQUENCE {}", i.from, i.manifest.sequence); }
 }
 
+// Asks the store what became of each pending effect with a key, does one not done now by its own swap, and saves what
+// it learned before a request is applied; false if that save failed.
+fn settle(names: &Names, i: &mut Instance, buffer: &mut [u8], state: &mut [u8]) -> bool {
+    let settled = reconcile(&mut i.manifest, &mut Remote, |e, told| {
+        let Key::Publication(p) = e.key else { return };
+        match told {
+            Ok(Told::Done) => mind::println!("RECONCILED {} DONE: {} AT {}", e.id, p.name(), p.from + 1),
+            Ok(Told::Now) => mind::println!("RECONCILED {} NOT DONE: PUBLISHED NOW AT {}", e.id, p.from + 1),
+            Ok(Told::Failed) => mind::println!("RECONCILED {} FAILED: {} CHANGED BY ANOTHER WRITER", e.id, p.name()),
+            Ok(_) => mind::println!("RECONCILED {} UNKNOWN: {} PAST ITS HISTORY; RECONCILE IT BY HAND", e.id, p.name()),
+            Err(why) => mind::println!("tally: effect {}: the store did not tell ({:?}): still pending", e.id, why),
+        }
+    });
+    settled == 0 || commit(names, i, buffer, state)
+}
+
+// Puts `text` as a raw block and publishes it under `name` from the version it reads, an effect with a key: the intent
+// and its key are saved first, so a run after a stop asks the store whether it was done. `crash` ends the instance
+// after the intent's save (`crash-before`) or after the swap (`crash-after`), before the outcome's.
+fn publish(names: &Names, i: &mut Instance, buffer: &mut [u8], state: &mut [u8], name: &str, text: &str, crash: Option<&str>) {
+    if let Some(e) = i.manifest.pending().next() { mind::println!("tally: effect refused: effect {} is pending; reconcile it first", e.id); return; }
+    let Some(mut key) = Publication::new(name, 0, Cid::raw(text.as_bytes())) else { mind::println!("tally: a name of 1 to {} of A-Z a-z 0-9 . _ / -", checkpoint::NAME); return };
+    match (checkpoint::Store::put(&mut Remote, text.as_bytes()), Target::head(&mut Remote, name)) {
+        (Ok(root), Ok((from, _))) => (key.root, key.from) = (root, from),
+        _ => { mind::println!("tally: publish: the store did not answer; nothing begun"); return }
+    }
+    let Ok(id) = i.manifest.begin_keyed("publish", Key::Publication(key)) else { mind::println!("tally: the effect journal is full of pending effects"); return };
+    // The intent and its key are durable before the swap.
+    if !commit(names, i, buffer, state) { return; }
+    if crash == Some("crash-before") { mind::println!("EFFECT {} BEGUN; ENDING BEFORE ITS SWAP", id); return; }
+    let told = key.apply(&mut Remote);
+    if crash == Some("crash-after") { mind::println!("EFFECT {} SWAPPED; ENDING BEFORE ITS OUTCOME IS RECORDED", id); return; }
+    match told.map(Told::outcome) {
+        Ok(outcome @ (Outcome::Done | Outcome::Failed)) => {
+            i.manifest.settle(id, outcome);
+            if !commit(names, i, buffer, state) { return; }
+            if outcome == Outcome::Done { mind::println!("EFFECT {} DONE: {} AT {}", id, name, key.from + 1); }
+            else { mind::println!("EFFECT {} FAILED: {} CHANGED BY ANOTHER WRITER", id, name); }
+        }
+        Ok(_) => mind::println!("EFFECT {} UNKNOWN: {} PAST ITS HISTORY; RECONCILE IT BY HAND", id, name),
+        Err(why) => mind::println!("tally: effect {}: the store did not answer ({:?}): pending, the next run asks it", id, why),
+    }
+}
+
 // Moves the component out of this store: releases it, so no instance here saves it again, then writes its last
 // checkpoint to `file`, a copy for `blocks import` into another store. Released before: the copy is written again from
 // the names' history.
 fn move_out(me: &Label, names: &Names, file: &str, buffer: &mut [u8]) {
     if !holds("files") { mind::println!("tally: move refused: this instance does not hold the files authority"); return; }
     let r = match restore(&mut Remote, names, CONTRACT, VERSION, SCHEMA, buffer) {
+        // A publication's target is a name in this store: asked here, never in the store it moves to.
+        Ok(Restored::Found(m)) if m.pending().any(|e| e.key != Key::None) => {
+            mind::println!("tally: move refused: a publication to this store is pending; any other run asks the store first");
+            return;
+        }
         Ok(Restored::Found(m)) => match release(&mut Remote, names, m.epoch, buffer) {
             Ok((r, epoch)) => { mind::println!("RELEASED {} EPOCH {}: NO INSTANCE IN THIS STORE SAVES IT AGAIN", short(me), epoch); r }
             Err(Error::Fenced) => { mind::println!("tally: FENCED: epoch {} is no longer current; nothing released", m.epoch); return }
@@ -386,7 +464,7 @@ fn move_out(me: &Label, names: &Names, file: &str, buffer: &mut [u8]) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("tally — named counters kept by checkpoints in the block store (contract tally 3). As <name> it is the component tally.<name>, which owes amounts to others and receives what they owe it. A move releases it here and writes its last checkpoint to a file, for `blocks import` into another store.\nUsage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed | move <file>\n       tally as <name> send <key> <n> to <name> | receive <name>");
+    mind::about!("tally — named counters kept by checkpoints in the block store (contract tally 4). As <name> it is the component tally.<name>, which owes amounts to others and receives what they owe it. A move releases it here and writes its last checkpoint to a file, for `blocks import` into another store. A publication of a word under a name is an effect each run asks the store about if it was left pending.\nUsage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | publish <name> <word> [crash-before|crash-after] | reconcile <id> done|failed | move <file>\n       tally as <name> send <key> <n> to <name> | receive <name>");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if !holds("blockstore") { mind::println!("tally: no client of the block store: nothing to restore from"); return; }
     let (buffer, state) = unsafe { (&mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(STATE)) };
@@ -412,6 +490,8 @@ fn main(_info: &'static BootInfo) {
         mind::println!("tally: AUTHORITY {} NOT HELD NOW", missing);
         files &= missing.as_str() != "files";
     }
+    // What is pending with a key is asked of the store, and what it told saved, before a request is applied.
+    if !settle(&names, &mut i, buffer, state) { return; }
     match (named.is_some(), words) {
         (_, [] | ["show"]) => show(&i),
         (_, ["add", key]) => add(&names, &mut i, buffer, state, key, None, None),
@@ -446,6 +526,9 @@ fn main(_info: &'static BootInfo) {
             i.manifest.settle(id, if written { Outcome::Done } else { Outcome::Failed });
             if commit(&names, &mut i, buffer, state) { mind::println!("EFFECT {} {} SAVED EPOCH {}", id, if written { "DONE" } else { "FAILED" }, i.from); }
         }
+        (_, ["publish", name, text, crash @ ..]) if crash.len() <= 1 && crash.iter().all(|c| *c == "crash-before" || *c == "crash-after") => {
+            publish(&names, &mut i, buffer, state, name, text, crash.first().copied())
+        }
         (_, ["reconcile", id, outcome]) => {
             let outcome = match *outcome { "done" => Outcome::Done, "failed" => Outcome::Failed, _ => { mind::println!("tally: reconcile <id> done|failed"); return } };
             let Ok(id) = id.parse::<u64>() else { mind::println!("tally: not an effect id"); return };
@@ -453,6 +536,6 @@ fn main(_info: &'static BootInfo) {
             i.manifest.settle(id, outcome);
             if commit(&names, &mut i, buffer, state) { mind::println!("RECONCILED {} SAVED EPOCH {}", id, i.from); }
         }
-        _ => mind::println!("Usage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | reconcile <id> done|failed | move <file> | as <name> send <key> <n> to <name> | as <name> receive <name>"),
+        _ => mind::println!("Usage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | publish <name> <word> [crash-before|crash-after] | reconcile <id> done|failed | move <file> | as <name> send <key> <n> to <name> | as <name> receive <name>"),
     }
 }

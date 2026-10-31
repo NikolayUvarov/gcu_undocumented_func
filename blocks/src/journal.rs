@@ -119,15 +119,15 @@ fn refused(what: &str, name: &str, error: Error, remote: &Remote) {
 }
 
 // Entries a check reads at most: the store's own bound on a walk, four for each block its index holds, and 64.
-fn steps() -> Option<u64> {
+pub(crate) fn steps() -> Option<u64> {
     match blockstore::stat(store()) {
         Ok(Ok(s)) => Some(4 * s.capacity as u64 + 64),
-        Ok(Err(e)) => { mind::println!("blocks: journal check: {:?}", e); None }
+        Ok(Err(e)) => { mind::println!("blocks: stat: {:?}", e); None }
         Err(e) => { store_silent(e); None }
     }
 }
 
-fn stopped(name: &str, r: Refused, remote: &Remote) {
+pub(crate) fn stopped(name: &str, r: Refused, remote: &Remote) {
     match r.error {
         Error::NotFound | Error::Removed(_) if r.checked == 0 => refused("journal", name, r.error, remote),
         e => mind::println!("REFUSED {} AT VERSION {}: SEQUENCE {}, AFTER {} ENTRIES CHECKED: {:?}", name, r.version, r.at, r.checked, e),

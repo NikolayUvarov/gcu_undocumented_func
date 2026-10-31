@@ -3,7 +3,8 @@
 //! simulated medium), fencing of a stale instance, contract and schema checks, names that disagree, effects that come
 //! back pending, authorities checked against what an instance holds; messages between components, each writing only
 //! its own checkpoint (313-STO-0030); a component moved to another store through a copy, active in one place only
-//! (313-STO-0033).
+//! (313-STO-0033); an effect with a key, reconciled by asking its target, done once wherever its instance stopped
+//! (313-STO-0036).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -24,8 +25,8 @@ mod worktree;
 #[path = "../libmind/src/car.rs"]
 mod car;
 
-use car::{Named, Target};
-use checkpoint::{read, rebind, release, released, restore, save, Applied, Error, Label, Manifest, Names, Outcome, Release, Restored, CLIENTS, MAX, OUTBOX};
+use car::Named;
+use checkpoint::{read, rebind, reconcile, release, released, restore, save, Applied, Error, Key, Label, Manifest, Names, Outcome, Publication, Release, Restored, Target, Told, CLIENTS, MAX, OUTBOX};
 use cid::{Cid, Codec};
 use store::{hmac_sha256, Crypto, Device, Entry, Extent, Head, Pin, Update, BUFFER, LEASE_NS, SECTOR};
 
@@ -87,8 +88,22 @@ impl car::Store for Local<'_> {
     }
     fn collect(&mut self) -> Result<u64, dag::Error> { self.0.collect().map(|c| c.blocks as u64).map_err(|_| dag::Error::Store) }
 }
+/// Its names as a publication's target (313-STO-0036), for the same owner.
+impl checkpoint::Target for Local<'_> {
+    fn head(&mut self, name: &str) -> Result<(u64, Option<Cid>), Error> { self.0.snapshot(name.as_bytes()).map_err(|_| Error::Store) }
+    fn version(&mut self, name: &str, version: u64) -> Result<Option<Option<Cid>>, Error> {
+        match self.0.history(name.as_bytes()) {
+            Ok(kept) => Ok(kept.iter().find(|v| v.version == version).map(|v| v.root())),
+            Err(store::Error::NotFound) => Ok(None),
+            Err(_) => Err(Error::Store),
+        }
+    }
+    fn publish(&mut self, name: &str, expected: u64, root: &Cid) -> Result<Option<u64>, Error> {
+        match self.0.publish(name.as_bytes(), expected, root, 7) { Ok(v) => Ok(Some(v)), Err(store::Error::Conflict) => Ok(None), Err(_) => Err(Error::Store) }
+    }
+}
 
-impl Target for Vec<u8> {
+impl car::Target for Vec<u8> {
     fn write(&mut self, data: &[u8]) -> Result<(), car::Error> { self.extend_from_slice(data); Ok(()) }
 }
 
@@ -124,13 +139,13 @@ fn a_manifest_has_one_encoding_and_refuses_the_rest() {
     let mut long = out[..n].to_vec();
     long.push(0);
     assert_eq!(Manifest::decode(&long), Err(Error::Format));
-    for (at, value) in [(0, b'X'), (n - 1 - 4 - 1, 3)] {
+    for (at, value) in [(0, b'X'), (n - 1 - 5 - 1, 3)] {
         let mut bad = out[..n].to_vec();
         bad[at] = value;
         assert_eq!(Manifest::decode(&bad), Err(Error::Format), "byte {at}");
     }
-    // Another format version is refused by its number (313-STO-0026: format 1 is not read, nor converted).
-    for version in [1u16, 3] {
+    // Another format version is refused by its number (313-STO-0036: formats 1 and 2 are not read, nor converted).
+    for version in [1u16, 2, 4] {
         let mut bad = out[..n].to_vec();
         bad[8..10].copy_from_slice(&version.to_le_bytes());
         assert_eq!(Manifest::decode(&bad), Err(Error::Version(version)));
@@ -307,6 +322,11 @@ impl<S: car::Store> car::Store for Stopping<'_, S> {
     fn snapshot(&mut self, names: &[&str], heads: &mut [(u64, Option<Cid>)]) -> Result<(), dag::Error> { self.dag()?; self.store.snapshot(names, heads) }
     fn collect(&mut self) -> Result<u64, dag::Error> { self.dag()?; self.store.collect() }
 }
+impl<S: Target> Target for Stopping<'_, S> {
+    fn head(&mut self, name: &str) -> Result<(u64, Option<Cid>), Error> { self.step()?; self.store.head(name) }
+    fn version(&mut self, name: &str, version: u64) -> Result<Option<Option<Cid>>, Error> { self.step()?; self.store.version(name, version) }
+    fn publish(&mut self, name: &str, expected: u64, root: &Cid) -> Result<Option<u64>, Error> { self.step()?; self.store.publish(name, expected, root) }
+}
 
 // One request of a model service, in the protocol's order: restore, tell a repeat, apply in memory with the client's
 // record, put the state, commit, answer. None: the instance ended before it answered, or the operation is stale.
@@ -474,7 +494,7 @@ fn a_save_before_the_first_request_claims_the_component() {
 }
 
 #[test]
-fn a_checkpoint_of_format_1_is_refused_by_its_number() {
+fn a_checkpoint_of_format_1_or_2_is_refused_by_its_number() {
     let mut medium = Memory { data: vec![0; 256 * SECTOR] };
     let mut room = Room::new();
     let mut local = mount(&mut medium, &mut room);
@@ -482,14 +502,16 @@ fn a_checkpoint_of_format_1_is_refused_by_its_number() {
     let mut buffer = [0u8; MAX];
     let mut m = manifest(&mut local, b"a=1\n");
     save(&mut local, &names, &mut m, 0, &mut buffer).unwrap();
-    // The same manifest written as format 1 would have it, under the same names.
-    let mut old = [0u8; MAX];
-    let n = m.encode(&mut old);
-    old[8..10].copy_from_slice(&1u16.to_le_bytes());
-    let block = local.0.put(Codec::Raw, &old[..n]).unwrap();
-    let updates = [Update { name: names.manifest().as_bytes(), expected: 1, root: Some(block) }, Update { name: names.state().as_bytes(), expected: 1, root: Some(m.state) }];
-    local.0.commit(&updates, 7).unwrap();
-    assert_eq!(restore(&mut local, &names, "tally", 1, 1, &mut buffer), Err(Error::Version(1)));
+    // The same manifest written as format 1 or 2 would have it, under the same names.
+    for (expected, version) in [(1, 1u16), (2, 2)] {
+        let mut old = [0u8; MAX];
+        let n = m.encode(&mut old);
+        old[8..10].copy_from_slice(&version.to_le_bytes());
+        let block = local.0.put(Codec::Raw, &old[..n]).unwrap();
+        let updates = [Update { name: names.manifest().as_bytes(), expected, root: Some(block) }, Update { name: names.state().as_bytes(), expected, root: Some(m.state) }];
+        local.0.commit(&updates, 7).unwrap();
+        assert_eq!(restore(&mut local, &names, "tally", 1, 1, &mut buffer), Err(Error::Version(version)));
+    }
 }
 
 // Messages between components (313-STO-0030): `a` owes `b` amounts, each its message's label. Each writes only its own
@@ -857,4 +879,261 @@ fn an_older_checkpoint_published_again_by_hand_at_a_later_version_is_refused() {
     assert_eq!(restore(&mut local, &names, "model", 1, 1, &mut buffer), Err(Error::Inconsistent));
     assert_eq!(serve(&mut local, &names, "shell", 5, 5, &mut buffer), None);
     assert_eq!(local.0.snapshot(names.manifest().as_bytes()).unwrap().0, 5);
+}
+
+// Effects with a key (313-STO-0036): a model instance publishes a root under `notes`, a name of the store, by
+// compare-and-swap, as an effect whose intent and key are saved first. A new instance asks the store what became of it.
+
+// The store with a stalled instance's swap made late: before call `left` of another instance, as if it resumed there.
+struct Between<'s, S> { store: &'s mut S, left: usize, late: Option<Publication>, told: Option<Result<Told, Error>> }
+impl<S: Target> Between<'_, S> {
+    fn step(&mut self) {
+        if self.left > 0 { self.left -= 1; return; }
+        if let Some(p) = self.late.take() { self.told = Some(p.apply(self.store)); }
+    }
+}
+impl<S: checkpoint::Store + Target> checkpoint::Store for Between<'_, S> {
+    fn put(&mut self, data: &[u8]) -> Result<Cid, Error> { self.step(); self.store.put(data) }
+    fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, Error> { self.step(); self.store.get(cid, out) }
+    fn snapshot(&mut self, names: [&str; 2]) -> Result<[(u64, Option<Cid>); 2], Error> { self.step(); self.store.snapshot(names) }
+    fn commit(&mut self, names: [&str; 2], expected: u64, roots: [Cid; 2]) -> Result<u64, Error> { self.step(); self.store.commit(names, expected, roots) }
+}
+impl<S: Target> Target for Between<'_, S> {
+    fn head(&mut self, name: &str) -> Result<(u64, Option<Cid>), Error> { self.step(); self.store.head(name) }
+    fn version(&mut self, name: &str, version: u64) -> Result<Option<Option<Cid>>, Error> { self.step(); self.store.version(name, version) }
+    fn publish(&mut self, name: &str, expected: u64, root: &Cid) -> Result<Option<u64>, Error> { self.step(); self.store.publish(name, expected, root) }
+}
+
+// A model instance that has begun its publication: its manifest, the epoch it saved the intent at, its count, and the
+// effect's id and key.
+struct Writer { m: Manifest, from: u64, count: u64, id: u64, key: Publication }
+
+// The protocol's first half: restore, reconcile what is pending with a key and save what it learned, read the name's
+// version, record the intent with its key and save it.
+fn intend<S: checkpoint::Store + Target>(store: &mut S, names: &Names, name: &str, root: Cid, buffer: &mut [u8]) -> Result<Writer, Error> {
+    let (mut m, mut from, count) = open(store, names, buffer)?;
+    if reconcile(&mut m, store, |_, _| {}) > 0 { from = keep(store, names, &mut m, from, count, buffer)?; }
+    let key = Publication::new(name, store.head(name)?.0, root).unwrap();
+    let id = m.begin_keyed("publish", Key::Publication(key))?;
+    let from = keep(store, names, &mut m, from, count, buffer)?;
+    Ok(Writer { m, from, count, id, key })
+}
+
+// The second half, after the swap: the outcome the target told recorded and saved; one that settles nothing, nothing.
+fn record(store: &mut impl checkpoint::Store, names: &Names, w: &mut Writer, told: Told, buffer: &mut [u8]) -> Result<u64, Error> {
+    if told.outcome() == Outcome::Pending { return Ok(w.from); }
+    w.m.settle(w.id, told.outcome());
+    keep(store, names, &mut w.m, w.from, w.count, buffer)
+}
+
+// A whole publication: the intent, the swap, the outcome.
+fn write<S: checkpoint::Store + Target>(store: &mut S, names: &Names, name: &str, root: Cid, buffer: &mut [u8]) -> Result<Told, Error> {
+    let mut w = intend(store, names, name, root, buffer)?;
+    let told = w.key.apply(store)?;
+    record(store, names, &mut w, told, buffer)?;
+    Ok(told)
+}
+
+// A new instance: restored, its pending effects with a key reconciled, what it learned saved. What each was told.
+fn settle<S: checkpoint::Store + Target>(store: &mut S, names: &Names, buffer: &mut [u8]) -> Result<Vec<Told>, Error> {
+    let (mut m, from, count) = open(store, names, buffer)?;
+    let (mut told, mut failed) = (vec![], None);
+    if reconcile(&mut m, store, |_, t| match t { Ok(t) => told.push(t), Err(e) => failed = Some(e) }) > 0 { keep(store, names, &mut m, from, count, buffer)?; }
+    failed.map_or(Ok(told), Err)
+}
+
+// `notes` published twice by another writer, the model at count 5; the root the model will publish, put.
+fn notes(local: &mut Local, names: &Names, buffer: &mut [u8]) -> Cid {
+    others(local, 2);
+    let (mut m, from, _) = open(local, names, buffer).unwrap();
+    keep(local, names, &mut m, from, 5, buffer).unwrap();
+    local.0.put(Codec::Raw, b"ours").unwrap()
+}
+
+// Another writer's `n` versions of `notes` after its current one: "theirs 0", "theirs 1", …
+fn others(local: &mut Local, n: u64) {
+    for k in 0..n {
+        let v = local.0.snapshot(b"notes").unwrap().0;
+        let r = local.0.put(Codec::Raw, format!("theirs {k}").as_bytes()).unwrap();
+        local.0.publish(b"notes", v, &r, 7).unwrap();
+    }
+}
+
+// The versions `notes` keeps, newest first, with their roots.
+fn kept(local: &Local) -> Vec<(u64, Option<Cid>)> { local.0.history(b"notes").unwrap().iter().map(|v| (v.version, v.root())).collect() }
+
+#[test]
+fn a_keyed_effect_stopped_anywhere_is_reconciled_and_the_name_moves_once() {
+    // The model publishes its root under `notes`, at version 2, stopping after each number of the store's calls in turn,
+    // from its restore to its outcome's save. A new instance reconciles each stop: once the intent is saved, the name
+    // ends at 3 with the root, never at 4, and the effect is settled done; before it, nothing changed.
+    let names = Names::of("model").unwrap();
+    let mut seen = [0; 4];
+    for stop in 0.. {
+        let mut medium = Memory { data: vec![0; 512 * SECTOR] };
+        let mut room = Room::new();
+        let mut local = mount(&mut medium, &mut room);
+        let mut buffer = [0u8; MAX];
+        let root = notes(&mut local, &names, &mut buffer);
+        let before = kept(&local);
+        let mut stopping = Stopping { store: &mut local, left: stop };
+        let whole = write(&mut stopping, &names, "notes", root, &mut buffer);
+        let unused = stopping.left;
+        // Where it stopped: before the intent's save, between it and the swap, after the swap, after the outcome's save.
+        let (m, ..) = open(&mut local, &names, &mut buffer).unwrap();
+        let swapped = kept(&local)[0] == (3, Some(root));
+        let at = match (m.effects().len(), m.pending().count(), swapped) { (0, ..) => 0, (_, 1, false) => 1, (_, 1, true) => 2, _ => 3 };
+        seen[at] += 1;
+        let told = settle(&mut local, &names, &mut buffer).unwrap();
+        assert_eq!(told, [vec![], vec![Told::Now], vec![Told::Done], vec![]][at], "stop {stop}");
+        let (m, _, count) = open(&mut local, &names, &mut buffer).unwrap();
+        assert_eq!((count, m.pending().count()), (5, 0), "stop {stop}");
+        if at == 0 { assert_eq!(kept(&local), before, "stop {stop}"); } else {
+            assert_eq!(kept(&local), [vec![(3, Some(root))], before.clone()].concat(), "stop {stop}");
+            assert_eq!(m.effects().iter().map(|e| (e.outcome, e.key)).collect::<Vec<_>>(), vec![(Outcome::Done, Key::Publication(Publication::new("notes", 2, root).unwrap()))]);
+        }
+        // A stop the run did not reach: every point of it was cut.
+        if unused > 0 { assert_eq!((whole, at), (Ok(Told::Now), 3)); break; }
+    }
+    assert!(seen.iter().all(|&n| n > 0), "{seen:?}");
+}
+
+#[test]
+fn a_stalled_writer_resuming_late_swaps_at_most_once_and_is_fenced() {
+    // The model saves its intent and stalls, after each number of the store's calls in turn up to its outcome's save. It
+    // resumes late: its swap, if it had not made it, before each number of a new instance's calls in turn, and its
+    // outcome's save after the new instance's. Its swap lands or is refused; of the stalled instance's and the new
+    // one's, one lands; the name takes the root once, the effect is settled done, and the late save is fenced.
+    let names = Names::of("model").unwrap();
+    let (mut lands, mut refused) = (0, 0);
+    'stops: for stop in 0.. {
+        for at in 0.. {
+            let mut medium = Memory { data: vec![0; 512 * SECTOR] };
+            let mut room = Room::new();
+            let mut local = mount(&mut medium, &mut room);
+            let mut buffer = [0u8; MAX];
+            let root = notes(&mut local, &names, &mut buffer);
+            let before = kept(&local);
+            let mut stopping = Stopping { store: &mut local, left: stop };
+            let Ok(mut w) = intend(&mut stopping, &names, "notes", root, &mut buffer) else { break };
+            let swapped = w.key.apply(&mut stopping);
+            let recorded = swapped.and_then(|t| record(&mut stopping, &names, &mut w, t, &mut buffer));
+            if recorded.is_ok() { break 'stops; }
+            let late = swapped.is_err().then_some(w.key);
+            let mut between = Between { store: &mut local, left: at, late, told: None };
+            let told = settle(&mut between, &names, &mut buffer).unwrap();
+            let after = between.left > 0;
+            // Not made within the new instance's calls: made after them.
+            let late = match between.told.take() { Some(t) => Some(t), None => late.map(|p| p.apply(&mut local)) }.map(|t| t.unwrap());
+            match late { Some(Told::Now) => lands += 1, Some(_) => refused += 1, None => {} }
+            assert_eq!(record(&mut local, &names, &mut w, late.unwrap_or(Told::Now), &mut buffer), Err(Error::Fenced), "stop {stop} at {at}");
+            assert_eq!(kept(&local), [vec![(3, Some(root))], before].concat(), "stop {stop} at {at}");
+            let now = [swapped.ok(), late, told.first().copied()].iter().filter(|t| **t == Some(Told::Now)).count();
+            assert_eq!((told.len(), now), (1, 1), "stop {stop} at {at}: {swapped:?} {late:?} {told:?}");
+            let (m, ..) = open(&mut local, &names, &mut buffer).unwrap();
+            assert_eq!(m.effects().iter().map(|e| e.outcome).collect::<Vec<_>>(), vec![Outcome::Done], "stop {stop} at {at}");
+            if late.is_none() || after { break; }
+        }
+    }
+    assert!(lands > 0 && refused > 0, "{lands} {refused}");
+}
+
+// A model that saved its intent to publish under `notes` at version 2 and stopped before its swap; then `change`, by
+// another writer; then a new instance that reconciles. What it was told, its last manifest, and the versions kept.
+fn reconciled_after(change: impl FnOnce(&mut Local, Cid)) -> (Vec<Told>, Manifest, Vec<(u64, Option<Cid>)>) {
+    let mut medium = Memory { data: vec![0; 512 * SECTOR] };
+    let mut room = Room::new();
+    let mut local = mount(&mut medium, &mut room);
+    let names = Names::of("model").unwrap();
+    let mut buffer = [0u8; MAX];
+    let root = notes(&mut local, &names, &mut buffer);
+    intend(&mut local, &names, "notes", root, &mut buffer).unwrap();
+    change(&mut local, root);
+    let told = settle(&mut local, &names, &mut buffer).unwrap();
+    (told, open(&mut local, &names, &mut buffer).unwrap().0, kept(&local))
+}
+
+#[test]
+fn another_writer_at_its_version_fails_it_and_past_the_history_it_is_unknown() {
+    let ours = |local: &mut Local, root: Cid| { local.0.publish(b"notes", 2, &root, 7).unwrap(); };
+    // Another root at version 3, or a removal at 3: failed, and the name is not published over.
+    let (told, m, kept) = reconciled_after(|l, _| others(l, 1));
+    assert_eq!((told, m.effects()[0].outcome, kept[0], kept.len()), (vec![Told::Failed], Outcome::Failed, (3, Some(Cid::raw(b"theirs 0"))), 3));
+    let (told, m, kept) = reconciled_after(|l, _| { l.0.unpublish(b"notes", 2, 7).unwrap(); });
+    assert_eq!((told, m.effects()[0].outcome, kept), (vec![Told::Failed], Outcome::Failed, vec![(3, None)]));
+    // Its own root at 3, the name moved on twice since: the history holds 3, done.
+    let (told, m, kept) = reconciled_after(|l, root| { ours(l, root); others(l, 2); });
+    assert_eq!((told, m.effects()[0].outcome, kept[2]), (vec![Told::Done], Outcome::Done, (3, Some(Cid::raw(b"ours")))));
+    // Five versions past 2, by another writer or after its own: 3 is no longer kept, unknown, left pending.
+    for own in [false, true] {
+        let (told, m, kept) = reconciled_after(|l, root| if own { ours(l, root); others(l, 4); } else { others(l, 5); });
+        assert_eq!((told, m.pending().count(), kept[kept.len() - 1].0), (vec![Told::Unknown], 1, 4), "{own}");
+    }
+    // Removed after its own root: only the removal is kept, unknown.
+    let (told, m, kept) = reconciled_after(|l, root| { ours(l, root); l.0.unpublish(b"notes", 3, 7).unwrap(); });
+    assert_eq!((told, m.pending().count(), kept), (vec![Told::Unknown], 1, vec![(4, None)]));
+    // Left pending, it is a person's to settle, as an effect without a key is; settled, it is asked no more.
+    let (_, mut m, _) = reconciled_after(|l, _| others(l, 5));
+    let id = m.pending().next().unwrap().id;
+    assert!(m.settle(id, Outcome::Failed));
+    let mut medium = Memory { data: vec![0; 256 * SECTOR] };
+    let mut room = Room::new();
+    let mut fresh = mount(&mut medium, &mut room);
+    assert_eq!(reconcile(&mut m, &mut fresh, |_, _| panic!("asked")), 0);
+    // A target that has forgotten the name, at a version below `from`, tells nothing: unknown. At `from` it is not
+    // done; done now by its swap; asked again, or swapped again and refused, done.
+    let key = Publication::new("notes", 2, Cid::raw(b"ours")).unwrap();
+    assert_eq!(key.tell(&mut fresh), Ok(Told::Unknown));
+    others(&mut fresh, 2);
+    fresh.0.put(Codec::Raw, b"ours").unwrap();
+    assert_eq!((key.tell(&mut fresh), key.apply(&mut fresh), key.tell(&mut fresh), key.apply(&mut fresh)), (Ok(Told::NotDone), Ok(Told::Now), Ok(Told::Done), Ok(Told::Done)));
+    assert_eq!(fresh.0.snapshot(b"notes"), Ok((3, Some(key.root))));
+}
+
+#[test]
+fn format_3_keys_have_one_encoding_and_format_2_is_refused() {
+    let mut m = Manifest::new(Label::new("model").unwrap(), 1, 1, Cid::raw(b"0"));
+    let longest = "n/".repeat(32);
+    let key = Publication::new(&longest, 7, Cid::raw(b"ours")).unwrap();
+    m.begin("beep").unwrap();
+    m.begin_keyed("publish", Key::Publication(key)).unwrap();
+    let mut out = [0u8; MAX];
+    let n = m.encode(&mut out);
+    assert_eq!(Manifest::decode(&out[..n]), Ok(m));
+    // The keyed effect is the last entry: its kind, the name's length and bytes, `from` and the root.
+    let at = n - (1 + 1 + 64 + 8 + 36);
+    assert_eq!((out[at], out[at + 1], &out[at + 2..at + 66], &out[n - 36..n]), (1, 64, longest.as_bytes(), &Cid::raw(b"ours").to_bytes()[..]));
+    // Every shorter prefix, a trailing byte: refused.
+    for len in 0..n { assert_eq!(Manifest::decode(&out[..len]), Err(Error::Format), "{len}"); }
+    let mut long = out[..n].to_vec();
+    long.push(0);
+    assert_eq!(Manifest::decode(&long), Err(Error::Format));
+    // A key of another kind, alone or with a publication's bytes after it, or of none with them: refused.
+    for kind in [0, 2, 255] {
+        let mut bad = out[..n].to_vec();
+        bad[at] = kind;
+        assert_eq!(Manifest::decode(&bad), Err(Error::Format), "kind {kind}");
+        let alone = Manifest::decode(&[&out[..at], &[kind][..]].concat()).map(|d| d.effects()[1].key);
+        assert_eq!(alone, if kind == 0 { Ok(Key::None) } else { Err(Error::Format) }, "kind {kind} alone");
+    }
+    // A name past 64 bytes, of none, or with a byte the store's names do not take: refused, as a publication is.
+    let with = |name: &[u8]| { let mut b = out[..at + 1].to_vec(); b.push(name.len() as u8); b.extend(name); b.extend(&out[at + 66..n]); b };
+    for name in [&b"n".repeat(65)[..], b"", b"a:b", b"a b", "é".as_bytes()] {
+        assert_eq!(Manifest::decode(&with(name)), Err(Error::Format), "{name:?}");
+        assert_eq!(Publication::new(core::str::from_utf8(name).unwrap(), 7, key.root), None);
+    }
+    assert_eq!(Manifest::decode(&with(b"notes")).map(|d| d.effects()[1].key), Ok(Key::Publication(Publication::new("notes", 7, key.root).unwrap())));
+    // Format 2 is refused by its number.
+    let mut old = out[..n].to_vec();
+    old[8..10].copy_from_slice(&2u16.to_le_bytes());
+    assert_eq!(Manifest::decode(&old), Err(Error::Version(2)));
+    // The largest manifest the format holds, every list full and every label and name at its longest, is MAX bytes.
+    let label = |c: char| c.to_string().repeat(checkpoint::LABEL);
+    let mut full = Manifest::new(Label::new(&label('c')).unwrap(), 1, 1, Cid::raw(b"0"));
+    for k in 0..8 { full.add_resource(&format!("{k}{}", &label('r')[1..])).unwrap(); full.add_authority(&format!("{k}{}", &label('a')[1..])).unwrap(); }
+    for _ in 0..checkpoint::EFFECTS { full.begin_keyed(&label('e'), Key::Publication(key)).unwrap(); }
+    for k in 0..CLIENTS { full.sequence += 1; full.record(&format!("{k:02}{}", &label('w')[2..]), 1, 1).unwrap(); }
+    for _ in 0..OUTBOX { full.send(&label('t'), &label('m')).unwrap(); }
+    assert_eq!(full.encode(&mut out), MAX);
+    assert_eq!(Manifest::decode(&out), Ok(full));
 }
