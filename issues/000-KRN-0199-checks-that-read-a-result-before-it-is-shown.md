@@ -16,6 +16,9 @@ In round 64 (candidate fbda1685), the group "x86: no PIT", the `normal` suite, f
 - **In round 65 too,** the group "x86: no PIT" failed on `i9`: the `busy` suite's run-time check, `(5201, 5511, 1.11)`. It asked that the busy loop gain more than 30 % of the host's wall clock in a second. Round 64's "x86: scheduling, isolation, heap" failed the same way on `un-rizen` (121 ms of 1.19 s).
   - The loop (PID 28, band 1) was on CPU 0 with the compositor (PID 5, the system band). Right after `top` ends, the compositor redraws the screen there: the loop ran 39 slices, 310 ms, in 1103 ms of its own age.
   - The suite's later check already measures the loop's share against the time the other tasks leave its CPU (000-KRN-0026), and asks for more than 0.9 of it.
+- **That later check** then failed in the branch's run on `un-rizen-service` (07b9c3ac, "x86: x2APIC", lane 2): share 0.889.
+  - It took the time the other tasks leave as the CPU's busy and idle time less the other tasks' run time, read by two commands each side of the 3 s. The compositor ran 2311 ms of the CPU's 3461 there.
+  - The CPU's idle time did not move (1063 ms before and after): the loop had all the time left. The 128 ms missing were the skew between the samples, which the subtraction of 2311 ms carried.
 
 ## Plan
 
@@ -23,6 +26,7 @@ In round 64 (candidate fbda1685), the group "x86: no PIT", the `normal` suite, f
 - The four row checks after a program ended or was killed use `task_rows_reaped`.
 - The x86 idle checks (`normal` for the boot CPU, `smp` for each CPU) sample `info registers` for up to 2 s until `HLT=1`. A CPU whose idle loop spins never shows it, so the check still fails then.
 - The `busy` suite's first run-time check asks what the accounting itself must hold: the loop gains run time, and no more than its age gained plus a 10 ms slice. Its share of the CPU stays the later check's, against the time the other tasks leave.
+- That later check takes the time the other tasks leave as what it is: the loop's run time and the CPU's idle time there. The share is the run time against both, still above 0.9. A scheduler that did not run the loop would leave the CPU idle, and fail it. The other tasks' run time is only reported.
 
 ## Acceptance criteria
 
@@ -33,7 +37,7 @@ In round 64 (candidate fbda1685), the group "x86: no PIT", the `normal` suite, f
 ## Progress (2026-10-31)
 
 - `tests/qemu_smoke.py`: the three colour checks of the `normal` suite and its two row checks; the `isolation` suite's two row checks after a fault; the two x86 idle checks; the `busy` suite's first run-time check.
-- The `normal`, `isolation`, `smp` and `busy` suites passed locally (x86, QEMU TCG, 4 CPUs; `smp` with `-cpu max`, all CPUs `HLT`; `busy`: the loop took 1.01 of the time the other tasks left its CPU).
+- The `normal`, `isolation`, `smp` and `busy` suites passed locally (x86, QEMU TCG, 4 CPUs; `smp` with `-cpu max`, all CPUs `HLT`; `busy`: the loop took 1.01 of the time the other tasks left its CPU, and 1.00 measured against its CPU's idle time).
 
 ## Related
 
