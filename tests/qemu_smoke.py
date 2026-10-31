@@ -3678,6 +3678,42 @@ def journal_entry(seq, boot, monotonic, calendar, clock, source, kind, content, 
     return cbor_head(5, len(fields)) + b"".join(cbor_text(k) + v for k, v in fields)
 
 
+def text_terms(data):
+    """The terms of `data` as a text index's tokenizer version 1 makes them (312-STO-0035), written here from its rule:
+    runs of ASCII letters and digits, lowercased, cut into pieces of 32."""
+    return [run[k:k + 32].lower() for run in re.split(rb"[^A-Za-z0-9]+", data) if run for k in range(0, len(run), 32)]
+
+
+def text_index(journal, seq, head, texts):
+    """A text index of a journal (312-STO-0035) written here from its layout and the DAG-CBOR and directory schemas, not
+    from libmind: `texts` the entries' contents from sequence 1, `head` the binary CID of the entry at `seq`. The root
+    holds `manifest` and `terms`; each term's file, an array of the sequences of the entries holding it, is at
+    `terms/<first byte>/<first two>/<term>`. Returns the root's CID and the manifest's counts: entries holding a term,
+    terms, postings."""
+    postings = {}
+    for s, text in enumerate(texts[:seq], 1):
+        for term in sorted(set(text_terms(text))):
+            postings.setdefault(term, []).append(s)
+
+    def directory(entries):
+        node = cbor_head(5, 2) + cbor_text("v") + cbor_head(0, 1) + cbor_text("entries") + cbor_head(4, len(entries))
+        for name, kind, size, cid in sorted(entries):
+            node += cbor_head(4, 4) + cbor_head(3, len(name)) + name + cbor_head(0, kind) + cbor_head(0, size) + cbor_link(cid)
+        return cid_binary(0x71, node)
+    shards = {}
+    for term, seqs in postings.items():
+        data = cbor_head(4, len(seqs)) + b"".join(cbor_head(0, s) for s in seqs)
+        shards.setdefault(term[:1], {}).setdefault(term[:2], []).append((term, 0, len(data), cid_binary(0x55, data)))
+    firsts = [(first, 1, len(sub), directory([(key, 1, len(files), directory(files)) for key, files in sub.items()])) for first, sub in shards.items()]
+    entries, count = sum(1 for text in texts[:seq] if text_terms(text)), sum(map(len, postings.values()))
+    manifest = (cbor_head(5, 9) + cbor_text("v") + cbor_head(0, 1) + cbor_text("seq") + cbor_head(0, seq) + cbor_text("head") + cbor_link(head)
+                + cbor_text("kind") + cbor_text("text") + cbor_text("terms") + cbor_head(0, len(postings)) + cbor_text("entries")
+                + cbor_head(0, entries) + cbor_text("journal") + cbor_text(journal) + cbor_text("postings") + cbor_head(0, count)
+                + cbor_text("tokenizer") + cbor_head(0, 1))
+    root = directory([(b"manifest", 0, len(manifest), cid_binary(0x55, manifest)), (b"terms", 1, len(firsts), directory(firsts))])
+    return cid_text(root), entries, len(postings), count
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -3918,6 +3954,7 @@ def store_suite(vm):
     store_copy_check(vm)
     tally_move_check(vm)
     store_journal_check(vm)
+    store_index_check(vm)
 
 
 def run_tally(vm, args):
@@ -4246,6 +4283,96 @@ def store_journal_check(vm):
     require(blocks("journal append diary note after it"), "blocks: journal append diary: Sequence(2)")
     require(blocks("resolve diary"), f"diary VERSION 4 ROOT {entries[1]}")
     print("PASS: a journal's older head published again by hand is refused by the check, and nothing is appended after it", flush=True)
+
+
+def store_index_check(vm):
+    """312-STO-0035: a text index of a journal through `blocks index`. Four notes are appended, and `build` publishes the
+    index whose root this suite computes from the layout (`text_index`); `search` prints each word's entries newest
+    first, as the notes hold them, and `check` says EQUAL. After another append, `search` says the index lacks one entry
+    and still finds it, and `check` says STALE 1; rebuilt, `check` says EQUAL, and once the leases have ended, after a
+    collection that frees a block nothing retains, the same. A journal that does not check has no index, and an index is
+    not answered for another journal. Where a memory domain is made (aarch64), an index in it is the domain's alone."""
+    import base64
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def cid_bytes(text):
+        return base64.b32decode(text[1:].upper() + "=" * (-len(text[1:]) % 8))
+    texts, heads = [], []
+
+    def append(note):
+        out = blocks(f"journal append notes note {note}")
+        found = re.search(rf"^APPENDED notes SEQUENCE {len(texts) + 1} BOOT 1 ENTRY (\S+) CONTENT {cid_raw(note.encode())} ", out, re.M)
+        assert found, out
+        texts.append(note.encode())
+        heads.append(found[1])
+
+    def build(version):
+        root, entries, terms, postings = text_index("notes", len(texts), cid_bytes(heads[-1]), texts)
+        require_all(blocks("index build notes"), f"INDEXED notes TO SEQUENCE {len(texts)}: {entries} ENTRIES WITH TERMS, {terms} TERMS, {postings} POSTINGS",
+                    f"PUBLISHED index/notes VERSION {version} ROOT {root} (")
+        return root
+
+    def search(word, at, state):
+        out = blocks(f"index search notes {word}")
+        found = [s for s in range(len(texts), 0, -1) if set(text_terms(word.encode())) <= set(text_terms(texts[s - 1]))]
+        assert re.findall(r"^SEQUENCES ([\d ]+?)\r?$", out, re.M) == ([" ".join(map(str, found))] if found else []), out
+        require_all(out, f"INDEX index/notes OF notes AT SEQUENCE {at}: {state}", f"FOUND IN {len(found)} ENTRIES OF notes, NEWEST FIRST, EACH CHECKED AGAINST THE JOURNAL")
+        return found
+    for note in ["The quick brown Fox", "a lazy dog, sleeping", "the FOX jumps again", "Fox-hole: 42 foxes, quick"]:
+        append(note)
+    root = build(1)
+    assert search("fox", 4, "CURRENT") == [4, 3, 1]
+    assert search("QUICK", 4, "CURRENT") == [4, 1]
+    assert search("quick-fox", 4, "CURRENT") == [4, 1]
+    assert search("cat", 4, "CURRENT") == []
+    require(blocks("index check notes"), "INDEX index/notes OF notes AT SEQUENCE 4: EQUAL")
+    require(blocks("index build notes"), f"UNCHANGED index/notes VERSION 1 ROOT {root}")
+    print("PASS: a text index: built from four notes to the root computed here; each search answers the notes' entries "
+          "newest first, each checked against the journal; the check rebuilds it equal", flush=True)
+    # One more: the index lacks it, a search scans it and finds it, the check says by how much.
+    append("a fox at five")
+    assert search("fox", 4, "STALE, LACKS 1 ENTRIES, SCANNED") == [5, 4, 3, 1]
+    assert search("five", 4, "STALE, LACKS 1 ENTRIES, SCANNED") == [5]
+    require(blocks("index check notes"), "INDEX index/notes OF notes AT SEQUENCE 4: STALE 1")
+    root = build(2)
+    require(blocks("index check notes"), "INDEX index/notes OF notes AT SEQUENCE 5: EQUAL")
+    assert search("fox", 5, "CURRENT") == [5, 4, 3, 1]
+    # Leases run 60 s by the guest's clock (303-STO-0017): after them a collection frees what nothing retains, and keeps
+    # the index, which its name retains as any tree.
+    require(vm.command("write ram:iloose.txt not in the index"), "WROTE 17 BYTES")
+    loose = cid_raw(b"not in the index\n")
+    require(blocks("put ram:iloose.txt"), f"PUT {loose} SIZE 17")
+    since = guest_seconds(vm)
+    time.sleep(55)
+    while guest_seconds(vm) < since + 62: time.sleep(2)
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    require(blocks(f"get {loose} ram:x.txt"), "blocks: get: NotFound")
+    require(blocks("index check notes"), "INDEX index/notes OF notes AT SEQUENCE 5: EQUAL")
+    assert search("fox", 5, "CURRENT") == [5, 4, 3, 1]
+    require(blocks("index build notes"), f"UNCHANGED index/notes VERSION 2 ROOT {root}")
+    print("PASS: a text index: after an append it is told one entry short and the search still finds that entry; rebuilt, "
+          "the check says equal, also after a collection", flush=True)
+    # The journal rewritten by store_journal_check does not check: no index of it. Asked of it, notes' index is refused.
+    require(blocks("index build diary"), "REFUSED diary AT VERSION 4: SEQUENCE 4, AFTER 0 ENTRIES CHECKED: Sequence(2)")
+    require(blocks("index search diary fox index/notes"), "blocks: index search diary: Another")
+    made = blocks("domain new")
+    if "NoRandom" in made:
+        print("PASS: a text index: none of a journal that does not check, and none answered for another journal", flush=True)
+        return
+    domain = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
+    require(blocks(f"-d {domain} journal append notes note in a domain"), "APPENDED notes SEQUENCE 1 BOOT 1 ENTRY")
+    require(blocks(f"-d {domain} index build notes"), "PUBLISHED index/notes VERSION 1 ROOT")
+    out = blocks(f"-d {domain} index search notes domain")
+    assert re.search(r"^SEQUENCES 1\r?$", out, re.M), out
+    require(out, "INDEX index/notes OF notes AT SEQUENCE 1: CURRENT")
+    require(blocks(f"-d {domain} index search notes fox"), "FOUND IN 0 ENTRIES OF notes")
+    require(blocks(f"domain forget {domain}"), f"DOMAIN {domain} FORGOTTEN")
+    require(blocks(f"-d {domain} index check notes"), f"blocks: domain {domain}: NotFound")
+    require(blocks("index check notes"), "INDEX index/notes OF notes AT SEQUENCE 5: EQUAL")
+    print("PASS: a text index: none of a journal that does not check, none answered for another journal; one in a memory "
+          "domain is the domain's alone and goes with it", flush=True)
 
 
 def store_domains_check(vm):
