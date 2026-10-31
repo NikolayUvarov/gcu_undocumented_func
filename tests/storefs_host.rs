@@ -6,7 +6,11 @@
 //! writers from one version the second is told of the conflict, nothing of it is published, and it writes again and
 //! publishes; a publication stopped at each write of the medium leaves the old root or the new one; a client's handles
 //! refused to another, a read-only volume refused a change, and a handle allowing no more than its parent; each bound,
-//! and each client's share, refused with nothing changed; the errors as `vfs.wit` 2.6 has them.
+//! and each client's share, refused with nothing changed; the errors as `vfs.wit` 2.6 has them. Scopes (311-STO-0037;
+//! MC-3.1, 3.4): a scope's root is its directory on its volume alone, and no path leaves it; a read-only scope, or one
+//! made through a handle that may not write, refuses every change, and so does each handle opened from it; its first
+//! task is its only user, and only its maker names another (`adopt`); it ends with its task, or after a minute unused,
+//! and its handles are then invalid; its directory is a path; the table, each client's share and the badges' turn.
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -33,7 +37,8 @@ mod vfs {
 
 use cid::Cid;
 use dag::{Builder, CHUNK};
-use fs::{Client, Error, Fs, CHUNKS, CHUNKS_EACH, CREATE, FILES, FILES_EACH, FILE_MAX, HANDLES, HANDLES_EACH, NEW, PAGE, PATH, TREES, TREES_EACH, TRUNCATE, WRITE};
+use fs::{Client, Error, Fs, Scoped, CHUNKS, CHUNKS_EACH, CREATE, FILES, FILES_EACH, FILE_MAX, HANDLES, HANDLES_EACH, NEW, PAGE, PATH, SCOPES, SCOPES_EACH, SCOPE_BADGE_FIRST, SCOPE_UNUSED_MS, TREES, TREES_EACH, TRUNCATE, WRITE};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use store::{hmac_sha256, Crypto, Device, Entry, Extent, Head, Pin, Store, BUFFER, SECTOR};
 use tree::Kind::{self, Directory, File};
@@ -923,5 +928,367 @@ fn a_volume_whose_root_is_no_directory_is_refused() {
         s.publish(b"fs/odd", 0, &file, OWNER).unwrap();
         assert_eq!(fs.root(s, USER, "odd", writable), Err(Error::NotDirectory));
         assert_eq!(fs.held(), (0, 0, 0, 0));
+    });
+}
+
+/// The capability the service's `mint` makes for a scope's badge, in these tests.
+fn mint(badge: u16) -> Option<usize> { Some(1000 + badge as usize) }
+
+/// A predicate that lets every badge write: a scope's client writes only as its scope says, whatever it answers.
+fn every(_: u16, _: &str) -> bool { true }
+
+/// The tasks scopes are lent to.
+const P: u64 = 20;
+const Q: u64 = 21;
+
+/// A directory made at `path` below `dir`.
+fn mkdir(fs: &mut Fs, store: &mut Local, client: Client, dir: u32, path: &str) { fs.open_dir(store, client, dir, path, true).and_then(|d| fs.close(store, client, d)).unwrap(); }
+
+#[test]
+fn a_scopes_root_is_its_directory_on_its_volume_alone_and_no_path_leaves_it() {
+    run(|| {
+        let mut medium = Memory::new();
+        let mut room = Room::new();
+        let mut store = mount(&mut medium, &mut room);
+        let mut fs = Box::new(Fs::new());
+        let s = &mut store;
+        let r = fs.root(s, USER, "home", writable).unwrap();
+        make(&mut fs, s, USER, r, "top.txt", b"top");
+        mkdir(&mut fs, s, USER, r, "docs/sub");
+        make(&mut fs, s, USER, r, "docs/a.txt", b"alpha");
+        make(&mut fs, s, USER, r, "docs/sub/b.txt", b"bravo");
+        let w = fs.root(s, USER, "work", writable).unwrap();
+        make(&mut fs, s, USER, w, "w.txt", b"work");
+        let docs = fs.open_dir(s, USER, r, "docs", false).unwrap();
+        let (badge, cap) = fs.scope(s, USER, docs, false, 0, mint).unwrap();
+        assert_eq!((badge, cap), (SCOPE_BADGE_FIRST, 1000 + SCOPE_BADGE_FIRST as usize));
+        assert_eq!(fs.scoped(badge), Some(Scoped { writable: false, maker: USER, user: None, volume: "home", path: "docs" }));
+        let p = Client { pid: P, badge };
+        // Its root of the volume, in any case, is the directory, at the name's current version.
+        let root = fs.root(s, p, "HOME", every).unwrap();
+        assert_eq!(fs.stat(s, p, root).map(|e| (e.name().to_vec(), e.kind)), Ok((b"docs".to_vec(), Directory)));
+        assert_eq!(listed(&mut fs, s, p, root), [entry("a.txt", File, 5), entry("sub", Directory, 1)]);
+        let v = fs.volume(s, p, root).unwrap();
+        assert_eq!((v.name(), v.writable, v.version), ("home", false, version(s, "fs/home")));
+        let a = fs.open(s, p, root, "a.txt", 0).unwrap();
+        assert_eq!(read_all(&mut fs, s, p, a), b"alpha");
+        let sub = fs.open_dir(s, p, root, "/sub/", false).unwrap();
+        assert_eq!(listed(&mut fs, s, p, sub), [entry("b.txt", File, 5)]);
+        // No path leaves it: `.` and `..` are refused, and a path from `/` is below it all the same.
+        for path in ["..", "../docs", "sub/../..", "./sub", "sub/../../top.txt", "../work"] {
+            assert_eq!(fs.open_dir(s, p, root, path, false), Err(Error::Invalid), "{path}");
+            assert_eq!(fs.open(s, p, root, path, 0), Err(Error::Invalid), "{path}");
+        }
+        assert_eq!(fs.open(s, p, sub, "../a.txt", 0), Err(Error::Invalid));
+        assert_eq!((fs.open(s, p, root, "/top.txt", 0), fs.open(s, p, root, "top.txt", 0)), (Err(Error::NotFound), Err(Error::NotFound)));
+        assert_eq!((fs.remove(s, p, root, ""), fs.rename(s, p, root, "", sub, "x")), (Err(Error::Invalid), Err(Error::Invalid)));
+        // Every other volume is refused, a store volume, vfs_server's, the boot disk's or no volume.
+        for other in ["work", "homes", "ram", "models", "", "a/b"] { assert_eq!(fs.root(s, p, other, every), Err(Error::Denied), "{other:?}"); }
+        assert_eq!(fs.held_by(p), (3, 1, 1, 0));
+        // A scope of a volume's root reads all of it, and does not write.
+        let (whole, _) = fs.scope(s, USER, r, false, 0, mint).unwrap();
+        let q = Client { pid: Q, badge: whole };
+        let all = fs.root(s, q, "home", every).unwrap();
+        assert_eq!(listed(&mut fs, s, q, all), [entry("docs", Directory, 2), entry("top.txt", File, 3)]);
+        assert_eq!((fs.open(s, q, all, "top.txt", WRITE), fs.root(s, q, "work", every)), (Err(Error::Denied), Err(Error::Denied)));
+        // A scope's directory is its handle's path from the volume's root, a scope's own handle's too.
+        let user_sub = fs.open_dir(s, USER, docs, "sub", false).unwrap();
+        let (below, _) = fs.scope(s, USER, user_sub, true, 0, mint).unwrap();
+        assert_eq!(fs.scoped(below), Some(Scoped { writable: true, maker: USER, user: None, volume: "home", path: "docs/sub" }));
+        let (theirs, _) = fs.scope(s, p, sub, true, 0, mint).unwrap();
+        assert_eq!(fs.scoped(theirs), Some(Scoped { writable: false, maker: p, user: None, volume: "home", path: "docs/sub" }));
+        assert_eq!(fs.scoped(whole).map(|x| x.path), Some(""));
+        // A scope is made of a directory handle of the caller's alone, nothing made otherwise.
+        let made = fs.scopes_held();
+        assert_eq!(fs.scope(s, p, a, false, 0, mint), Err(Error::NotDirectory));
+        assert_eq!(fs.scope(s, USER, a, false, 0, mint), Err(Error::Invalid));
+        assert_eq!(fs.scope(s, OTHER, docs, false, 0, mint), Err(Error::Invalid));
+        assert_eq!(fs.scope(s, USER, 99, false, 0, mint), Err(Error::Invalid));
+        assert_eq!(fs.scopes_held(), made);
+    });
+}
+
+#[test]
+fn a_read_only_scope_and_each_handle_from_it_refuse_every_change_and_a_writable_one_writes_there_alone() {
+    run(|| {
+        let mut medium = Memory::new();
+        let mut room = Room::new();
+        let mut store = mount(&mut medium, &mut room);
+        let mut fs = Box::new(Fs::new());
+        let s = &mut store;
+        let r = fs.root(s, USER, "home", writable).unwrap();
+        make(&mut fs, s, USER, r, "top.txt", b"top");
+        mkdir(&mut fs, s, USER, r, "docs/sub");
+        make(&mut fs, s, USER, r, "docs/a.txt", b"alpha");
+        let docs = fs.open_dir(s, USER, r, "docs", false).unwrap();
+        let app = fs.root(s, APP, "home", writable).unwrap();
+        let app_docs = fs.open_dir(s, APP, app, "docs", false).unwrap();
+        // Asked read-only through a handle that may write, and asked writable through one that may not.
+        let (asked, _) = fs.scope(s, USER, docs, false, 0, mint).unwrap();
+        let (narrow, _) = fs.scope(s, APP, app_docs, true, 0, mint).unwrap();
+        // A scope keeps its directory's path, not the handle it was made of.
+        for h in [app_docs, app] { fs.close(s, APP, h).unwrap(); }
+        let before = published(s, "fs/home");
+        for (k, badge) in [asked, narrow].into_iter().enumerate() {
+            assert_eq!(fs.scoped(badge).map(|x| x.writable), Some(false));
+            let p = Client { pid: P + k as u64, badge };
+            // The service's predicate is not asked: the scope says.
+            let root = fs.root(s, p, "home", every).unwrap();
+            assert_eq!(fs.volume(s, p, root).map(|v| v.writable), Ok(false));
+            let sub = fs.open_dir(s, p, root, "sub", false).unwrap();
+            let same = fs.open_dir(s, p, root, "", true).unwrap();
+            for dir in [root, sub, same] {
+                assert_eq!(fs.volume(s, p, dir).map(|v| v.writable), Ok(false));
+                for mode in [WRITE, CREATE, TRUNCATE, WRITE | CREATE | TRUNCATE, CREATE | NEW] {
+                    assert_eq!(fs.open(s, p, dir, "new", mode), Err(Error::Denied), "{mode}");
+                }
+                assert_eq!(fs.open_dir(s, p, dir, "made", true), Err(Error::Denied));
+                fs.flush(s, p, dir).unwrap();
+            }
+            for mode in [WRITE, TRUNCATE, WRITE | TRUNCATE] { assert_eq!(fs.open(s, p, root, "a.txt", mode), Err(Error::Denied), "{mode}"); }
+            assert_eq!((fs.remove(s, p, root, "a.txt"), fs.remove(s, p, root, "sub")), (Err(Error::Denied), Err(Error::Denied)));
+            assert_eq!(fs.rename(s, p, root, "a.txt", sub, "a.txt"), Err(Error::Denied));
+            let file = fs.open(s, p, root, "a.txt", 0).unwrap();
+            assert_eq!((fs.write(s, p, file, 0, b"x"), fs.truncate(s, p, file, 0)), (Err(Error::Denied), Err(Error::Denied)));
+            fs.flush(s, p, file).unwrap();
+            fs.close(s, p, file).unwrap();
+            // A scope made of its handle, asked writable, does not write either.
+            let (deeper, _) = fs.scope(s, p, sub, true, 0, mint).unwrap();
+            let d = Client { pid: 30 + k as u64, badge: deeper };
+            let below = fs.root(s, d, "home", every).unwrap();
+            assert_eq!(fs.open(s, d, below, "new", WRITE | CREATE), Err(Error::Denied));
+            for h in [root, sub, same] { fs.close(s, p, h).unwrap(); }
+            fs.close(s, d, below).unwrap();
+        }
+        assert_eq!(published(s, "fs/home"), before);
+
+        // A writable scope writes in its directory, the predicate saying no, and nowhere else.
+        let (rw, _) = fs.scope(s, USER, docs, true, 0, mint).unwrap();
+        let w = Client { pid: 40, badge: rw };
+        let root = fs.root(s, w, "home", |_, _| false).unwrap();
+        assert_eq!(fs.volume(s, w, root).map(|v| v.writable), Ok(true));
+        make(&mut fs, s, w, root, "b.txt", b"bravo");
+        mkdir(&mut fs, s, w, root, "sub/deeper");
+        fs.remove(s, w, root, "a.txt").unwrap();
+        let (_, tree) = published(s, "fs/home");
+        assert_eq!(tree.keys().map(String::as_str).collect::<Vec<_>>(), ["docs", "docs/b.txt", "docs/sub", "docs/sub/deeper", "top.txt"]);
+        assert_eq!((&tree["docs/b.txt"], &tree["top.txt"]), (&Err(b"bravo".to_vec()), &Err(b"top".to_vec())));
+        // A handle of it opened to read does not write; a scope of its handle writes in that directory alone.
+        let f = fs.open(s, w, root, "b.txt", 0).unwrap();
+        assert_eq!(fs.write(s, w, f, 0, b"x"), Err(Error::Denied));
+        let sub = fs.open_dir(s, w, root, "sub", false).unwrap();
+        let (deeper, _) = fs.scope(s, w, sub, true, 0, mint).unwrap();
+        let d = Client { pid: 41, badge: deeper };
+        let below = fs.root(s, d, "home", every).unwrap();
+        make(&mut fs, s, d, below, "x.txt", b"x");
+        assert_eq!(listed(&mut fs, s, d, below), [entry("deeper", Directory, 0), entry("x.txt", File, 1)]);
+        assert_eq!(published(s, "fs/home").1.keys().filter(|k| !tree.contains_key(*k)).collect::<Vec<_>>(), ["docs/sub/x.txt"]);
+    });
+}
+
+#[test]
+fn a_scopes_first_task_is_its_only_user_and_only_its_maker_names_another() {
+    run(|| {
+        let mut medium = Memory::new();
+        let mut room = Room::new();
+        let mut store = mount(&mut medium, &mut room);
+        let mut fs = Box::new(Fs::new());
+        let s = &mut store;
+        let r = fs.root(s, USER, "home", writable).unwrap();
+        let docs = fs.open_dir(s, USER, r, "docs", true).unwrap();
+        let (one, _) = fs.scope(s, USER, docs, false, 0, mint).unwrap();
+        let (p, q) = (Client { pid: P, badge: one }, Client { pid: Q, badge: one });
+        let root = fs.root(s, p, "home", every).unwrap();
+        assert_eq!(fs.scoped(one).unwrap().user, Some(P));
+        // Another task holding a copy is refused, and the first task's handles are not its own.
+        assert_eq!(fs.root(s, q, "home", every), Err(Error::Denied));
+        assert_eq!(fs.list(s, q, root, 0, |_, _, _| {}), Err(Error::Invalid));
+        assert_eq!(fs.held_by(q), (0, 0, 0, 0));
+        // The first task to ask a root takes it up, whatever the root answers.
+        let (two, _) = fs.scope(s, USER, docs, false, 0, mint).unwrap();
+        assert_eq!(fs.root(s, Client { pid: Q, badge: two }, "work", every), Err(Error::Denied));
+        assert_eq!(fs.scoped(two).unwrap().user, Some(Q));
+        assert_eq!(fs.root(s, Client { pid: P, badge: two }, "home", every), Err(Error::Denied));
+        // `adopt`: only the task that made a scope names its user, and the scope is then that task's alone.
+        let (three, _) = fs.scope(s, USER, docs, false, 0, mint).unwrap();
+        for stranger in [OTHER, APP, p] { assert_eq!(fs.adopt(stranger, three, 40), Err(Error::Denied), "{stranger:?}"); }
+        assert_eq!(fs.scoped(three).unwrap().user, None);
+        fs.adopt(USER, three, 40).unwrap();
+        assert_eq!(fs.scoped(three).unwrap().user, Some(40));
+        assert_eq!(fs.root(s, Client { pid: P, badge: three }, "home", every), Err(Error::Denied));
+        assert!(fs.root(s, Client { pid: 40, badge: three }, "home", every).is_ok());
+        // The same task again changes nothing; a scope another task uses is refused, whoever its maker names.
+        fs.adopt(USER, three, 40).unwrap();
+        assert_eq!(fs.adopt(USER, three, 41), Err(Error::Denied));
+        assert_eq!(fs.adopt(USER, one, Q), Err(Error::Denied));
+        fs.adopt(USER, one, P).unwrap();
+        assert_eq!((fs.scoped(one).unwrap().user, fs.scoped(three).unwrap().user), (Some(P), Some(40)));
+        // The maker is a task: its PID asks, by any badge.
+        let (four, _) = fs.scope(s, USER, docs, false, 0, mint).unwrap();
+        fs.adopt(Client { pid: USER.pid, badge: 0 }, four, 42).unwrap();
+        assert_eq!(fs.scoped(four).unwrap().user, Some(42));
+        // No scope of that badge: `adopt` is not-found, a root denied.
+        for badge in [0, 1, SCOPE_BADGE_FIRST - 1, SCOPE_BADGE_FIRST + 4, u16::MAX] {
+            assert_eq!(fs.adopt(USER, badge, 40), Err(Error::NotFound), "{badge}");
+        }
+        assert_eq!(fs.root(s, Client { pid: P, badge: u16::MAX }, "home", every), Err(Error::Denied));
+    });
+}
+
+#[test]
+fn a_scope_ends_with_its_task_or_after_a_minute_unused_and_its_handles_are_then_invalid() {
+    run(|| {
+        let mut medium = Memory::new();
+        let mut room = Room::new();
+        let mut store = mount(&mut medium, &mut room);
+        let mut fs = Box::new(Fs::new());
+        let s = &mut store;
+        let r = fs.root(s, USER, "home", writable).unwrap();
+        mkdir(&mut fs, s, USER, r, "docs");
+        make(&mut fs, s, USER, r, "docs/a.txt", b"alpha");
+        let docs = fs.open_dir(s, USER, r, "docs", false).unwrap();
+        let t0 = 5_000;
+        let (used, cap) = fs.scope(s, USER, docs, true, t0, mint).unwrap();
+        let (unused, unused_cap) = fs.scope(s, USER, docs, false, t0, mint).unwrap();
+        let (adopted, adopted_cap) = fs.scope(s, USER, docs, false, t0, mint).unwrap();
+        fs.adopt(USER, adopted, 40).unwrap();
+        let p = Client { pid: P, badge: used };
+        let root = fs.root(s, p, "home", every).unwrap();
+        let same = fs.open_dir(s, p, root, "", false).unwrap();
+        let f = fs.open(s, p, root, "a.txt", WRITE).unwrap();
+        write_all(&mut fs, s, p, f, 0, b"unsaved");
+        let (at, before) = (version(s, "fs/home"), fs.held());
+        let mut ended = Vec::new();
+        // While their tasks live, the used and the adopted scope last however long; one nobody took up, a minute.
+        assert_eq!(fs.sweep_scopes(t0 + SCOPE_UNUSED_MS, |_| true, |b, c| ended.push((b, c))), 0);
+        assert_eq!(fs.sweep_scopes(t0 + SCOPE_UNUSED_MS + 1, |_| true, |b, c| ended.push((b, c))), 1);
+        assert_eq!((&ended[..], fs.scoped(unused), fs.scopes_held()), (&[(unused, unused_cap)][..], None, 2));
+        assert_eq!(fs.root(s, Client { pid: Q, badge: unused }, "home", every), Err(Error::Denied));
+        assert_eq!(fs.sweep_scopes(t0 + 3_600_000, |_| true, |b, c| ended.push((b, c))), 0);
+        // The adopted one ends with the task it names, though that task never opened it.
+        assert_eq!(fs.sweep_scopes(t0 + 3_600_000, |pid| pid != 40, |b, c| ended.push((b, c))), 1);
+        assert_eq!(ended[1], (adopted, adopted_cap));
+        // The used one ends with its task: its handles are closed, what they held unpublished dropped, its tree freed.
+        assert_eq!(fs.sweep_scopes(t0, |pid| pid != P, |b, c| ended.push((b, c))), 1);
+        assert_eq!((ended.len(), ended[2]), (3, (used, cap)));
+        for h in [root, same, f] {
+            assert_eq!(fs.stat(s, p, h), Err(Error::Invalid));
+            assert_eq!(fs.read(s, p, h, 0, &mut [0; 4]), Err(Error::Invalid));
+            assert_eq!(fs.write(s, p, h, 0, b"x"), Err(Error::Invalid));
+            assert_eq!(fs.list(s, p, h, 0, |_, _, _| {}), Err(Error::Invalid));
+            assert_eq!(fs.open(s, p, h, "a.txt", 0), Err(Error::Invalid));
+            assert_eq!(fs.flush(s, p, h), Err(Error::Invalid));
+            assert_eq!(fs.close(s, p, h), Err(Error::Invalid));
+        }
+        assert_eq!((fs.held(), fs.held_by(p)), ((before.0 - 3, before.1 - 1, before.2 - 1, 0), (0, 0, 0, 0)));
+        assert_eq!((version(s, "fs/home"), fs.root(s, p, "home", every), fs.scopes_held()), (at, Err(Error::Denied), 0));
+        // Its maker's handles are its own still.
+        assert_eq!(listed(&mut fs, s, USER, docs), [entry("a.txt", File, 5)]);
+        assert_eq!(fs.sweep_scopes(u64::MAX, |_| false, |b, c| ended.push((b, c))), 0);
+    });
+}
+
+#[test]
+fn a_scopes_directory_is_a_path_gone_when_removed_or_moved_and_reached_again_when_made() {
+    run(|| {
+        let mut medium = Memory::new();
+        let mut room = Room::new();
+        let mut store = mount(&mut medium, &mut room);
+        let mut fs = Box::new(Fs::new());
+        let s = &mut store;
+        let r = fs.root(s, USER, "home", writable).unwrap();
+        mkdir(&mut fs, s, USER, r, "docs");
+        make(&mut fs, s, USER, r, "docs/a.txt", b"alpha");
+        let docs = fs.open_dir(s, USER, r, "docs", false).unwrap();
+        let (badge, _) = fs.scope(s, USER, docs, false, 0, mint).unwrap();
+        fs.close(s, USER, docs).unwrap();
+        let p = Client { pid: P, badge };
+        let root = fs.root(s, p, "home", every).unwrap();
+        assert_eq!(listed(&mut fs, s, p, root), [entry("a.txt", File, 5)]);
+        // Removed by another writer: the open root is closed as its tree follows the name, and a new one is not found.
+        fs.remove(s, USER, r, "docs/a.txt").unwrap();
+        fs.remove(s, USER, r, "docs").unwrap();
+        assert_eq!(fs.stat(s, p, root), Err(Error::Invalid));
+        assert_eq!(fs.root(s, p, "home", every), Err(Error::NotFound));
+        assert_eq!(fs.held_by(p), (0, 0, 0, 0));
+        // Made again at its path, it is the scope's.
+        mkdir(&mut fs, s, USER, r, "docs");
+        make(&mut fs, s, USER, r, "docs/b.txt", b"bravo");
+        let root = fs.root(s, p, "home", every).unwrap();
+        assert_eq!(listed(&mut fs, s, p, root), [entry("b.txt", File, 5)]);
+        // Moved, it is not followed; a file at its path is no directory.
+        fs.rename(s, USER, r, "docs", r, "moved").unwrap();
+        assert_eq!((fs.stat(s, p, root), fs.root(s, p, "home", every)), (Err(Error::Invalid), Err(Error::NotFound)));
+        make(&mut fs, s, USER, r, "docs", b"a file");
+        assert_eq!(fs.root(s, p, "home", every), Err(Error::NotDirectory));
+        assert_eq!((fs.held_by(p), fs.scoped(badge).map(|x| x.user)), ((0, 0, 0, 0), Some(Some(P))));
+    });
+}
+
+#[test]
+fn the_scopes_table_and_each_clients_share_are_refused_past_them_with_nothing_changed() {
+    run(|| {
+        let mut medium = Memory::new();
+        let mut room = Room::new();
+        let mut store = mount(&mut medium, &mut room);
+        let mut fs = Box::new(Fs::new());
+        let s = &mut store;
+        assert_eq!((SCOPES, SCOPES_EACH, SCOPE_BADGE_FIRST, SCOPE_UNUSED_MS), (16, 8, 0x100, 60_000));
+        let (r, o, a) = (fs.root(s, USER, "home", writable).unwrap(), fs.root(s, OTHER, "home", writable).unwrap(), fs.root(s, APP, "home", writable).unwrap());
+        let minted = Cell::new(0);
+        let counted = |badge| { minted.set(minted.get() + 1); mint(badge) };
+        // A client makes its share; past it, Handles, nothing changed: no capability minted, no badge taken.
+        let mine: Vec<u16> = (0..SCOPES_EACH).map(|_| fs.scope(s, USER, r, false, 0, counted).unwrap().0).collect();
+        assert_eq!(mine, (0..SCOPES_EACH as u16).map(|k| SCOPE_BADGE_FIRST + k).collect::<Vec<_>>());
+        assert_eq!(fs.scopes_held_by(USER), SCOPES_EACH);
+        let before = (fs.scopes_held(), fs.held(), minted.get());
+        assert_eq!(fs.scope(s, USER, r, true, 0, counted), Err(Error::Handles));
+        assert_eq!(Error::Handles.wire(), vfs::Error::Handles);
+        assert_eq!((fs.scopes_held(), fs.held(), minted.get()), before);
+        // Another client still gets its share, from the next badge; then the table is full for a third.
+        let theirs: Vec<u16> = (0..SCOPES - SCOPES_EACH).map(|_| fs.scope(s, OTHER, o, false, 0, counted).unwrap().0).collect();
+        assert_eq!(theirs[0], SCOPE_BADGE_FIRST + SCOPES_EACH as u16);
+        assert_eq!((fs.scopes_held(), fs.scopes_held_by(OTHER)), (SCOPES, SCOPES - SCOPES_EACH));
+        let before = (fs.scopes_held(), fs.held(), minted.get());
+        assert_eq!(fs.scope(s, APP, a, false, 0, counted), Err(Error::Handles));
+        assert_eq!((fs.scopes_held(), fs.held(), minted.get()), before);
+        // Ended, they give their places back. A capability the service cannot make is Handles, and no scope.
+        assert_eq!(fs.sweep_scopes(SCOPE_UNUSED_MS + 1, |_| true, |_, _| {}), SCOPES);
+        assert_eq!(fs.scope(s, APP, a, false, 0, |_| None), Err(Error::Handles));
+        assert_eq!(fs.scopes_held(), 0);
+        assert_eq!(fs.scope(s, APP, a, false, 0, mint).map(|(badge, _)| badge), Ok(SCOPE_BADGE_FIRST + SCOPES as u16));
+        assert_eq!(fs.scopes_held_by(APP), 1);
+    });
+}
+
+#[test]
+fn a_scopes_badge_is_the_next_that_no_scope_holds_wrapping_past_u16_max() {
+    run(|| {
+        let mut medium = Memory::new();
+        let mut room = Room::new();
+        let mut store = mount(&mut medium, &mut room);
+        let mut fs = Box::new(Fs::new());
+        let s = &mut store;
+        let r = fs.root(s, USER, "home", writable).unwrap();
+        // One scope lasts, its task alive.
+        let (kept, _) = fs.scope(s, USER, r, false, 0, mint).unwrap();
+        fs.adopt(USER, kept, 40).unwrap();
+        // The others are made and end unused, a round each minute, until every badge was given.
+        let (mut now, mut next) = (0, SCOPE_BADGE_FIRST as u32 + 1);
+        while next <= u16::MAX as u32 {
+            for _ in 1..SCOPES_EACH {
+                if next > u16::MAX as u32 { break; }
+                let (badge, cap) = fs.scope(s, USER, r, false, now, mint).unwrap();
+                assert_eq!((badge as u32, cap), (next, 1000 + next as usize));
+                next += 1;
+            }
+            now += SCOPE_UNUSED_MS + 1;
+            fs.sweep_scopes(now, |pid| pid == 40, |_, _| {});
+        }
+        assert_eq!(fs.scopes_held(), 1);
+        // Past u16::MAX the turn starts again from SCOPE_BADGE_FIRST, which the kept scope holds: it is skipped.
+        assert_eq!(fs.scope(s, USER, r, false, now, mint).map(|(badge, _)| badge), Ok(SCOPE_BADGE_FIRST + 1));
+        assert_eq!(fs.scope(s, USER, r, false, now, mint).map(|(badge, _)| badge), Ok(SCOPE_BADGE_FIRST + 2));
+        assert_eq!(fs.scoped(kept).map(|x| x.user), Some(Some(40)));
     });
 }
