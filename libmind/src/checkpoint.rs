@@ -10,17 +10,22 @@
 //! sender its client; the sender clears what the receiver's checkpoint shows applied. Each writes only its own.
 //! A move (313-STO-0033) releases the component, both names to a release record by one compare-and-swap, so no instance
 //! in this store saves it again, and its last checkpoint, which the names' history keeps, goes to a copy; imported into
-//! a store that never held its names, a manifest takes their first version as its epoch. No system calls:
-//! tests/checkpoint_host.rs.
+//! a store that never held its names, a manifest takes their first version as its epoch. Format 3 (313-STO-0036) saves
+//! with an effect's intent the key its target tells it by, a publication by compare-and-swap: `reconcile` asks the
+//! target whether it was done, and does it now if it was not, never twice. No system calls: tests/checkpoint_host.rs.
 use crate::cid::{self, Cid};
 
 pub const MAGIC: &[u8; 8] = b"MIND-CKP";
 /// A release record's magic: the component was moved out of this store.
 pub const RELEASED: &[u8; 8] = b"MIND-RLS";
 /// The manifest format's version; another is refused by its number, never read as this one.
-pub const FORMAT: u16 = 2;
+pub const FORMAT: u16 = 3;
+/// The release record's format version: its layout is the one of the manifest's format 2.
+pub const RELEASE_FORMAT: u16 = 2;
 /// Bytes of a label (a contract, a resource, an authority, an effect) at most.
 pub const LABEL: usize = 32;
+/// Bytes of a publication's name at most: a name of the store, 1 to 64 of `A-Z a-z 0-9 . _ / -`.
+pub const NAME: usize = 64;
 pub const RESOURCES: usize = 8;
 pub const AUTHORITIES: usize = 8;
 pub const EFFECTS: usize = 16;
@@ -28,7 +33,7 @@ pub const CLIENTS: usize = 16;
 pub const OUTBOX: usize = 16;
 /// Bytes of an encoded manifest at most.
 pub const MAX: usize = 8 + 2 + 1 + LABEL + 2 + 2 + 8 + 8 + cid::BYTES + 5 + 8 + 8 + (RESOURCES + AUTHORITIES) * (1 + LABEL)
-    + EFFECTS * (8 + 1 + 1 + LABEL) + CLIENTS * (1 + LABEL + 8 + 8 + 8) + OUTBOX * (8 + 2 * (1 + LABEL));
+    + EFFECTS * (8 + 1 + 1 + LABEL + 1 + 1 + NAME + 8 + cid::BYTES) + CLIENTS * (1 + LABEL + 8 + 8 + 8) + OUTBOX * (8 + 2 * (1 + LABEL));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -72,9 +77,58 @@ impl core::fmt::Display for Label { fn fmt(&self, f: &mut core::fmt::Formatter) 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome { Pending, Done, Failed }
 
+/// An external effect: its id, what it is, its outcome, and the key its target tells it by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Effect { pub id: u64, pub what: Label, pub outcome: Outcome }
-impl Effect { pub const EMPTY: Effect = Effect { id: 0, what: Label::EMPTY, outcome: Outcome::Done }; }
+pub struct Effect { pub id: u64, pub what: Label, pub outcome: Outcome, pub key: Key }
+impl Effect { pub const EMPTY: Effect = Effect { id: 0, what: Label::EMPTY, outcome: Outcome::Done, key: Key::None }; }
+
+/// What an effect's target tells it by, saved with its intent (format 3): none, so only a person reconciles it, or a
+/// publication by compare-and-swap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key { None, Publication(Publication) }
+
+/// A publication by compare-and-swap: `root` under a name of the store from its version `from`, so the name takes it
+/// at `from + 1` once, or never.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Publication { name: [u8; NAME], len: u8, pub from: u64, pub root: Cid }
+impl Publication {
+    /// None unless `name` is a name of the store.
+    pub fn new(name: &str, from: u64, root: Cid) -> Option<Publication> {
+        let b = name.as_bytes();
+        if !(1..=NAME).contains(&b.len()) || !b.iter().all(|c| c.is_ascii_alphanumeric() || b"._/-".contains(c)) { return None; }
+        let mut p = Publication { name: [0; NAME], len: b.len() as u8, from, root };
+        p.name[..b.len()].copy_from_slice(b);
+        Some(p)
+    }
+    pub fn name(&self) -> &str { core::str::from_utf8(&self.name[..self.len as usize]).unwrap_or("") }
+    /// What `target` tells of it now: the name's current version, and past `from + 1` the versions the target keeps.
+    /// A name below `from` was forgotten by the target since: unknown.
+    pub fn tell(&self, target: &mut impl Target) -> Result<Told, Error> {
+        let (now, root) = target.head(self.name())?;
+        if now == self.from { return Ok(Told::NotDone); }
+        if now < self.from { return Ok(Told::Unknown); }
+        let at = if now == self.from + 1 { Some(root) } else { target.version(self.name(), self.from + 1)? };
+        Ok(match at { Some(Some(r)) if r == self.root => Told::Done, Some(_) => Told::Failed, None => Told::Unknown })
+    }
+    /// Done now by its compare-and-swap from `from`: Now if it lands; refused, the name moved on, and the target is
+    /// asked again, so another instance's swap of the same root is told done.
+    pub fn apply(&self, target: &mut impl Target) -> Result<Told, Error> {
+        if target.publish(self.name(), self.from, &self.root)?.is_some() { return Ok(Told::Now); }
+        self.tell(target)
+    }
+}
+
+/// What a publication's target tells: done (the name took its root at `from + 1`), not done (the name still at
+/// `from`), done now (it was not, and this swap landed), failed (`from + 1` holds another root or removed the name), or
+/// unknown (the name past `from + 1`, a version the target no longer keeps: for a person).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Told { Done, NotDone, Now, Failed, Unknown }
+impl Told {
+    /// The outcome it settles; pending if it settles none.
+    pub fn outcome(self) -> Outcome {
+        match self { Told::Done | Told::Now => Outcome::Done, Told::Failed => Outcome::Failed, Told::NotDone | Told::Unknown => Outcome::Pending }
+    }
+}
 
 /// A client's last operation applied: its id, the result it was answered, and the sequence it was applied at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,7 +204,9 @@ impl Manifest {
     }
     /// Records an effect about to begin, as pending; returns its id. Done and failed effects are dropped first when
     /// the journal is full.
-    pub fn begin(&mut self, what: &str) -> Result<u64, Error> {
+    pub fn begin(&mut self, what: &str) -> Result<u64, Error> { self.begin_keyed(what, Key::None) }
+    /// The same, with the key its target tells it by, saved with the intent (format 3).
+    pub fn begin_keyed(&mut self, what: &str, key: Key) -> Result<u64, Error> {
         let what = Label::new(what).ok_or(Error::Invalid)?;
         if self.counts[2] as usize == EFFECTS {
             let keep = self.effects.iter().position(|e| e.outcome != Outcome::Pending).ok_or(Error::Invalid)?;
@@ -158,7 +214,7 @@ impl Manifest {
             self.counts[2] -= 1;
         }
         let id = self.effects().iter().map(|e| e.id).max().unwrap_or(0) + 1;
-        self.effects[self.counts[2] as usize] = Effect { id, what, outcome: Outcome::Pending };
+        self.effects[self.counts[2] as usize] = Effect { id, what, outcome: Outcome::Pending, key };
         self.counts[2] += 1;
         Ok(id)
     }
@@ -260,6 +316,15 @@ impl Manifest {
             w.put(&e.id.to_le_bytes());
             w.put(&[match e.outcome { Outcome::Pending => 0, Outcome::Done => 1, Outcome::Failed => 2 }]);
             w.label(&e.what);
+            match &e.key {
+                Key::None => w.put(&[0]),
+                Key::Publication(p) => {
+                    w.put(&[1, p.len]);
+                    w.put(&p.name[..p.len as usize]);
+                    w.put(&p.from.to_le_bytes());
+                    w.put(&p.root.to_bytes());
+                }
+            }
         }
         for c in self.clients() {
             w.label(&c.who);
@@ -293,7 +358,19 @@ impl Manifest {
         for k in 0..counts[2] as usize {
             let id = r.u64()?;
             let outcome = match r.take(1)?[0] { 0 => Outcome::Pending, 1 => Outcome::Done, 2 => Outcome::Failed, _ => return Err(Error::Format) };
-            m.effects[k] = Effect { id, what: r.label()?, outcome };
+            let what = r.label()?;
+            let key = match r.take(1)?[0] {
+                0 => Key::None,
+                1 => {
+                    let len = r.take(1)?[0] as usize;
+                    let name = core::str::from_utf8(r.take(len)?).map_err(|_| Error::Format)?;
+                    let from = r.u64()?;
+                    let root = Cid::from_bytes(r.take(cid::BYTES)?).map_err(|_| Error::Format)?;
+                    Key::Publication(Publication::new(name, from, root).ok_or(Error::Format)?)
+                }
+                _ => return Err(Error::Format),
+            };
+            m.effects[k] = Effect { id, what, outcome, key };
         }
         for k in 0..counts[3] as usize {
             let who = r.label()?;
@@ -322,7 +399,7 @@ impl Release {
     pub fn encode(&self, out: &mut [u8]) -> usize {
         let mut w = Out { out, at: 0 };
         w.put(RELEASED);
-        w.put(&FORMAT.to_le_bytes());
+        w.put(&RELEASE_FORMAT.to_le_bytes());
         w.put(&self.epoch.to_le_bytes());
         w.put(&self.manifest.to_bytes());
         w.put(&self.state.to_bytes());
@@ -332,7 +409,7 @@ impl Release {
     pub fn decode(bytes: &[u8]) -> Result<Release, Error> {
         let mut r = In { bytes, at: 0 };
         if r.take(8)? != RELEASED { return Err(Error::Format); }
-        match r.u16()? { FORMAT => {} other => return Err(Error::Version(other)) }
+        match r.u16()? { RELEASE_FORMAT => {} other => return Err(Error::Version(other)) }
         let epoch = r.u64()?;
         let manifest = Cid::from_bytes(r.take(cid::BYTES)?).map_err(|_| Error::Format)?;
         let state = Cid::from_bytes(r.take(cid::BYTES)?).map_err(|_| Error::Format)?;
@@ -370,6 +447,33 @@ pub trait Store {
     fn snapshot(&mut self, names: [&str; 2]) -> Result<[(u64, Option<Cid>); 2], Error>;
     /// Both names from `expected` to their roots, at once or not at all; Fenced if either moved on.
     fn commit(&mut self, names: [&str; 2], expected: u64, roots: [Cid; 2]) -> Result<u64, Error>;
+}
+
+/// A publication's target as reconciling asks it: a name's current version, a version it keeps, and the
+/// compare-and-swap.
+pub trait Target {
+    /// `name`'s current version and root (0 and none: never published; a version and none: removed).
+    fn head(&mut self, name: &str) -> Result<(u64, Option<Cid>), Error>;
+    /// Version `version` of `name` if the target still keeps it: its root, or none if that version removed the name.
+    fn version(&mut self, name: &str, version: u64) -> Result<Option<Option<Cid>>, Error>;
+    /// `root` published under `name` if it is at `expected`: its new version; None if it is not.
+    fn publish(&mut self, name: &str, expected: u64, root: &Cid) -> Result<Option<u64>, Error>;
+}
+
+/// Reconciles each pending effect with a key by asking `target`, never trying it blindly (Appendix B.4): done before,
+/// or not done and done now by its own compare-and-swap, it is settled done; failed, failed; unknown, or the target's
+/// error, it stays pending. `each` sees each effect asked and the answer. Returns how many it settled, to be saved
+/// before a request is applied.
+pub fn reconcile(manifest: &mut Manifest, target: &mut impl Target, mut each: impl FnMut(&Effect, Result<Told, Error>)) -> usize {
+    let mut settled = 0;
+    for k in 0..manifest.counts[2] as usize {
+        let (Outcome::Pending, Key::Publication(p)) = (manifest.effects[k].outcome, manifest.effects[k].key) else { continue };
+        let told = p.tell(target).and_then(|t| if t == Told::NotDone { p.apply(target) } else { Ok(t) });
+        let outcome = told.map_or(Outcome::Pending, Told::outcome);
+        if outcome != Outcome::Pending { manifest.effects[k].outcome = outcome; settled += 1; }
+        each(&manifest.effects[k], told);
+    }
+    settled
 }
 
 /// The two names of `component`'s checkpoint: its manifest and its state.

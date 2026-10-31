@@ -20,6 +20,7 @@ pub mod checkpoint;
 pub mod cid;
 pub mod control;
 pub mod dag;
+pub mod index;
 pub mod journal;
 pub mod tree;
 pub mod worktree;
