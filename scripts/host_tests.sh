@@ -32,6 +32,10 @@ rustc --edition=2021 -O -C debug-assertions=on --test tests/blockstore_host.rs -
 # checks of overflow and assertions kept, they take seconds, not a minute (312-STO-0034).
 rustc --edition=2021 -O -C debug-assertions=on --test tests/journal_host.rs -o "$OUT/journal-tests"
 "$OUT/journal-tests"
+# The index's tests search every word of journals of hundreds of entries, each answer checked against the journal and
+# each word scanned too: optimized, its checks of overflow and assertions kept, 4 s rather than 44 (312-STO-0035).
+rustc --edition=2021 -O -C debug-assertions=on --test tests/index_host.rs -o "$OUT/index-tests"
+"$OUT/index-tests"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"
