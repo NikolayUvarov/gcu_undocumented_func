@@ -3780,6 +3780,25 @@ def text_index(journal, seq, head, texts):
     return cid_text(root), entries, len(postings), count
 
 
+def assertion_node(subject, kind, interp, value=None, retracts=None, basis=None):
+    """An assertion (312-STO-0038) written here from its schema and the DAG-CBOR specification, not from libmind:
+    `{"v": 1, "type", "basis", "value", "interp", "subject", "retracts"}`, its keys in DAG-CBOR's order (shorter first,
+    then by their bytes). `subject`, `basis`, `retracts` and a CID value are CIDs' binary forms, each a byte string, not
+    a link; a text value is a `str`; a withdrawal has `retracts` and no value."""
+    def mention(cid):
+        return cbor_head(2, len(cid)) + cid
+    fields = [("v", cbor_head(0, 1)), ("type", cbor_text(kind))]
+    if basis:
+        fields.append(("basis", mention(basis)))
+    if value is not None:
+        fields.append(("value", cbor_text(value) if isinstance(value, str) else mention(value)))
+    fields += [("interp", cbor_head(0, interp)), ("subject", mention(subject))]
+    if retracts:
+        fields.append(("retracts", mention(retracts)))
+    assert [k for k, _ in fields] == sorted((k for k, _ in fields), key=lambda k: (len(k), k))
+    return cbor_head(5, len(fields)) + b"".join(cbor_text(k) + v for k, v in fields)
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -4022,6 +4041,7 @@ def store_suite(vm):
     tally_move_check(vm)
     store_journal_check(vm)
     store_index_check(vm)
+    store_assertion_check(vm)
 
 
 def run_tally(vm, args):
@@ -4475,6 +4495,80 @@ def store_index_check(vm):
     require(blocks("index check notes"), "INDEX index/notes OF notes AT SEQUENCE 5: EQUAL")
     print("PASS: a text index: none of a journal that does not check, none answered for another journal; one in a memory "
           "domain is the domain's alone and goes with it", flush=True)
+
+
+def store_assertion_check(vm):
+    """312-STO-0038: assertions about an object through `blocks assert`, in a journal of their own (`claims`). An object
+    is put and published, and two assertions are added about it, a text and a CID, each assertion's CID the one this
+    suite computes from the schema; `about` lists both newest first. `retract` withdraws the first, its withdrawal's CID
+    computed here too, and `about` lists the other; withdrawing it again, or what is no claim, is refused. Once the
+    object's name is removed and the leases have ended, a collection frees the object, and `about` still lists the
+    assertion, the journal whole: an assertion mentions its subject and does not retain it. Where a memory domain is made
+    (aarch64), an assertion in it is the domain's alone and goes with it."""
+    import base64
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def cid_bytes(text):
+        return base64.b32decode(text[1:].upper() + "=" * (-len(text[1:]) % 8))
+    require(vm.command("write ram:asubject.txt a photo of the sea"), "WROTE 19 BYTES")
+    subject = cid_raw(b"a photo of the sea\n")
+    require(blocks("put ram:asubject.txt"), f"PUT {subject} SIZE 19")
+    since = guest_seconds(vm)
+    require(blocks(f"publish asubject {subject}"), "PUBLISHED asubject VERSION 1")
+    # A CID as a value is a mention too: this one is never put.
+    coast = cid_raw(b"a map of the coast")
+    said = cid_bytes(subject)
+
+    def add(args, seq, node):
+        cid = cid_text(cid_binary(0x55, node))
+        require(blocks(f"assert add claims {subject} {args}"), f"ASSERTED claims SEQUENCE {seq} ASSERTION {cid} ABOUT {subject} (")
+        return cid
+
+    def about(version, expected):
+        out = blocks(f"assert about claims {subject}")
+        rows = re.findall(r"^ASSERTION (\d+) (\S+) SOURCE (\S+) TYPE (\S+) INTERP (\d+)\r?\n  (TEXT|CID) (.*?)\r?$", out, re.M)
+        assert rows == expected, out
+        require(out, f"{len(expected)} ASSERTIONS ABOUT {subject} IN claims AT VERSION {version}, NEWEST FIRST")
+    title = add("title The sea at dawn", 1, assertion_node(said, "title", 1, value="The sea at dawn"))
+    see_also = add(f"seealso -c {coast}", 2, assertion_node(said, "seealso", 1, value=cid_bytes(coast)))
+    second = ("2", see_also, "blocks", "seealso", "1", "CID", coast)
+    about(2, [second, ("1", title, "blocks", "title", "1", "TEXT", "The sea at dawn")])
+    print("PASS: assertions: two said of an object with `blocks assert add`, each the schema's encoding computed here, "
+          "listed by `about` newest first", flush=True)
+    withdrawal = cid_text(cid_binary(0x55, assertion_node(said, "title", 1, retracts=cid_bytes(title))))
+    require(blocks(f"assert retract claims {title}"), f"RETRACTED {title} IN claims SEQUENCE 3 ASSERTION {withdrawal} (")
+    about(3, [second])
+    require(blocks(f"assert retract claims {title}"), "blocks: assert retract claims: Withdrawn")
+    require(blocks(f"assert retract claims {withdrawal}"), "blocks: assert retract claims: NotFound")
+    require(blocks(f"assert retract claims {subject}"), "blocks: assert retract claims: NotFound")
+    require(blocks("journal check claims"), "CHECKED claims: 3 ENTRIES, SEQUENCE 1 TO 3, AT VERSION 3: WHOLE")
+    print("PASS: assertions: `retract` withdraws one, and `about` lists the other; withdrawing it again, or what is no "
+          "claim, is refused with nothing appended", flush=True)
+    # Leases run 60 s by the guest's clock (303-STO-0017): the object's name removed, a collection after them frees it,
+    # and the journal keeps its assertions, which mention it.
+    require(blocks("unpublish asubject 1"), "REMOVED asubject VERSION 2")
+    left = since + 62 - guest_seconds(vm)
+    if left > 4:
+        time.sleep(left - 4)
+    while guest_seconds(vm) < since + 62: time.sleep(2)
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    require(blocks(f"get {subject} ram:x.txt"), "blocks: get: NotFound")
+    about(3, [second])
+    require(blocks("journal check claims"), "CHECKED claims: 3 ENTRIES, SEQUENCE 1 TO 3, AT VERSION 3: WHOLE")
+    print("PASS: assertions: the object unpublished and collected, `about` still lists what is said of it", flush=True)
+    made = blocks("domain new")
+    if "NoRandom" in made:
+        return
+    domain = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
+    require(blocks(f"-d {domain} assert add claims {subject} title In a domain"), "ASSERTED claims SEQUENCE 1 ASSERTION ")
+    require_all(blocks(f"-d {domain} assert about claims {subject}"), "  TEXT In a domain", f"1 ASSERTIONS ABOUT {subject} IN claims AT VERSION 1, NEWEST FIRST")
+    about(3, [second])
+    require(blocks(f"domain forget {domain}"), f"DOMAIN {domain} FORGOTTEN")
+    require(blocks(f"-d {domain} assert about claims {subject}"), f"blocks: domain {domain}: NotFound")
+    about(3, [second])
+    print("PASS: assertions: one in a memory domain is the domain's alone and goes with it", flush=True)
 
 
 def store_domains_check(vm):

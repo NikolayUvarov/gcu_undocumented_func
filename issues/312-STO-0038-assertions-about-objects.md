@@ -24,7 +24,7 @@ The store keeps objects, names and journals ([312-STO-0034](../issues-done/312-S
 - **A mention, not a retention** (MC-4.5): `subject`, `basis` and `retracts` are kept as the CIDs' bytes, not as links. A walk of the store does not follow them, so an assertion never retains its subject, and a subject collected leaves its assertions in place.
 - **Kept in a journal:** an assertion is the content of a journal entry of kind `assertion`, appended by `journal::append`. The journal gives it its order, its time and its `source`, the writer's label as the journal records it. So an assertion's provenance is its journal's entry, checked from the head as every entry is.
 - **Retraction:** a later assertion by the same `source` that names an earlier one in `retracts` withdraws it. One by another source does not: it is that source's own claim, and both stand.
-- **Reading** (`assertion::about`): the assertions of a journal about one subject, newest first, without the retracted ones, each with its entry's sequence and source. The journal is checked whole from its head, and each assertion read and checked against its CID. A scan first: an index by subject waits for the sizes to ask for it, as the text index did ([312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.md)).
+- **Reading** (`assertion::about`): the assertions of a journal about one subject, newest first, without the retracted ones, each with its entry's sequence and source. The journal is checked whole from its head, and each assertion read and checked against its CID. A scan first: an index by subject waits for the sizes to ask for it, as the text index did ([312-STO-0035](../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done)).
 - **The sources of truth** (MC-4.12), named in docs/storage:
   - an assertion with no `basis` is its source's word, and the journal is its record;
   - one with a `basis` is derived, may be dropped, and is made again from its basis.
@@ -42,6 +42,61 @@ The store keeps objects, names and journals ([312-STO-0034](../issues-done/312-S
 - **No rights:** an assertion lives in its journal's store and domain, and reading one about an object grants nothing on the object (MC-4.6).
 - **A scan:** each `about` reads the whole journal.
 
+## Decisions while building (2026-10-31)
+
+- **The schema** is flat: `{"v": 1, "type", "basis", "value", "interp", "subject", "retracts"}`, its keys in DAG-CBOR's order, as the reference library `dag-cbor` 0.3.3 sorts them (a host test holds four of its encodings).
+  - `type` is a label by the journal's rules (`journal::Label`: 1 to 32 bytes of `!` to `~`), so a type and an entry's kind are one kind of name. `interp` is any number; `blocks` writes 1.
+  - A text value is at most 1024 bytes of UTF-8, the empty text among them; an assertion is at most 1182 bytes.
+  - Every CID in it is its binary form as a byte string, never a link: `subject`, `basis`, `retracts` and a CID value. **A CID value is a mention too:** an assertion that names an object as its value does not keep it; what is to be kept has a name or a pin of its own. Only the CIDs the store's identifiers name (CIDv1, `raw` or `dag-cbor`, SHA-256) can be written; another is refused (`format`).
+- **A withdrawal has no value** (a departure from the plan's field list, which gives every assertion a value). `value` is absent exactly when `retracts` is present, a rule of the schema as a journal's `prev` is. So an assertion is a claim or a withdrawal, never both:
+  - `about` answers claims. The plan's "both stand" for a withdrawal by another source is kept as: it withdraws nothing, and it stands in the journal as that source's record; it is not itself an answer, as it says nothing of the subject but that.
+  - A withdrawal carries the claim's subject, type and interpretation, which `retract` takes from the claim, so `about` meets it among the subject's assertions and keeps nothing of other subjects.
+  - A claim replaced by another is a withdrawal, then a claim: two entries.
+  - `retracts` names an assertion's block, so a `dag-cbor` CID there is refused.
+- **A withdrawal names the claim's CID,** the assertion's block, not its entry, as `blocks assert add` prints it. The same bytes said twice by one source are one CID: a withdrawal withdraws each of them said before it, and the same claim said again after it stands, a claim made anew. The same bytes said by two sources are two claims, and one's withdrawal leaves the other's.
+- **The block is `raw`,** holding the canonical DAG-CBOR bytes, not a typed `dag-cbor` block, as an index's manifest is (312-STO-0035). The store takes a `dag-cbor` block only of the schemas its walk reads, and a `raw` one as a file of one chunk whose bytes it never reads. So the journal retains each assertion through its entry, nothing in it is followed, and nothing in the store changes. Every read checks it against its CID (`corrupt`); its CID is of the codec `raw`.
+- **An entry of kind `assertion` whose content is no assertion refuses the journal's answers** (`format`; `version(n)` for another version), and is not skipped: the entry says what its content is, and an assertion of another version left out would answer less than the journal holds (MC-4.13). An entry of another kind is skipped, also one whose content is an assertion's bytes.
+- **`add` takes claims only;** withdrawals are written by `retract`, which checks them first. A writer that does not use this module can append any withdrawal to a journal it may write; `about` honours one only of an earlier claim of its own source, so it needs no other check. `retract` withdraws only the source's own claim that stands, and refuses, nothing appended:
+  - no claim with that CID in the journal (`not-found`): also a withdrawal's CID, an entry's, or any other block;
+  - only another source's claim (`another`);
+  - one whose newest of the claims and the withdrawals of it by the source is a withdrawal (`withdrawn`).
+
+  A withdrawal takes no basis: it is its source's word.
+- **One walk** for `about` and for `retract`, as for an index's build: `journal::check_each`, each assertion read as its entry is met. Every assertion of the journal is read and checked, not only the subject's: a journal holding an assertion that does not read answers nothing about any subject, as one that does not check answers nothing.
+- **The work area:** the subject's claims met, from the first place up, and its withdrawals, from the last place down, in a slice the caller gives (`Claim`: a sequence, a source and a CID, 80 bytes). From the head down a withdrawal is met before the claims it withdraws, so a claim met is final at once, and a withdrawn one takes no place. `blocks` keeps 256 in a static, about 20 KiB, and reads through its two blocks. Past them is `full`, nothing answered.
+- **Answers are given once checked:** `about` gives each claim after the whole journal is checked, its block read again and checked against its CID (the work area holds no texts). So nothing is answered from a journal that does not check. A block not read the second time (a store failing between the two reads) stops the answers there, with its error.
+- **`retract` checks the journal at one head and appends at the head `journal::append` reads.** An append between them leaves what was checked below it, the journal being append-only: the claim is still an earlier one of the source. Two racing withdrawals of one claim may both be appended; the second withdraws nothing more.
+- **`blocks assert`:**
+  - the source is `blocks` and the interpretation 1; the text is the words joined by one space, as `blocks journal append` joins them; a CID value is `-c <cid>`; no basis is given, as nothing the pilot says is derived;
+  - `about` prints a claim on two lines, a third for a basis; a text of more than 192 bytes or with a control character is told by its length (a console line holds 256 bytes, and a text read from memory is data, MC-11.5);
+  - up to 8 conflicts are met by appending again.
+- **The host tests are built unoptimized,** in `scripts/host_tests.sh`'s list: 4 s, 0.4 s optimized. Their reference encodings were made here with `dag-cbor` 0.3.3 and `multiformats` 0.3.1, installed in a scratch environment outside the repository.
+- **The QEMU check, `store_assertion_check`,** runs after `store_index_check`, with a journal (`claims`) and an object (`asubject`) of its own. It waits for the leases from the object's put (62 s by the guest's clock), so its collection frees the object. The suite computes each assertion's CID from the schema (`assertion_node`, written from the DAG-CBOR specification and checked here against the reference library). Where a memory domain is made (aarch64), it adds an assertion in one and forgets it.
+- **docs/api** lists no `journal` or `index` module, and so no `assertion` one; docs/storage is their reference.
+
+## Progress (2026-10-31)
+
+- **Built** in a worktree by an agent of the storage session, for the session to review and merge. On the agent's container (an x86 host of 4 CPUs, QEMU under TCG for both architectures):
+  - `tests/assertion_host.rs`: 9 tests pass, unoptimized (4 s) and built with `-O -C debug-assertions=on` (0.4 s). The reference encodings in them (four assertions and their CIDs) were made here with `dag-cbor` 0.3.3 and `multiformats` 0.3.1; the suite's `assertion_node` gives that library's bytes for four assertions too (checked here, by a script outside the repository);
+  - `scripts/host_tests.sh` whole exits 0 (22 min): `assertion` 9, `journal` 16, `index` 14, `blockstore` 73 among it;
+  - the x86 image builds (`./02_build.sh`), and the QEMU `store` suite (x86) passes whole, 22 checks in 12 min, the three of `store_assertion_check` among them; `qemu64` makes no memory domain, so its fourth does not run there;
+  - the aarch64 image builds (`ARCH=aarch64 ./02_build.sh`), and its QEMU `store` suite passes whole, 23 checks in 11 min, the assertion in a memory domain among them.
+- **The tests can fail.** Each change below was made to a copy of `assertion.rs`, and the host tests were built against it:
+  - the subject kept as a link (written and read as tag 42): 2 fail (the reference encodings, the canonical decode). The store's walk does not tell it: the block is `raw`, whose bytes the store never reads, so the collection test passes with it too;
+  - a withdrawal by another source honoured by `about`: 2 fail (the retractions, the seeded journals); `retract` withdrawing another source's claim: 2 fail;
+  - withdrawn claims still answered: 3 fail;
+  - decoding without the canonical re-encoding: 1 fails;
+  - an assertion read without its check against its CID: 1 fails (the store that lies);
+  - entries of another kind read as assertions: 3 fail;
+  - `about` not checking the journal to its first entry (`journal::list` within the steps for `check_each`): 1 fails (the journal read past its steps);
+  - `retract` not refusing a claim withdrawn already: 2 fail;
+  - the version not read first, another read as 1: 2 fail;
+  - a text past its bound encoded and read: 1 fails;
+  - `about` keeping the withdrawals of every subject: 1 fails (the work area's bound); the work area's bound not kept: 1 fails;
+  - `add` taking a withdrawal: 1 fails.
+- **Not tested:** two writers racing at `add` or `retract` (the journal's compare-and-swap is, in `tests/journal_host.rs`), and a block that fails its second read in `about`.
+- **The profile:** the Article 4 rows (x86, aarch64) and their evidence say what ran.
+
 ## Acceptance criteria
 
 - **Host,** `tests/assertion_host.rs`, over the block store's logic on a simulated medium:
@@ -58,4 +113,4 @@ The store keeps objects, names and journals ([312-STO-0034](../issues-done/312-S
 
 ## Related
 
-[312](312-the-minds-memory.md), [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.md), [303](../issues-done/303-retention-and-collection.done), [308](308-encryption-at-rest.md).
+[312](312-the-minds-memory.md), [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done), [303](../issues-done/303-retention-and-collection.done), [308](308-encryption-at-rest.md).

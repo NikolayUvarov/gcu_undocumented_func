@@ -1,8 +1,8 @@
-# 313-STO-0036 — An effect its target can tell: reconciled at restore by asking the target, never tried again blindly
+# 313-STO-0036 — An effect its target can tell: reconciled at restore by asking the target, never tried again blindly — done
 
-**Type:** storage (`libmind`, `tally`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [313](313-persistent-actors.md) · **Constitution:** MC-6.6, MC-6.10, MC-6.12, MC-7.1, Appendix B.4
+**Type:** storage (`libmind`, `tally`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [313](../issues/313-persistent-actors.md) · **Constitution:** MC-6.6, MC-6.10, MC-6.12, MC-7.1, Appendix B.4
 
-Split from [313](313-persistent-actors.md) (2026-10-31): "an effect journal (the intent before an effect, the result after); an indeterminate outcome reconciled, never blindly repeated", and its host criterion "a stop at every point between an effect and its record, each reconciled".
+Split from [313](../issues/313-persistent-actors.md) (2026-10-31): "an effect journal (the intent before an effect, the result after); an indeterminate outcome reconciled, never blindly repeated", and its host criterion "a stop at every point between an effect and its record, each reconciled".
 
 ## Problem
 
@@ -79,6 +79,15 @@ Split from [313](313-persistent-actors.md) (2026-10-31): "an effect journal (the
   - a name published by `blocks publish` between the two: `FAILED`.
 - **docs/storage/checkpoints.md** (version 5: format 3, `tally` 4, what it does not give) and the profile's Article 6 rows.
 
+## Resolution
+
+Landed in `main` 36d05f12 (round 8ea4b135) as 8bf86cf7 and e94c727e.
+- **`mind::checkpoint`, manifest format 3** (`libmind/src/checkpoint.rs`): an effect's record carries a key saved with its intent, so far a publication by compare-and-swap (a name, `from`, the root). `reconcile` asks a `Target` (a name's head, a kept version, the swap): done, not done and then published now by the same swap from `from`, failed, or unknown and left for a person; a refused swap asks again, so the name takes the root once. Format 2 is refused by its number; the release record keeps its version 2.
+- **The pilot, `tally` 4:** `publish <name> <word> [crash-before|crash-after]`; every run but a move reconciles first and saves what it learned; a move is refused while a publication is pending. Its stack is 256 KiB (`tally/linker.ld`), as format 3's manifests overflowed the default on a save that reads another component's checkpoint.
+- **Tests:** `tests/checkpoint_host.rs` (23), among them a keyed publication stopped after each of the store's calls and reconciled, and the stalled instance resuming late at each point; `tally_publish_check` in the QEMU `store` suite (not done, done, failed by another writer). They passed on the session's container and on `un-rizen_2a8b108d5593` (x86 and aarch64, QEMU TCG) on 0c161935, as the landing request of 05:57 says.
+- **The docs:** docs/storage/checkpoints.md version 5 (what it does not give, and the move check on both architectures), docs/api, README's `tally` line, the profile's Article 6 rows and their evidence.
+- **Not done here:** the root block is retained only by its lease until it is published, so a reconcile after a collection freed it leaves the effect pending, as checkpoints.md says. 313 stays open for its first users (260, 950).
+
 ## Related
 
-[313](313-persistent-actors.md), [306](../issues-done/306-checkpoints-and-rebinding.done), [313-STO-0026](../issues-done/313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done), [304](../issues-done/304-several-names-at-once.done), [308-STO-0023](../issues-done/308-STO-0023-memory-domains.done).
+[313](../issues/313-persistent-actors.md), [306](306-checkpoints-and-rebinding.done), [313-STO-0026](313-STO-0026-operation-ids-and-queues-in-a-checkpoint.done), [304](304-several-names-at-once.done), [308-STO-0023](308-STO-0023-memory-domains.done).
