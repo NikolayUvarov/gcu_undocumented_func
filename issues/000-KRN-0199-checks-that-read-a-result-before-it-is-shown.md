@@ -28,7 +28,7 @@ In round 64 (candidate fbda1685), the group "x86: no PIT", the `normal` suite, f
 ## Progress (2026-10-31)
 
 - `tests/qemu_smoke.py`: the three colour checks of the `normal` suite and its two row checks; the `isolation` suite's two row checks after a fault; the two x86 idle checks.
-- The `normal` and `isolation` suites passed locally (x86, QEMU TCG, 4 CPUs).
+- The `normal`, `isolation` and `smp` suites passed locally (x86, QEMU TCG, 4 CPUs; `smp` with `-cpu max`, all CPUs `HLT`).
 
 ## Related
 
