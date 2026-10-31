@@ -511,11 +511,11 @@ def center_pixel_soon(vm, want, seconds=5):
 
 
 # aarch64 idle check (issue 208, 000-KRN-0197): QEMU shows no WFI state, so the check looks at its threads. A vCPU that
-# spins instead of waiting in WFI keeps its thread running or waiting to run the whole second, on any host and under
-# any load; an idle one sleeps between wakeups. QEMU's processor time in all grows with the host's slowness (0.85-1.05 s
-# a second on PCU's 4 cores) and is only reported. The lowest of a few samples is compared, so one sample that meets a
-# burst of wakeups does not fail the check.
-IDLE_THREAD_LIMIT = .6
+# spins instead of waiting in WFI never sleeps: its thread runs or waits to run the whole second on any host and under
+# any load (100% with `nop` for `wfi`). An idle one sleeps between wakeups (15% on a 4-thread container, 45-47% on PCU,
+# where the threads wait for its 4 cores). QEMU's processor time in all grows with the host's slowness (0.85-1.05 s a
+# second on PCU) and is only reported. The lowest of a few samples is compared, so one burst of wakeups does not fail it.
+IDLE_THREAD_LIMIT = .9
 
 
 def idle_thread_share(vm, samples=3):

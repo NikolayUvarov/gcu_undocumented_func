@@ -20,8 +20,20 @@ In round 62 (candidate 74cf7265), two groups on `un-rizen-service` failed their 
 
 ## Acceptance criteria
 
-- [ ] Both groups pass on `un-rizen-service` and `acc-1` with the change.
+- [x] Both groups pass on `un-rizen-service` and `acc-1` with the change (below).
 - [ ] The landing gate runs them with neither wait failing.
+
+## Progress
+
+- **2026-10-31, made** on `claude/youthful-mendel-mf1soy` (d40bac34).
+- **`acc-1`, d40bac34:** "x86: RAM above 4 GiB" passed in 955 s and "x86: boot, display, shell, memory, clock" in 698 s.
+- **`un-rizen-service`'s second lane, d40bac34:**
+  - the boot suite's signed-volume cases passed with the new waits;
+  - two other 8 s prompt waits then failed: `dmesg -s wifi` in the `net` suite, and `dmesg -s vfs_server` after the decoy boot;
+  - the machine was at a load average of 58 on 16 cores, from two KRN branch runs (one of them a 16-CPU group) and another track's run. The kernel track loaded it so; the run says nothing of these waits on a machine with one gate's lanes.
+
+  These two waits are not changed. The groups run there again.
+- **`un-rizen-service`'s second lane, cf0161af, alone on its lane:** "x86: RAM above 4 GiB" passed in 1000 s and "x86: boot, display, shell, memory, clock" in 688 s.
 
 ## Related
 
