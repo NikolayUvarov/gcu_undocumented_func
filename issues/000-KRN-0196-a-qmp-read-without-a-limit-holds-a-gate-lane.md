@@ -28,12 +28,14 @@
 
 - [x] `no_serial_check` closes each connection and bounds each try to 10 s; a socket error or a broken reply counts as a try.
 - [x] `VM.qmp` reads with a time limit of 60 s.
-- [ ] `x86: RAM above 4 GiB` (with `no_serial_check` in its `normal` suite) passes locally and on i9.
+- [ ] `x86: RAM above 4 GiB` (with `no_serial_check` in its `display` suite) passes locally (done) and on i9.
 - [ ] The landing gate runs it with no hour-long lane.
 
 ## Progress
 
 - **2026-10-31, made** on `claude/youthful-mendel-mf1soy`.
+- **Tested locally (x86, QEMU TCG, 4 CPUs):** `x86: RAM above 4 GiB` PASS in 1119 s, with `no_serial_check`'s line.
+- **Left:** a gate that runs the group on i9.
 
 ## Related
 
