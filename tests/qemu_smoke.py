@@ -2650,12 +2650,14 @@ def busy_suite(vm):
     vm.send("q")
     vm.expect("EXITED. SHELL RESUMED.")
     time.sleep(.1); vm.collect(); vm.output = ""
-    # TSC accounting (STAT): a task that never yields gets most of its CPU.
-    run = lambda: int(re.search(r"RUN_MS=(\d+)", vm.command("stat 1"))[1])
-    before, started = run(), time.monotonic()
+    # TSC accounting (STAT): a task that never yields gains run time, never more than it lived plus a 10 ms slice. Its
+    # share of its CPU is checked below against the time the other tasks leave there: right after top the compositor,
+    # on the same CPU and in the system band, redraws the screen, which took 72 % of a second on a slow host (000-KRN-0199).
+    stat = lambda: tuple(map(int, re.search(r"RUN_MS=(\d+) AGE_MS=(\d+)", vm.command("stat 1")).groups()))
+    run0, age0 = stat()
     time.sleep(1)
-    after, elapsed = run(), time.monotonic() - started
-    assert (after - before) > 0.3 * elapsed * 1000, (before, after, elapsed)
+    run1, age1 = stat()
+    assert 0 < run1 - run0 <= age1 - age0 + 10, (run0, age0, run1, age1)
     fixture = vm.command("logs 1")
     require(fixture, "BUSY FIXTURE")
     avx_expected(vm, fixture)
