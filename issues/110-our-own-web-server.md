@@ -1,6 +1,6 @@
 # 110 — Our own web server, `httpd`: releases first, on Linux and then on MIND Core
 
-**Type:** network (main task: a server) · **Owner:** `NET` (the kernel session), with `UPD` for the release side · **Priority:** P1 · **Status:** open · **Blocked by:** — for stage 1; stage 2 by its own tasks (listening sockets, the TLS server role) · **Roadmap:** track C (update and distribution), track D (network) · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-9.6, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
+**Type:** network (main task: a server) · **Owner:** `NET` (the kernel session), with `UPD` for the release side · **Priority:** P1 · **Status:** open · **Blocked by:** — for stage 1; stage 2 by its own tasks: listening sockets and the listening grant ([110-NET-0052](110-NET-0052-listening-tcp-sockets.md)), the TLS server role · **Roadmap:** track C (update and distribution), track D (network) · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-9.6, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
 
 **Recorded by:** the kernel session, 2026-10-25, at the maintainer's request: "we must have our own web server, so that we can serve updates".
 
@@ -51,8 +51,8 @@
 
 ### Stage 2: the same server as a MIND Core service
 
-- **`netstack`:** listening TCP sockets for programs, with accept and a backlog, in `netstack.wit`'s next minor version (a `NET` task).
-- **`netpolicy`:** a listening grant (the program, the port, the networks it may be reached from), the inbound counterpart of a flow grant (MC-11.6).
+- **`netstack`:** listening TCP sockets for programs, with accept and a backlog, in `socket.wit`'s next minor version ([110-NET-0052](110-NET-0052-listening-tcp-sockets.md)).
+- **`netpolicy`:** a listening grant (the program, the port, the networks it may be reached from), the inbound counterpart of a flow grant (MC-11.6; the same task).
 - **`tls`:** a server role. Its private key lives in `keystore` and never leaves it (MC-11.9); the certificate chain comes from a file.
 - **The content:**
   - a read-only VFS scope of the release directory;
