@@ -1,6 +1,6 @@
 # 311-STO-0032 — `storefs`: files and directories of a named root, through `vfs.wit`
 
-**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md) (a scope, so a program can hold a client), then APP's lending in [requests-APP.md](requests-APP.md), for two of the QEMU checks ([311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done) and [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done) are done) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
+**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md) (the shell lending a program a client of `storefs`; [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md)'s scope is in `main` f7f1d0fe), for two of the QEMU checks ([311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done) and [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done) are done) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
 

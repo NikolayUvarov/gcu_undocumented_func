@@ -1,6 +1,6 @@
-# 550-APP-0117 — `wifi scan`: the networks around as text, without a screen
+# 550-APP-0117 — `wifi scan`: the networks around as text, without a screen — done
 
-**Type:** tools (`wifi`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the drivers track's hardware evidence) · **Status:** in progress (done in QEMU; DRV's runs on the DEXP and the MacBook Pro left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-12.1
+**Type:** tools (`wifi`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the drivers track's hardware evidence) · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-12.1
 
 Numbered on 2026-10-30 from the drivers track's request (`APP/2026-10-30T0735Z-DRV-a-request-wifi-scan-without-a-screen.md` on `internal-dev-messages`), at the maintainer's word: "`wifi` needs a console variant of its network list".
 
@@ -38,4 +38,15 @@ The drivers' hardware evidence needs the list as text: 550-DRV-0042 (the DEXP's 
 
 ## Related
 
-[550-APP-0078](550-APP-0078-wifi-join-without-a-screen.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), 550-DRV-0042, 550-DRV-0045.
+[550-APP-0078](../issues/550-APP-0078-wifi-join-without-a-screen.md), [550-APP-0033](../issues/550-APP-0033-wifi-setup-program.md), 550-DRV-0042, 550-DRV-0045.
+
+## Resolution
+
+Done on 2026-10-31. `wifi scan` is in `wifi/src/headless.rs`, host-tested in `tests/wifi_host.rs` and checked in the `net` suite on x86 QEMU. It is in `main` since landing round f4ca0f6c (74508583).
+
+DRV ran this branch's `wifi` (a88728f5), put into `data/link/` and started by `effector485`, on both machines. Their outputs are in `APP/2026-10-30T1258Z-DRV-…` and `APP/2026-10-30T2324Z-DRV-…` on `internal-dev-messages`:
+- **The MacBook Pro** (`bcm_wifi`, release 202610301115): 16 networks, strongest first, `CoolNet2` marked `REMEMBERED JOINED`, two `(hidden)`, the count last. With it DRV measured 550-DRV-0045's level correction.
+- **The DEXP** (`rtw88_wifi`, RTL8821CE): 16 networks in the same form.
+
+That is evidence for that build on those machines, not for a release that carries it (MC-12.1).
+
