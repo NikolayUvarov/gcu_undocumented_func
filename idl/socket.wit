@@ -32,7 +32,11 @@
 /// many for the reply, when it is sent; `ping` is counted the same way, 16 bytes each way.
 /// 2.7 (000-NET-0049): a rule of address 0 reaches any public address (`mind::network::public`) on its port, TCP only
 /// and never port 0: the browsing grant; the stack logs each new host a grant reaches through it.
-package mind:socket@2.7.0;
+///
+/// 2.8 (000-NET-0049): a grant may ask for a TCP flow its rules do not name (`ask`, `asked`). The stack decides
+/// nothing: the policy badge reads the questions (`questions`) and gives the user's answer (`decide`), which adds the
+/// rule to the grant.
+package mind:socket@2.8.0;
 
 interface socket {
     /// Why a request failed.
@@ -114,4 +118,23 @@ interface socket {
     prefer: func(card: u8) -> result<_, error>;
     /// Every card the stack has a slot for, in order (2.5).
     cards: func() -> result<list<card, 4>, error>;
+
+    /// Where a grant's question stands (2.8).
+    enum question-state { pending, allowed, refused }
+    /// A question as the policy badge reads it (2.8): its id, the grant that asked, the host (a name or a dotted
+    /// address), the TCP port and the program's reason, in its own words.
+    record question { id: u32, badge: u16, host: string<253>, port: u16, why: string<80> }
+    /// What became of a question (2.8): allowed, with the address the new rule names; refused; or still pending.
+    record ruling { state: question-state, address: u32 }
+    /// A grant asks to reach `host` on TCP `port`; answers the question's id at once (2.8). `invalid`: an empty host or
+    /// port 0; `limit`: a question of this grant already waits, or 8 do in all; `denied`: not a live grant.
+    ask: func(host: string<253>, port: u16, why: string<80>) -> result<u32, error>;
+    /// What became of question `id`, for the grant that asked it (2.8); `not-found` for any other client or id.
+    asked: func(id: u32) -> result<ruling, error>;
+    /// The questions that wait, oldest first (policy badge, 2.8).
+    questions: func() -> result<list<question, 8>, error>;
+    /// The answer to question `id` (policy badge, 2.8). `allowed` adds a TCP rule for `address` and the question's port
+    /// to its grant; with `once`, the rule ends with the grant's first connection through it. `not-found`: no question
+    /// waits with that id; `limit`: the grant holds 16 rules.
+    decide: func(id: u32, address: u32, allowed: bool, once: bool) -> result<_, error>;
 }

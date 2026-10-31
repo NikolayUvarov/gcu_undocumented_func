@@ -12,7 +12,12 @@
 /// grants and reads the policy and the grants, and is refused `revoke`, `add` and `remove` (`denied`), as is a client
 /// with any other badge. The shell's client has no badge; `link` gets a launcher's in its developer mode, as it has no
 /// user to ask.
-package mind:netpolicy@1.2.0;
+///
+/// 1.3 (000-NET-0049): a running program asks, through its grant (`socket.wit` 2.8), for a TCP flow its grant does not
+/// name. The broker names the program and its PID from its grants and gives the question to the shell (`questions`),
+/// which puts it to the user on the program's console and gives the answer (`answer`). A question no one answers within
+/// 60 s is refused, and one whose program ended leaves the list. A launcher's client is refused both (`denied`).
+package mind:netpolicy@1.3.0;
 
 interface netpolicy {
     /// `unwritable` (1.1): the change could not be stored, so it was not made. `denied` (1.2): a launcher's client asked
@@ -39,4 +44,17 @@ interface netpolicy {
     add: func(line: string<160>) -> result<_, error>;
     /// Removes every line equal to `line` (spaces aside); returns how many (1.1).
     remove: func(line: string<160>) -> result<u32, error>;
+
+    /// A program's question (1.3): its id, the program's PID and the name its grant was made for, the host and the
+    /// TCP port it asks for, and its reason in its own words.
+    record question { id: u32, pid: u64, program: string<16>, host: string<253>, port: u16, why: string<80> }
+    /// The user's answer (1.3): no; once (one connection); for the rest of the program's run; always (a line of the
+    /// policy as well).
+    enum choice { no, once, session, always }
+    /// The questions that wait, oldest first, at most 8 (1.3).
+    questions: func() -> result<list<question, 8>, error>;
+    /// The user's `choice` for question `id` (1.3). `not-found`: it has gone (answered, refused after 60 s, or its
+    /// program ended); `no-network`: the host could not be resolved, so the question was refused; `limit`: the grant
+    /// holds 16 rules; `unwritable` or `invalid` with `always`: the flow is allowed for the run, the line not stored.
+    answer: func(id: u32, choice: choice) -> result<_, error>;
 }

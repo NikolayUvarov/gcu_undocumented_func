@@ -9392,10 +9392,20 @@ def browse_check(args):
             require_all(log, "[NETSTACK] GRANT ", " BROWSES A NEW PUBLIC HOST 11.0.2.80:80 (1 SO FAR)", " BROWSES A NEW PUBLIC HOST 11.0.2.81:80 (2 SO FAR)")
             assert log.count("BROWSES A NEW PUBLIC HOST 11.0.2.80:80") == 1, log  # once per host
             require(vm.service_logs("netpolicy", "TO netcheck"), "TO netcheck: 1 RULES, BROWSING ANY PUBLIC ADDRESS, 600 S, 1000000 BYTES")
+            # A question at run time (socket.wit 2.8, netpolicy.wit 1.3). The shell does not put it to the user yet
+            # (000-APP-0120): one whose program ends leaves the broker's list, and one no one answers is refused at 60 s.
+            out = vm.command("netcheck ask:11.0.2.80:81:3", timeout=30)
+            require_all(out, "FOR 11.0.2.80:81", "NETCHECK ANSWER PENDING", "NETCHECK ask:11.0.2.80:81:3 Timeout")
+            log = vm.service_logs("netpolicy", "ITS PROGRAM ENDED")
+            require_all(log, "netcheck (PID ", ") ASKS FOR 11.0.2.80:81 TCP: \"netcheck's check of a question at run time\"", "OF netcheck: ITS PROGRAM ENDED")
+            pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", vm.command("run netcheck ask:11.0.2.80:81:90 &"))[1]
+            require(vm.program_logs(pid, "NETCHECK ANSWER", tries=400), "NETCHECK ANSWER REFUSED")
+            require(vm.service_logs("netpolicy", "REFUSED"), "OF netcheck: NO ANSWER IN 60 S, REFUSED")
         finally:
             vm.close()
     print("PASS: a browsing grant (000-NET-0049): netcheck reached two public addresses on its port, each new host logged once "
-          "by the stack, and was refused another port and two private addresses", flush=True)
+          "by the stack, and was refused another port and two private addresses; a question at run time left the broker's "
+          "list when its program ended, and was refused when no one answered it in 60 s", flush=True)
 
 
 def late_attach_check(args):

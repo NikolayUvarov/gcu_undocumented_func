@@ -13,6 +13,11 @@
 //! grants and reads the policy and the grants, and is refused `revoke`, `add` and `remove` (`denied`), as is a client
 //! with any other badge. The shell's client has no badge; `link` gets a launcher's in its developer mode, as it has no
 //! user to ask.
+//!
+//! 1.3 (000-NET-0049): a running program asks, through its grant (`socket.wit` 2.8), for a TCP flow its grant does not
+//! name. The broker names the program and its PID from its grants and gives the question to the shell (`questions`),
+//! which puts it to the user on the program's console and gives the answer (`answer`). A question no one answers within
+//! 60 s is refused, and one whose program ended leaves the list. A launcher's client is refused both (`denied`).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -22,7 +27,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:netpolicy";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// `unwritable` (1.1): the change could not be stored, so it was not made. `denied` (1.2): a launcher's client asked
@@ -47,6 +52,31 @@ impl Wire for Grant {
     const MAX: usize = <u16 as Wire>::MAX + <Text<16> as Wire>::MAX + <u8 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.badge.encode(w)?; self.program.encode(w)?; self.rules.encode(w)?; self.left_ms.encode(w)?; self.used.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { badge: Wire::decode(r)?, program: Wire::decode(r)?, rules: Wire::decode(r)?, left_ms: Wire::decode(r)?, used: Wire::decode(r)? }) }
+}
+
+/// A program's question (1.3): its id, the program's PID and the name its grant was made for, the host and the
+/// TCP port it asks for, and its reason in its own words.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Question { pub id: u32, pub pid: u64, pub program: Text<16>, pub host: Text<253>, pub port: u16, pub why: Text<80> }
+impl Wire for Question {
+    const MAX: usize = <u32 as Wire>::MAX + <u64 as Wire>::MAX + <Text<16> as Wire>::MAX + <Text<253> as Wire>::MAX + <u16 as Wire>::MAX + <Text<80> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.id.encode(w)?; self.pid.encode(w)?; self.program.encode(w)?; self.host.encode(w)?; self.port.encode(w)?; self.why.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { id: Wire::decode(r)?, pid: Wire::decode(r)?, program: Wire::decode(r)?, host: Wire::decode(r)?, port: Wire::decode(r)?, why: Wire::decode(r)? }) }
+}
+
+/// The user's answer (1.3): no; once (one connection); for the rest of the program's run; always (a line of the
+/// policy as well).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Choice { #[default] No = 0, Once = 1, Session = 2, Always = 3 }
+impl Choice {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::No), 1 => Some(Self::Once), 2 => Some(Self::Session), 3 => Some(Self::Always), _ => None } }
+}
+impl Wire for Choice {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
 /// Makes a grant for `program` from the policy; returns its badge. Error no-policy: the policy names nothing for it.
@@ -156,6 +186,31 @@ pub fn remove(endpoint: Endpoint, line: &str) -> Result<core::result::Result<u32
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The questions that wait, oldest first, at most 8 (1.3).
+pub fn questions(endpoint: Endpoint) -> Result<core::result::Result<List<Question, 8>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 2954, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Question, 8> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The user's `choice` for question `id` (1.3). `not-found`: it has gone (answered, refused after 60 s, or its
+/// program ended); `no-network`: the host could not be resolved, so the question was refused; `limit`: the grant
+/// holds 16 rules; `unwritable` or `invalid` with `always`: the flow is allowed for the run, the line not stored.
+pub fn answer(endpoint: Endpoint, id: u32, choice: Choice) -> Result<core::result::Result<(), Error>> {
+    let words = [10 | MAJOR << 8 | ((id) as usize) << 16 | ((choice) as usize) << 48, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `netpolicy` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -167,6 +222,8 @@ pub enum Request {
     Lines { start: u32 },
     Add { line: Text<160> },
     Remove { line: Text<160> },
+    Questions,
+    Answer { id: u32, choice: Choice },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -231,6 +288,18 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Remove { line }, call))
         }
+        9 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 2954, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Questions, call))
+        }
+        10 => {
+            wire::body(request, cap, [0xffffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            let Some(choice) = Choice::from_code(wire::field(&words, 0, 48, 8)) else { wire::discard(request, cap); return Err(Reject::Invalid) };
+            Ok((Request::Answer { id: wire::field(&words, 0, 16, 32) as u32, choice }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -265,4 +334,12 @@ pub fn reply_add(call: Call, value: core::result::Result<(), Error>) -> Result<(
 pub fn reply_remove(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_questions(call: Call, value: core::result::Result<&[Question], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Question, 8>(value, w))
+}
+pub fn reply_answer(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

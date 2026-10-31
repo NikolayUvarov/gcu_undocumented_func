@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // Network stack: IPv4 with DHCP (static QEMU fallback), ARP, ICMP echo, a DNS resolver, UDP and TCP (smoltcp) over the
-// network card drivers' frames. Serves idl/socket.wit 2.5. Holds clients of up to CARDS card drivers (slots 2 and 3,
+// network card drivers' frames. Serves idl/socket.wit 2.8. Holds clients of up to CARDS card drivers (slots 2 and 3,
 // and the Wi-Fi station `wlan` in slot 4) and nothing of the devices themselves (Appendix B.6: packet and flow
 // endpoints with quotas, no power over the device); each card is an interface of its own (issue 105) and a flow goes
 // out through the one its route names. What each client may reach comes from the badge of its capability (policy.rs,
@@ -11,6 +11,7 @@ extern crate alloc;
 mod dns;
 mod policy;
 mod poll;
+mod questions;
 mod turn;
 
 use alloc::boxed::Box;
@@ -786,13 +787,18 @@ fn main(_info: &'static BootInfo) {
     let mut scratch: Box<[u8; socket::REQUEST_MAX]> = vec![0u8; socket::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     let mut reaped = 0u64;
     let mut policy = Policy::default();
+    let mut questions = questions::Questions::default();
     loop {
         // One shared driver budget, then a client receive opportunity (550-NET-0032).
         stack.poll();
         let now = now_ms();
         if now - reaped >= 1000 { reaped = now; stack.reap(); }
         // Grants that ran out of time or volume lose their flows.
-        for badge in policy.ended(now) { let closed = stack.close_badge(badge); mind::println!("[NETSTACK] GRANT {} ENDED, {} SOCKETS CLOSED", badge, closed); }
+        for badge in policy.ended(now) {
+            let closed = stack.close_badge(badge);
+            questions.forget(badge);
+            mind::println!("[NETSTACK] GRANT {} ENDED, {} SOCKETS CLOSED", badge, closed);
+        }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, POLL_MS) else { continue };
         let owner = (request.sender, request.badge);
         let (decoded, call) = match socket::decode(&request, RECEIVED, &mut scratch) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
@@ -805,13 +811,51 @@ fn main(_info: &'static BootInfo) {
                 let _ = socket::reply_policy_set(call, result); continue;
             }
             socket::Request::PolicyDrop { badge: grant } => {
-                let result = if !matches!(policy::access(badge), Access::Policy) { Err(Error::Denied) } else if policy.drop(grant) { Ok(stack.close_badge(grant)) } else { Err(Error::NotFound) };
+                let result = if !matches!(policy::access(badge), Access::Policy) { Err(Error::Denied) } else if policy.drop(grant) { questions.forget(grant); Ok(stack.close_badge(grant)) } else { Err(Error::NotFound) };
                 let _ = socket::reply_policy_drop(call, result); continue;
             }
             socket::Request::PolicyUsage { badge: grant } => {
                 let sockets = stack.sockets_of(grant);
                 let usage = if matches!(policy::access(badge), Access::Policy) { policy.usage(grant, now, sockets).ok_or(Error::NotFound) } else { Err(Error::Denied) };
                 let _ = socket::reply_policy_usage(call, usage.as_ref().map_err(|e| *e)); continue;
+            }
+            // A grant's question and its answer (socket.wit 2.8): asked by the grant, read and answered by the broker.
+            socket::Request::Ask { host, port, why } => {
+                let result = match policy::access(badge) {
+                    Access::Grant(grant) => policy.alive(grant, now).and_then(|()| questions.ask(grant, host.as_str(), port, why.as_str()).map_err(refusal)),
+                    _ => Err(Error::Denied),
+                };
+                let _ = socket::reply_ask(call, result); continue;
+            }
+            socket::Request::Asked { id } => {
+                let ruling = |state| match state {
+                    questions::State::Pending => socket::Ruling { state: socket::QuestionState::Pending, address: 0 },
+                    questions::State::Allowed(address) => socket::Ruling { state: socket::QuestionState::Allowed, address },
+                    questions::State::Refused => socket::Ruling { state: socket::QuestionState::Refused, address: 0 },
+                };
+                let result = match policy::access(badge) { Access::Grant(grant) => questions.asked(grant, id).map(ruling).map_err(refusal), _ => Err(Error::NotFound) };
+                let _ = socket::reply_asked(call, result.as_ref().map_err(|e| *e)); continue;
+            }
+            socket::Request::Questions => {
+                let result = if matches!(policy::access(badge), Access::Policy) {
+                    let mut list = List::<socket::Question, { questions::WAITING }>::default();
+                    for q in questions.waiting() {
+                        list.push(socket::Question { id: q.id, badge: q.badge, host: wire_text(&q.host), port: q.port, why: wire_text(&q.why) });
+                    }
+                    Ok(list)
+                } else { Err(Error::Denied) };
+                let _ = socket::reply_questions(call, result.as_ref().map(|l| l.as_slice()).map_err(|e| *e)); continue;
+            }
+            socket::Request::Decide { id, address, allowed, once } => {
+                let result = if !matches!(policy::access(badge), Access::Policy) { Err(Error::Denied) } else {
+                    match questions.pending(id) {
+                        None => Err(Error::NotFound),
+                        Some((grant, port)) if allowed => policy.add_rule(grant, address, port, once, now)
+                            .and_then(|()| questions.settle(id, questions::State::Allowed(address)).map_err(refusal)),
+                        Some(_) => questions.settle(id, questions::State::Refused).map_err(refusal),
+                    }
+                };
+                let _ = socket::reply_decide(call, result); continue;
             }
             _ => {}
         }
@@ -841,7 +885,7 @@ fn main(_info: &'static BootInfo) {
             Err(error) => { if matches!(error, Error::Denied) && matches!(policy::access(badge), Access::Grant(_)) { mind::println!("[NETSTACK] DENIED FOR GRANT {}", badge); } let _ = refuse(decoded, call, error); }
             Ok(()) => {
                 let grant = match policy::access(badge) { Access::Grant(grant) => Some(grant), _ => None };
-                if let (Some(grant), socket::Request::TcpConnect { address, port, .. }) = (grant, &decoded) { policy.audit(grant, *address, *port); }
+                if let (Some(grant), socket::Request::TcpConnect { address, port, .. }) = (grant, &decoded) { policy.audit(grant, *address, *port); policy.spend(grant, *address, *port); }
                 let source = |address: u32, port: u16| grant.is_none_or(|g| policy.allows(g, Protocol::Udp, address, port, now).is_ok());
                 let (sent, received) = stack.handle(decoded, call, owner, &source);
                 if let Some(grant) = grant { policy.charge(grant, sent, received); }
@@ -872,8 +916,20 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::Sockets { .. } => socket::reply_sockets(call, Err(error)),
         socket::Request::Prefer { .. } => socket::reply_prefer(call, Err(error)),
         socket::Request::Cards => socket::reply_cards(call, Err(error)),
+        socket::Request::Ask { .. } => socket::reply_ask(call, Err(error)),
+        socket::Request::Asked { .. } => socket::reply_asked(call, Err(error)),
+        socket::Request::Questions => socket::reply_questions(call, Err(error)),
+        socket::Request::Decide { .. } => socket::reply_decide(call, Err(error)),
     }
 }
+
+// What a question's bookkeeping refused, as socket.wit names it (2.8).
+fn refusal(refusal: questions::Refusal) -> Error {
+    match refusal { questions::Refusal::Invalid => Error::Invalid, questions::Refusal::Limit => Error::Limit, questions::Refusal::NotFound => Error::NotFound }
+}
+
+// A string the stack kept, back into the wire's bounded text (it came in as one, so it fits).
+fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> { mind::idl::codec::Text::new(text).unwrap_or_default() }
 
 // smoltcp's TCP state as socket.wit 2.4 names it.
 fn tcp_state(state: tcp::State) -> socket::TcpState {

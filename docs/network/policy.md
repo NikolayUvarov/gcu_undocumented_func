@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.5 (2026-10-28: the browsing grant, 000-NET-0049; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.6 (2026-10-31: a question at run time, the stack's and the broker's part, 000-NET-0049; 0.5: 2026-10-28, the browsing grant; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 
@@ -34,7 +34,27 @@ One line per rule, `#` starts a comment:
 - **The audit.** The stack logs each new host a grant reaches through its browsing rule, once per host: `[NETSTACK] GRANT n BROWSES A NEW PUBLIC HOST A.B.C.D:PORT (k SO FAR)`. It remembers the last 256 hosts of a grant, so past them a host can be logged again.
 - **The broker's line** for such a grant says so: `[NETPOLICY] GRANT n TO program: k RULES, BROWSING ANY PUBLIC ADDRESS, …`.
 - **Names.** A program that looks names up needs `program dns` too. The answer is plain DNS, as for any grant.
-- **Not done:** asking the user for a host at run time, the rest of 000-NET-0049.
+
+### A question at run time
+
+A program that reaches a host the user names only when it runs (`get URL`, a mail client with the user's server) may ask for it while it runs (000-NET-0049).
+
+- **The program asks through its grant** (`idl/socket.wit` 2.8): `ask(host, port, why)` for one TCP port. The host is a name or a dotted address. The reason is the program's own words, at most 80 bytes. The program then reads the answer with `asked(id)`: pending, allowed with the address to reach, or refused.
+- **The stack decides nothing.** It keeps the question, at most one a grant and 8 in all, and refuses one from a client that is not a live grant.
+- **The broker** (`idl/netpolicy.wit` 1.3):
+  - takes the questions from the stack once a second;
+  - names each one's program and PID from its grants;
+  - logs it: `[NETPOLICY] QUESTION n: program (PID p) ASKS FOR host:port TCP: "why"`;
+  - serves the questions (`questions`) and takes the answer (`answer`), for the shell's client only. A launcher's client is refused both.
+- **The answers:**
+  - **no** refuses it;
+  - **once** adds a rule that ends with the grant's first connection through it;
+  - **session** adds a rule for the rest of the grant, which ends with the program;
+  - **always** adds the rule and the line `program host tcp port` to the policy, as `netpolicy add` would.
+
+  A name is looked up when the answer comes, as for a line.
+- **A question no one answers in 60 s is refused** (`NO ANSWER IN 60 S, REFUSED`), and one whose program ended leaves the list (`ITS PROGRAM ENDED`).
+- **Not done:** the shell putting the question to the user and giving the answer (000-APP-0120). Until it does, every question ends in one of those two ways.
 
 ### Term and volume
 
@@ -90,6 +110,13 @@ In the same suite (750-NET-0014), on x86 and aarch64:
 - a grant's 10-second term ends the connection it holds, while a lasting grant holds its connection for 40 s.
 
 A connection held past the default term (an hour) is not run.
+
+In the `net` suite's browsing check (000-NET-0049), on x86 and aarch64:
+- `netcheck` asked for a port its grant does not name; the broker logged the question with the program and its PID;
+- it ended without an answer, and the question left the broker's list;
+- asked again and left unanswered, it was refused at 60 s.
+
+The answers `once`, `session` and `always` wait for the shell's part (000-APP-0120). Until then they are only in the code and its host tests.
 
 In the `tls` suite's raw-image check, a change is still there after a reboot.
 

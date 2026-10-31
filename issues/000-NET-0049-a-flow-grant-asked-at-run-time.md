@@ -78,6 +78,48 @@ Still left: `ask(host, port, why)` and the user's answers, which need the shell'
   - a program's way to ask through its grant;
   - each answer applied: `once` and `session` as rules of the program's live grant, `always` as a line of the policy;
   - a question no one answers in 60 s refused.
+- **The way through, as designed (2026-10-31).** A program holds only its grant, a client of the stack. So the question goes through the stack, and the stack decides nothing.
+  - **`socket.wit` 2.8, for a grant's badge:**
+    - `ask(host, port, why)`: the host is a name or a dotted address, up to 253 bytes; the reason up to 120. The stack keeps it, at most one a grant and 8 in all, and answers its id at once, as its other calls that do not wait;
+    - `asked(id)`: `pending`, `allowed` with the address to reach, or `refused`.
+  - **`socket.wit` 2.8, for the policy badge:**
+    - `questions()`: what is pending, with each one's grant badge;
+    - `decide(id, address, allowed)`: the answer for the program.
+  - **`netpolicy`:**
+    - takes the questions from the stack in its loop;
+    - names each grant's program and PID from its own table;
+    - serves them to the shell (`netpolicy.wit` 1.3);
+    - on an answer: resolves the host, adds the rule to the grant (`policy-set`), with `always` adds the line as `add` does, and tells the stack.
+  - **`once`** is the rule until the program's first connection to that host and port ends. The stack drops a rule marked so when that socket closes (the rule's kind, `socket.wit` 2.8).
+
+## Progress (2026-10-31): the stack's and the broker's part
+
+- **APP's answer** (`NET/2026-10-31T0650Z-APP-…`):
+  - the poll suits the shell; it asks `questions()` at most every 500 ms;
+  - the program's name is the grant's, the reason is bounded, a question of an ended program leaves the list and `answer` gives it `not-found`, and each question has its PID;
+  - its part is [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.md), which starts once `netpolicy.wit` 1.3 is in `fast-test`.
+- **`socket.wit` 2.8:**
+  - `ask`, `asked`, `questions`, `decide`;
+  - `netstack/src/questions.rs`: at most one question a grant and 8 waiting in all, a grant's own questions only, the answered ones kept for 16 more;
+  - `policy.rs`: `add_rule` (never address 0 or port 0, 16 rules at most) and `spend`, which ends a rule given once at the grant's first connection through it.
+- **`netpolicy.wit` 1.3:**
+  - `questions` and `answer`, refused for a launcher's client;
+  - the broker takes the stack's questions with its 1 s pass, so no other wakeup;
+  - it names each one's program and PID;
+  - it refuses a question at 60 s, and drops one whose grant ended;
+  - an answer looks the host up as a line's name is, and `always` adds `program host tcp port` through `add`;
+  - the program's reason reaches the log as printable ASCII only.
+- **`netcheck ask:HOST:PORT:SECONDS`:** asks, waits that long for the answer, and connects if allowed.
+- **Host tests:**
+  - `tests/net_questions_host.rs`, 6 tests;
+  - the IDL fuzzer with the new types;
+  - `netpolicy_host`.
+- **QEMU** (the `net` suite's `browse_check`): a question whose program ended leaves the list; one no one answers is refused at 60 s.
+  - **Run locally,** x86, QEMU TCG, ef234cc8: the check alone passed, both ends with the broker's lines.
+  - **Still to run:** the whole x86 and aarch64 network groups on the machines.
+- **Left:**
+  - the user's answer through the shell (APP), and with it the checks of `once`, `session` and `always`;
+  - the profile's MC-11.6 row, once the whole path is tested.
 
 ## Related
 
