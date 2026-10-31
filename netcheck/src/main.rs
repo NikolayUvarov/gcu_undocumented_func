@@ -8,7 +8,9 @@
 // and which is the default, socket.wit 2.5), card (the card client in SLOT_NET, which a launcher lends read-only for
 // REQUEST_NET_COUNTERS: its info and counters read, a frame sent or received and a ring lent each refused, 000-NET-0015),
 // sessions (ten parser sessions in a row, each with a helper of its own, with one endpoint left in the quota, 109-KRN-0133),
-// echo:A.B.C.D:SIZE:HEX (an echo of SIZE data bytes of the pattern HEX, its reply's size and data checked, socket.wit 2.6).
+// echo:A.B.C.D:SIZE:HEX (an echo of SIZE data bytes of the pattern HEX, its reply's size and data checked, socket.wit 2.6),
+// ask:HOST:PORT:SECONDS (asks for a TCP flow its grant does not name and waits that long for the user's answer, then
+// connects if allowed, socket.wit 2.8).
 // A console program; without a grant every network check reports NO GRANT.
 // Its own secrets in keystore (REQUEST_SECRETS, 000-NET-0045): secret-put:NAME:FILE keeps the file's bytes as secret
 // NAME, secret-get:NAME prints its length and SHA-256 (never the value), secret-delete:NAME, secrets lists the names;
@@ -93,6 +95,30 @@ fn echo(address: u32, size: u16, hex: &str) -> mind::sys::Result<Result<(), sock
     })
 }
 
+// Asks for `host`:`port` and waits up to `seconds` for the answer; allowed, it connects to the address the rule names
+// (000-NET-0049).
+fn ask(host: &str, port: u16, seconds: u32) -> mind::sys::Result<Result<(), socket::Error>> {
+    let id = match socket::ask(STACK, host, port, "netcheck's check of a question at run time")? { Ok(id) => id, Err(error) => return Ok(Err(error)) };
+    mind::println!("NETCHECK ASKED {} FOR {}:{}", id, host, port);
+    let started = mind::time::uptime_ms();
+    loop {
+        let ruling = match socket::asked(STACK, id)? { Ok(ruling) => ruling, Err(error) => return Ok(Err(error)) };
+        match ruling.state {
+            socket::QuestionState::Allowed => {
+                let [a, b, c, d] = ruling.address.to_be_bytes();
+                mind::println!("NETCHECK ANSWER ALLOWED {}.{}.{}.{}", a, b, c, d);
+                return Ok(socket::tcp_connect(STACK, ruling.address, port, 3000)?.map(|handle| { let _ = socket::close(STACK, handle); }));
+            }
+            socket::QuestionState::Refused => { mind::println!("NETCHECK ANSWER REFUSED"); return Ok(Err(socket::Error::Denied)); }
+            socket::QuestionState::Pending if mind::time::uptime_ms() - started >= seconds as usize * 1000 => {
+                mind::println!("NETCHECK ANSWER PENDING");
+                return Ok(Err(socket::Error::Timeout));
+            }
+            socket::QuestionState::Pending => { mind::time::sleep(250); }
+        }
+    }
+}
+
 // Ten parser sessions in a row with one endpoint free, as the updater has: each has a helper of its own and parses a
 // head, and its end frees the endpoint for the next (109-KRN-0133).
 fn sessions() -> mind::sys::Result<Result<(), socket::Error>> {
@@ -171,6 +197,7 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
         "card" => return card(),
         "sessions" => return sessions(),
         "echo" => return echo(address, b.parse().unwrap_or(u16::MAX), c),
+        "ask" => return ask(a, port, c.parse().unwrap_or(5)),
         _ => Err(socket::Error::Invalid),
     })
 }
@@ -222,6 +249,6 @@ fn wipe(bytes: &mut [u8]) { for byte in bytes.iter_mut() { unsafe { core::ptr::w
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets");
+    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX  ask:HOST:PORT:SECONDS\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets");
     for word in mind::process::args_str().split_whitespace() { if !secret(word) { report(word, check(word)); } }
 }

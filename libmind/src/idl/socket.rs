@@ -33,6 +33,10 @@
 //! many for the reply, when it is sent; `ping` is counted the same way, 16 bytes each way.
 //! 2.7 (000-NET-0049): a rule of address 0 reaches any public address (`mind::network::public`) on its port, TCP only
 //! and never port 0: the browsing grant; the stack logs each new host a grant reaches through it.
+//!
+//! 2.8 (000-NET-0049): a grant may ask for a TCP flow its rules do not name (`ask`, `asked`). The stack decides
+//! nothing: the policy badge reads the questions (`questions`) and gives the user's answer (`decide`), which adds the
+//! rule to the grant.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -42,7 +46,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 7, 0);
+pub const VERSION: (u8, u8, u8) = (2, 8, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -176,6 +180,39 @@ impl Wire for Card {
     const MAX: usize = <u8 as Wire>::MAX + <CardKind as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.card.encode(w)?; self.kind.encode(w)?; self.present.encode(w)?; self.up.encode(w)?; self.configured.encode(w)?; self.preferred.encode(w)?; self.default.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { card: Wire::decode(r)?, kind: Wire::decode(r)?, present: Wire::decode(r)?, up: Wire::decode(r)?, configured: Wire::decode(r)?, preferred: Wire::decode(r)?, default: Wire::decode(r)? }) }
+}
+
+/// Where a grant's question stands (2.8).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum QuestionState { #[default] Pending = 0, Allowed = 1, Refused = 2 }
+impl QuestionState {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Pending), 1 => Some(Self::Allowed), 2 => Some(Self::Refused), _ => None } }
+}
+impl Wire for QuestionState {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// A question as the policy badge reads it (2.8): its id, the grant that asked, the host (a name or a dotted
+/// address), the TCP port and the program's reason, in its own words.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Question { pub id: u32, pub badge: u16, pub host: Text<253>, pub port: u16, pub why: Text<80> }
+impl Wire for Question {
+    const MAX: usize = <u32 as Wire>::MAX + <u16 as Wire>::MAX + <Text<253> as Wire>::MAX + <u16 as Wire>::MAX + <Text<80> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.id.encode(w)?; self.badge.encode(w)?; self.host.encode(w)?; self.port.encode(w)?; self.why.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { id: Wire::decode(r)?, badge: Wire::decode(r)?, host: Wire::decode(r)?, port: Wire::decode(r)?, why: Wire::decode(r)? }) }
+}
+
+/// What became of a question (2.8): allowed, with the address the new rule names; refused; or still pending.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ruling { pub state: QuestionState, pub address: u32 }
+impl Wire for Ruling {
+    const MAX: usize = <QuestionState as Wire>::MAX + <u32 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.state.encode(w)?; self.address.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { state: Wire::decode(r)?, address: Wire::decode(r)? }) }
 }
 
 pub fn config(endpoint: Endpoint) -> Result<core::result::Result<Config, Error>> {
@@ -433,6 +470,64 @@ pub fn cards(endpoint: Endpoint) -> Result<core::result::Result<List<Card, 4>, E
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Card, 4> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// A grant asks to reach `host` on TCP `port`; answers the question's id at once (2.8). `invalid`: an empty host or
+/// port 0; `limit`: a question of this grant already waits, or 8 do in all; `denied`: not a live grant.
+pub fn ask(endpoint: Endpoint, host: &str, port: u16, why: &str) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<253>(host, &mut w).ok_or(SysError::Invalid)?;
+        port.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<80>(why, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 20 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// What became of question `id`, for the grant that asked it (2.8); `not-found` for any other client or id.
+pub fn asked(endpoint: Endpoint, id: u32) -> Result<core::result::Result<Ruling, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        id.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 21 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 5, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Ruling as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The questions that wait, oldest first (policy badge, 2.8).
+pub fn questions(endpoint: Endpoint) -> Result<core::result::Result<List<Question, 8>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 22 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 2762, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Question, 8> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The answer to question `id` (policy badge, 2.8). `allowed` adds a TCP rule for `address` and the question's port
+/// to its grant; with `once`, the rule ends with the grant's first connection through it. `not-found`: no question
+/// waits with that id; `limit`: the grant holds 16 rules.
+pub fn decide(endpoint: Endpoint, id: u32, address: u32, allowed: bool, once: bool) -> Result<core::result::Result<(), Error>> {
+    let words = [23 | MAJOR << 8 | ((id) as usize) << 16, ((address) as usize) << 0 | ((allowed) as usize) << 32 | ((once) as usize) << 33];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -458,6 +553,10 @@ pub enum Request<'a> {
     Sockets { start: u32 },
     Prefer { card: u8 },
     Cards,
+    Ask { host: Text<253>, port: u16, why: Text<80> },
+    Asked { id: u32 },
+    Questions,
+    Decide { id: u32, address: u32, allowed: bool, once: bool },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -603,6 +702,35 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Cards, call))
         }
+        20 => {
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let host = <Text<253> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let port = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let why = <Text<80> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Ask { host, port, why }, call))
+        }
+        21 => {
+            let (call, length) = wire::take_buffer(request, cap, 5, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let id = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Asked { id }, call))
+        }
+        22 => {
+            let (call, length) = wire::take_buffer(request, cap, 2762, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Questions, call))
+        }
+        23 => {
+            wire::body(request, cap, [0xffffffff0000, 0x3ffffffff], CAP_KIND_NONE, false)?;
+            Ok((Request::Decide { id: wire::field(&words, 0, 16, 32) as u32, address: wire::field(&words, 1, 0, 32) as u32, allowed: wire::field(&words, 1, 32, 1) != 0, once: wire::field(&words, 1, 33, 1) != 0 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -682,4 +810,20 @@ pub fn reply_prefer(call: Call, value: core::result::Result<(), Error>) -> Resul
 pub fn reply_cards(call: Call, value: core::result::Result<&[Card], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<Card, 4>(value, w))
+}
+pub fn reply_ask(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_asked(call: Call, value: core::result::Result<&Ruling, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_questions(call: Call, value: core::result::Result<&[Question], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Question, 8>(value, w))
+}
+pub fn reply_decide(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

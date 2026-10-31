@@ -9,7 +9,10 @@
 // netpolicy`), and read in place of the shipped file; the shell asks the user before it asks for a change. The policy's
 // `default card N` line names the stack's preferred card (550-NET-0025), told to the stack at start, after each change
 // and every 10 s (a restarted stack learns it again). A `browse` line gives a program any public address on its ports
-// (000-NET-0049); the stack logs each new host it reaches so. Holds: a stack client to mint from (slot 2), a VFS client with the
+// (000-NET-0049); the stack logs each new host it reaches so. A running program may ask, through its grant, for a TCP
+// flow its grant does not name (socket.wit 2.8, netpolicy.wit 1.3): the broker names the program and its PID, the shell
+// puts the question to the user, and the answer adds the rule (once, for the run, or always as a line of the policy);
+// a question not answered within 60 s is refused. Holds: a stack client to mint from (slot 2), a VFS client with the
 // broker's own badge (slot 3), the stack's policy client (slot 4).
 extern crate alloc;
 
@@ -36,6 +39,7 @@ const PREFER_MS: u64 = 10_000; // how often the preferred card is told to the st
 const GRANTS: usize = 32;
 const SECONDS: u32 = 3600; // a line without a term
 const BYTES: u64 = 16 * 1024 * 1024; // a line without a volume
+const ANSWER_MS: u64 = 60_000; // a question no one answers in this time is refused (000-NET-0049)
 
 struct Grant { badge: u16, program: Text<16>, cap: usize, rules: u8, taken: bool, pid: u64 }
 
@@ -177,7 +181,13 @@ fn store(text: &str) -> Result<(), Error> {
     mind::fs::rename(EDITED_NEW, EDITED).map_err(|error| { mind::println!("[NETPOLICY] CHANGE NOT STORED: {:?}", error); Error::Unwritable })
 }
 
-struct Broker { grants: Vec<Grant>, next: u16, preferred: Option<u8>, told: u64, read: bool }
+// A program's question (000-NET-0049): the stack's id for it, the grant that asked, what it asks for, since when.
+struct Asked { id: u32, badge: u16, pid: u64, program: Text<16>, host: Text<253>, port: u16, why: Text<80>, since: u64 }
+
+// A program's words in the log: printable ASCII only, so its reason cannot forge a line.
+fn printable(text: &str) -> String { text.chars().map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' }).collect() }
+
+struct Broker { grants: Vec<Grant>, next: u16, preferred: Option<u8>, told: u64, read: bool, asked: Vec<Asked> }
 
 impl Broker {
     fn badge(&mut self) -> u16 {
@@ -236,6 +246,64 @@ impl Broker {
                 _ => index += 1,
             }
         }
+    }
+
+    // The questions the stack holds that are new to the broker, the ones past their time refused, and those whose
+    // grant has gone dropped (000-NET-0049).
+    fn questions(&mut self, now: u64) {
+        let grants = &self.grants;
+        self.asked.retain(|q| {
+            let live = grants.iter().any(|g| g.badge == q.badge);
+            if !live { mind::println!("[NETPOLICY] QUESTION {} OF {}: ITS PROGRAM ENDED", q.id, q.program.as_str()); }
+            live
+        });
+        while let Some(index) = self.asked.iter().position(|q| now - q.since >= ANSWER_MS) {
+            let q = self.asked.remove(index);
+            let _ = socket::decide(CONTROL, q.id, 0, false, false);
+            mind::println!("[NETPOLICY] QUESTION {} OF {}: NO ANSWER IN {} S, REFUSED", q.id, q.program.as_str(), ANSWER_MS / 1000);
+        }
+        let Ok(Ok(waiting)) = socket::questions(CONTROL) else { return };
+        for q in waiting.as_slice() {
+            if self.asked.iter().any(|a| a.id == q.id) { continue; }
+            let Some(grant) = self.grants.iter().find(|g| g.badge == q.badge) else { let _ = socket::decide(CONTROL, q.id, 0, false, false); continue };
+            mind::println!("[NETPOLICY] QUESTION {}: {} (PID {}) ASKS FOR {}:{} TCP: \"{}\"", q.id, grant.program.as_str(), grant.pid,
+                printable(q.host.as_str()), q.port, printable(q.why.as_str()));
+            self.asked.push(Asked { id: q.id, badge: q.badge, pid: grant.pid, program: grant.program, host: q.host, port: q.port, why: q.why, since: now });
+        }
+    }
+
+    fn waiting(&self) -> List<netpolicy::Question, 8> {
+        let mut list = List::default();
+        for q in &self.asked { list.push(netpolicy::Question { id: q.id, pid: q.pid, program: q.program, host: q.host, port: q.port, why: q.why }); }
+        list
+    }
+
+    // The user's answer to question `id`, through the shell (000-NET-0049); `pid` is the shell's, for the policy's log.
+    fn answer(&mut self, id: u32, choice: netpolicy::Choice, pid: u64) -> Result<(), Error> {
+        let index = self.asked.iter().position(|q| q.id == id).ok_or(Error::NotFound)?;
+        let q = self.asked.remove(index);
+        let (program, host) = (q.program.as_str(), q.host.as_str());
+        if choice == netpolicy::Choice::No {
+            let _ = socket::decide(CONTROL, id, 0, false, false);
+            mind::println!("[NETPOLICY] QUESTION {} OF {}: REFUSED BY THE USER", id, program);
+            return Ok(());
+        }
+        let address = parse_ip(host).or_else(|| if is_name(host) { lookup(program, host, resolver(&policy_text().unwrap_or_default())) } else { None });
+        let Some(address) = address.filter(|&a| a != 0) else {
+            let _ = socket::decide(CONTROL, id, 0, false, false);
+            mind::println!("[NETPOLICY] QUESTION {} OF {}: {} NOT RESOLVED, REFUSED", id, program, printable(host));
+            return Err(Error::NoNetwork);
+        };
+        match socket::decide(CONTROL, id, address, true, choice == netpolicy::Choice::Once) {
+            Ok(Ok(())) => {}
+            Ok(Err(socket::Error::Limit)) => return Err(Error::Limit),
+            _ => return Err(Error::NotFound),
+        }
+        let [a, b, c, d] = address.to_be_bytes();
+        let kind = match choice { netpolicy::Choice::Once => "ONCE", netpolicy::Choice::Session => "FOR THIS RUN", _ => "ALWAYS" };
+        mind::println!("[NETPOLICY] QUESTION {} OF {}: ALLOWED {} BY THE USER: {}.{}.{}.{}:{} TCP", id, program, kind, a, b, c, d, q.port);
+        if choice == netpolicy::Choice::Always { Broker::add(pid, &alloc::format!("{} {} tcp {}", program, host, q.port))?; }
+        Ok(())
     }
 
     // The policy's lines from `start`, comments and blank lines left out (108).
@@ -304,13 +372,13 @@ fn denied(what: &str, pid: u64) -> Error {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut broker = Broker { grants: Vec::new(), next: 0, preferred: None, told: 0, read: false };
+    let mut broker = Broker { grants: Vec::new(), next: 0, preferred: None, told: 0, read: false, asked: Vec::new() };
     mind::println!("[NETPOLICY] READY: POLICY FROM {}", POLICY_FILE);
     broker.prefer(true, mind::time::uptime_ms() as u64);
     let mut checked = 0u64;
     loop {
         let now = mind::time::uptime_ms() as u64;
-        if now - checked >= 1000 { checked = now; broker.expire(); }
+        if now - checked >= 1000 { checked = now; broker.expire(); broker.questions(now); }
         if now - broker.told >= PREFER_MS { broker.prefer(false, now); }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) else { continue };
         if !request.is_call { continue; }
@@ -321,6 +389,15 @@ fn main(_info: &'static BootInfo) {
             Ok((netpolicy::Request::Revoke { .. }, call)) if !may_change_policy(request.badge) => netpolicy::reply_revoke(call, Err(denied("REVOKE", request.sender))),
             Ok((netpolicy::Request::Add { .. }, call)) if !may_change_policy(request.badge) => netpolicy::reply_add(call, Err(denied("ADD", request.sender))),
             Ok((netpolicy::Request::Remove { .. }, call)) if !may_change_policy(request.badge) => netpolicy::reply_remove(call, Err(denied("REMOVE", request.sender))),
+            // Only the shell puts a question to the user and answers it (1.3).
+            Ok((netpolicy::Request::Questions, call)) if !may_change_policy(request.badge) => netpolicy::reply_questions(call, Err(denied("QUESTIONS", request.sender))),
+            Ok((netpolicy::Request::Answer { .. }, call)) if !may_change_policy(request.badge) => netpolicy::reply_answer(call, Err(denied("ANSWER", request.sender))),
+            Ok((netpolicy::Request::Questions, call)) => netpolicy::reply_questions(call, Ok(broker.waiting().as_slice())),
+            Ok((netpolicy::Request::Answer { id, choice }, call)) => {
+                let answered = broker.answer(id, choice, request.sender);
+                if answered.is_ok() && choice == netpolicy::Choice::Always { broker.prefer(true, now); }
+                netpolicy::reply_answer(call, answered)
+            }
             Ok((netpolicy::Request::Take { badge }, call)) => {
                 // The capability goes out once, to the launcher that prepared it.
                 let result = match broker.grants.iter_mut().find(|g| g.badge == badge && !g.taken) { Some(g) => { g.taken = true; Ok(g.cap) } None => Err(Error::NotFound) };

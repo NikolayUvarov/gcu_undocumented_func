@@ -92,6 +92,33 @@ Still left: `ask(host, port, why)` and the user's answers, which need the shell'
     - on an answer: resolves the host, adds the rule to the grant (`policy-set`), with `always` adds the line as `add` does, and tells the stack.
   - **`once`** is the rule until the program's first connection to that host and port ends. The stack drops a rule marked so when that socket closes (the rule's kind, `socket.wit` 2.8).
 
+## Progress (2026-10-31): the stack's and the broker's part
+
+- **APP's answer** (`NET/2026-10-31T0650Z-APP-…`):
+  - the poll suits the shell; it asks `questions()` at most every 500 ms;
+  - the program's name is the grant's, the reason is bounded, a question of an ended program leaves the list and `answer` gives it `not-found`, and each question has its PID;
+  - its part is [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.md), which starts once `netpolicy.wit` 1.3 is in `fast-test`.
+- **`socket.wit` 2.8:**
+  - `ask`, `asked`, `questions`, `decide`;
+  - `netstack/src/questions.rs`: at most one question a grant and 8 waiting in all, a grant's own questions only, the answered ones kept for 16 more;
+  - `policy.rs`: `add_rule` (never address 0 or port 0, 16 rules at most) and `spend`, which ends a rule given once at the grant's first connection through it.
+- **`netpolicy.wit` 1.3:**
+  - `questions` and `answer`, refused for a launcher's client;
+  - the broker takes the stack's questions with its 1 s pass, so no other wakeup;
+  - it names each one's program and PID;
+  - it refuses a question at 60 s, and drops one whose grant ended;
+  - an answer looks the host up as a line's name is, and `always` adds `program host tcp port` through `add`;
+  - the program's reason reaches the log as printable ASCII only.
+- **`netcheck ask:HOST:PORT:SECONDS`:** asks, waits that long for the answer, and connects if allowed.
+- **Host tests:**
+  - `tests/net_questions_host.rs`, 6 tests;
+  - the IDL fuzzer with the new types;
+  - `netpolicy_host`.
+- **QEMU** (the `net` suite's `browse_check`): a question whose program ended leaves the list; one no one answers is refused at 60 s.
+- **Left:**
+  - the user's answer through the shell (APP), and with it the checks of `once`, `session` and `always`;
+  - the profile's MC-11.6 row, once the whole path is tested.
+
 ## Related
 
 [351-NET-0003](../issues-done/351-NET-0003-names-in-the-network-policy.done), [108](../issues-done/108-editable-network-policy.done), [255](255-text-web-browser.md), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md).
