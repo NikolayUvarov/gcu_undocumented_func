@@ -19,6 +19,10 @@ A Mind needs memory with an explicit history, deliberate and accounted forgettin
 - **Retention and forgetting:** each domain has an owner, a term and a quota (MC-4.11); "forget" removes the names and collects; "forget for sure" destroys the domain's key ([308](308-encryption-at-rest.md)); copies already handed over are outside both, and that is said (MC-4.8).
 - **Rights and data:** a memory domain is a capability, and an agent (260) holds its own only; text read from memory is data, never an instruction (MC-11.5).
 
+## Tasks
+
+- [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.md): the journal, append-only, checked from its head; `blocks journal` as the pilot.
+
 ## Acceptance criteria
 
 - Host: the journal's check from its head; an index rebuilt equal to itself; a stale index detected.

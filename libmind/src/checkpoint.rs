@@ -6,10 +6,17 @@
 //! its rights from its current grants. Effects begun but not recorded come back pending, to be reconciled, not
 //! repeated. Format 2 (313-STO-0026) keeps each client's last operation, so a repeated request is answered and not
 //! applied again; how far an input queue was read; and the messages owed to others, sent again until acknowledged.
-//! No system calls: tests/checkpoint_host.rs.
+//! Between components (313-STO-0030) the receiver reads the sender's checkpoint and applies what it owes once, the
+//! sender its client; the sender clears what the receiver's checkpoint shows applied. Each writes only its own.
+//! A move (313-STO-0033) releases the component, both names to a release record by one compare-and-swap, so no instance
+//! in this store saves it again, and its last checkpoint, which the names' history keeps, goes to a copy; imported into
+//! a store that never held its names, a manifest takes their first version as its epoch. No system calls:
+//! tests/checkpoint_host.rs.
 use crate::cid::{self, Cid};
 
 pub const MAGIC: &[u8; 8] = b"MIND-CKP";
+/// A release record's magic: the component was moved out of this store.
+pub const RELEASED: &[u8; 8] = b"MIND-RLS";
 /// The manifest format's version; another is refused by its number, never read as this one.
 pub const FORMAT: u16 = 2;
 /// Bytes of a label (a contract, a resource, an authority, an effect) at most.
@@ -31,14 +38,16 @@ pub enum Error {
     Format,
     /// A manifest of another format version, the one found: not read as this one.
     Version(u16),
-    /// A checkpoint of another contract, or another version of it: not read as this one.
-    Contract,
-    /// A state of another schema version.
-    Schema,
+    /// A checkpoint of another contract, or another version of it, the version found: not read as this one.
+    Contract(u16),
+    /// A state of another schema version, the one found.
+    Schema(u16),
     /// The manifest and the state's name disagree (version or root): not restored.
     Inconsistent,
     /// Another instance saved since this one restored: it no longer holds the component (MC-6.12).
     Fenced,
+    /// Released at this epoch, moved out of this store: no instance here restores or saves it again (MC-6.12).
+    Released(u64),
     /// A label too long or not printable, or more entries than the format holds.
     Invalid,
 }
@@ -90,7 +99,8 @@ pub struct Manifest {
     pub contract: Label,
     pub contract_version: u16,
     pub schema: u16,
-    /// The generation of the instance that saved it: the version of the checkpoint's names it wrote.
+    /// The generation of the instance that saved it: the version of the checkpoint's names it wrote; restored after a
+    /// move, their first version in this store.
     pub epoch: u64,
     /// The consistency point: requests applied to the state.
     pub sequence: u64,
@@ -202,6 +212,34 @@ impl Manifest {
         self.counts[4] -= 1;
         true
     }
+    /// The messages owed to `to`, in sequence order.
+    pub fn owed<'m>(&'m self, to: &'m str) -> impl Iterator<Item = &'m Message> + 'm { self.outbox().iter().filter(move |m| m.to.as_str() == to) }
+
+    /// Applies the messages `sender` (its last checkpoint) owes `me`, this component, that it has not applied, in
+    /// sequence order: `from` is the sender as a client, each sequence its operation, so one applied before is not
+    /// applied again. `apply` gives each one's result to record; its error stops the rest. Returns how many it applied.
+    pub fn receive(&mut self, me: &str, from: &str, sender: &Manifest, mut apply: impl FnMut(&Message) -> Result<u64, Error>) -> Result<usize, Error> {
+        let mut applied = 0;
+        for m in sender.owed(me) {
+            if self.applied(from, m.seq) != Applied::New { continue; }
+            let result = apply(m)?;
+            self.record(from, m.seq, result)?;
+            applied += 1;
+        }
+        Ok(applied)
+    }
+    /// Clears the messages owed to `to` that `receiver`, its last checkpoint, shows applied: those up to the last
+    /// operation its clients table holds for `me`, this component. `each` sees each one; returns how many.
+    pub fn acknowledge(&mut self, me: &str, to: &str, receiver: &Manifest, mut each: impl FnMut(&Message)) -> usize {
+        let Some(last) = receiver.clients().iter().find(|c| c.who.as_str() == me).map(|c| c.op) else { return 0 };
+        let mut cleared = 0;
+        loop {
+            let Some(m) = self.owed(to).find(|m| m.seq <= last).copied() else { return cleared };
+            each(&m);
+            self.delivered(m.seq);
+            cleared += 1;
+        }
+    }
 
     /// The canonical bytes; `out` holds MAX.
     pub fn encode(&self, out: &mut [u8]) -> usize {
@@ -275,6 +313,34 @@ impl Manifest {
     }
 }
 
+/// A release: the epoch of the component's last checkpoint in this store, and that checkpoint's manifest and state,
+/// which the names' history retains.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Release { pub epoch: u64, pub manifest: Cid, pub state: Cid }
+impl Release {
+    /// The canonical bytes: RELEASED, the format version, the epoch and the two CIDs; `out` holds MAX.
+    pub fn encode(&self, out: &mut [u8]) -> usize {
+        let mut w = Out { out, at: 0 };
+        w.put(RELEASED);
+        w.put(&FORMAT.to_le_bytes());
+        w.put(&self.epoch.to_le_bytes());
+        w.put(&self.manifest.to_bytes());
+        w.put(&self.state.to_bytes());
+        w.at
+    }
+    /// The release `bytes` encode, if they are exactly one of this format version.
+    pub fn decode(bytes: &[u8]) -> Result<Release, Error> {
+        let mut r = In { bytes, at: 0 };
+        if r.take(8)? != RELEASED { return Err(Error::Format); }
+        match r.u16()? { FORMAT => {} other => return Err(Error::Version(other)) }
+        let epoch = r.u64()?;
+        let manifest = Cid::from_bytes(r.take(cid::BYTES)?).map_err(|_| Error::Format)?;
+        let state = Cid::from_bytes(r.take(cid::BYTES)?).map_err(|_| Error::Format)?;
+        if r.at != bytes.len() { return Err(Error::Format); }
+        Ok(Release { epoch, manifest, state })
+    }
+}
+
 struct Out<'a> { out: &'a mut [u8], at: usize }
 impl Out<'_> {
     fn put(&mut self, b: &[u8]) { self.out[self.at..self.at + b.len()].copy_from_slice(b); self.at += b.len(); }
@@ -331,7 +397,9 @@ impl Restored {
 }
 
 /// The last checkpoint of `component`, if it follows `contract` at `version` with state of `schema`, and its two names
-/// agree. `buffer` holds MAX. Its authorities are text: the caller checks them against what it holds now (`rebind`).
+/// agree; its epoch is their version. A manifest of another epoch is taken only at their first version, moved in from
+/// another store; elsewhere Inconsistent. Released if both names hold a release, never fresh. `buffer` holds MAX. Its authorities are text: the caller checks them against what it
+/// holds now (`rebind`).
 pub fn restore(store: &mut impl Store, names: &Names, contract: &str, version: u16, schema: u16, buffer: &mut [u8]) -> Result<Restored, Error> {
     let [(mv, manifest), (sv, state)] = store.snapshot([names.manifest(), names.state()])?;
     let (manifest, state) = match (manifest, state) {
@@ -340,11 +408,53 @@ pub fn restore(store: &mut impl Store, names: &Names, contract: &str, version: u
         _ => return Err(Error::Inconsistent),
     };
     let n = store.get(&manifest, &mut buffer[..MAX])?;
-    let m = Manifest::decode(&buffer[..n])?;
-    if m.contract.as_str() != contract || m.contract_version != version { return Err(Error::Contract); }
-    if m.schema != schema { return Err(Error::Schema); }
-    if m.state != state || m.epoch != mv { return Err(Error::Inconsistent); }
+    if buffer[..n].starts_with(RELEASED) {
+        Release::decode(&buffer[..n])?;
+        return Err(if state == manifest { Error::Released(mv) } else { Error::Inconsistent });
+    }
+    let mut m = Manifest::decode(&buffer[..n])?;
+    if m.contract.as_str() != contract || m.contract_version != version { return Err(Error::Contract(m.contract_version)); }
+    if m.schema != schema { return Err(Error::Schema(m.schema)); }
+    // Another epoch only at the names' first version, as an import into a store that never held them publishes it.
+    if m.state != state || (m.epoch != mv && mv != 1) { return Err(Error::Inconsistent); }
+    m.epoch = mv;
     Ok(Restored::Found(m))
+}
+
+/// Releases the component whose checkpoint was restored at epoch `from`: both names to a release record by one commit
+/// from `from`, so every instance of that epoch is fenced and every later restore in this store refused (Released). The
+/// checkpoint stays the names' version `from`, which their history keeps, and the release names it. Fenced if another
+/// instance saved since; Invalid if no checkpoint is at `from`. Returns the release and its epoch. `buffer` holds MAX.
+pub fn release(store: &mut impl Store, names: &Names, from: u64, buffer: &mut [u8]) -> Result<(Release, u64), Error> {
+    let [(mv, manifest), (sv, state)] = store.snapshot([names.manifest(), names.state()])?;
+    if mv != from || sv != from { return Err(Error::Fenced); }
+    let (Some(manifest), Some(state)) = (manifest, state) else { return Err(Error::Invalid) };
+    // Both names at one block: a release already, never a checkpoint (its manifest names its state).
+    if manifest == state { return Err(Error::Released(from)); }
+    let r = Release { epoch: from, manifest, state };
+    let n = r.encode(&mut buffer[..MAX]);
+    let root = store.put(&buffer[..n])?;
+    Ok((r, store.commit([names.manifest(), names.state()], from, [root, root])?))
+}
+
+/// The release of a component moved out of this store, which `restore` refuses: it names the last checkpoint, which the
+/// names' history keeps, to be written to a copy again. Inconsistent unless both names hold one release. `buffer` holds
+/// MAX.
+pub fn released(store: &mut impl Store, names: &Names, buffer: &mut [u8]) -> Result<Release, Error> {
+    match store.snapshot([names.manifest(), names.state()])? {
+        [(mv, Some(manifest)), (sv, Some(state))] if mv == sv && manifest == state => {
+            let n = store.get(&manifest, &mut buffer[..MAX])?;
+            Release::decode(&buffer[..n])
+        }
+        _ => Err(Error::Inconsistent),
+    }
+}
+
+/// Another component's last checkpoint, read and not restored: its manifest, checked as `restore` checks it, and its
+/// state's bytes in `state` (their length). None if it has none. Nothing is written, so its owner is never fenced.
+pub fn read(store: &mut impl Store, names: &Names, contract: &str, version: u16, schema: u16, buffer: &mut [u8], state: &mut [u8]) -> Result<Option<(Manifest, usize)>, Error> {
+    let Restored::Found(m) = restore(store, names, contract, version, schema, buffer)? else { return Ok(None) };
+    Ok(Some((m, store.get(&m.state, state)?)))
 }
 
 /// Saves `manifest` (its state's object already stored) as the next checkpoint after the one restored at epoch

@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use mind::voice::grammar::{Grammar, Token};
 use mind::voice::model::Model;
 use mind::voice::recognizer::Recognizer;
-use mind::voice::{meter, Detector, Microphone, Source, Stream, Utterance, Wav};
+use mind::voice::{meter, Detector, Microphone, Source, Stream, Utterance, Wav, COMMAND_PAUSE_MS};
 use phonetics::phonemes::{Ph, Unit};
 
 pub const MODEL: &str = "voice/model.bin";
@@ -66,6 +66,9 @@ pub const CONTEXT_MS: usize = 200;
 const PER_MS: usize = mind::voice::RATE as usize / 1000;
 /// How much of the stream is kept for that: more than the longest utterance and its context.
 const KEEP: usize = 10_000 * PER_MS;
+/// A command is longer than this (000-APP-0114): a shorter sound (a key's click, a knock, a breath) does not end a
+/// wait for one.
+pub const COMMAND_MIN_MS: u64 = 300;
 
 /// `u` widened by up to `CONTEXT_MS` on each side from `recent` (the stream from sample `base` on).
 fn with_context(u: Utterance, recent: &[i16], base: usize) -> Utterance {
@@ -103,10 +106,11 @@ impl Sound {
 }
 
 /// Feeds a stream to the speech detector and hands every utterance, with its context (`CONTEXT_MS`), to `found`
-/// (which returns false to stop); `watch` sees each piece read and the detector after it (a level meter). `limit` ends
+/// (which returns false to stop); an utterance ends after `COMMAND_PAUSE_MS` of quiet, so a command's words and a weak
+/// syllable stay in it (000-APP-0114); `watch` sees each piece read and the detector after it (a level meter). `limit` ends
 /// it after that many 16 kHz samples (the microphone). Returns how many utterances there were, or why the stream failed.
 pub fn utterances<S: Source>(mut stream: Stream<S>, limit: Option<usize>, watch: &mut dyn FnMut(&Detector, &[i16]), found: &mut dyn FnMut(Utterance) -> bool) -> Result<usize, String> where S::Error: core::fmt::Debug {
-    let mut detector = Detector::new();
+    let mut detector = Detector::with_pause(COMMAND_PAUSE_MS);
     let (mut chunk, mut count, mut total, mut idle) = (Vec::new(), 0usize, 0usize, 0usize);
     let mut ready: Vec<Utterance> = Vec::new();
     let (mut recent, mut base): (Vec<i16>, usize) = (Vec::new(), 0);
@@ -131,11 +135,13 @@ pub fn utterances<S: Source>(mut stream: Stream<S>, limit: Option<usize>, watch:
     Ok(count)
 }
 
-/// One utterance from the microphone within `seconds` (None: nothing was said); `watch` as for `utterances`.
-pub fn listen_once(seconds: usize, watch: &mut dyn FnMut(&Detector, &[i16])) -> Result<Option<Utterance>, String> {
+/// The first utterance from the microphone within `seconds` that is at least `shortest_ms` long (None: none was);
+/// `skipped` gets each shorter one before it, and `watch` is as for `utterances`.
+pub fn listen_once(seconds: usize, shortest_ms: u64, watch: &mut dyn FnMut(&Detector, &[i16]), skipped: &mut dyn FnMut(Utterance)) -> Result<Option<Utterance>, String> {
     let microphone = Microphone::start().map_err(capture_error)?;
     let mut heard = None;
-    utterances(Stream::new(microphone), Some(seconds * mind::voice::RATE as usize), watch, &mut |u| { heard = Some(u); false })?;
+    utterances(Stream::new(microphone), Some(seconds * mind::voice::RATE as usize), watch,
+               &mut |u| if u.length_ms() < shortest_ms { skipped(u); true } else { heard = Some(u); false })?;
     Ok(heard)
 }
 

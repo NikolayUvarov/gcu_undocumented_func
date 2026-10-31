@@ -135,3 +135,13 @@ The service runs as a program started from the shell (`effector data/effector/ef
 - **Telemetry** every 30 s ([750-EFF-0014](750-EFF-0014-telemetry.md)); `X-Effector-Agent-ID` on every request.
 - **The journal no longer stops at 64 answers.** A `done` line marks an answer that needs no more ACK, so a restart does not acknowledge it again. A full journal drops its oldest acknowledged, expired record. An action runs only for a new command in time whose answer has room.
 - **Tested:** the `effector` QEMU suite on x86_64, all of it (`docs/effector/README.md`, "Tested").
+
+## Progress (2026-10-30): the last heartbeat before a restart the agent knows of
+
+- **What the agent does now.** It sends one heartbeat with `system_state: "shutting_down"`:
+  - after the answer of an `exec` `reboot` the gateway admitted, once no answer waits;
+  - before an update's apply (751-EFF-0023).
+
+  After it, no heartbeat, poll or telemetry goes until the restart, or for 40 s if it does not come; then the agent goes on as before. Logged as `EFFECTOR: THE MACHINE RESTARTS: SHUTTING_DOWN SENT`.
+- **Checked in the `effector-update` QEMU suite, x86 and aarch64** (LEG9, 2026-10-30). The fixture holds that heartbeat before the trial boot. On aarch64 the staging takes minutes, and the server's connection had closed meanwhile, so the heartbeat now tries up to three times, each on a new connection. The `exec` `reboot` path has no QEMU check yet, because the suite's policy refuses `reboot`.
+- **Still open: a stop by `init`** (`svc stop`, the shell's `reboot`, a restart the updater asks for alone) gives the agent no warning: `init` kills it. This needs a notice from `init` before the kill (KRN), requested on internal-dev-messages.

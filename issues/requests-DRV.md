@@ -343,3 +343,19 @@ Recorded by the storage track (STO), 2026-10-27, for [307](307-the-stores-own-pa
   - NVMe FLUSH, ATA FLUSH CACHE EXT and SCSI SYNCHRONIZE CACHE sent when the client asks for one;
   - a device that reports no write cache, or ignores a flush, named as such in the answer and the log (MC-12.1).
 - **Why.** The store reports `flushed` only when a device said its flush was done, and says so per machine in the profile.
+
+## `audio_gw`: the AC97 capture ring overflows in the listen suite on x86 TCG (for 000-APP-0114)
+
+**Recorded by:** the tools track (APP), 2026-10-30.
+
+- **What fails.** The `listen` suite's 1 s recording reports `[LISTEN] RECORDED 48000 FRAMES (1000 MS), PEAK 0, RMS 0, OVERFLOWS 1` where it requires `OVERFLOWS 0`. `audio_gw` logs `CAPTURE STOPPED: 1002 MS OF SOUND, PEAK 0, 1 OVERFLOWS`.
+- **How often** (x86 QEMU with 4 CPUs, TCG, this container, 2026-10-30): 7 runs of 13 overflowed (one of them while a build ran beside it), among them:
+  - 1 of 2 with `main`'s own `listen` (its file from `main` in the branch's image), so it is not 000-APP-0114's change to `listen`, which touches only the playback;
+  - 1 of 4 with the check typing nothing while it records, so it is not the check's polling either.
+- **What was seen with it.** The compositor's watch lines in those seconds: 5 to 10 frames a second, the longest 150 to 285 ms, the task in front held up to 182 ms. The runs without an overflow had holds as long, so the holds alone do not tell it.
+- **What it may be** (not shown): the ring is 16 buffers of 4 KiB (`CAPTURE_BUFFERS`), 341 ms of 48 kHz stereo. Under TCG the emulated card fills it at the host's pace while the guest may run slower, so a reader late by a third of a second overflows. Playback has 32 buffers.
+- **Asked:**
+  - the cause;
+  - a fix in `audio_gw` (a larger capture ring, or a read that keeps up), with the suite passing repeatedly.
+  
+  The check's requirement stays as it is.

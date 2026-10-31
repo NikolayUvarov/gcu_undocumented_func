@@ -1,6 +1,6 @@
-# 550-DRV-0045 — `bcm_wifi`: the levels read with the external LNA held off get its gain back
+# 550-DRV-0045 — `bcm_wifi`: the levels read with the external LNA held off get its gain back — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P3 · **Status:** in progress (2026-10-30) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P3 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -41,12 +41,31 @@ NET's answer puts a correction, if one is made, in `bcm_wifi`, where the LNA's s
 
 ## Acceptance criteria
 
-- [ ] The host test passes; the x86 build passes.
-- [ ] **On the MacBook Pro**, with this `bcm_wifi`:
+- [x] The host test passes; the x86 build passes.
+- [x] **On the MacBook Pro**, with this `bcm_wifi`:
   - the network's beacons read within 2 dB of the PHY's control's −41 to −42 dBm, at the same place;
   - `wifi` shows 4 bars for it again;
   - beacons heard stay above 90%.
 
+## Resolution
+
+- **The code** (`claude/ASR-DRV` 16bcaa2e, landed in round 50, `main` 8e2b16e0):
+  - `bcm_wifi/src/level.rs`: `LNA_GAIN = 18`, `level` and `levels`;
+  - `radio.rs`: `rf_control` sets the gain with the hold, and every level of a receive header uses it;
+  - `tests/bcm_level_host.rs` (5 tests) in `scripts/host_tests.sh`.
+
+  Host tests and the x86 build passed before the landing request.
+- **The run on the MacBook Pro** (2026-10-30, the same place as 550-DRV-0039's):
+  - **Release 202610301115** (`[INIT] BUILD: … COMMIT ff0da96d1d15`, ABI 25), put over the cable at 12:47 UTC. Before it, on 202610290937, the network read `MEAN -61 DBM`, as 550-DRV-0039's held tallies did.
+  - **`bcm_wifi`'s 10 s beacon tallies, 12 windows from 13 s to 123 s:** −43 or −44 dBm in each. That is within 2 dB of the PHY's control's −41 to −42 dBm.
+  - **Beacons heard:** 88 to 93 of 97 due in each window after the first, 1013 of 1067 in all (94.9%). The first window, during the join, had 77 of 97.
+  - **`wifi status`:** `JOINED CoolNet2 … -44 DBM`.
+  - **APP's `wifi scan` (550-APP-0117,** its build run from `data/link/`): CoolNet2 at −44 dBm, `REMEMBERED JOINED`, among 16 networks.
+- **The bars, one criterion met differently:**
+  - The maintainer read −45 and −47 dBm on the screen, in `wm`'s Wi-Fi settings, not bars in `wifi`'s list.
+  - By `wifi`'s thresholds (`wifi/src/view.rs` `bars`: 4 bars down to −55 dBm), those are 4 bars; −61 was 3.
+- **Evidence for this machine and this release only** (MC-12.1). The corrected level is what the PHY reports with the LNA under its control, not a calibrated one (MC-12.3).
+
 ## Related
 
-[550-DRV-0039](../issues-done/550-DRV-0039-the-external-lna-held-off.done), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md); NET's answer `ALL/2026-10-29T1612Z-NET-levels-wlan-compares-only-wifis-bars-are-absolute.md` on `internal-dev-messages`.
+[550-DRV-0039](../issues-done/550-DRV-0039-the-external-lna-held-off.done), [550-DRV-0029](../issues/550-DRV-0029-bcm4331-receives-ofdm.md), [550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md); NET's answer `ALL/2026-10-29T1612Z-NET-levels-wlan-compares-only-wifis-bars-are-absolute.md` on `internal-dev-messages`.

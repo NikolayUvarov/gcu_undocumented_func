@@ -31,12 +31,19 @@ fn every_option() {
     assert_eq!((o.output.clone(), o.method()), (Output::Remote, "POST"));
     assert_eq!(parse(&words("-d hello https://h/")).unwrap().data, Some(Data::Text("hello".into())));
     assert_eq!(parse(&words("-d @ https://h/")).unwrap().data, Some(Data::Text("@".into())));
-    assert!(parse(&words("-I https://h/")).unwrap().head);
+    let o = parse(&words("-I https://h/")).unwrap();
+    assert_eq!((o.head, o.method()), (true, "HEAD"));
+    // HEAD, PATCH and DELETE by -X; -X HEAD shows the head as -I does (000-NET-0047).
+    let o = parse(&words("-X head https://h/")).unwrap();
+    assert_eq!((o.head, o.method()), (true, "HEAD"));
+    assert_eq!(parse(&words("-X PATCH -d {} https://h/")).unwrap().method(), "PATCH");
+    let o = parse(&words("-X DELETE https://h/")).unwrap();
+    assert_eq!((o.head, o.method()), (false, "DELETE"));
 }
 
 #[test]
 fn what_is_refused() {
-    for bad in ["", "-o", "-x https://h/", "https://a/ https://b/", "-X DELETE https://h/", "-H nocolon https://h/", "-H 'bad name: v' https://h/",
+    for bad in ["", "-o", "-x https://h/", "https://a/ https://b/", "-X TRACE https://h/", "-X HEAD -d a https://h/", "-H nocolon https://h/", "-H 'bad name: v' https://h/",
                 "-d a -F b=c https://h/", "-I -d a https://h/", "-c https://h/", "--max-redirs many https://h/", "--max-redirs 11 https://h/", "-m 0 https://h/", "-F =v https://h/",
                 "-F novalue https://h/"] {
         assert!(parse(&words(bad)).is_err(), "{:?}", bad);

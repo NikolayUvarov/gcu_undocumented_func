@@ -3,8 +3,9 @@
 // hear [SECONDS] [--save FILE] | hear --wav FILE [--save FILE]: recognizes voice commands (docs/voice V1, issue 078).
 // The model (voice/model.bin) and the grammar (voice/commands.txt) come from the boot disk; the grammar's phrases are
 // spelled with the synthesizer's letter-to-sound rules (the phonetics crate). From the microphone it waits up to
-// SECONDS (default 8) for one utterance, with a level meter on one line; from a file it recognizes every utterance in
-// it. For the operator (000-APP-0053) each utterance gets its time, length and level and the three best phrases with
+// SECONDS (default 8) for one utterance of a command's length, with a level meter on one line; a shorter sound (a key's
+// click) is named and the wait goes on, and an utterance ends after 600 ms of quiet (000-APP-0114); from a file it
+// recognizes every utterance in it. For the operator (000-APP-0053) each utterance gets its time, length and level and the three best phrases with
 // their confidence, then `HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=0.91` or `NOT UNDERSTOOD (...)` and why;
 // nothing heard gets the noise floor and the peak. `--save` keeps the first utterance, or the whole wait when nothing
 // was heard, as a WAV file. Least authority (Art. 11.5, 11.11): it is lent the user's files for `--save` alone and drops
@@ -17,7 +18,7 @@ use hear::Sound;
 use mind::voice::recognizer::Recognizer;
 use mind::abi::{SLOT_FILE, SLOT_VFS};
 use mind::ipc::Endpoint;
-use mind::voice::{meter, Detector, Utterance, RATE};
+use mind::voice::{meter, Detector, Utterance, COMMAND_PAUSE_MS, RATE};
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES);
 
@@ -47,7 +48,7 @@ fn report(recognizer: &Recognizer, utterance: &Utterance) {
 
 mind::entry!(main);
 fn main(_info: &'static mind::BootInfo) {
-    mind::about!("hear — recognizes a spoken command offline (Russian and English) and prints what it heard.\nUsage: hear [seconds] [--save file] | hear --wav file [--save file]   (default: one utterance within 8 s from the microphone)\nFor each utterance: its length and level, the three closest phrases and the verdict; from the microphone a level meter\nwhile it listens, and the noise floor when nothing was heard. --save keeps the utterance (or the whole wait) as a WAV file.\nThe commands are in voice/commands.txt. It acts on nothing; voice control is the shell's voice on.");
+    mind::about!("hear — recognizes a spoken command offline (Russian and English) and prints what it heard.\nUsage: hear [seconds] [--save file] | hear --wav file [--save file]   (default: one utterance within 8 s from the microphone)\nA command ends after 600 ms of quiet; a sound shorter than 300 ms (a key's click) is named and the wait goes on.\nFor each utterance: its length and level, the three closest phrases and the verdict; from the microphone a level meter\nwhile it listens, and the noise floor when nothing was heard. --save keeps the utterance (or the whole wait) as a WAV file.\nThe commands are in voice/commands.txt. It acts on nothing; voice control is the shell's voice on.");
     let words: Vec<&str> = mind::process::args_str().split_whitespace().collect();
     let (words, save) = match words.iter().position(|w| *w == "--save") {
         Some(at) if at + 1 < words.len() => ([&words[..at], &words[at + 2..]].concat(), Some(words[at + 1])),
@@ -69,7 +70,7 @@ fn main(_info: &'static mind::BootInfo) {
     let heard = match wav {
         Some(path) => hear::wav_utterances(path, &mut |detector, chunk| sound.note(detector, chunk)),
         None => {
-            mind::println!("LISTENING FOR {} S: SPEECH STARTS 9 DB ABOVE THE NOISE FLOOR, NOT BELOW -50 DBFS", seconds);
+            mind::println!("LISTENING FOR {} S: SPEECH STARTS 9 DB ABOVE THE NOISE FLOOR, NOT BELOW -50 DBFS; IT ENDS AFTER {} MS OF QUIET", seconds, COMMAND_PAUSE_MS);
             let mut since = 0usize;
             let mut watch = |detector: &Detector, chunk: &[i16]| {
                 sound.note(detector, chunk);
@@ -82,7 +83,9 @@ fn main(_info: &'static mind::BootInfo) {
                                  peak, rms, detector.floor_dbfs(), detector.threshold_dbfs(), if detector.speaking() { "; SPEAKING" } else { "          " });
                 }
             };
-            let result = hear::listen_once(seconds, &mut watch);
+            let mut skipped = |u: Utterance| mind::println!("\nSKIPPED AT {}.{:02} S: {} MS, LEVEL {} DBFS, SHORTER THAN A COMMAND ({} MS)",
+                                                             u.start_ms / 1000, u.start_ms % 1000 / 10, u.length_ms(), u.level, hear::COMMAND_MIN_MS);
+            let result = hear::listen_once(seconds, hear::COMMAND_MIN_MS, &mut watch, &mut skipped);
             mind::println!("");
             result.map(|u| u.into_iter().collect::<Vec<_>>())
         }

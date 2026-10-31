@@ -16,7 +16,7 @@ use mind::script::{parse, Host, Interpreter, Script, Value};
 /// The functions the shell gives scripts (beside mind::script's).
 pub const HOST_FUNCTIONS: [&str; 8] = ["capture", "ps", "services", "files", "glob", "log", "sleep", "now"];
 // `firmware` and `camera` still ask the user each time; declaring them only lets a program ask (211-APP-0013).
-const WORDS: [&str; 20] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera", "blockstore", "firmware", "tls", "parse", "battery", "wifi", "ssh"];
+const WORDS: [&str; 21] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera", "blockstore", "firmware", "tls", "parse", "battery", "wifi", "ssh", "nn"];
 const MAX_SCRIPT: usize = 64 * 1024;
 
 // The shell's commands that need a declared word in a script.
@@ -25,7 +25,7 @@ fn needs(command: &str) -> Option<&'static str> {
     if is(&["write", "mkdir", "rm", "mv", "sync", "screenshot"]) { Some("files") }
     else if is(&["ping", "nslookup", "fetch", "https", "net", "netrevoke", "ip", "tls", "netstat"]) { Some("network") }
     else if is(&["logger"]) { Some("log") }
-    else if is(&["kill", "budget", "stop", "reboot", "poweroff", "shutdown"]) { Some("lifecycle") }
+    else if is(&["kill", "budget", "stop", "reboot", "poweroff", "shutdown", "update"]) { Some("lifecycle") }
     else { None }
 }
 

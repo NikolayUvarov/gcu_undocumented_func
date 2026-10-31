@@ -17,6 +17,12 @@
 //! sealed under the volume key. Names, pins and blocks belong to a domain; the same bytes in two domains are two
 //! records. Forgetting a domain writes a tombstone and erases its key record, so its records never open again, and the
 //! next collection frees them.
+//!
+//! The recovery key (308-STO-0028): 16 random bytes the owner keeps for a volume key kept off the medium. A recovery
+//! record seals the volume key under a key derived from it and the kept id, framed in a domain of its own that no mount
+//! opens; a mount keeps it, never counts it corrupt, and remembers where it lies. A new key's record is written and
+//! flushed, and the older ones are erased only once the owner types the new key back. On another machine `recover`
+//! opens one and gives the volume key to that machine's keeper.
 use crate::cid::{self, Cid, Codec};
 use crate::dag;
 use crate::sha256;
@@ -72,6 +78,8 @@ pub const COMMIT_MAX: usize = 8;
 pub const VOLUME: u16 = 0;
 // The frame's domain of the records that keep the domains' keys, sealed under the volume key.
 const KEYS: u16 = 0xFFFF;
+// The frame's domain of the recovery records, sealed under a key from a recovery key no mount holds (308-STO-0028).
+const RECOVERY: u16 = 0xFFFE;
 /// Domains a store keeps at most, live and forgotten together.
 pub const DOMAINS: usize = 32;
 // A domain's key record: magic, layout, the domain (u16), its state (u16), the owner (u16), zero (4), the key (32
@@ -80,6 +88,11 @@ const KEY_MAGIC: &[u8; 8] = b"MIND-KEY";
 const KEY_RECORD: usize = 52 + 32;
 const KEY_LIVE: u16 = 1;
 const KEY_GONE: u16 = 2;
+// A recovery record: magic, layout, zero (6), the volume key (32 bytes), and the SHA-256 of these 48 bytes.
+const RECOVERY_MAGIC: &[u8; 8] = b"MIND-RCV";
+const RECOVERY_RECORD: usize = 48 + 32;
+/// Recovery records whose places a mount remembers; past them, a new recovery key or a forget finds the rest by a scan.
+pub const RECOVERIES: usize = 4;
 
 /// The medium under the store: sectors of SECTOR bytes, read and written up to RECORD_SECTORS at a time.
 pub trait Device {
@@ -137,10 +150,48 @@ impl Keys {
         let nonce: [u8; 12] = hmac_sha256(&self.nonce, &[aad, data])[..12].try_into().unwrap();
         (nonce, crypto.seal(&self.seal, &nonce, aad, data))
     }
+    // The keys of a recovery record: HKDF-SHA-256 (RFC 5869) of the recovery key, the kept id as salt.
+    fn recovery(recovery: &[u8; 16], id: &[u8; 8]) -> Self {
+        // HMAC pads its key with zeros, so the id padded to 32 bytes is the salt itself.
+        let mut salt = [0u8; 32];
+        salt[..8].copy_from_slice(id);
+        let prk = hmac_sha256(&salt, &[recovery]);
+        Keys::new(&hmac_sha256(&prk, &[b"MIND-STO recovery", &[1]]))
+    }
 }
 
 /// Sectors of a sealed record of `len` bytes.
 pub const fn sealed_sectors(len: usize) -> usize { (FRAME + len).div_ceil(SECTOR) }
+
+// Seals the record of `len` bytes at b[FRAME..], and the zeros after it to the end of its last sector, under `keys` in
+// `domain` for its first sector `lba`; returns its sectors, ready to write.
+fn seal_frame(crypto: &dyn Crypto, keys: &Keys, b: &mut [u8], lba: u64, len: usize, domain: u16) -> usize {
+    let n = sealed_sectors(len);
+    let b = &mut b[..n * SECTOR];
+    b[FRAME + len..].fill(0);
+    b[..8].copy_from_slice(FRAME_MAGIC);
+    b[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    b[10..12].copy_from_slice(&domain.to_le_bytes());
+    b[12..16].copy_from_slice(&(n as u32).to_le_bytes());
+    let aad = aad(b, lba);
+    let (nonce, tag) = keys.seal(crypto, &aad, &mut b[FRAME..]);
+    b[16..28].copy_from_slice(&nonce);
+    b[28..FRAME].copy_from_slice(&tag);
+    n
+}
+
+// Opens the record sealed in the `n` sectors `b` read from `lba`, under `keys` in `domain`: it then starts `b`, zeros
+// after it. If the frame does not cover exactly them, is of another domain or does not open, `b` is zeros and false.
+fn open_frame(crypto: &dyn Crypto, keys: Option<Keys>, b: &mut [u8], lba: u64, n: usize, domain: u16) -> bool {
+    let b = &mut b[..n * SECTOR];
+    let framed = parse_frame(b) == Some(n) && b[10..12] == domain.to_le_bytes();
+    let (aad, nonce, tag) = (aad(b, lba), b[16..28].try_into().unwrap(), b[28..FRAME].try_into().unwrap());
+    let opened = framed && keys.is_some_and(|k| crypto.open(&k.seal, &nonce, &aad, &mut b[FRAME..], &tag));
+    if !opened { b.fill(0); return false; }
+    b.copy_within(FRAME.., 0);
+    b[n * SECTOR - FRAME..].fill(0);
+    true
+}
 
 // The sectors a frame covers, if the sector starts a frame of this layout.
 fn parse_frame(sector: &[u8]) -> Option<usize> {
@@ -172,17 +223,19 @@ pub enum Error {
     /// The device failed a read, write or flush.
     Device,
     /// The medium is neither wholly blank nor a store (sector 0 holds no valid superblock): it belongs to something
-    /// else and is left alone.
+    /// else and is left alone. To `recover`, a blank one is no store either.
     Foreign,
     /// A store of another layout version, the one found: this build reads only its own and converts none.
     Layout(u16),
     /// The superblock's key does not open its check, or comes from a source this build does not know: nothing is read.
+    /// To `recover` and `recovery_keep`, a recovery key that opens no recovery record.
     Key,
     /// The volume key is kept off the medium under this id, and no keeper gave it: none to ask, or another machine's
-    /// medium.
+    /// medium. To `recover`, the keeper would not keep it.
     Kept([u8; 8]),
     /// A `dag-cbor` block that is neither a node of `dag`'s schema nor a directory of `tree`'s (MC-4.2: the type is bound
-    /// to the data); a name that is not 1 to NAME_MAX allowed bytes; a root whose tree is out of shape.
+    /// to the data); a name that is not 1 to NAME_MAX allowed bytes; a root whose tree is out of shape; a recovery key
+    /// for a store whose volume key is not kept off the medium (308-STO-0028).
     Invalid,
     /// The name's current version is not the one the publisher expected (MC-4.3): nothing was published.
     Conflict,
@@ -193,7 +246,8 @@ pub enum Error {
     Quota,
     /// A pin or a domain of another owner.
     Rights,
-    /// No random source for a domain's key: one derived from anything kept could not be destroyed (308-STO-0023).
+    /// No random source for a domain's key: one derived from anything kept could not be destroyed (308-STO-0023). Nor
+    /// for a recovery key, which would be no secret (308-STO-0028).
     NoRandom,
 }
 
@@ -421,9 +475,45 @@ fn parse_key(sector: &[u8]) -> Option<(u16, u16, u16, [u8; 32])> {
     let field = |at: usize| u16::from_le_bytes([sector[at], sector[at + 1]]);
     let (domain, state, owner) = (field(10), field(12), field(14));
     let key: [u8; 32] = sector[20..52].try_into().unwrap();
-    let valid = field(8) == LAYOUT && sector[16..20] == [0; 4] && domain != VOLUME && domain != KEYS
+    let valid = field(8) == LAYOUT && sector[16..20] == [0; 4] && domain != VOLUME && domain < RECOVERY
         && (state == KEY_LIVE || (state == KEY_GONE && key == [0; 32]));
     valid.then_some((domain, state, owner, key))
+}
+
+fn recovery_record(volume: &[u8; 32]) -> [u8; RECOVERY_RECORD] {
+    let mut r = [0u8; RECOVERY_RECORD];
+    r[..8].copy_from_slice(RECOVERY_MAGIC);
+    r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    r[16..48].copy_from_slice(volume);
+    let check = sha256::digest(&r[..48]);
+    r[48..RECOVERY_RECORD].copy_from_slice(&check);
+    r
+}
+
+// The volume key a sector keeps, if it is a whole recovery record of this layout.
+fn parse_recovery(sector: &[u8]) -> Option<[u8; 32]> {
+    if &sector[..8] != RECOVERY_MAGIC || sector[48..RECOVERY_RECORD] != sha256::digest(&sector[..48]) || sector[RECOVERY_RECORD..].iter().any(|&b| b != 0) { return None; }
+    (u16::from_le_bytes([sector[8], sector[9]]) == LAYOUT && sector[10..16] == [0; 6]).then(|| sector[16..48].try_into().unwrap())
+}
+
+// The first recovery record's sector from `lba` on, found by its frame alone (it opens only under its recovery key).
+fn find_recovery<D: Device>(dev: &mut D, buffer: &mut [u8; BUFFER], mut lba: u64) -> Result<Option<u64>, Error> {
+    let sectors = dev.sectors();
+    while lba < sectors {
+        let window = (sectors - lba).min(RECORD_SECTORS as u64) as usize;
+        if !dev.read(lba, &mut buffer[..window * SECTOR]) { return Err(Error::Device); }
+        let mut next = lba + window as u64;
+        for at in 0..window {
+            let here = lba + at as u64;
+            let sector = &buffer[at * SECTOR..(at + 1) * SECTOR];
+            let Some(n) = parse_frame(sector).filter(|&n| here + n as u64 <= sectors) else { continue };
+            if n == 1 && sector[10..12] == RECOVERY.to_le_bytes() { return Ok(Some(here)); }
+            next = here + n as u64;
+            break;
+        }
+        lba = next;
+    }
+    Ok(None)
 }
 
 /// A memory domain (308-STO-0023): its number, its owner (a badge), whether its key is forgotten, and how many of its
@@ -455,9 +545,14 @@ pub struct Store<'a, D: Device> {
     damaged: u64,
     crypto: &'a dyn Crypto,
     keys: Keys,
-    // Whether this mount made the volume key, and from random bytes; and where the key is kept.
+    // Whether this mount made the volume key, and from random bytes; and, for a key kept off the medium, its id and the
+    // key, which a recovery record keeps (308-STO-0028).
     made: Option<bool>,
-    source: u8,
+    kept: Option<([u8; 8], [u8; 32])>,
+    // Where the first RECOVERIES recovery records lie, how many of them, and how many there are.
+    recoveries: [u64; RECOVERIES],
+    remembered: usize,
+    recovered: usize,
     // The domain requests work in, and the domains the store keeps.
     domain: u16,
     domains: [Option<Domain>; DOMAINS],
@@ -564,14 +659,58 @@ fn key_of(s: &[u8], crypto: &dyn Crypto, keeper: &mut Option<&mut dyn Keeper>) -
         }
         _ => return Err(Error::Key),
     };
+    if opens(s, crypto, &key) { Ok(Some(key)) } else { Err(Error::Key) }
+}
+
+// Whether `key` opens a superblock's check.
+fn opens(s: &[u8], crypto: &dyn Crypto, key: &[u8; 32]) -> bool {
     let mut check: [u8; 32] = s[92..124].try_into().unwrap();
-    let opened = crypto.open(&Keys::new(&key).seal, s[80..92].try_into().unwrap(), &aad(s, 0), &mut check, s[124..140].try_into().unwrap());
-    if opened && check == [0; 32] { Ok(Some(key)) } else { Err(Error::Key) }
+    crypto.open(&Keys::new(key).seal, s[80..92].try_into().unwrap(), &aad(s, 0), &mut check, s[124..140].try_into().unwrap()) && check == [0; 32]
+}
+
+// Whether `s` is a superblock of this layout: `Foreign` if it is no store's, `Layout` if it is another layout's.
+fn check_superblock(s: &[u8]) -> Result<(), Error> {
+    if &s[..8] != SUPER_MAGIC || s[16..48] != sha256::digest(&s[..16]) { return Err(Error::Foreign); }
+    let layout = u16::from_le_bytes([s[8], s[9]]);
+    if layout != LAYOUT { return Err(Error::Layout(layout)); }
+    if s[10..12] != (SECTOR as u16).to_le_bytes() || s[13..16] != [0; 3] || s[140..SUPER] != sha256::digest(&s[..140])
+        || s[SUPER..].iter().any(|&b| b != 0) { return Err(Error::Foreign); }
+    Ok(())
 }
 
 /// The id a superblock's key is kept under by its keeper, if it is kept so.
 #[cfg(test)]
 pub fn kept_id(s: &[u8]) -> Option<[u8; 8]> { (s[..8] == *SUPER_MAGIC && s[12] == KEY_KEPT).then(|| s[48..56].try_into().unwrap()) }
+
+/// Gives `keeper` the volume key of the store on `dev` under its superblock's id, from the first recovery record that
+/// `recovery` opens (308-STO-0028), so a medium whose keeper lacks it mounts. Nothing is written to the medium. A key
+/// in the clear or none is `Invalid`; a recovery key that opens none, or a record whose key does not open the
+/// superblock's check, `Key`; a keeper that does not keep it, `Kept`, and nothing is kept.
+#[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
+pub fn recover<D: Device>(dev: &mut D, crypto: &dyn Crypto, keeper: &mut dyn Keeper, recovery: &[u8; 16], buffer: &mut [u8; BUFFER]) -> Result<(), Error> {
+    if dev.sectors() < 2 { return Err(Error::Foreign); }
+    if !dev.read(0, &mut buffer[..SECTOR]) { return Err(Error::Device); }
+    let s: [u8; SECTOR] = buffer[..SECTOR].try_into().unwrap();
+    check_superblock(&s)?;
+    let id: [u8; 8] = match s[12] {
+        KEY_KEPT if s[56..80].iter().all(|&b| b == 0) => s[48..56].try_into().unwrap(),
+        KEY_NONE | KEY_CLEAR => return Err(Error::Invalid),
+        _ => return Err(Error::Key),
+    };
+    let keys = Keys::recovery(recovery, &id);
+    let mut lba = 1;
+    while let Some(at) = find_recovery(dev, buffer, lba)? {
+        lba = at + 1;
+        if !dev.read(at, &mut buffer[..SECTOR]) { return Err(Error::Device); }
+        if !open_frame(crypto, Some(keys), &mut buffer[..SECTOR], at, 1, RECOVERY) { continue; }
+        let volume = parse_recovery(&buffer[..SECTOR]).filter(|v| opens(&s, crypto, v));
+        // The volume key does not stay in the caller's buffer.
+        buffer[..SECTOR].fill(0);
+        let volume = volume.ok_or(Error::Key)?;
+        return if keeper.put(&id, &volume) { Ok(()) } else { Err(Error::Kept(id)) };
+    }
+    Err(Error::Key)
+}
 
 impl<'a, D: Device> Store<'a, D> {
     /// Mounts the store on `dev` at time `now` (ns), its records sealed with `crypto`: a blank medium is formatted (if
@@ -592,15 +731,11 @@ impl<'a, D: Device> Store<'a, D> {
             if !blank(&mut dev, buffer)? { return Err(Error::Foreign); }
             None
         } else {
-            if &s[..8] != SUPER_MAGIC || s[16..48] != sha256::digest(&s[..16]) { return Err(Error::Foreign); }
-            let layout = u16::from_le_bytes([s[8], s[9]]);
-            if layout != LAYOUT { return Err(Error::Layout(layout)); }
-            if s[10..12] != (SECTOR as u16).to_le_bytes() || s[13..16] != [0; 3] || s[140..SUPER] != sha256::digest(&s[..140])
-                || s[SUPER..].iter().any(|&b| b != 0) { return Err(Error::Foreign); }
+            check_superblock(&s)?;
             key_of(&s, crypto, &mut keeper)?
         };
-        let (key, made, source) = match key {
-            Some(key) => (key, None, s[12]),
+        let (key, made, kept) = match key {
+            Some(key) => (key, None, (s[12] == KEY_KEPT).then(|| (s[48..56].try_into().unwrap(), key))),
             None => {
                 if !dev.writable() { return Err(Error::ReadOnly); }
                 let mut key = [0u8; 32];
@@ -612,7 +747,7 @@ impl<'a, D: Device> Store<'a, D> {
                 let mut id = [0u8; 8];
                 let kept = (random && crypto.random(&mut id) && keeper.as_mut().is_some_and(|k| k.put(&id, &key))).then_some(id);
                 if !dev.write(0, &superblock(Some((&key, crypto)), kept.as_ref())) || !dev.flush() { return Err(Error::Device); }
-                (key, Some(random), if kept.is_some() { KEY_KEPT } else { KEY_CLEAR })
+                (key, Some(random), kept.map(|id| (id, key)))
             }
         };
         let quota = dev.sectors() * SECTOR as u64 / 4 * 3;
@@ -620,9 +755,9 @@ impl<'a, D: Device> Store<'a, D> {
         index.fill(Entry::EMPTY);
         let mut store = Store {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
-            scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made, source,
-            domain: VOLUME, domains: [None; DOMAINS], deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0,
-            scrubbing: Scrubbed::default(),
+            scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made, kept,
+            recoveries: [0; RECOVERIES], remembered: 0, recovered: 0, domain: VOLUME, domains: [None; DOMAINS],
+            deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0, scrubbing: Scrubbed::default(),
         };
         store.mount_pass()?;
         store.size_retained();
@@ -633,7 +768,7 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn made(&self) -> Option<bool> { self.made }
 
     /// Where the volume key is kept: in the superblock in the clear (KEY_CLEAR) or by the keeper (KEY_KEPT).
-    pub fn key_source(&self) -> u8 { self.source }
+    pub fn key_source(&self) -> u8 { if self.kept.is_some() { KEY_KEPT } else { KEY_CLEAR } }
 
     /// The time (ns, monotonic) the next requests happen at: leases are measured with it.
     pub fn set_time(&mut self, now: u64) { self.now = now; }
@@ -707,6 +842,7 @@ impl<'a, D: Device> Store<'a, D> {
         self.pass(false)?;
         if self.waiting > DEFERRED {
             (self.count, self.bytes, self.names, self.pinned, self.next_pin, self.corrupt) = (0, 0, 0, 0, 1, 0);
+            (self.remembered, self.recovered) = (0, 0);
             self.index.fill(Entry::EMPTY);
             self.waiting = usize::MAX;
             self.pass(false)?;
@@ -751,10 +887,11 @@ impl<'a, D: Device> Store<'a, D> {
     fn slot_of(&self, id: u16) -> Option<usize> { self.domains.iter().position(|d| d.is_some_and(|d| d.id == id)) }
 
     // The keys the records of `domain` are sealed under: the volume's for its own and for the key records, a live
-    // domain's own; none for a forgotten or unknown one.
+    // domain's own; none for a forgotten or unknown one, nor for the recovery records.
     fn keys_for(&self, domain: u16) -> Option<Keys> {
         match domain {
             VOLUME | KEYS => Some(self.keys),
+            RECOVERY => None,
             _ => self.slot_of(domain).and_then(|k| self.domains[k]).filter(|d| !d.forgotten).map(|d| d.keys),
         }
     }
@@ -770,6 +907,14 @@ impl<'a, D: Device> Store<'a, D> {
                     true if n == 1 => match parse_key(&self.buffer[..SECTOR]) { Some(key) => self.key_found(here, key)?, None => self.corrupt += 1 },
                     _ => self.corrupt += 1,
                 }
+            }
+            return self.settle(true, here, n, run, freed);
+        }
+        if domain == RECOVERY && n == 1 {
+            // It opens only under its recovery key: kept as it is, and a mount remembers where, so it can be erased.
+            if !sweep {
+                if self.remembered < RECOVERIES { self.recoveries[self.remembered] = here; self.remembered += 1; }
+                self.recovered += 1;
             }
             return self.settle(true, here, n, run, freed);
         }
@@ -951,27 +1096,16 @@ impl<'a, D: Device> Store<'a, D> {
         self.find_room(n).ok_or(Error::Full)
     }
 
-    // Seals the record of `len` bytes at buffer[FRAME..], and the zeros after it to the end of its last sector, in
-    // `domain` for its first sector `lba`; returns its sectors, ready to write. `NotFound` for a domain without a key.
-    fn seal(&mut self, lba: u64, len: usize, domain: u16) -> Result<usize, Error> {
+    // Seals the record of `len` bytes at buffer[FRAME..] in `domain` for `lba`, writes and flushes it. `NotFound` for a
+    // domain without a key.
+    fn write_sealed(&mut self, lba: u64, len: usize, domain: u16) -> Result<(), Error> {
         let keys = self.keys_for(domain).ok_or(Error::NotFound)?;
-        let n = sealed_sectors(len);
-        let b = &mut self.buffer[..n * SECTOR];
-        b[FRAME + len..].fill(0);
-        b[..8].copy_from_slice(FRAME_MAGIC);
-        b[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
-        b[10..12].copy_from_slice(&domain.to_le_bytes());
-        b[12..16].copy_from_slice(&(n as u32).to_le_bytes());
-        let aad = aad(b, lba);
-        let (nonce, tag) = keys.seal(self.crypto, &aad, &mut b[FRAME..]);
-        b[16..28].copy_from_slice(&nonce);
-        b[28..FRAME].copy_from_slice(&tag);
-        Ok(n)
+        self.write_under(lba, len, domain, &keys)
     }
 
-    // Seals the record of `len` bytes at buffer[FRAME..] in `domain` for `lba`, writes and flushes it.
-    fn write_sealed(&mut self, lba: u64, len: usize, domain: u16) -> Result<(), Error> {
-        let n = self.seal(lba, len, domain)?;
+    // The same under `keys`.
+    fn write_under(&mut self, lba: u64, len: usize, domain: u16, keys: &Keys) -> Result<(), Error> {
+        let n = seal_frame(self.crypto, keys, &mut self.buffer[..], lba, len, domain);
         // A scrub inside the blank run written now would read the record's middle as damaged: it goes on after it.
         if (lba + 1..lba + n as u64).contains(&self.scrub_at) { self.scrub_at = lba + n as u64; }
         if !self.dev.write(lba, &self.buffer[..n * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
@@ -990,13 +1124,7 @@ impl<'a, D: Device> Store<'a, D> {
         let keys = self.keys_for(domain);
         let b = &mut self.buffer[..n * SECTOR];
         if !self.dev.read(lba, b) { return Err(Error::Device); }
-        let framed = parse_frame(b) == Some(n) && b[10..12] == domain.to_le_bytes();
-        let (aad, nonce, tag) = (aad(b, lba), b[16..28].try_into().unwrap(), b[28..FRAME].try_into().unwrap());
-        let opened = framed && keys.is_some_and(|k| self.crypto.open(&k.seal, &nonce, &aad, &mut b[FRAME..], &tag));
-        if !opened { b.fill(0); return Ok(false); }
-        b.copy_within(FRAME.., 0);
-        b[n * SECTOR - FRAME..].fill(0);
-        Ok(true)
+        Ok(open_frame(self.crypto, keys, b, lba, n, domain))
     }
 
     // Opens the record at `lba`; whether it is the block `cid` of `len` bytes, whole. Its bytes then follow the header.
@@ -1395,7 +1523,7 @@ impl<'a, D: Device> Store<'a, D> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         let slot = self.domains.iter().position(Option::is_none).ok_or(Error::Full)?;
         let id = self.domains().map(|d| d.id).max().unwrap_or(VOLUME) + 1;
-        if id == KEYS { return Err(Error::Full); }
+        if id >= RECOVERY { return Err(Error::Full); }
         let mut key = [0u8; 32];
         if !self.crypto.random(&mut key) { return Err(Error::NoRandom); }
         let lba = self.room(1)?;
@@ -1449,11 +1577,94 @@ impl<'a, D: Device> Store<'a, D> {
     /// The domains the store keeps, live and forgotten (a forgotten one until a collection has freed its records).
     pub fn domains(&self) -> impl Iterator<Item = &Domain> { self.domains.iter().flatten() }
 
+    /// Makes a recovery key for a volume key kept off the medium (308-STO-0028), the first of two steps: 16 random
+    /// bytes, under which a new recovery record keeps the volume key, written and flushed; returns the key. Nothing is
+    /// erased: the older keys open the medium until the owner types the new one back (`recovery_keep`). `Invalid` for
+    /// a key in the clear and `NoRandom` without a random source, nothing written.
+    #[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
+    pub fn recovery_new(&mut self) -> Result<[u8; 16], Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let (id, volume) = self.kept.ok_or(Error::Invalid)?;
+        let mut recovery = [0u8; 16];
+        if !self.crypto.random(&mut recovery) { return Err(Error::NoRandom); }
+        let lba = self.room(1)?;
+        self.claim(lba, 1);
+        self.buffer[FRAME..FRAME + RECOVERY_RECORD].copy_from_slice(&recovery_record(&volume));
+        self.write_under(lba, RECOVERY_RECORD, RECOVERY, &Keys::recovery(&recovery, &id))?;
+        if self.remembered < RECOVERIES { self.recoveries[self.remembered] = lba; self.remembered += 1; }
+        self.recovered += 1;
+        Ok(recovery)
+    }
+
+    /// The second step (308-STO-0028): the owner types the key `recovery_new` showed back, and every recovery record
+    /// it does not open is erased; returns how many. `Key` if it opens none, nothing erased: so the owner never holds
+    /// only a key that no longer opens the medium.
+    #[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
+    pub fn recovery_keep(&mut self, recovery: &[u8; 16]) -> Result<usize, Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let (id, volume) = self.kept.ok_or(Error::Invalid)?;
+        let keep = (Keys::recovery(recovery, &id), volume);
+        let mut from = 1;
+        loop {
+            let Some(lba) = self.next_recovery(from)? else { return Err(Error::Key) };
+            if self.recovery_opens(lba, &keep)? { break; }
+            from = lba + 1;
+        }
+        self.erase_recoveries(Some(&keep))
+    }
+
+    /// Erases every recovery record, as forgetting a domain erases its key record, and returns how many: no recovery
+    /// key opens the medium after it (308-STO-0028).
+    #[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
+    pub fn recovery_forget(&mut self) -> Result<usize, Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        self.erase_recoveries(None)
+    }
+
+    /// The recovery records on the medium: those the mount met and this mount wrote, less those it erased.
+    #[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
+    pub fn recovery(&self) -> usize { self.recovered }
+
+    // Erases every recovery record but those that `keep`'s keys open to its volume key (none: every one); returns how
+    // many.
+    fn erase_recoveries(&mut self, keep: Option<&(Keys, [u8; 32])>) -> Result<usize, Error> {
+        let (mut erased, mut from) = (0, 1);
+        while let Some(lba) = self.next_recovery(from)? {
+            from = lba + 1;
+            if let Some(keep) = keep { if self.recovery_opens(lba, keep)? { continue; } }
+            self.erase(lba, 1)?;
+            if let Some(k) = self.recoveries[..self.remembered].iter().position(|&p| p == lba) {
+                self.recoveries.copy_within(k + 1..self.remembered, k);
+                self.remembered -= 1;
+            }
+            self.recovered -= 1;
+            self.release(lba, 1);
+            erased += 1;
+        }
+        Ok(erased)
+    }
+
+    // The first recovery record from sector `from` on: among those remembered while every one is, else by a scan.
+    fn next_recovery(&mut self, from: u64) -> Result<Option<u64>, Error> {
+        if self.recovered == self.remembered { return Ok(self.recoveries[..self.remembered].iter().copied().filter(|&p| p >= from).min()); }
+        find_recovery(&mut self.dev, self.buffer, from)
+    }
+
+    // Whether the recovery record at `lba` opens under `keys` to `volume`, this store's volume key.
+    fn recovery_opens(&mut self, lba: u64, (keys, volume): &(Keys, [u8; 32])) -> Result<bool, Error> {
+        if !self.dev.read(lba, &mut self.buffer[..SECTOR]) { return Err(Error::Device); }
+        let opens = open_frame(self.crypto, Some(*keys), &mut self.buffer[..SECTOR], lba, 1, RECOVERY)
+            && parse_recovery(&self.buffer[..SECTOR]) == Some(*volume);
+        // The volume key does not stay in the buffer.
+        self.buffer[..SECTOR].fill(0);
+        Ok(opens)
+    }
+
     /// Reads and checks the records from where the scrub stopped (309-STO-0025), about `budget` sectors of them, as a
     /// mount does: each opened under its domain's key, a block's bytes matched to its CID, any other record's digest
-    /// checked; a forgotten domain's records are not opened. Nothing is written. `found` hears of each record that does
-    /// not open or is not whole: its sector, and the block the index holds there. The pass that reaches the medium's
-    /// end returns what it found, and the next call starts another.
+    /// checked; a forgotten domain's records and the recovery records are not opened. Nothing is written. `found` hears
+    /// of each record that does not open or is not whole: its sector, and the block the index holds there. The pass
+    /// that reaches the medium's end returns what it found, and the next call starts another.
     pub fn scrub(&mut self, budget: u64, found: &mut dyn FnMut(u64, Option<Cid>)) -> Result<Option<Scrubbed>, Error> {
         let sectors = self.dev.sectors();
         if self.scrub_at == 0 { (self.scrub_at, self.scrubbing) = (1, Scrubbed::default()); }
@@ -1496,6 +1707,8 @@ impl<'a, D: Device> Store<'a, D> {
 
     // Whether the record of `n` sectors at `here`, sealed in `domain`, opens and is whole; and the sectors it covers.
     fn check(&mut self, here: u64, n: u64, domain: u16) -> Result<(bool, u64), Error> {
+        // A recovery record opens only under its recovery key, which the store does not hold.
+        if domain == RECOVERY && n == 1 { return Ok((true, n)); }
         if domain != VOLUME && domain != KEYS {
             match self.slot_of(domain).and_then(|k| self.domains[k]) {
                 // Its key is destroyed: the next collection frees it.

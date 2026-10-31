@@ -19,6 +19,10 @@
 //!
 //! 1.4 (750-EFF-0021): `deliver-commit` answers with `delivered`, what the gateway read back from the file under its
 //! name once it was published, so the server gets the destination's own size and SHA-256 rather than a bare `ok`.
+//!
+//! 1.5 (751-EFF-0023): `update-begin`, `update-commit`, `update-apply` and `update-state`, a developer's release handed
+//! to `updater` (`update.wit` 1.3's `install-…`, `apply`, `status`) under the policy's `update apply` and the owner's
+//! `remote-update`, which the gateway and the updater each ask of `init`. Nothing of it lands in a file the gateway writes.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -28,7 +32,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:effector";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -213,6 +217,17 @@ impl Wire for Sample {
     const MAX: usize = <u16 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <List<Load, 48> as Wire>::MAX + <List<Space, 4> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.cpus.encode(w)?; self.busy_ns.encode(w)?; self.idle_ns.encode(w)?; self.uptime_ms.encode(w)?; self.memory_total.encode(w)?; self.memory_free.encode(w)?; self.services.encode(w)?; self.volumes.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { cpus: Wire::decode(r)?, busy_ns: Wire::decode(r)?, idle_ns: Wire::decode(r)?, uptime_ms: Wire::decode(r)?, memory_total: Wire::decode(r)?, memory_free: Wire::decode(r)?, services: Wire::decode(r)?, volumes: Wire::decode(r)? }) }
+}
+
+/// The updater's view (1.5), as its `status` gives it: the running slot (`A`, `B`, or 0), whether it runs on trial, its
+/// version; the slot the newer boot record names and whether that is confirmed; the version staged in the other slot;
+/// the last failure. All zero without the gateway's client of the updater.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UpdateState { pub slot: u8, pub trial: bool, pub running: u64, pub recorded: u8, pub confirmed: bool, pub staged: u64, pub failure: Text<64> }
+impl Wire for UpdateState {
+    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <Text<64> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.trial.encode(w)?; self.running.encode(w)?; self.recorded.encode(w)?; self.confirmed.encode(w)?; self.staged.encode(w)?; self.failure.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, trial: Wire::decode(r)?, running: Wire::decode(r)?, recorded: Wire::decode(r)?, confirmed: Wire::decode(r)?, staged: Wire::decode(r)?, failure: Wire::decode(r)? }) }
 }
 
 /// The machine's state for the heartbeat. Allowed to both clients; changes nothing.
@@ -528,6 +543,64 @@ pub fn connection(endpoint: Endpoint, connected: bool, active: bool) -> Result<(
     wire::check_reply(&reply, [0, 0], false).map(drop)
 }
 
+/// Starts handing `updater` a release bundle of `size` bytes and the announced SHA-256 (1.5), if the policy says
+/// `update apply` and the owner's `remote-update` is on (else `denied`, and nothing reaches the updater). `write`
+/// streams it; `close` and `cancel` drop it.
+pub fn update_begin(endpoint: Endpoint, origin: &Origin, size: u64, sha256: &str) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        origin.encode(&mut w).ok_or(SysError::Invalid)?;
+        size.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<64>(sha256, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 22 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Has `updater` check the whole bundle and stage the release it holds in the other slot: the version staged.
+pub fn update_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<u64, Error>> {
+    let words = [23 | MAJOR << 8 | ((handle) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0x0, 0xffffffffffffffff], false)?;
+    Ok(Ok(wire::field(&reply, 1, 0, 64) as u64))
+}
+
+/// Has `updater` boot the staged release on trial with `tries` (1 to 9), as `update-begin` allows. `init` restarts
+/// the machine at once, so usually only a refusal is answered.
+pub fn update_apply(endpoint: Endpoint, origin: &Origin, tries: u8) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        origin.encode(&mut w).ok_or(SysError::Invalid)?;
+        tries.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 24 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// The updater's view (above). Allowed to both clients; changes nothing.
+pub fn update_state(endpoint: Endpoint) -> Result<UpdateState> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 25 | MAJOR << 8, &buffer, length)?;
+    let length = wire::buffer_reply(&reply, 86, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <UpdateState as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 32782;
 
@@ -555,6 +628,10 @@ pub enum Request<'a> {
     Sample,
     Load,
     Connection { connected: bool, active: bool },
+    UpdateBegin { origin: Origin, size: u64, sha256: Text<64> },
+    UpdateCommit { handle: u32 },
+    UpdateApply { origin: Origin, tries: u8 },
+    UpdateState,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -736,6 +813,36 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0x30000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Connection { connected: wire::field(&words, 0, 16, 1) != 0, active: wire::field(&words, 0, 17, 1) != 0 }, Call::words(request, cap)))
         }
+        22 => {
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let origin = <Origin as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let size = <u64 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let sha256 = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::UpdateBegin { origin, size, sha256 }, call))
+        }
+        23 => {
+            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::UpdateCommit { handle: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
+        }
+        24 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let origin = <Origin as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let tries = <u8 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::UpdateApply { origin, tries }, call))
+        }
+        25 => {
+            let (call, length) = wire::take_buffer(request, cap, 86, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::UpdateState, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -819,4 +926,19 @@ pub fn reply_load(call: Call, value: u32) -> Result<()> {
 }
 pub fn reply_connection(call: Call) -> Result<()> {
     wire::finish(call, [0, 0])
+}
+pub fn reply_update_begin(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_update_commit(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, ((value) as usize) << 0])
+}
+pub fn reply_update_apply(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_update_state(call: Call, value: &UpdateState) -> Result<()> {
+    wire::reply_buffer(call, |w| value.encode(w))
 }

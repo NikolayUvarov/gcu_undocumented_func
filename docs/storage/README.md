@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -82,7 +82,7 @@ A directory is a set of named files and subdirectories under one root CID (`libm
   - The store's walk is the tree's. A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`.
   - **A walk in the store takes at most four steps for each block its index can hold, and 64 more.** A tree that needs more is refused as out of shape (`invalid`), with nothing written. So a walk's work is bounded by the medium's size (MC-5.1). By count, not run here: a 3 GiB object of distinct chunks takes about 199 000 steps of the about 790 000 its index's 225 654 slots give. A collection marks every block a retained directory reaches, so a directory's files are retained by the name or pin that holds it.
   - An owner is charged the bytes of the files under a directory it retains; a mount reads them again with `tree::size`.
-- **Not built yet:** a working tree in memory, the publication of a changed tree by compare-and-swap, `storefs` (a `vfs.wit` provider) and the shell's commands. The store built for the platform takes directories, but no program there makes or reads one yet, and no QEMU suite tests them (MC-12.1, 12.3).
+- **Not built yet:** the `storefs` service (a `vfs.wit` provider); its logic is host-tested (below). On the platform, `blocks tree` makes and reads directories through a working tree (next section).
 
 Evidence: host tests of the code, not a proof (MC-12.2).
 - `tests/tree_host.rs`:
@@ -98,6 +98,86 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - a directory node is stored and found again by a mount, and a `dag-cbor` block of neither schema is refused;
   - a tree that takes one step more than the store gives is refused for a publication, a pin and a commit, and one within is published.
 
+## A working tree — host-tested, run in QEMU on x86 and aarch64 (311-STO-0029)
+
+A writer changes a published tree through a **working tree** (`libmind/src/worktree.rs`), the second step of [311](../../issues/311-storefs-a-file-face.md). A published root is never changed in place (MC-4.9): the edits are made in memory and published as a new root.
+
+- **It starts** from the root a name's version gave, and that version; none and 0 are the empty tree of a new name.
+- **Edits:** put a file (an object the store holds, with its size: its root is read and the size checked), replace a file with another in one edit (or put it under a name not taken; 311-STO-0032), make a directory, remove a file or an empty directory, move an entry. A path is names separated by `/`, each one a name a directory node takes; a leading `/` is allowed, and the root is the empty path. Each refusal changes nothing:
+  - a name a directory refuses, or the root where an edit needs an entry (`Name`);
+  - a missing parent (`NotFound`), a file where a directory belongs (`NotDirectory`);
+  - a name taken (`Exists`): a put does not replace a file, a replace does, and a replace does not take a directory's place;
+  - a directory removed with entries (`NotEmpty`), or moved into itself or under it (`Inside`).
+- **What it holds:** each directory an edit changed, with every directory above it, as its node; what no edit touched stays in the store. **Reads** (lookup and list) see the edits and read the rest from the store. A held directory has no CID until it is written out.
+- **Bounds.** It holds at most 64 directories (`DIRS`) and 64 KiB of their nodes and names (`BYTES`). An edit past them is refused (`Full`) with nothing changed, until a publication lets them go. A directory over a block, or more than 32 directories down from the root, is refused (`TooLarge`). A move checks the depth of the place it goes to, not the height of what it moves: a tree too deep is refused by the store's walk at the publication (`invalid`), and nothing is published. The tree takes about 85 KiB, so a program keeps it in a static.
+- **Write-out** puts the held directories, deepest first, and returns the new root. A subtree no edit touched keeps its CID and is not written again.
+- **Publication** is the name's compare-and-swap: `publish` with the version read. If another writer published since:
+  - nothing is published, and the writer is told the version it read and the current one: a conflict, never a merge;
+  - its working tree stays as it was. What to do next is the writer's, for example to read the new version and make its edits again;
+  - the nodes it wrote out are retained by nothing, and a collection frees them once their lease (60 s) has ended.
+- **`blocks tree`**, each change one publication:
+  - `ls <name> [path]` prints `FILE <bytes> <cid> <name>` or `DIR <entries> <cid> <name>` for each entry, then `<n> ENTRIES IN /<path> OF <name> VERSION <v>`;
+  - `cat <name> <path> <file>` copies a file out, every block checked, and prints `READ <n> BYTES SHA-256 <hex>`;
+  - `put <name> <file> <path>`, `mkdir <name> <path>`, `rm <name> <path>`, `mv <name> <from> <to>` print `PUBLISHED <name> VERSION <v> ROOT <cid> (<durability>)`, or `CONFLICT <name>: READ AT VERSION <r>, NOW AT <c>; ROOT <cid> NOT PUBLISHED`;
+  - a change reads the name's current version, or a version the name keeps, given as the last word (0: the empty tree of a new name). A test plays a second writer so.
+- **Not built yet:** sharded directories, and changes to several names at once from working trees (a commit). `storefs`'s logic is the next section.
+
+Evidence: host tests of the code, not a proof (MC-12.2).
+- `tests/worktree_host.rs`, through the store's own logic on a simulated medium:
+  - each edit is read at once, and each refusal above leaves what the tree holds and every read unchanged;
+  - `DIRS`, `BYTES`, a directory over a block and the depth are refused with nothing changed, and the edit refused for a bound is made after a publication;
+  - a write-out's root decodes and walks (`tree::walk`) with every block stored; an edit deep in one subtree writes the directories down to it and no others, and every other CID stays;
+  - of two writers from one version, the second is told of the conflict with both versions, and nothing of it is published. A collection after the lease frees its nodes, and every version kept stays whole;
+  - a medium stopped at each write of a publication, the write not made or only its first sector, mounts with the old root or the new one, each whole, never a mix;
+  - 2400 random edits, replaces among them, read and publish as a model of them does;
+  - a replace keeps the directory's entries and their order, is refused as the other edits are, and past `DIRS` holds no stored directory.
+- The QEMU `store` suite (x86 and aarch64):
+  - `blocks tree` makes two directories and three files under a name, one of them two blocks under a node, and lists them;
+  - each file reads back, its SHA-256 checked by the suite, and the name's history holds each root;
+  - a change read at an older version is refused as a conflict, and the name is unchanged;
+  - once the leases have ended, a collection frees the refused tree's root, and every file is still read;
+  - a move and two removals are published, and a directory with entries is not removed.
+
+## Files over the store: `storefs` — host-tested, built; not in the images and not run yet, waiting for the kernel track (311-STO-0032)
+
+`storefs/src/fs.rs` is the logic of a service that is to serve `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues/311-storefs-a-file-face.md). `storefs/src/main.rs` answers `vfs.wit` 2.6's calls with it, and builds for x86 and aarch64. It is not put on the images: a program there that is not a boot image is listed as one the user runs. Its start by `init` as a boot image with a client of the store, and the clients it lends, are 311-KRN-0190; `vfs.wit` 2.6's error `conflict` came with 311-KRN-0189.
+
+- **How a files client reaches it** (the kernel track's answer, 2026-10-30): `mind::fs` asks `vfs_server` first, and asks `storefs` for a volume `vfs_server` answers `not-found`, if the program holds a client of it. So `storefs` answers `not-found` for the boot disk's empty name, `ram`, `log` and `models`, whatever their case; any other volume `v` is the store's name `fs/<v>`.
+- **A volume** is 1 to 16 bytes of `A-Z a-z 0-9 . _ -`, its case ignored, and none of `vfs_server`'s; another name is `not-found`. Its tree is the name `fs/<volume>`, in lower case.
+- **`root`** opens a tree of its own, a working tree (above) at the name's current version, or the empty tree if the name has none. The handles opened from it share that tree.
+- **A tree follows its name:** before each call on it, a tree that holds no unpublished data moves to the name's current version if another writer published since. Its open files are read again at their paths, and a handle whose entry is gone, or no longer a file or a directory as it was, is closed, as a removal closes it. A tree that holds unpublished data stays at the version it read until it publishes.
+- **Handles** belong to the client that opened them, by its PID and badge: another client's request with one is `invalid`. Whether a root may write is the service's predicate over the client's badge and the volume. A handle never allows more than the one it came from: `write`, `create` and `truncate` need a directory handle that may write, and a file handle may write only if opened with `write`. A path never leaves its handle's directory: `.` and `..` are `invalid`.
+- **Reads** go to the store through the working tree, every block checked against its CID. `list` gives at most 16 entries from an index, in the order of the names; an empty page is the end. A file open in the tree is listed, and `stat`ed, with the size written to it.
+- **A change of a directory is one publication** by the name's compare-and-swap, made by the call itself: `open-dir` with `create` (every directory it makes), `open` that makes or empties a file, `remove` and `rename`. A removal closes the handles of what it removes, and the handles of what moves follow it.
+- **A file's data** is held as the chunks of 16 KiB it changed; the rest is read from the object it was. The handles of one file in one tree share what is written. At the file's `flush` or `close`, through a handle that may write, it is stored as an object, put in the tree in place of the old one in one edit, and published. A directory's `flush` stores every file written below it and publishes them in one version. A file the working tree cannot hold for its bounds is put after the files before it are published, so that flush publishes twice. A flush through a handle that may not write publishes nothing.
+- **A conflict:** if another writer published since the tree was read, nothing is published, and the call that would have published is told (`Conflict`). The tree drops what it did not publish and moves to the name's current version, never merging. A file whose written data was dropped so answers the same conflict to every call until it is closed, and its `close` closes it. The writer then makes its change again from the current version. What a refused publication stored is retained by nothing, and a collection frees it once its lease (60 s) has ended.
+- **Bounds,** each refused with nothing changed:
+  - a file is at most 64 MiB (`FILE_MAX`) after a write or a truncation: `no-space`;
+  - 4 trees (`TREES`), 64 handles (`HANDLES`) and 32 open files (`FILES`), and a client (PID and badge) holds at most half of each: 2 trees, 32 handles, 16 files: `handles`;
+  - 16 chunks of written files at once (`CHUNKS`, 256 KiB), a client at most 8 (128 KiB), until a flush lets them go; the working tree's `DIRS` and `BYTES`: `no-space`;
+  - a handle's path of 512 bytes (`PATH`), a directory over a block, a tree past 32 directories: `no-space`.
+
+  The state takes 786 KiB, all zeros when new, so a program keeps it in `.bss`.
+- **Errors** are the logic's own, each with the error of `vfs.wit` 2.6 that says it. A conflict is `conflict`: nothing of the write was stored under the name, and the client reads the file again and writes once more.
+- **The service** answers `check`, `scope`, `format`, `fill` and `adopt` with `denied`: they are `vfs_server`'s. `volume` gives the label `MIND STORE`, no FAT type and no room (the store's own `stat` says it), and a chunk as the cluster. A directory's size is 0, as on FAT, and no time stamps are kept (`modified` is 0). Until 311-KRN-0190, the user's badge writes every volume and every other badge reads, and the store's client is looked for where a program's is (`SLOT_BLOCKSTORE`); its first line is `[STOREFS] READY …`.
+- **Not run yet:** the service, and its files client in `mind::fs` (the kernel track's).
+
+Evidence: host tests of the code, not a proof (MC-12.2).
+- `tests/storefs_host.rs`, through the store's own logic on a simulated medium:
+  - `root` (refusing `vfs_server`'s volumes), `open-dir` (directories made on the way), `open` by each mode, `read`, `write` with a gap read as zeros, `truncate` shorter and longer, `stat`, `list` sixteen at a time, `remove`, `rename` across directory handles, `volume`, and their refusals; each change of a directory one version of the name, and a file's data published at its close;
+  - a file of three chunks and more, written in pieces, flushed and read back by SHA-256 through its handle, another client's root and the store alone; changed across a chunk's end, and read so through a reader's open file; 400 random writes, truncations and flushes read as a model of them does;
+  - the flush of a directory stores the files written below it and publishes them in one version; a directory's changes are published with no flush;
+  - a reader's open root, file and directory follow a writer's publications, and its handles of what the writer removed are closed; a tree holding unpublished data stays at its version;
+  - of two writers from one version, the second is told of the conflict, `io` on the wire, and the name keeps the first writer's tree and versions; the second tree drops its data and reads the new version, its other handle that held data answers the conflict to every call until closed, and it writes again and publishes;
+  - a directory made, a move and a removal each refused on its own call by a conflict, with nothing published, and made once the tree followed the name;
+  - a medium stopped at each write of a flush, the write not made or only its first sector, mounts with the old root or the new one, each whole, never a mix;
+  - every call with a handle of another PID, or of another badge, is `invalid`; a volume the badge may not write refuses every change; a handle opened to read refuses a write;
+  - each bound refused with nothing changed: `FILE_MAX` for a write and a truncation, each table and each client's share of it, the chunks, the path, a path of 32 directories refused at the last leaving none; three files that the working tree cannot hold at once published in two versions;
+  - a second client gets its share of trees, handles, files and chunks while the first holds its own;
+  - a volume whose root is not a directory is refused;
+  - the error mapping, checked against the generated `vfs.wit` 2.6 enum.
+- `tests/dag_host.rs`: a builder reset between objects makes each one as a new builder does.
+
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
 
 `blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 2.3 over a block client: `put` takes a content type (`raw` or `dag-cbor`, a node checked before it is stored) and bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. `init` starts it at boot over a RAM disk of its own, `ramdisk#1` ([300-KRN-0001](../../issues-done/300-KRN-0001-blockstore-at-boot.done)). The shell holds a client with every right (slot 25) and lends it for `REQUEST_BLOCKSTORE`. The `blocks` tool uses it.
@@ -107,7 +187,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 | Sectors | Content |
 |---|---|
 | 0 | superblock: `MIND-STO`, layout version (u16), sector size (u16), the key's source (0: none yet, 1: in the clear), three zeros, the SHA-256 of these 16 bytes; the volume key (32 bytes); a check, 32 zero bytes sealed under it (nonce, ciphertext, tag); the SHA-256 of the 140 bytes before it |
-| 1 … | sealed records, each starting on a sector (below, Sealed records). Inside its seal, a block record is `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes. Name records are described under Names, commit records under Several names at once, pin records under Retention, key records under Memory domains. Each kind of record is checked by its seal, then by its own SHA-256 and the layout version in it |
+| 1 … | sealed records, each starting on a sector (below, Sealed records). Inside its seal, a block record is `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes. Name records are described under Names, commit records under Several names at once, pin records under Retention, key records under Memory domains, recovery records under The recovery key. Each kind of record is checked by its seal, then by its own SHA-256 and the layout version in it |
 
 A store of layout 1 to 3 is refused and left as it is (MC-4.13), with `device` on the wire; the service logs `NOT MOUNTED: A STORE OF LAYOUT 3; THIS BUILD READS LAYOUT 4 AND CONVERTS NONE`. Nothing converts it (AGENTS.md section 3, before the first release). Layout 3 lacked the domains: a build of it would have read a domain's records as corrupt and freed them. The RAM disk starts blank at every boot; a VirtIO disk or a partition that holds an older layout is written again by hand.
 
@@ -163,7 +243,7 @@ A damaged record is otherwise found only when it is read or when the store mount
 - a record of a domain with no key record is counted corrupt, as a mount counts it;
 - non-blank sectors outside every record are counted damaged.
 
-Nothing is written, and nothing is repaired: one copy cannot be repaired from itself ([309](../../issues/309-copies-scrub-and-repair.md)'s copies will). `stat`'s `corrupt` and `damaged` stay the mount's and the reads' counts; the scrub reports its own.
+Nothing is written, and nothing is repaired: one copy cannot be repaired from itself. An import of a copy in a file repairs the blocks it holds (next section). `stat`'s `corrupt` and `damaged` stay the mount's and the reads' counts; the scrub reports its own.
 
 **When it runs (MC-5.1).**
 - **Between requests.** After 20 ms without a request, the store checks the records of the next 256 sectors, ending a step at the end of the record or the 33-sector window it is in, then waits again; a request is always served first. A pass starts a day after the last one ended, the mount counting as one.
@@ -182,6 +262,57 @@ Evidence:
 
 Not tested on the platform: the scrub between requests, whose first pass starts a day after the mount. Its steps are the host tests' steps; its pacing is not measured.
 
+## Copies in a file — host-tested, run in QEMU on x86 and aarch64 (309-STO-0031)
+
+A copy of named roots in a file (`libmind/src/car.rs`, the second step of [309](../../issues/309-copies-scrub-and-repair.md)) brings back names a store lost, and repairs blocks a scrub or a read found damaged. It needs no second medium lent to the store: it is made and used by hand, with `blocks`.
+
+- **The format is CAR v1**, the IPLD content archive, so other tools read it:
+  - a header: a varint length, then DAG-CBOR `{"roots": [link], "version": 1}`. Its one root is the names node;
+  - sections, each a varint length, a CID's binary form and its block: the names node first, then every block under each name's root, in the order `tree::walk` visits them. A block met twice is written twice.
+- **The names node** is one DAG-CBOR block `{"v": 1, "names": [[name, version, root], ...]}`:
+  - 1 to 8 names (one `snapshot` reads 8 at one point), sorted by their bytes, each once, each a name the store takes;
+  - `version`: the one the name was at in the store it was exported from, from 1;
+  - `root`: a link, written as an object's node writes its links;
+  - `"v"` is the schema's version, and another is refused (MC-4.13). The node is the copy's own, not a block the store takes.
+- **A copy is checked whole** before anything of it is put:
+  - the header and the names node only if re-encoding them gives exactly their bytes. A CAR of another version (CAR v2) is refused;
+  - every section's CID a supported one, its length at most a CID and a block (16 KiB) in its shortest form, its bytes matching its CID;
+  - each name's root is walked (`tree::walk`) over the copy's own sections. Each block the walk visits must be the next section, and each node it reads is checked against its schema and its place. So a copy cut short at any byte, even at a section's end, missing a block, or with one out of the walk's order, is refused, and so is a section after the last;
+  - a refusal names its error and the byte its section starts at.
+- **`blocks export <file> <name>...`** reads the names' current roots at one point (`snapshot`). It then writes the copy, each block read from the store and checked against its CID, each walk within the steps the store gives its own. It prints `EXPORT <name> VERSION <v> ROOT <cid>` for each name, then `EXPORTED <n> NAMES, <b> BLOCKS, <bytes> BYTES TO <file>; SHA-256 <hex>`.
+  - A name that does not exist or is removed, one the store does not take, one given twice, or more than 8 are refused, and nothing is written.
+  - The file is made at the first byte written, so a refusal before it leaves a file of that name as it was; a copy that failed part-way is removed.
+- **`blocks import --check <file>`** checks the copy and puts nothing. It prints `NAME <name> VERSION <v> ROOT <cid>` for each name, then `CHECKED <file>: <n> NAMES, <b> BLOCKS, <bytes> BYTES; SHA-256 <hex>`, or `blocks: import --check: <file> refused at byte <n>: <error>`.
+- **`blocks import <file>`:**
+  - checks the copy whole first, and puts nothing if any of it is refused;
+  - reads it again and puts each block, after reading it from the store. A block the store holds damaged is found corrupt by that read, leaves the store's index, and the put stores it again: it is repaired. The second read must give the same bytes as the first (`changed`), or nothing is published;
+  - reads the names at one point. A name at the copy's root already is left: `SAME <name> VERSION <v> ROOT <cid>`. A name with no root, new or removed, is published at the copy's root by compare-and-swap from the version it is at: `PUBLISHED <name> VERSION <v> ROOT <cid> (<durability>)`. A name at another root is left as it is, never overwritten: `CONFLICT <name>: VERSION <v> ROOT <cid>, NOT <cid>; LEFT AS IT IS`. A name another writer publishes between that read and the publication is read again and reported the same way;
+  - prints `IMPORTED <file>: <n> NAMES, <b> BLOCKS (<s> STORED, <r> REPAIRED, <h> HELD), <bytes> BYTES; SHA-256 <hex>`;
+  - after a repair, asks for a collection, which frees the damaged copies, so the next scrub does not find them: `COLLECTED <k> BLOCKS: THE DAMAGED COPIES FREED`. A block a mount found damaged has left the index already: the import stores it as one the store lacked, and the next collection frees the damaged copy.
+- **A copy is in the clear.** Its blocks and names are not sealed (308-STO-0021): whoever reads the file reads them. It is kept where the user puts it, and is as safe as that place. A memory domain is not exported (`blocks -d <id> export` is refused), as its copy would outlive the domain's forgetting (308-STO-0023).
+- **Independence (MC-4.8).** A copy guards against the loss of the store's medium only on another medium:
+  - a file on the boot volume is on another medium than the RAM disk store; a file on `ram:` is lost with a reset as the store is;
+  - a store on a partition of the stick (307-STO-0020) and a file on the stick's boot volume share one medium: losing the stick loses both;
+  - a copy is as old as its export. What was published after it is not in it, and an import does not take a name back to it: a name moved on is a conflict.
+- **Not provided:** copies made by the store itself, or on a medium lent to it (309); a name brought back at its old version (an import publishes from the version the name is at here, so into an empty store at 1). The blocks an import puts are retained by their leases (60 s) until its names are published; an import that takes longer is not tested.
+
+Evidence: host tests of the code, not a proof (MC-12.2).
+- `tests/car_host.rs`, through the store's own logic on a simulated medium:
+  - a copy written by hand from the CAR v1 and DAG-CBOR specifications is what an export writes, byte for byte, and what a check reads;
+  - every cut of it and every bit of every byte changed are refused; in a copy of a tree, cuts at and around each section and every 97 bytes, and a changed byte in each section's length, CID and block;
+  - a CID of another hash, content type, version or digest length, a section longer than a block, a length that cuts its CID or is not in its shortest form, a header not exactly its encoding, CAR v2, and sections out of order or after the last are refused, each with its error and place;
+  - a names node unsorted, with a name twice, not in shortest forms, with its keys out of order or another key, of another schema version, with a name the store does not take, at version 0, or with none or more than 8 names, is refused;
+  - each block of a tree left out, or moved one place on, is refused; a directory read again after more nodes than a check remembers is found;
+  - export, then import into an empty store, gives the same names at version 1, the same roots and each name's blocks in the same order; imported again, nothing is written; the imported store exports the same copy;
+  - a chunk damaged on the medium is found by a scrub; the import repairs it, its collection frees the damaged copy, the next scrub finds nothing, and a new instance mounts the medium whole. A block a mount found damaged is stored again;
+  - a name at another root is left and reported, a removed one is published again, one at the copy's root is left; a name another writer published between the read and the publication is a conflict, or the same at the copy's root;
+  - a copy with a bad section, wherever it is, or cut short, puts nothing (no write on the medium); one that changed between its check and its import publishes nothing;
+  - an export refuses names that do not exist or are removed, are not the store's, are given twice or are more than 8, and a root with a damaged or missing block.
+- The QEMU `storefaults` suite (x86 and aarch64): `obj` exported to `ram:` is the CAR v1 the suite writes from the specifications, byte for byte (its SHA-256). A chunk damaged on the medium is found by `blocks scrub` and repaired by `blocks import` of that copy (1 repaired, the damaged copy collected); the next scrub finds nothing, and the object reads back whole.
+- The QEMU `store` suite (x86 and aarch64): a tree and a file under two names exported to the boot volume; after a reboot, with the store's RAM disk blank, an import publishes each at its root and every file reads back (its SHA-256 checked by the suite). An import again changes nothing, and a name published since at another root is left as it is.
+
+Not run on aarch64 yet.
+
 ## Names — run on the platform (302, 303-STO-0003, 0004)
 
 A **name** is a stable entity, its **versions** are the immutable roots it has pointed at, and its **head** is the current one (MC-4.3). The three are kept distinct:
@@ -192,7 +323,7 @@ A **name** is a stable entity, its **versions** are the immutable roots it has p
 - **Compare-and-swap.** `publish(name, expected, root)` succeeds only if `expected` is the name's current version (0 for a new name), and returns the new version. Of two publishers that read the same version, the first wins and the second gets `conflict`. Nothing of the refused publication is written, and the loser decides what to do: read the new head, merge, try again. This is the declared protocol for concurrent updates.
 - **Only complete roots (MC-4.4).** Before a publication, the store checks with `dag::complete` that every block of the root's object is stored. Every node is read and checked against its CID and the shape, and every chunk is looked up. A missing block is refused with `incomplete` and a tree out of shape with `invalid`. A name therefore never points at data the store has not received.
 - **Durability.** Blocks are flushed when they are put, and the name record is flushed before the reply. The durability level is what the device's flush gives; on the RAM disk that lasts until the next reset.
-- **Record (layout 3).** Sealed in one sector, written only into a blank sector: `MIND-REF`, layout version (u16), name length (u16), version (u64), the root's CID (36 bytes, zero for a removal), the root of the version before (36 bytes, zero for the first), the name padded with zeros to 64 bytes, the kind (0: the version points at its root, 1: it removes the name), zero, the owner (the publisher's badge, u16), and the SHA-256 of these 160 bytes.
+- **Record (layout 4).** Sealed in one sector, written only into a blank sector: `MIND-REF`, layout version (u16), name length (u16), version (u64), the root's CID (36 bytes, zero for a removal), the root of the version before (36 bytes, zero for the first), the name padded with zeros to 64 bytes, the kind (0: the version points at its root, 1: it removes the name), zero, the owner (the publisher's badge, u16), and the SHA-256 of these 160 bytes.
 - **History (303-STO-0003, MC-4.5).** A name keeps its newest 4 versions: the current one and up to 3 before it. Each record links the root of the version before it, so the links are explicit on the medium. When mounting, the newest valid version of each name is current and the next valid ones are kept up to 4; a collection frees the records of older versions. `history` lists the kept versions, newest first. Every kept version retains its object (Retention, below).
 - **Removing a name (303-STO-0004, MC-4.8).** `unpublish(name, expected)` is a compare-and-swap like a publication, and writes a version without a root. The name then resolves to `not-found` and retains nothing; it keeps only that version, and a collection frees the records before it. Removing a name deletes a reference, not data: its objects go only when a collection finds that nothing else retains them (another name, a pin, a lease). Publishing from the removal's version creates the name again with the next number.
 - **A damaged record.** If the latest record of a name does not open, it is counted as corrupt (`stat`; damaged if its frame is gone) and the version before it is current. That loses a confirmed change on a damaged medium, but the loss is reported, not silent. Copies on other media are not provided yet (MC-4.8).
@@ -220,8 +351,8 @@ Every record is sealed with ChaCha20-Poly1305 (RFC 8439; the RustCrypto `chacha2
 | Bytes | Content |
 |---|---|
 | 0–7 | `MIND-SLD` |
-| 8–9 | layout version (u16, 3) |
-| 10–11 | domain (u16): 0, the volume's; a memory domain's number; 0xFFFF, the domains' key records (below) |
+| 8–9 | layout version (u16, 4) |
+| 10–11 | domain (u16): 0, the volume's; a memory domain's number; 0xFFFF, the domains' key records (below); 0xFFFE, the recovery records (below, host-tested only) |
 | 12–15 | the sectors the record covers (u32) |
 | 16–27 | nonce |
 | 28–43 | tag |
@@ -231,7 +362,7 @@ Then the record and zeros up to the end of its last sector, encrypted. So the fr
 - **The nonce** is the first 12 bytes of an HMAC-SHA-256 of the associated data and the sealed bytes, under a key derived from the volume key. A write needs no random source, which a qemu64 CPU and the i7-930 lack. The same nonce comes back only for the same record at the same place, which seals to the same bytes.
 - **Keys.** Two keys are derived from the volume key by HMAC-SHA-256: one seals, one makes nonces.
 - **The volume key** is made at the first mount of a blank medium, or of a partition `make_usb_image.py` formatted with no key yet. It is random where the processor gives random numbers (RDRAND, RNDR). Elsewhere it comes from the medium's size and the time, and the log says so (`VOLUME KEY MADE WITHOUT RDRAND`).
-- **The key is kept in the superblock in the clear.** That is **no confidentiality:** whoever reads the medium reads the key and opens every record. What this stage gives is the format, the cipher on the platform and their cost; [308-STO-0022](../../issues/308-STO-0022-the-volume-key-held-by-keystore.md) moves the key to `keystore`. The service's ready line says `SEALED, KEY IN THE CLEAR`.
+- **A key kept in the superblock is in the clear.** That is **no confidentiality:** whoever reads the medium reads the key and opens every record. A RAM disk's key is kept there, and so is any key `keystore` does not keep; the service's ready line then says `SEALED, KEY IN THE CLEAR`. Any other medium's key is kept by `keystore` (next section).
 - **A wrong key.** The superblock holds a check, 32 zero bytes sealed under the key. A key that does not open it is refused at mount with `key` (`blockstore.wit` 2.1), and nothing is read or written. A store of damaged records is not mistaken for one of another key.
 - **Corrupt and damaged.** A record whose frame is whole but whose seal does not open is corrupt. Sectors outside any frame are damaged. A block found corrupt at a read is named by its CID from the index; one found at a mount, only counted.
 - **A collection** opens every record to learn what it is, and frees a record that does not open unless the index names its place.
@@ -245,13 +376,13 @@ Evidence: `tests/blockstore_host.rs` over a stand-in cipher (a keystream of spli
 
 The platform's cipher is the crate, tested by its own project. On the platform, the QEMU `store` suite (x86 and aarch64) puts, reads and names objects through sealed records, and finds them again after a restart without making a key again. The `storefaults` suite finds each record it damages by opening frames (above), and shows a wrong key refused.
 
-**Not provided:** confidentiality of the medium (the key is in the clear). What sealing protects and what it does not is in [the threat model](../profile/threat-model.md) (308-STO-0024).
+**Not provided:** confidentiality of a medium whose key is in the clear. What sealing protects and what it does not is in [the threat model](../profile/threat-model.md) (308-STO-0024).
 
-## The volume key kept by `keystore` — built; on the platform once `init` lends the client (308-STO-0022)
+## The volume key kept by `keystore` — run on the platform (308-STO-0022)
 
 A medium that outlives the machine's memory keeps no key: `keystore` keeps it as the store's own secret.
 - **Key source 2, kept.** The superblock holds an id of 8 random bytes where the key would be, zeros after it, and the check as before. The key is `blockstore`'s secret `volume-<id in hex>` in `keystore` (`keystore.wit` 1.4's `secret-put` and `secret-get`), sealed there under a key from the device key.
-- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take ([308-KRN-0183](../../issues-done/308-KRN-0183-a-secrets-client-for-blockstore.done), the kernel session's). Until it does, every medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
+- **The client.** `init` lends the store a secrets client in its slot 3 under a name no loaded program can take, whenever `keystore` runs ([308-KRN-0183](../../issues-done/308-KRN-0183-a-secrets-client-for-blockstore.done), the kernel session's, since round 46). Without it, a new medium keeps its key in the clear, and the log says why (`IN THE SUPERBLOCK: NO SECRETS CLIENT`).
 - **Which key is kept.** At the first mount of a blank medium, or of a partition with no key yet:
   - a RAM disk keeps its key in its superblock, as nothing of it outlives a reset and a restarted store must find it;
   - any other medium's key is kept, if it is random and `keystore` keeps it;
@@ -264,8 +395,8 @@ A medium that outlives the machine's memory keeps no key: `keystore` keeps it as
   - another key under the id does not open the check: `key`.
 - **The ready line** says `SEALED, KEY KEPT BY KEYSTORE` or `SEALED, KEY IN THE CLEAR`; a key made at this mount is logged with where it went and why.
 - **What it does not give:**
-  - the device key is kept on the boot volume in the clear until a TPM seals it (351-NET-0006). So a store disk alone opens nothing, but with the boot volume beside it, it opens. The stick's own store partition (307-STO-0020) is beside it;
-  - a recovery key and a passphrase are still to come, with `APP`;
+  - where there is no TPM, the device key lies on the boot volume in the clear. So a store disk alone opens nothing, but with the boot volume beside it, it opens. The stick's own store partition (307-STO-0020) is beside it. Where there is a TPM, it seals the device key (351-NET-0006), and the store opens only on that TPM;
+  - a recovery key and a passphrase are still to come, with `APP` and `KRN` ([308-STO-0028](../../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)); the store's part of the recovery key is host-tested (next section), but no program can make or use one. Until then, a medium whose machine is gone or whose device key was made anew stays closed;
   - the key of a medium that is gone stays kept until deleted.
 
 Evidence, `tests/blockstore_host.rs` (a keeper in memory):
@@ -274,7 +405,53 @@ Evidence, `tests/blockstore_host.rs` (a keeper in memory):
 - `only_a_random_key_is_kept_and_only_by_a_keeper_that_keeps_it`: a derived key and a refused one stay in the clear;
 - `a_kept_superblock_with_bytes_where_the_key_would_be_is_refused`.
 
-Not run on the platform: no secrets client is lent yet. The QEMU checks of [308-STO-0022](../../issues/308-STO-0022-the-volume-key-held-by-keystore.md) come with 308-KRN-0183.
+On the platform, the QEMU `tls` suite (x86 and aarch64), on a raw image with a blank store disk beside it:
+- **its device key check** (308-KRN-0183): the store's volume key is kept as `volume-…`, read back at the next boot, and is not on the medium. Another program's secrets client finds none of it, nor opens the store's file copied under its own name. Under a new device key it opens no more;
+- **its TPM check** (swtpm): the disk is made at a boot without a TPM, and an object is put and named. The disk mounts, and the object reads back, after TPM A sealed the device key, and again under A. Under TPM B's new device key it is not mounted (`NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS volume-…`), and the object is not read (`key`).
+
+These are tests of the configurations named, not a proof (MC-12.2). The device key on the boot volume beside the disk, without a TPM, is not a protection, as said above.
+
+## The recovery key — host-tested, not on the wire yet (308-STO-0028)
+
+**No program can make or use a recovery key yet.** What follows is the store's own part, in `blockstore/src/store.rs` and `libmind/src/blockstore.rs`, tested on the host only. The wire (`blockstore.wit` 2.4), who may call it, and how the console shows a key and takes it back wait for an agreement with `APP` and `KRN`. Until then, the previous section's limits stand on the platform.
+
+A medium whose volume key `keystore` keeps opens on no other machine, nor on its own once its device key is made anew. A recovery key, kept by the owner away from the machine, is the way back.
+
+- **The key** is 16 random bytes. Without a random source none is made (`no-random`). Only a volume key kept off the medium gets one; a store whose key is in the superblock is refused (`invalid`).
+- **Its text form** (`mind::blockstore::recovery_text` and `recovery_parse`) is 32 characters of Crockford's base32 in 8 groups of 4, joined by `-`, for example `000G-40R4-0M30-E209-185G-R38E-1YZ4-BJS6`. They encode the 16 bytes and then the first 4 bytes of their SHA-256, a check. Typing it back ignores case, `-` and spaces, and reads `I` and `L` as 1 and `O` as 0. A `U` or any other character, a wrong length and a failed check are refused as typos, before any key is tried, so a typo is never mistaken for a wrong key.
+- **A record in the log, not the superblock.** The store never writes over a stored sector, and a torn write of sector 0 would lose the whole medium. So the volume key sealed under the recovery key is a record like the others, written into blank sectors:
+  - its frame's domain is 0xFFFE;
+  - inside its seal: `MIND-RCV`, the layout version (u16), six zeros, the volume key (32 bytes), and the SHA-256 of these 48 bytes;
+  - it is sealed as every record is (Sealed records above), under the keys derived from K, where K is HKDF-SHA-256 (RFC 5869) of the recovery key with the superblock's kept id as salt and `MIND-STO recovery` as info;
+  - the recovery key itself is nowhere on the medium, and neither is the volume key.
+- **A mount** cannot open such a record. It keeps it, counts it neither corrupt nor damaged, and remembers where the first 4 lie. A collection keeps it, and a scrub neither opens nor reports it.
+- **A new key takes two steps,** so the owner never holds only a key that no longer opens the medium:
+  1. `recovery_new` writes the new record, flushes it and returns the key to be shown. Nothing is erased: the older keys still open the medium;
+  2. `recovery_keep` takes the key the owner types back. If it opens none of the recovery records, it is `key` and nothing is erased. Otherwise every record it does not open is erased as a freed record is erased (a free marker first, which a mount finishes after a cut).
+
+  So a cut leaves a key the owner holds opening the medium: the old one, both, or the new one once it was shown. The store mounts whole after it. Until the second step, each new key adds a record. Past the 4 places a mount remembers, the others are found by a scan of the frames. **Forgetting** erases every one.
+- **On another machine,** `recover` reads the superblock, opens the first recovery record the key opens, checks that the volume key in it opens the superblock's check, and gives it to that machine's keeper under the kept id. The medium then mounts there as its own. Nothing is written to the medium:
+  - a wrong key opens nothing (`key`), and nothing is kept;
+  - a keeper that refuses the key gives `kept`;
+  - a store whose key is in the clear has nothing to recover (`invalid`).
+- **The layout stays 4.** A medium without a recovery record is one this build wrote before, so nothing converts anything.
+
+Evidence, `tests/blockstore_host.rs`: host tests of the logic on a simulated medium with the stand-in cipher, not a proof (MC-12.2).
+- `a_recovery_key_opens_a_medium_whose_keeper_lacks_its_key`: a fresh keeper gives `kept`; the recovery key puts the volume key in it, writing nothing; the medium then mounts whole, and the object and its name read back. The record is opened as this section describes it, with HKDF checked against RFC 5869's first test case;
+- `a_wrong_recovery_key_opens_nothing_and_writes_nothing`: a wrong key, `key`; a forged record that opens but holds another volume key, `key`; a refusing keeper, `kept`; nothing written or kept; a key in the clear, `invalid`;
+- `a_recovery_key_is_written_down_in_groups_and_typed_back_with_a_check`: two texts worked out from the alphabet and SHA-256, not from the code; a round trip of 256 keys; the aliases; every character changed to every other one refused by the check; wrong lengths and characters refused;
+- `a_new_recovery_key_replaces_the_old_once_it_is_typed_back`: after a new key, both keys open the medium and there are 2 records; a key typed back wrong is `key` and the medium is unchanged; once the new key is typed back, the first opens nothing, and one record is left, also after a remount;
+- `a_rotation_cut_anywhere_leaves_the_owner_a_key_that_opens_the_medium`: a new key and its typing back, on a device that stops after 0, 1, 2… writes and flushes, until a rotation ends before the stop. The old key alone opens the medium, then both, then the new one alone, and a key the owner holds always opens it; each time the medium mounts whole with its keeper;
+- `a_recovery_record_is_sealed_kept_by_a_collection_and_not_reported_by_a_scrub`: neither key in any 16 or 32 bytes of the medium; a mount counts nothing corrupt or damaged, a whole scrub reports nothing, and a collection that frees a block keeps the record;
+- `a_recovery_key_needs_a_kept_key_and_a_random_source_and_is_forgotten_whole`: a key in the clear, no random source and a read-only medium refused with nothing written; two records forgotten, after which neither key opens anything;
+- `recovery_records_past_those_a_mount_remembers_are_found_and_erased`: 6 records of keys never typed back, all erased by a forget, and all but its own by the last key typed back, whose record the mount did not remember;
+- `a_domains_records_before_its_key_record_are_found`: a mount that scans twice counts a recovery record once.
+
+**What erasing a recovery record does not reach:**
+- a flash medium's spare blocks, which may keep the erased sector beneath its interface, as for a forgotten domain's key record;
+- a record whose frame is damaged: it is no longer taken for a recovery record (a damaged magic, for one, leaves its sector counted as damaged), so neither a replacement nor a forget erases it.
+
+**Not provided:** anything on the platform (above), and the passphrase where there is no TPM (308-STO-0028's other half).
 
 ## Memory domains — run on the platform (308-STO-0023)
 
@@ -381,7 +558,7 @@ A collection:
   A block leaves the index before its record is freed (175-STO-0012, audit A05). So a sweep cut by a read, write or flush failure leaves the running store with no erased block indexed: a later put of the same bytes writes them again rather than acknowledging what is gone. Evidence: `tests/blockstore_host.rs` fails each read and each write of a collection in turn and puts every block again (host only: nothing makes the RAM disk fail in the middle of a collection on the platform).
 - **Room.** The freed sectors are blank, and later records go into them.
 
-**Pin record (layout 3, sealed).** One sector: `MIND-PIN`, layout version (u16), zero, the id (u32), the owner (u16), zero, the root's CID (36 bytes), and the SHA-256 of these 56 bytes. When mounting, every valid pin record is a pin; a pin's id is never given again while its record exists, and ids go on from the highest found.
+**Pin record (layout 4, sealed).** One sector: `MIND-PIN`, layout version (u16), zero, the id (u32), the owner (u16), zero, the root's CID (36 bytes), and the SHA-256 of these 56 bytes. When mounting, every valid pin record is a pin; a pin's id is never given again while its record exists, and ids go on from the highest found.
 
 Not provided yet:
 - **Terms:** a pin lasts until its owner ends it; a pin that ends at a time of its own is not provided (B.3 allows a term or a termination condition; this is the termination condition).
@@ -492,7 +669,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 |---|---|---|
 | [307](../../issues/307-the-stores-own-partition.md) | A partition of the store's own on real machines; durability classes `volatile`, `flushed`, `copied` (`blockstore.wit` 2.0) | first: until then nothing survives a reset on a real machine |
 | [308](../../issues/308-encryption-at-rest.md) | Sealed records, a key per memory domain, the volume key from the TPM or a passphrase | before any personal data |
-| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)); copies and repair after 307 |
+| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), and copies in a file with repair from them ([309-STO-0031](../../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)); copies on a second medium after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues/311-storefs-a-file-face.md) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
 | [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | after 308 |

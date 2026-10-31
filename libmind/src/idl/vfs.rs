@@ -14,16 +14,17 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:vfs";
-pub const VERSION: (u8, u8, u8) = (2, 5, 0);
+pub const VERSION: (u8, u8, u8) = (2, 6, 0);
 const MAJOR: usize = 2;
 
-/// Why a request failed.
+/// Why a request failed. `conflict` (2.6, 311-KRN-0189): another writer published the file first, so the caller reads
+/// it again before it writes; a store that publishes by compare-and-swap answers it, and `vfs_server` never does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NotFound = 0, Exists = 1, NotEmpty = 2, Invalid = 3, Denied = 4, NoSpace = 5, ReadOnly = 6, Io = 7, Handles = 8, Name = 9, NotDirectory = 10, IsDirectory = 11 }
+pub enum Error { #[default] NotFound = 0, Exists = 1, NotEmpty = 2, Invalid = 3, Denied = 4, NoSpace = 5, ReadOnly = 6, Io = 7, Handles = 8, Name = 9, NotDirectory = 10, IsDirectory = 11, Conflict = 12 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Exists), 2 => Some(Self::NotEmpty), 3 => Some(Self::Invalid), 4 => Some(Self::Denied), 5 => Some(Self::NoSpace), 6 => Some(Self::ReadOnly), 7 => Some(Self::Io), 8 => Some(Self::Handles), 9 => Some(Self::Name), 10 => Some(Self::NotDirectory), 11 => Some(Self::IsDirectory), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Exists), 2 => Some(Self::NotEmpty), 3 => Some(Self::Invalid), 4 => Some(Self::Denied), 5 => Some(Self::NoSpace), 6 => Some(Self::ReadOnly), 7 => Some(Self::Io), 8 => Some(Self::Handles), 9 => Some(Self::Name), 10 => Some(Self::NotDirectory), 11 => Some(Self::IsDirectory), 12 => Some(Self::Conflict), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;

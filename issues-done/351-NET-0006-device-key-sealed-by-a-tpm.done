@@ -1,8 +1,8 @@
-# 351-NET-0006 — The device key sealed by a TPM
+# 351-NET-0006 — The device key sealed by a TPM — done
 
-**Type:** network (key service) · **Owner:** `NET` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [351-DRV-0015](351-DRV-0015-tpm-driver.md) (built; it waits for the kernel to hand out the TPM's registers, [requests-KRN.md](requests-KRN.md)) · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-11.9, Appendix B.6
+**Type:** network (key service) · **Owner:** `NET` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-11.9, Appendix B.6
 
-Recorded by the storage session working the network track, at the maintainer's request (2026-10-09): the key on the disk ([351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done)) is the interim, a TPM next.
+Recorded by the storage session working the network track, at the maintainer's request (2026-10-09): the key on the disk ([351-NET-0005](351-NET-0005-persistent-device-key.done)) is the interim, a TPM next.
 
 ## Problem
 
@@ -24,7 +24,7 @@ With a TPM, the stored blob gives the key only on the machine whose TPM sealed i
 
 ## Related
 
-[351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [351-DRV-0015](351-DRV-0015-tpm-driver.md), [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md).
+[351-NET-0005](351-NET-0005-persistent-device-key.done), [351-DRV-0015](../issues/351-DRV-0015-tpm-driver.md), [351-UPD-0011](../issues/351-UPD-0011-version-floor-in-the-tpm.md).
 
 ## Progress (2026-10-09)
 
@@ -43,5 +43,15 @@ With a TPM, the stored blob gives the key only on the machine whose TPM sealed i
   - With another TPM, B: refused, a new key made and sealed.
 
   This is the `tls` suite's `tpm_check`. Until the kernel's half lands it skips the sealing and says why. It is not evidence for the system as committed (MC-12.1).
-- **Waiting:** the kernel's half ([requests-KRN.md](requests-KRN.md)); then the check on x86 and aarch64.
+- **Waiting:** the kernel's half ([requests-KRN.md](../issues/requests-KRN.md)); then the check on x86 and aarch64.
 
+## Resolution
+
+- **The kernel's half is in `main`:** 351-KRN-0052 (done 2026-10-09) hands `tpm` the TPM's registers, so the `tls` suite's `tpm_check` seals for real instead of skipping. The storage track pointed out that this issue still read as waiting (`KRN/2026-10-30T1916Z-STO-three-stale-lines-on-the-tpm-for-net-and-drv.md`).
+- **Evidence:** round 56's gate (candidate f4ca0f6c, `main` 9671b4bf), QEMU with `swtpm`. Both runs logged the same line:
+  - x86, `tpm-crb`, on i9 (`x86: network, TLS and Effector`);
+  - aarch64, `tpm-tis-device`, on un-rizen (`aarch64: network, TLS and Effector`);
+  - `PASS: TPM 2.0 (…, swtpm) driven by the TPM service: the unencrypted device key (MIND …) sealed and its file removed, unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal`.
+- **What it does not show (MC-12.1):** a real machine's TPM. A policy on the boot state stays a later step, as the plan says; the threat model says so too.
+- **Docs:** `docs/profile/threat-model.md`, the device key's line: sealed where there is a TPM, tested in QEMU only.
+- **Not changed here:** 351-DRV-0015 is DRV's; its `Blocked by` reads the same, and the storage track told DRV's owner the same way.

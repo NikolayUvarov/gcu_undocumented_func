@@ -72,6 +72,7 @@ const EFFECTOR_MEMORY_MIB: u16 = 48; // the agent's benchmark: a 16 MiB chase an
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
+const STOP_NOTICE_MS: usize = 2000; // what a service warned of its stop has to end on its own (750-KRN-0194)
 const LINK_DIR: &str = "data/link"; // the only files the link to another machine reaches (800-KRN-0128)
 const FIRMWARE_DIR: &str = "data/firmware"; // the drivers' proprietary files; link writes there in developer mode (800-KRN-0173)
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
@@ -141,7 +142,11 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // The client of nnd init keeps, whose copies the shell holds and lends, revoked before each new shell (262-KRN-0178).
               shell_nn: Option<usize>,
               // Whether this boot's slot was signed with the public test key, which anyone can sign with (751-KRN-0185).
-              test_key: bool }
+              test_key: bool,
+              // A safe start, after an unfinished run or asked at the bootloader: link gets no input (800-KRN-0191).
+              safe: bool,
+              // The held `stop-notice` call of each service that asked, answered when init decides to stop it (750-KRN-0194).
+              notices: [Option<wire::Call>; UNITS] }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -535,7 +540,10 @@ impl Init {
                     grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_DEVELOPER)?, CLIENT);
                     // The shell's commands, badged so that the shell applies the link's rule to them (800-KRN-0148).
                     grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
-                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}/ TO WRITE", FIRMWARE_DIR);
+                    // Keys and the pointer from the cable (800-KRN-0191); not in a safe start, whose asker is at the machine.
+                    if !self.safe { grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0); }
+                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}{}/ TO WRITE",
+                                   if self.safe { "NO INPUT IN A SAFE START; " } else { "INPUT; " }, FIRMWARE_DIR);
                 }
             }
             "virtio_blk" => {
@@ -813,7 +821,8 @@ impl Init {
             }
             // The Effector agent's session, only in a mode: the clock, the flow the policy gives program `effector`, TLS
             // without the device certificate, the parser, the gateway as its session, its private directory and the owner's
-            // data/effector/ to read (a scope made at each start). Nothing that acts on the machine: the gateway does.
+            // data/effector/ to read (a scope made at each start), and init's client for its stop notice. Nothing that acts
+            // on the machine: the gateway does.
             "effector" => {
                 self.lend(&mut grants, SLOT_RTC, "rtc")?;
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR)?, CLIENT);
@@ -824,6 +833,8 @@ impl Init {
                 if self.present("tls") { grants.add(SLOT_TLS, self.badged(&mut minted, "tls", mind::network::BADGE_TLS_NO_DEVICE)?, CLIENT); }
                 if self.present("parse") { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
                 grants.add(mind::effector::SLOT_GATEWAY, self.badged(&mut minted, "effector_gw", mind::effector::BADGE_SESSION)?, CLIENT);
+                // init's client for its stop notice alone, so its last heartbeat can say it is going (750-KRN-0194).
+                grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NOTICE)?, CLIENT);
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
@@ -871,8 +882,10 @@ impl Init {
                 flags |= SPAWN_SCREEN;
                 // Badged: an unbadged copy could be badged for reboot by whoever holds it (351-KRN-0022).
                 grants.add(SLOT_INIT, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_LIFECYCLE)?, CLIENT);
-                for (slot, service) in [(SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
-                // The clock's client that may set it (211-KRN-0051); programs get the plain one from the loader.
+                for (slot, service) in [(SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
+                // The clients that may set the clock (211-KRN-0051) and the audio levels (000-KRN-0118); programs get the
+                // plain ones from the loader.
+                grants.add(SLOT_AUDIO, self.badged(&mut minted, "audio_gw", mind::audio::BADGE_LEVELS)?, CLIENT);
                 grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
@@ -1097,17 +1110,40 @@ impl Init {
     // init and the shell are the last recovery boundary: no client stops them (MC-6.8).
     fn kept(index: usize) -> bool { index == 0 || unit_name(index) == "shell" }
 
-    fn stop_service(&mut self, index: usize) -> core::result::Result<(), idl_init::Error> {
+    fn stop_service(&mut self, index: usize, reason: idl_init::StopReason) -> core::result::Result<(), idl_init::Error> {
         if Self::kept(index) { return Err(idl_init::Error::Denied); }
         if !self.running(index) { return Err(idl_init::Error::Stopped); }
         let pid = self.pids[index];
         self.stopped[index] = true;
-        if mind::control::kill(pid).is_err() { self.stopped[index] = false; return Err(idl_init::Error::Failed); }
+        // A service that asked is told why and may end on its own within the bound (750-KRN-0194).
+        let ended = self.warn(index, reason) && self.ended_within(&[index]);
+        if !ended && mind::control::kill(pid).is_err() { self.stopped[index] = false; return Err(idl_init::Error::Failed); }
         for _ in 0..200 { if !mind::process::alive(pid) { break; } mind::time::sleep(10); }
         // Its device stops DMA until the next start (MC-6.3).
         self.quiesce(index).map_err(|_| idl_init::Error::Failed)?;
         mind::println!("[INIT] STOPPED {} PID={}", unit_name(index), pid);
         Ok(())
+    }
+
+    // Answers the held `stop-notice` of a service that asked (750-KRN-0194); false when it asked for none.
+    fn warn(&mut self, index: usize, reason: idl_init::StopReason) -> bool {
+        let Some(call) = self.notices[index].take() else { return false };
+        let word = match reason { idl_init::StopReason::Stop => "STOP", idl_init::StopReason::Restart => "RESTART", idl_init::StopReason::PowerOff => "POWER-OFF" };
+        mind::println!("[INIT] STOP NOTICE TO {} (PID {}): {}", unit_name(index), self.pids[index], word);
+        idl_init::reply_stop_notice(call, Ok(reason)).is_ok()
+    }
+
+    // Whether the warned services ended on their own within STOP_NOTICE_MS, each logged either way (750-KRN-0194).
+    fn ended_within(&self, units: &[usize]) -> bool {
+        let start = mind::time::uptime_ms();
+        while units.iter().any(|&i| mind::process::alive(self.pids[i])) && mind::time::uptime_ms() - start < STOP_NOTICE_MS { mind::time::sleep(10); }
+        let mut all = true;
+        for &i in units {
+            let ended = !mind::process::alive(self.pids[i]);
+            all &= ended;
+            mind::println!("[INIT] {} {}", unit_name(i), if ended { "ENDED WITHIN THE NOTICE" } else { "KILLED AFTER THE NOTICE" });
+        }
+        all
     }
 
     // A service started from an ELF in data/link/ in place of its boot image, until the next boot (800-KRN-0144). Only
@@ -1129,7 +1165,7 @@ impl Init {
                 Some((pages.detach().map_err(|_| E::Failed)?, len, digest))
             }
         };
-        if self.running(index) { self.stop_service(index)?; }
+        if self.running(index) { self.stop_service(index, idl_init::StopReason::Restart)?; }
         match &image {
             Some((_, _, digest)) => {
                 let mut hex = [0u8; 64];
@@ -1230,7 +1266,7 @@ impl Init {
                 let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
                     if Self::kept(i) { return Err(refused(sender, badge, "STOP", format_args!("STOP {}", unit_name(i)), "MC-6.8")); }
                     if !self.named(badge, sender, i, Action::Stop) { return Err(E::Denied); }
-                    self.stop_service(i)
+                    self.stop_service(i, idl_init::StopReason::Stop)
                 });
                 idl_init::reply_stop(call, result)
             }
@@ -1238,13 +1274,13 @@ impl Init {
                 let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
                     if Self::kept(i) { return Err(refused(sender, badge, "RESTART", format_args!("RESTART {}", unit_name(i)), "MC-6.8")); }
                     if !self.named(badge, sender, i, Action::Restart) { return Err(E::Denied); }
-                    if self.running(i) { self.stop_service(i)?; }
+                    if self.running(i) { self.stop_service(i, idl_init::StopReason::Restart)?; }
                     self.start_service(i)
                 });
                 idl_init::reply_restart(call, result)
             }
             // The gateway's named client stops services only, by name (750-KRN-0121).
-            Request::StopTask { pid } if badge == mind::process::BADGE_NAMED => {
+            Request::StopTask { pid } if matches!(badge, mind::process::BADGE_NAMED | mind::process::BADGE_NOTICE) => {
                 idl_init::reply_stop_task(call, Err(refused(sender, badge, "STOP", format_args!("STOP PID {}", pid), "MC-3.4")))
             }
             Request::StopTask { pid } => {
@@ -1268,6 +1304,16 @@ impl Init {
             Request::LinkConsole => idl_init::reply_link_console(call, Ok(self.link_console)),
             Request::BootPlan => idl_init::reply_boot_plan(call, Ok(&self.boot_plan()[..])),
             Request::Configuration => idl_init::reply_configuration(call, Ok(self.configuration)),
+            // A running boot service asks to be told before it is stopped: the call is held until then (750-KRN-0194).
+            Request::StopNotice => {
+                let Some(index) = (1..UNITS).find(|&i| self.pids[i] == sender && self.running(i)) else {
+                    return idl_init::reply_stop_notice(call, Err(E::Denied));
+                };
+                let mut call = call;
+                if call.defer().is_err() { return idl_init::reply_stop_notice(call, Err(E::Failed)); }
+                if let Some(old) = self.notices[index].replace(call) { let _ = idl_init::reply_stop_notice(old, Err(E::Failed)); }
+                Ok(())
+            }
             Request::Replace { name, path } => { let result = self.replace(name.as_str(), path.as_str(), badge, sender); idl_init::reply_replace(call, result) }
             Request::SetMode { which, on, reason } => {
                 let result = self.set_mode(which, on, reason.as_str(), badge, sender);
@@ -1356,6 +1402,11 @@ impl Init {
     // A client badged BADGE_NAMED (the Effector gateway's, 750-KRN-0121) may run, stop or restart only what the owner's
     // policy allows; init reads the policy itself, so the gateway's own check is never the only one (MC-3.4).
     fn named(&mut self, badge: u16, sender: u64, index: usize, action: Action) -> bool {
+        // The Effector agent's client only waits for its stop notice (750-KRN-0194).
+        if badge == mind::process::BADGE_NOTICE {
+            let _ = refused(sender, badge, "LIFECYCLE CHANGE", format_args!("CHANGE {}", unit_name(index)), "MC-3.4");
+            return false;
+        }
         if badge != mind::process::BADGE_NAMED { return true; }
         let name = unit_name(index);
         let why = match self.effector_policy() {
@@ -1566,7 +1617,7 @@ impl Init {
             if on && !self.running(index) {
                 if let Err(error) = self.start_service(index) { mind::println!("[INIT] {} NOT STARTED FOR THE MODE: {:?}", name, error); }
             } else if !on && self.running(index) {
-                let _ = self.stop_service(index);
+                let _ = self.stop_service(index, idl_init::StopReason::Stop);
             }
         }
         if on && present == 0 { mind::println!("[INIT] A MODE IS ON, BUT THIS BUILD HAS NO EFFECTOR SERVICES (750-KRN-0119)"); }
@@ -1576,6 +1627,12 @@ impl Init {
     // start order (their devices quiesced), then the reset through the restart privilege.
     fn reboot(&mut self) -> ! {
         mind::println!("[INIT] RESTARTING THE MACHINE: THE VOLUMES WRITTEN, THE SERVICES STOPPED");
+        // The services that asked are told together and waited for once, before anything stops (750-KRN-0194).
+        let (mut told, mut told_count) = ([0usize; UNITS], 0);
+        for index in 1..UNITS {
+            if self.running(index) && self.warn(index, idl_init::StopReason::Restart) { self.stopped[index] = true; told[told_count] = index; told_count += 1; }
+        }
+        if told_count > 0 { let _ = self.ended_within(&told[..told_count]); }
         if let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)) {
             // A flush to a slow stick may take long: the mount's limit, not a call's.
             wire::with_timeout(MOUNT_LIMIT_MS, || for volume in ["", "ram", "log"] {
@@ -1586,10 +1643,11 @@ impl Init {
         let (mut order, mut count) = ([0usize; UNITS], 0);
         for index in boot_order() { order[count] = index; count += 1; }
         for &index in order[..count].iter().rev() {
-            if !self.running(index) { continue; }
+            // One that ended within its notice is quiesced all the same.
+            if !self.running(index) && !told[..told_count].contains(&index) { continue; }
             let pid = self.pids[index];
             self.stopped[index] = true;
-            let _ = mind::control::kill(pid);
+            if self.running(index) { let _ = mind::control::kill(pid); }
             for _ in 0..200 { if !mind::process::alive(pid) { break; } mind::time::sleep(10); }
             if self.quiesce(index).is_ok() { mind::println!("[INIT] STOPPED {} PID={}", unit_name(index), pid); }
         }
@@ -1729,7 +1787,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0 };
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS] };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
@@ -1757,6 +1815,7 @@ fn boot(info: &'static BootInfo) {
     if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
     // A safe start asked at the bootloader (173-KRN-0036): the service configuration is not read.
     let asked = info.boot_flags & BOOT_SAFE != 0;
+    init.safe = safe || asked;
     let (healthy, mounted) = boot_services(&mut init, info, safe, asked);
     if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
     // Applications may not take the frames a service restart needs (MC-6.5): a reserve only the system band uses.

@@ -1,0 +1,109 @@
+{
+  "schema": "nrl.portable-import-cli-cases/0",
+  "source": "007f0a4290349aade1972b948aee47223df4f185",
+  "cases": {
+    "fresh-model": {
+      "absolute_tolerance": 1e-12,
+      "checkpoints": 50,
+      "description_sha256": "b9a099efd336ef96a5d29fdf684f1d985db6fc2c57ea66ba9cfe4ea565c1bab7",
+      "execution": "host process using APP nnpkg portable code; no native IPC/worker/VFS claim",
+      "input_sha256": "ef5255b83a48656dcd9b0c2ba23bd0d4af292e10cc2178b755305bd38f292c76",
+      "input_width": 3,
+      "manifest_sha256": "9c8d27e89a9393cfe0a902b4a4495454007a91afa52e70a84918e4fbb5157c4b",
+      "model_id": "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee",
+      "native_execution": false,
+      "object_sha256": {
+        "block0": "44d56b16af69609ca92c2d18bd5a529d7f4962cbdebad60be3236593cbc65092",
+        "block1": "4bc5b2eff085a6800bf11b24d9cdcc3b0dcb351d8946c439735c5a6fcac6db84",
+        "block2": "56026d89342e9b90fe47403d4de90cded14e300caa3dfb6d3e4b693ace8d70eb",
+        "block3": "d17be4c817118109045cdc8599afd232edcd74233bc6a2dcc72fea02ed15a2e0",
+        "block4": "f3aab60084dc9433a669c086bf22a1ddb355fcf1dfc0bb907296e0866a314ed6",
+        "embed": "2e2f59dcf3d25d7c83701be48d51cbd0cf17881278a1b6ffb81347a4ceae67ea",
+        "head": "5799e06064230cc10e6433b6d53df6fcd3df03b2bcb986fca8fd7c5a687e1e6a"
+      },
+      "output": [
+        0.5289660534219036,
+        -0.06521224447542881,
+        9.579420417810082,
+        -1.3753147554865992,
+        0.44852716434513873,
+        -0.17955012656958597
+      ],
+      "output_width": 2,
+      "reference": "NRL host model.forward; not a new independent numerical oracle",
+      "relative_tolerance": 1e-10,
+      "requests": 1,
+      "rows": 3,
+      "schema": "nrl.portable-import-check/0",
+      "service_state_released": true,
+      "work_units": 1893,
+      "workspace_values": 77
+    },
+    "materialized-overlay": {
+      "absolute_tolerance": 1e-12,
+      "checkpoints": 50,
+      "description_sha256": "ad17d882415f91cf6310fff898c7ab60dc64237db11ed37c4bd189b0240c81a1",
+      "execution": "host process using APP nnpkg portable code; no native IPC/worker/VFS claim",
+      "input_sha256": "ef5255b83a48656dcd9b0c2ba23bd0d4af292e10cc2178b755305bd38f292c76",
+      "input_width": 3,
+      "manifest_sha256": "1bb6a63db01e5f1164e7245f403d5b31621969fbf704ec6f4e1e3274f308c59e",
+      "model_id": "369b1f14df0f200f09e73724c5b9479ccabd32746bf804f94beb9bf52ac4fd0c",
+      "native_execution": false,
+      "object_sha256": {
+        "block0": "4bc5b2eff085a6800bf11b24d9cdcc3b0dcb351d8946c439735c5a6fcac6db84",
+        "block1": "4bc5b2eff085a6800bf11b24d9cdcc3b0dcb351d8946c439735c5a6fcac6db84",
+        "block2": "56026d89342e9b90fe47403d4de90cded14e300caa3dfb6d3e4b693ace8d70eb",
+        "block3": "d17be4c817118109045cdc8599afd232edcd74233bc6a2dcc72fea02ed15a2e0",
+        "block4": "f3aab60084dc9433a669c086bf22a1ddb355fcf1dfc0bb907296e0866a314ed6",
+        "embed": "2e2f59dcf3d25d7c83701be48d51cbd0cf17881278a1b6ffb81347a4ceae67ea",
+        "head": "cbc7632bf329978b7bba4c11ffcdd47355968c29fdf64486da544ab242d5b111"
+      },
+      "output": [
+        0.577908073224233,
+        -0.10300221204061932,
+        9.605063426147657,
+        -1.3841140142197121,
+        0.49620236975827137,
+        -0.22257734123032363
+      ],
+      "output_width": 2,
+      "reference": "NRL host model.forward; not a new independent numerical oracle",
+      "relative_tolerance": 1e-10,
+      "requests": 1,
+      "rows": 3,
+      "schema": "nrl.portable-import-check/0",
+      "service_state_released": true,
+      "work_units": 1965,
+      "workspace_values": 77
+    },
+    "trained-selected-regression": {
+      "absolute_tolerance": 1e-12,
+      "checkpoints": 14,
+      "description_sha256": "b040e9fc39a7db6d0b098c18dc473d4011963e2ff380410c0207e9647c2d18aa",
+      "execution": "host process using APP nnpkg portable code; no native IPC/worker/VFS claim",
+      "input_sha256": "4764139214fd1d007cea1409a55c447f8b4ad89f42d1a076acbd117f9ce14de9",
+      "input_width": 2,
+      "manifest_sha256": "85ca22ba5de5cea611311b15a0d52d2a694020c290f1c864c588fee30339a154",
+      "model_id": "0cb40e71303b15daf2785215de8eed53a5528200c56eae4a11d8de03ed18d78c",
+      "native_execution": false,
+      "object_sha256": {
+        "hidden": "463602b2d54c9d5f4e709191885902fa509d08af8f54c3ec1a530c92b41d8696",
+        "readout": "aeaa465f578c9961b8c3d0bcd744ab67652f345bae3495d9c640a9c8186939c5"
+      },
+      "output": [
+        0.6763785336355472,
+        1.0532730893266438,
+        -0.4548094750224301
+      ],
+      "output_width": 1,
+      "reference": "NRL host model.forward; not a new independent numerical oracle",
+      "relative_tolerance": 1e-10,
+      "requests": 1,
+      "rows": 3,
+      "schema": "nrl.portable-import-check/0",
+      "service_state_released": true,
+      "work_units": 78,
+      "workspace_values": 11
+    }
+  }
+}

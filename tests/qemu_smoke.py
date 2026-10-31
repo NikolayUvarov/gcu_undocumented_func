@@ -921,6 +921,7 @@ def normal_suite(vm):
     require(vm.command("fg nosuch"), "ERROR: NO PROGRAM CALLED nosuch RUNS")
     vm.send("fg app2\n")
     vm.expect("FOREGROUND PID=5")
+    time.sleep(.3)  # the compositor asks whose screen is in front every 15 ms or so; a shorter turn may go unseen
     vm.background(5)
     vm.send("fg 1\n")
     vm.expect("FOREGROUND PID=1")
@@ -1070,6 +1071,11 @@ def normal_suite(vm):
         for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
             assert name not in services, services
             require(log, f"[INIT] {name} NOT STARTED: NO DEVICE")
+    # 750-KRN-0192: the kernel names whose screen is in front, as the compositor logs it: first the shell's, app2's (held
+    # in front above), the shell's again.
+    fronts = re.findall(r"\[COMPOSITOR\] SCREEN OF PID (\d+) IN FRONT", vm.command("dmesg -s compositor", raw=True))
+    shell = str(services["shell"])
+    assert fronts[:3] == [shell, "5", shell], (fronts, shell)
     # 000-KRN-0110, last: `stop` halts, and the kernel says so on COM1 and over the screen once the other CPUs stopped.
     vm.send("stop\n")
     vm.expect("MIND CORE KERNEL: THE SYSTEM IS STOPPED", timeout=30)
@@ -1280,6 +1286,16 @@ def shell_suite(vm):
                 return seen
             time.sleep(.01)
         raise AssertionError(f"Timeout waiting for {fragment!r} and a prompt: {vm.output[-3000:]}")
+    # 000-APP-0115 (for 000-KRN-0188): a line of 200 characters written to the serial line at once arrives whole; the
+    # shell's loop used to keep 64 bytes of one pass and drop the rest, the newline with it. The shell's own `write` and
+    # `cat`, so no program starts and the PIDs below keep their ordinals.
+    marker = "".join("0123456789ABCDEF"[i % 16] for i in range(179))
+    vm.process.stdin.write(f"write ram:serial.txt {marker}\r".encode())
+    vm.process.stdin.flush()
+    vm.expect("WROTE 180 BYTES TO ram:serial.txt", timeout=20)  # with its newline
+    require(vm.command("cat ram:serial.txt"), marker)
+    require(vm.command("rm ram:serial.txt"), "OK")  # msh's sum of ram: below counts every file there
+    vm.output = ""
     # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
     keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
     # Delete: "cpusX", Left, Delete -> "cpus".
@@ -1477,6 +1493,29 @@ def shell_suite(vm):
     assert "POWERING OFF..." in output and "STOPPED" not in output, output
     vm.process.wait(timeout=30)
     print("PASS: poweroff and shutdown: help names them, another word gets the usage, poweroff -f turns the machine off", flush=True)
+
+
+def serial_load_suite(vm, lines=50, loops=4):
+    """000-KRN-0188: a 200-character line written to the serial line at once, `lines` times while `loops` busy loops spin
+    on the host, arrives whole every time. Evidence for one machine, not a gate group: the loops would load its lanes."""
+    busy = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(loops)]
+    try:
+        whole, start = 0, time.monotonic()
+        for i in range(lines):
+            marker = "".join("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(i + j) % 36] for j in range(179))
+            vm.output = ""
+            vm.process.stdin.write(f"write ram:serial.txt {marker}\r".encode())
+            vm.process.stdin.flush()
+            vm.expect("WROTE 180 BYTES TO ram:serial.txt", timeout=30)  # with its newline
+            require(vm.command("cat ram:serial.txt"), marker)
+            whole += 1
+        require(vm.command("rm ram:serial.txt"), "OK")
+    finally:
+        for process in busy:
+            process.kill()
+            process.wait()
+    print(f"PASS: serial line under load: {whole} of {lines} lines of 200 characters, each written at once, arrived whole "
+          f"while {loops} busy loops spun on the host ({os.cpu_count()} CPUs), in {time.monotonic() - start:.0f} s", flush=True)
 
 
 def line_faces_check(vm):
@@ -2800,6 +2839,89 @@ def nnd_check(vm):
           f"64 MiB and {vm.cpus} workers with one, read again at a restart and after its end; the shell holds its client with the right to badge", flush=True)
 
 
+def nn_clients_check(vm):
+    """262-APP-0112, the shell's part of 262-KRN-0178 (docs/nn/runtime.md section 1): a program that asks for nnd
+    (REQUEST_NN) gets a copy of the shell's client badged for that start alone, without the right to badge, which the
+    shell keeps; one that does not ask gets none. A badged client may not retire. The lowest free badge goes first; when
+    its program ends, the shell revokes its copy and nnd retires the badge before the next start takes it again. At the
+    shell's start nnd retired an earlier shell's badges, and a restarted shell leaves no client of the old one's."""
+    def nnd_endpoint():
+        caps = vm.command(f"stat caps {vm.services()['shell']}", raw=True)
+        return int(re.search(r"^SLOT=41 GEN=\d+ KIND=1 .*BADGE=0 EP=(\d+)", caps, re.M)[1])
+
+    def shell_copies(endpoint):  # the badges of the copies of nnd's client the shell keeps, its own (0) with them
+        caps = vm.command(f"stat caps {vm.services()['shell']}", raw=True)
+        return sorted(int(b) for b, ep in re.findall(r"^SLOT=\d+ GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M) if int(ep) == endpoint)
+
+    def client(pid):  # the badge and rights of `pid`'s SLOT_NN, or None; `pid` as the harness numbers programs
+        found = re.search(r"^SLOT=41 GEN=\d+ KIND=1 RIGHTS=(\d+) SIZE=\d+ BADGE=(\d+) EP=(\d+)", vm.command(f"stat caps {pid}"), re.M)
+        return found and (int(found[2]), int(found[1]), int(found[3]))
+
+    def retired(count):  # nnd's retirements of a badge so far, waited for until there are `count`
+        for _ in range(100):
+            found = re.findall(r"\[NND\] BADGE (\d+) RETIRED", vm.command("dmesg -s nnd", raw=True))
+            if len(found) >= count:
+                return [int(b) for b in found]
+            time.sleep(.1)
+        raise AssertionError((count, vm.command("dmesg -s nnd", raw=True)[-1500:], vm.command("dmesg -s shell", raw=True)[-1500:]))
+
+    def nncheck(badge):  # one start in the foreground: its client's badge, every check held
+        out = vm.command("nncheck", raw=True, timeout=20)
+        for line in (f"NNCHECK CLIENT BADGE={badge} RIGHTS=6 OK", "NNCHECK RETIRE Ok(Err(Owner)) REFUSED", "NNCHECK RETIRE-ALL Ok(Err(Owner)) REFUSED", "NNCHECK DONE"):
+            require(out, line)
+
+    def background():  # the program's PID as the harness numbers programs
+        return int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", vm.command("run nncheck hold 120 &", raw=True))[1])
+
+    endpoint = nnd_endpoint()
+    require(vm.command("dmesg -s shell", raw=True), "[SHELL] NND: THE BADGES OF AN EARLIER SHELL RETIRED")
+    before = len(retired(0))
+    nncheck(1)
+    assert retired(before + 1)[-1] == 1
+    nncheck(1)  # the retired badge again, the lowest free one
+    assert retired(before + 2)[-1] == 1
+    first, second = background(), background()
+    assert client(first) == (1, 6, endpoint) and client(second) == (2, 6, endpoint), (client(first), client(second))
+    assert shell_copies(endpoint) == [0, 1, 2], shell_copies(endpoint)
+    status = vm.command("nn status", raw=True)
+    for line in (f"BADGE 1: PID {first}", f"BADGE 2: PID {second}", "SHELL: 2 BADGES LENT, 0 OWED A RETIREMENT, 30 FREE"):
+        require(status, line)
+    clock = int(re.search(r"STARTED PID=(\d+) NAME=dzen-clock BACKGROUND", vm.command("run dzen-clock &", raw=True))[1])
+    assert client(clock) is None, vm.command(f"stat caps {clock}")  # it did not ask
+    # The first ends: its copy revoked, its badge retired, and the next start takes badge 1 while 2 is still held.
+    require(vm.command(f"kill {first}"), f"KILLED PID={first}")
+    assert retired(before + 3)[-1] == 1
+    assert shell_copies(endpoint) == [0, 2], shell_copies(endpoint)
+    nncheck(1)
+    assert retired(before + 4)[-1] == 1
+    # A restarted shell: init revokes what the old one minted, and the new one retires every badge before it lends one.
+    third = background()
+    assert client(third) == (1, 6, endpoint), client(third)
+    vm.send(f"kill {vm.services()['shell']}\n", raw=True)
+    vm.expect("MIND> ", timeout=60, after="MIND CORE v1.6")
+    for _ in range(100):
+        if vm.command("dmesg -s shell", raw=True).count("[SHELL] NND: THE BADGES OF AN EARLIER SHELL RETIRED") >= 2:
+            break
+        time.sleep(.1)
+    else:
+        raise AssertionError(vm.command("dmesg -s shell", raw=True)[-1500:])
+    assert client(second) is None and client(third) is None, (client(second), client(third))  # still running, without their copies
+    assert shell_copies(endpoint) == [0], shell_copies(endpoint)
+    nncheck(1)
+    for pid in (second, third, clock):
+        vm.command(f"kill {pid}")
+    require(vm.command("nn status", raw=True), "SHELL: 0 BADGES LENT, 0 OWED A RETIREMENT, 32 FREE")
+    print("PASS: nnd's clients (262-APP-0112): a program that asks gets a copy badged for its start, without the right to badge, "
+          "and one that does not gets none; a badged client may not retire; the lowest free badge first, retired and taken again "
+          "once its program ends, its copy revoked; a restarted shell leaves the old one's clients none and retires every badge", flush=True)
+
+
+def nnd_suite(vm):
+    """The model service: KRN's boot service (262-KRN-0178), then the shell's clients of it (262-APP-0112)."""
+    nnd_check(vm)
+    nn_clients_check(vm)
+
+
 def held_check(vm, cpus):
     """Held: the program and its workers each on a CPU of its own, then all gone when the program is killed."""
     creator = int(re.search(r"STARTED PID=(\d+)", vm.command(f"run memtest workers {cpus - 1} hold &"))[1])
@@ -3495,6 +3617,53 @@ def cid_raw(data):
     return "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(data).digest()).decode().lower().rstrip("=")
 
 
+def cbor_head(major, value):
+    """A CBOR head in its shortest form (RFC 8949), as DAG-CBOR requires."""
+    if value < 24:
+        return bytes([major << 5 | value])
+    size = next(n for n in (1, 2, 4, 8) if value < 1 << 8 * n)
+    return bytes([major << 5 | {1: 24, 2: 25, 4: 26, 8: 27}[size]]) + value.to_bytes(size, "big")
+
+
+def cbor_text(text):
+    return cbor_head(3, len(text)) + text.encode()
+
+
+def cbor_link(cid):
+    """A DAG-CBOR link: tag 42 over the identity multibase prefix 0 and the CID's binary form."""
+    return cbor_head(6, 42) + cbor_head(2, len(cid) + 1) + b"\0" + cid
+
+
+def cid_binary(codec, data):
+    """A CIDv1's binary form: version 1, the codec (0x55 raw, 0x71 dag-cbor), sha2-256 and its 32 bytes."""
+    return bytes([1, codec, 0x12, 0x20]) + hashlib.sha256(data).digest()
+
+
+def cid_text(cid):
+    return "b" + base64.b32encode(cid).decode().lower().rstrip("=")
+
+
+def uvarint(value):
+    """An unsigned varint of multiformats (LEB128), in its shortest form."""
+    out = bytearray()
+    while True:
+        out.append(value & 0x7f | (0x80 if value > 0x7f else 0))
+        value >>= 7
+        if not value:
+            return bytes(out)
+
+
+def car_v1(names, blocks):
+    """A copy of named roots (309-STO-0031) written here from the CAR v1 and DAG-CBOR specifications, not from libmind: a
+    header `{"roots": [link], "version": 1}` naming the names node `{"v": 1, "names": [[name, version, root], ...]}`,
+    sorted by name, then the node's section and a section for each (CID, block) of `blocks`."""
+    node = (cbor_head(5, 2) + cbor_text("v") + cbor_head(0, 1) + cbor_text("names") + cbor_head(4, len(names))
+            + b"".join(cbor_head(4, 3) + cbor_text(name) + cbor_head(0, version) + cbor_link(root) for name, version, root in sorted(names)))
+    root = cid_binary(0x71, node)
+    head = cbor_head(5, 2) + cbor_text("roots") + cbor_head(4, 1) + cbor_link(root) + cbor_text("version") + cbor_head(0, 1)
+    return uvarint(len(head)) + head + b"".join(uvarint(len(cid) + len(block)) + cid + block for cid, block in [(root, node), *blocks])
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -3689,8 +3858,7 @@ def store_suite(vm):
     # 306-STO-0009: checkpoints. Each run of tally is an instance: it restores the last checkpoint, applies one request
     # and saves the next, its manifest and state under two names in one commit.
     def tally(args):
-        vm.send(f"tally {args}\n")
-        return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+        return run_tally(vm, args)
     require(tally("show"), "TALLY EPOCH 0 SEQUENCE 0")
     require(tally("add apples 3"), "SAVED EPOCH 1 SEQUENCE 1: apples = 3")
     require(tally("add pears"), "SAVED EPOCH 2 SEQUENCE 2: pears = 1")
@@ -3719,8 +3887,7 @@ def store_suite(vm):
     # it is answered with its first result; an older one is refused.
     require(tally("add plums 2 op shell 1"), "SAVED EPOCH 9 SEQUENCE 9: plums = 2")
     require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
-    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
-    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+    restart_store(vm)
     require(tally("add plums 2 op shell 1"), "REPEATED shell 1: ANSWERED 2, NOT APPLIED AGAIN")
     require(tally("add plums 5 op shell 2"), "SAVED EPOCH 10 SEQUENCE 10: plums = 7")
     require(tally("add plums 5 op shell 1"), "tally: operation 1 of shell is older than its last: refused")
@@ -3732,6 +3899,276 @@ def store_suite(vm):
           "applied once (also after the store restarted)", flush=True)
     store_domains_check(vm)
     fm_store_check(vm)
+    tally_messages_check(vm)
+    store_tree_check(vm)
+    store_copy_check(vm)
+    tally_move_check(vm)
+
+
+def run_tally(vm, args):
+    """One instance of tally (306-STO-0009): it restores, applies `args` and saves; what it printed."""
+    vm.send(f"tally {args}\n")
+    return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+
+
+def restart_store(vm):
+    """A new instance of the block store, mounted on the same medium."""
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+
+
+def reboot_blank_store(vm):
+    """The store suite's reboot: the store's RAM disk starts blank, while the boot volume (QEMU's virtual FAT, whose
+    writes the snapshot overlay keeps) keeps what was written to it."""
+    vm.send("reboot\n")
+    vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=180)
+    vm.expect("MIND>", timeout=120)
+    time.sleep(1); vm.collect(); vm.output = ""
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 ")
+
+
+def tally_messages_check(vm):
+    """313-STO-0030: messages between components. `tally as a` moves an amount out of its count into a message owed to
+    `tally.b`; b reads a's checkpoint and applies it once, also when it reads it again, and writes only its own. After a
+    restart of the store, a's next save clears the message, b's checkpoint showing it applied, and the two still count
+    what a counted; two messages owed at once are applied in order."""
+    def tally(args):
+        return run_tally(vm, args)
+    def versions():
+        snap = vm.command("blocks snapshot checkpoint/tally.a checkpoint/tally.b", timeout=240)
+        return [int(v) for v in re.findall(r"^checkpoint/tally\.[ab] VERSION (\d+) ROOT", snap, re.M)]
+    require(tally("as a add apples 10"), "SAVED EPOCH 1 SEQUENCE 1: apples = 10")
+    require_all(tally("as a send apples 3 to b"), "OWED apples 3 TO b 1", "SAVED EPOCH 2 SEQUENCE 2: apples = 7")
+    require(tally("as a send apples 8 to b"), "tally: a holds 7 apples: 8 refused")
+    require(tally("send apples 1 to b"), "Usage: tally [as <name>]")
+    require_all(tally("as b receive a"), "ADDED apples 3 FROM a 1", "SAVED EPOCH 1 SEQUENCE 1")
+    # Read again, the same outbox applies nothing and nothing is saved; a's checkpoint was read, never written.
+    again = tally("as b receive a")
+    require(again, "REPEATED apples 3 FROM a 1: NOT APPLIED AGAIN")
+    assert "ADDED" not in again and "SAVED" not in again, again
+    assert versions() == [2, 1], versions()
+    # A request cannot pose as a's messages: a component's name is no client's.
+    require(tally("as b add apples 5 op tally.a 9"), "tally: tally.a is a component: its operations are its messages")
+    require(tally("as a show"), "OWED apples 3 TO b 1")
+    restart_store(vm)
+    require(tally("as b receive a"), "REPEATED apples 3 FROM a 1: NOT APPLIED AGAIN")
+    # a's next save reads b's checkpoint and clears what b applied: 7 and 3 still make 10.
+    require_all(tally("as a add apples 0"), "ACKNOWLEDGED a 1 BY b", "SAVED EPOCH 3 SEQUENCE 3: apples = 7")
+    shown = tally("as a show")
+    require(shown, "apples = 7")
+    assert "OWED" not in shown, shown
+    require(tally("as b show"), "apples = 3")
+    require(tally("as b receive a"), "NOTHING OWED BY a")
+    # Two messages owed at once: applied in sequence order, in one save.
+    require(tally("as a send apples 1 to b"), "OWED apples 1 TO b 2")
+    require(tally("as a send apples 2 to b"), "OWED apples 2 TO b 3")
+    got = tally("as b receive a")
+    first, second = got.find("ADDED apples 1 FROM a 2"), got.find("ADDED apples 2 FROM a 3")
+    assert 0 <= first < second, got
+    require(got, "SAVED EPOCH 2 SEQUENCE 2")
+    require_all(tally("as a add apples 0"), "ACKNOWLEDGED a 2 BY b", "ACKNOWLEDGED a 3 BY b", "SAVED EPOCH 6 SEQUENCE 6: apples = 4")
+    require(tally("as b show"), "apples = 6")
+    print("PASS: messages between components: tally.a moves 3 of its 10 to tally.b as a message it owes; b applies it once, "
+          "read again it applies nothing, and a's checkpoint is only read; after the store restarted a's next save "
+          "clears it, and the two still count 10; two messages owed at once are applied in order", flush=True)
+
+
+def store_tree_check(vm):
+    """311-STO-0029: a directory tree under a name through `blocks tree`, each change one publication by compare-and-swap.
+    A tree of two directories and three files (one of two blocks under a node) is made, listed and read back, each file's
+    SHA-256 checked here; the name's history holds each root; a change read at an older version is refused as a conflict
+    and the name is unchanged; once the leases have ended, a collection frees the refused tree's nodes and every file is
+    still read; then a move and removals."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    first, second = b"first file\n", b"second file\n"
+    require(vm.command("write ram:ta.txt first file"), "WROTE 11 BYTES")
+    require(vm.command("write ram:tb.txt second file"), "WROTE 12 BYTES")
+    # The reference pattern of tests/dag_host.rs over two chunks, put and copied out to a file.
+    big = bytes((i * 31 + 7) % 251 for i in range(20000))
+    put = re.search(r"PUT (\S+) SIZE 20000", blocks("pattern 20000"))
+    assert put, "blocks pattern 20000"
+    require(blocks(f"get {put[1]} ram:tc.bin"), "GOT 20000 BYTES")
+    files = {"docs/a.txt": (first, cid_raw(first)), "docs/deep/b.txt": (second, cid_raw(second)), "c.bin": (big, put[1])}
+    roots = []
+
+    def published(out):
+        version = len(roots) + 1
+        found = re.search(rf"^PUBLISHED home VERSION {version} ROOT (\S+) \((VOLATILE|FLUSHED|COPIED)\)\r?$", out, re.M)
+        assert found, out
+        roots.append(found[1])
+        # The name keeps this root and the three before it.
+        history = blocks("history home")
+        for v in range(max(1, version - 3), version + 1):
+            require(history, f"home VERSION {v} ROOT {roots[v - 1]}")
+
+    def read_back():
+        for path, (data, _) in files.items():
+            require(blocks(f"tree cat home {path} ram:back.bin"), f"READ {len(data)} BYTES SHA-256 {hashlib.sha256(data).hexdigest()}")
+
+    def listed(path, count):
+        out = blocks(f"tree ls home {path}".rstrip())
+        require(out, f"{count} ENTRIES IN /{path} OF home VERSION {len(roots)}")
+        return re.findall(r"^(FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)
+    published(blocks("tree mkdir home docs"))
+    published(blocks("tree put home ram:ta.txt docs/a.txt"))
+    published(blocks("tree mkdir home docs/deep"))
+    published(blocks("tree put home ram:tb.txt docs/deep/b.txt"))
+    published(blocks("tree put home ram:tc.bin c.bin"))
+    top = listed("", 2)
+    assert [(k, s, n) for k, s, _, n in top] == [("FILE", "20000", "c.bin"), ("DIR", "2", "docs")] and top[0][2] == put[1], top
+    docs = listed("docs", 2)
+    assert [(k, s, n) for k, s, _, n in docs] == [("FILE", "11", "a.txt"), ("DIR", "1", "deep")] and docs[0][2] == cid_raw(first), docs
+    assert listed("docs/deep", 1) == [("FILE", "12", cid_raw(second), "b.txt")]
+    read_back()
+    require(blocks("tree cat home docs/a.txt ram:back.txt"), "READ 11 BYTES")
+    require(vm.command("cat ram:back.txt"), "first file")
+    # A second writer: it read version 3 and publishes against it. Refused, nothing published, the name unchanged.
+    out = blocks("tree mkdir home other 3")
+    refused = re.search(r"^CONFLICT home: READ AT VERSION 3, NOW AT 5; ROOT (\S+) NOT PUBLISHED\r?$", out, re.M)
+    assert refused, out
+    require(blocks("resolve home"), f"home VERSION 5 ROOT {roots[-1]}")
+    assert "other" not in blocks("tree ls home"), "the refused change was published"
+    # Its nodes are stored, and nothing retains them: its root is a directory, not an object `get` reads.
+    require(blocks(f"get {refused[1]} ram:x.bin"), "blocks: get: Format")
+    # Leases run 60 s by the guest's clock (303-STO-0017): after them a collection frees what nothing retains.
+    since = guest_seconds(vm)
+    time.sleep(55)
+    while guest_seconds(vm) < since + 62: time.sleep(2)
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    require(blocks(f"get {refused[1]} ram:x.bin"), "blocks: get: NotFound")
+    read_back()
+    print("PASS: blocks tree: two directories and three files under a name, one publication each, listed and read back "
+          "(SHA-256); the history holds each root; a change from an older version is refused as a conflict, the name "
+          "unchanged; after a collection the refused tree is gone and every file is read", flush=True)
+    # A directory with entries is not removed; a move, then a file and an empty directory removed.
+    require(blocks("tree rm home docs/deep"), "blocks: tree rm: NotEmpty")
+    published(blocks("tree mv home c.bin docs/c.bin"))
+    published(blocks("tree rm home docs/deep/b.txt"))
+    published(blocks("tree rm home docs/deep"))
+    assert [(k, n) for k, _, _, n in listed("docs", 2)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
+    require(blocks("tree cat home docs/c.bin ram:back.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
+    print("PASS: blocks tree: a move and two removals, each published; a directory with entries is not removed", flush=True)
+
+
+def store_copy_check(vm):
+    """309-STO-0031: names exported to a file on the boot volume come back whole into a store that lost them. The store's
+    medium is a RAM disk, blank after a reboot; the boot volume is QEMU's virtual FAT, whose writes the snapshot overlay
+    keeps across the guest's reboot. `home` (store_tree_check's tree) and `list/n00` are exported; after the reboot an
+    import publishes each at its root, every file reads back (SHA-256 checked here), an import again changes nothing, and
+    a name published elsewhere since is left as it is."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    vm.command("mkdir data")
+    snap = blocks("snapshot home list/n00")
+    home = re.search(r"^home VERSION (\d+) ROOT (\S+)\r?$", snap, re.M)
+    left = re.search(r"^list/n00 VERSION 1 ROOT (\S+)\r?$", snap, re.M)
+    assert home and left, snap
+    out = blocks("export data/names.car list/n00 home")
+    require_all(out, f"EXPORT home VERSION {home[1]} ROOT {home[2]}", f"EXPORT list/n00 VERSION 1 ROOT {left[1]}")
+    written = re.search(r"^EXPORTED 2 NAMES, (\d+) BLOCKS, (\d+) BYTES TO data/names.car; SHA-256 ([0-9a-f]{64})\r?$", out, re.M)
+    assert written, out
+    require_all(blocks("import --check data/names.car"), f"NAME home VERSION {home[1]} ROOT {home[2]}", f"NAME list/n00 VERSION 1 ROOT {left[1]}",
+                f"CHECKED data/names.car: 2 NAMES, {written[1]} BLOCKS, {written[2]} BYTES; SHA-256 {written[3]}")
+    # The reboot: the RAM disk starts blank, the boot volume keeps the file.
+    reboot_blank_store(vm)
+    require(blocks("resolve home"), "blocks: resolve home: NotFound")
+    out = blocks("import data/names.car")
+    require_all(out, f"PUBLISHED home VERSION 1 ROOT {home[2]} (VOLATILE)", f"PUBLISHED list/n00 VERSION 1 ROOT {left[1]} (VOLATILE)")
+    counts = re.search(rf"^IMPORTED data/names.car: 2 NAMES, {written[1]} BLOCKS \((\d+) STORED, 0 REPAIRED, (\d+) HELD\), {written[2]} BYTES; SHA-256 {written[3]}\r?$", out, re.M)
+    assert counts and int(counts[1]) > 0 and int(counts[1]) + int(counts[2]) == int(written[1]), out
+    require(blocks("snapshot home list/n00"), f"home VERSION 1 ROOT {home[2]}")
+    # Every file reads back whole: the tree's, as store_tree_check left it, and list/n00's.
+    big = bytes((i * 31 + 7) % 251 for i in range(20000))
+    assert [(k, n) for k, _, _, n in re.findall(r"^(FILE|DIR) (\d+) (\S+) (\S+)\r?$", blocks("tree ls home docs"), re.M)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
+    for path, data in (("docs/a.txt", b"first file\n"), ("docs/c.bin", big)):
+        require(blocks(f"tree cat home {path} ram:back.bin"), f"READ {len(data)} BYTES SHA-256 {hashlib.sha256(data).hexdigest()}")
+    require(blocks(f"get {left[1]} ram:left.txt"), "GOT 5 BYTES")
+    require(vm.command("cat ram:left.txt"), "left")
+    # Imported again: every name at its root, every block held, nothing published.
+    require_all(blocks("import data/names.car"), f"SAME home VERSION 1 ROOT {home[2]}", f"SAME list/n00 VERSION 1 ROOT {left[1]}",
+                f"(0 STORED, 0 REPAIRED, {written[1]} HELD)")
+    # A name published since at another root: left as it is, and reported.
+    require(vm.command("write ram:other.txt other"), "WROTE 6 BYTES")
+    other = cid_raw(b"other\n")
+    require(blocks("put ram:other.txt"), f"PUT {other} SIZE 6")
+    require(blocks(f"publish list/n00 {other} 1"), "PUBLISHED list/n00 VERSION 2")
+    require_all(blocks("import data/names.car"), f"SAME home VERSION 1 ROOT {home[2]}",
+                f"CONFLICT list/n00: VERSION 2 ROOT {other}, NOT {left[1]}; LEFT AS IT IS")
+    require(blocks("resolve list/n00"), f"list/n00 VERSION 2 ROOT {other}")
+    print("PASS: copies in a file: two names exported to the boot volume come back whole into the store a reboot left "
+          "blank (each at its root, every file read back), an import again changes nothing, and a name published since at "
+          "another root is left as it is", flush=True)
+
+
+def tally_move_check(vm):
+    """313-STO-0033: a component moved to another store through a copy, active in one place only. `tally as a` counts
+    with operation IDs, owes a message, and is moved to a file on the boot volume. The release fences an instance that
+    restored before it; afterwards every run of `a` at the source is refused by the release, never started fresh, and
+    both names hold the release record, which names the last checkpoint the names' history keeps; a second move writes
+    the same copy from it. After a reboot leaves the store blank, `blocks import` brings the copy in, and `tally as a`
+    goes on from its count, sequence and outbox at the next epoch of the new store, a repeated operation answered from
+    the record."""
+    import base64
+    def tally(args):
+        return run_tally(vm, args)
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def cid_bytes(text):
+        return base64.b32decode(text[1:].upper() + "=" * (-len(text[1:]) % 8))
+    vm.command("mkdir data")
+    require(tally("as a add apples 4 op shell 1"), "SAVED EPOCH 1 SEQUENCE 1: apples = 4")
+    require(tally("as a add apples 3 op shell 2"), "SAVED EPOCH 2 SEQUENCE 2: apples = 7")
+    require_all(tally("as a send apples 2 to b"), "OWED apples 2 TO b 1", "SAVED EPOCH 3 SEQUENCE 3: apples = 5")
+    last = blocks("snapshot checkpoint/tally.a checkpoint/tally.a/state")
+    manifest = re.search(r"^checkpoint/tally\.a VERSION 3 ROOT (\S+)\r?$", last, re.M)
+    state = re.search(r"^checkpoint/tally\.a/state VERSION 3 ROOT (\S+)\r?$", last, re.M)
+    assert manifest and state, last
+    # An instance restores epoch 3 and stalls; the move releases the component meanwhile; the stalled one is fenced.
+    held = re.search(r"PID=(\d+) NAME=tally BACKGROUND", vm.command("run tally as a hold 15 pears &"))
+    assert held, "tally did not start in the background"
+    require(vm.program_logs(held[1], "HOLDING EPOCH"), "HOLDING EPOCH 3")
+    out = tally("as a move data/tally-a.car")
+    require(out, "RELEASED a EPOCH 4: NO INSTANCE IN THIS STORE SAVES IT AGAIN")
+    moved = re.search(r"^MOVED a EPOCH 3 TO data/tally-a\.car: 2 BLOCKS, (\d+) BYTES; SHA-256 ([0-9a-f]{64})\r?$", out, re.M)
+    assert moved, out
+    require(vm.program_logs(held[1], "FENCED"), "tally: FENCED: epoch 3 is no longer current; nothing saved")
+    # At the source a run of `a` is refused by the release: nothing restored, nothing saved, never a fresh start.
+    for args in ("as a show", "as a add apples 1", "as a add apples 3 op shell 2", "as a receive b"):
+        out = tally(args)
+        require(out, "tally: RELEASED: a was moved out of this store at epoch 4; nothing restored or saved here (MC-6.12)")
+        assert "SAVED" not in out and "TALLY EPOCH" not in out and "REPEATED" not in out, out
+    # Both names hold the release record (written here from its format: MIND-RLS, format 2, the epoch, the two CIDs),
+    # and the history keeps the last checkpoint.
+    record = b"MIND-RLS" + (2).to_bytes(2, "little") + (3).to_bytes(8, "little") + cid_bytes(manifest[1]) + cid_bytes(state[1])
+    snap = blocks("snapshot checkpoint/tally.a checkpoint/tally.a/state")
+    require_all(snap, f"checkpoint/tally.a VERSION 4 ROOT {cid_raw(record)}", f"checkpoint/tally.a/state VERSION 4 ROOT {cid_raw(record)}")
+    require(blocks("history checkpoint/tally.a"), f"checkpoint/tally.a VERSION 3 ROOT {manifest[1]}")
+    require(blocks("history checkpoint/tally.a/state"), f"checkpoint/tally.a/state VERSION 3 ROOT {state[1]}")
+    # Moved again: the same copy, written from the names' history.
+    copy = f"MOVED a EPOCH 3 TO data/tally-a.car: 2 BLOCKS, {moved[1]} BYTES; SHA-256 {moved[2]}"
+    require_all(tally("as a move data/tally-a.car"), "RELEASED a EPOCH 4 BEFORE: ITS LAST CHECKPOINT IS WRITTEN AGAIN", copy)
+    require_all(blocks("import --check data/tally-a.car"), f"NAME checkpoint/tally.a VERSION 3 ROOT {manifest[1]}",
+                f"NAME checkpoint/tally.a/state VERSION 3 ROOT {state[1]}",
+                f"CHECKED data/tally-a.car: 2 NAMES, 2 BLOCKS, {moved[1]} BYTES; SHA-256 {moved[2]}")
+    reboot_blank_store(vm)
+    require(tally("as a show"), "TALLY EPOCH 0 SEQUENCE 0")
+    out = blocks("import data/tally-a.car")
+    require_all(out, f"PUBLISHED checkpoint/tally.a VERSION 1 ROOT {manifest[1]} (VOLATILE)",
+                f"PUBLISHED checkpoint/tally.a/state VERSION 1 ROOT {state[1]} (VOLATILE)", "(2 STORED, 0 REPAIRED, 0 HELD)")
+    # The moved-in checkpoint: its sequence, counts and outbox, at the names' version here.
+    require_all(tally("as a show"), "TALLY EPOCH 1 SEQUENCE 3", "apples = 5", "OWED apples 2 TO b 1")
+    require(tally("as a add apples 3 op shell 2"), "REPEATED shell 2: ANSWERED 7, NOT APPLIED AGAIN")
+    require(tally("as a add apples 1 op shell 3"), "SAVED EPOCH 2 SEQUENCE 4: apples = 6")
+    require_all(tally("as a show"), "TALLY EPOCH 2 SEQUENCE 4", "apples = 6", "OWED apples 2 TO b 1")
+    print("PASS: a move through a copy: tally.a, moved to the boot volume, is released at the source (an instance restored "
+          "before is fenced, every later run refused by the release, never fresh) and its copy written again the same from "
+          "the names' history; after a reboot left the store blank, imported, it goes on from its sequence, count and "
+          "outbox at the new store's next epoch, a repeated operation answered from the record", flush=True)
 
 
 def store_domains_check(vm):
@@ -3761,6 +4198,8 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 309-STO-0031: a copy in a file is in the clear and would outlive the domain's forgetting, so none is made.
+    require(blocks(f"-d {first} export ram:dom.car secret"), "blocks: export: a memory domain is not copied")
     out = blocks("domains")
     for line in (f"DOMAIN {first} LIVE", f"DOMAIN {second} LIVE"):
         require(out, line)
@@ -3958,6 +4397,38 @@ def block_record(chunk):
     return lambda opened: opened[:8] == b"MIND-BLK" and opened[16:52] == cid
 
 
+def store_copy_repair_check(vm, blocks, data, root):
+    """309-STO-0031: `obj` (`data`, the pattern's first 100 000 bytes: a node over 7 chunks, `root`) is exported to a file
+    on the RAM volume: the CAR v1 this suite writes from the specifications, byte for byte (its SHA-256). A chunk then
+    damaged on the store's medium is found by a scrub; an import of the copy reads it, finds it corrupt and stores it
+    again, a collection frees the damaged copy, and the next scrub finds nothing."""
+    chunks = [data[k:k + 16384] for k in range(0, len(data), 16384)]
+    node = (cbor_head(5, 3) + cbor_text("v") + cbor_head(0, 1) + cbor_text("size") + cbor_head(0, len(data)) + cbor_text("links")
+            + cbor_head(4, len(chunks)) + b"".join(cbor_link(cid_binary(0x55, c)) for c in chunks))
+    assert cid_text(cid_binary(0x71, node)) == root
+    copy = car_v1([("obj", 1, cid_binary(0x71, node))], [(cid_binary(0x71, node), node), *((cid_binary(0x55, c), c) for c in chunks)])
+    digest = hashlib.sha256(copy).hexdigest()
+    require_all(blocks("export ram:obj.car obj"), f"EXPORT obj VERSION 1 ROOT {root}",
+                f"EXPORTED 1 NAMES, 8 BLOCKS, {len(copy)} BYTES TO ram:obj.car; SHA-256 {digest}")
+    require_all(blocks("import --check ram:obj.car"), f"NAME obj VERSION 1 ROOT {root}",
+                f"CHECKED ram:obj.car: 1 NAMES, 8 BLOCKS, {len(copy)} BYTES; SHA-256 {digest}")
+    # The fourth chunk changes on the medium: a scrub finds it.
+    assert poke(vm, sealed_record(vm, block_record(chunks[3])), 44 + 84 + 100, GDB_PORT) >= 1
+    require(blocks("scrub"), "1 CORRUPT, 0 DAMAGED SECTORS;")
+    found = f"[BLOCKSTORE] SCRUB: BLOCK {cid_raw(chunks[3])} AT SECTOR"
+    require(vm.service_logs("blockstore", found), found)
+    # The import repairs it from the copy, the name left at its root; the collection frees the damaged copy.
+    require_all(blocks("import ram:obj.car"), f"SAME obj VERSION 1 ROOT {root}",
+                f"IMPORTED ram:obj.car: 1 NAMES, 8 BLOCKS (0 STORED, 1 REPAIRED, 7 HELD), {len(copy)} BYTES; SHA-256 {digest}",
+                "COLLECTED 1 BLOCKS: THE DAMAGED COPIES FREED")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] CORRUPT"), f"[BLOCKSTORE] CORRUPT {cid_raw(chunks[3])}")
+    require(blocks("scrub"), "0 CORRUPT, 0 DAMAGED SECTORS;")
+    require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
+    print("PASS: a copy in a file: obj exported as the CAR v1 written here from the specifications (SHA-256), a chunk "
+          "damaged on the medium found by a scrub and repaired by an import of the copy, the next scrub clean", flush=True)
+
+
 def store_faults_suite(vm):
     """300-STO-0005: damage on the block store's own medium, injected from the host into the RAM disk's bytes in guest
     memory (no program can reach that medium). A flipped byte in a chunk is refused when read and when mounting; a
@@ -3997,6 +4468,9 @@ def store_faults_suite(vm):
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
     assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
     require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
+    # 309-STO-0031: a copy in a file repairs what a scrub finds. Here, while the medium is otherwise whole: the damaged
+    # frame below leaves 33 sectors damaged for good, and the suite's end leaves a store that is not mounted.
+    store_copy_repair_check(vm, blocks, data, root)
     # A byte of the fifth chunk, found when a new instance mounts the medium.
     assert poke(vm, sealed_record(vm, block_record(chunk(4))), 44 + 84 + 100, GDB_PORT) >= 1
     require(restart(), "CORRUPT=1 DAMAGED=0")
@@ -4113,13 +4587,19 @@ def escrow_check(vm):
 
 
 def services_suite(vm):
-    # The shell's fixed grants 13..15 (issue 151): sysmon's authority view (badged), the keyboard driver, the compositor.
+    # The shell's fixed grants 13..15 (issue 151): sysmon's authority view (badged), the keyboard driver, the compositor;
+    # the clock's client that may set it (211-KRN-0051) and audio_gw's that may change the levels (000-KRN-0118).
     real = vm.services()
     caps = vm.command(f"stat caps {real['shell']}", raw=True)
     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
-    for slot, service, badge in [(13, "sysmon", 1), (14, "ps2_kbd", 0), (15, "compositor", 0)]:
+    for slot, service, badge in [(13, "sysmon", 1), (14, "ps2_kbd", 0), (15, "compositor", 0), (2, "rtc", 1), (4, "audio_gw", 1)]:
         found = re.search(fr"^SLOT={slot} GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE={badge} EP=(\d+)", caps, re.M)
         assert found and servers.get(int(found[1])) == real[service], (slot, service, caps)
+    # Programs get the loader's plain clients of the clock and of audio_gw (its slots 2 and 4).
+    loader = vm.command(f"stat caps {real['loader']}", raw=True)
+    for slot, service in [(2, "rtc"), (4, "audio_gw")]:
+        found = re.search(fr"^SLOT={slot} GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE=0 EP=(\d+)", loader, re.M)
+        assert found and servers.get(int(found[1])) == real[service], (slot, service, loader)
     output = vm.command("ps")
     for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts", "sysmon"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
@@ -4609,14 +5089,15 @@ def link_suite(args):
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
             # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
             # init's reboot client, the policy broker, the Wi-Fi station, the shell's commands (800-KRN-0148) and a writable
-            # scope of data/firmware/ in slot 7 (800-KRN-0173).
+            # scope of data/firmware/ in slot 7 (800-KRN-0173), and the input privilege in slot 8 (800-KRN-0191).
             base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"]), (15, pids["compositor"])]
             developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0)),  # 0: no station runs
                          (30, pids.get("shell")), (7, pids["vfs_server"])}
-            assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
+            assert re.search(r"^SLOT=8 GEN=0 KIND=6 ", caps, re.M), caps  # CAP_KIND_INPUT: keys and the pointer from the cable
+            assert count == len(held) + 1 and count - 1 - len(granted) <= 3 and len(own) <= 1, caps
             assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
             assert (7, pids["vfs_server"]) in granted, caps
-            require(vm.command("dmesg -s init", raw=True), "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; data/firmware/ TO WRITE")
+            require(vm.command("dmesg -s init", raw=True), "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; INPUT; data/firmware/ TO WRITE")
             assert re.search(r"\bfirmware\b", vm.command("ls data", raw=True)), "init made data/firmware/"
             # 800-KRN-0148: link's slot 30 is a client badged BADGE_SHELL_LINK (1) of the endpoint the shell serves in slot 37.
             commands = re.search(r"^SLOT=37 GEN=0 KIND=1 .*EP=(\d+)", vm.command(f"stat caps {pids['shell']}", raw=True), re.M)
@@ -5418,7 +5899,8 @@ def effector_grants_check(vm):
     """750-KRN-0119: in a mode init starts effector_gw, then effector, each with exactly the grants of `mind::effector`'s
     table: the gateway its endpoint, its private directory (BADGE_EFFECTOR_GW), the volumes to read, sysmon and the log to
     read, and the compositor to capture the screen (750-KRN-0153); the session the clock, its private directory (BADGE_EFFECTOR), data/effector/ (a scope), its flow, TLS without the device certificate,
-    the parser and the gateway badged as its session. The session keeps the owner's token in its private directory."""
+    the parser, the gateway badged as its session and init's client for its stop notice (750-KRN-0194). The session keeps
+    the owner's token in its private directory."""
     for name in ("effector_gw", "effector"):
         for _ in range(60):
             if name in vm.services():
@@ -5448,7 +5930,8 @@ def effector_grants_check(vm):
     # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
     assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw
     require(vm.command("dmesg -s vfs_server", raw=True), ":/inbox (WRITABLE)")  # vfs_server names the directory alone
-    assert {2, 3, 4, 7, 12, 18, 20, 28} == set(session), session
+    assert {2, 3, 4, 7, 11, 12, 18, 20, 28} == set(session), session
+    assert session[11] == (7, "init"), session  # BADGE_NOTICE: init's client for its stop notice alone (750-KRN-0194)
     assert session[2][1] == "rtc" and session[4] == (1, "effector_gw") and session[20] == (1, "tls") and session[28][1] == "parse", session
     assert session[3] == (6, "vfs_server") and session[7][1] == "vfs_server" and session[7][0] > 7, session  # 7: a scope of data/effector/
     assert session[18][1] == "netstack", session
@@ -6394,6 +6877,7 @@ def update_suite(args):
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
                                        "channel stable\nautomatic apply\nevery 20\ntries 3\n")
+    (layout / "update0.msh").write_text("#!msh\nupdate status\n")  # 351-APP-0029: without `requires: lifecycle`
     image = boot_slots.Image.create(temp / "update.img", layout)
     first = boot_slots.records(image.path)
     (server / "channels/stable").write_bytes(channel(6, 5, "2020-01-01T00:00:00Z"))
@@ -6498,6 +6982,20 @@ def update_suite(args):
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/B/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        # 351-APP-0029: the shell's `update` shows the updater's view and the channel it holds (update.wit 1.1), says
+        # check's refusal, asks before a rollback and is refused to a script without `requires: lifecycle`.
+        out = vm.command("update", raw=True, timeout=60)
+        for line in ("UPDATE: RUNNING SLOT B, VERSION 6\n", "UPDATE: THE NEWER BOOT RECORD NAMES SLOT B, CONFIRMED", "UPDATE: CHANNEL stable: VERSION 6, MINIMUM 6, EXPIRES "):  # release 6 raised it (351-UPD-0024)
+            require(out.replace("\r", ""), line)
+        require(out, ", READ FROM THE SOURCE")
+        require(vm.command("update check", raw=True, timeout=60), "UPDATE: THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE")
+        require(vm.command("update apply 10", raw=True), "USAGE: UPDATE [STATUS | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]")
+        vm.send("update rollback\n")
+        require(vm.expect("(Y/N)", timeout=30), "ROLL BACK TO SLOT A? ")
+        vm.send_bytes(b"n")
+        require(vm.expect("MIND> ", timeout=30), "UPDATE: NOT ROLLED BACK")
+        require(vm.command("msh /update0.msh", raw=True), "SCRIPT FAILED: update needs `requires: lifecycle` in the script (LINE 2)")
+        assert "[SHELL] UPDATE ROLLBACK" not in vm.command("dmesg -s shell", raw=True)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -6538,6 +7036,18 @@ def update_suite(args):
             require(log, line)
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
+        # 351-APP-0029: `update` names the channel kept in slot A, expired; `apply` asks about the release slot B holds
+        # from before the restart, and declined, writes nothing.
+        out = vm.command("update", raw=True, timeout=60)
+        for line in ("UPDATE: RUNNING SLOT A, VERSION 5", "UPDATE: CHANNEL stable: VERSION 5, ", ", KEPT IN THE RUNNING SLOT, NOT READ FROM THE SOURCE",
+                     "UPDATE: THE CHANNEL HAS EXPIRED, OR THE CLOCK CANNOT BE READ: FETCH AND APPLY WAIT FOR A CURRENT ONE, ROLLBACK STAYS POSSIBLE"):
+            require(out, line)
+        vm.send("update apply 2\n")
+        # The updater names the release staged there (its `staged`), so the question names its version.
+        require(vm.expect("(Y/N)", timeout=30), "APPLY VERSION 6 (RUNNING 5)? THE MACHINE RESTARTS INTO SLOT B ON TRIAL WITH 2 TRIES, FALLING BACK TO SLOT A.")
+        vm.send_bytes(b"n")
+        require(vm.expect("MIND> ", timeout=30), "UPDATE: NOT APPLIED")
+        assert "[UPDATER] APPLY:" not in vm.command("dmesg -s updater", raw=True)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -6550,8 +7060,11 @@ def update_suite(args):
           "its applications are in slot B, "
           "the one it changed fetched and the others copied from slot A, and the trial runs them from there; release 6's minimum "
           "raises the version floor to 6, and a record booting slot A's release 5 boots slot B instead; booted back in "
-          "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
-          "is consistent", flush=True)
+          "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the shell's "
+          "`update` shows the updater's view and the channel it holds, read from the source, then kept and expired, says "
+          "check's refusal, asks before a rollback and an apply, which declined write nothing, and is refused to a script "
+          "without requires: lifecycle (351-APP-0029); "
+          "the file system is consistent", flush=True)
 
 
 def install_suite(args, stub_elf):
@@ -7531,7 +8044,8 @@ def service_runs(vm, port):
 def api_runs(vm, port):
     """000-NET-0047: HTTP for API clients against tests/http_api_stub.py over HTTPS with the test CA: a JSON POST, a
     multipart upload checked by Python's own parser, a chunked upload, redirect chains by their rules, gzip and deflate
-    bodies decoded as they come and a bomb stopped at 1 MiB, 1000 Server-Sent Events in order, Retry-After in both forms."""
+    bodies decoded as they come and a bomb stopped at 1 MiB, 1000 Server-Sent Events in order, Retry-After in both forms,
+    and HEAD, PATCH and DELETE on one connection."""
     vm.send(f"webcheck https://10.0.2.2:{port}/ --api\n")
     out = vm.expect("MIND> ", timeout=900, after="WEBCHECK DONE")
     data = bytes(i * 7 % 251 for i in range(100_000))
@@ -7557,10 +8071,22 @@ def api_runs(vm, port):
     require(out, f"WEBCHECK API EVENTS text/event-stream {http_api_stub.EVENTS} DELTAS IN ORDER true DONE true LAST ID {http_api_stub.EVENTS - 1} RETRY Some(3000)")
     require(out, "WEBCHECK API busy 503 RETRY-AFTER Some(Seconds(7))")
     require(out, "WEBCHECK API limited 429 RETRY-AFTER Some(Date(1445412480))")
+    # HEAD's answers end at their heads though they name a length and a chunked coding; the requests after them on the
+    # same connection are answered whole and in order.
+    def echoed(method, body=b"", kind=None):
+        return json.dumps({"method": method, "authorization": None, "type": kind, "token": None, "length": len(body),
+                           "sha256": hashlib.sha256(body).hexdigest()}, separators=(",", ":"))
+    patch = b'{"name":"mind"}'
+    for line in (f"WEBCHECK API HEAD echo 200 LENGTH Some({len(echoed('HEAD'))}) CHUNKED false BODY []",
+                 "WEBCHECK API HEAD events 200 LENGTH None CHUNKED true BODY []", "WEBCHECK API GET final 200 LENGTH Some(8) CHUNKED false BODY [the end ]",
+                 f"WEBCHECK API PATCH 200 {echoed('PATCH', patch, 'application/merge-patch+json')}", f"WEBCHECK API DELETE 200 {echoed('DELETE')}",
+                 "WEBCHECK API DELETE item 204 BODY [] ONE CONNECTION 6"):
+        require(out, line)
     print("PASS: HTTP for API clients over HTTPS: a JSON POST, a multipart upload of a field and a 100 000-byte file, a chunked "
           "upload, redirects by their rules (301, 302, 307, 308, 303 after a POST; a loop refused after 10, HTTPS to HTTP refused), "
           f"gzip and deflate bodies decoded as they came, a bomb stopped at {int(bomb[1])} bytes, {http_api_stub.EVENTS} "
-          "Server-Sent Events in order, Retry-After in seconds and as a date", flush=True)
+          "Server-Sent Events in order, Retry-After in seconds and as a date; HEAD (a length and a chunked coding named, no "
+          "body), PATCH and DELETE (204) on one connection", flush=True)
 
 
 def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, files):
@@ -7630,6 +8156,10 @@ def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, fil
     assert code == 22 and "GET: HTTP 503" in out and "busy" not in out.replace("api/busy", ""), out
     out = get(f"-I {api}/gzip")
     assert re.search(r"HTTP 200\r?\nContent-Length: \d+\r?\nContent-Type: text/plain", out), out
+    # -I sends HEAD; PATCH and DELETE by -X (000-NET-0047).
+    assert echo(get(f"-X PATCH -H 'Content-Type: application/merge-patch+json' -d '{{}}' {api}/echo"))["method"] == "PATCH"
+    assert echo(get(f"-X DELETE {api}/echo"))["method"] == "DELETE"
+    assert re.search(r"HTTP 204", get(f"-X DELETE -I {api}/item")), "DELETE 204"
     require(get(f"-o ram:text.txt {api}/gzip"), f"GET: {len(http_api_stub.TEXT)} BYTES IN ram:text.txt")
     assert re.search(r"GET: HTTP 200, 8 BYTES IN \d+ MS", get(f"-s -w -o ram:w.txt {api}/final")), "-w"
     # Failures and their statuses: time, certificate, plain HTTP, a host the grant does not name, usage, URL.
@@ -7644,12 +8174,12 @@ def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, fil
     require(out, "plain text over http")
     code, out = status("https://10.0.2.3/")
     assert code == 7, out
-    for arguments, expected in (("-X DELETE https://h/", 2), (f"-O {api}/", 2), ("ftp://h/x", 3)):
+    for arguments, expected in (("-X TRACE https://h/", 2), (f"-O {api}/", 2), ("ftp://h/x", 3)):
         code, out = status(arguments)
         assert code == expected, (arguments, out)
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
-          "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I, -w, --max-time, plain HTTP only "
+          "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
           "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's", flush=True)
 
 
@@ -8035,6 +8565,11 @@ def wifi_join_check(vm):
     run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90, "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # 550-APP-0117 (for 550-DRV-0042, 0045): the networks as text, the joined one marked, then their count.
+    scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
+    scanned += vm.command("dmesg -s wifi", raw=True)
+    assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 -\d+ DBM WPA2( REMEMBERED)? JOINED', scanned), scanned[-2000:]
+    assert re.search(r"\[WIFI\] SCAN: \d+ NETWORKS?", scanned), scanned[-2000:]
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
     # network, and its gateway answers a ping through the WPA2 link.
     require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
@@ -8073,7 +8608,8 @@ def wifi_join_check(vm):
     run("wifi countries", 30, "[WIFI] COUNTRIES: NO CATALOGUE IN THIS STATION")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
-          "station's reason, MIND-TEST joined, wifi status and wifi leave; wifi country: no catalogue in this station", flush=True)
+          "station's reason, MIND-TEST joined, wifi status, wifi scan (MIND-TEST marked joined) and wifi leave; wifi country: no "
+          "catalogue in this station", flush=True)
     # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
     sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
     offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))
@@ -8919,12 +9455,12 @@ def effector_suite(args, disk):
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(13 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(15 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (13 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (15 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
@@ -8973,6 +9509,136 @@ def effector_suite(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
 
 
+def effector_update_suite(args):
+    """751-EFF-0023: a developer's release through the Effector agent, against the fixture. A raw image with release 5 in
+    slot A, confirmed, in the development mode, the owner's policy saying `update apply`; the fixture holds release 6's
+    bundle as `release.py bundle` writes it, for an `update_agent` command. With the owner's `remote-update` off, the
+    gateway refuses it as init says the word is off: the command is answered failed (denied), nothing reaches the
+    updater, nothing is downloaded or staged. With it on, the agent downloads the bundle into the gateway, which streams it to the updater; release 6 is
+    staged in slot B and applied, the machine restarts and boots slot B on trial, and after init confirms it the agent
+    answers the command it kept across the restart: completed, `updated 6, slot B confirmed`."""
+    if not raw_tools():
+        print("SKIP: effector-update suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    sys.path.insert(0, str(ROOT / "tests"))
+    import effector_server  # noqa: E402
+    temp = Path(tempfile.mkdtemp(prefix="mind-effector-update-"))
+    arch = args.arch
+    volume, _, server_tree, kept, _, _, manifest6, boot_files, _ = update_releases(temp, arch)
+    release_tool.bundle(server_tree, temp / "release6.zip", arches=[arch])
+    bundle = (temp / "release6.zip").read_bytes()
+    payload = {"size": len(bundle), "sha256": hashlib.sha256(bundle).hexdigest(), "version": 6, "tries": 3, "timeout_seconds": 1800}
+    agent, token = "mind-test", "mind-effector-test-token"
+    server = effector_server.EffectorFixture(token=token).start()
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    files = {"netpolicy.txt": f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\n".encode(), "data/mode.conf": b"development\n",
+             "data/effector/effector.conf": f"effector-config 1\nserver https://10.0.2.2:{server.port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n".encode(),
+             "data/effector/token": (token + "\n").encode(), "data/effector/agent_id": (agent + "\n").encode(),
+             "data/effector/policy": b"effector-policy 1\nagent on\nupdate apply\n"}
+    for name, data in files.items():
+        (layout / name).parent.mkdir(parents=True, exist_ok=True)
+        (layout / name).write_bytes(data)
+    # Room for both slots and the bundle the updater holds while it stages.
+    image = boot_slots.Image.create(temp / "effector-update.img", layout, megabytes=256)
+    first = boot_slots.records(image.path)
+    cpu = ["-cpu", "max" if arch == "aarch64" else "qemu64,+rdrand"]
+    network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+
+    def logged(vm, name, line, timeout=120):
+        # A service's lines through dmesg; a read a kernel line lands in is made again.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            try:
+                log = vm.command(f"dmesg -s {name}", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            if line in log:
+                return log
+            time.sleep(1)
+        raise AssertionError((name, line, log[-3000:], vm.command("dmesg -s effector_gw", raw=True)[-2000:]))
+
+    def downloads(command):
+        return [r for r in list(server.requests) if "/api/commands/file" in r["path"] and f"command_id={command}" in r["path"]]
+
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
+        off = server.queue(agent, "update_agent", payload, program="MIND Core")
+        server.publish(bundle, command_id=off, bundle=True)
+        log = logged(vm, "effector", f"EFFECTOR: ACK {off} failed ACCEPTED", 180)
+        require(log, f"EFFECTOR: {off}: THE UPDATE REFUSED: denied")
+        result = server.operation(off)
+        assert result["status"] == "failed" and result["result"]["error"] == "denied", result
+        assert not downloads(off), "a byte was downloaded"
+        assert "INSTALL" not in vm.command("dmesg -s updater", raw=True), "the updater was asked"
+        require(vm.command("dmesg -s effector_gw", raw=True), f" {off} update-begin?{len(bundle)}?bytes remote-update off ")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-effector-update-off-{args.cpus}cpu.log").write_text(vm.log)
+    assert boot_slots.records(image.path) == first, "a boot record was written"
+    assert image.read("MIND/B/MANIFEST") is None and image.read("MIND/B/INSTALL/BUNDLE.ZIP") is None
+    print(f"PASS: effector-update with remote-update off: the gateway refuses the command as init says the word is off, "
+          f"answered failed (denied); nothing reaches the updater, nothing of the {len(bundle)}-byte bundle is downloaded "
+          "and nothing staged", flush=True)
+    image.write("data/mode.conf", b"development\nremote-update\n")
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT; REMOTE UPDATE (data/mode.conf)")
+        logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        on = server.queue(agent, "update_agent", payload, program="MIND Core")
+        server.publish(bundle, command_id=on, bundle=True)
+        started = time.monotonic()
+        logged(vm, "effector", f"EFFECTOR: {on}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
+        # No shell command meanwhile: the download, the staging and the restart come on their own. An answer before the
+        # restart is a failure, its services' lines said.
+        vm.collect()
+        since, deadline = len(vm.log), time.monotonic() + 1500
+        while "BOOT: SLOT B LOADED ON TRIAL" not in vm.log[since:]:
+            answered = server.operation(on)
+            if answered or time.monotonic() > deadline:
+                raise AssertionError((answered, *(vm.command(f"dmesg -s {name}", raw=True)[-2500:] for name in ("effector", "effector_gw", "updater"))))
+            time.sleep(1)
+            vm.collect()
+        print(f"TIME: {len(bundle)} bytes downloaded, streamed to the updater, staged and applied in {time.monotonic() - started:.0f} s", flush=True)
+        # The server heard of the restart before it came (750-EFF-0006): a heartbeat saying shutting_down.
+        assert any(b.get("agent_id") == agent and b.get("system_state") == "shutting_down" for b in list(server.beats)), \
+            ("no shutting_down heartbeat before the restart", [b.get("system_state") for b in list(server.beats)][-5:], vm.log[since - 4000:since + 4000])
+        vm.logged("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", since, timeout=300)
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        log = logged(vm, "effector", f"EFFECTOR: ACK {on} completed WITH ITS RESULT ACCEPTED", 300)
+        require(log, f"EFFECTOR: UPDATE {on} TO VERSION 6: THE MACHINE RESTARTED")
+        require(log, f"EFFECTOR: {on}: updated 6, slot B confirmed")
+        result = server.operation(on)
+        assert result["status"] == "completed" and result["result"]["stdout"] == "updated 6, slot B confirmed", result
+        assert len(downloads(on)) == 1, downloads(on)
+        require(logged(vm, "updater", "[UPDATER] SLOT B CONFIRMED ON THE DISK", 120), "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        # The agent removed its kept answer last, which leaves the volume marked changed until a flush.
+        require(vm.command("sync"), "OK")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        server.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-effector-update-on-{args.cpus}cpu.log").write_text(vm.log)
+    records = boot_slots.records(image.path)
+    assert boot_slots.newest(records)[1]["slot"] == "B" and boot_slots.newest(records)[1]["confirmed"], records
+    assert image.read("MIND/B/MANIFEST") == manifest6, "slot B's manifest"
+    for name, digest in boot_files:
+        assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
+    assert image.read("MIND/B/INSTALL/BUNDLE.ZIP") is None and image.read("system/effector/update") is None
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: effector-update with remote-update on: the agent downloads release 6's bundle into the gateway, which "
+          "streams it to the updater; release 6 is staged in slot B and applied, the machine restarts into slot B on trial, "
+          "and once it is confirmed the agent answers the command it kept across the restart: completed, updated 6, slot B "
+          "confirmed", flush=True)
+
+
 def effector_actions_check(vm, server, agent, until, beats):
     """750-EFF-0007, 0014: the gateway's other actions as the suite's policy allows them, and the agent's telemetry."""
     # The screen as a PNG, inline in the ACK as the server's other agents send it; the gateway audits the capture.
@@ -8995,6 +9661,16 @@ def effector_actions_check(vm, server, agent, until, beats):
     until(f"EFFECTOR: ACK {log_id} completed WITH ring.log")
     text = base64.b64decode(server.operation(log_id)["result"]["artifact"]["data"]).decode()
     assert "[INIT] MODE: DEVELOPMENT" in text and f"{shot_id} open-screen" in text, text[-1500:]
+    # Past its run time an answer goes without its artifact, naming it, and the agent is free at once (750-EFF-0025): the
+    # first ACK fails, and the retry, 5 s or more later, comes after the command's 3 s.
+    server.inject("/api/commands/ack", "ack_500")
+    late_id = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 3}, program="mind")
+    until(f"EFFECTOR: ACK {late_id} completed LATE, WITHOUT ring.log")
+    late = server.operation(late_id)["result"]
+    assert late["status"] == "completed" and "artifact" not in late, late.keys()
+    assert re.fullmatch(r"not sent: the server had ended the command; ring\.log \d+ [0-9a-f]{64}", late["stdout"]), late["stdout"]
+    after_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
+    until(f"EFFECTOR: ACK {after_id} completed WITH ITS RESULT ACCEPTED")
     # A file delivered under the policy's root, checked by size and SHA-256 before it takes its name; one outside refused.
     delivery = b"delivered by the Effector fixture\n" * 2000
     published = server.publish(delivery, command_id="deliver-1")
@@ -9418,7 +10094,8 @@ def tpm_check(args, cpu):
     driven by the TPM service, which init gives its registers from the firmware's tables. On one raw image: a boot without
     a TPM keeps the device key unencrypted (the interim); a boot with TPM A seals that key and removes the plain file; A
     again unseals the same key; another TPM, B, does not open the blob, and a new key is made and sealed. The shell's
-    client, without the seal badge, is refused a seal."""
+    client, without the seal badge, is refused a seal. 308-STO-0022: a store disk whose volume key keystore keeps opens
+    under the same device key, sealed by A or not, and not under B's."""
     if not raw_tools() or not shutil.which("swtpm"):
         print("SKIP: the TPM check needs swtpm, mkfs.fat, fsck.fat and mtools", flush=True)
         return
@@ -9427,6 +10104,10 @@ def tpm_check(args, cpu):
         image, start, fs_sectors = raw_fat_image(temp)
         part = f"{image}@@{start * 512}"
         device = "tpm-tis-device" if args.arch == "aarch64" else "tpm-crb"
+        store = temp / "store.img"
+        with store.open("wb") as f:
+            f.truncate(32 << 20)
+        disk = ["-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
 
         def boot(tpm=None):
             # A swtpm for each boot, on the state directory of TPM `tpm`.
@@ -9443,7 +10124,7 @@ def tpm_check(args, cpu):
                         break
                     time.sleep(.1)
                 extra = ["-chardev", f"socket,id=chrtpm,path={socket_path}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", f"{device},tpmdev=tpm0"]
-            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra])
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra, *disk])
             vm.swtpm, vm.sockets = swtpm, sockets
             log = vm.service_logs("keystore", "PUBLIC KEY")
             name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
@@ -9459,11 +10140,29 @@ def tpm_check(args, cpu):
 
         def stored(name):
             return subprocess.run(["mtype", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True).returncode == 0
+
+        def store_opens(vm, root=None):
+            # 308-STO-0022: the store disk mounts with the volume key keystore keeps; an object published at the first
+            # boot reads back at the others. Returns its CID and the secret's name.
+            log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+            require(log, "SEALED, KEY KEPT BY KEYSTORE")
+            if root:
+                assert "VOLUME KEY MADE" not in log, log
+                require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+                return root
+            assert re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE FROM \w+, KEPT BY KEYSTORE, NOT ON THE MEDIUM", log), log
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.command("dmesg -s blockstore", raw=True)
+            require(vm.command(f"blocks publish kept {put[1]}"), "PUBLISHED kept VERSION 1")
+            return put[1]
         vm, log, plain = boot()
         try:
             require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
             require(vm.service_logs("tpm", "[TPM] NO TPM"), "[TPM] NO TPM")
             require(vm.command("tpm"), "TPM: NONE")
+            root = store_opens(vm)
+            volume = re.search(r"\[KEYSTORE\] SECRET (volume-[0-9a-f]{16}) OF SERVICE blockstore KEPT", service_log(vm, "keystore", "OF SERVICE blockstore KEPT"))
+            assert volume, vm.command("dmesg -s keystore", raw=True)
         finally:
             close(vm)
         assert stored("device.key") and not stored("device.sealed")
@@ -9478,22 +10177,34 @@ def tpm_check(args, cpu):
             require(vm.command("tpm seal not mine"), "TPM: Rights")
             log = vm.command("dmesg -s tpm")
             assert re.search(r"\[TPM\] SEALED 32 BYTES FOR PID \d+", log) and re.search(r"\[TPM\] REFUSED SEAL FOR PID \d+ \(BADGE 0\)", log), log
+            store_opens(vm, root)
         finally:
             close(vm)
         assert sealed == plain, (plain, sealed)
         assert stored("device.sealed") and not stored("device.key")
         vm, log, again = boot("a")
-        close(vm)
+        try:
+            store_opens(vm, root)
+        finally:
+            close(vm)
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
         assert again == plain, (plain, again)
-        # The disk without its TPM: another TPM does not open the blob.
+        # The disk without its TPM: another TPM does not open the blob, nor the store's disk the secret kept under it.
         vm, log, other = boot("b")
-        close(vm)
+        try:
+            refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
+            require(refused, f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}, WHICH KEEPS NONE UNDER IT")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
+        finally:
+            close(vm)
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM AND SEALED BY THE TPM IN system/keystore/device.sealed")
         assert other != plain, (plain, other)
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: TPM 2.0 ({device}, swtpm) driven by the TPM service: the unencrypted device key (MIND {plain}) sealed and its file removed, "
           "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal", flush=True)
+    print(f"PASS: the store's volume key kept by keystore under the device key (308-STO-0022): its disk made at a boot without a TPM "
+          f"({volume[1]}) mounts and reads back an object put then after TPM A sealed the device key, and twice under A; under "
+          "TPM B's new device key it is not mounted and the object is not read", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
@@ -11879,7 +12590,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -11940,6 +12651,9 @@ def main():
             continue
         if suite == "install":
             install_suite(args, args.updater_elf)
+            continue
+        if suite == "effector-update":
+            effector_update_suite(args)
             continue
         if suite == "update":
             update_suite(args)
@@ -12069,6 +12783,9 @@ def main():
             if suite == "net":
                 net_suite(args, disk)
                 continue
+            if suite == "download":  # net's downloads, `get` and the API clients' checks alone (000-NET-0047)
+                download_check(args, disk)
+                continue
             if suite == "tls":
                 tls_suite(args, disk)
                 continue
@@ -12091,10 +12808,12 @@ def main():
                 svc_boot_check(args)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
-            # line, and audio_gw must keep playing without interrupts (issue 096).
+            # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
+            # its end (309-STO-0031): its RAM disk store starts blank, and the snapshot overlay keeps the boot volume's files.
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
-                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults" else (), tablet=suite == "tablet", usb_input=suite == "usb")
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults" else (), tablet=suite == "tablet", usb_input=suite == "usb",
+                    reboot=suite == "store")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
@@ -12104,10 +12823,12 @@ def main():
                     listen_suite(vm, starts)
                 elif suite == "tablet":
                     tablet_suite(vm, wav)
+                elif suite == "serialload":  # 000-KRN-0188, named only, in no gate group
+                    serial_load_suite(vm)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "nnd": nnd_check, "bigmem": big_memory_check}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check, "nnd": nnd_suite, "bigmem": big_memory_check}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

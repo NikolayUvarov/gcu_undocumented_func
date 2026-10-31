@@ -760,6 +760,9 @@ fn main(info: &'static BootInfo) {
                     manager.wm.desk.background = backdrop.shown();
                     (next_pattern, next_info) = (0, 0);
                     mind::println!("[WM] SETTINGS {}{}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "), if saved { "; SAVED" } else { "; NOT SAVED" });
+                    // A picture wm could not show, from the file's row: Settings, still open, offer the choice of another
+                    // (the maintainer, 2026-10-30).
+                    if let (Some(why), Mode::Settings(settings)) = (&problem, &mut manager.wm.mode) { settings.not_shown(why.clone()); }
                     manager.wm.notice = Some(problem.unwrap_or_else(|| String::from(if saved { "Settings: the background is kept in data/wm.conf" } else { "Settings: the background could not be written to data/wm.conf" })));
                     // A new size or colour of the pointer (000-APP-0061): drawn so from the next frame.
                     if (backdrop.config.pointer, backdrop.config.pointer_colour) != pointer_before {

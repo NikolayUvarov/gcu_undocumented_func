@@ -422,9 +422,9 @@ types! {
     battery: Error Status;
     blockstore: Error Codec Durability Stats Head Collected Kept Pinned Usage Update Named Published PinTaken Committed Domain Scrubbed;
     display: Error Mode RemoteState;
-    effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport Delivered PolicySummary Load Space Sample;
+    effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport Delivered PolicySummary Load Space Sample UpdateState;
     gpio: Kind Pull Error Controller Pin;
-    init: Error Service Boot Mode ModeState Planned Configuration;
+    init: Error Service Boot Mode ModeState Planned Configuration StopReason;
     keyboard: Layout SwitchKey State;
     keystore: Error Purpose Usage WifiNetwork;
     loader: Error Program Needs HelperKind;
@@ -484,4 +484,21 @@ fn every_generated_type_decodes_only_canonical_encodings() {
     panic::set_hook(hook);
     for (name, accepted) in &done { println!("{name}: {} inputs, {accepted} accepted (seed {:#x})", iterations(), seed()); }
     assert!(findings.is_empty(), "type findings:\n{}", findings.join("\n"));
+}
+
+#[test]
+fn vfs_2_6_decodes_conflict_and_mind_fs_maps_every_code() {
+    // 311-KRN-0189: `conflict` is code 12, and the code past it is refused as every undefined one is.
+    use idl::vfs::Error;
+    assert_eq!(Error::decode(&mut Reader::new(&[12])), Some(Error::Conflict));
+    assert_eq!(Error::decode(&mut Reader::new(&[13])), None);
+    // libmind/src/fs.rs is not built on the host: its mapping is read, and each code keeps its name.
+    let source = include_str!("../libmind/src/fs.rs");
+    let mapping = &source[source.find("impl From<vfs::Error> for Error").expect("the mapping")..];
+    let mapping = &mapping[..mapping.find("\n}\n").expect("its end")];
+    let names: Vec<String> = (0..).map_while(Error::from_code).map(|e| format!("{e:?}")).collect();
+    assert_eq!(names.last().map(String::as_str), Some("Conflict"));
+    for name in names {
+        assert!(mapping.contains(&format!("vfs::Error::{name} => Error::{name}")), "mind::fs maps {name} to its own {name}");
+    }
 }

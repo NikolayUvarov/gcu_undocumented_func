@@ -53,7 +53,9 @@ fn version_read_needs_only_the_old_record() {
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
     assert_eq!(BOOT_HANDOFF_VERSION, 25);
-    assert!(BOOT_HANDOFF_VERSION >= ABI_VERSION, "a handoff is numbered above every ABI so far");
+    // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192). It
+    // stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older, 351-KRN-0166).
+    assert!(BOOT_HANDOFF_VERSION > 18, "a handoff is above every ABI an older loader wrote in its place");
     assert_eq!(BOOT_IMAGES, 46, "a change of the boot images is a change of the handoff");
     assert_eq!(size_of::<BootInfo>(), 1096, "a change of BootInfo is a change of the handoff");
     let at = BOOT_SERVICES.iter().position(|&name| name == "rtw88_wifi").unwrap();

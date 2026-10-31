@@ -106,6 +106,24 @@ fn the_same_bytes_give_the_same_root_however_they_are_written() {
 }
 
 #[test]
+fn a_reset_builder_makes_each_object_as_a_new_one_does() {
+    // 311-STO-0032: storefs keeps one builder for every file it stores.
+    let mut builder = Box::new(Builder::new());
+    let mut blocks = Memory::default();
+    for len in [CHUNK * FANOUT + 5, 0, 3 * CHUNK, 1, CHUNK * FANOUT + 5] {
+        let data = pattern(len);
+        builder.reset();
+        builder.write(&mut blocks, &data).unwrap();
+        assert_eq!(builder.finish(&mut blocks), Ok(store(&mut Memory::default(), &data, CHUNK)), "{len} bytes");
+    }
+    // A build left half way, by a refusal or not, is dropped.
+    builder.reset();
+    builder.write(&mut blocks, &pattern(5 * CHUNK + 3)).unwrap();
+    builder.reset();
+    assert_eq!(builder.finish(&mut blocks), Ok(store(&mut Memory::default(), &[], 1)));
+}
+
+#[test]
 fn reads_at_any_offset() {
     let data = pattern(CHUNK * FANOUT + 3 * CHUNK + 11);
     let mut blocks = Memory::default();

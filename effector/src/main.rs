@@ -5,15 +5,16 @@
 // `token`, `agent_id` and `journal`. As a boot service in a mode, `init` starts it with `--service` (750-KRN-0119,
 // 0143): it reads `data/effector/effector.conf` and the owner's token through SLOT_FILE and keeps the token,
 // `agent_id` and `journal` in its private `system/effector` (SLOT_VFS, `mind::effector`). It heartbeats, polls, hands
-// `collect_file`, `deliver_file`, `collect_logs`, `screenshot` and the service actions to `effector_gw` (whose owner's
-// policy decides each, 750-EFF-0007), answers any other command `denied`, journals each answer before its ACK, and
+// `collect_file`, `deliver_file`, `collect_logs`, `screenshot`, the service actions and a developer's release
+// (`update_agent`, 751-EFF-0023) to `effector_gw` (whose owner's policy decides each, 750-EFF-0007), answers any other
+// command `denied`, journals each answer before its ACK (an update's after the restart it asks for), and
 // sends the gateway's counters as telemetry every 30 s (750-EFF-0014), over one HTTPS connection to the pinned server.
 // Heads and JSON bodies are read by the parser service (MC-11.11); the token is never printed. One line per event.
 extern crate alloc;
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 use effector::session::{self, Accepted, Artifact, Outcome, Session, Time};
-use effector::{bench, config, journal, telemetry, wire};
+use effector::{bench, config, journal, telemetry, update, wire};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS, SLOT_VFS};
 use mind::effector::{OWNER_DIR, SESSION_DIR, SLOT_GATEWAY};
 use mind::idl::codec::Text;
@@ -32,6 +33,10 @@ const ACTION_S: u64 = 120; // a gateway request's budget when the command names 
 const LOAD_MS: usize = 10_000; // the load is read this often for the heartbeat and the poll
 const BENCH_SLICE_MS: u64 = 200; // performance_measure runs this long between heartbeats
 const REBOOT_DELAY_MS: u32 = 10_000; // the gateway asks init to restart this long after it answers: time to keep and send the result
+const QUIET_MS: usize = 40_000; // after the last heartbeat, how long the agent waits for the restart before it goes on
+const UPDATE_S: u64 = 1800; // an update's budget when the command names none: the download, the staging and the apply
+const RESTART_WAIT_MS: usize = 60_000; // after an apply the updater accepted, the restart comes within this or not at all
+const UPDATE_LOOK_MS: usize = 2000; // after the restart, the updater's view is read this often until it answers
 const BODY_MAX: usize = 16384;
 // A request waits this long for a byte: TCP resends a segment lost twice at 3 s (1 + 2 s, smoltcp's RTO), so a burst of
 // Wi-Fi loss would otherwise cost a new connection and TLS handshake every few seconds (DRV, 2026-10-23).
@@ -139,6 +144,10 @@ struct Running {
     conditions: bench::Conditions, baseline_until: usize, sample_at: usize,
 }
 
+/// A developer's release applied before the restart this boot may follow (751-EFF-0023): its command, whether the
+/// machine restarted since, and when the agent started looking.
+struct UpdateWait { pending: update::Pending, restarted: bool, since: usize, look_at: usize }
+
 /// The machine's processor time and the agent's own, from the gateway's counters.
 fn cpu_now() -> Option<bench::Cpu> {
     let s = gateway::sample(GATEWAY).ok().filter(|s| s.cpus > 0)?;
@@ -155,7 +164,7 @@ impl bench::Disk for BenchFile<'_> {
 }
 
 /// What the artifact file's first line says: `<command> <size> <sha256> <truncated 0|1> <name>`.
-struct Kept { command: String, size: usize, sha256: String, truncated: bool, name: String, start: usize }
+struct Kept { command: String, size: usize, sha256: String, truncated: bool, name: String, start: usize, ends_unix: u64 }
 
 fn failure(e: gateway::Error) -> session::Failure {
     use session::Failure as F;
@@ -165,6 +174,11 @@ fn failure(e: gateway::Error) -> session::Failure {
         gateway::Error::Expired => F::Expired, gateway::Error::Audit => F::Audit, gateway::Error::Malformed => F::Malformed,
         gateway::Error::Unsupported => F::Unsupported, _ => F::Io,
     }
+}
+
+/// A gateway's error by its IDL name, for an update's answer (`signature`, `older` and `expired` among them).
+fn reason(e: gateway::Error) -> &'static str {
+    match e { gateway::Error::Signature => "signature", gateway::Error::Older => "older", gateway::Error::Exists => "exists", gateway::Error::Cancelled => "cancelled", e => failure(e).name() }
 }
 
 /// The command's origin as the gateway audits it; a field cut to fit says so. `budget_s`: the command's own execution
@@ -201,6 +215,9 @@ struct Agent {
     busy_since: Option<String>,
     held: Option<(String, String)>, // the command taken this run whose answer waits, and its action
     running: Option<Box<Running>>,
+    update: Option<Box<UpdateWait>>,
+    restart_at: Option<usize>, // a restart the gateway admitted: once its answer is sent, the last heartbeat (750-EFF-0006)
+    quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
 }
 
 impl Agent {
@@ -326,8 +343,9 @@ impl Agent {
 
     #[inline(never)]
     fn heartbeat(&mut self, stopping: bool, waiting: Option<session::Id>) -> Outcome {
-        // A benchmark under way holds the one slot as an answer waiting does.
-        let waiting = waiting.or_else(|| self.running.as_ref().and_then(|r| session::Id::command(&r.id).ok()));
+        // A benchmark under way, or an update waiting for its restart, holds the one slot as an answer waiting does.
+        let own = self.running.as_ref().map(|r| (r.id.as_str(), r.action.as_str())).or(self.update.as_ref().map(|u| (u.pending.id.as_str(), u.pending.action.as_str())));
+        let waiting = waiting.or_else(|| own.and_then(|(id, _)| session::Id::command(id).ok()));
         let mut buf = [0u8; 1536];
         let mut stamp = [0u8; 20];
         let agent_time = mind::rtc::unix_time().map(|t| wire::rfc3339_utc(t, &mut stamp));
@@ -337,8 +355,8 @@ impl Agent {
             (None, true) => { self.busy_since = None; self.held = None; }
             _ => {}
         }
-        let action = match (&self.held, &self.running, waiting) {
-            (_, Some(r), Some(w)) if r.id == w.as_str() => r.action.as_str(),
+        let action = match (&self.held, own, waiting) {
+            (_, Some((id, action)), Some(w)) if id == w.as_str() => action,
             (Some((held, action)), _, Some(w)) if held == w.as_str() => action.as_str(),
             _ => "",
         };
@@ -378,6 +396,20 @@ impl Agent {
         let file = File::open(&self.path("artifact")).ok()?;
         let kept = kept(&file)?;
         if kept.command != ack.record.id.as_str() || file.size() != kept.start + kept.size { return None; }
+        // Past the command's run time the server has ended it and keeps nothing of a late answer but its status: the
+        // answer goes at once, naming the artifact, rather than tying the agent up sending megabytes (750-EFF-0025).
+        if kept.ends_unix != 0 && mind::rtc::unix_time().is_some_and(|t| t >= kept.ends_unix) {
+            let line = alloc::format!("not sent: the server had ended the command; {} {} {}", kept.name, kept.size, kept.sha256);
+            let mut buf = [0u8; 1024];
+            let result = wire::exec_result(&mut buf, 0, &line, "").ok()?.to_vec();
+            let result = core::str::from_utf8(&result).ok()?;
+            let mut body = [0u8; 1536];
+            let body = wire::ack(&mut body, ack.record.id.as_str(), result).ok()?.to_vec();
+            let Some(status) = self.request(Method::Post, "/api/commands/ack", "", Some(&body)) else { return Some(Outcome::Retry) };
+            let ok = status == 200 && self.answer(wire::ok_answer).is_ok();
+            mind::println!("EFFECTOR: ACK {} completed LATE, WITHOUT {} ({} BYTES) {}", ack.record.id.as_str(), kept.name, kept.size, if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
+            return Some(session::outcome(status, ok));
+        }
         // A PNG's width and height, from its header chunk.
         let mut head = [0u8; 24];
         let picture = (kind == Artifact::Screen && file.read_at(kept.start, &mut head).ok() == Some(24))
@@ -460,7 +492,7 @@ impl Agent {
         let mut took_command = false;
         // While an answer waits for its ACK the agent takes no new command: the server delivers each command once, so
         // `at_capacity=1` asks it to hold them (contract 1.0) rather than hand over one that would be refused.
-        let full = session.busy() || self.running.is_some();
+        let full = session.busy() || self.running.is_some() || self.update.is_some();
         let mut query = alloc::format!("?agent_id={}{}", self.agent_id, if full { "&at_capacity=1" } else { "" });
         // The load on every poll too (Effector ahelp, "Load gate").
         if let Some(l) = self.load { let _ = core::fmt::write(&mut query, format_args!("&load_percent={}.{:03}", l.percent / 1000, l.percent % 1000)); }
@@ -481,8 +513,8 @@ impl Agent {
                             self.start_bench(id, agent_id, action, program, payload, *expires_unix);
                             continue;
                         }
-                        if self.running.as_ref().is_some_and(|r| &r.id == id) { continue; }
-                        let done = if gateway_ok && session.runnable(&command, time()) { self.act(id, action, program, payload, initiator, reason) } else { None };
+                        if self.running.as_ref().is_some_and(|r| &r.id == id) || self.update.as_ref().is_some_and(|u| &u.pending.id == id) { continue; }
+                        let done = if gateway_ok && session.runnable(&command, time()) { self.act(id, action, program, payload, *expires_unix, initiator, reason) } else { None };
                         let received = match done { Some(done) => session.receive_with(command, time(), done), None => session.receive(command, time()) };
                         self.keep_answer(session, received, id, action);
                     }
@@ -587,10 +619,10 @@ impl Agent {
 
     /// The action of a command the gateway serves, or `None` for one it does not (answered `denied`).
     #[inline(never)]
-    fn act(&mut self, id: &str, action: &str, program: &str, payload: &str, initiator: &str, reason: &str) -> Option<session::Final> {
+    fn act(&mut self, id: &str, action: &str, program: &str, payload: &str, expires_unix: Option<u64>, initiator: &str, reason: &str) -> Option<session::Final> {
         use session::{Failure, Final};
         // The command's own budget, else the server's default for its kind (services 180 s, screenshots 30 s).
-        let default = match action { "start_service" | "stop_service" | "restart_service" => 180, "screenshot" => 30, _ => ACTION_S };
+        let default = match action { "start_service" | "stop_service" | "restart_service" => 180, "screenshot" => 30, "update_agent" => UPDATE_S, _ => ACTION_S };
         let budget = if payload.trim_start().starts_with('{') { self.parsed(payload.as_bytes(), wire::timeout_seconds).ok().flatten() } else { None }.unwrap_or(default);
         let o = origin(id, initiator, reason, budget);
         let service = |a| {
@@ -601,10 +633,11 @@ impl Agent {
         Some(match action {
             "collect_file" => self.collect_file(id, payload, &o),
             "deliver_file" => self.deliver_file(id, payload, &o),
+            "update_agent" => self.update_agent(id, program, payload, expires_unix, &o),
             "collect_logs" => self.collect_logs(id, payload, &o),
             "screenshot" => {
                 let opened = gateway::open_screen(GATEWAY, &o);
-                self.capture(id, opened, Artifact::Screen, "screenshot.png")
+                self.capture(id, opened, Artifact::Screen, "screenshot.png", &o)
             }
             // The server's `exec` with the command `reboot`: the gateway's restart, under the owner's `reboot on`.
             "exec_v1" => {
@@ -613,7 +646,11 @@ impl Agent {
                 if command.trim() == "health" { return Some(self.health(id)); }
                 if command.trim() != "reboot" { return None; }
                 match gateway::reboot(GATEWAY, &o, REBOOT_DELAY_MS) {
-                    Ok(Ok(())) => { mind::println!("EFFECTOR: {}: THE MACHINE RESTARTS IN {} S", id, REBOOT_DELAY_MS / 1000); Final::Completed }
+                    Ok(Ok(())) => {
+                        mind::println!("EFFECTOR: {}: THE MACHINE RESTARTS IN {} S", id, REBOOT_DELAY_MS / 1000);
+                        self.restart_at = Some(now() + REBOOT_DELAY_MS as usize);
+                        Final::Completed
+                    }
                     Ok(Err(e)) => Final::Failed(failure(e)),
                     Err(_) => Final::Failed(Failure::Unsupported),
                 }
@@ -655,18 +692,21 @@ impl Agent {
             "ring" | "boot" => (gateway::open_log(GATEWAY, o, &path), alloc::format!("{}.log", path)),
             p => (gateway::open_file(GATEWAY, o, p), String::from(p.rsplit(['/', ':']).next().unwrap_or("collected.log"))),
         };
-        self.capture(id, opened, Artifact::Log, &name)
+        self.capture(id, opened, Artifact::Log, &name, o)
     }
 
     /// An opened transfer kept as the answer's artifact, then closed.
-    fn capture(&mut self, id: &str, opened: mind::sys::Result<core::result::Result<gateway::Transfer, gateway::Error>>, kind: Artifact, name: &str) -> session::Final {
+    fn capture(&mut self, id: &str, opened: mind::sys::Result<core::result::Result<gateway::Transfer, gateway::Error>>, kind: Artifact, name: &str, o: &gateway::Origin) -> session::Final {
         use session::{Failure, Final};
         let opened = match opened {
             Ok(Ok(t)) => t,
             Ok(Err(e)) => { mind::println!("EFFECTOR: {}: THE GATEWAY ANSWERED {:?}", id, e); return Final::Failed(failure(e)) }
             Err(e) => { mind::println!("EFFECTOR: {}: NO ANSWER FROM THE GATEWAY: {:?}", id, e); return Final::Failed(Failure::Unsupported) }
         };
-        let kept = self.keep(id, &opened, name);
+        // The run time's end in Unix seconds, so that it holds across a restart: an answer later than it goes without
+        // its artifact (750-EFF-0025).
+        let ends_unix = mind::rtc::unix_time().map_or(0, |t| t + o.deadline_ms.saturating_sub(now() as u64) / 1000);
+        let kept = self.keep(id, &opened, name, ends_unix);
         if let Err(f) = kept { mind::println!("EFFECTOR: {}: {} BYTES NOT KEPT: {}", id, opened.size, f.name()); }
         let _ = gateway::close(GATEWAY, opened.handle);
         match kept { Ok(()) => Final::Captured(kind), Err(f) => Final::Failed(f) }
@@ -675,11 +715,11 @@ impl Agent {
     /// Copies an open transfer into the private `artifact` file, after a header line naming the command, checking the
     /// SHA-256 the gateway announced: it stays there until its answer is acknowledged.
     #[inline(never)]
-    fn keep(&mut self, id: &str, t: &gateway::Transfer, name: &str) -> Result<(), session::Failure> {
+    fn keep(&mut self, id: &str, t: &gateway::Transfer, name: &str, ends_unix: u64) -> Result<(), session::Failure> {
         use session::Failure;
         if t.size > INLINE_MAX { return Err(Failure::Bounds); }
         let name: String = name.chars().filter(|c| c.is_ascii_graphic() && *c != '"' && *c != '\\').take(64).collect();
-        let header = alloc::format!("{} {} {} {} {}\n", id, t.size, t.sha256.as_str(), t.truncated as u8, if name.is_empty() { "artifact" } else { &name });
+        let header = alloc::format!("{} {} {} {} {} {}\n", id, t.size, t.sha256.as_str(), t.truncated as u8, if name.is_empty() { "artifact" } else { &name }, ends_unix);
         let mut file = File::open_mode(&self.path("artifact"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE).map_err(|_| Failure::Io)?;
         file.write_at(0, header.as_bytes()).map_err(|_| Failure::Io)?;
         let mut piece = alloc::vec![0u8; PIECE];
@@ -714,6 +754,24 @@ impl Agent {
             Ok(Err(e)) => return Final::Failed(failure(e)),
             Err(_) => return Final::Failed(Failure::Unsupported),
         };
+        let result = self.download(id, size, handle);
+        match result.and_then(|()| match gateway::deliver_commit(GATEWAY, handle) { Ok(Ok(d)) => Ok(d), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) }) {
+            Ok(d) => {
+                // The answer names the file as the gateway read it back (750-EFF-0021); delivered either way.
+                let stdout = alloc::format!("delivered {} {} {}", d.path.as_str(), d.size, d.sha256.as_str());
+                let mut buf = [0u8; 1024];
+                let kept = wire::completed_result(&mut buf, &stdout).ok().is_some_and(|json| self.keep_result(id, json));
+                if kept { Final::Reported } else { Final::Completed }
+            }
+            Err(f) => { let _ = gateway::close(GATEWAY, handle); Final::Failed(f) }
+        }
+    }
+
+    /// The command's file from `/api/commands/file`, written into the gateway's incoming transfer `handle` in its pieces,
+    /// in order; more than `size` bytes is `digest`.
+    #[inline(never)]
+    fn download(&mut self, id: &str, size: u64, handle: u32) -> Result<(), session::Failure> {
+        use session::Failure;
         let query = alloc::format!("?agent_id={}&command_id={}", self.agent_id, id);
         let (mut piece, mut offset, mut failed) = (Vec::with_capacity(PIECE), 0u64, None);
         let status = {
@@ -733,22 +791,110 @@ impl Agent {
             };
             self.send(Method::Get, "/api/commands/file", &query, "application/json", None, Some(&mut sink))
         };
-        let result = match (status, failed) {
+        match (status, failed) {
             (_, Some(f)) => Err(f),
             (Some(200), None) if !piece.is_empty() => match gateway::write(GATEWAY, handle, offset, &piece) { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) },
             (Some(200), None) => Ok(()),
             _ => Err(Failure::Upload),
-        };
-        match result.and_then(|()| match gateway::deliver_commit(GATEWAY, handle) { Ok(Ok(d)) => Ok(d), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) }) {
-            Ok(d) => {
-                // The answer names the file as the gateway read it back (750-EFF-0021); delivered either way.
-                let stdout = alloc::format!("delivered {} {} {}", d.path.as_str(), d.size, d.sha256.as_str());
-                let mut buf = [0u8; 1024];
-                let kept = wire::completed_result(&mut buf, &stdout).ok().is_some_and(|json| self.keep_result(id, json));
-                if kept { Final::Reported } else { Final::Completed }
-            }
-            Err(f) => { let _ = gateway::close(GATEWAY, handle); Final::Failed(f) }
         }
+    }
+
+    /// `update_agent` (751-EFF-0023): a developer's release bundle downloaded straight into the gateway, which streams it
+    /// to the updater under the policy's `update apply`; the updater refuses it unless the owner's `remote-update` is on,
+    /// before a byte is downloaded. Once staged, the command is kept in the private `update` file and the release applied:
+    /// the machine restarts, and `update_step` answers after it. Only what ends before the restart is answered here.
+    #[inline(never)]
+    fn update_agent(&mut self, id: &str, program: &str, payload: &str, expires_unix: Option<u64>, o: &gateway::Origin) -> session::Final {
+        use session::{Failure, Final};
+        let Ok((size, sha256, version, tries)) = self.parsed(payload.as_bytes(), |v| wire::update(v).map(|u| (u.size, String::from(u.sha256), u.version, u.tries))) else {
+            return Final::Failed(Failure::Malformed);
+        };
+        let handle = match gateway::update_begin(GATEWAY, o, size, &sha256) {
+            Ok(Ok(h)) => h,
+            Ok(Err(e)) => { mind::println!("EFFECTOR: {}: THE UPDATE REFUSED: {}", id, reason(e)); return Final::Failed(failure(e)) }
+            Err(_) => return Final::Failed(Failure::Unsupported),
+        };
+        mind::println!("EFFECTOR: {}: A RELEASE OF {} BYTES TO THE UPDATER", id, size);
+        if let Err(f) = self.download(id, size, handle) { let _ = gateway::close(GATEWAY, handle); return Final::Failed(f); }
+        let staged = match gateway::update_commit(GATEWAY, handle) {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => return self.update_answer(id, 1, &alloc::format!("not staged: {}", reason(e)), reason(e)),
+            Err(_) => return Final::Failed(Failure::Io),
+        };
+        if version.is_some_and(|v| v != staged) {
+            return self.update_answer(id, 1, &alloc::format!("staged version {}, not the {} the command names: not applied", staged, version.unwrap_or(0)), "version");
+        }
+        let running = gateway::update_state(GATEWAY).map_or(0, |s| s.running);
+        let boot_unix = mind::rtc::unix_time().map(|t| t.saturating_sub(now() as u64 / 1000));
+        let pending = update::Pending {
+            id: String::from(id), agent_id: self.agent_id.clone(), action: String::from("update_agent"), program: String::from(program), payload: String::from(payload),
+            expires_unix, received_unix: mind::rtc::unix_time(), at_ms: now() as u64, boot_unix, running, staged,
+        };
+        // Kept and flushed before the apply: the restart leaves no time after it.
+        let kept = update::write(&pending).is_some_and(|text| {
+            File::open_mode(&self.path("update"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE).and_then(|mut f| { f.write_at(0, text.as_bytes())?; f.flush() }).is_ok()
+        });
+        if !kept { return self.update_answer(id, 1, &alloc::format!("version {} staged, not applied: the command could not be kept across the restart", staged), "io"); }
+        mind::println!("EFFECTOR: {}: VERSION {} STAGED; APPLIED WITH {} TRIES: THE MACHINE RESTARTS", id, staged, tries);
+        // The server hears of the restart before it comes (750-EFF-0006): the apply restarts the machine at once.
+        self.last_heartbeat();
+        let applied = gateway::update_apply(GATEWAY, o, tries);
+        if let Ok(Err(e)) = applied {
+            let _ = fs::remove(&self.path("update"));
+            return self.update_answer(id, 1, &alloc::format!("version {} staged, not applied: {}", staged, reason(e)), reason(e));
+        }
+        // Accepted (or the gateway went down with the machine): the restart comes now.
+        let until = now() + RESTART_WAIT_MS;
+        while now() < until { mind::time::sleep(500); }
+        let _ = fs::remove(&self.path("update"));
+        self.update_answer(id, 1, &alloc::format!("the restart did not come: version {} stays staged", staged), "restart")
+    }
+
+    /// One heartbeat saying `shutting_down`, before a restart the agent knows of; then no heartbeat or poll until the
+    /// restart, or `QUIET_MS` if it does not come (750-EFF-0006).
+    fn last_heartbeat(&mut self) {
+        // The connection may have closed while the agent worked (an update's staging takes minutes on a slow machine):
+        // a failed try drops it, and the next opens a new one.
+        let mut outcome = Outcome::Retry;
+        for _ in 0..3 {
+            outcome = self.heartbeat(true, None);
+            if outcome != Outcome::Retry { break; }
+        }
+        mind::println!("EFFECTOR: THE MACHINE RESTARTS: SHUTTING_DOWN SENT ({:?})", outcome);
+        self.quiet_until = now() + QUIET_MS;
+    }
+
+    /// An update's answer, kept in the private `result` file until it is acknowledged.
+    fn update_answer(&mut self, id: &str, exit_code: u64, stdout: &str, error: &str) -> session::Final {
+        mind::println!("EFFECTOR: {}: {}", id, stdout);
+        let mut buf = [0u8; 1024];
+        let kept = wire::exec_result(&mut buf, exit_code, stdout, error).ok().is_some_and(|json| self.keep_result(id, json));
+        if kept { session::Final::Reported } else { session::Final::Failed(session::Failure::Io) }
+    }
+
+    /// After the restart an update asked for: its command answered from the updater's view once that settles, when no
+    /// older answer waits; journaled before its ACK, then its file removed.
+    #[inline(never)]
+    fn update_step(&mut self, session: &mut Session) {
+        let Some(u) = self.update.as_mut() else { return };
+        if now() < u.look_at || session.busy() { return; }
+        u.look_at = now() + UPDATE_LOOK_MS;
+        let state = gateway::update_state(GATEWAY).ok();
+        let view = state.as_ref().filter(|s| s.slot != 0 || s.running != 0).map(|s| update::View {
+            slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: s.failure.as_str(),
+        });
+        let verdict = update::verdict(&u.pending, u.restarted, view.as_ref(), (now() - u.since) as u64);
+        let update::Verdict::Answer { exit_code, stdout, error } = verdict else { return };
+        let u = self.update.take().unwrap();
+        let p = &u.pending;
+        let answer = self.update_answer(&p.id, exit_code, &stdout, error);
+        // Received before the restart: its term in the server's queue is judged at that time.
+        let received = Time { monotonic_ms: now() as u64, unix_seconds: p.received_unix.or(mind::rtc::unix_time()) };
+        let command = session::Command { id: &p.id, agent_id: &p.agent_id, action: &p.action, program: &p.program, payload: &p.payload, expires_unix: p.expires_unix };
+        let received = session.receive_with(command, received, answer);
+        let durable = matches!(received, Ok(Accepted::Store(_)) | Ok(Accepted::Replay));
+        self.keep_answer(session, received, &p.id, &p.action);
+        if durable { let _ = fs::remove(&self.path("update")); }
     }
 
     /// One telemetry sample (750-EFF-0014): the gateway's counters and the network cards, rates against the last one.
@@ -829,8 +975,10 @@ fn kept(file: &File) -> Option<Kept> {
     let line = core::str::from_utf8(&head[..end]).ok()?;
     let mut w = line.split(' ');
     let (command, size, sha256, truncated, name) = (w.next()?, w.next()?.parse().ok()?, w.next()?, w.next()?, w.next()?);
+    // When the command's run time ends, in Unix seconds (750-EFF-0025); 0, or a file kept before it: not known.
+    let ends_unix = match w.next() { Some(t) => t.parse().ok()?, None => 0 };
     if w.next().is_some() || sha256.len() != 64 { return None; }
-    Some(Kept { command: String::from(command), size, sha256: String::from(sha256), truncated: truncated == "1", name: String::from(name), start: end + 1 })
+    Some(Kept { command: String::from(command), size, sha256: String::from(sha256), truncated: truncated == "1", name: String::from(name), start: end + 1, ends_unix })
 }
 
 fn read_file(path: &str, max: usize) -> Option<Vec<u8>> {
@@ -949,7 +1097,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let hostname = String::from(config.hostname());
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
-        load: None, load_at: 0, busy_since: None, held: None, running: None });
+        load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0 });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -989,6 +1137,18 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let session = match Session::restore(&agent.agent_id, &records, &done, now() as u64) { Ok(s) => Box::new(s), Err(e) => fail(format_args!("SESSION: {:?}", e)) };
     agent.executed_total = read_file(&agent.path("executed"), 24).and_then(|b| core::str::from_utf8(&b).ok().and_then(|t| t.trim().parse().ok())).unwrap_or(0);
     let waiting = done.iter().filter(|d| !**d).count();
+    // An update applied before a restart (751-EFF-0023): answered once the updater's view settles (`update_step`).
+    if let Some(bytes) = read_file(&agent.path("update"), update::FILE_MAX) {
+        match update::read(&bytes).filter(|p| p.agent_id == agent.agent_id) {
+            Some(pending) => {
+                let boot_unix = mind::rtc::unix_time().map(|t| t.saturating_sub(now() as u64 / 1000));
+                let restarted = update::restarted(&pending, now() as u64, boot_unix);
+                mind::println!("EFFECTOR: UPDATE {} TO VERSION {}: {}", pending.id, pending.staged, if restarted { "THE MACHINE RESTARTED; ITS ANSWER FOLLOWS THE UPDATER'S STATE" } else { "NO RESTART SINCE IT WAS APPLIED" });
+                agent.update = Some(Box::new(UpdateWait { pending, restarted, since: now(), look_at: 0 }));
+            }
+            None => { mind::println!("EFFECTOR: {}/update IS MALFORMED OR ANOTHER AGENT'S: REMOVED", agent.dir); let _ = fs::remove(&agent.path("update")); }
+        }
+    }
     // Compacted at each start: each record once, with one done line (a redelivered answer adds another).
     if count > 0 && !agent.rewrite_journal(&session) { mind::println!("EFFECTOR: JOURNAL: NOT COMPACTED, KEPT AS IT WAS"); }
     mind::println!("EFFECTOR: AGENT {} TO {}{} ({} SAVED RESULTS, {} TO ACKNOWLEDGE)", agent.agent_id, agent.config.host(), agent.config.base_path(), count, waiting);
@@ -1009,7 +1169,10 @@ fn main(_info: &'static BootInfo) {
             if now() >= started + limit * 1000 { session.stop(ms); stopped_at = Some(now()); mind::println!("EFFECTOR: STOPPING"); }
         }
         if session.shutdown_done() || stopped_at.is_some_and(|s| now() > s + 10_000) { break; }
-        match session.heartbeat(ms) {
+        // A restart the gateway admitted: once no answer waits, the last heartbeat, then quiet until it comes (750-EFF-0006).
+        if agent.restart_at.is_some() && session.waiting().is_none() { agent.restart_at = None; agent.last_heartbeat(); }
+        let quiet = now() < agent.quiet_until;
+        match if quiet { Ok(None) } else { session.heartbeat(ms) } {
             Ok(Some(attempt)) => {
                 let outcome = agent.heartbeat(session.stopping(), session.waiting());
                 let _ = session.heartbeat_done(attempt, outcome, now() as u64, jitter());
@@ -1039,12 +1202,13 @@ fn main(_info: &'static BootInfo) {
             agent.load_at = now() + LOAD_MS;
         }
         // Telemetry every 30 s once the server knows the agent, the first 5 s after.
-        if session.registered() && !session.stopping() {
+        if session.registered() && !session.stopping() && !quiet {
             if agent.telemetry_at == 0 { agent.telemetry_at = now() + 5000; }
             if now() >= agent.telemetry_at { agent.telemetry(); agent.telemetry_at = now() + telemetry::PERIOD_MS as usize; }
         }
         agent.bench_step(&mut session);
-        match session.poll(now() as u64) {
+        agent.update_step(&mut session);
+        match if quiet { Ok(None) } else { session.poll(now() as u64) } {
             Ok(Some(attempt)) => {
                 let (outcome, took_command) = agent.poll(&mut session);
                 let _ = session.poll_done(attempt, outcome, now() as u64, jitter());

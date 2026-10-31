@@ -18,7 +18,8 @@
                                               one answer in LANDING/ naming each request landed, returned or superseded
 
 Requests are messages on `internal-dev-messages`: LANDING/<YYYY-MM-DDTHHMMZ>-<TRK>-ready-<name>.md with the line
-**Ready:** `<branch>` <commit>. Answers there name them in **Landed:**, **Returned:** or **Superseded:** lines.
+**Ready:** `<branch>` <commit>. Answers there name them in **Landed:**, **Returned:** or **Superseded:** lines; a
+request's own track takes it back with a **Withdraws:** line naming it.
 State: $LAND_WORK (default $TMPDIR/mind-land). Effector's API key: the file $EFFECTOR_KEY_FILE, sent only in the
 X-API-Key header and never printed (docs/effector.md, section 2). $LAND_TRAILER is appended to the merge messages.
 """
@@ -35,6 +36,7 @@ EFFECTOR = os.environ.get("EFFECTOR_URL", "https://hesere.uz/effector")
 
 REQUEST = re.compile(r"^\*\*Ready:\*\*\s+`?([^`\s]+)`?\s+([0-9a-f]{7,40})\b", re.M)
 ANSWER = re.compile(r"^\*\*(Landed|Returned|Superseded):\*\*\s+`?([^`\s]+\.md)`?", re.M)
+WITHDRAWN = re.compile(r"\*\*Withdraws:\*\*\s+`?(?:LANDING/)?([^`\s]+\.md)`?")
 SUMMARY = re.compile(r"^(PASS|FAIL)\s+(\d+)s\s+(.+?)\s*$", re.M)
 
 
@@ -50,6 +52,9 @@ def git(*args, cwd=None, check=True):
 def pending(files):
     """Requests not answered, oldest first, and the older requests of a branch that a newer one superseded."""
     answered = {name for text in files.values() for _, name in ANSWER.findall(text)}
+    # A withdrawal counts from the request's own track alone (round 58 took STO's withdrawn 1952Z).
+    track = lambda name: name.split("-")[3] if name.count("-") >= 3 else None
+    answered |= {gone for name, text in files.items() for gone in WITHDRAWN.findall(text) if track(gone) == track(name)}
     latest, superseded = {}, []
     for name in sorted(files):
         match = REQUEST.search(files[name])
@@ -497,6 +502,10 @@ class Effector:
         reply = self.call("GET", "/api/v1/endpoints")
         return reply.get("endpoints", []) if isinstance(reply, dict) else reply
 
+    def active(self, machine):
+        reply = self.call("GET", f"/api/v1/operations?agent_id={machine['agent']}&status=active")
+        return reply.get("operations", []) if isinstance(reply, dict) else reply
+
     def run(self, machine, command, timeout, reason, key, queue_ttl=6 * 3600):
         body = {"agent_id": machine["agent"], "kind": "exec", "command": command, "timeout_seconds": timeout, "reason": reason,
                 "idempotency_key": key, "queue_ttl_seconds": queue_ttl, **({"run_as": machine["run_as"]} if machine["run_as"] else {})}
@@ -539,8 +548,25 @@ class Gate:
         with self.lock:
             print(f"{time.strftime('%H:%M:%S')} {text}", flush=True)
 
+    def earlier(self, name):
+        """IDs of another run's operations still queued or running in this lane's clone. Stopping a gate here leaves its
+        operations running there: round 56 checked out its tree under round 55's and read their results as its own."""
+        mark = re.compile(rf"^{TRACK} landing gate (\S+): .* on {re.escape(name)}$")
+        try:
+            ops = self.effector.active(self.lane(name)[0])
+        except (Exception, SystemExit) as error:
+            self.log(f"{name}: its active operations not listed ({error}); the tree goes ahead")
+            return []
+        return [op.get("id") for op in ops if (m := mark.match(op.get("reason") or "")) and m[1] != self.tag]
+
     def tree(self, name):
         machine, clone, _ = self.lane(name)
+        waited = False
+        while ids := self.earlier(name):
+            if not waited:
+                self.log(f"{name}: waits for an earlier run's operations in its clone to end: {', '.join(ids)}")
+                waited = True
+            time.sleep(60)
         command = self.prelude(name) + (
             f"[ -d {clone}/.git ] || {{ mkdir -p {os.path.dirname(clone)} && git clone -q {URL} {clone}; }} || exit 3\n"
             f"cd {clone} || exit 3\ngit merge --abort 2>/dev/null; git reset -q --hard\n"

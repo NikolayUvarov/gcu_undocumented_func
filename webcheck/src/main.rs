@@ -188,6 +188,7 @@ fn api(base: &Url, parser: &mut mind::parse::Service) {
     api_bomb(base, parser);
     api_events(base, parser);
     for path in ["/api/busy", "/api/limited"] { api_retry(base, path, parser); }
+    api_methods(base, parser);
 }
 
 // A JSON POST, as a language model's API takes one.
@@ -418,3 +419,32 @@ fn main(_info: &'static BootInfo) {
     }
     mind::println!("WEBCHECK DONE");
 }
+
+// HEAD, PATCH and DELETE on one connection: HEAD's answers end at their heads, though they name a length and a chunked
+// coding, and the requests after them are answered in order.
+#[inline(never)]
+fn api_methods(base: &Url, parser: &mut mind::parse::Service) {
+    let url = Url { path: "/api/echo", ..*base };
+    let mut connection = open(&url);
+    for (method, path) in [(Method::Head, "/api/echo"), (Method::Head, "/api/events"), (Method::Get, "/api/final")] {
+        let url = Url { path, ..*base };
+        let mut response = connection.request(method, &url, &[], None, parser, false).unwrap_or_else(|e| fail(format_args!("API {} {}: {:?}", method.name(), path, e)));
+        let (status, length, chunked) = (response.status, response.head.length, response.head.chunked);
+        mind::println!("WEBCHECK API {} {} {} LENGTH {:?} CHUNKED {} BODY [{}]", method.name(), &path[5..], status, length, chunked, text(&mut response));
+    }
+    let patch = "{\"name\":\"mind\"}";
+    let mut source = patch.as_bytes();
+    let mut response = connection.request(Method::Patch, &url, &[("Content-Type", "application/merge-patch+json")], Some((patch.len() as u64, &mut source)), parser, false)
+        .unwrap_or_else(|e| fail(format_args!("API PATCH: {:?}", e)));
+    let status = response.status;
+    mind::println!("WEBCHECK API PATCH {} {}", status, text(&mut response));
+    let mut response = connection.request(Method::Delete, &url, &[], None, parser, false).unwrap_or_else(|e| fail(format_args!("API DELETE: {:?}", e)));
+    let status = response.status;
+    mind::println!("WEBCHECK API DELETE {} {}", status, text(&mut response));
+    let item = Url { path: "/api/item", ..*base };
+    let mut response = connection.request(Method::Delete, &item, &[], None, parser, false).unwrap_or_else(|e| fail(format_args!("API DELETE item: {:?}", e)));
+    let status = response.status;
+    let body = text(&mut response);
+    mind::println!("WEBCHECK API DELETE item {} BODY [{}] ONE CONNECTION {}", status, body, connection.served());
+}
+

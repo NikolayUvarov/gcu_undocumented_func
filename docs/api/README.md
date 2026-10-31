@@ -1,6 +1,6 @@
 # MIND Core API
 
-**Version:** ABI 25 (`ABI_VERSION` in `common/abi.rs`; 262-KRN-0178: the model service `nnd` a boot image, and `SLOT_NN`, the shell's client of it; 700-KRN-0176: `bt_hci` a boot image) · **Stability:** unstable, see [Stability](#stability)
+**Version:** ABI 26 (`ABI_VERSION` in `common/abi.rs`; 750-KRN-0192: `COMPOSITOR_PULL` names the PID whose screen is in front) · **Stability:** unstable, see [Stability](#stability)
 
 Programs reach MIND Core through three layers:
 
@@ -99,7 +99,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages; up to `IRQ_SHARERS` (4) drivers share a line, each gets every interrupt, and the line stays masked until each has called `IRQ_ACK` |
 | 25 | `IRQ_ACK` | `arg1` = IRQ handle; unmasks the line |
 | 20 | `INPUT_EVENT` | routes decoded input [input privilege] |
-| 21 | `COMPOSITOR_PULL` | `arg1` = slot for the focused screen, `arg2` = 0 → 0 unchanged, 1 dirty, 2 new screen (read-only capability); `arg2` = `COMPOSITOR_FRAME`: the same, or `COMPOSITOR_BUSY` while the focused task runs with a changed screen (the task is then held when it next sleeps or waits for a message), and on 1 the task is held until `arg2` = `COMPOSITOR_RELEASE`, until the compositor waits or ends, or for 1 s at most (000-KRN-0086, 000-KRN-0186) [display privilege] |
+| 21 | `COMPOSITOR_PULL` | `arg1` = slot for the focused screen, `arg2` = 0 → 0 unchanged, 1 dirty, 2 new screen (read-only capability); `arg2` = `COMPOSITOR_FRAME`: the same, or `COMPOSITOR_BUSY` while the focused task runs with a changed screen (the task is then held when it next sleeps or waits for a message), and on 1 the task is held until `arg2` = `COMPOSITOR_RELEASE`, until the compositor waits or ends, or for 1 s at most (000-KRN-0086, 000-KRN-0186); every pull but a release returns in `arg2` the PID of the task whose screen is in front, 0 for none (750-KRN-0192) [display privilege] |
 
 ### Platform (init only)
 
@@ -178,7 +178,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | `log` | the system log: every `println!` line of a process holding a `logd` client goes there; `write`, `read`, `state` |
 | `stat` | `STAT` records as typed slices (`read`, `one`) and their names |
 | `block`, `block_protocol` | block device client; the common driver loop with the write badge checks (`Driver`, `read`, `write`, `flush`) |
-| `checkpoint` | checkpoints of a component's state in the block store ([docs/storage/checkpoints.md](../storage/checkpoints.md)): `Manifest` (contract, schema, epoch, sequence, state, resources, authorities, effect journal with `begin` and `settle`), `restore`, `save` (fenced if another instance saved first), `rebind`, over a `Store` trait |
+| `checkpoint` | checkpoints of a component's state in the block store ([docs/storage/checkpoints.md](../storage/checkpoints.md)): `Manifest` (contract, schema, epoch, sequence, state, resources, authorities, effect journal with `begin` and `settle`; format 2's clients with `applied` and `record`, the inbox, and the outbox with `send`, `delivered`, `owed`; between components `receive` and `acknowledge`), `restore` (a manifest's epoch must be its names' version, but one moved in, at their first version in a store that never held them, takes 1), `read` (another component's last checkpoint, nothing written), `save` (fenced if another instance saved first), `release` and `released` (a move out: both names to a `Release` record by one compare-and-swap, so a later restore there is refused, `Error::Released`), `rebind`, over a `Store` trait |
 | `blockstore` | rights of block store clients by badge: `BADGE_GET` (get, has, resolve, history, snapshot), `BADGE_PUT` (put, collect), `BADGE_PUBLISH` (publish, unpublish, commit, pin, unpin), any of them (stat, pins, usage), `allowed(badge, Operation)` ([docs/storage](../storage/README.md)); the calls are in `idl::blockstore` |
 | `dag` | objects larger than a block ([docs/storage](../storage/README.md)): `Builder` (chunks and DAG-CBOR nodes, the root of the bytes), `size`, `read_at`, `walk` and `complete` (every node and chunk checked against its CID and the shape), `encode`/`decode` of nodes, the `Blocks` trait of a store |
 | `cid`, `sha256` | content identifiers ([docs/storage](../storage/README.md)): `Cid` (CIDv1, `raw` or `dag-cbor` content, SHA-256) with `raw`, `matches`, binary (`to_bytes`, `from_bytes`, `read`) and text (`to_text`, `from_text`, `Display`) forms; unsupported versions, types, algorithms and non-canonical encodings are refused (`cid::Error`); SHA-256 (`digest`, `Sha256`) |

@@ -48,9 +48,12 @@ fn recognize(recognizer: &Recognizer, utterance: &Utterance, yes_no: bool) -> Re
     Report { heard: true, understood: true, text: phrase.text.clone(), intent: phrase.intent.clone(), slots, confidence }
 }
 
-fn listen(input: &mut Input) -> Result<Option<Utterance>, String> {
+// A command is at least `COMMAND_MIN_MS` long, so a key's click (F12's) does not end the wait; a yes or a no may be shorter.
+fn listen(input: &mut Input, yes_no: bool) -> Result<Option<Utterance>, String> {
+    let shortest = if yes_no { 0 } else { hear::COMMAND_MIN_MS };
+    let mut skipped = |u: Utterance| mind::println!("[VOICE] SKIPPED {} MS {} DBFS: SHORTER THAN A COMMAND", u.length_ms(), u.level);
     match input {
-        Input::Microphone(seconds) => hear::listen_once(*seconds, &mut |_, _| {}),
+        Input::Microphone(seconds) => hear::listen_once(*seconds, shortest, &mut |_, _| {}, &mut skipped),
         Input::Wav(queue) => Ok(queue.pop_front()),
     }
 }
@@ -91,7 +94,7 @@ fn main(_info: &'static mind::BootInfo) {
         match order.action {
             Action::Wait => {}
             Action::Quit => { mind::println!("[VOICE] DONE"); return; }
-            Action::Listen | Action::ListenYesNo => match listen(&mut input) {
+            Action::Listen | Action::ListenYesNo => match listen(&mut input, order.action == Action::ListenYesNo) {
                 Ok(Some(utterance)) => report = recognize(&recognizer, &utterance, order.action == Action::ListenYesNo),
                 Ok(None) => mind::println!("[VOICE] NOTHING HEARD"),
                 Err(error) => mind::println!("[VOICE] {}", error),

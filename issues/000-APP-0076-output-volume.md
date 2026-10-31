@@ -1,6 +1,6 @@
 # 000-APP-0076 — The output volume: `volume` in the shell and on `wm`'s Sound page
 
-**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (planned) · **Blocked by:** `DRV`: the levels in `audio.wit` ([requests-DRV.md](requests-DRV.md), "The output volume and the microphone's sensitivity in `audio.wit`"); `KRN`: the shell's right to change them ([requests-KRN.md](requests-KRN.md), "The shell's audio client that may change the levels") · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer, 2026-10-30: "the microphone in `listen` is very quiet on playback; the sound's and the microphone's levels are needed") · **Status:** open (planned; waits for DRV and KRN) · **Blocked by:** `DRV`: the levels in `audio.wit` ([requests-DRV.md](requests-DRV.md), "The output volume and the microphone's sensitivity in `audio.wit`"); `KRN`: the shell's right to change them ([requests-KRN.md](requests-KRN.md), "The shell's audio client that may change the levels") · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 **Recorded by:** the tools track (APP), 2026-10-14, at the maintainer's request: "the output volume and the microphone's sensitivity need settings". The microphone's part is [000-APP-0077](000-APP-0077-microphone-sensitivity.md).
 

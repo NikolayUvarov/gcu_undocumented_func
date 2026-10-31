@@ -8,7 +8,8 @@
 //! records: nothing of a block, a CID or a name in the clear, a changed or moved record refused, a wrong key refused at
 //! mount (308-STO-0021); memory domains, each under its own key, and a domain forgotten by destroying its key, its
 //! records then refused and collected (308-STO-0023); directory nodes stored, and the files of a directory tree retained
-//! by the name that holds it (311-STO-0027).
+//! by the name that holds it (311-STO-0027); a recovery key that opens a medium whose keeper lacks its volume key, its
+//! text form, its rotation, a rotation cut anywhere, and its refusals (308-STO-0028).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -24,9 +25,10 @@ mod store;
 mod rights;
 
 use cid::{Cid, Codec};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use store::{hmac_sha256, kept_id, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Keeper, Pin, Scrubbed, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_KEPT, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, SECTOR, VOLUME};
+use store::{hmac_sha256, kept_id, recover, record_sectors, sealed_sectors, superblock, Collected, Crypto, Device, Entry, Error, Extent, Head, Keeper, Pin, Scrubbed, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, FRAME, HEADER, HISTORY, KEY_CLEAR, KEY_KEPT, KEY_NONE, LAYOUT, LEASE_NS, NAME_MAX, RECOVERIES, SECTOR, VOLUME};
 
 /// A stand-in for ChaCha20-Poly1305, since the host tests build without crates: a keystream of splitmix64 seeded by
 /// SHA-256(key, nonce), and a tag of two sums in the manner of FNV-1a, seeded by the key, over the nonce, the associated
@@ -76,21 +78,27 @@ impl Crypto for Sealer {
     }
 }
 
-// The format again, written here from docs/storage rather than taken from store.rs: the keys a superblock's volume key
-// gives, and a record's associated data.
-fn keys(superblock: &[u8]) -> ([u8; 32], [u8; 32]) {
-    let volume: [u8; 32] = superblock[48..80].try_into().unwrap();
-    (hmac_sha256(&volume, &[b"MIND-STO seal"]), hmac_sha256(&volume, &[b"MIND-STO nonce"]))
+// The format again, written here from docs/storage rather than taken from store.rs: the keys a volume key (or a
+// recovery record's key) gives, and a record's associated data.
+fn keys(volume: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
+    (hmac_sha256(volume, &[b"MIND-STO seal"]), hmac_sha256(volume, &[b"MIND-STO nonce"]))
 }
 fn aad(frame: &[u8], lba: u64) -> Vec<u8> { [&frame[..16], &lba.to_le_bytes()[..]].concat() }
 
-/// The record sealed in `bytes` (from its frame on) for sector `lba`, opened under the key in `superblock`: the bytes of
-/// its sectors after the frame, or none if no frame starts there or it does not open.
-fn unseal(superblock: &[u8], lba: u64, bytes: &[u8]) -> Option<Vec<u8>> {
+/// The first 32 bytes of HKDF-SHA-256 (RFC 5869) with a salt of up to 32 bytes, written here from the RFC.
+fn hkdf(salt: &[u8], ikm: &[u8], info: &[u8]) -> [u8; 32] {
+    let mut padded = [0u8; 32];
+    padded[..salt.len()].copy_from_slice(salt);
+    hmac_sha256(&hmac_sha256(&padded, &[ikm]), &[info, &[1]])
+}
+
+/// The record sealed in `bytes` (from its frame on) for sector `lba`, opened under keys from `volume`: the bytes of its
+/// sectors after the frame, or none if no frame starts there or it does not open.
+fn unseal(volume: &[u8; 32], lba: u64, bytes: &[u8]) -> Option<Vec<u8>> {
     if &bytes[..8] != b"MIND-SLD" || bytes[8..10] != LAYOUT.to_le_bytes() { return None; }
     let n = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
     let mut data = bytes.get(FRAME..n * SECTOR)?.to_vec();
-    SEALER.open(&keys(superblock).0, bytes[16..28].try_into().unwrap(), &aad(bytes, lba), &mut data, bytes[28..44].try_into().unwrap()).then_some(data)
+    SEALER.open(&keys(volume).0, bytes[16..28].try_into().unwrap(), &aad(bytes, lba), &mut data, bytes[28..44].try_into().unwrap()).then_some(data)
 }
 
 /// Every record on the medium that opens, by its first sector, and every frame that does not (none).
@@ -101,7 +109,7 @@ fn records(medium: &Memory) -> Vec<(u64, Option<Vec<u8>>)> {
         let at = lba * SECTOR;
         let n = u32::from_le_bytes(medium.data[at + 12..at + 16].try_into().unwrap()) as usize;
         if medium.data[at..at + 8] == *b"MIND-SLD" && n >= 1 && lba + n <= medium.writes.len() {
-            found.push((lba as u64, unseal(&medium.data[..SECTOR], lba as u64, &medium.data[at..])));
+            found.push((lba as u64, unseal(&medium.volume(), lba as u64, &medium.data[at..])));
             lba += n;
         } else {
             lba += 1;
@@ -119,7 +127,10 @@ fn find(medium: &Memory, magic: &[u8; 8]) -> Vec<u64> {
 fn plant(medium: &mut Memory, lba: u64, record: &[u8]) { plant_in(medium, lba, record, VOLUME) }
 
 /// The same with the frame's domain `domain`; still under the volume key, as the domains' key records are (0xFFFF).
-fn plant_in(medium: &mut Memory, lba: u64, record: &[u8], domain: u16) {
+fn plant_in(medium: &mut Memory, lba: u64, record: &[u8], domain: u16) { let volume = medium.volume(); plant_under(medium, lba, record, domain, &volume) }
+
+/// The same under keys from `volume`.
+fn plant_under(medium: &mut Memory, lba: u64, record: &[u8], domain: u16, volume: &[u8; 32]) {
     let n = sealed_sectors(record.len());
     let mut b = vec![0u8; n * SECTOR];
     b[..8].copy_from_slice(b"MIND-SLD");
@@ -128,19 +139,25 @@ fn plant_in(medium: &mut Memory, lba: u64, record: &[u8], domain: u16) {
     b[12..16].copy_from_slice(&(n as u32).to_le_bytes());
     b[FRAME..FRAME + record.len()].copy_from_slice(record);
     let nonce = [lba as u8; 12];
-    let t = SEALER.seal(&keys(&medium.data[..SECTOR]).0, &nonce, &aad(&b, lba), &mut b[FRAME..]);
+    let t = SEALER.seal(&keys(volume).0, &nonce, &aad(&b, lba), &mut b[FRAME..]);
     b[16..28].copy_from_slice(&nonce);
     b[28..44].copy_from_slice(&t);
     let at = lba as usize * SECTOR;
     medium.data[at..at + n * SECTOR].copy_from_slice(&b);
 }
 
-/// A medium in memory that counts how often each sector was written.
+/// A medium in memory that counts how often each sector was written. `kept` is the volume key a test gives it when a
+/// keeper keeps it, so that it knows a free marker; `stop_after` stops it, as a cut does, after that many writes and
+/// flushes (`ops`): every later one fails and changes nothing.
 #[derive(Clone)]
-struct Memory { data: Vec<u8>, writes: Vec<u32>, writable: bool, fail_write: bool, flushes: usize, reads: usize, fail_read_at: Option<usize>, written: usize, fail_write_at: Option<usize> }
+struct Memory { data: Vec<u8>, writes: Vec<u32>, writable: bool, fail_write: bool, flushes: usize, reads: usize, fail_read_at: Option<usize>, written: usize, fail_write_at: Option<usize>, kept: Option<[u8; 32]>, ops: usize, stop_after: Option<usize> }
 impl Memory {
-    fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * SECTOR], writes: vec![0; sectors], writable: true, fail_write: false, flushes: 0, reads: 0, fail_read_at: None, written: 0, fail_write_at: None } }
+    fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * SECTOR], writes: vec![0; sectors], writable: true, fail_write: false, flushes: 0, reads: 0, fail_read_at: None, written: 0, fail_write_at: None, kept: None, ops: 0, stop_after: None } }
     fn flip(&mut self, sector: u64, byte: usize) { self.data[sector as usize * SECTOR + byte] ^= 0x10; }
+    // The volume key: in the superblock, or the one the test gave for a key kept off the medium.
+    fn volume(&self) -> [u8; 32] { self.kept.unwrap_or_else(|| self.data[48..80].try_into().unwrap()) }
+    // Counts a write or a flush; whether the device has stopped before it.
+    fn stopped(&mut self) -> bool { self.ops += 1; self.stop_after.is_some_and(|n| self.ops > n) }
 }
 impl Device for &mut Memory {
     fn sectors(&self) -> u64 { self.writes.len() as u64 }
@@ -155,21 +172,21 @@ impl Device for &mut Memory {
     }
     fn write(&mut self, lba: u64, data: &[u8]) -> bool {
         assert!(self.writable && data.len() % SECTOR == 0 && data.len() <= BUFFER);
-        if self.fail_write { return false; }
+        if self.fail_write || self.stopped() { return false; }
         self.written += 1;
         if self.fail_write_at == Some(self.written) { return false; }
         let at = lba as usize * SECTOR;
         // A record goes only into blank sectors, so nothing stored is overwritten; only a free marker goes over the
         // record it frees.
         if lba > 0 && data.starts_with(b"MIND-SLD") {
-            let marker = unseal(&self.data[..SECTOR], lba, data).is_some_and(|r| r.starts_with(b"MIND-DEL"));
+            let marker = unseal(&self.volume(), lba, data).is_some_and(|r| r.starts_with(b"MIND-DEL"));
             assert!(marker || self.data[at..at + data.len()].iter().all(|&b| b == 0), "a record written over sectors that are not blank at {lba}");
         }
         self.data[at..at + data.len()].copy_from_slice(data);
         for s in 0..data.len() / SECTOR { self.writes[lba as usize + s] += 1; }
         true
     }
-    fn flush(&mut self) -> bool { self.flushes += 1; true }
+    fn flush(&mut self) -> bool { if self.stopped() { return false; } self.flushes += 1; true }
 }
 
 struct Room { index: Vec<Entry>, heads: Vec<Head>, pins: Vec<Pin>, holes: Vec<Extent>, buffer: Box<[u8; BUFFER]>, scratch: Box<[u8; dag::CHUNK]>, now: u64 }
@@ -1677,7 +1694,7 @@ fn a_changed_or_moved_record_does_not_open() {
     for byte in [8, 10, 13, 16, 30, FRAME, FRAME + 100, SECTOR - 1] {
         let mut changed = medium.clone();
         changed.flip(1, byte);
-        assert_eq!(unseal(&changed.data[..SECTOR], 1, &changed.data[SECTOR..]), None, "byte {byte}");
+        assert_eq!(unseal(&changed.volume(), 1, &changed.data[SECTOR..]), None, "byte {byte}");
         let mut room = Room::new(16);
         let mut store = mount(&mut changed, &mut room).unwrap();
         assert_eq!((get(&mut store, &a), get(&mut store, &b).is_ok()), (Err(Error::NotFound), true), "byte {byte}");
@@ -1939,7 +1956,7 @@ fn a_domains_records_before_its_key_record_are_found() {
     // mount scans once more.
     for count in [10usize, 70] {
         let mut medium = Memory::new(512);
-        let (a, cids);
+        let (a, cids, end);
         {
             let mut room = Room::new(256);
             let mut store = mount(&mut medium, &mut room).unwrap();
@@ -1950,12 +1967,15 @@ fn a_domains_records_before_its_key_record_are_found() {
             store.set_domain(a).unwrap();
             cids = (0..count).map(|i| store.put(Codec::Raw, &(1000 + i as u32).to_le_bytes()).unwrap()).collect::<Vec<_>>();
             store.publish(b"last", 0, &cids[count - 1], OWNER).unwrap();
+            end = store.stats().used;
         }
         let key = frames(&medium).iter().find(|f| f.1 == 0xFFFF).unwrap().0;
         assert!(frames(&medium).iter().filter(|f| f.1 == a && f.0 < key).count() >= count, "{count}: the domain's blocks lie before its key record");
+        // A recovery record's frame after them (308-STO-0028): a second scan counts it once, not twice.
+        plant_in(&mut medium, end, &[0; 80], 0xFFFE);
         let mut room = Room::new(256);
         let mut store = mount(&mut medium, &mut room).unwrap();
-        assert_eq!((store.stats().blocks as usize, store.stats().corrupt), (count, 0), "{count}");
+        assert_eq!((store.stats().blocks as usize, store.stats().corrupt, store.recovery()), (count, 0, 1), "{count}");
         store.set_domain(a).unwrap();
         assert!(cids.iter().all(|c| store.has(c)), "{count}");
         assert_eq!(store.resolve(b"last"), Ok((1, cids[count - 1])));
@@ -2142,4 +2162,336 @@ fn a_kept_superblock_with_bytes_where_the_key_would_be_is_refused() {
     let digest = sha256::digest(&medium.data[..140]);
     medium.data[140..172].copy_from_slice(&digest);
     assert_eq!(mount_kept(&mut medium, &mut Room::new(64), &SEALER, Some(&mut vault)).err(), Some(Error::Key));
+}
+
+// The stand-in cipher, which remembers the random bytes it gave last: the recovery key a cut `recovery_new` made.
+#[derive(Default)]
+struct Witness { last: RefCell<Vec<u8>> }
+impl Witness { fn key(&self) -> [u8; 16] { self.last.borrow()[..].try_into().unwrap() } }
+impl Crypto for Witness {
+    fn seal(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8]) -> [u8; 16] { SEALER.seal(key, nonce, aad, data) }
+    fn open(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8], t: &[u8; 16]) -> bool { SEALER.open(key, nonce, aad, data, t) }
+    fn random(&self, out: &mut [u8]) -> bool { let given = SEALER.random(out); *self.last.borrow_mut() = out.to_vec(); given }
+}
+
+// A store disk whose volume key a keeper keeps, with an object named `kept`: the keeper and the object's root. The
+// medium is told the key, so that it knows a free marker.
+fn kept_store(medium: &mut Memory) -> (Vault, Cid) {
+    let mut vault = Vault::default();
+    let mut room = Room::new(64);
+    let mut store = mount_kept(medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+    let root = object(&mut store, 8, 20_000);
+    store.publish(b"kept", 0, &root, OWNER).unwrap();
+    drop(store);
+    medium.kept = Some(*vault.keys.values().next().unwrap());
+    (vault, root)
+}
+
+// A recovery key made on the store whose key `vault` keeps.
+fn recovery_new(medium: &mut Memory, vault: &mut Vault) -> Result<[u8; 16], Error> {
+    let mut room = Room::new(64);
+    mount_kept(medium, &mut room, &SEALER, Some(vault))?.recovery_new()
+}
+
+// The owner typing `key` back on the store whose key `vault` keeps.
+fn recovery_keep(medium: &mut Memory, vault: &mut Vault, key: &[u8; 16]) -> Result<usize, Error> {
+    let mut room = Room::new(64);
+    mount_kept(medium, &mut room, &SEALER, Some(vault))?.recovery_keep(key)
+}
+
+// `recover` on `medium` with `key`, into `vault`.
+fn recover_into(medium: &mut Memory, vault: &mut Vault, key: &[u8; 16]) -> Result<(), Error> {
+    recover(&mut &mut *medium, &SEALER, vault, key, &mut Box::new([0u8; BUFFER]))
+}
+
+// Mounts `medium` with `vault` and checks it whole: nothing corrupt or damaged, the object read back under its name.
+// Returns its recovery records.
+fn mounts_whole(medium: &mut Memory, vault: &mut Vault, root: &Cid) -> usize {
+    let mut room = Room::new(64);
+    let mut store = mount_kept(medium, &mut room, &SEALER, Some(vault)).unwrap();
+    assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0));
+    assert_eq!(store.resolve(b"kept"), Ok((1, *root)));
+    assert_eq!(read_object(&mut store, root), block(8, 20_000));
+    store.recovery()
+}
+
+// The recovery records' frames on `medium`.
+fn recovery_frames(medium: &Memory) -> usize { frames(medium).iter().filter(|f| f.1 == 0xFFFE).count() }
+
+#[test]
+fn a_recovery_key_opens_a_medium_whose_keeper_lacks_its_key() {
+    let mut medium = Memory::new(256);
+    let (mut vault, root) = kept_store(&mut medium);
+    let recovery = recovery_new(&mut medium, &mut vault).unwrap();
+    let (&id, &volume) = vault.keys.iter().next().unwrap();
+    // Another machine's keeper has nothing under the id: not mounted.
+    let mut other = Vault::default();
+    assert_eq!(mount_kept(&mut medium, &mut Room::new(64), &SEALER, Some(&mut other)).err(), Some(Error::Kept(id)));
+    // The recovery key gives that keeper the volume key, writing nothing; the medium then mounts as its own.
+    let before = (medium.data.clone(), medium.written, medium.flushes);
+    assert_eq!(recover_into(&mut medium, &mut other, &recovery), Ok(()));
+    assert_eq!((medium.data.clone(), medium.written, medium.flushes), before, "recovering writes nothing");
+    assert_eq!(other.keys, HashMap::from([(id, volume)]));
+    assert_eq!(mounts_whole(&mut medium, &mut other, &root), 1);
+    // The record as docs/storage describes it: the volume key sealed, in frame domain 0xFFFE, under the keys of
+    // HKDF-SHA-256 of the recovery key with the kept id as salt.
+    let hex = |d: [u8; 32]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let (salt, info): (Vec<u8>, Vec<u8>) = ((0..13).collect(), (0xf0..0xfa).collect());
+    assert_eq!(hex(hkdf(&salt, &[0x0b; 22], &info)), "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf", "RFC 5869, test case 1");
+    let at = frames(&medium).into_iter().find(|f| f.1 == 0xFFFE).unwrap().0;
+    let record = unseal(&hkdf(&id, &recovery, b"MIND-STO recovery"), at, &medium.data[at as usize * SECTOR..]).unwrap();
+    assert_eq!((&record[..8], &record[8..10], &record[10..16], &record[16..48]), (&b"MIND-RCV"[..], &LAYOUT.to_le_bytes()[..], &[0u8; 6][..], &volume[..]));
+    assert_eq!(record[48..80], sha256::digest(&record[..48]));
+    assert!(record[80..].iter().all(|&b| b == 0));
+}
+
+#[test]
+fn a_wrong_recovery_key_opens_nothing_and_writes_nothing() {
+    let mut medium = Memory::new(256);
+    let (mut vault, _) = kept_store(&mut medium);
+    let recovery = recovery_new(&mut medium, &mut vault).unwrap();
+    let id = kept_id(&medium.data[..SECTOR]).unwrap();
+    let before = (medium.data.clone(), medium.written, medium.flushes);
+    let mut other = Vault::default();
+    let mut wrong = recovery;
+    wrong[15] ^= 1;
+    assert_eq!(recover_into(&mut medium, &mut other, &wrong), Err(Error::Key));
+    // A record that opens under the key but holds another volume key, which does not open the superblock's check.
+    let mut forged = medium.clone();
+    let mut record = [0u8; 80];
+    record[..8].copy_from_slice(b"MIND-RCV");
+    record[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    record[16..48].fill(9);
+    let digest = sha256::digest(&record[..48]);
+    record[48..].copy_from_slice(&digest);
+    plant_under(&mut forged, 255, &record, 0xFFFE, &hkdf(&id, &wrong, b"MIND-STO recovery"));
+    assert_eq!(recover_into(&mut forged, &mut other, &wrong), Err(Error::Key));
+    // A keeper that does not keep it: `kept`, and nothing kept.
+    let mut refusing = Vault { refuse: true, ..Vault::default() };
+    assert_eq!(recover_into(&mut medium, &mut refusing, &recovery), Err(Error::Kept(id)));
+    assert!(other.keys.is_empty() && refusing.keys.is_empty(), "nothing is kept");
+    assert_eq!((medium.data.clone(), medium.written, medium.flushes), before, "nothing is written");
+    // A medium whose key is in the clear has nothing to recover, and a blank one is no store.
+    let mut clear = Memory::new(64);
+    drop(mount(&mut clear, &mut Room::new(8)).unwrap());
+    assert_eq!(recover_into(&mut clear, &mut other, &recovery), Err(Error::Invalid));
+    assert_eq!(recover_into(&mut Memory::new(64), &mut other, &recovery), Err(Error::Foreign));
+}
+
+#[test]
+fn a_recovery_key_is_written_down_in_groups_and_typed_back_with_a_check() {
+    use rights::{recovery_parse, recovery_text, Typo};
+    // Worked out from Crockford's alphabet and SHA-256, not from the code: 16 zero bytes, and the bytes 0 to 15.
+    assert_eq!(&recovery_text(&[0; 16]), b"0000-0000-0000-0000-0000-0000-00VM-E27Z");
+    let counting: [u8; 16] = std::array::from_fn(|i| i as u8);
+    let text = recovery_text(&counting);
+    assert_eq!(&text, b"000G-40R4-0M30-E209-185G-R38E-1YZ4-BJS6");
+    for seed in 0..256u64 {
+        let key: [u8; 16] = sha256::digest(&seed.to_le_bytes())[..16].try_into().unwrap();
+        assert_eq!(recovery_parse(&recovery_text(&key)), Ok(key));
+    }
+    // Lower case, spaces for the dashes or none at all, and I, L and O for 1, 1 and 0.
+    assert!(text.contains(&b'0') && text.contains(&b'1'));
+    let typed = |f: fn(u8) -> Option<u8>| text.iter().filter_map(|&c| f(c)).collect::<Vec<u8>>();
+    for variant in [
+        typed(|c| Some(if c == b'-' { b' ' } else { c.to_ascii_lowercase() })),
+        typed(|c| match c { b'-' => None, b'0' => Some(b'O'), b'1' => Some(b'I'), c => Some(c) }),
+        typed(|c| Some(match c { b'0' => b'o', b'1' => b'l', c => c })),
+    ] {
+        assert_eq!(recovery_parse(&variant), Ok(counting), "{}", String::from_utf8_lossy(&variant));
+    }
+    // Each character changed to each other one is a typo the check finds, never a key tried and found wrong.
+    for at in (0..text.len()).filter(|&i| text[i] != b'-') {
+        for &c in b"0123456789ABCDEFGHJKMNPQRSTVWXYZ".iter().filter(|&&c| c != text[at]) {
+            let mut changed = text;
+            changed[at] = c;
+            assert_eq!(recovery_parse(&changed), Err(Typo::Check), "{}", String::from_utf8_lossy(&changed));
+        }
+    }
+    // A character left out or one too many; a U, which no key has, or anything else.
+    assert_eq!(recovery_parse(&text[..38]), Err(Typo::Length));
+    assert_eq!(recovery_parse(&[&text[..], b"0"].concat()), Err(Typo::Length));
+    assert_eq!(recovery_parse(b""), Err(Typo::Length));
+    for bad in [b'U', b'u', b'*', b'\t'] {
+        let mut changed = text;
+        changed[0] = bad;
+        assert_eq!(recovery_parse(&changed), Err(Typo::Character), "{}", bad as char);
+    }
+}
+
+#[test]
+fn a_new_recovery_key_replaces_the_old_once_it_is_typed_back() {
+    let mut medium = Memory::new(256);
+    let (mut vault, root) = kept_store(&mut medium);
+    let first = recovery_new(&mut medium, &mut vault).unwrap();
+    let second = {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+        assert_eq!(store.recovery(), 1);
+        let second = store.recovery_new().unwrap();
+        assert_eq!(store.recovery(), 2);
+        second
+    };
+    assert_ne!(first, second);
+    // Until the owner types the new key back, both open the medium.
+    assert_eq!(recovery_frames(&medium), 2);
+    for key in [&first, &second] { assert_eq!(recover_into(&mut medium, &mut Vault::default(), key), Ok(())); }
+    // A key typed back wrong opens none of them: `key`, and nothing is erased.
+    let mut wrong = second;
+    wrong[0] ^= 1;
+    let before = (medium.data.clone(), medium.written, medium.flushes);
+    assert_eq!(recovery_keep(&mut medium, &mut vault, &wrong), Err(Error::Key));
+    assert_eq!((medium.data.clone(), medium.written, medium.flushes), before, "nothing is erased");
+    // Typed back right: the older record is erased, and only the new key opens the medium, also after a remount.
+    {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+        assert_eq!((store.recovery_keep(&second), store.recovery()), (Ok(1), 1));
+        assert_eq!((store.recovery_keep(&second), store.recovery_keep(&first)), (Ok(0), Err(Error::Key)));
+    }
+    assert_eq!(recovery_frames(&medium), 1);
+    assert_eq!(recover_into(&mut medium, &mut Vault::default(), &first), Err(Error::Key), "the first key opens nothing");
+    let mut other = Vault::default();
+    assert_eq!(recover_into(&mut medium, &mut other, &second), Ok(()));
+    assert_eq!(mounts_whole(&mut medium, &mut other, &root), 1);
+}
+
+#[test]
+fn a_rotation_cut_anywhere_leaves_the_owner_a_key_that_opens_the_medium() {
+    let mut medium = Memory::new(256);
+    let (mut vault, root) = kept_store(&mut medium);
+    let old = recovery_new(&mut medium, &mut vault).unwrap();
+    let opens = |medium: &mut Memory, key: &[u8; 16]| recover_into(medium, &mut Vault::default(), key).is_ok();
+    let mut outcomes = Vec::new();
+    // A new key, shown, then typed back; the device stops after n of their writes and flushes, for each n until a
+    // rotation that ends before it.
+    for n in 0.. {
+        let mut cut = medium.clone();
+        let witness = Witness::default();
+        let (shown, finished) = {
+            let mut room = Room::new(64);
+            let mut store = mount_kept(&mut cut, &mut room, &witness, Some(&mut vault)).unwrap();
+            let device = store.device();
+            (device.ops, device.stop_after) = (0, Some(n));
+            let shown = store.recovery_new().ok();
+            let kept = shown.map(|key| store.recovery_keep(&key));
+            let reached = store.device().ops > n;
+            assert_eq!(kept.is_some_and(|k| k.is_ok()), !reached, "{n}");
+            (shown.is_some(), !reached)
+        };
+        cut.stop_after = None;
+        let both = (opens(&mut cut, &old), opens(&mut cut, &witness.key()));
+        // The owner holds the old key, and the new one once it was shown.
+        assert!(both.0 || (shown && both.1), "a cut after {n} writes and flushes: no key the owner holds opens the medium");
+        outcomes.push(both);
+        // With its own keeper it mounts whole, and a rotation then leaves one record.
+        assert!((1..=2).contains(&mounts_whole(&mut cut, &mut vault, &root)), "{n}");
+        let key = recovery_new(&mut cut, &mut vault).unwrap();
+        recovery_keep(&mut cut, &mut vault, &key).unwrap();
+        assert_eq!(recovery_frames(&cut), 1, "{n}");
+        if finished { break; }
+    }
+    // The old key alone while the new record is not written, both until the old one is erased, then the new one alone.
+    assert_eq!(outcomes.last(), Some(&(false, true)));
+    for outcome in [(true, false), (true, true), (false, true)] { assert!(outcomes.contains(&outcome), "{outcomes:?}"); }
+}
+
+#[test]
+fn a_recovery_record_is_sealed_kept_by_a_collection_and_not_reported_by_a_scrub() {
+    let mut medium = Memory::new(256);
+    let (mut vault, root) = kept_store(&mut medium);
+    // A block no name retains, which the collection below frees.
+    {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+        store.put(Codec::Raw, &block(9, 3000)).unwrap();
+    }
+    let recovery = recovery_new(&mut medium, &mut vault).unwrap();
+    let volume = medium.kept.unwrap();
+    assert!(medium.data.windows(16).all(|w| w != recovery), "the recovery key is not on the medium");
+    assert!(medium.data.windows(32).all(|w| w != volume), "the volume key is not on the medium");
+    let records = frames(&medium).len() as u32;
+    {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+        // A mount counts it neither corrupt nor damaged, and a whole scrub reports nothing.
+        assert_eq!((store.stats().corrupt, store.stats().damaged, store.recovery()), (0, 0, 1));
+        assert_eq!(scrub_all(&mut store, u64::MAX), (Scrubbed { records, corrupt: 0, damaged: 0 }, vec![], 1));
+        // A collection once the block's lease has ended frees it, and keeps the recovery record.
+        store.set_time(LEASE_NS);
+        assert!(store.collect().unwrap().blocks >= 1);
+        assert_eq!(store.recovery(), 1);
+    }
+    assert_eq!(recovery_frames(&medium), 1);
+    assert_eq!(recover_into(&mut medium, &mut Vault::default(), &recovery), Ok(()));
+    assert_eq!(mounts_whole(&mut medium, &mut vault, &root), 1);
+}
+
+#[test]
+fn a_recovery_key_needs_a_kept_key_and_a_random_source_and_is_forgotten_whole() {
+    // A key in the clear has no recovery key: nothing written.
+    let mut clear = Memory::new(64);
+    {
+        let mut room = Room::new(8);
+        let mut store = mount(&mut clear, &mut room).unwrap();
+        let written = store.device().written;
+        assert_eq!((store.recovery_new(), store.recovery_keep(&[0; 16])), (Err(Error::Invalid), Err(Error::Invalid)));
+        assert_eq!(store.device().written, written);
+    }
+    // Without a random source none is made, and nothing is written; nor on a read-only medium.
+    let mut medium = Memory::new(256);
+    let (mut vault, root) = kept_store(&mut medium);
+    let before = (medium.data.clone(), medium.written, medium.flushes);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut medium, &mut room, &NO_RANDOM, Some(&mut vault)).unwrap();
+        assert_eq!(store.recovery_new(), Err(Error::NoRandom));
+    }
+    medium.writable = false;
+    {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+        assert_eq!((store.recovery_new(), store.recovery_forget()), (Err(Error::ReadOnly), Err(Error::ReadOnly)));
+        assert_eq!(store.recovery_keep(&[0; 16]), Err(Error::ReadOnly));
+    }
+    medium.writable = true;
+    assert_eq!((medium.data.clone(), medium.written, medium.flushes), before, "nothing is written");
+    // Two records, the second not typed back yet, each opening the medium; forgetting erases both.
+    let keys = [recovery_new(&mut medium, &mut vault).unwrap(), recovery_new(&mut medium, &mut vault).unwrap()];
+    for key in &keys { assert_eq!(recover_into(&mut medium, &mut Vault::default(), key), Ok(())); }
+    {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut medium, &mut room, &SEALER, Some(&mut vault)).unwrap();
+        assert_eq!(store.recovery(), 2);
+        assert_eq!(store.recovery_forget(), Ok(2));
+        assert_eq!((store.recovery(), store.recovery_forget()), (0, Ok(0)));
+    }
+    assert_eq!(recovery_frames(&medium), 0);
+    for key in &keys { assert_eq!(recover_into(&mut medium, &mut Vault::default(), key), Err(Error::Key)); }
+    assert_eq!(mounts_whole(&mut medium, &mut vault, &root), 0);
+}
+
+#[test]
+fn recovery_records_past_those_a_mount_remembers_are_found_and_erased() {
+    let mut medium = Memory::new(256);
+    let (mut vault, root) = kept_store(&mut medium);
+    // New keys, none typed back: each mount makes one more, and the last two lie past what a mount remembers.
+    let keys: Vec<[u8; 16]> = (0..RECOVERIES + 2).map(|_| recovery_new(&mut medium, &mut vault).unwrap()).collect();
+    for key in &keys { assert_eq!(recover_into(&mut medium, &mut Vault::default(), key), Ok(())); }
+    assert_eq!(mounts_whole(&mut medium, &mut vault, &root), RECOVERIES + 2);
+    // Forgetting erases every one, those the mount did not remember too.
+    let mut forgotten = medium.clone();
+    {
+        let mut room = Room::new(64);
+        let mut store = mount_kept(&mut forgotten, &mut room, &SEALER, Some(&mut vault)).unwrap();
+        assert_eq!((store.recovery_forget(), store.recovery()), (Ok(RECOVERIES + 2), 0));
+    }
+    assert_eq!(recovery_frames(&forgotten), 0);
+    // So does the last key typed back, a record the mount did not remember, but its own.
+    let last = keys[RECOVERIES + 1];
+    assert_eq!(recovery_keep(&mut medium, &mut vault, &last), Ok(RECOVERIES + 1));
+    assert_eq!(recovery_frames(&medium), 1);
+    for key in &keys[..RECOVERIES + 1] { assert_eq!(recover_into(&mut medium, &mut Vault::default(), key), Err(Error::Key)); }
+    assert_eq!(recover_into(&mut medium, &mut Vault::default(), &last), Ok(()));
+    assert_eq!(mounts_whole(&mut medium, &mut vault, &root), 1);
 }

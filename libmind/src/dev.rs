@@ -60,18 +60,20 @@ pub fn input_key(app: usize, owner: usize, attention: bool) -> Result<()> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Frame { Unchanged, Dirty, NewSource, Busy }
 
-fn pull(slot: usize, mode: usize) -> Result<Frame> {
-    check(call(SYSCALL_COMPOSITOR_PULL, slot, mode)).map(|state| match state {
+fn pull(slot: usize, mode: usize) -> Result<(Frame, u64)> {
+    let raw = syscall(SYSCALL_COMPOSITOR_PULL, slot, mode, [0; 4]);
+    check(raw.result).map(|state| (match state {
         0 => Frame::Unchanged, 1 => Frame::Dirty, COMPOSITOR_BUSY => Frame::Busy, _ => Frame::NewSource,
-    })
+    }, raw.arg2 as u64))
 }
 
-/// Compositor: active screen state; on NewSource the capability for the new screen is in `slot`.
-pub fn compositor_pull(slot: usize) -> Result<Frame> { pull(slot, 0) }
+/// Compositor: active screen state and the PID of the task whose screen is in front, 0 for none (750-KRN-0192); on
+/// NewSource the capability for the new screen is in `slot`.
+pub fn compositor_pull(slot: usize) -> Result<(Frame, u64)> { pull(slot, 0) }
 
 /// Compositor: as `compositor_pull`, between the focused task's frames only: Busy while it runs with a changed screen;
 /// on Dirty the task is held until `compositor_release` (or 50 ms), so the copy is of a whole frame (000-KRN-0086).
-pub fn compositor_pull_frame(slot: usize) -> Result<Frame> { pull(slot, COMPOSITOR_FRAME) }
+pub fn compositor_pull_frame(slot: usize) -> Result<(Frame, u64)> { pull(slot, COMPOSITOR_FRAME) }
 
 /// Compositor: lets the task held by `compositor_pull_frame` run again.
 pub fn compositor_release(slot: usize) -> Result<()> { check(call(SYSCALL_COMPOSITOR_PULL, slot, COMPOSITOR_RELEASE)).map(drop) }

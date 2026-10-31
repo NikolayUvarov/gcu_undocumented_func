@@ -23,6 +23,13 @@ def test_requests_and_answers():
     requests, superseded = land.pending(files)
     assert requests == [("2026-10-21T1200Z-LNK-ready-link-again.md", "claude/LNK-link", "0123abcd")], requests
     assert superseded == ["2026-10-21T1000Z-LNK-ready-link.md"], superseded
+    # A track takes its own request back; another track's line withdraws nothing.
+    files["2026-10-21T1500Z-STO-ready-store.md"] = "**Ready:** `claude/STO-store` 1111111\n"
+    files["2026-10-21T1510Z-STO-ready-tally.md"] = "**Ready:** `claude/STO-tally` 2222222\n"
+    files["2026-10-21T1520Z-STO-withdrawn-store.md"] = "**From:** STO · **Withdraws:** `LANDING/2026-10-21T1500Z-STO-ready-store.md`\n"
+    files["2026-10-21T1530Z-APP-withdrawn-tally.md"] = "**Withdraws:** `2026-10-21T1510Z-STO-ready-tally.md`\n"
+    requests, _ = land.pending(files)
+    assert [r[0] for r in requests] == ["2026-10-21T1200Z-LNK-ready-link-again.md", "2026-10-21T1510Z-STO-ready-tally.md"], requests
 
 
 def test_text_only():
@@ -149,6 +156,27 @@ def test_a_pool_gives_a_failed_builds_groups_to_another_lane():
         again.trees.update({"acc1", "pcu"})
         again.pool(["acc1", "pcu"], list(queue), part_of, {}, taken_path)
         assert [g for lane, g in again.effector.commands if lane == "acc1" and not g.startswith("=build")] == ["=" + g for g in taken["acc1"]]
+
+
+def test_a_tree_waits_for_an_earlier_runs_operations_in_its_clone():
+    old, other, mine = ({"id": i, "reason": f"{land.TRACK} landing gate {tag}: x86: a on {lane}"}
+                        for i, tag, lane in (("1", "land-old", "rz"), ("2", "land-old", "rz-2"), ("3", "land-new", "rz")))
+
+    class Effector:
+        def __init__(self):
+            self.views, self.runs = [[old, other, mine], [other, mine]], []  # the earlier run's group on rz ends after one look
+        def active(self, machine):
+            return self.views.pop(0) if len(self.views) > 1 else self.views[0]
+        def run(self, machine, command, timeout, reason, key, queue_ttl=None):
+            self.runs.append((len(self.views), reason))
+            return "completed", 0, "TREE " + "a" * 40
+    sleep, land.time.sleep = land.time.sleep, lambda seconds: None
+    try:
+        gate = land.Gate("a" * 40, "land-new", Effector(), pathlib.Path(os.devnull))
+        assert gate.tree("rz") and gate.effector.runs == [(1, f"{land.TRACK} landing gate land-new: the tree on rz")], gate.effector.runs
+        assert gate.earlier("rz-2") == ["2"] and gate.earlier("rz") == []
+    finally:
+        land.time.sleep = sleep
 
 
 def git(*args, cwd):
