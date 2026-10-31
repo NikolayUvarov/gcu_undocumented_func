@@ -1,16 +1,16 @@
-# 312-STO-0038 — Assertions about objects: a claim with its type, source and interpretation, kept apart from content
+# 312-STO-0038 — Assertions about objects: a claim with its type, source and interpretation, kept apart from content — done
 
-**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.md) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, Appendix B.3
+**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, Appendix B.3
 
-Split from [312](312-the-minds-memory.md) (2026-10-31), its third step: "assertions, apart from content (MC-4.12): a claim about an object, its subject's CID, its author and its origin; signed where it crosses a trust zone (B.3); each kind of metadata names its source of truth".
+Split from [312](../issues/312-the-minds-memory.md) (2026-10-31), its third step: "assertions, apart from content (MC-4.12): a claim about an object, its subject's CID, its author and its origin; signed where it crosses a trust zone (B.3); each kind of metadata names its source of truth".
 
-No personal data is written before [308](308-encryption-at-rest.md) is done: the tests and the pilot assert test text only.
+No personal data is written before [308](../issues/308-encryption-at-rest.md) is done: the tests and the pilot assert test text only.
 
 ## Problem
 
 MC-4.6: "Semantic links MUST contain a type, provenance and an interpretation version. A model's inference, an embedding and a tag are assertions by a specific source, not an immutable truth about the data." MC-4.12 keeps content identity and semantic assertions distinct, with a source of truth for each kind of metadata.
 
-The store keeps objects, names and journals ([312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done)), and nothing that says something *about* an object. A tag or a title written into an object's content changes its CID, so it is no longer the same object, and nothing tells who said it.
+The store keeps objects, names and journals ([312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done)), and nothing that says something *about* an object. A tag or a title written into an object's content changes its CID, so it is no longer the same object, and nothing tells who said it.
 
 ## Plan
 
@@ -24,7 +24,7 @@ The store keeps objects, names and journals ([312-STO-0034](../issues-done/312-S
 - **A mention, not a retention** (MC-4.5): `subject`, `basis` and `retracts` are kept as the CIDs' bytes, not as links. A walk of the store does not follow them, so an assertion never retains its subject, and a subject collected leaves its assertions in place.
 - **Kept in a journal:** an assertion is the content of a journal entry of kind `assertion`, appended by `journal::append`. The journal gives it its order, its time and its `source`, the writer's label as the journal records it. So an assertion's provenance is its journal's entry, checked from the head as every entry is.
 - **Retraction:** a later assertion by the same `source` that names an earlier one in `retracts` withdraws it. One by another source does not: it is that source's own claim, and both stand.
-- **Reading** (`assertion::about`): the assertions of a journal about one subject, newest first, without the retracted ones, each with its entry's sequence and source. The journal is checked whole from its head, and each assertion read and checked against its CID. A scan first: an index by subject waits for the sizes to ask for it, as the text index did ([312-STO-0035](../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done)).
+- **Reading** (`assertion::about`): the assertions of a journal about one subject, newest first, without the retracted ones, each with its entry's sequence and source. The journal is checked whole from its head, and each assertion read and checked against its CID. A scan first: an index by subject waits for the sizes to ask for it, as the text index did ([312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.done)).
 - **The sources of truth** (MC-4.12), named in docs/storage:
   - an assertion with no `basis` is its source's word, and the journal is its record;
   - one with a `basis` is derived, may be dropped, and is made again from its basis.
@@ -111,6 +111,16 @@ The store keeps objects, names and journals ([312-STO-0034](../issues-done/312-S
   - the object unpublished and collected: `about` still lists the assertion.
 - **docs/storage** (a section on assertions, with what they do not give) and the profile's Article 4 rows.
 
+## Resolution
+
+Landed in `main` 370e905c (round 370e905c) as 5efb10ba and 5c4b5fe0.
+- **`mind::assertion`** (`libmind/src/assertion.rs`): an assertion is one canonical DAG-CBOR node of schema `v` 1 (subject, type, the version of the type's meaning, a text of at most 1024 bytes or a CID as its value, a basis), kept as a `raw` block, the content of a journal entry of kind `assertion`. Its subject and every CID in it are bytes, not links, so the store's walk never follows them and a collected subject leaves its assertions. A withdrawal has no value and names in `retracts` an earlier claim of its own source; `retract` refuses another source's claim, one withdrawn already, or one the journal does not hold, and appends nothing. `about` checks the journal whole from its head and every assertion against its CID, then answers the subject's standing claims newest first.
+- **The pilot:** `blocks assert add|about|retract`, with `-d <domain>` (`blocks/src/assertion.rs`).
+- **Tests:** `tests/assertion_host.rs` (9), in `scripts/host_tests.sh`'s list; `store_assertion_check` in the QEMU `store` suite, an assertion in a memory domain on aarch64. They passed on the session's container and on `un-rizen_2a8b108d5593` (x86 and aarch64, QEMU TCG), as the landing request of 10:16 says.
+- **The docs:** docs/storage 0.25 (assertions, the sources of truth, and what they do not give: no signature, no truth, no rights, a scan), the profile's Article 4 rows and their evidence (x86, aarch64).
+- **A departure from the plan,** recorded above: a withdrawal carries no value, so an assertion is either a claim or a withdrawal.
+- `blockstore.wit` and the store's layout did not change. 312 stays open for vectors (with `NRL`), an index of assertions by subject when sizes ask for it, and a domain's term and quota.
+
 ## Related
 
-[312](312-the-minds-memory.md), [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done), [303](../issues-done/303-retention-and-collection.done), [308](308-encryption-at-rest.md).
+[312](../issues/312-the-minds-memory.md), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.done), [303](303-retention-and-collection.done), [308](../issues/308-encryption-at-rest.md).
