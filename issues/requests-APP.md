@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (3 requests waiting, 2026-10-30) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (7 requests waiting, 2026-10-31) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -74,3 +74,37 @@ APP's ALL reply of 2026-10-29 accepts the 0025 corrections in design 1.0 and own
   - end the wait by the clock, 1 s after the request was sent, however many tries fit;
   - one buffer for all the tries.
 - **The check:** the `net` suite's `net arp 10.0.2.99` answers `ARP 10.0.2.99: NO ANSWER` as now; it ends within its 8 s on a loaded machine.
+
+## The shell lends a `storefs` client to programs (for 311-KRN-0190), once `storefs` can make one that does not write
+
+**Asked by:** KRN, 2026-10-30, for the storage track's 311-STO-0032. **Blocked by:** `storefs` minting a client that does not write, or serving `scope` (STO; both refused today; [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md) serves `scope` and `adopt`). **Constitution:** MC-3.1, MC-3.4.
+
+- **What is in place:** with 311-KRN-0190, `init` gives the shell a `storefs` client badged `mind::fs::BADGE_USER` in `SLOT_STOREFS` (42, a launch slot). `mind::fs` asks it for every volume but `vfs_server`'s (`""`, `ram`, `log`, `models`), so the shell's own `ls`, `cat`, `write`, `mkdir` and `rm` reach a store volume such as `notes:`.
+- **Do not lend that client as it is:** a copy keeps its badge, and `storefs` lets `BADGE_USER` write.
+- **The ask, once STO's part is there:**
+  - a client that does not write, in the program's `SLOT_STOREFS`, for every program that reads files, as `vfs_server`'s plain one reaches every program;
+  - for `REQUEST_FILE` on a path on a store volume, a scope of that directory in `SLOT_FILE`, as for a FAT volume.
+- **Today a program holds none,** so `find notes:` says `NOTFOUND` and asks nobody (the `shell` suite's `storefs_check`).
+- **The check then:** `find notes:` lists what the shell wrote there.
+
+## The shell puts a running program's question about a flow to the user (for 000-NET-0049)
+
+**Asked by:** NET, 2026-10-31, for [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md). **Blocked by:** `netpolicy.wit` 1.3 (`questions`, `answer`), the network track's next step there. **Constitution:** MC-3.1, MC-3.8, MC-11.6.
+
+- **Why:** a program such as `get` reaches a host the user names only when it runs. Today a flow grant is only a line of the policy written beforehand. The program may ask, but only the user may answer, and only through the shell, which alone talks to the user with the operator's authority (MC-3.11).
+- **What the network track makes** (`netpolicy.wit` 1.3; a proposal the two tracks may change):
+  - a program's question, `host`, `port` and its own `why`, through its grant. That way in is NET's part;
+  - `questions() -> list<question, 8>`, each `{ id, pid, program, host, port, why }`, for the shell's client only. A launcher's client (`BADGE_LAUNCH`) is refused, as for `add`;
+  - `answer(id, choice)`, `choice` one of `no`, `once` (this flow), `session` (until the program ends) and `always` (a line of the policy, as `netpolicy add` writes);
+  - a question no one answers within 60 s is refused, and the log says so.
+- **The ask:**
+  - the shell's loop looks for new questions (`questions`) and puts each to the user on the console the program `pid` was started from: in its window if it has one, else on its console;
+  - the question names the program, its PID, the host and the port. The program's `why` is shown as its words, not the shell's;
+  - four answers, one key each: `N`o (the default), `O`nce, `S`ession, `A`lways;
+  - only a key the user types answers it: the program's own output or input never does (the shell reads the keys);
+  - then `answer(id, choice)`.
+- **The check** (QEMU, x86, with the network track's test program):
+  - asked, it is refused, then allowed once;
+  - asked again, it is asked again;
+  - `session` holds until it ends;
+  - `always` leaves the line in `netpolicy`.

@@ -491,7 +491,9 @@ impl Host {
             Some(armed) => armed,
             None => {
                 let ring = device.rings[..device.ring_count].iter().find(|r| r.0 == target).ok_or(Error::Invalid)?.1;
-                if !self.xhci.arm(device.slot, target, ring, endpoint.packet, endpoint.is_bulk()) { return Err(Error::NoMemory); }
+                // A Bluetooth controller's events too lose nothing: an event of many packets broken by one dropped is lost whole (700-DRV-0047).
+                let lossless = endpoint.is_bulk() || badge == mind::usb::BADGE_BLUETOOTH;
+                if !self.xhci.arm(device.slot, target, ring, endpoint.packet, lossless) { return Err(Error::NoMemory); }
                 mind::println!("[USB] SLOT {} ENDPOINT {}: POLLED (PACKET {}, INTERVAL {})", device.slot, target, endpoint.packet, endpoint.interval);
                 self.xhci.armed(device.slot, target).ok_or(Error::NoMemory)?
             }

@@ -8,10 +8,11 @@
 //! zeros up to the end of its last sector, encrypted and authenticated with ChaCha20-Poly1305 under the volume key, the
 //! frame and the record's first sector as associated data. Nothing but the frame is in the clear, and it does not say
 //! what kind of record it seals. A block record is a header (magic, layout version, length, the block's CID, a digest of the header) and
-//! the block's bytes; a `dag-cbor` block must be a node of `dag` or a directory of `tree` (311-STO-0027). A name record
-//! is the name, its version and root, and a digest. Records are written only into blank sectors, so nothing stored is
-//! overwritten; a collection makes the sectors of what it frees blank again. Every block read is opened and checked
-//! against its CID, and one that does not open or match is reported corrupt, never returned.
+//! the block's bytes; a `dag-cbor` block must be a node of `dag`, a directory of `tree` (311-STO-0027) or an entry of
+//! `journal` (312-STO-0034), whose chain a walk follows one entry after another. A name record is the name, its version
+//! and root, and a digest. Records are written only into blank sectors, so nothing stored is overwritten; a collection
+//! makes the sectors of what it frees blank again. Every block read is opened and checked against its CID, and one that
+//! does not open or match is reported corrupt, never returned.
 //!
 //! Memory domains (308-STO-0023): a domain's records are sealed under a key of its own, random, kept in a key record
 //! sealed under the volume key. Names, pins and blocks belong to a domain; the same bytes in two domains are two
@@ -25,6 +26,7 @@
 //! opens one and gives the volume key to that machine's keeper.
 use crate::cid::{self, Cid, Codec};
 use crate::dag;
+use crate::journal;
 use crate::sha256;
 use crate::tree;
 
@@ -233,9 +235,9 @@ pub enum Error {
     /// The volume key is kept off the medium under this id, and no keeper gave it: none to ask, or another machine's
     /// medium. To `recover`, the keeper would not keep it.
     Kept([u8; 8]),
-    /// A `dag-cbor` block that is neither a node of `dag`'s schema nor a directory of `tree`'s (MC-4.2: the type is bound
-    /// to the data); a name that is not 1 to NAME_MAX allowed bytes; a root whose tree is out of shape; a recovery key
-    /// for a store whose volume key is not kept off the medium (308-STO-0028).
+    /// A `dag-cbor` block that is neither a node of `dag`'s schema, a directory of `tree`'s nor an entry of `journal`'s
+    /// (MC-4.2: the type is bound to the data); a name that is not 1 to NAME_MAX allowed bytes; a root whose tree or
+    /// journal is out of shape; a recovery key for a store whose volume key is not kept off the medium (308-STO-0028).
     Invalid,
     /// The name's current version is not the one the publisher expected (MC-4.3): nothing was published.
     Conflict,
@@ -586,8 +588,9 @@ fn parse_free(sector: &[u8]) -> Option<u64> {
     (n >= 1).then_some(n)
 }
 
-// Whether `data` is what its type says: any bytes are raw, a node must decode as a file's or a directory.
-fn typed(codec: Codec, data: &[u8]) -> bool { codec == Codec::Raw || dag::decode(data).is_ok() || tree::decode(data).is_ok() }
+// Whether `data` is what its type says: any bytes are raw, a node must decode as a file's, a directory or a journal's
+// entry.
+fn typed(codec: Codec, data: &[u8]) -> bool { codec == Codec::Raw || dag::decode(data).is_ok() || tree::decode(data).is_ok() || journal::decode(data).is_ok() }
 
 /// Sectors of the record of a block of `len` bytes.
 pub const fn record_sectors(len: usize) -> usize { sealed_sectors(HEADER + len) }
@@ -1230,11 +1233,11 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(self.heads[self.find(name).map_err(|_| Error::NotFound)?].versions())
     }
 
-    // Walks the object or directory tree `root` through the store; `visit` sees the store and each block's CID.
+    // Walks the object, directory tree or journal `root` through the store; `visit` sees the store and each block's CID.
     fn walk(&mut self, root: &Cid, visit: impl FnMut(&mut Self, &Cid) -> Result<(), dag::Error>) -> Result<u64, Error> {
         let scratch = self.scratch.take().ok_or(Error::Device)?;
         let steps = self.steps();
-        let walked = tree::walk(self, root, scratch, steps, visit);
+        let walked = journal::walk(self, root, scratch, steps, visit);
         self.scratch = Some(scratch);
         walked.map_err(|e| match e {
             dag::Error::NotFound => Error::Incomplete,
@@ -1248,21 +1251,21 @@ impl<'a, D: Device> Store<'a, D> {
     // so no root keeps the store at it longer than its medium's worth.
     fn steps(&self) -> u64 { 4 * self.limit() as u64 + 64 }
 
-    // The size of every retained object, for the owners' accounts: read from each root (a directory's from its nodes), in
-    // its domain, once a mount is done.
+    // The size of every retained object, for the owners' accounts: read from each root (a directory's from its nodes, a
+    // journal's from its entries and its contents' roots), in its domain, once a mount is done.
     fn size_retained(&mut self) {
         let Some(scratch) = self.scratch.take() else { return };
         let (current, steps) = (self.domain, self.steps());
         for i in 0..self.names {
             self.domain = self.heads[i].domain;
             for k in 0..self.heads[i].count as usize {
-                if let Some(root) = self.heads[i].kept[k].root() { self.heads[i].kept[k].size = tree::size(self, &root, scratch, steps).unwrap_or(0); }
+                if let Some(root) = self.heads[i].kept[k].root() { self.heads[i].kept[k].size = journal::size(self, &root, scratch, steps).unwrap_or(0); }
             }
         }
         for i in 0..self.pinned {
             self.domain = self.pins[i].domain;
             let root = self.pins[i].root();
-            self.pins[i].size = tree::size(self, &root, scratch, steps).unwrap_or(0);
+            self.pins[i].size = journal::size(self, &root, scratch, steps).unwrap_or(0);
         }
         self.domain = current;
         self.scratch = Some(scratch);
@@ -1736,7 +1739,7 @@ impl<'a, D: Device> Store<'a, D> {
 // A root as an owner's account counts it: the CID and the domain it is in.
 type Root = ([u8; cid::BYTES], u16);
 
-// The store as the blocks of `dag` and `tree`: reads go through `get`, so every block is checked against its CID.
+// The store as the blocks of `dag`, `tree` and `journal`: reads go through `get`, so every block is checked against its CID.
 impl<D: Device> dag::Blocks for Store<'_, D> {
     fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, dag::Error> {
         Store::put(self, codec, data).map_err(|e| match e { Error::Full => dag::Error::Full, _ => dag::Error::Store })
