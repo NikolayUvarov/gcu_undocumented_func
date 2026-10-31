@@ -59,17 +59,23 @@
 - **Builds:** the x86 and aarch64 images, and `mindlink` and `effector485` for Linux and Windows, without warnings.
 - **The QEMU `link` suite, x86 and aarch64:** PASS. Both refusals are checked, and the check that keys arrive SKIPs until KRN's grant. The suite now runs on aarch64 too (`rtc.elf` from the tested architecture's image), though it is in no aarch64 CI group.
 
+**2026-10-31, with KRN's grant** (800-KRN-0191, in `main`: `link` holds the input capability in slot 8 with `dev`):
+- **What the landing round showed.** The request was returned (round 04e043f5) because the positive check, running for the first time, waited for Ctrl+Alt+F6 in `keys`. The shell listens for Ctrl+Alt+F1…F6 (INPUT_LISTEN, the screenshot on F6), so the kernel hands that chord to the shell whatever has the focus.
+- **The check now:**
+  - Ctrl+Alt+F7, Alt+0 and Shift+A reach `keys` in that order, and `type hi` gives h and i. The suite waits for the lines and checks their order, since `expect` ran past a line that came in the same piece;
+  - Ctrl+Alt+F6 over the link reaches its listener, the shell. The shell's console line `SCREENSHOT data/media/…` is awaited (up to 180 s under TCG), and its log says `(CTRL+ALT+F6)`;
+  - `[LINK] INPUT: N EVENTS FROM THE MASTER` is logged.
+- **The QEMU `link` suite, x86 and aarch64,** on `main` 435e47ff merged: PASS, with no SKIP.
+
 **Open:**
-- `KRN`'s grant of the input capability to `link` in `dev`;
-- the positive QEMU check, which turns on by itself with that grant;
 - the MacBook Pro's criterion;
 - the master's pointer commands.
 
 ## Acceptance criteria
 
-- [ ] `protocol.md` (EN, RU) defines `INPUT`'s payload; host tests cover it and the key names.
-- [ ] The QEMU `link` suite on x86 and aarch64: keys over the link reach `wm` and the shell; refused without `dev`.
-- [ ] `mindlink key`, `mindlink type` and `effector485`'s `key` and `type` are documented in `mindlink.md` and `effector485.md` (EN, RU).
+- [x] `protocol.md` (EN, RU) defines `INPUT`'s payload; host tests cover it and the key names.
+- [x] The QEMU `link` suite on x86 and aarch64: keys over the link reach `wm` and the shell; refused without `dev`.
+- [x] `mindlink key`, `mindlink type` and `effector485`'s `key` and `type` are documented in `mindlink.md` and `effector485.md` (EN, RU).
 - [ ] On the MacBook Pro: Ctrl+Alt+F6 and Alt+0 sent over the cable, with their effect on the screen and in the log.
 
 ## Related
