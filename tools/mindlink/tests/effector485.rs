@@ -96,6 +96,13 @@ fn a_batch_idempotency_cancel_and_a_restart() {
     assert!(code == 0 && out.contains(": completed, exit code 0") && out.contains("shell 42"), "{out}");
     let listed = e485(&at2, &["list"]).1;
     assert_eq!(listed.lines().count(), 10, "{listed}");
+    // 800-LNK-0032: keys, which `mindlink serve` does not take; a name that is no key fails before the line.
+    let (code, out) = e485(&at2, &["submit", "key", "names=ctrl-alt-f6 alt-0", "pace_ms=0", "--key", "T-key", "--reason", "test: key", "--wait"]);
+    assert!(code == 1 && out.contains(": failed") && out.contains("does not serve this"), "{code}: {out}");
+    let (code, out) = e485(&at2, &["submit", "key", "names=ctrl-nope", "--key", "T-key2", "--reason", "test: key", "--wait"]);
+    assert!(code == 1 && out.contains("is not a key name"), "{code}: {out}");
+    let (code, out) = e485(&at2, &["submit", "type", "--key", "T-type", "--reason", "test: type"]);
+    assert!(code == 1 && out.contains("a type needs \"text\""), "{code}: {out}");
     std::fs::remove_dir_all(&d).ok();
 }
 

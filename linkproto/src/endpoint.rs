@@ -25,6 +25,7 @@ pub mod kind {
     pub const LIST_DIR: u8 = 23;
     pub const CONSOLE: u8 = 20;
     pub const LOG: u8 = 30;
+    /// Input events posted on the slave's machine, as its keyboard gives them (800-LNK-0032).
     pub const INPUT: u8 = 40;
     /// Programs the slave starts for the master (800-LNK-0009).
     pub const RUN: u8 = 50;

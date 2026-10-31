@@ -9,6 +9,8 @@ Russian: [protocol_RU.md](protocol_RU.md).
 
 A slave from before them refuses the new requests with UNSUPPORTED, and a name with `/` with DENIED, so a master can tell. The frame and its version are unchanged.
 
+**Additions of 2026-10-30** within versions 1 and 2: INPUT's payload (800-LNK-0032), the code reserved since version 1. A slave from before it refuses INPUT with UNSUPPORTED, as it did while the code was reserved.
+
 **Version 2, of 2026-10-26** (800-LNK-0026): a frame with the slave's address, so several slaves share one RS-485 line (section 3a). Only the frame's header changes; the channels, requests and answers are version 1's. A line with one slave still uses version 1 frames.
 
 MIND Link connects a development machine to a machine under test over any byte stream (task [800](../../issues/800-mind-link.md)):
@@ -115,7 +117,7 @@ On a shared line, such as two-wire RS-485 with several machines on its pair, eac
 | 1 | console | console bytes both ways |
 | 2 | files | put, get, list, stat, delete |
 | 3 | log | the slave's system log |
-| 4 | input | keyboard and mouse events (reserved for the multi-device) |
+| 4 | input | keyboard and mouse events for the slave's machine (800-LNK-0032) |
 | 5 | programs | programs the slave starts for the master, and their output |
 
 ## 5. Requests
@@ -248,7 +250,30 @@ The slave starts a program from its directory for the master, keeps its output a
 
 ### Input (channel 4)
 
-**INPUT (40).** Reserved for keyboard and mouse events. Its payload is defined with the multi-device ([800-LNK-0005](../../issues/800-LNK-0005-the-rp2-multi-device-firmware.md)). Version 1's slaves refuse it with UNSUPPORTED.
+**INPUT (40)** (800-LNK-0032): events for the slave's machine, as its own keyboard would give them.
+
+| Request | Payload | Answer |
+|---|---|---|
+| INPUT (40) | 1 to 64 events, each a `u64`: an input word as MIND Core's `common/abi.rs` `input_event` builds it | `posted u32`: how many were posted, in order |
+
+- **The word**, by bits:
+  - 0–7: the legacy byte, the PS/2 scan code that completed the key;
+  - 8–23: the key (`KEY_*`);
+  - 24–31: the modifiers held (`MOD_*`);
+  - 32: pressed;
+  - 40–63: the character (Unicode; 0: none).
+- **A word of 0** is the attention key: the focus goes back to the shell, as Ctrl+Z from a keyboard does.
+- **A pointer event** is a word whose key is `KEY_POINTER` (`pointer_event`, `pointer_absolute`). It goes in the same list. The master's commands for it come later.
+- **How the master builds the words.** `mindlink` and `effector485` press the keys as PS/2 set 1 scan codes and let MIND Core's own decoder (`libmind/src/keys.rs`) make the words:
+  - a modifier's press and its release each give a word;
+  - another key's press gives a word with its scan code as the legacy byte, its release none.
+
+  So a key over the link is the event QEMU's `sendkey` of that key gives. The decoder keeps the US layout and never switches it: the machine's own layout is its keyboard driver's.
+- **What the slave does.** It posts each word as its keyboard driver does. MIND Core's `link`:
+  - posts them through `SYSCALL_INPUT_EVENT`, with `dev` in `link.conf` and the input capability `init` gives it (asked of the kernel track for 800-LNK-0032). It logs `[LINK] INPUT: <n> EVENTS FROM THE MASTER`;
+  - refuses DENIED without `dev`, or without the capability, posting none, and logs the refusal.
+- **A payload** that is empty, longer than 64 words, or not whole words is BAD_REQUEST. At a smaller payload agreed in the hello, a frame holds fewer words.
+- **`mindlink serve`** refuses INPUT with UNSUPPORTED: it posts no input on its machine.
 
 ## 6. Refusal codes
 

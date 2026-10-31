@@ -1,5 +1,5 @@
 //! The link protocol over a simulated line that loses, corrupts, echoes and repeats bytes (800-LNK-0001).
-use linkproto::app::{path_name, plain_name, Client, FileService, Files, RunOutput, EXIT_UNKNOWN, RUN_ENDED, RUN_RUNNING, RUN_STOPPED};
+use linkproto::app::{path_name, plain_name, Client, FileService, Files, RunOutput, EXIT_UNKNOWN, INPUT_MAX, MIN_PAYLOAD, RUN_ENDED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::frame::{self, Decoder, Header, MAX_PAYLOAD, MAX_WIRE};
 use linkproto::sha256::Sha256;
@@ -78,7 +78,7 @@ fn take(q: &mut VecDeque<u8>, out: &mut [u8]) -> usize {
 /// Files in memory, counting writes: a repeated request must not write twice.
 #[derive(Default)]
 struct Disk { files: BTreeMap<String, Vec<u8>>, dirs: BTreeSet<String>, open: Option<(String, Vec<u8>)>, reading: Vec<u8>, writes: u32, log: Vec<u8>,
-              console: Vec<u8>, runs: Vec<Run>, starts: u32, reboots: u32, commands: u32, replaced: Vec<(String, String)> }
+              console: Vec<u8>, runs: Vec<Run>, starts: u32, reboots: u32, commands: u32, replaced: Vec<(String, String)>, inputs: Vec<u64> }
 
 /// A program of the simulated end: `echo.elf` prints its arguments and ends; `loop.elf` prints a line a poll until stopped.
 /// A shell command (COMMAND) ends at once: its line echoed with exit 0, or `refused` with exit 1 for `netpolicy add`.
@@ -225,6 +225,8 @@ impl Files for Disk {
         Ok(())
     }
     fn reboot(&mut self) -> Result<(), u8> { self.reboots += 1; Ok(()) }
+    /// As MIND Core's `link` with the input capability: each word posted once, in order.
+    fn input(&mut self, words: &[u64]) -> Result<u32, u8> { self.inputs.extend_from_slice(words); Ok(words.len() as u32) }
     /// As MIND Core's init: `logd` is never replaced, a file must exist; each replace is kept, a repeat too.
     fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> {
         if unit == "logd" { return Err(code::DENIED); }
@@ -521,6 +523,54 @@ fn shell_commands_over_a_lossy_line() {
     assert_eq!(c.command("   "), Err(Error::TooBig));
     assert_eq!(c.command(&"x".repeat(241)), Err(Error::TooBig));
     assert_eq!(c.master.call(channel::PROGRAMS, kind::COMMAND, b"ps\nkill 1", &mut out), Err(Error::Refused(code::BAD_REQUEST)));
+}
+
+/// INPUT (800-LNK-0032): each frame's words posted once and in order over a line that loses and repeats frames.
+#[test]
+fn input_over_a_lossy_line() {
+    let faults = Faults { lose_write: 30_000, repeat_write: 30_000, echo: true, ..Faults::default() };
+    let (mut c, _) = pair(faults, 37, 0);
+    c.master.tries = 12;
+    let mut sent = Vec::new();
+    for i in 0..40u64 {
+        let words: Vec<u64> = (0..1 + i % INPUT_MAX as u64).map(|k| (i << 32) | k).collect();
+        assert_eq!(c.input(&words).unwrap(), words.len() as u32);
+        sent.extend_from_slice(&words);
+    }
+    assert_eq!(c.master.line.service.files.inputs, sent, "a repeated INPUT posted its events twice, or out of order");
+}
+
+/// INPUT's bounds: 1 to INPUT_MAX words, whole words, within the payload agreed; a slave without input refuses it.
+#[test]
+fn input_bounds_and_an_end_without_input() {
+    let (mut c, _) = pair(Faults::default(), 41, 0);
+    assert_eq!(c.input(&[]), Err(Error::TooBig));
+    assert_eq!(c.input(&[7; INPUT_MAX + 1]), Err(Error::TooBig));
+    assert_eq!(c.input(&[0, u64::MAX]), Ok(2));
+    let mut r = [0u8; MAX_PAYLOAD];
+    for bad in [&[][..], &[1u8; 12][..], &[1u8; 8 * (INPUT_MAX + 1)][..]] {
+        assert_eq!(c.master.call(channel::INPUT, kind::INPUT, bad, &mut r), Err(Error::Refused(code::BAD_REQUEST)), "{} bytes", bad.len());
+    }
+    assert_eq!(c.master.line.service.files.inputs, [0, u64::MAX]);
+    // At the smallest payload a frame holds 8 events.
+    c.max_payload = MIN_PAYLOAD;
+    c.hello("small", &mut [0; 64]).unwrap();
+    assert_eq!(c.input_max(), 8);
+    assert_eq!(c.input(&[1; 9]), Err(Error::TooBig));
+    assert_eq!(c.input(&[1; 8]), Ok(8));
+    // An end whose `Files` posts no input answers UNSUPPORTED, as a slave from before INPUT's payload did.
+    struct NoInput;
+    impl Files for NoInput {
+        fn create(&mut self, _: &str, _: u64) -> Result<(), u8> { Err(code::IO) }
+        fn write_at(&mut self, _: u64, _: &[u8]) -> Result<(), u8> { Err(code::IO) }
+        fn commit(&mut self, _: &[u8; 32], _: bool) -> Result<(), u8> { Err(code::IO) }
+        fn open(&mut self, _: &str) -> Result<u64, u8> { Err(code::NOT_FOUND) }
+        fn read_at(&mut self, _: u64, _: &mut [u8]) -> Result<usize, u8> { Err(code::IO) }
+        fn list(&mut self, _: u32, _: &mut [u8]) -> Result<(usize, Option<u32>), u8> { Ok((0, None)) }
+    }
+    let mut service = FileService::new(NoInput);
+    let mut reply = [0u8; MAX_PAYLOAD];
+    assert_eq!(service.handle(channel::INPUT, kind::INPUT, &[0; 8], &mut reply), Err(code::UNSUPPORTED));
 }
 
 #[test]

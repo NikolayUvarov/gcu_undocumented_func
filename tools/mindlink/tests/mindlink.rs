@@ -51,6 +51,13 @@ fn session(spec: &str, tag: &str) {
 
     let (ok, out) = run(p, &["hello"], b"");
     assert!(ok && out.contains("mindlink serve on"), "{out}");
+    // 800-LNK-0032: this end posts no input, so it refuses keys; a name that is no key fails before the line.
+    let (ok, out) = run(p, &["key", "ctrl-alt-f6", "alt-0"], b"");
+    assert!(!ok && out.contains("does not serve this"), "{out}");
+    let (ok, out) = run(p, &["type", "hi"], b"");
+    assert!(!ok && out.contains("does not serve this"), "{out}");
+    let (ok, out) = run(p, &["key", "ctrl-nope"], b"");
+    assert!(!ok && out.contains("\"nope\" is not a key name"), "{out}");
     let (ok, out) = run(p, &["put", big.to_str().unwrap()], b"");
     assert!(ok && out.contains("put ") && out.contains("1500000 bytes"), "{out}");
     assert_eq!(std::fs::read(d.join("srv/big.bin")).unwrap(), data);

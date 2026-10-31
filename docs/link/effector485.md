@@ -94,6 +94,8 @@ Each operation has:
 | `reboot` | — | restarts the other end (MIND Core: `dev` in `link.conf`); the daemon says hello again when it is back |
 | `shell` | `line`, `timeout_seconds` | one line for the other end's shell (800-LNK-0015). Its output becomes the operation's; it fails when the shell refused or failed the line |
 | `replace` | `unit`; `file` (put first, as `replace/<its name>`) or `name` (one the other end holds); or `back`: true | starts the other end's service again from that file, unverified, or from its boot image (800-LNK-0016; MIND Core: `dev` in `link.conf`) |
+| `key` | `names` (chords separated by spaces, QEMU's `sendkey` names: `ctrl-alt-f6 alt-0`), `pace_ms` (20) | presses the keys on the other end's machine as its keyboard would, a chord every `pace_ms` (800-LNK-0032; MIND Core: `dev` in `link.conf` and the input capability from `init`). `events` in the result |
+| `type` | `text`, `pace_ms` (20) | types the text there, a character every `pace_ms`; a cancel stops it between characters |
 
 **Names on the other end** are paths below its directory: on MIND Core, `data/link/` (protocol, section 5).
 
