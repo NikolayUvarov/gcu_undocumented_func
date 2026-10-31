@@ -731,7 +731,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 | [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), and copies in a file with repair from them ([309-STO-0031](../../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)); copies on a second medium after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues/311-storefs-a-file-face.md) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
-| [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | the journal built ([312-STO-0034](../../issues/312-STO-0034-a-journal-checked-from-its-head.md), above); no personal data before 308 |
+| [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | the journal built ([312-STO-0034](../../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), above); no personal data before 308 |
 | [313](../../issues/313-persistent-actors.md) | Checkpoints of services with queues, an effect journal | after 308 |
 | [314](../../issues/314-models-mapped-from-the-store.md) | Models mapped read-only from the store | after 307 |
 | [315](../../issues/315-memory-across-machines.md) | Memory across machines | an intention only |

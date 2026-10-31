@@ -184,7 +184,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md) | `storefs`: files and directories of a named root through `vfs.wit`, each flush a publication by compare-and-swap | `STO` | P2 | [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.md) | track B |
 | [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.md) | `storefs` at boot, a client of it beside `vfs_server`'s, and `mind::fs` routing by volume | `KRN` | P2 | `storefs` building as a boot program (STO) | track B |
 | [312](312-the-minds-memory.md) | The Mind's memory: a journal, assertions and derived indexes | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (no personal data before it) | track B |
-| [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.md) | A journal, append-only, checked from its head: entries chained by their links, the head published by compare-and-swap, the store retaining it whole; `blocks journal` | `STO` | P2 | — | track B |
 | [313](313-persistent-actors.md) | Persistent actors: checkpoints of services with queues | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (for actors that hold personal data) | track B |
 | [314](314-models-mapped-from-the-store.md) | Models and large objects mapped from the store | main task, `STO` | P3 | [307](307-the-stores-own-partition.md) | track B |
 | [315](315-memory-across-machines.md) | Memory across machines (later; an intention only) | main task, `STO` | P3 | [309](309-copies-scrub-and-repair.md), [313](313-persistent-actors.md) | track B |
@@ -317,6 +316,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done) | A journal, append-only, checked from its head: entries chained by their links, the head published by compare-and-swap, the store retaining it whole; `blocks journal` | `mind::journal`, the store's walk along a journal, `blocks journal` `append`, `check` and `list`; host-tested, and the `store` suite on x86 and aarch64 (QEMU TCG), a journal in a memory domain too; nothing on the wire changed |
 | [700-DRV-0047](../issues-done/700-DRV-0047-the-bluetooths-events-without-loss.done) | `usb_host` keeps a Bluetooth controller's events without loss | lossless for `BADGE_BLUETOOTH`; the DEXP's rounds dropped 64 to 404 packets before, none after (release 202610302359) |
 | [700-DRV-0046](../issues-done/700-DRV-0046-rtw88-gives-the-bluetooth-its-antenna.done) | `rtw88_wifi` lets the card's Bluetooth on air: rtw88's free run for a Bluetooth on its own antenna | the DEXP's Bluetooth heard nothing, then 14–15 LE and 1 BR/EDR devices a round; the Wi-Fi joins and acknowledges every frame |
 | [700-BLT-0002](../issues-done/700-BLT-0002-bt-hci-rounds-every-five-minutes-and-what-they-got.done) | `bt_hci`: a round every five minutes as meant, and what each round got | rounds 319–322 s apart on the DEXP; events, drops and the inquiry's end in each round's lines |

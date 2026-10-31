@@ -1,10 +1,10 @@
-# 312-STO-0034 — A journal, append-only, checked from its head
+# 312-STO-0034 — A journal, append-only, checked from its head — done
 
-**Type:** storage (`libmind`, `blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.md) · **Constitution:** MC-4.3, MC-4.5, MC-4.10, MC-4.12, MC-10.3
+**Type:** storage (`libmind`, `blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Constitution:** MC-4.3, MC-4.5, MC-4.10, MC-4.12, MC-10.3
 
-Split from [312](312-the-minds-memory.md) (2026-10-30), its first step: "the journal, append-only per memory domain … the head is published by compare-and-swap, so a reader checks order and completeness from it". Assertions and derived indexes are later tasks of 312.
+Split from [312](../issues/312-the-minds-memory.md) (2026-10-30), its first step: "the journal, append-only per memory domain … the head is published by compare-and-swap, so a reader checks order and completeness from it". Assertions and derived indexes are later tasks of 312.
 
-No personal data is written before [308](308-encryption-at-rest.md) is done: the tests and the pilot write test text only.
+No personal data is written before [308](../issues/308-encryption-at-rest.md) is done: the tests and the pilot write test text only.
 
 ## Problem
 
@@ -115,6 +115,17 @@ The store keeps objects and names, and a name's history keeps 4 versions. Nothin
   - an older head published again by hand with `blocks publish` is refused by `check`.
 - **docs/storage** (a section on the journal, with what it does not give) and the profile's Article 4 rows.
 
+## Resolution
+
+Landed in `main` 077e0fb9 (round 077e0fb99cca) as c96e91e6, b8a0c112, 968116c7 and 4ce998ef.
+- **`mind::journal`** (`libmind/src/journal.rs`): the entry's schema, `append` by compare-and-swap at the version that is the entry's sequence, and `check` and `list` from the head, which refuse a sequence not at its version or not one less, a block missing or corrupt, another schema, and a boot or a monotonic time that goes back.
+- **The store** (`blockstore/src/store.rs`) takes an entry as a typed `dag-cbor` block and walks a journal entry after entry (`journal::walk`), within one bound shared with `tree::walk_from`; `mind::car` walks the same way, so a copy carries a journal whole.
+- **The pilot:** `blocks journal append|check|list` (`blocks/src/journal.rs`).
+- **Tests:** `tests/journal_host.rs` (16), built optimized in `scripts/host_tests.sh`; `store_journal_check` in the QEMU `store` suite, and `store_domains_check` appends to a journal in a domain. They passed on the session's container and on `un-rizen_2a8b108d5593` (x86 and aarch64, QEMU TCG), as the progress above says.
+- **The docs:** docs/storage 0.22, and the profile's Article 4 rows (x86, aarch64) and their evidence.
+- **What it does not give** stays in docs/storage: the source, the calendar time and the boot are the writer's claims; each append walks the whole journal; a copy is checked in the store it was written in.
+- `blockstore.wit` and the store's layout did not change. 312 stays open for assertions and derived indexes.
+
 ## Related
 
-[312](312-the-minds-memory.md), [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), [308-STO-0023](../issues-done/308-STO-0023-memory-domains.done), [313-STO-0033](../issues-done/313-STO-0033-a-component-moved-through-a-copy.done), [303](../issues-done/303-retention-and-collection.done).
+[312](../issues/312-the-minds-memory.md), [311-STO-0027](311-STO-0027-directories-as-objects.done), [308-STO-0023](308-STO-0023-memory-domains.done), [313-STO-0033](313-STO-0033-a-component-moved-through-a-copy.done), [303](303-retention-and-collection.done).
