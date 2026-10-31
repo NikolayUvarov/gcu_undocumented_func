@@ -1047,16 +1047,15 @@ def normal_suite(vm):
     vm.keys(f"kill {clock}\n")
     vm.serial()
     assert task_rows_reaped(vm) == {}
-    # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
-    # state for aarch64: there no QEMU thread stays runnable for most of a second.
+    # Idle: the CPU sleeps in HLT (a sample may catch it handling a tick or drawing the last output, so it is sampled
+    # for up to 2 s; one that spins never halts). QEMU shows no WFI state for aarch64: there no QEMU thread stays
+    # runnable for most of a second.
     idle = "HLT"
     if vm.arch == "aarch64":
         idle = f"WFI (a thread runnable {idle_check(vm):.0%})"
     else:
-        for _ in range(10):
-            registers = vm.hmp("info registers")
-            if "HLT=1" in registers:
-                break
+        deadline = time.monotonic() + 2
+        while "HLT=1" not in (registers := vm.hmp("info registers")) and time.monotonic() < deadline:
             time.sleep(.02)
         require(registers, "HLT=1")
     cpus = vm.hmp("info cpus")
@@ -2651,12 +2650,14 @@ def busy_suite(vm):
     vm.send("q")
     vm.expect("EXITED. SHELL RESUMED.")
     time.sleep(.1); vm.collect(); vm.output = ""
-    # TSC accounting (STAT): a task that never yields gets most of its CPU.
-    run = lambda: int(re.search(r"RUN_MS=(\d+)", vm.command("stat 1"))[1])
-    before, started = run(), time.monotonic()
+    # TSC accounting (STAT): a task that never yields gains run time, never more than it lived plus a 10 ms slice. Its
+    # share of its CPU is checked below against the time the other tasks leave there: right after top the compositor,
+    # on the same CPU and in the system band, redraws the screen, which took 72 % of a second on a slow host (000-KRN-0199).
+    stat = lambda: tuple(map(int, re.search(r"RUN_MS=(\d+) AGE_MS=(\d+)", vm.command("stat 1")).groups()))
+    run0, age0 = stat()
     time.sleep(1)
-    after, elapsed = run(), time.monotonic() - started
-    assert (after - before) > 0.3 * elapsed * 1000, (before, after, elapsed)
+    run1, age1 = stat()
+    assert 0 < run1 - run0 <= age1 - age0 + 10, (run0, age0, run1, age1)
     fixture = vm.command("logs 1")
     require(fixture, "BUSY FIXTURE")
     avx_expected(vm, fixture)
@@ -2755,14 +2756,13 @@ def smp_suite(vm):
         vm.serial()
         idle = f"WFI (a thread runnable {idle_check(vm):.0%})"
     else:
+        # A CPU still drawing the last output (the compositor's frame copy) halts once it is done; one that spins never.
         for cpu in range(vm.cpus):
             vm.hmp(f"cpu {cpu}")
-            for _ in range(10):
-                regs = vm.hmp("info registers")
-                if "HLT=1" in regs:
-                    break
+            deadline = time.monotonic() + 2
+            while "HLT=1" not in (regs := vm.hmp("info registers")) and time.monotonic() < deadline:
                 time.sleep(.02)
-            else:
+            if "HLT=1" not in regs:
                 raise AssertionError(f"CPU {cpu} did not halt when idle: {regs}")
         vm.serial()
     print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, {kept} preservation, supervisor reserve under load, remote kill, all CPUs {idle}", flush=True)
