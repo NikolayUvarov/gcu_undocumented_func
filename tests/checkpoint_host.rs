@@ -13,6 +13,8 @@ mod cid;
 mod dag;
 #[path = "../libmind/src/tree.rs"]
 mod tree;
+#[path = "../libmind/src/journal.rs"]
+mod journal;
 #[path = "../blockstore/src/store.rs"]
 mod store;
 #[path = "../libmind/src/checkpoint.rs"]
