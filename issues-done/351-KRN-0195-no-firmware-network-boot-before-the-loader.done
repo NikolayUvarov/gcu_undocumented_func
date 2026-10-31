@@ -1,6 +1,6 @@
-# 351-KRN-0195 — The firmware's own network boot stays off: named in the threat model, refused by `efivar`
+# 351-KRN-0195 — The firmware's own network boot stays off: named in the threat model, refused by `efivar` — done
 
-**Type:** docs, `efivar` · **Owner:** `KRN` · **Priority:** P3 · **Status:** open (made and tested on both architectures; landing left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-12.3
+**Type:** docs, `efivar` · **Owner:** `KRN` · **Priority:** P3 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-12.3
 
 **Asked by:** the maintainer on 2026-10-30, after a public advisory on EDK II's PXE driver (CVE-2026-97631). The priority is low: nothing in MIND Core boots over the network, and our machines can turn it off in their firmware today.
 
@@ -53,6 +53,16 @@
 - **Docs:** both threat models; the disk-writing guide's firmware settings, in English and Russian; the evidence rows of both profiles; a task for the maintainer in `issues-human/` (section 13).
 
 **Left:** landing. Turning network boot off on the maintainer's machines is a person's task (`issues-human/`, section 13), not this issue's.
+
+## Resolution
+
+Landed in `main` ff58632f (landing round 66, gate land-ff58632f: every group passed on its first run).
+
+- **The classifier:** `libmind/src/firmware/boot_path.rs`, a child of `firmware.rs`. Network: a MAC, IPv4, IPv6 or URI messaging node. Malformed: a node that overruns, or no end node. 8 host tests in `tests/boot_path_host.rs`.
+- **`efivar`:** `efivar boot` marks such an entry `(network)`. `bootnext` and `bootorder` refuse it, and one whose path cannot be read, naming it.
+- **Checked:** the `efivar` check saw OVMF's (x86) and AAVMF's (aarch64) `UEFI PXEv4` entry marked and refused, with `BootNext` and `BootOrder` unchanged, on the machines and in the gate.
+- **Docs:** both threat models, both evidence rows, the disk-writing guide (EN, RU).
+- **Left to a person:** turning network boot off on the maintainer's machines, `issues-human/` section 13.
 
 ## Related
 

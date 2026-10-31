@@ -1,6 +1,6 @@
-# 000-KRN-0199 — Checks that read a result before a loaded host shows it: the colour after `fg`, a program's row after it ended, an idle CPU's halt
+# 000-KRN-0199 — Checks that read a result before a loaded host shows it: the colour after `fg`, a program's row after it ended, an idle CPU's halt — done
 
-**Type:** tests · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
+**Type:** tests · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -30,14 +30,29 @@ In round 64 (candidate fbda1685), the group "x86: no PIT", the `normal` suite, f
 
 ## Acceptance criteria
 
-- [ ] The `normal` and `isolation` suites pass on x86 with the waits, in QEMU locally and in a landing round's gate.
-- [ ] Nothing waits where a wrong result could still turn right: each wait is for a colour, for a row of a program that has ended, or for `HLT=1`.
-- [ ] No share of the host's wall clock is asked of the busy loop; its share of what its CPU leaves is still asked.
+- [x] The `normal` and `isolation` suites pass on x86 with the waits, in QEMU locally and in a landing round's gate.
+- [x] Nothing waits where a wrong result could still turn right: each wait is for a colour, for a row of a program that has ended, or for `HLT=1`.
+- [x] No share of the host's wall clock is asked of the busy loop; its share of what its CPU leaves is still asked.
 
 ## Progress (2026-10-31)
 
 - `tests/qemu_smoke.py`: the three colour checks of the `normal` suite and its two row checks; the `isolation` suite's two row checks after a fault; the two x86 idle checks; the `busy` suite's first run-time check.
 - The `normal`, `isolation`, `smp` and `busy` suites passed locally (x86, QEMU TCG, 4 CPUs; `smp` with `-cpu max`, all CPUs `HLT`; `busy`: the loop took 1.01 of the time the other tasks left its CPU, and 1.00 measured against its CPU's idle time).
+
+## Resolution
+
+Landed in `main` ff58632f (landing round 66, gate land-ff58632f: every group passed on its first run).
+
+- `tests/qemu_smoke.py` only:
+  - the three colour checks after `fg` wait up to 5 s for the colour they want;
+  - the rows of a program that ended or was killed are read with `task_rows_reaped`;
+  - the x86 idle checks (`normal`, `smp`) sample `HLT=1` for up to 2 s;
+  - the `busy` suite's first run-time check asks for consistent accounting: the loop gains run time, no more than its age plus a 10 ms slice;
+  - its share check takes the loop's run time against its CPU's idle time.
+- **Tested:**
+  - locally, the `normal`, `isolation`, `smp` and `busy` suites;
+  - on the machines, "x86: x2APIC", "x86: no PIT", "x86: scheduling, isolation, heap", "x86: AVX state" and "aarch64: programs, shell and four CPUs" at 0e095611 and ff58632f;
+  - then the whole gate.
 
 ## Related
 

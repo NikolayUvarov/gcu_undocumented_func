@@ -129,6 +129,15 @@ Still left: `ask(host, port, why)` and the user's answers, which need the shell'
   - the user's answer through the shell (APP), and with it the checks of `once`, `session` and `always`;
   - the profile's MC-11.6 row, once the whole path is tested.
 
+## Progress (2026-10-31): in `main`
+
+The stack's and the broker's part is in `main` at ff58632f (landing round 66; the request's commit is the branch's ff58632f). Every group of the gate passed on its first run, the `net` suite's question checks on x86 and aarch64 among them.
+
+Still left:
+- the user's answer through the shell (APP's 000-APP-0120), which starts now that `netpolicy.wit` 1.3 is in `main`;
+- with it, the checks of `once`, `session` and `always`;
+- the profile's MC-11.6 row, once the whole path is tested.
+
 ## Related
 
 [351-NET-0003](../issues-done/351-NET-0003-names-in-the-network-policy.done), [108](../issues-done/108-editable-network-policy.done), [255](255-text-web-browser.md), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md).

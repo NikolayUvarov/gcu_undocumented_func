@@ -196,7 +196,7 @@ Done when the phone answers on the serial console at 115200 with Tow-Boot's prom
 
 ## 13. Network boot off in the firmware of the machines that boot MIND Core
 
-Task [351-KRN-0195](../issues/351-KRN-0195-no-firmware-network-boot-before-the-loader.md): the firmware's own network boot (PXE, HTTP boot) runs before our bootloader and outside every guarantee ([threat model](../docs/profile/threat-model.md)). `efivar` refuses to put such an entry first or next, but only the firmware's setup turns it off. The agents cannot reach the firmware's setup screens.
+Task [351-KRN-0195](../issues-done/351-KRN-0195-no-firmware-network-boot-before-the-loader.done): the firmware's own network boot (PXE, HTTP boot) runs before our bootloader and outside every guarantee ([threat model](../docs/profile/threat-model.md)). `efivar` refuses to put such an entry first or next, but only the firmware's setup turns it off. The agents cannot reach the firmware's setup screens.
 
 - [ ] On each machine that boots MIND Core (the Intel PC, the MacBook Pro if its firmware offers it, and any Effector machine that boots a MIND Core disk): in the firmware's setup, turn off PXE or "Network Stack", "UEFI Network" and HTTP boot. Note the machine, the firmware's version and the setting's name here.
 
