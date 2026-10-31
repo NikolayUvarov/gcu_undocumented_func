@@ -6274,7 +6274,8 @@ def vfs_suite(args):
                     raise AssertionError(f"{command}: record did not end")
                 require(vm.command(f"logs {pid}"), line)
             # record (issue 093): 3 s of the screen while clock is in front, into data/; the display shows the dot meanwhile.
-            recorder = re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command("run record -t 3 data/rec.avi &"))[1]
+            # Its image is read while vfs_server may still write the last file: 8 s was short on a loaded host (000-KRN-0198).
+            recorder = re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command("run record -t 3 data/rec.avi &", timeout=30))[1]
             vm.send("clock\n")
             vm.expect("[CLOCK] ")
             # The dot shows once record captures, which a loaded machine starts later than 1 s on (gate 25: i7-930, PCU).
@@ -12508,6 +12509,13 @@ def trial_check(args, disk):
           "restarts at the deadline, and the next boot falls back to slot A", flush=True)
 
 
+def loader_error(vm, name, reason):
+    # The loader reads and hashes the images in order before the one it names: on a loaded host that took over 30 s
+    # from QEMU's start (round 62), so its start and its error each have their own limit (000-KRN-0198).
+    vm.expect("STARTED; READING", timeout=120)
+    vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=60)
+
+
 def boot_suite(args, disk):
     # The bootloader names a broken or missing boot file instead of hanging silently.
     kernel = (disk / "kernel.elf").read_bytes()
@@ -12527,7 +12535,7 @@ def boot_suite(args, disk):
             sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
-            vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=30)
+            loader_error(vm, name, reason)
         finally:
             vm.close()
         target.write_bytes(original)
@@ -12545,7 +12553,7 @@ def boot_suite(args, disk):
         change()
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
-            vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=30)
+            loader_error(vm, name, reason)
         finally:
             vm.close()
         (disk / "kernel.elf").write_bytes(kernel)
