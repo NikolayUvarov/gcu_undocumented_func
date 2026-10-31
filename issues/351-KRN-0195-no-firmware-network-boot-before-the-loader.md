@@ -1,6 +1,6 @@
 # 351-KRN-0195 — The firmware's own network boot stays off: named in the threat model, refused by `efivar`
 
-**Type:** docs, `efivar` · **Owner:** `KRN` · **Priority:** P3 · **Status:** open (made; the aarch64 run and the machines' firmware left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-12.3
+**Type:** docs, `efivar` · **Owner:** `KRN` · **Priority:** P3 · **Status:** open (made and tested on both architectures; landing left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-12.3
 
 **Asked by:** the maintainer on 2026-10-30, after a public advisory on EDK II's PXE driver (CVE-2026-97631). The priority is low: nothing in MIND Core boots over the network, and our machines can turn it off in their firmware today.
 
@@ -49,11 +49,10 @@
 - **Host tests,** `tests/boot_path_host.rs`, 8: a disk path, MAC + IPv4, MAC alone, IPv6, URI (behind IPv4 and alone), a network instance after a disk instance, malformed paths (empty, no end node, the end node cut, a node of length 2, 0 or past the end), and a `Boot####` read past its description or cut short.
 - **The `efivar` check** (x86's `boot` suite, aarch64's `efivar` suite) finds the `(network)` entry and sees both commands refuse it, with `BootNext` and `BootOrder` unchanged. On x86 it requires one; on aarch64 it checks one when AAVMF lists one.
   - **Run locally,** x86, QEMU TCG with OVMF: OVMF's `Boot0002 UEFI PXEv4 (MAC:525400123456)` for QEMU's default card was marked and refused; the rest of the check passed as before.
-- **Docs:** both threat models; the disk-writing guide's firmware settings, in English and Russian; the x86 evidence row; a task for the maintainer in `issues-human/` (section 13).
+  - **On the Effector machines,** the branch at 07b9c3ac (`main` 370e905c merged): "x86: boot, display, shell, memory, clock" on `acc-2` and "aarch64: programs, shell and four CPUs" on PCU passed. On both, `Boot0003 UEFI PXEv4 (MAC:525400123456)` was marked and refused: AAVMF makes the entry as OVMF does. The host tests (`boot_path` among them) passed on `un-rizen`.
+- **Docs:** both threat models; the disk-writing guide's firmware settings, in English and Russian; the evidence rows of both profiles; a task for the maintainer in `issues-human/` (section 13).
 
-**Left:**
-- the `efivar` suite on aarch64, to see whether AAVMF lists a network entry;
-- the maintainer's machines' firmware (`issues-human/`, section 13).
+**Left:** landing. Turning network boot off on the maintainer's machines is a person's task (`issues-human/`, section 13), not this issue's.
 
 ## Related
 
