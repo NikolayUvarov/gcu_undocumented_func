@@ -107,9 +107,8 @@ def test_a_pool_takes_the_longest_first():
     assert land.pick(queue, "acc1", {"x86"}, {"a": 100, "b": 400, "c": 900}) == ("aarch64", "b")  # the host part: un-rizen
     assert land.pick(queue, "rz-3", {"x86"}, {"a": 100, "b": 400, "c": 900}) == ("host", "c")
     assert land.pick(queue, "pcu", set(), {"a": 900, "b": 1}) == ("aarch64", "b")  # PCU gates aarch64 alone
-    # A group a machine cannot run is left to the others, however long it is.
-    assert land.pick([("aarch64", "aarch64: 16 CPUs"), ("aarch64", "b")], "pcu", set(), {"aarch64: 16 CPUs": 900, "b": 1}) == ("aarch64", "b")
-    assert land.pick([("aarch64", "aarch64: 16 CPUs")], "rz-2", set(), {}) == ("aarch64", "aarch64: 16 CPUs")
+    # PCU takes the 16-CPU group too since the idle check measures a thread (000-KRN-0197).
+    assert land.pick([("aarch64", "aarch64: 16 CPUs"), ("aarch64", "b")], "pcu", set(), {"aarch64: 16 CPUs": 900, "b": 1}) == ("aarch64", "aarch64: 16 CPUs")
     assert land.pick(queue, "acc2", set(), {"a": 900, "b": 1}, broken={"x86"}) == ("aarch64", "b")
     assert land.pick(queue, "i9", set(), {}, broken={"x86"}) is None
     # A machine Effector lists as off gives no lane (round 47).

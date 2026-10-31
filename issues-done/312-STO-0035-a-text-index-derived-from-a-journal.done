@@ -1,21 +1,21 @@
-# 312-STO-0035 — A text index derived from a journal: rebuilt equal to itself, a stale one told, every answer checked
+# 312-STO-0035 — A text index derived from a journal: rebuilt equal to itself, a stale one told, every answer checked — done
 
-**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.md) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, MC-10.3
+**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, MC-10.3
 
-Split from [312](312-the-minds-memory.md) (2026-10-31), its second step: "derived indexes: full text … an exact scan first … an index is never authority or proof that a version is current, and may be dropped and rebuilt (MC-4.12)". Vectors wait for `NRL`'s embeddings; assertions are a later task of 312.
+Split from [312](../issues/312-the-minds-memory.md) (2026-10-31), its second step: "derived indexes: full text … an exact scan first … an index is never authority or proof that a version is current, and may be dropped and rebuilt (MC-4.12)". Vectors wait for `NRL`'s embeddings; assertions are a later task of 312.
 
-No personal data is written before [308](308-encryption-at-rest.md) is done: the tests and the pilot index test text only.
+No personal data is written before [308](../issues/308-encryption-at-rest.md) is done: the tests and the pilot index test text only.
 
 ## Problem
 
-A journal ([312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done)) is read from its head, newest first. Finding the entries whose content holds a word means reading every entry and every content. An index answers sooner, but MC-4.12 and MC-4.6 bound it:
+A journal ([312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done)) is read from its head, newest first. Finding the entries whose content holds a word means reading every entry and every content. An index answers sooner, but MC-4.12 and MC-4.6 bound it:
 - it is derived: it can be dropped and rebuilt, and a rebuild gives the same index;
 - it is not proof that it is current: a reader tells a stale one, and by how much;
 - it is not authority: each answer is checked against the journal, and an index that answers wrong is refused.
 
 ## Plan
 
-- **An index is an object of `tree`** ([311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done)), published under a name of its own by compare-and-swap, `index/<journal>` unless one is given. So the store retains it, `mind::car` copies it, and the owners' sizes count it, with nothing new in the store and nothing on the wire.
+- **An index is an object of `tree`** ([311-STO-0027](311-STO-0027-directories-as-objects.done)), published under a name of its own by compare-and-swap, `index/<journal>` unless one is given. So the store retains it, `mind::car` copies it, and the owners' sizes count it, with nothing new in the store and nothing on the wire.
   - `manifest`, a file: a canonical DAG-CBOR map of a schema of its own, `mind::index`, versioned (`"v"`; another is refused by its number, MC-4.13). It names the index's kind (`"text"`), the tokenizer's version, the journal's name, and the head's sequence and CID it was built from, with the counts of entries, terms and postings.
   - the terms, in directories sharded by their first bytes, each term a file of its postings: the sequences of the entries whose content holds it, ascending, in one encoding.
   - Built only from what the journal holds, in one order: the same head gives the same bytes, so the same root's CID.
@@ -35,7 +35,7 @@ A journal ([312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its
 ## What it does not give, said in docs/storage
 
 - **Not vectors,** and no term beyond ASCII.
-- **Bounded:** by the work area, so a journal past it has no index. An index on the medium that grows is [310](310-the-index-on-the-medium.md)'s.
+- **Bounded:** by the work area, so a journal past it has no index. An index on the medium that grows is [310](../issues/310-the-index-on-the-medium.md)'s.
 - **Not faster to check:** every answer is checked, and the check reads the journal down to the oldest entry answered. An index saves the tokenizing of the entries no term names; it does not make a journal's check shorter.
 - **No rights:** an index lives in the store and domain its journal does; it grants nothing and reads nothing its reader's client cannot (MC-4.6).
 
@@ -107,6 +107,15 @@ A journal ([312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its
   - rebuilt, `check` says `equal`; after a collection, the same.
 - **docs/storage** (a section on derived indexes, with what they do not give) and the profile's Article 4 rows.
 
+## Resolution
+
+Landed in `main` 36d05f12 (round 8ea4b135) as 27388dd7, f7d8bc6f and da6b8137.
+- **`mind::index`** (`libmind/src/index.rs`): an index is a `tree` under its own name (`index/<journal>` by default), a `manifest` (DAG-CBOR, schema `v` 1, kept as a `raw` file so the store does not retain the journal through it) and term files sharded by their first one and two bytes. `build` reads the journal once through `journal::check_each`, so the same head gives the same root; `state` tells current or stale by how many entries; `search` checks the journal whole, every posting against its entry and the entries above the index's head scanned, so its answer is the exact scan's (`scan`); `verify` rebuilds and compares (`equal`, `stale <n>`, `differs`). The work area is the caller's; a journal past it is `full`, nothing published.
+- **The pilot:** `blocks index build|search|check` (`blocks/src/index.rs`).
+- **Tests:** `tests/index_host.rs` (14), built optimized in `scripts/host_tests.sh`; `store_index_check` in the QEMU `store` suite, with an index in a memory domain on aarch64. They passed on the session's container and on `un-rizen_2a8b108d5593` (x86 and aarch64, QEMU TCG) on 0c161935, as the landing request of 05:57 says.
+- **The docs:** docs/storage 0.23 (derived indexes, and what they do not give), the profile's Article 4 rows (x86, aarch64) and their evidence.
+- `blockstore.wit` and the store's layout did not change. 312 stays open for assertions (312-STO-0038), vectors and forgetting.
+
 ## Related
 
-[312](312-the-minds-memory.md), [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), [310](310-the-index-on-the-medium.md), [303](../issues-done/303-retention-and-collection.done).
+[312](../issues/312-the-minds-memory.md), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [310](../issues/310-the-index-on-the-medium.md), [303](303-retention-and-collection.done).

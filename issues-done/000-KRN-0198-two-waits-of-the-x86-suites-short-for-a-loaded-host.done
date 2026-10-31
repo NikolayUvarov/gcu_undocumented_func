@@ -1,0 +1,53 @@
+# 000-KRN-0198 — Two waits of the x86 suites are short for a loaded host: the loader's error and a program's start — done
+
+**Type:** tests · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.2
+
+## Problem
+
+In round 62 (candidate 74cf7265), two groups on `un-rizen-service` failed their first run while the machine ran a second gate lane and the host tests. Each passed when run again alone.
+
+- **"x86: boot, display, shell, memory, clock", the `boot` suite.** It changes `rtc.elf` and waits 30 s from QEMU's start for `BOOT ERROR: rtc.elf: not as the manifest says`.
+  - The loader had printed `STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME` and its safe-start line, and then nothing within the 30 s.
+  - The loader reads and hashes the images in order, from a virtual FAT disk, before it reaches the one it names. Under TCG on a loaded host, the firmware's start and those reads together took longer than 30 s.
+- **"x86: RAM above 4 GiB", the `vfs` suite.** It waits for the prompt after `run record -t 3 data/rec.avi &` with the shell's default limit of 8 s, and the prompt did not come in time.
+  - The step before it wrote two recordings into `data/`.
+  - A program's image is read through `vfs_server`, which may still be writing the last file. Round 48 failed later in the same step on the same machine.
+
+## Plan
+
+- **The loader's error:** wait for the loader's start (120 s, as the `modes` suite's safe start does), and then for its error (60 s). A loader that stops without naming the file still fails.
+- **The program's start:** 30 s for that one `run … &`. The suite still checks that `record` starts in the background and records 3 s.
+
+## Acceptance criteria
+
+- [x] Both groups pass on `un-rizen-service` and `acc-1` with the change (below).
+- [ ] The landing gate runs them with neither wait failing.
+
+## Progress
+
+- **2026-10-31, made** on `claude/youthful-mendel-mf1soy` (d40bac34).
+- **`acc-1`, d40bac34:** "x86: RAM above 4 GiB" passed in 955 s and "x86: boot, display, shell, memory, clock" in 698 s.
+- **`un-rizen-service`'s second lane, d40bac34:**
+  - the boot suite's signed-volume cases passed with the new waits;
+  - two other 8 s prompt waits then failed: `dmesg -s wifi` in the `net` suite, and `dmesg -s vfs_server` after the decoy boot;
+  - the machine was at a load average of 58 on 16 cores, from two KRN branch runs (one of them a 16-CPU group) and another track's run. The kernel track loaded it so; the run says nothing of these waits on a machine with one gate's lanes.
+
+  These two waits are not changed. The groups run there again.
+- **`un-rizen-service`'s second lane, cf0161af, alone on its lane:** "x86: RAM above 4 GiB" passed in 1000 s and "x86: boot, display, shell, memory, clock" in 688 s.
+
+## Resolution
+
+- **Landed** in `main` 36d05f12 (round 63, candidate 8ea4b135; `claude/youthful-mendel-mf1soy` f47e13fe).
+- **What changed:**
+  - the `boot` suite waits 120 s for the loader's start and then 60 s for its error (`loader_error`), instead of 30 s from QEMU's start;
+  - the `vfs` suite waits 30 s for the prompt after `run record -t 3 data/rec.avi &`.
+- **Every criterion:**
+  - both groups passed on `acc-1` (955 s and 698 s) and on `un-rizen`'s second lane alone (1000 s and 688 s);
+  - round 63's gate ran them with neither wait failing: "x86: RAM above 4 GiB" in 1180 s on `un-rizen`, "x86: boot, display, shell, memory, clock" in 710 s on `acc-2`.
+- **Not changed here:** the other 8 s prompt waits that failed while the kernel track's own runs overloaded `un-rizen` (load average 58 on 16 cores): `dmesg -s wifi`, `dmesg -s vfs_server`. In round 63, `svc start tts` failed the same way on `un-rizen` while both lanes there ran, and passed alone. These belong to the gate's load, not to one wait.
+
+## Related
+
+- 350-UPD-0003: the signed boot volume, whose errors the `boot` suite checks.
+- 093: `record`.
+- Round 62 of the landing queue; 000-KRN-0197 (the other gate failure of that round, on PCU).
