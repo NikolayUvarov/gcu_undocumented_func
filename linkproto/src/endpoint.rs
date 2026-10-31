@@ -89,13 +89,16 @@ pub trait Line {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats { pub requests: u32, pub retries: u32, pub dropped: u32 }
 
+/// The longest a later try waits, unless `timeout_ms` is longer (800-LNK-0033).
+pub const WAIT_MAX_MS: u64 = 4000;
+
 pub struct Master<L: Line> {
     pub line: L,
     decoder: Decoder,
     seq: u16,
     wire: [u8; MAX_WIRE],
     chunk: [u8; 256],
-    /// How long one try waits for the answer, and how many tries.
+    /// How long the first try waits for the answer (each next one twice as long, up to `WAIT_MAX_MS`), and how many tries.
     pub timeout_ms: u32,
     pub tries: u32,
     pub stats: Stats,
@@ -127,7 +130,10 @@ impl<L: Line> Master<L> {
         for attempt in 0..self.tries {
             if attempt > 0 { self.stats.retries += 1; }
             if !self.line.write(&self.wire[..n]) { return Err(Error::Line); }
-            let end = self.line.now_ms() + self.timeout_ms as u64;
+            // Each try waits twice as long as the one before, up to WAIT_MAX_MS: a slave writing its disk (a flush at
+            // PUT_CLOSE, 800-LNK-0033) is silent for seconds, while a lost frame is still found by the first, short tries.
+            let wait = ((self.timeout_ms as u64) << attempt.min(4)).min((self.timeout_ms as u64).max(WAIT_MAX_MS));
+            let end = self.line.now_ms() + wait;
             loop {
                 let now = self.line.now_ms();
                 if now >= end { break; }

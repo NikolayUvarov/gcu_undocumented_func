@@ -24,7 +24,7 @@ The store keeps objects, names and journals ([312-STO-0034](../issues-done/312-S
 - **A mention, not a retention** (MC-4.5): `subject`, `basis` and `retracts` are kept as the CIDs' bytes, not as links. A walk of the store does not follow them, so an assertion never retains its subject, and a subject collected leaves its assertions in place.
 - **Kept in a journal:** an assertion is the content of a journal entry of kind `assertion`, appended by `journal::append`. The journal gives it its order, its time and its `source`, the writer's label as the journal records it. So an assertion's provenance is its journal's entry, checked from the head as every entry is.
 - **Retraction:** a later assertion by the same `source` that names an earlier one in `retracts` withdraws it. One by another source does not: it is that source's own claim, and both stand.
-- **Reading** (`assertion::about`): the assertions of a journal about one subject, newest first, without the retracted ones, each with its entry's sequence and source. The journal is checked whole from its head, and each assertion read and checked against its CID. A scan first: an index by subject waits for the sizes to ask for it, as the text index did ([312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.md)).
+- **Reading** (`assertion::about`): the assertions of a journal about one subject, newest first, without the retracted ones, each with its entry's sequence and source. The journal is checked whole from its head, and each assertion read and checked against its CID. A scan first: an index by subject waits for the sizes to ask for it, as the text index did ([312-STO-0035](../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done)).
 - **The sources of truth** (MC-4.12), named in docs/storage:
   - an assertion with no `basis` is its source's word, and the journal is its record;
   - one with a `basis` is derived, may be dropped, and is made again from its basis.
@@ -58,4 +58,4 @@ The store keeps objects, names and journals ([312-STO-0034](../issues-done/312-S
 
 ## Related
 
-[312](312-the-minds-memory.md), [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.md), [303](../issues-done/303-retention-and-collection.done), [308](308-encryption-at-rest.md).
+[312](312-the-minds-memory.md), [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done), [303](../issues-done/303-retention-and-collection.done), [308](308-encryption-at-rest.md).

@@ -81,8 +81,8 @@ A driver's proprietary file thus goes to a running machine with no disk written 
 | Option | Default |
 |---|---|
 | `--baud <rate>` | 115200. Rates from 9600 to 3000000 that Linux names (921600, 2000000 and others). Both ends must use the same rate |
-| `--timeout <ms>` | how long one try waits: from the rate on a serial port, 2 s on TCP |
-| `--tries <n>` | 8 tries for each request |
+| `--timeout <ms>` | how long the first try waits: from the rate on a serial port, 2 s on TCP. Each next try waits twice as long, up to 4 s (or this, if longer), so a machine busy writing its disk for seconds still answers (800-LNK-0033) |
+| `--tries <n>` | 8 tries for each request: about 20 s of silence at 460800 bit/s before it gives up (290, 580, 1160 and 2320 ms, then 4 s each) |
 | `--turnaround <us>` | `serve`: 500 µs before each answer, for an RS-485 converter to turn the line round |
 | `--payload <bytes>` | 1024: the largest frame's payload, from 64. Less for a noisy line, and 256 for QEMU's emulated converter (below) |
 | `--address <n>` | none: a line with one machine. On a line shared by several (below): the other end's address, 1 to 247; with `serve`, this end's own |

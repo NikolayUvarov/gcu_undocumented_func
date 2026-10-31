@@ -34,7 +34,7 @@ impl Wire {
 }
 
 /// Both directions and the clock, shared by the two ends.
-struct Shared { to_slave: VecDeque<u8>, to_master: VecDeque<u8>, wire: Wire, clock: u64, turnarounds: u32 }
+struct Shared { to_slave: VecDeque<u8>, to_master: VecDeque<u8>, wire: Wire, clock: u64, turnarounds: u32, held_until: u64 }
 type Link = Rc<RefCell<Shared>>;
 
 struct SlaveEnd(Link);
@@ -61,6 +61,10 @@ impl Line for MasterEnd {
     }
     fn read(&mut self, out: &mut [u8], timeout_ms: u32) -> usize {
         while !self.link.borrow().to_slave.is_empty() { self.slave.serve(&mut self.service, 0).unwrap(); }
+        // A slave busy writing its disk answers only once the write is done.
+        let stall = core::mem::take(&mut self.service.files.stalled);
+        if stall > 0 { let s = &mut *self.link.borrow_mut(); s.held_until = s.clock + stall; }
+        if self.link.borrow().clock < self.link.borrow().held_until { self.link.borrow_mut().clock += timeout_ms as u64; return 0; }
         let n = take(&mut self.link.borrow_mut().to_master, out);
         // Nothing came: the wait ran its course.
         self.link.borrow_mut().clock += if n == 0 { timeout_ms as u64 } else { 1 };
@@ -78,7 +82,8 @@ fn take(q: &mut VecDeque<u8>, out: &mut [u8]) -> usize {
 /// Files in memory, counting writes: a repeated request must not write twice.
 #[derive(Default)]
 struct Disk { files: BTreeMap<String, Vec<u8>>, dirs: BTreeSet<String>, open: Option<(String, Vec<u8>)>, reading: Vec<u8>, writes: u32, log: Vec<u8>,
-              console: Vec<u8>, runs: Vec<Run>, starts: u32, reboots: u32, commands: u32, replaced: Vec<(String, String)>, inputs: Vec<u64> }
+              console: Vec<u8>, runs: Vec<Run>, starts: u32, reboots: u32, commands: u32, replaced: Vec<(String, String)>, inputs: Vec<u64>,
+              commit_stall: u64, stalled: u64 }
 
 /// A program of the simulated end: `echo.elf` prints its arguments and ends; `loop.elf` prints a line a poll until stopped.
 /// A shell command (COMMAND) ends at once: its line echoed with exit 0, or `refused` with exit 1 for `netpolicy add`.
@@ -110,6 +115,8 @@ impl Files for Disk {
         Ok(())
     }
     fn commit(&mut self, _digest: &[u8; 32], matches: bool) -> Result<(), u8> {
+        // A disk slow to flush: the answer waits `commit_stall` ms.
+        self.stalled = self.commit_stall;
         let (name, buf) = self.open.take().ok_or(code::BAD_REQUEST)?;
         if matches { self.files.insert(name, buf); }
         Ok(())
@@ -255,7 +262,7 @@ impl Files for Disk {
 }
 
 fn pair(faults: Faults, seed: u64, clock: u64) -> (Client<MasterEnd>, Link) {
-    let link = Rc::new(RefCell::new(Shared { to_slave: VecDeque::new(), to_master: VecDeque::new(), wire: Wire { rng: Rng(seed), faults }, clock, turnarounds: 0 }));
+    let link = Rc::new(RefCell::new(Shared { to_slave: VecDeque::new(), to_master: VecDeque::new(), wire: Wire { rng: Rng(seed), faults }, clock, turnarounds: 0, held_until: 0 }));
     let end = MasterEnd { link: link.clone(), slave: Slave::new(SlaveEnd(link.clone())), service: FileService::new(Disk::default()) };
     (Client::new(end), link)
 }
@@ -363,6 +370,24 @@ fn clean_line_hello_put_get_list() {
     assert_eq!(std::str::from_utf8(&out[..n]).unwrap(), format!("chunk\t{}\nempty\t0\nodd\t{}\none\t1\n", c.chunk, 3 * c.chunk + 17));
     assert_eq!(c.master.stats.retries, 0);
     assert!(link.borrow().turnarounds > 0);
+}
+
+#[test]
+fn a_slave_slow_to_close_a_put() {
+    // The DEXP's stick took seconds to flush a file at PUT_CLOSE (800-LNK-0033): 8 tries of the rate's 300 ms gave up
+    // after 2.4 s; each try now waits twice the one before, so 6 s of silence ends with the put kept.
+    let (mut c, link) = pair(Faults::default(), 31, 0);
+    c.master.timeout_ms = 300;
+    c.master.line.service.files.commit_stall = 6_000;
+    let bytes = data(3 * c.chunk + 5, 31);
+    let start = link.borrow().clock;
+    assert_eq!(put(&mut c, "slow", &bytes).unwrap(), sha(&bytes));
+    assert!(c.master.stats.retries > 0);
+    assert!(link.borrow().clock - start >= 6_000);
+    assert_eq!(get(&mut c, "slow").unwrap(), bytes);
+    // A slave gone for good is still given up on: here after the 8 tries' 20.5 s (300 ms doubling to 4 s).
+    c.master.line.service.files.commit_stall = 60_000;
+    assert_eq!(put(&mut c, "gone", &bytes), Err(Error::Timeout));
 }
 
 #[test]
@@ -651,7 +676,8 @@ fn dead_line_times_out() {
     c.master.tries = 3;
     assert_eq!(c.hello("dead", &mut [0; 64]).map(|_| ()), Err(Error::Timeout));
     assert_eq!(c.master.stats.retries, 2);
-    assert_eq!(link.borrow().clock, 300);
+    // The tries wait 100, 200 and 400 ms, each twice the one before (800-LNK-0033).
+    assert_eq!(link.borrow().clock, 700);
 }
 
 /// The line dies in the middle of a put; the next put of the same file goes on from where the slave stopped.

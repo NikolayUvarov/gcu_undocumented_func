@@ -22,7 +22,7 @@ A Mind needs memory with an explicit history, deliberate and accounted forgettin
 ## Tasks
 
 - [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done): the journal, append-only, checked from its head; `blocks journal` as the pilot. Done 2026-10-31.
-- [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.md): a text index derived from a journal, rebuilt equal to itself, a stale one told, every answer checked; `blocks index` as the pilot.
+- [312-STO-0035](../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done): a text index derived from a journal, rebuilt equal to itself, a stale one told, every answer checked; `blocks index` as the pilot. Done 2026-10-31.
 - [312-STO-0038](312-STO-0038-assertions-about-objects.md): assertions about objects, each with its type, source and interpretation, kept in a journal apart from content, mentioning its subject without retaining it; `blocks assert` as the pilot.
 
 ## Acceptance criteria

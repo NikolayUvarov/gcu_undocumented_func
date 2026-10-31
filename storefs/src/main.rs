@@ -4,8 +4,8 @@
 // each a directory tree, through fs.rs (its logic: tests/storefs_host.rs). A handle belongs to the client that opened it,
 // by the PID and badge of its request. A files client asks vfs_server first and storefs for a volume vfs_server answers
 // `not-found` (the kernel track's way (b), 2026-10-30), so the boot disk, `ram`, `log` and `models` are refused here.
-// The state is in statics. Nothing starts it yet: init's start, its store client and the clients it lends are
-// 311-KRN-0190, pending.
+// init starts it after blockstore and gives the shell a client badged BADGE_USER (311-KRN-0190); a scope
+// (311-STO-0037) is a narrower client, of one directory, that the shell can lend. The state is in statics.
 mod fs;
 
 // fs.rs names these as crate::cid, crate::dag, crate::tree, crate::worktree and crate::vfs, so the host tests build it
@@ -15,20 +15,19 @@ use mind::{cid, dag, tree, worktree};
 
 use cid::{Cid, Codec};
 use dag::{Blocks, CHUNK};
-use fs::{Client, Error, Fs, Roots, CHUNKS, CHUNKS_EACH, FILES, FILES_EACH, FILE_MAX, HANDLES, HANDLES_EACH, PAGE, TREES, TREES_EACH};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE};
+use fs::{Client, Error, Fs, Roots, CHUNKS, CHUNKS_EACH, FILES, FILES_EACH, FILE_MAX, HANDLES, HANDLES_EACH, PAGE, SCOPES, SCOPES_EACH, SCOPE_BADGE_FIRST, TREES, TREES_EACH};
+use mind::abi::{BootInfo, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_BLOCKSTORE, SLOT_SERVICE};
 use mind::fs::{BADGE_USER, ENTRY_DIR};
 use mind::idl::blockstore;
 use mind::idl::codec::Text;
 use mind::idl::vfs::Request;
 use mind::idl::wire::{self, Call};
-use mind::ipc::Endpoint;
+use mind::ipc::{self, Endpoint};
 use tree::Kind;
 use worktree::Names;
 
 const RECEIVED: usize = 9;
-/// The store's client, that may get, put and publish: looked for in SLOT_BLOCKSTORE, as `tally` and `blocks` look for
-/// theirs; init's grant of it is 311-KRN-0190, pending.
+/// The store's client, that may get, put and publish, in SLOT_BLOCKSTORE, where init grants it (311-KRN-0190).
 const STORE: Endpoint = Endpoint(SLOT_BLOCKSTORE);
 
 static mut FS: Fs = Fs::new();
@@ -82,8 +81,8 @@ impl Roots for Remote {
     }
 }
 
-// Whether a client may write a volume: the user's badge (the shell's client) writes every volume, every other badge
-// reads. The badges init gives storefs's clients are 311-KRN-0190's, pending.
+// Whether a client may write a volume: the user's badge (the shell's client, 311-KRN-0190) writes every volume, every
+// other badge reads. A scope's badge (from SCOPE_BADGE_FIRST) is never asked: fs.rs gives it what its scope says.
 fn writable(badge: u16, _volume: &str) -> bool { badge == BADGE_USER }
 
 // An entry as `vfs.wit` gives it: a directory's size is 0, as FAT's, and no time is kept.
@@ -93,15 +92,29 @@ fn entry(name: &[u8], kind: Kind, size: u64) -> vfs::Entry {
     vfs::Entry { name, size: if directory { 0 } else { size.min(u32::MAX as u64) as u32 }, modified: 0, attributes: if directory { ENTRY_DIR } else { 0 }, directory }
 }
 
-// When a table is full, the handles of clients that have ended are closed, unpublished, as vfs_server frees them.
+// When a table is full, the scopes of ended tasks end and the handles of clients that have ended are closed,
+// unpublished, as vfs_server frees them.
 fn sweep(fs: &mut Fs) {
     let (handles, trees, files, _) = fs.held();
     if handles < HANDLES && trees < TREES && files < FILES { return; }
+    end_scopes(fs);
     let gone = fs.forget(|pid| !mind::process::alive(pid));
     if gone > 0 { mind::println!("[STOREFS] {} HANDLES OF ENDED CLIENTS CLOSED", gone); }
 }
 
+// The scopes whose task has ended, or that nobody took up within a minute, end: the capability kept for each is
+// revoked, so no copy of it reaches storefs again, and dropped.
+fn end_scopes(fs: &mut Fs) {
+    fs.sweep_scopes(mind::time::uptime_ms() as u64, mind::process::alive, |badge, cap| {
+        let _ = ipc::revoke(cap);
+        let _ = ipc::drop_cap(cap);
+        mind::println!("[STOREFS] SCOPE {:#x} ENDED", badge);
+    });
+}
+
 fn serve(fs: &mut Fs, store: &mut Remote, client: Client, request: Request, call: Call, data: &mut [u8; CHUNK]) -> mind::Result<()> {
+    // A scope's client is served only while its scope lasts.
+    if client.badge >= SCOPE_BADGE_FIRST { end_scopes(fs); }
     match request {
         Request::Root { name } => {
             sweep(fs);
@@ -146,12 +159,26 @@ fn serve(fs: &mut Fs, store: &mut Remote, client: Client, request: Request, call
         }
         Request::Flush { handle } => vfs::reply_flush(call, fs.flush(store, client, handle).map_err(Error::wire)),
         Request::Close { handle } => vfs::reply_close(call, fs.close(store, client, handle).map_err(Error::wire)),
-        // vfs_server's alone: a FAT check, scopes, formatting, a fill of a memory object, a scope adopted.
+        Request::Scope { dir, writable } => {
+            end_scopes(fs);
+            // A capability of storefs's own endpoint with the scope's badge, kept, so ending the scope revokes every copy.
+            let now = mind::time::uptime_ms() as u64;
+            let made = fs.scope(store, client, dir, writable, now, |badge| ipc::mint_badged(SLOT_SERVICE, CAP_WRITE | CAP_GRANT, badge).ok());
+            if let Ok((badge, _)) = made {
+                if let Some(scope) = fs.scoped(badge) {
+                    mind::println!("[STOREFS] SCOPE {:#x} FOR {}:/{} ({})", badge, scope.volume, scope.path, if scope.writable { "WRITABLE" } else { "READ-ONLY" });
+                }
+            }
+            vfs::reply_scope(call, made.map(|(_, cap)| cap).map_err(Error::wire))
+        }
+        Request::Adopt { scope, task } => {
+            end_scopes(fs);
+            vfs::reply_adopt(call, fs.adopt(client, scope, task).map_err(Error::wire))
+        }
+        // vfs_server's alone: a FAT check, formatting, a fill of a memory object.
         Request::Check { .. } => vfs::reply_check(call, Err(vfs::Error::Denied)),
-        Request::Scope { .. } => vfs::reply_scope(call, Err(vfs::Error::Denied)),
         Request::Format { .. } => vfs::reply_format(call, Err(vfs::Error::Denied)),
         Request::Fill { .. } => vfs::reply_fill(call, Err(vfs::Error::Denied)),
-        Request::Adopt { .. } => vfs::reply_adopt(call, Err(vfs::Error::Denied)),
     }
 }
 
@@ -160,9 +187,9 @@ fn main(_info: &'static BootInfo) {
     let (fs, scratch, data) = unsafe { (&mut *core::ptr::addr_of_mut!(FS), &mut *core::ptr::addr_of_mut!(SCRATCH), &mut *core::ptr::addr_of_mut!(DATA)) };
     // Without a store client every volume fails (`io`), so clients are not left waiting.
     let held = mind::dev::cap_info(SLOT_BLOCKSTORE).0 == CAP_KIND_ENDPOINT;
-    mind::println!("[STOREFS] READY VOLUMES fs/<NAME>: {} TREES, {} HANDLES, {} FILES, {} KIB OF WRITTEN CHUNKS ({}, {}, {}, {} KIB A CLIENT), FILES UP TO {} MIB{}",
-                   TREES, HANDLES, FILES, CHUNKS * CHUNK / 1024, TREES_EACH, HANDLES_EACH, FILES_EACH, CHUNKS_EACH * CHUNK / 1024, FILE_MAX >> 20,
-                   if held { "" } else { "; NO STORE CLIENT (311-KRN-0190)" });
+    mind::println!("[STOREFS] READY VOLUMES fs/<NAME>: {} TREES, {} HANDLES, {} FILES, {} KIB OF WRITTEN CHUNKS, {} SCOPES ({}, {}, {}, {} KIB, {} A CLIENT), FILES UP TO {} MIB{}",
+                   TREES, HANDLES, FILES, CHUNKS * CHUNK / 1024, SCOPES, TREES_EACH, HANDLES_EACH, FILES_EACH, CHUNKS_EACH * CHUNK / 1024, SCOPES_EACH, FILE_MAX >> 20,
+                   if held { "" } else { "; NO STORE CLIENT" });
     let mut store = Remote;
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
