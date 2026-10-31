@@ -1,6 +1,6 @@
-# 000-KRN-0197 — The aarch64 idle check measures QEMU's busiest thread, not the host's speed
+# 000-KRN-0197 — The aarch64 idle check measures QEMU's busiest thread, not the host's speed — done
 
-**Type:** tests · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (made 2026-10-31; runs on PCU left) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing queue (AGENTS.md section 4) · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -41,7 +41,22 @@
 - **PCU, cf0161af (the limit 0.9, `NOT_ON` gone):** both groups passed:
   - GICv2 in 884 s, at 46% and 45%;
   - "16 CPUs" in 301 s, at 41%. PCU had not run it since round 45.
+- **PCU, cf0161af, four more runs of the 16-CPU group's suite** (`--cpus 16 --suites normal`) on the same tree: each passed, in 296 to 301 s, at 40%, 41%, 42% and 41%. That makes five in a row with the run above, which 000-KRN-0129 and 000-NET-0036 asked for.
 - **`un-rizen-service`, f4c42ea3:** both groups passed: GICv2 727 s, at 14% and 15%; "16 CPUs" 429 s, at 37%. The 16-CPU run was under a load average of 58 on 16 cores (two KRN lanes and another track's run).
+
+## Resolution
+
+- **Landed** in `main` 36d05f12 (round 63, candidate 8ea4b135; `claude/youthful-mendel-mf1soy` f47e13fe).
+- **What changed:**
+  - the aarch64 idle check of the `normal` and `smp` suites takes the share of a second QEMU's busiest thread ran or waited to run (`/proc/<qemu>/task/*/schedstat`), the lowest of three samples, against 0.9; it was QEMU's processor time against 0.85 s;
+  - the suites' lines carry the figure;
+  - `scripts/land.py` lets PCU take "aarch64: 16 CPUs" again (`NOT_ON` gone);
+  - the aarch64 profile's evidence names the measure.
+- **Every criterion:**
+  - the mutation (`nop` for `wfi`) failed the check at 100%;
+  - GICv2 and "16 CPUs" passed on PCU (45% to 47%; 16 CPUs five times in a row, 40% to 42%) and on `un-rizen` (14%, 15%; 37% under a load average of 58);
+  - round 63's gate gave no idle-check failure: 11% to 14% on `un-rizen`, 31% for 16 CPUs on `acc-2`, 45% on PCU. Its GICv2 group on `un-rizen` failed once in the `net` suite's download, after the idle check had passed, and passed alone.
+- **Closed with it:** 000-KRN-0129 and 000-NET-0036, whose last criterion this check had kept open.
 
 ## Related
 
