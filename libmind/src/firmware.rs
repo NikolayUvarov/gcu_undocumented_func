@@ -5,6 +5,9 @@ use crate::abi::*;
 use crate::mem::Pages;
 use crate::sys::{check, syscall, Error, Result};
 
+mod boot_path;
+pub use boot_path::{option_kind, option_path, path_kind, PathKind};
+
 /// EFI_GLOBAL_VARIABLE: 8BE4DF61-93CA-11D2-AA0D-00E098032B8C, as the firmware stores it.
 pub const GLOBAL: [u8; 16] = [0x61, 0xDF, 0xE4, 0x8B, 0xCA, 0x93, 0xD2, 0x11, 0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C];
 pub const NON_VOLATILE: u32 = 1;

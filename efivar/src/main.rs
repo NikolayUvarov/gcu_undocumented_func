@@ -1,15 +1,16 @@
 #![no_std]
 #![no_main]
 // efivar: the firmware's boot variables (351-KRN-0027): the boot entries, the order, the entry booted now and the one
-// to boot next once. A console program; the shell lends the firmware privilege after asking the user.
+// to boot next once. A console program; the shell lends the firmware privilege after asking the user. The firmware's
+// network boot is marked and never put first or next (351-KRN-0195).
 use mind::abi::BootInfo;
-use mind::firmware::{self, APPEND, AUTHENTICATED, BOOT_VARIABLE, GLOBAL, IMAGE_SECURITY};
+use mind::firmware::{self, PathKind, APPEND, AUTHENTICATED, BOOT_VARIABLE, GLOBAL, IMAGE_SECURITY};
 use mind::sys::Error;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FIRMWARE);
 
 // A boot option number from four hex digits.
-fn option(text: &str) -> Option<u16> { (text.len() <= 4).then(|| u16::from_str_radix(text, 16).ok()).flatten() }
+fn number(text: &str) -> Option<u16> { (text.len() <= 4).then(|| u16::from_str_radix(text, 16).ok()).flatten() }
 
 // A variable's u16 values (BootCurrent, BootNext, BootOrder).
 fn numbers(name: &str) -> core::result::Result<([u16; 64], usize), Error> {
@@ -29,20 +30,47 @@ fn show(name: &str) {
     }
 }
 
-// Boot####: attributes (u32), the device path's length (u16), the description (UTF-16, NUL-terminated), the path.
-fn entry(number: u16) -> Option<()> {
+// Boot####: attributes (u32), the device path's length (u16), the description (UTF-16, NUL-terminated), the path. Its
+// bytes in `data`, as many as fit.
+fn option(number: u16, data: &mut [u8; 1024]) -> Option<usize> {
     let mut name = mind::util::FixedBuf::<8>::new();
     let _ = core::fmt::Write::write_fmt(&mut name, format_args!("Boot{:04X}", number));
-    let mut data = [0u8; 1024];
-    let (_, length) = firmware::get(core::str::from_utf8(name.as_bytes()).ok()?, &GLOBAL, &mut data).ok()?;
-    let data = &data[..length.min(data.len())];
-    let active = data.first().is_some_and(|a| a & 1 != 0);
-    mind::print!("Boot{:04X}{} ", number, if active { "" } else { " (inactive)" });
-    for unit in data.get(6..)?.chunks_exact(2).map(|u| u16::from_le_bytes([u[0], u[1]])).take_while(|&u| u != 0) {
+    let (_, length) = firmware::get(core::str::from_utf8(name.as_bytes()).ok()?, &GLOBAL, data).ok()?;
+    Some(length.min(data.len()))
+}
+
+fn description(data: &[u8]) {
+    for unit in data.get(6..).unwrap_or(&[]).chunks_exact(2).map(|u| u16::from_le_bytes([u[0], u[1]])).take_while(|&u| u != 0) {
         mind::print!("{}", char::from_u32(unit as u32).unwrap_or('?'));
     }
+}
+
+fn entry(number: u16) -> Option<()> {
+    let mut buffer = [0u8; 1024];
+    let length = option(number, &mut buffer)?;
+    let data = &buffer[..length];
+    let active = data.first().is_some_and(|a| a & 1 != 0);
+    let network = firmware::option_kind(data) == PathKind::Network;
+    mind::print!("Boot{:04X}{}{} ", number, if active { "" } else { " (inactive)" }, if network { " (network)" } else { "" });
+    description(data);
     mind::println!();
     Some(())
+}
+
+// Whether entry `number` may be put first or next: not the firmware's network boot, nor one whose device path cannot be
+// read (351-KRN-0195). One not set is the firmware's to skip.
+fn refused(number: u16) -> bool {
+    let mut data = [0u8; 1024];
+    let Some(length) = option(number, &mut data) else { return false };
+    let why = match firmware::option_kind(&data[..length]) {
+        PathKind::Local => return false,
+        PathKind::Network => "boots from the network, before and outside MIND Core's guarantees; turn network boot off in the firmware's setup",
+        PathKind::Malformed => "has a device path that cannot be read",
+    };
+    mind::print!("efivar: REFUSED: Boot{:04X} (", number);
+    description(&data[..length]);
+    mind::println!(") {} (351-KRN-0195)", why);
+    true
 }
 
 fn set_numbers(name: &str, values: &[u16]) {
@@ -72,7 +100,7 @@ fn append(name: &str, path: &str) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("efivar — the firmware's boot variables.\nUsage: efivar [boot] | bootnext <hex> | bootorder <hex>,<hex>... | delete bootnext | append db|dbx|KEK <file>\nboot: the boot entries, the order, the entry booted now and the next one.\nappend: a signed signature list (sbvarsign's output) added to db, dbx or KEK.");
+    mind::about!("efivar — the firmware's boot variables.\nUsage: efivar [boot] | bootnext <hex> | bootorder <hex>,<hex>... | delete bootnext | append db|dbx|KEK <file>\nboot: the boot entries, the order, the entry booted now and the next one. The firmware's network boot is marked (network) and never put first or next.\nappend: a signed signature list (sbvarsign's output) added to db, dbx or KEK.");
     let args = mind::process::args_str();
     let mut words = args.split_whitespace();
     match (words.next(), words.next()) {
@@ -81,12 +109,17 @@ fn main(_info: &'static BootInfo) {
             show("BootCurrent"); show("BootNext"); show("BootOrder");
             for number in 0..=0x20u16 { entry(number); }
         }
-        (Some("bootnext"), Some(text)) => match option(text) { Some(n) => set_numbers("BootNext", &[n]), None => mind::println!("efivar: not a boot option: {}", text) },
+        (Some("bootnext"), Some(text)) => match number(text) {
+            Some(n) if !refused(n) => set_numbers("BootNext", &[n]),
+            Some(_) => {}
+            None => mind::println!("efivar: not a boot option: {}", text),
+        },
         (Some("bootorder"), Some(text)) => {
             let (mut values, mut count) = ([0u16; 64], 0);
             for part in text.split(',') {
-                match option(part) { Some(n) if count < values.len() => { values[count] = n; count += 1; } _ => { mind::println!("efivar: not a boot option: {}", part); return; } }
+                match number(part) { Some(n) if count < values.len() => { values[count] = n; count += 1; } _ => { mind::println!("efivar: not a boot option: {}", part); return; } }
             }
+            if values[..count].iter().any(|&n| refused(n)) { return; }
             set_numbers("BootOrder", &values[..count]);
         }
         (Some("delete"), Some("bootnext")) => match firmware::set("BootNext", &GLOBAL, BOOT_VARIABLE, &[]) {

@@ -12523,7 +12523,9 @@ def store_disk_check(args, disk):
 def efivar_check(args, disk):
     """351-KRN-0027 (x86, OVMF), 351-KRN-0028 (aarch64, AAVMF): efivar reads the firmware's boot variables through the
     kernel's UEFI runtime services, only after the user allows it; BootNext set to the firmware's own shell boots that
-    shell once, and the boot after it is MIND Core again, with BootNext consumed by the firmware."""
+    shell once, and the boot after it is MIND Core again, with BootNext consumed by the firmware. 351-KRN-0195: the
+    firmware's network boot (OVMF's PXE entry for QEMU's default card, which has a boot ROM) is marked and refused as
+    BootNext and in BootOrder."""
     vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True)
 
     def efivar(line, answer):
@@ -12538,6 +12540,17 @@ def efivar_check(args, disk):
         current = re.search(r"BootCurrent: ([0-9A-F]{4})", listing)
         shell = re.search(r"Boot([0-9A-F]{4}) EFI Internal Shell", listing)
         assert current and shell and "BootNext: not set" in listing and "BootOrder:" in listing, listing
+        network = re.search(r"^Boot([0-9A-F]{4})(?: \(inactive\))? \(network\) (.+?)\r?$", listing, re.M)
+        assert network or args.arch != "x86_64", listing
+        assert f"Boot{current[1]} (network)" not in listing and f"Boot{shell[1]} (network)" not in listing, listing
+        if network:
+            for line in (f"efivar bootnext {network[1]}", f"efivar bootorder {current[1]},{network[1]}"):
+                refused = efivar(line, b"y")
+                require(refused, f"efivar: REFUSED: Boot{network[1]} ({network[2]}) boots from the network")
+                assert "SET TO" not in refused, refused
+            order = re.search(r"BootOrder:[^\n]*", listing)[0]
+            listing = efivar("efivar", b"y")
+            assert "BootNext: not set" in listing and order in listing, listing
         require(efivar(f"efivar bootnext {shell[1]}", b"y"), f"BootNext SET TO {shell[1]}")
         vm.send("reboot\n")
         vm.expect("Shell>", timeout=90)
@@ -12549,8 +12562,9 @@ def efivar_check(args, disk):
         assert f"BootCurrent: {current[1]}" in listing and "BootNext: not set" in listing, listing
     finally:
         vm.close()
+    marked = f"; Boot{network[1]} ({network[2]}) marked as network boot and refused as BootNext and in BootOrder" if network else ""
     print(f"PASS: efivar lists the boot entries after the user allows it (refused without); BootNext {shell[1]} boots the "
-          f"firmware's shell once, then Boot{current[1]} again with BootNext consumed", flush=True)
+          f"firmware's shell once, then Boot{current[1]} again with BootNext consumed{marked}", flush=True)
 
 
 def devicetree_suite(args, disk):
