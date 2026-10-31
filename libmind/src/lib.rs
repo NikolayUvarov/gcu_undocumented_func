@@ -10,6 +10,7 @@ pub mod font;
 #[path = "../../common/font16.rs"]
 pub mod font16;
 
+pub mod assertion;
 pub mod audio;
 pub mod battery;
 pub mod block;

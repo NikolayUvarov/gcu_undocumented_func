@@ -46,8 +46,9 @@ What the code shows:
   - 24 puts of 12 release images (8.4 MB) twice, 15 to 47 s each, and their removal;
   - all 26 operations completed;
   - no `no answer from the other end` line in the daemon's log (27 before, 27 after).
+- **The MacBook Pro's slot update** to release 202610310825 (2026-10-31, `main` 1c68b668) through it: 107 puts, none lost. `link_update.py` ended `exit 1` on an old log line, which is 800-LNK-0034. The Mac applied the release by itself and confirmed slot B.
 - **How much that shows:** before, a put was lost about once in 50 to 100 files, so 24 make the change likely to hold, not certain. The next slot updates of the DEXP and the MacBook Pro over the cable are the rest of the criterion.
 
 ## Related
 
-[800-LNK-0011](800-LNK-0011-effector485.md) (the daemon), [800-LNK-0032](800-LNK-0032-keys-and-the-pointer-over-the-link.md), [docs/link/mindlink.md](../docs/link/mindlink.md).
+[800-LNK-0011](800-LNK-0011-effector485.md) (the daemon), [800-LNK-0032](../issues-done/800-LNK-0032-keys-and-the-pointer-over-the-link.done), [docs/link/mindlink.md](../docs/link/mindlink.md).
