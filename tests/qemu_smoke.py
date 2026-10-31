@@ -957,24 +957,24 @@ def normal_suite(vm):
     vm.expect("PID=2 EXITED. SHELL RESUMED.")
     time.sleep(.1)
     vm.collect(); vm.output = ""
-    assert set(task_rows(vm)) == {1, 3, 4, 5}
+    assert set(task_rows_reaped(vm)) == {1, 3, 4, 5}, task_rows(vm)
     # Changing the foreground square's color must not affect the other copy.
     vm.send("fg 3\n")
     vm.expect("FOREGROUND PID=3")
+    # Each colour is waited for: a loaded host shows the front program's frame late, and a wrong one never changes.
     vm.send("g\n")
-    time.sleep(.15)
-    assert center_pixel(vm) == b"\x00\xff\x00", "input must reach PID 3"
+    assert center_pixel_soon(vm, b"\x00\xff\x00") == b"\x00\xff\x00", "input must reach PID 3"
     vm.serial(); vm.background(3)
     vm.send("fg 4\n")
     vm.expect("FOREGROUND PID=4")
-    assert center_pixel(vm) == b"\x00\xff\xff", "PID 4 must keep its own color"
+    assert center_pixel_soon(vm, b"\x00\xff\xff") == b"\x00\xff\xff", "PID 4 must keep its own color"
     vm.serial(); vm.background(4)
     vm.send("fg 3\n")
     vm.expect("FOREGROUND PID=3")
-    assert center_pixel(vm) == b"\x00\xff\x00", "fg must preserve state, not restart"
+    assert center_pixel_soon(vm, b"\x00\xff\x00") == b"\x00\xff\x00", "fg must preserve state, not restart"
     vm.serial(); vm.background(3)
     require(vm.command("kill 3"), "KILLED PID=3")
-    assert set(task_rows(vm)) == {1, 4, 5}
+    assert set(task_rows_reaped(vm)) == {1, 4, 5}, task_rows(vm)
     vm.send("fg 4\n")
     vm.expect("FOREGROUND PID=4")
     # Exercise the physical Ctrl+Z keyboard route, not just UART.
@@ -3004,7 +3004,7 @@ def isolation_suite(vm):
         time.sleep(.1); vm.collect(); vm.output = ""
         faults = vm.command("faults")
         assert re.search(fr"FAULT PID={pid} CPU=\d+ VECTOR={vector} ERROR={error:#x} ", faults), faults
-        assert set(task_rows(vm)) == {1}
+        assert set(task_rows_reaped(vm)) == {1}, task_rows(vm)
     vm.send("run app2\n")
     vm.expect("RING3 IOPL0 READY")
     vm.send("p\n")
@@ -3336,7 +3336,7 @@ def heap_suite(vm):
         exited(pid)
         faults = vm.command("faults")
         assert re.search(fr"FAULT PID={pid} CPU=\d+ VECTOR=14 ERROR={error:#x} ", faults), faults
-        assert set(task_rows(vm)) == {1}
+        assert set(task_rows_reaped(vm)) == {1}, task_rows(vm)
         assert heap_used(vm) == clock_baseline, "fault teardown leaked heap"
 
     # Pre-create idle clients so the expected OOM occurs in ALLOC, not in RUN.
