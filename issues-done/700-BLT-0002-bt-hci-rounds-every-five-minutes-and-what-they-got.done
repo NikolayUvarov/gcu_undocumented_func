@@ -1,6 +1,6 @@
-# 700-BLT-0002 — `bt_hci`: a round every five minutes as meant, and what each round got from the controller
+# 700-BLT-0002 — `bt_hci`: a round every five minutes as meant, and what each round got from the controller — done
 
-**Type:** driver · **Owner:** `BLT` · **Priority:** P2 · **Status:** in progress (2026-10-31) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-12.1
+**Type:** driver · **Owner:** `BLT` · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [700](../issues/700-bluetooth.md) · **Constitution:** MC-12.1
 
 ## Problem
 
@@ -18,7 +18,7 @@ On the DEXP (2026-10-30), `bt_hci` (700-BLT-0001) logged a round about every 77 
 
 ## Acceptance criteria
 
-- [ ] `tests/bt_hci_host.rs` and the x86 build pass.
+- [x] `tests/bt_hci_host.rs` and the x86 build pass.
 - [x] On the DEXP: rounds 300 s apart, and the round's lines as above.
 
 ## Progress (2026-10-31)
@@ -42,6 +42,15 @@ On the DEXP (2026-10-30), `bt_hci` (700-BLT-0001) logged a round about every 77 
 - **A try that took the bytes past an event's end as the next event** (as Linux btusb does with its larger transfers) lost its alignment after the first lost packet and stalled the round (`Timeout(8204)`). It was taken back.
 - **The interval:** two rounds ended at 43,641 s and 43,963 s, 322 s apart: the 300 s wait and the round itself. The second heard 15 LE and 1 BR/EDR devices and dropped 404 packets.
 
+## Resolution
+
+- **The change:** `bt_hci/src/main.rs` (f002134f): the round's wait in pieces of at most 60 s, and the round's lines.
+- **In release 202610302359 on the DEXP** (2026-10-31, tree `d83c98c5` with DRV's 700-DRV-0046 and 700-DRV-0047):
+  - **Round 1, at 26 s:** `14 LE AND 1 BR/EDR DEVICES HEARD; 25 EVENTS IN THE LE SCAN, 14 IN THE INQUIRY; 0 EVENT PACKETS DROPPED`, and `NO INQUIRY COMPLETE IN 12000 MS`.
+  - **Round 2, 319 s later:** `15 LE AND 1 BR/EDR …; 0 EVENT PACKETS DROPPED`, and `INQUIRY COMPLETE AFTER 8972 MS, STATUS 00`.
+- **Not explained:** the first round's inquiry, right after boot while the Wi-Fi joined, did not complete within 12 s. Later rounds will show whether it recurs.
+- **Evidence for the DEXP only** (MC-12.1).
+
 ## Related
 
-[700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md); DRV's 700-DRV-0046 (`rtw88_wifi`'s free run) and 700-DRV-0047 (the events without loss), on `claude/ASR-DRV`.
+[700-BLT-0001](../issues/700-BLT-0001-bt-hci-the-rtl8821c-up.md); DRV's 700-DRV-0046 (`rtw88_wifi`'s free run) and 700-DRV-0047 (the events without loss), on `claude/ASR-DRV`.
