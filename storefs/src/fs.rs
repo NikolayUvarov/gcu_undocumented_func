@@ -6,9 +6,12 @@
 //! compare-and-swap. A file written is held as the chunks it changed, and at its `flush` or `close` stored as an object
 //! of `dag`, put into the tree and published. If another writer published first, nothing is published (Conflict): the
 //! tree drops what it did not publish and follows the name to its current version, never merging. A tree that holds no
-//! unpublished data follows the name before each call. No heap and no system calls; every bound is fixed and named, a
-//! client holds at most half of each table, and a request past one is refused with nothing changed:
-//! tests/storefs_host.rs.
+//! unpublished data follows the name before each call. A scope (311-STO-0037; MC-3.1, 3.4) is a client confined to one
+//! directory, by a badge of its own: its root of the directory's volume is that directory, by its path, and every other
+//! root is refused; it may write only if asked and its maker's handle may; its first task, or the one its maker names
+//! (`adopt`), is its only user, and it ends with that task, or after a minute if nobody took it up. No heap and no
+//! system calls (the clock and whether a task is alive are given); every bound is fixed and named, a client holds at
+//! most half of each table, and a request past one is refused with nothing changed: tests/storefs_host.rs.
 use crate::cid::{self, Cid, Codec};
 use crate::dag::{self, Blocks, Builder, CHUNK};
 use crate::tree::{self, Kind, NAME_MAX};
@@ -23,11 +26,21 @@ pub const HANDLES: usize = 64;
 pub const FILES: usize = 32;
 /// Chunks of written files held at once, of CHUNK bytes each (256 KiB): a write past them is Full until a flush.
 pub const CHUNKS: usize = 16;
-/// What one client (PID and badge) holds at most of each: half.
+/// Scopes at once: a scope keeps a path and no tree until its user opens its root, and one nobody took up ends after
+/// SCOPE_UNUSED_MS; 16 is four for each of the TREES that can be open, for the shell to lend one to each program it starts.
+pub const SCOPES: usize = 16;
+/// What one client (PID and badge) holds at most of each, and makes at most of SCOPES: half.
 pub const TREES_EACH: usize = TREES / 2;
 pub const HANDLES_EACH: usize = HANDLES / 2;
 pub const FILES_EACH: usize = FILES / 2;
 pub const CHUNKS_EACH: usize = CHUNKS / 2;
+pub const SCOPES_EACH: usize = SCOPES / 2;
+/// A scope's badge is one from here to u16::MAX, as vfs_server's: init's badges are below it.
+pub const SCOPE_BADGE_FIRST: u16 = 0x100;
+/// Milliseconds a scope nobody took up lasts: a minute, as vfs_server's.
+pub const SCOPE_UNUSED_MS: u64 = 60_000;
+// How many badges scopes take in turn.
+const SCOPE_BADGES: u16 = u16::MAX - SCOPE_BADGE_FIRST + 1;
 /// Bytes a file is at most after a write or a truncation: 64 MiB.
 pub const FILE_MAX: u64 = 64 << 20;
 /// Bytes of a handle's path from its tree's root at most.
@@ -51,7 +64,7 @@ const NAME: usize = PREFIX.len() + VOLUME_MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// No entry at the path, or a name that is no volume.
+    /// No entry at the path, a name that is no volume, or no scope of the badge `adopt` names.
     NotFound,
     /// The name is taken.
     Exists,
@@ -60,7 +73,8 @@ pub enum Error {
     /// A handle not the client's, two handles of two trees, `.` or `..` in a path, no name where an entry is needed, a
     /// directory moved into itself or under it.
     Invalid,
-    /// A change through a handle that may not write.
+    /// A change through a handle that may not write; a scope's root asked by another task than its user, or of another
+    /// volume, or with the badge of no scope; an `adopt` not by the scope's maker, or of a scope another task uses.
     Denied,
     /// A name a directory refuses.
     Name,
@@ -68,7 +82,8 @@ pub enum Error {
     NotDirectory,
     /// A directory where a file belongs.
     IsDirectory,
-    /// HANDLES, TREES or FILES are all in use, or the client holds its share of them: nothing was changed.
+    /// HANDLES, TREES, FILES or SCOPES are all in use, or the client holds its share of them, or a scope's capability
+    /// was not made: nothing was changed.
     Handles,
     /// Past CHUNKS, the client's share of them, or what the working tree holds (`worktree::DIRS`, `BYTES`): nothing was
     /// changed, and a flush lets the chunks go.
@@ -133,6 +148,11 @@ impl Entry { pub fn name(&self) -> &[u8] { &self.name[..self.len] } }
 pub struct Volume { pub writable: bool, pub version: u64, pub root: Option<Cid>, len: usize, name: [u8; VOLUME_MAX] }
 impl Volume { pub fn name(&self) -> &str { core::str::from_utf8(&self.name[..self.len]).unwrap_or("") } }
 
+/// A scope as `scoped` gives it: whether it may write, its maker, its user once taken up, its volume and its directory's
+/// path from the volume's root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scoped<'s> { pub writable: bool, pub maker: Client, pub user: Option<u64>, pub volume: &'s str, pub path: &'s str }
+
 // A tree's client, its volume in lower case, and the handles open in it (none: free).
 #[derive(Clone, Copy)]
 struct View { users: usize, pid: u64, badge: u16, len: usize, volume: [u8; VOLUME_MAX] }
@@ -163,7 +183,17 @@ struct File { users: usize, tree: usize, base: [u8; cid::BYTES], stored: u64, si
 #[derive(Clone, Copy)]
 struct Slot { used: bool, file: usize, index: u64 }
 
-/// The service's state: 786 KiB, all zeros when new, so a program keeps it in a static in `.bss` (`new` is `const`).
+// A scope: its badge and the capability minted with it, its maker, its user once `taken`, when it was made (ms),
+// whether it may write, its volume in lower case, and its directory's path from the volume's root (`depth` bytes).
+#[derive(Clone, Copy)]
+struct Scope { used: bool, badge: u16, cap: usize, maker: Client, taken: bool, user: u64, made: u64, writable: bool, len: usize, volume: [u8; VOLUME_MAX], depth: usize, path: [u8; PATH] }
+
+impl Scope {
+    fn volume(&self) -> &str { core::str::from_utf8(&self.volume[..self.len]).unwrap_or("") }
+    fn path(&self) -> &str { core::str::from_utf8(&self.path[..self.depth]).unwrap_or("") }
+}
+
+/// The service's state: 796 KiB, all zeros when new, so a program keeps it in a static in `.bss` (`new` is `const`).
 pub struct Fs {
     trees: [Worktree; TREES],
     views: [View; TREES],
@@ -171,6 +201,9 @@ pub struct Fs {
     files: [File; FILES],
     slots: [Slot; CHUNKS],
     chunks: [[u8; CHUNK]; CHUNKS],
+    scopes: [Scope; SCOPES],
+    // The next scope's badge, from SCOPE_BADGE_FIRST.
+    turn: u16,
     builder: Builder,
     buffer: [u8; CHUNK],
     data: [u8; CHUNK],
@@ -183,8 +216,9 @@ impl Fs {
         const HANDLE: Handle = Handle { used: false, pid: 0, badge: 0, tree: 0, directory: false, writable: false, file: 0, len: 0, path: [0; PATH] };
         const FILE: File = File { users: 0, tree: 0, base: [0; cid::BYTES], stored: 0, size: 0, changed: false, stale: false, read: 0, current: 0 };
         const SLOT: Slot = Slot { used: false, file: 0, index: 0 };
+        const SCOPE: Scope = Scope { used: false, badge: 0, cap: 0, maker: Client { pid: 0, badge: 0 }, taken: false, user: 0, made: 0, writable: false, len: 0, volume: [0; VOLUME_MAX], depth: 0, path: [0; PATH] };
         Fs { trees: [TREE; TREES], views: [VIEW; TREES], handles: [HANDLE; HANDLES], files: [FILE; FILES], slots: [SLOT; CHUNKS],
-             chunks: [[0; CHUNK]; CHUNKS], builder: Builder::new(), buffer: [0; CHUNK], data: [0; CHUNK] }
+             chunks: [[0; CHUNK]; CHUNKS], scopes: [SCOPE; SCOPES], turn: 0, builder: Builder::new(), buffer: [0; CHUNK], data: [0; CHUNK] }
     }
 
     /// What it holds: handles, trees, files and chunks (at most HANDLES, TREES, FILES and CHUNKS).
@@ -203,25 +237,86 @@ impl Fs {
 
     /// The root of `volume` for `client`: a tree of its own, read at the current version of the name `fs/<volume>` (none:
     /// the empty tree), that may write if `writable` says so of the client's badge and the volume. A volume is 1 to
-    /// VOLUME_MAX bytes of `A-Z a-z 0-9 . _ -`, its case ignored, and none of VFS_VOLUMES; another name is NotFound.
+    /// VOLUME_MAX bytes of `A-Z a-z 0-9 . _ -`, its case ignored, and none of VFS_VOLUMES; another name is NotFound. A
+    /// scope's client (a badge from SCOPE_BADGE_FIRST) gets the scope's directory instead, on its volume alone.
     pub fn root<S: Blocks + Roots>(&mut self, store: &mut S, client: Client, volume: &str, writable: impl Fn(u16, &str) -> bool) -> Result<u32, Error> {
+        if client.badge >= SCOPE_BADGE_FIRST { return self.scoped_root(store, client, volume); }
         let bytes = volume.as_bytes();
         if bytes.is_empty() || bytes.len() > VOLUME_MAX || !bytes.iter().all(|&c| c.is_ascii_alphanumeric() || b"._-".contains(&c)) { return Err(Error::NotFound); }
         if VFS_VOLUMES.iter().any(|v| v.eq_ignore_ascii_case(volume)) { return Err(Error::NotFound); }
-        let h = self.free(client)?;
-        if self.held_by(client).1 >= TREES_EACH { return Err(Error::Handles); }
-        let t = self.views.iter().position(|v| v.users == 0).ok_or(Error::Handles)?;
         let mut view = View { users: 0, pid: client.pid, badge: client.badge, len: bytes.len(), volume: [0; VOLUME_MAX] };
         for (to, c) in view.volume.iter_mut().zip(bytes) { *to = c.to_ascii_lowercase(); }
-        let (version, root) = store.current(view.name(&mut [0; NAME]))?;
-        self.trees[t].start(root, version);
-        // Its root is read: a directory, checked against its CID.
-        self.trees[t].lookup(store, "")?;
         let may = writable(client.badge, view.volume());
-        self.views[t] = view;
-        self.add(h, client, t, true, may, 0, b"");
-        Ok(h as u32)
+        self.open_root(store, client, view, b"", may)
     }
+
+    /// A client confined to directory `dir`, a handle of `client`'s (`scope`): its root of the directory's volume is that
+    /// directory, by its path from the volume's root, opened at the name's current version as any root; every other root
+    /// is Denied. It may write only if `writable` and `dir` may (never more than `dir`, MC-3.4). Its badge is the next
+    /// from SCOPE_BADGE_FIRST that no scope holds, wrapping, and `mint` makes the service's capability with that badge
+    /// (none: Handles), kept with the scope so that its end revokes every copy. SCOPES at most, SCOPES_EACH made by a
+    /// client: past them Handles. A refusal changes nothing. Returns the badge and the capability.
+    pub fn scope<S: Blocks + Roots>(&mut self, store: &mut S, client: Client, dir: u32, writable: bool, now: u64, mint: impl FnOnce(u16) -> Option<usize>) -> Result<(u16, usize), Error> {
+        let d = self.directory(store, client, dir)?;
+        if self.scopes_held_by(client) >= SCOPES_EACH { return Err(Error::Handles); }
+        let s = self.scopes.iter().position(|s| !s.used).ok_or(Error::Handles)?;
+        let mut turn = self.turn;
+        let badge = loop {
+            let badge = SCOPE_BADGE_FIRST + turn;
+            turn = (turn + 1) % SCOPE_BADGES;
+            if self.scope_of(badge).is_none() { break badge; }
+        };
+        let cap = mint(badge).ok_or(Error::Handles)?;
+        let (handle, view) = (&self.handles[d], &self.views[self.handles[d].tree]);
+        let mut scope = Scope { used: true, badge, cap, maker: client, taken: false, user: 0, made: now, writable: writable && handle.writable, len: view.len, volume: view.volume, depth: handle.len, path: [0; PATH] };
+        scope.path[..handle.len].copy_from_slice(handle.path());
+        (self.scopes[s], self.turn) = (scope, turn);
+        Ok((badge, cap))
+    }
+
+    /// Makes scope `badge` task `task`'s alone, as if that task had used it first (`adopt`): it then lasts as long as the
+    /// task. Only the task that made it may ask, and a scope another task uses already is Denied; no such scope is
+    /// NotFound.
+    pub fn adopt(&mut self, client: Client, badge: u16, task: u64) -> Result<(), Error> {
+        let s = self.scope_of(badge).ok_or(Error::NotFound)?;
+        let scope = &mut self.scopes[s];
+        if scope.maker.pid != client.pid || (scope.taken && scope.user != task) { return Err(Error::Denied); }
+        (scope.taken, scope.user) = (true, task);
+        Ok(())
+    }
+
+    /// Ends each scope whose user has ended, by `alive` of its PID, and each nobody took up within SCOPE_UNUSED_MS of
+    /// `now` (ms): its badge and capability go to `ended`, for the service to revoke, and its client's handles are
+    /// closed unpublished, so they are Invalid. Returns how many.
+    pub fn sweep_scopes(&mut self, now: u64, alive: impl Fn(u64) -> bool, mut ended: impl FnMut(u16, usize)) -> usize {
+        let mut gone = 0;
+        for s in 0..SCOPES {
+            let Scope { used, badge, cap, taken, user, made, .. } = self.scopes[s];
+            if !used { continue; }
+            let over = if taken { !alive(user) } else { now.saturating_sub(made) > SCOPE_UNUSED_MS };
+            if !over { continue; }
+            self.scopes[s].used = false;
+            for h in 0..HANDLES {
+                if self.handles[h].used && self.handles[h].badge == badge { self.release(h); }
+            }
+            ended(badge, cap);
+            gone += 1;
+        }
+        gone
+    }
+
+    /// Scope `badge` as it is now, if there is one.
+    pub fn scoped(&self, badge: u16) -> Option<Scoped<'_>> {
+        let scope = &self.scopes[self.scope_of(badge)?];
+        Some(Scoped { writable: scope.writable, maker: scope.maker, user: scope.taken.then_some(scope.user), volume: scope.volume(), path: scope.path() })
+    }
+
+    /// Scopes, at most SCOPES.
+    #[allow(dead_code)] // the host tests use it
+    pub fn scopes_held(&self) -> usize { self.scopes.iter().filter(|s| s.used).count() }
+
+    /// Scopes `client` made, at most SCOPES_EACH.
+    pub fn scopes_held_by(&self, client: Client) -> usize { self.scopes.iter().filter(|s| s.used && s.maker == client).count() }
 
     /// A directory below directory `dir`; with `create`, each one missing on the way is made if `dir` may write, all of
     /// them one publication.
@@ -492,6 +587,38 @@ impl Fs {
             if self.handles[h].used && ended(self.handles[h].pid) { self.release(h); gone += 1; }
         }
         gone
+    }
+
+    // The root of a scope's client: the scope's directory, on its volume alone. The first task to ask is its only user,
+    // whatever the root answers, as vfs_server's.
+    fn scoped_root<S: Blocks + Roots>(&mut self, store: &mut S, client: Client, volume: &str) -> Result<u32, Error> {
+        let s = self.scope_of(client.badge).ok_or(Error::Denied)?;
+        let scope = &mut self.scopes[s];
+        if !scope.taken { (scope.taken, scope.user) = (true, client.pid); }
+        if scope.user != client.pid || !scope.volume().eq_ignore_ascii_case(volume) { return Err(Error::Denied); }
+        let view = View { users: 0, pid: client.pid, badge: client.badge, len: scope.len, volume: scope.volume };
+        let (path, depth, may) = (scope.path, scope.depth, scope.writable);
+        self.open_root(store, client, view, &path[..depth], may)
+    }
+
+    // A tree of `client`'s for `view` at its name's current version, and a handle of the directory at `path` in it.
+    fn open_root<S: Blocks + Roots>(&mut self, store: &mut S, client: Client, view: View, path: &[u8], may: bool) -> Result<u32, Error> {
+        let h = self.free(client)?;
+        if self.held_by(client).1 >= TREES_EACH { return Err(Error::Handles); }
+        let t = self.views.iter().position(|v| v.users == 0).ok_or(Error::Handles)?;
+        let (version, root) = store.current(view.name(&mut [0; NAME]))?;
+        self.trees[t].start(root, version);
+        // A directory: the root's block, and each on the way to it, read and checked against its CID.
+        if self.trees[t].lookup(store, text(path)?)?.kind != Kind::Directory { return Err(Error::NotDirectory); }
+        self.views[t] = view;
+        self.add(h, client, t, true, may, 0, path);
+        Ok(h as u32)
+    }
+
+    // The scope whose badge is `badge`.
+    fn scope_of(&self, badge: u16) -> Option<usize> {
+        if badge < SCOPE_BADGE_FIRST { return None; }
+        self.scopes.iter().position(|s| s.used && s.badge == badge)
     }
 
     // A free handle for `client`, within its share.
