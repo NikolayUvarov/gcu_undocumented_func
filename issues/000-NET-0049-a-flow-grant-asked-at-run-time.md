@@ -78,6 +78,19 @@ Still left: `ask(host, port, why)` and the user's answers, which need the shell'
   - a program's way to ask through its grant;
   - each answer applied: `once` and `session` as rules of the program's live grant, `always` as a line of the policy;
   - a question no one answers in 60 s refused.
+- **The way through, as designed (2026-10-31).** A program holds only its grant, a client of the stack. So the question goes through the stack, and the stack decides nothing.
+  - **`socket.wit` 2.8, for a grant's badge:**
+    - `ask(host, port, why)`: the host is a name or a dotted address, up to 253 bytes; the reason up to 120. The stack keeps it, at most one a grant and 8 in all, and answers its id at once, as its other calls that do not wait;
+    - `asked(id)`: `pending`, `allowed` with the address to reach, or `refused`.
+  - **`socket.wit` 2.8, for the policy badge:**
+    - `questions()`: what is pending, with each one's grant badge;
+    - `decide(id, address, allowed)`: the answer for the program.
+  - **`netpolicy`:**
+    - takes the questions from the stack in its loop;
+    - names each grant's program and PID from its own table;
+    - serves them to the shell (`netpolicy.wit` 1.3);
+    - on an answer: resolves the host, adds the rule to the grant (`policy-set`), with `always` adds the line as `add` does, and tells the stack.
+  - **`once`** is the rule until the program's first connection to that host and port ends. The stack drops a rule marked so when that socket closes (the rule's kind, `socket.wit` 2.8).
 
 ## Related
 
