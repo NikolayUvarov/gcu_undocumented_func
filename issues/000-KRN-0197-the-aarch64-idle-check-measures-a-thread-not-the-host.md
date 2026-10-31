@@ -26,7 +26,7 @@
 ## Acceptance criteria
 
 - [x] With a kernel whose idle CPUs spin (`nop` for `wfi` in `wait_for_interrupt`), the check fails (a mutation run, recorded below).
-- [ ] "aarch64: GICv2 with GICv2m" and "aarch64: 16 CPUs" pass on PCU, with their figures recorded, and on `un-rizen`.
+- [x] "aarch64: GICv2 with GICv2m" and "aarch64: 16 CPUs" pass on PCU, with their figures recorded, and on `un-rizen` (below).
 - [ ] The landing gate runs them with no idle-check failure.
 
 ## Progress
@@ -38,6 +38,9 @@
 - **PCU, f4c42ea3:** "aarch64: GICv2 with GICv2m" passed in 880 s. The busiest thread was runnable 47% in the `normal` suite and 45% in the `smp` suite.
 
   These figures led to the limit of 0.9 instead of 0.6: an idle thread there waits for the host's 4 cores, and a spinning one is runnable all of the second whatever the host.
+- **PCU, cf0161af (the limit 0.9, `NOT_ON` gone):** both groups passed:
+  - GICv2 in 884 s, at 46% and 45%;
+  - "16 CPUs" in 301 s, at 41%. PCU had not run it since round 45.
 - **`un-rizen-service`, f4c42ea3:** both groups passed: GICv2 727 s, at 14% and 15%; "16 CPUs" 429 s, at 37%. The 16-CPU run was under a load average of 58 on 16 cores (two KRN lanes and another track's run).
 
 ## Related
