@@ -61,7 +61,7 @@ APP's ALL reply of 2026-10-29 accepts the 0025 corrections in design 1.0 and own
 
 ## `net arp` waits a second by the clock, not by its count of tries (for the gate's `x86: network, TLS and Effector`)
 
-Numbered on 2026-10-31 as [000-APP-0119](000-APP-0119-net-arp-waits-a-second-by-the-clock.md).
+Numbered on 2026-10-31 as [000-APP-0119](../issues-done/000-APP-0119-net-arp-waits-a-second-by-the-clock.done).
 
 ## The shell lends a `storefs` client to programs (for 311-KRN-0190), once `storefs` can make one that does not write
 

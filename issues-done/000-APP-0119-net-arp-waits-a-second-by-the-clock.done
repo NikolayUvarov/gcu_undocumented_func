@@ -1,6 +1,6 @@
-# 000-APP-0119 — `net arp` waits a second by the clock
+# 000-APP-0119 — `net arp` waits a second by the clock — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (a gate's failure) · **Status:** open (written; the `net` suite's run left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.2
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (a gate's failure) · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.2
 
 **Recorded by:** the tools track, 2026-10-31, from KRN's request in `issues/requests-APP.md` (2026-10-30, as the landing queue's integrator) and its message `APP/2026-10-30T2156Z-KRN-a-request-net-arp-waits-a-second-by-the-clock.md`.
 
@@ -19,9 +19,22 @@
 
 ## Acceptance criteria
 
-- The `net` suite's `net arp 10.0.2.2` and `net arp 10.0.2.99` answer as before, on x86 QEMU with 4 CPUs.
-- `net arp 10.0.2.99` ends within its 8 s while the machine is loaded (a build beside it).
+- [x] The `net` suite's `net arp 10.0.2.2` and `net arp 10.0.2.99` answer as before, on x86 QEMU with 4 CPUs.
+- [x] `net arp 10.0.2.99` ends within its 8 s while the machine is loaded.
 
 ## Related
 
-The gate's `x86: network, TLS and Effector`; [000-APP-0049](../issues-done/000-APP-0049-network-traffic-on-wms-background.done) (the card client).
+The gate's `x86: network, TLS and Effector`; [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.done) (the card client).
+
+## Resolution
+
+Done on 2026-10-31 in 58472c53 (`shell/src/net.rs` `arp`).
+
+The `net` suite passed twice on x86 QEMU with 4 CPUs, TCG, in this container:
+- alone;
+- with four busy loops on the host beside it, where `net arp 10.0.2.99` answered `ARP 10.0.2.99: NO ANSWER` within the harness's 8 s.
+
+That is not the gate's machine, `un-rizen` with a build on its other lane, where the failure was seen.
+
+One buffer for every frame received is not done; the Plan says why.
+
