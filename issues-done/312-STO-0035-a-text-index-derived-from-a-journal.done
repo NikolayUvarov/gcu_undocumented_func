@@ -1,0 +1,121 @@
+# 312-STO-0035 — A text index derived from a journal: rebuilt equal to itself, a stale one told, every answer checked — done
+
+**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, MC-10.3
+
+Split from [312](../issues/312-the-minds-memory.md) (2026-10-31), its second step: "derived indexes: full text … an exact scan first … an index is never authority or proof that a version is current, and may be dropped and rebuilt (MC-4.12)". Vectors wait for `NRL`'s embeddings; assertions are a later task of 312.
+
+No personal data is written before [308](../issues/308-encryption-at-rest.md) is done: the tests and the pilot index test text only.
+
+## Problem
+
+A journal ([312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done)) is read from its head, newest first. Finding the entries whose content holds a word means reading every entry and every content. An index answers sooner, but MC-4.12 and MC-4.6 bound it:
+- it is derived: it can be dropped and rebuilt, and a rebuild gives the same index;
+- it is not proof that it is current: a reader tells a stale one, and by how much;
+- it is not authority: each answer is checked against the journal, and an index that answers wrong is refused.
+
+## Plan
+
+- **An index is an object of `tree`** ([311-STO-0027](311-STO-0027-directories-as-objects.done)), published under a name of its own by compare-and-swap, `index/<journal>` unless one is given. So the store retains it, `mind::car` copies it, and the owners' sizes count it, with nothing new in the store and nothing on the wire.
+  - `manifest`, a file: a canonical DAG-CBOR map of a schema of its own, `mind::index`, versioned (`"v"`; another is refused by its number, MC-4.13). It names the index's kind (`"text"`), the tokenizer's version, the journal's name, and the head's sequence and CID it was built from, with the counts of entries, terms and postings.
+  - the terms, in directories sharded by their first bytes, each term a file of its postings: the sequences of the entries whose content holds it, ascending, in one encoding.
+  - Built only from what the journal holds, in one order: the same head gives the same bytes, so the same root's CID.
+- **The tokenizer, version 1:** a term is a run of ASCII letters and digits in a content, lowercased, 1 to 32 bytes; a longer run is cut into pieces of 32, and every other byte separates. Text beyond ASCII is not indexed; docs/storage says so.
+- **Building** (`index::build`): the journal checked from its head first (`journal::check`): no index is built from a journal that does not check. Then each entry's content read whole, every block checked against its CID, and tokenized. `libmind` has no heap: the terms and postings are gathered in a work area the caller gives, and a journal past it is refused (`full`), nothing published. The bounds are said in docs/storage.
+- **Stale or current** (`index::state`): an index is current when its head is the journal's head. It is stale when the journal checks and the entry at the index's sequence is the index's head: the journal grew by the entries above it. Anything else is refused: the journal does not check, or its entry at that sequence is another, or the journal is shorter (an index of another journal, or of one rewritten).
+- **Search** (`index::search`): the postings of a word's terms, then each posting checked against the journal: its entry read and its content tokenized again, so a posting whose entry does not hold the term is a false answer, and the index is refused. A stale index answers for the entries up to its sequence, and the entries above it are scanned. So an answer is always the exact scan's.
+- **The exact scan** (`index::scan`) is the answer without an index: every entry's content tokenized. The host tests hold every search to it.
+- **The check** (`index::verify`): the index rebuilt in the work area and its root compared with the published one: equal, stale (rebuilt from the index's own head, equal), or differs, which also tells a posting dropped, which a search cannot.
+- **The pilot, `blocks index`:**
+  - `build <journal> [<name>]`, which prints the counts and the root;
+  - `search <journal> <word> [<name>]`, the sequences, newest first, and whether the index is current or how many entries it lacks;
+  - `check <journal> [<name>]`, which prints `equal`, `stale <n>` or `differs`;
+  - with `-d <domain>`, as every command of the tool.
+- **Not on the wire:** `blockstore.wit` and the store's layout do not change. An index is a client's use of `put`, `publish`, `snapshot` and `get`.
+
+## What it does not give, said in docs/storage
+
+- **Not vectors,** and no term beyond ASCII.
+- **Bounded:** by the work area, so a journal past it has no index. An index on the medium that grows is [310](../issues/310-the-index-on-the-medium.md)'s.
+- **Not faster to check:** every answer is checked, and the check reads the journal down to the oldest entry answered. An index saves the tokenizing of the entries no term names; it does not make a journal's check shorter.
+- **No rights:** an index lives in the store and domain its journal does; it grants nothing and reads nothing its reader's client cannot (MC-4.6).
+
+## Decisions while building (2026-10-31)
+
+- **The layout.** The root holds `manifest` and `terms`. A term's file is at `terms/<first byte>/<first two bytes>/<term>`, a term of one byte under that byte twice, so a term and a directory never share a name. A first byte holds at most 37 shards; a shard holds the terms sharing their first two bytes, as many as one directory block holds (about 320 terms of 5 bytes, 200 of 32). Past that the build is refused (`TooLarge`), nothing published: shards that split further as they grow are not built.
+- **The manifest is a `raw` file** holding the DAG-CBOR map, not a typed `dag-cbor` block: the store takes no block of another schema, and an index should not retain its journal. So its head is a link in bytes the store does not read, and nothing is new in the store.
+  - Its keys: `{"v": 1, "seq", "head", "kind", "terms", "entries", "journal", "postings", "tokenizer"}`, in DAG-CBOR's order, as the reference library `dag-cbor` 0.3.3 sorts them (a host test holds its bytes).
+  - `entries` counts the entries whose content gave a term, so it is not the sequence again.
+  - It decodes only with `seq` from 1, a `dag-cbor` head and `entries` at most `seq`; whether the other counts are the postings' is told by a check.
+  - Another version and another tokenizer are refused by their numbers (`Version(n)`, `Tokenizer(n)`), another kind by its name (`Kind`). `"v"` alone is read before the other keys, so another kind whose keys differ is `Format`.
+- **A postings file** is one `raw` block, a canonical DAG-CBOR array of the sequences, ascending and each once. A term's postings over a block (a term in more than about 5500 entries) are refused (`TooLarge`), not written as an object of `dag`, which would need a builder of 110 KiB in the work area. Not tested: a journal that long takes minutes to append on the host, each append walking the whole journal.
+- **The tree is written with `tree::encode_each`,** not through `worktree`: a working tree holds at most 64 directories and 64 KiB, fewer than an index of a few hundred terms has, and encodes a node again at each edit. The directories are written in the terms' order, each once, each after what it holds.
+- **The work area is the caller's slices:** terms (16 bytes each), their bytes, postings (8 bytes each: a sequence as `u32`, and the next posting), and three blocks. `blocks` keeps 4096 terms, 64 KiB, 32768 postings and the blocks in statics, about 430 KiB.
+  - The terms are kept sorted as they come (a binary search, then a move), so the build sorts as it gathers.
+  - A term's postings are a list through the postings, each new one first. The journal is read from its head down, so the list runs ascending.
+  - A sequence past 2³² − 1 is past the work area (`Full`).
+- **One walk, not a check and then a walk.** The plan has the journal checked first (`journal::check`), then each content read. The build reads the journal once, through `journal::check_each` (`check` with a callback that hears each entry, added to `journal`), and tokenizes each content as its entry is met. A refusal anywhere stops it before anything is put. Two walks would read every entry twice, and a journal appended to between them would be checked at one head and indexed at another.
+- **A search checks the whole journal,** as `state` does, not only down to the oldest entry answered, so a journal that does not check is refused by every use of its index. Below the index's head it reads entries, and only the answers' contents. docs/storage says so, in place of "the check reads the journal down to the oldest entry answered".
+- **A word** is tokenized as a content is, into 1 to 8 terms (`WORD`), each once, and the answer is the entries that hold all of them. No term, or more than 8, is `Word`. The shell splits the command line, so `blocks index search` takes a word without spaces.
+- **Answers are given once checked.** A search keeps them in the work area's postings, those from the index and then those scanned above its head, and gives them only after the walk ends, newest first. So a false answer found at an older entry never follows answers already printed. Past the postings area is `Full`.
+- **A directory as a content holds no term:** its names and files are not read. Only a file is tokenized.
+- **A build that finds its root under the name already publishes nothing** (`UNCHANGED`): rebuilding the same head would otherwise fill the name's kept versions with one root.
+- **A check (`verify`) puts nothing:** the rebuild names its blocks (`Cid::of`) without storing them. A rebuild past the work area is refused (`Full`), as a build is.
+- **Refusals:** an index whose manifest names another journal than the one asked is `Another`, as is one whose head is not the journal's entry at its sequence. A journal shorter than the index is `Shorter(version)`. A journal that does not check is `Journal(refused)`, its check's own refusal, which `blocks` prints as `blocks journal check` does.
+- **`blocks index`:** the default name is `index/<journal>`, so a journal's name of more than 58 bytes needs one given (the store's names are 64). `search` prints 16 sequences a line; `check` prints `EQUAL`, `STALE <n>` or `DIFFERS`.
+- **The host tests are built optimized,** with debug assertions, as the journal's are: 4 s, 44 s unoptimized.
+- **The QEMU check, `store_index_check`,** runs after `store_journal_check`, on a journal of its own (`notes`). It leaves `diary` rewritten, which shows that a journal that does not check has no index. The suite computes each index's root from the layout (`text_index`, written from the DAG-CBOR specification and checked against the reference library's root of a small index). It waits for the leases on its own (62 s by the guest's clock). Where a memory domain is made (aarch64), it builds an index in one and forgets it.
+
+## Progress (2026-10-31)
+
+- **Built** in a worktree by an agent of the storage session, for the session to review and merge. On the agent's container (an x86 host of 4 CPUs, QEMU under TCG for both architectures, shared with another agent's builds and runs):
+  - `tests/index_host.rs`: 14 tests pass, built with `-O -C debug-assertions=on` (4 s) and without (44 s). The reference encodings in them (a manifest, a postings file, the root of a small index) were made here with `dag-cbor` 0.3.3 and `multiformats` 0.3.1; the suite's `text_index` gives that small index's root too;
+  - `scripts/host_tests.sh`: `index` 14 and `journal` 16 pass in it. Its first run stopped at `tests/effector_server_test.py`, a test of the Effector fixture, which nothing here touches: under a load of 20 to 25 on the 4 CPUs it failed 4 of 9 runs alone, a different test of it each time (a broken pipe, a request handler failing), and passed the other 5. The steps after it, run on their own, passed. Run again whole on a quiet machine, the script exits 0 (21 min), `index` 14 among it;
+  - the x86 image builds (`./02_build.sh`), and the QEMU `store` suite (x86) passes whole, 18 checks in 10 min, the three of `store_index_check` among them;
+  - the aarch64 image builds (`ARCH=aarch64 ./02_build.sh`), and its QEMU `store` suite passes whole, 18 checks in 9 min, the index in a memory domain among them.
+- **The tests can fail.** Each change below was made to a copy of the code, and the index's host tests were run on it:
+  - a search not checking a posting against the journal: 1 fails (the index changed by hand);
+  - the state not comparing the entry at the index's sequence with its head: 2 fail (changed by hand, another or rewritten journal);
+  - the tokenizer not lowercasing: 12 fail; cutting runs at 16, not 32: 6 fail;
+  - the build not sorting its terms, each new one appended: 12 fail;
+  - the check not rebuilding, its verdict from the heads alone: 1 fails;
+  - a stale index's search not scanning the entries above its head: 1 fails;
+  - the manifest's version not read first, another read as 1: 1 fails;
+  - the index not checked to name the journal asked of: 0 failed at first, as the state refused each case as `Another` too; a test now publishes the same entries under a second name, a journal that checks, and 1 fails;
+  - a journal shorter than the index not refused: 1 fails;
+  - a term's posting added twice for one entry: 9 fail;
+  - a postings file's order not checked: 1 fails;
+  - a directory as a content tokenized as a file: 3 fail;
+  - the work area's bound on postings not kept: 1 fails;
+  - the journal not checked down to its first entry (`check_each` past its steps passing): 1 fails;
+  - a build publishing a root its name holds already: 1 fails.
+- **Not tested:** a term's postings over a block (a journal of more than about 5500 entries), and a sequence past 2³² − 1.
+- **The profile:** the Article 4 rows (x86, aarch64) and their evidence say what ran.
+
+## Acceptance criteria
+
+- **Host,** `tests/index_host.rs`, over the block store's logic on a simulated medium:
+  - an index built twice from the same journal of at least 200 entries (words from a seeded generator): the same root, also after a remount and a collection;
+  - every search equal to the exact scan, for each word the journal holds and for words it does not;
+  - after appends, the index told stale by how many entries, and searches still equal to the scan;
+  - refused: an index of another journal; an index of a journal rewritten from an older point; a journal that does not check;
+  - an index changed by hand and published under its name: a posting added is a false answer, refused by the search; a posting dropped is told by `verify`, `differs`;
+  - a manifest of another version or kind refused by its number;
+  - a journal past the work area refused with nothing published.
+- **QEMU `store` suite (x86, aarch64):**
+  - `blocks journal append` several times, then `blocks index build`, and `search` prints the sequences;
+  - after another append, `search` says the index lacks one entry and still finds it, and `check` says `stale 1`;
+  - rebuilt, `check` says `equal`; after a collection, the same.
+- **docs/storage** (a section on derived indexes, with what they do not give) and the profile's Article 4 rows.
+
+## Resolution
+
+Landed in `main` 36d05f12 (round 8ea4b135) as 27388dd7, f7d8bc6f and da6b8137.
+- **`mind::index`** (`libmind/src/index.rs`): an index is a `tree` under its own name (`index/<journal>` by default), a `manifest` (DAG-CBOR, schema `v` 1, kept as a `raw` file so the store does not retain the journal through it) and term files sharded by their first one and two bytes. `build` reads the journal once through `journal::check_each`, so the same head gives the same root; `state` tells current or stale by how many entries; `search` checks the journal whole, every posting against its entry and the entries above the index's head scanned, so its answer is the exact scan's (`scan`); `verify` rebuilds and compares (`equal`, `stale <n>`, `differs`). The work area is the caller's; a journal past it is `full`, nothing published.
+- **The pilot:** `blocks index build|search|check` (`blocks/src/index.rs`).
+- **Tests:** `tests/index_host.rs` (14), built optimized in `scripts/host_tests.sh`; `store_index_check` in the QEMU `store` suite, with an index in a memory domain on aarch64. They passed on the session's container and on `un-rizen_2a8b108d5593` (x86 and aarch64, QEMU TCG) on 0c161935, as the landing request of 05:57 says.
+- **The docs:** docs/storage 0.23 (derived indexes, and what they do not give), the profile's Article 4 rows (x86, aarch64) and their evidence.
+- `blockstore.wit` and the store's layout did not change. 312 stays open for assertions (312-STO-0038), vectors and forgetting.
+
+## Related
+
+[312](../issues/312-the-minds-memory.md), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [310](../issues/310-the-index-on-the-medium.md), [303](303-retention-and-collection.done).
