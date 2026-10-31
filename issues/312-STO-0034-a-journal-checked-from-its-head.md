@@ -91,7 +91,9 @@ The store keeps objects and names, and a name's history keeps 4 versions. Nothin
   - an append never counting a new boot: 1 fails;
   - a check past its steps passing: 1 fails; an append extending a head not at its version: 1 fails;
   - the store taking no entry: 13 fail; a copy walking with `tree::walk`: 1 fails; decoding without the canonical re-encoding: 1 fails.
-- **Not yet:** the session's runs on the maintainer's machines, and the profile's Article 4 rows.
+- **Reviewed and merged** by the session (b8a0c112; ade502a1 with `main`). `scripts/host_tests.sh` whole exits 0 on b8a0c112: `journal` 16, `blockstore` 73.
+- **QEMU on `un-rizen_2a8b108d5593` through Effector, on ade502a1:** x86 and aarch64, the `store`, `storefaults` and `vfs` suites, 23 checks each, all pass: both journal checks, and on aarch64 the journal in a memory domain (`store_domains_check`).
+- **The profile:** the Article 4 rows (x86, aarch64) and their evidence say what ran.
 
 ## Acceptance criteria
 
