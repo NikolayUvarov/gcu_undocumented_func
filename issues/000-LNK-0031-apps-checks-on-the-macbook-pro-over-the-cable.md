@@ -31,4 +31,4 @@ APP's session runs in the cloud and does not reach `effector485`, which stays lo
 
 ## Related
 
-[800-LNK-0032](800-LNK-0032-keys-and-the-pointer-over-the-link.md) (APP's checks that need keys), [effector485.md](../docs/link/effector485.md).
+[800-LNK-0032](../issues-done/800-LNK-0032-keys-and-the-pointer-over-the-link.done) (APP's checks that need keys), [effector485.md](../docs/link/effector485.md).

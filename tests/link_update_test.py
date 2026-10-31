@@ -59,6 +59,17 @@ def test_follow():
     # No confirmation in time.
     line, _ = follow([boot1], before=boot1)
     assert line.startswith("error: no confirmation"), line
+    # A read that lost its anchor (a long read of a large log, the MacBook Pro on 2026-10-31) holds old lines, an old
+    # refusal among them: not taken for new; the next boot's log is (800-LNK-0034).
+    late = "71482.148 [UPDATER] FETCH: 62 OF 104\n71483.511 [UPDATER] FETCH: 64 OF 104\n"
+    stale = "68816.682 [UPDATER] CHECK stable: VERSION 6\n68816.683 [UPDATER] CHECK: REFUSED: Older\n"
+    boot = "0.286 [INIT] LAUNCH\n2.860 [UPDATER] SLOT B ON TRIAL, VERSION 7\n3.019 [UPDATER] SLOT B CONFIRMED ON THE DISK\n"
+    line, said = follow([late, stale, boot], before="71400.000 x\n")
+    assert line.startswith("3.019 [UPDATER] SLOT B CONFIRMED"), (line, said)
+    assert not any("REFUSED" in s for s in said) and said.count("71483.511 [UPDATER] FETCH: 64 OF 104") == 1, said
+    # Without the anchor, a line of the same uptime as the last read is still new unless it was read.
+    line, said = follow(["5.100 a\n5.170 [UPDATER] RECORD\n", "5.170 [UPDATER] RECORD\n5.170 [UPDATER] SLOT A CONFIRMED ON THE DISK\n"], before="5.000 y\n")
+    assert line == "5.170 [UPDATER] SLOT A CONFIRMED ON THE DISK" and said.count("5.170 [UPDATER] RECORD") == 1, (line, said)
 
 
 if __name__ == "__main__":

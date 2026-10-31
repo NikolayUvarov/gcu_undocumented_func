@@ -48,6 +48,7 @@ DIR = "rel"  # below data/link/: update.txt's `source data/link/rel`
 DONE = re.compile(r"\[UPDATER\] SLOT ([AB]) CONFIRMED ON THE DISK")
 FAILED = re.compile(r"\[UPDATER\] [^\n]*(REFUSED|ROLLBACK)[^\n]*")
 ANCHOR = 8  # lines that mark where the last read of the log ended
+BOOT_S = 60  # a log whose first line is this young is a new boot's
 
 
 def boot_file(name):
@@ -112,26 +113,48 @@ class Link:
         return r.stdout if r.returncode == 0 else None
 
 
-def fresh(lines, anchor):
-    """The lines after `anchor`, the last lines read before; all of them when the anchor is gone (the next boot)."""
+def stamp(line):
+    """A log line's uptime in seconds, its first word; None for a line without one."""
+    try:
+        return float(line.split(" ", 1)[0])
+    except ValueError:
+        return None
+
+
+def latest(lines):
+    return next((s for s in map(stamp, reversed(lines)) if s is not None), None)
+
+
+def fresh(lines, anchor, last=None):
+    """The lines after `anchor`, the last lines read before, and whether this read is current. Without the anchor
+    (800-LNK-0034: a long read of a large log lost it and took old lines for new), by the uptimes after `last`, the
+    latest read: all lines for the next boot, whose log begins again; none for a read that ends before `last`."""
     n = len(anchor)
     for i in range(len(lines) - n, -1, -1) if n else ():
         if lines[i:i + n] == anchor:
-            return lines[i + n:]
-    return lines
+            return lines[i + n:], True
+    stamps = [s for s in map(stamp, lines) if s is not None]
+    if last is None or not stamps:
+        return lines, True
+    if stamps[-1] < last:
+        return (lines, True) if stamps[0] < BOOT_S else ([], False)
+    seen = set(anchor)
+    return [line for line in lines if (stamp(line) or 0) > last or (stamp(line) == last and line not in seen)], True
 
 
 def follow(link, timeout, say=print, pause=5, before=""):
     """The updater's lines after `before` (the log as it was), across the trial restart, until the new slot is
     confirmed on the disk (its line returned) or a step is refused (an error)."""
     deadline, anchor, trial = time.monotonic() + timeout, before.splitlines()[-ANCHOR:], False
+    last = latest(before.splitlines())
     while time.monotonic() < deadline:
         text = link.log()
         if text is None:
             time.sleep(pause)
             continue
         lines = text.splitlines()
-        for line in fresh(lines, anchor):
+        new, current = fresh(lines, anchor, last)
+        for line in new:
             if "[UPDATER]" in line or "TRIAL" in line:
                 say(line)
             if DONE.search(line):
@@ -141,7 +164,8 @@ def follow(link, timeout, say=print, pause=5, before=""):
             # finds nothing newer. Neither refusal is the update's.
             if FAILED.search(line) and "REFUSED: Missing" not in line and not (trial and "REFUSED: Older" in line):
                 raise RuntimeError(line.strip())
-        anchor = lines[-ANCHOR:] or anchor
+        if current:
+            anchor, last = lines[-ANCHOR:] or anchor, latest(lines) if lines else last
         time.sleep(pause)
     raise RuntimeError(f"no confirmation within {timeout} s")
 
