@@ -1,0 +1,46 @@
+# 700-DRV-0047 — `usb_host` keeps a Bluetooth controller's events without loss — done
+
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [700](../issues/700-bluetooth.md) · **Constitution:** MC-12.1
+
+## Problem
+
+- **What the DEXP showed.** Once `rtw88_wifi` let the RTL8821C's Bluetooth on air (700-DRV-0046), `bt_hci`'s rounds logged packets dropped and no inquiry complete (700-BLT-0002):
+  - `64 EVENT PACKETS DROPPED` in one round, `195` in another;
+  - `NO INQUIRY COMPLETE IN 12000 MS`.
+- **Why.** `usb_host`'s xHCI side keeps 8 reports of an interrupt IN endpoint, and drops the oldest when a ninth comes (`usb_host/src/xhci.rs`).
+  - The controller sends a 16-byte event packet a millisecond. `bt_hci` takes them about every 10 ms.
+  - An extended inquiry result is 17 packets, and a lost one breaks the event it belongs to.
+  - A mouse loses a stale movement that way; an HCI event is lost whole.
+- **The remedy exists.** `usb_host` already holds a converter's bulk IN endpoint without loss (800-DRV-0034): a transfer goes back on the ring only while the queue has room, so the device waits (NAK) instead of a report being dropped.
+
+## Plan
+
+1. **In `reports`:** the endpoint is armed `lossless` when it is bulk, or when the client asking is badged `BADGE_BLUETOOTH` (`bt_hci`, 700-DRV-0043). Nothing else changes for other clients.
+2. **EHCI's reports** (`ehci_reports`) are not changed here. The DEXP's controller is on xHCI.
+
+## Acceptance criteria
+
+- [x] The x86 and aarch64 builds and the QEMU `usb` suite pass. QEMU has no Bluetooth controller, so this only shows that nothing else changed.
+- [x] On the DEXP, with 700-DRV-0046 and 700-BLT-0002: `bt_hci`'s rounds drop no event packet, and the inquiry completes. Evidence for the DEXP only (MC-12.1).
+
+## Progress (2026-10-31)
+
+- **Built** for x86 and aarch64 without warnings. The QEMU `usb` suite passed on x86 (LEG9, WSL2).
+- **Before it, on the DEXP:** 700-BLT-0002's rounds dropped 64, 195 and 404 packets, and no inquiry completed.
+- **The DEXP with it:** `usb_host` cannot be replaced by `effector485 replace`, as the boot volume is a USB stick on it, so it came with a slot update (the resolution).
+
+## Resolution
+
+- **The change:** `usb_host/src/main.rs` arms a `BADGE_BLUETOOTH` client's endpoint `lossless` (3cc7184f). The x86 and aarch64 builds and the QEMU `usb` suite passed.
+- **Before it, by replace:** 64, 195 and 404 packets dropped a round. **After it, in the release:** none, in each round.
+- **On the DEXP, in release 202610302359** (2026-10-31 00:17 UTC, slot A, confirmed over the cable):
+  - **The tree:** `[INIT] BUILD: … COMMIT d83c98c5095b`, release 202610301115's tree (`ff0da96d`, ABI 25) with this change and its fellows (700-DRV-0046, 700-DRV-0047, BLT's 700-BLT-0002) applied, as on this branch.
+  - **The Wi-Fi:** `[RTW88] ANTENNA: FREE RUN …`, `[WLAN] AUTO-JOIN CoolNet2: JOINED (TRY 1)`, DHCP 192.168.2.141 at 5.7 s, −56 dBm. Every frame sent was acknowledged (`SENT 20 (20 ACKED)`, `22 (22 ACKED)`). The agent reconnected to hesere.
+  - **`bt_hci`'s rounds:**
+    - `14 LE AND 1 BR/EDR DEVICES HEARD; 25 EVENTS IN THE LE SCAN, 14 IN THE INQUIRY; 0 EVENT PACKETS DROPPED` at 26 s, with no inquiry complete in 12 s;
+    - `15 LE AND 1 BR/EDR …; 0 EVENT PACKETS DROPPED` at 346 s, with `INQUIRY COMPLETE AFTER 8972 MS, STATUS 00`.
+  - **Evidence for the DEXP and that release only** (MC-12.1).
+
+## Related
+
+[700-DRV-0046](700-DRV-0046-rtw88-gives-the-bluetooth-its-antenna.done), [700-DRV-0043](../issues/700-DRV-0043-usb-host-hands-out-bluetooth-controllers.md), [800-DRV-0034](../issues/800-DRV-0034-usb-host-serves-serial-converters.md); BLT's 700-BLT-0002.
