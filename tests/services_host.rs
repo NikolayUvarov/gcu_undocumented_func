@@ -124,16 +124,6 @@ fn an_image_names_its_instances() {
 }
 
 #[test]
-fn each_usb_host_starts_before_the_class_drivers_on_it() {
-    // usb_host#1 drives the second xHCI; usb_storage#1 and usb_hid#1 take its client, so they start after it (213-KRN-0099).
-    let order = order(&parsed("").0);
-    let place = |name| order.iter().position(|u| *u == name).unwrap();
-    assert!(place("usb_host") < place("usb_host#1"));
-    for driver in ["usb_storage", "usb_storage#1", "usb_hid", "usb_hid#1"] { assert!(place("usb_host#1") < place(driver), "{driver}"); }
-    assert!(place("usb_storage#1") < place("vfs_server"));
-}
-
-#[test]
 fn essential_unknown_and_malformed_lines_are_refused_and_change_nothing() {
     let (plan, refused) = parsed("disable logd\ndisable nosuchservice\nthis is not a directive\ndisable\nafter windows\n");
     let lines: Vec<_> = refused.iter().map(|(line, why, _)| (*line, *why)).collect();

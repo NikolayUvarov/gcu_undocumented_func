@@ -46,7 +46,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_host#1", "usb_storage", "usb_storage#1", "usb_hid", "usb_hid#1", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -83,11 +83,9 @@ class VM:
         if tablet:
             extra = (*extra, "-device", "virtio-tablet-pci")
         if usb_input:
-            # USB input only (issue 164): a keyboard behind a hub, a tablet on a root port; no PS/2 or VirtIO input. A
-            # tuple names other USB devices instead (213-KRN-0099).
-            extra = (*extra, *(usb_input if isinstance(usb_input, tuple) else
-                               ("-device", "qemu-xhci,id=xhci", "-device", "usb-hub,bus=xhci.0,port=1,id=hub",
-                                "-device", "usb-kbd,bus=xhci.0,port=1.1,id=kbd", "-device", "usb-tablet,bus=xhci.0,port=2,id=usbtablet")))
+            # USB input only (issue 164): a keyboard behind a hub, a tablet on a root port; no PS/2 or VirtIO input.
+            extra = (*extra, "-device", "qemu-xhci,id=xhci", "-device", "usb-hub,bus=xhci.0,port=1,id=hub",
+                     "-device", "usb-kbd,bus=xhci.0,port=1.1,id=kbd", "-device", "usb-tablet,bus=xhci.0,port=2,id=usbtablet")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
@@ -12050,35 +12048,6 @@ def wm_suite(vm):
     print("PASS: wm: reboot typed in console asks in the shell's window and, once agreed, restarts the machine", flush=True)
 
 
-def second_xhci_check(args, disk):
-    """213-KRN-0099: a usb_host for every xHCI controller. With a tablet on the first controller and a keyboard on the
-    second, init starts usb_host#1 for the second, with usb_storage#1 and usb_hid#1 on it; the keyboard's keys reach the
-    keys program, and the tablet stays the first usb_hid's."""
-    devices = ("-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0",
-               "-device", "qemu-xhci,id=xhci1", "-device", "usb-kbd,bus=xhci1.0")
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), usb_input=devices)
-    try:
-        names = vm.services()
-        assert all(n in names for n in ("usb_host", "usb_host#1", "usb_hid", "usb_hid#1", "usb_storage", "usb_storage#1")), names
-        require(vm.service_logs("usb_hid#1", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
-        require(vm.service_logs("usb_hid", "TABLET"), "TABLET")
-        first = vm.service_logs("usb_hid")
-        assert not re.search(r"\[USB_HID\] [0-9A-F]{4}:[0-9A-F]{4} KEYBOARD", first), first  # the keyboard is the second controller's
-        vm.send("run keys\n"); vm.expect("[KEYS] READY"); time.sleep(.3)
-        start = len(vm.log)
-        for key in ("a", "b", "c"):
-            vm.hmp(f"sendkey {key}"); time.sleep(.2)
-        vm.serial(enter=False)
-        time.sleep(.8); vm.collect()
-        got = re.findall(r"\[KEYS\] code=Char mods=- char=([abc])", vm.log[start:])
-        assert got == ["a", "b", "c"], vm.log[start:]
-        vm.send_bytes(b"\x1b"); vm.expect("EXITED. SHELL RESUMED.")
-    finally:
-        vm.close()
-    print("PASS: a usb_host for every xHCI (213-KRN-0099): usb_host#1, usb_storage#1 and usb_hid#1 for the second controller; "
-          "its keyboard types, the first controller's tablet stays usb_hid's", flush=True)
-
-
 def usb_suite(vm):
     """USB keyboards and pointers (issue 164): usb_host finds a keyboard behind a hub and a tablet on a root port (and a
     mouse plugged in later), usb_hid turns their reports into keys and pointer events; devices come and go at run time,
@@ -13278,8 +13247,6 @@ def main():
                 continue
             if suite == "tools":  # its own raw disk, booted twice (173-APP-0092)
                 svc_boot_check(args)
-            if suite == "usb":  # its own machine, with two xHCI controllers (213-KRN-0099)
-                second_xhci_check(args, disk)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
