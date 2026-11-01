@@ -84,8 +84,10 @@ class VM:
             extra = (*extra, "-device", "virtio-tablet-pci")
         if usb_input:
             # USB input only (issue 164): a keyboard behind a hub, a tablet on a root port; no PS/2 or VirtIO input.
+            # A second xHCI with nothing on it at start (213-DRV-0048): the usb suite plugs a keyboard into it.
             extra = (*extra, "-device", "qemu-xhci,id=xhci", "-device", "usb-hub,bus=xhci.0,port=1,id=hub",
-                     "-device", "usb-kbd,bus=xhci.0,port=1.1,id=kbd", "-device", "usb-tablet,bus=xhci.0,port=2,id=usbtablet")
+                     "-device", "usb-kbd,bus=xhci.0,port=1.1,id=kbd", "-device", "usb-tablet,bus=xhci.0,port=2,id=usbtablet",
+                     "-device", "qemu-xhci,id=xhci2")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
@@ -12158,6 +12160,18 @@ def usb_suite(vm):
     vm.qmp("device_add", driver="usb-kbd", bus="xhci.0", port="1.2", id="kbd2")
     require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
     in_order(typed(["m", "n"]), ["char=m U+006D", "char=n U+006E"])
+    # A keyboard on the second xHCI (213-DRV-0048), the first's unplugged so the keys can come from it alone. Its
+    # controller comes from init's grant (KRN, asked for 213-KRN-0099); without it usb_host names no second one.
+    second = "XHCI 1: " in vm.command("dmesg -s usb_host", raw=True)
+    if second:
+        vm.qmp("device_del", id="kbd2")
+        require(vm.service_logs("usb_hid", "DEVICE GONE"), "[USB_HID] DEVICE GONE")
+        vm.qmp("device_add", driver="usb-kbd", bus="xhci2.0", id="kbd3")
+        require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
+        assert re.search(r"\[USB\] XHCI 1: 0627:0001 ON PORT \d+ \(\w+ SPEED\)", vm.command("dmesg -s usb_host", raw=True))
+        in_order(typed(["k", "j"]), ["char=k U+006B", "char=j U+006A"])
+    else:
+        print("SKIP: usb: a keyboard on the second xHCI needs init's grant of it to usb_host (KRN, asked for 213-KRN-0099)", flush=True)
     # Both drivers restart; the keyboard works again (usb_hid claims it from the new usb_host).
     for driver in ("usb_hid", "usb_host"):
         pid = vm.services()[driver]
@@ -12165,7 +12179,8 @@ def usb_suite(vm):
         require(vm.service_logs("init", f"{driver} RESTARTED"), f"{driver} RESTARTED")
         require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
         in_order(typed(["z"]), ["char=z U+007A"])
-    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, a click, movement, hot plug, driver restarts", flush=True)
+    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, a click, movement, hot plug, driver restarts"
+          + (", a keyboard on a second xHCI" if second else ""), flush=True)
 
 
 def tablet_suite(vm, wav):

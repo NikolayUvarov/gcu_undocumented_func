@@ -125,7 +125,7 @@ The maintainer asked for several monitors, their positions, and the GPU for the 
 - **Sound:** `audio_gw` took the GPU's HDMI audio controller (05:00.1, 1002:1637, codec 1002:AA01: "NO OUTPUT PATH") and gave up. The analog controller (05:00.6, 1022:15E3, subsystem 1022:D270) was not tried.
 - **Ethernet:** a Realtek RTL8168 (10EC:8168 at 02:00.0) has no driver.
 - **A second NVMe disk** (04:00.0, 1F40:1202) has no driver: `nvme` drives the first (01:00.0).
-- **The second xHCI** (05:00.4): `usb_host` instances, [213-KRN-0099](213-KRN-0099-a-usb-host-for-every-xhci.md).
+- **The second xHCI** (05:00.4): numbered [213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.md) (one `usb_host` for every xHCI), with [213-KRN-0099](213-KRN-0099-a-usb-host-for-every-xhci.md)'s `init` grant.
 
 ### Plan (a proposal; the drivers track decides)
 

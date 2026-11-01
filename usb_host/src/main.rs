@@ -18,7 +18,7 @@ use mind::ipc::Endpoint;
 use mind::mem::Mapping;
 use mind::sys::{Error, Result};
 use mind::usb::{claims, known, EndpointInfo, Interface, BULK_MAX, CONTROL_MAX, MAX_ENDPOINTS};
-use xhci::{Ring, Xhci, DATA, EP_BULK_IN, EP_BULK_OUT, EP_CONTROL, EP_INTERRUPT_IN, EP_INTERRUPT_OUT, IOC, ISP, SMALL, STALL, TYPE_NORMAL};
+use xhci::{Ring, Tag, Xhci, DATA, EP_BULK_IN, EP_BULK_OUT, EP_CONTROL, EP_INTERRUPT_IN, EP_INTERRUPT_OUT, IOC, ISP, SMALL, STALL, TYPE_NORMAL};
 
 const RECEIVED_CAP: usize = 9;
 const SCAN_MS: u64 = 250;
@@ -42,13 +42,23 @@ struct Device {
     interfaces: [Iface; MAX_INTERFACES], count: usize,
 }
 
-struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; mind::usb::BADGES], root_failed: u64, scanned: u64, step: &'static str, root_tries: [u8; 64], ehci: &'static mut [Option<ehci::Bus>; 2] }
+// One xHCI controller and the devices on its ports: the first init grants in SLOT_DEV0, further ones in mind::usb::XHCI's
+// slots (213-DRV-0048).
+struct Controller { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, root_failed: u64, step: &'static str, root_tries: [u8; 64] }
 
-// The EHCI buses live in static memory: a service has no heap, and its 64 KiB stack holds the xHCI host already.
+struct Host { roots: &'static mut [Option<Controller>; XHCI_MAX], buffers: [Option<Mapping>; mind::usb::BADGES], scanned: u64, ehci: &'static mut [Option<ehci::Bus>; 2] }
+
+const XHCI_MAX: usize = 1 + mind::usb::XHCI.len();
+
+// The controllers live in static memory: a service has no heap, and its stack is 64 KiB.
+static mut XHCI_ROOTS: [Option<Controller>; XHCI_MAX] = [const { None }; XHCI_MAX];
 static mut EHCI_BUSES: [Option<ehci::Bus>; 2] = [const { None }; 2];
 
-// A handle's device byte: an xHCI device's index, or 0x40 times (EHCI bus + 1) plus its index there (211-DRV-0004).
+// A handle's device byte: 0x20 times the xHCI controller plus a device's index there (213-DRV-0048), or 0x40 times (EHCI
+// bus + 1) plus its index there (211-DRV-0004).
 fn ehci_device(handle: u32) -> Option<(usize, usize)> { let byte = ((handle >> 8) & 0xFF) as usize; (byte >= 0x40).then(|| ((byte >> 6) - 1, byte & 0x3F)) }
+fn xhci_device(handle: u32) -> (usize, usize) { let byte = ((handle >> 8) & 0xFF) as usize; (byte >> 5, byte & 0x1F) }
+fn handle(generation: u16, device_byte: usize, iface: usize) -> u32 { (generation as u32) << 16 | (device_byte as u32) << 8 | iface as u32 }
 
 // The endpoints of alternate setting `alternate` of interface `number` in a configuration descriptor (an isochronous
 // one's packet as wMaxPacketSize is), or None without that setting (158).
@@ -82,7 +92,7 @@ impl core::fmt::Display for Path {
     }
 }
 
-impl Host {
+impl Controller {
     fn small(&mut self, length: usize) -> &mut [u8] { self.xhci.dma.bytes(SMALL, length) }
 
     // A control transfer on device `index`'s endpoint 0 (data in the SMALL area).
@@ -91,7 +101,7 @@ impl Host {
         let mut ring = device.ep0;
         let (slot, result) = (device.slot, self.xhci.control(device.slot, &mut ring, request_type, request, value, windex, length));
         if let Some(device) = self.devices[index].as_mut() { device.ep0 = ring; }
-        if let Err(code) = result { mind::println!("[USB] SLOT {} REQUEST {:02X} {:02X} {:04X}: COMPLETION {}", slot, request_type, request, value, code); }
+        if let Err(code) = result { mind::println!("[USB] {}SLOT {} REQUEST {:02X} {:02X} {:04X}: COMPLETION {}", Tag(self.xhci.number), slot, request_type, request, value, code); }
         result
     }
 
@@ -166,10 +176,10 @@ impl Host {
         self.step = "SET CONFIGURATION";
         self.control(index, 0x00, 9, config[5] as u16, 0, 0).ok()?; // SET_CONFIGURATION
         let hub = class == CLASS_HUB || interfaces[..count].iter().any(|i| i.info.class == CLASS_HUB);
-        mind::println!("[USB] {:04X}:{:04X} ON PORT {} ({} SPEED){}", vendor, product, Path(device.root, device.route), speed_name(device.speed), if hub { " HUB" } else { "" });
+        mind::println!("[USB] {}{:04X}:{:04X} ON PORT {} ({} SPEED){}", Tag(self.xhci.number), vendor, product, Path(device.root, device.route), speed_name(device.speed), if hub { " HUB" } else { "" });
         // A hub: its ports, think time and power-on delay. A USB 3 hub is two: its USB 2 side on a USB 2 port, and its
         // SuperSpeed side, which is told its depth first and has a descriptor of its own (211-DRV-0035).
-        if hub && device.depth >= MAX_DEPTH { mind::println!("[USB] HUB ON PORT {}: {} HUBS DEEP, ITS PORTS NOT WALKED", Path(device.root, device.route), device.depth + 1); }
+        if hub && device.depth >= MAX_DEPTH { mind::println!("[USB] {}HUB ON PORT {}: {} HUBS DEEP, ITS PORTS NOT WALKED", Tag(self.xhci.number), Path(device.root, device.route), device.depth + 1); }
         let hub = if !hub || device.depth >= MAX_DEPTH { None } else if device.speed == 4 {
             self.step = "SET HUB DEPTH";
             self.control(index, 0x20, hub::SET_HUB_DEPTH, device.depth as u16, 0, 0).ok()?;
@@ -236,7 +246,7 @@ impl Host {
         pages[0] = device.output; pages[1] = device.ep0.page;
         for (i, ring) in device.rings[..device.ring_count].iter().enumerate() { pages[2 + i] = ring.1.page; }
         self.discard(device.slot, &pages[..2 + device.ring_count]);
-        mind::println!("[USB] DEVICE ON PORT {} GONE", Path(device.root, device.route));
+        mind::println!("[USB] {}DEVICE ON PORT {} GONE", Tag(self.xhci.number), Path(device.root, device.route));
     }
 
     // A hub port's status and change bits.
@@ -252,7 +262,7 @@ impl Host {
             let changed = self.xhci.acknowledge(port);
             let connected = self.xhci.connected(port);
             let present = (0..MAX_DEVICES).find(|&i| self.devices[i].is_some_and(|d| d.parent.is_none() && d.root as usize == port));
-            if changed { self.root_failed &= !(1 << (port - 1)); self.root_tries[port - 1] = 0; mind::println!("[USB] PORT {}: {} (PORTSC {:08X})", port, if connected { "CONNECTED" } else { "DISCONNECTED" }, self.xhci.port_status(port)); }
+            if changed { self.root_failed &= !(1 << (port - 1)); self.root_tries[port - 1] = 0; mind::println!("[USB] {}PORT {}: {} (PORTSC {:08X})", Tag(self.xhci.number), port, if connected { "CONNECTED" } else { "DISCONNECTED" }, self.xhci.port_status(port)); }
             if let Some(index) = present { if !connected || changed { self.remove(index); } else { continue; } }
             if !connected || self.root_failed & 1 << (port - 1) != 0 { continue; }
             self.step = "PORT RESET"; self.xhci.last = 0;
@@ -263,7 +273,7 @@ impl Host {
             if set_up.is_none() {
                 self.root_tries[port - 1] += 1;
                 if self.root_tries[port - 1] >= ROOT_TRIES { self.root_failed |= 1 << (port - 1); }
-                mind::println!("[USB] PORT {}: DEVICE NOT SET UP AT {} (COMPLETION {}, PORTSC {:08X}, TRY {} OF {})", port, self.step, self.xhci.last, self.xhci.port_status(port), self.root_tries[port - 1], ROOT_TRIES);
+                mind::println!("[USB] {}PORT {}: DEVICE NOT SET UP AT {} (COMPLETION {}, PORTSC {:08X}, TRY {} OF {})", Tag(self.xhci.number), port, self.step, self.xhci.last, self.xhci.port_status(port), self.root_tries[port - 1], ROOT_TRIES);
             }
         }
         for hub in 0..MAX_DEVICES {
@@ -294,7 +304,7 @@ impl Host {
                     self.enumerate(hub_device.root, route, hub_device.depth + 1, speed, Some((hub, port)))
                 });
                 if self.hub_port(hub, port).is_some_and(|(_, change)| change & 1 != 0) { let _ = self.control(hub, 0x23, 1, 16, port as u16, 0); }
-                if set_up.is_none() { if let Some(d) = self.devices[hub].as_mut() { d.failed |= bit; } mind::println!("[USB] PORT {}.{}: DEVICE NOT SET UP AT {} (COMPLETION {})", Path(device.root, device.route), port, self.step, self.xhci.last); }
+                if set_up.is_none() { if let Some(d) = self.devices[hub].as_mut() { d.failed |= bit; } mind::println!("[USB] {}PORT {}.{}: DEVICE NOT SET UP AT {} (COMPLETION {})", Tag(self.xhci.number), Path(device.root, device.route), port, self.step, self.xhci.last); }
             }
         }
     }
@@ -305,7 +315,7 @@ impl Host {
         let superspeed = self.devices[hub]?.speed == 4;
         let mut status = self.hub_reset(hub, port, hub::PORT_RESET, hub::CHANGED_RESET)?;
         if status & hub::ENABLED == 0 && superspeed {
-            mind::println!("[USB] HUB PORT {}: NOT ENABLED AFTER A RESET (STATUS {:04X}); A WARM RESET", port, status);
+            mind::println!("[USB] {}HUB PORT {}: NOT ENABLED AFTER A RESET (STATUS {:04X}); A WARM RESET", Tag(self.xhci.number), port, status);
             status = self.hub_reset(hub, port, hub::BH_PORT_RESET, hub::CHANGED_WARM_RESET)?;
         }
         if status & hub::ENABLED == 0 { return None; }
@@ -327,15 +337,31 @@ impl Host {
         Some(status)
     }
 
+    // The configuration descriptor of device `index` and its length.
+    fn config_of(&mut self, index: usize) -> Option<([u8; CONTROL_MAX], usize)> {
+        self.control(index, 0x80, 6, 0x0200, 0, 9).ok()?;
+        let total = u16::from_le_bytes([self.small(4)[2], self.small(4)[3]]).clamp(9, CONTROL_MAX as u16);
+        let got = self.control(index, 0x80, 6, 0x0200, 0, total).ok()?;
+        let mut config = [0u8; CONTROL_MAX];
+        config[..got].copy_from_slice(self.small(got));
+        Some((config, got))
+    }
+}
+
+impl Host {
+    // The xHCI controller a handle names.
+    fn root(&mut self, c: usize) -> Result<&mut Controller> { self.roots.get_mut(c).and_then(Option::as_mut).ok_or(Error::NotFound) }
+
     // The device and interface a handle names, if the client with `badge` holds it.
     fn interface(&self, handle: u32, badge: u16) -> Result<(usize, usize)> {
-        let (generation, index, iface) = ((handle >> 16) as u16, ((handle >> 8) & 0xFF) as usize, (handle & 0xFF) as usize);
+        let (generation, iface) = ((handle >> 16) as u16, (handle & 0xFF) as usize);
         if let Some((bus, index)) = ehci_device(handle) {
             let device = self.ehci.get(bus).and_then(Option::as_ref).and_then(|b| b.devices.get(index).copied().flatten()).ok_or(Error::NotFound)?;
             if device.generation != generation || iface >= device.count || device.interfaces[iface].owner != badge { return Err(Error::NotFound); }
             return Ok((index, iface));
         }
-        let device = self.devices.get(index).copied().flatten().ok_or(Error::NotFound)?;
+        let (c, index) = xhci_device(handle);
+        let device = self.roots.get(c).and_then(Option::as_ref).and_then(|r| r.devices.get(index).copied().flatten()).ok_or(Error::NotFound)?;
         if device.generation != generation || iface >= device.count || device.interfaces[iface].owner != badge { return Err(Error::NotFound); }
         Ok((index, iface))
     }
@@ -347,13 +373,16 @@ impl Host {
     fn claim(&mut self, badge: u16) -> Result<u32> {
         if !known(badge) { return Err(Error::Rights); }
         self.buffer(badge).map_err(|_| Error::Invalid)?; // no buffer: this instance is new to the client
-        for index in 0..MAX_DEVICES {
-            let Some(device) = self.devices[index].as_mut() else { continue };
-            let Some(iface) = (0..device.count).find(|&i| claims(badge, &device.interfaces[i].info) && device.interfaces[i].owner == 0) else { continue };
-            device.interfaces[iface].owner = badge;
-            let (info, generation) = (device.interfaces[iface].info, device.generation);
-            info.encode(self.buffer(badge)?);
-            return Ok((generation as u32) << 16 | (index as u32) << 8 | iface as u32);
+        for c in 0..XHCI_MAX {
+            let Some(root) = self.roots[c].as_mut() else { continue };
+            for index in 0..MAX_DEVICES {
+                let Some(device) = root.devices[index].as_mut() else { continue };
+                let Some(iface) = (0..device.count).find(|&i| claims(badge, &device.interfaces[i].info) && device.interfaces[i].owner == 0) else { continue };
+                device.interfaces[iface].owner = badge;
+                let (info, generation) = (device.interfaces[iface].info, device.generation);
+                info.encode(self.buffer(badge)?);
+                return Ok(handle(generation, 0x20 * c + index, iface));
+            }
         }
         for b in 0..self.ehci.len() {
             let Some(bus) = self.ehci[b].as_mut() else { continue };
@@ -363,7 +392,7 @@ impl Host {
                 device.interfaces[iface].owner = badge;
                 let (info, generation) = (device.interfaces[iface].info, device.generation);
                 info.encode(self.buffer(badge)?);
-                return Ok((generation as u32) << 16 | (0x40 * (b as u32 + 1) + index as u32) << 8 | iface as u32);
+                return Ok(handle(generation, 0x40 * (b + 1) + index, iface));
             }
         }
         Err(Error::NotFound)
@@ -380,10 +409,11 @@ impl Host {
             if bus.streaming == Some((index, iface)) { bus.stop_stream(); let _ = bus.control(index, 0x01, 11, 0, info.number as u16, 0); }
             return Ok(());
         }
-        let device = self.devices[index].as_mut().ok_or(Error::NotFound)?;
+        let root = self.root(xhci_device(handle).0)?;
+        let device = root.devices[index].as_mut().ok_or(Error::NotFound)?;
         device.interfaces[iface].owner = 0;
         let (slot, info) = (device.slot, device.interfaces[iface].info);
-        for endpoint in info.endpoints() { self.xhci.forget(slot, dci(endpoint.address)); }
+        for endpoint in info.endpoints() { root.xhci.forget(slot, dci(endpoint.address)); }
         Ok(())
     }
 
@@ -399,11 +429,13 @@ impl Host {
                 }
             }
         }
-        for index in 0..MAX_DEVICES {
-            let Some(device) = self.devices[index] else { continue };
-            for iface in (0..device.count).filter(|&i| device.interfaces[i].owner == badge) {
-                for endpoint in device.interfaces[iface].info.endpoints() { self.xhci.forget(device.slot, dci(endpoint.address)); }
-                if let Some(d) = self.devices[index].as_mut() { d.interfaces[iface].owner = 0; }
+        for root in self.roots.iter_mut().flatten() {
+            for index in 0..MAX_DEVICES {
+                let Some(device) = root.devices[index] else { continue };
+                for iface in (0..device.count).filter(|&i| device.interfaces[i].owner == badge) {
+                    for endpoint in device.interfaces[iface].info.endpoints() { root.xhci.forget(device.slot, dci(endpoint.address)); }
+                    if let Some(d) = root.devices[index].as_mut() { d.interfaces[iface].owner = 0; }
+                }
             }
         }
     }
@@ -428,20 +460,22 @@ impl Host {
     fn control_request(&mut self, badge: u16, handle: u32, request_type: u8, request: u8, value: u16, index: u16, length: u16) -> Result<u16> {
         let (device, iface) = self.interface(handle, badge)?;
         if let Some((b, _)) = ehci_device(handle) { return self.ehci_control(b, badge, device, iface, request_type, request, value, index, length); }
-        let info = self.devices[device].ok_or(Error::NotFound)?.interfaces[iface].info;
+        let c = xhci_device(handle).0;
+        let info = self.root(c)?.devices[device].ok_or(Error::NotFound)?.interfaces[iface].info;
         if !Self::allowed(&info, request_type, request, index) { return Err(Error::Rights); }
         if length as usize > CONTROL_MAX { return Err(Error::Invalid); }
         let input = request_type & 0x80 != 0;
-        if !input { let data: [u8; CONTROL_MAX] = { let mut d = [0; CONTROL_MAX]; d[..length as usize].copy_from_slice(&self.buffer(badge)?[..length as usize]); d }; self.small(length as usize).copy_from_slice(&data[..length as usize]); }
-        let got = self.control(device, request_type, request, value, index, length).map_err(|code| if code == 0 { Error::Other(ERR_TIMEOUT) } else { Error::Invalid })?;
-        if input { let mut data = [0u8; CONTROL_MAX]; data[..got].copy_from_slice(self.small(got)); self.buffer(badge)?[..got].copy_from_slice(&data[..got]); }
+        if !input { let data: [u8; CONTROL_MAX] = { let mut d = [0; CONTROL_MAX]; d[..length as usize].copy_from_slice(&self.buffer(badge)?[..length as usize]); d }; self.root(c)?.small(length as usize).copy_from_slice(&data[..length as usize]); }
+        let got = self.root(c)?.control(device, request_type, request, value, index, length).map_err(|code| if code == 0 { Error::Other(ERR_TIMEOUT) } else { Error::Invalid })?;
+        if input { let mut data = [0u8; CONTROL_MAX]; data[..got].copy_from_slice(self.root(c)?.small(got)); self.buffer(badge)?[..got].copy_from_slice(&data[..got]); }
         Ok(got as u16)
     }
 
     fn bulk(&mut self, badge: u16, handle: u32, address: u8, offset: u32, length: u32) -> Result<u32> {
         let (index, iface) = self.interface(handle, badge)?;
         if let Some((b, _)) = ehci_device(handle) { return self.ehci_bulk(b, badge, index, iface, address, offset, length); }
-        let device = self.devices[index].ok_or(Error::NotFound)?;
+        let c = xhci_device(handle).0;
+        let device = self.root(c)?.devices[index].ok_or(Error::NotFound)?;
         let endpoint = device.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_bulk()).ok_or(Error::Invalid)?;
         let (offset, length) = (offset as usize, length as usize);
         let size = self.buffer(badge)?.len();
@@ -449,26 +483,23 @@ impl Host {
         let target = dci(endpoint.address);
         let at = device.rings[..device.ring_count].iter().position(|r| r.0 == target).ok_or(Error::Invalid)?;
         let mut ring = device.rings[at].1;
-        if !endpoint.is_in() {
-            let source = self.buffers.get(badge as usize).and_then(Option::as_ref).ok_or(Error::NotFound)?.as_slice()[offset..offset + length].as_ptr();
-            self.xhci.dma.bytes(DATA, length).copy_from_slice(unsafe { core::slice::from_raw_parts(source, length) });
-        }
-        let data = self.xhci.physical(DATA);
-        let result = self.xhci.transfer(device.slot, target, &mut ring, &[(data, length as u32, TYPE_NORMAL << 10 | IOC | ISP)]);
-        if let Some(d) = self.devices[index].as_mut() { d.rings[at].1 = ring; }
+        let Host { roots, buffers, .. } = self;
+        let root = roots.get_mut(c).and_then(Option::as_mut).ok_or(Error::NotFound)?;
+        let buffer = buffers.get_mut(badge as usize).and_then(Option::as_mut).ok_or(Error::NotFound)?.as_mut_slice();
+        if !endpoint.is_in() { root.xhci.dma.bytes(DATA, length).copy_from_slice(&buffer[offset..offset + length]); }
+        let data = root.xhci.physical(DATA);
+        let result = root.xhci.transfer(device.slot, target, &mut ring, &[(data, length as u32, TYPE_NORMAL << 10 | IOC | ISP)]);
+        if let Some(d) = root.devices[index].as_mut() { d.rings[at].1 = ring; }
         match result {
             Ok(residue) => {
                 let got = length.saturating_sub(residue as usize);
-                if endpoint.is_in() {
-                    let source = self.xhci.dma.bytes(DATA, got).as_ptr();
-                    self.buffer(badge)?[offset..offset + got].copy_from_slice(unsafe { core::slice::from_raw_parts(source, got) });
-                }
+                if endpoint.is_in() { buffer[offset..offset + got].copy_from_slice(root.xhci.dma.bytes(DATA, got)); }
                 Ok(got as u32)
             }
             Err(STALL) => {
                 // The endpoint halted: reset it on both sides, so the next transfer can run (BOT recovery).
-                self.xhci.recover(device.slot, target, &ring);
-                let _ = self.control(index, 0x02, 1, 0, address as u16, 0); // CLEAR_FEATURE ENDPOINT_HALT
+                root.xhci.recover(device.slot, target, &ring);
+                let _ = root.control(index, 0x02, 1, 0, address as u16, 0); // CLEAR_FEATURE ENDPOINT_HALT
                 Err(Error::Invalid)
             }
             Err(0) => Err(Error::Other(ERR_TIMEOUT)),
@@ -482,25 +513,27 @@ impl Host {
         let (index, iface) = self.interface(handle, badge)?;
         if longest.is_some_and(|l| l == 0 || l as usize > 512) { return Err(Error::Invalid); }
         if let Some((b, _)) = ehci_device(handle) { return self.ehci_reports(b, badge, index, iface, address, longest); }
-        let device = self.devices[index].ok_or(Error::NotFound)?;
+        let c = xhci_device(handle).0;
+        let device = self.root(c)?.devices[index].ok_or(Error::NotFound)?;
         // An interrupt IN endpoint, or a full-speed bulk IN one, polled a packet at a time (usb.wit 1.3, 800-LNK-0002).
         let endpoint = device.interfaces[iface].info.endpoints().iter().copied()
             .find(|e| e.address == address && e.is_in() && (e.is_interrupt() || e.is_bulk() && e.packet <= 64)).ok_or(Error::Invalid)?;
         let target = dci(address);
-        let armed = match self.xhci.armed(device.slot, target) {
+        let xhci = &mut self.root(c)?.xhci;
+        let armed = match xhci.armed(device.slot, target) {
             Some(armed) => armed,
             None => {
                 let ring = device.rings[..device.ring_count].iter().find(|r| r.0 == target).ok_or(Error::Invalid)?.1;
                 // A Bluetooth controller's events too lose nothing: an event of many packets broken by one dropped is lost whole (700-DRV-0047).
                 let lossless = endpoint.is_bulk() || badge == mind::usb::BADGE_BLUETOOTH;
-                if !self.xhci.arm(device.slot, target, ring, endpoint.packet, lossless) { return Err(Error::NoMemory); }
-                mind::println!("[USB] SLOT {} ENDPOINT {}: POLLED (PACKET {}, INTERVAL {})", device.slot, target, endpoint.packet, endpoint.interval);
-                self.xhci.armed(device.slot, target).ok_or(Error::NoMemory)?
+                if !xhci.arm(device.slot, target, ring, endpoint.packet, lossless) { return Err(Error::NoMemory); }
+                mind::println!("[USB] {}SLOT {} ENDPOINT {}: POLLED (PACKET {}, INTERVAL {})", Tag(xhci.number), device.slot, target, endpoint.packet, endpoint.interval);
+                xhci.armed(device.slot, target).ok_or(Error::NoMemory)?
             }
         };
         let wide = longest.is_some();
         let mut out = [0u8; 8 * 66]; let mut at = 0;
-        let count = self.xhci.take_reports(armed, |report| { at += put(&mut out[at..], report, wide); })
+        let count = xhci.take_reports(armed, |report| { at += put(&mut out[at..], report, wide); })
             .map_err(|_| Error::NotFound)?;
         self.buffer(badge)?[..at].copy_from_slice(&out[..at]);
         Ok(count as u16)
@@ -568,28 +601,19 @@ impl Host {
     fn select(&mut self, badge: u16, handle: u32, alternate: u8) -> Result<()> {
         let (index, iface) = self.interface(handle, badge)?;
         if let Some((b, _)) = ehci_device(handle) { return self.ehci_select(b, badge, index, iface, alternate); }
-        let device = self.devices[index].ok_or(Error::NotFound)?;
+        let root = self.root(xhci_device(handle).0)?;
+        let device = root.devices[index].ok_or(Error::NotFound)?;
         let mut info = device.interfaces[iface].info;
-        let (config, total) = self.config_of(index).ok_or(Error::Other(ERR_TIMEOUT))?;
+        let (config, total) = root.config_of(index).ok_or(Error::Other(ERR_TIMEOUT))?;
         let (endpoints, count) = setting(&config[..total], info.number, alternate).ok_or(Error::Invalid)?;
         if endpoints[..count as usize].iter().any(EndpointInfo::is_isochronous) {
-            mind::println!("[USB] SLOT {} INTERFACE {} SETTING {}: ISOCHRONOUS ON XHCI IS NOT DONE YET (158)", device.slot, info.number, alternate);
+            mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: ISOCHRONOUS ON XHCI IS NOT DONE YET (158)", Tag(root.xhci.number), device.slot, info.number, alternate);
             return Err(Error::Invalid);
         }
-        self.control(index, 0x01, 11, alternate as u16, info.number as u16, 0).map_err(|code| if code == 0 { Error::Other(ERR_TIMEOUT) } else { Error::Invalid })?;
+        root.control(index, 0x01, 11, alternate as u16, info.number as u16, 0).map_err(|code| if code == 0 { Error::Other(ERR_TIMEOUT) } else { Error::Invalid })?;
         (info.endpoints, info.count) = (endpoints, count);
         info.encode(self.buffer(badge)?);
         Ok(())
-    }
-
-    // The configuration descriptor of xHCI device `index` and its length.
-    fn config_of(&mut self, index: usize) -> Option<([u8; CONTROL_MAX], usize)> {
-        self.control(index, 0x80, 6, 0x0200, 0, 9).ok()?;
-        let total = u16::from_le_bytes([self.small(4)[2], self.small(4)[3]]).clamp(9, CONTROL_MAX as u16);
-        let got = self.control(index, 0x80, 6, 0x0200, 0, total).ok()?;
-        let mut config = [0u8; CONTROL_MAX];
-        config[..got].copy_from_slice(self.small(got));
-        Some((config, got))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -682,17 +706,26 @@ fn put(out: &mut [u8], report: &[u8], wide: bool) -> usize {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let (Ok(mmio), Ok(dma)) = (Mmio::map(SLOT_DEV0), Dma::map(SLOT_MEM)) else { mind::println!("[USB] NO CONTROLLER OR DMA REGION"); return };
-    let Some(xhci) = Xhci::init(mmio, dma) else { mind::println!("[USB] CONTROLLER DID NOT START"); return };
-    mind::println!("[USB] XHCI: {} PORTS, {} SLOTS", xhci.ports(), xhci.slots);
-    // Intel 7-9 series: the ports the kernel moved from EHCI (XUSB2PR, USB3_PSSEN) and those the firmware lets move
-    // (their masks); a port left on EHCI is not seen here (211-PRT-0004).
-    let config = |offset| mind::dev::device_config(SLOT_DEV0, offset).unwrap_or(0);
-    if config(0) & 0xFFFF == 0x8086 {
-        mind::println!("[USB] INTEL ROUTING: USB 2 {:X} OF MASK {:X}, USB 3 {:X} OF MASK {:X}", config(0xD0), config(0xD4), config(0xD8), config(0xDC));
+    let roots: &'static mut [Option<Controller>; XHCI_MAX] = unsafe { &mut *core::ptr::addr_of_mut!(XHCI_ROOTS) };
+    // The first xHCI controller, then the further ones init granted (213-DRV-0048): their own registers and DMA regions.
+    for (nth, (bar_slot, dma_slot)) in core::iter::once((SLOT_DEV0, SLOT_MEM)).chain(mind::usb::XHCI.iter().copied()).enumerate() {
+        let tag = Tag(nth as u8);
+        if nth > 0 && mind::dev::cap_info(bar_slot).0 != mind::abi::CAP_KIND_MMIO { continue; }
+        let (Ok(mmio), Ok(dma)) = (Mmio::map(bar_slot), Dma::map(dma_slot)) else { mind::println!("[USB] {}NO CONTROLLER OR DMA REGION", tag); continue };
+        let Some(xhci) = Xhci::init(mmio, dma, nth as u8) else { mind::println!("[USB] {}CONTROLLER DID NOT START", tag); continue };
+        let config = |offset| mind::dev::device_config(bar_slot, offset).unwrap_or(0);
+        if nth == 0 { mind::println!("[USB] XHCI: {} PORTS, {} SLOTS", xhci.ports(), xhci.slots); }
+        else { mind::println!("[USB] XHCI {}: {:04X}:{:04X}, {} PORTS, {} SLOTS", nth, config(0) & 0xFFFF, config(0) >> 16, xhci.ports(), xhci.slots); }
+        // Intel 7-9 series: the ports the kernel moved from EHCI (XUSB2PR, USB3_PSSEN) and those the firmware lets move
+        // (their masks); a port left on EHCI is not seen here (211-PRT-0004).
+        if config(0) & 0xFFFF == 0x8086 {
+            mind::println!("[USB] {}INTEL ROUTING: USB 2 {:X} OF MASK {:X}, USB 3 {:X} OF MASK {:X}", tag, config(0xD0), config(0xD4), config(0xD8), config(0xDC));
+        }
+        // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
+        for port in 1..=xhci.ports() { mind::println!("[USB] {}PORT {} PORTSC {:08X}", tag, port, xhci.port_status(port)); }
+        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64] });
     }
-    // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
-    for port in 1..=xhci.ports() { mind::println!("[USB] PORT {} PORTSC {:08X}", port, xhci.port_status(port)); }
+    if roots.iter().all(Option::is_none) { return; }
     // EHCI controllers init granted (211-DRV-0004): their own registers and DMA regions.
     let buses: &'static mut [Option<ehci::Bus>; 2] = unsafe { &mut *core::ptr::addr_of_mut!(EHCI_BUSES) };
     for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
@@ -706,19 +739,23 @@ fn main(_info: &'static BootInfo) {
         };
         match ehci::Ehci::init(mmio, dma) { Ok(hc) => buses[nth] = Some(ehci::Bus::new(hc, nth as u8)), Err(why) => mind::println!("[USB] EHCI {}: {}", nth, why) }
     }
-    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: core::array::from_fn(|_| None), root_failed: 0, scanned: 0, step: "", root_tries: [0; 64], ehci: buses };
+    let mut host = Host { roots, buffers: core::array::from_fn(|_| None), scanned: 0, ehci: buses };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
-    host.scan();
+    for root in host.roots.iter_mut().flatten() { root.scan(); }
     for bus in host.ehci.iter_mut().flatten() { bus.scan(); }
     host.scanned = mind::time::uptime_ms() as u64;
     loop {
         let streaming = host.ehci.iter().flatten().any(|bus| bus.streaming.is_some());
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if streaming { STREAM_MS } else { SCAN_MS as u32 });
-        host.xhci.pump();
+        for root in host.roots.iter_mut().flatten() { root.xhci.pump(); }
         for bus in host.ehci.iter_mut().flatten() { bus.hc.pump(); }
         let now = mind::time::uptime_ms() as u64;
-        if now >= host.scanned + SCAN_MS { host.scan(); for bus in host.ehci.iter_mut().flatten() { bus.scan(); } host.scanned = now; }
+        if now >= host.scanned + SCAN_MS {
+            for root in host.roots.iter_mut().flatten() { root.scan(); }
+            for bus in host.ehci.iter_mut().flatten() { bus.scan(); }
+            host.scanned = now;
+        }
         let Ok(request) = received else { continue };
         match usb::decode(&request, RECEIVED_CAP) {
             Ok((call_request, call)) => host.serve(request.badge, call_request, call),
