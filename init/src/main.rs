@@ -50,6 +50,8 @@ const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buf
 const NVME_DMA_BYTES: usize = 128 * 1024; // queues, identify page, PRP list and a 64 KiB data buffer
 const VIRTIO_BLK_DMA_BYTES: usize = 128 * 1024; // the virtqueue, request headers and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 512 * 1024; // rings, contexts, scratchpad, a 64 KiB data buffer and a pool of pages (usb_host)
+// usb_host's instances, one an xHCI controller (213-KRN-0099); the serial, Bluetooth and camera clients are the first's.
+const USB_HOSTS: [&str; 2] = ["usb_host", "usb_host#1"];
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
 const HDA_DMA_BYTES: usize = (32 + 16 + 3) * 4096; // the same rings, two buffer lists, CORB and RIRB (551-DRV-0010)
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
@@ -485,13 +487,14 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "ahci")?, ALL); grants.copy(SLOT_MEM, self.dma(index, AHCI_DMA_BYTES)?, 0);
             }
             "usb_host" => {
-                // First xHCI controller (class 0C:03:30): registers in BAR0 (issue 164).
-                let device = platform::find_device(0x0C_03_30, 0xFF_FF_FF, 0)?; self.devices[index] = Some(device);
+                // The instance's xHCI controller (class 0C:03:30) in PCI order, registers in BAR0 (issue 164): instance n
+                // drives the n-th (213-KRN-0099).
+                let device = platform::find_device(0x0C_03_30, 0xFF_FF_FF, instance)?; self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
-                // EHCI controllers (class 0C:03:20, 211-DRV-0004): an Intel Mac's internal keyboard and trackpad sit
-                // behind them; each its BAR0 and its own DMA region.
-                for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
+                // EHCI controllers (class 0C:03:20, 211-DRV-0004), with the first instance only: an Intel Mac's internal
+                // keyboard and trackpad sit behind them; each its BAR0 and its own DMA region.
+                for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate().filter(|_| instance == 0) {
                     let Ok(ehci) = platform::find_device(0x0C_03_20, 0xFF_FF_FF, nth) else { break };
                     let bar = match Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) { Ok(bar) => bar, Err(e) => {
                         let at = mind::dev::device_config_at(SLOT_DEV0, ehci, 0x10).unwrap_or(0) & !0xF;
@@ -500,13 +503,15 @@ impl Init {
                     grants.add(bar_slot, bar, 0); grants.add(dma_slot, platform::cap(PLATFORM_DMA, mind::usb::EHCI_DMA_BYTES, 0)?, 0);
                 }
             }
-            // USB class drivers: a client of usb_host whose badge names the one class it may claim.
+            // USB class drivers: a client of usb_host whose badge names the one class it may claim; instance n of each
+            // takes usb_host's instance n (213-KRN-0099).
             "usb_storage" | "usb_hid" => {
-                if !self.running(service_index("usb_host")) { return Err(Error::NotFound); }
-                let badge = if name == "usb_hid" { mind::usb::BADGE_HID } else { mind::usb::BADGE_STORAGE };
-                grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", badge)?, CLIENT);
+                let host = *USB_HOSTS.get(instance).ok_or(Error::NotFound)?;
+                if !self.running(service_index(host)) { return Err(Error::NotFound); }
+                let badge = if BOOT_SERVICES[image] == "usb_hid" { mind::usb::BADGE_HID } else { mind::usb::BADGE_STORAGE };
+                grants.add(SLOT_DEV0, self.badged(&mut minted, host, badge)?, CLIENT);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
-                if name == "usb_hid" { grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0); }
+                if BOOT_SERVICES[image] == "usb_hid" { grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0); }
             }
             // The link to another machine (800-KRN-0128), started only with link.conf at the boot volume's root: the
             // serial converters' driver holds usb_host's client badged for them, and its endpoint.
@@ -662,7 +667,7 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL | CAP_BADGE);
                 let mut slot = SLOT_BLOCK_FIRST;
                 let store = self.store_disk(); // the block store's own disk: never a file system's (Appendix B.6)
-                for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
+                for driver in ["ata", "ahci", "usb_storage", "usb_storage#1", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
                     if Some(driver) == store { continue; }
                     if self.running(service_index(driver)) && slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
