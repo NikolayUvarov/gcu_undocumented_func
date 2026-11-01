@@ -12139,17 +12139,15 @@ def usb_suite(vm):
     require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
     in_order(typed(["m", "n"]), ["char=m U+006D", "char=n U+006E"])
     # A keyboard on the second xHCI (213-DRV-0048), the first's unplugged so the keys can come from it alone. Its
-    # controller comes from init's grant (KRN, asked for 213-KRN-0099); without it usb_host names no second one.
-    second = "XHCI 1: " in vm.command("dmesg -s usb_host", raw=True)
-    if second:
-        vm.qmp("device_del", id="kbd2")
-        require(vm.service_logs("usb_hid", "DEVICE GONE"), "[USB_HID] DEVICE GONE")
-        vm.qmp("device_add", driver="usb-kbd", bus="xhci2.0", id="kbd3")
-        require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
-        assert re.search(r"\[USB\] XHCI 1: 0627:0001 ON PORT \d+ \(\w+ SPEED\)", vm.command("dmesg -s usb_host", raw=True))
-        in_order(typed(["k", "j"]), ["char=k U+006B", "char=j U+006A"])
-    else:
-        print("SKIP: usb: a keyboard on the second xHCI needs init's grant of it to usb_host (KRN, asked for 213-KRN-0099)", flush=True)
+    # controller comes from init's grant (213-KRN-0099): without it usb_host names no second one.
+    host = vm.command("dmesg -s usb_host", raw=True)
+    assert "XHCI 1: " in host, host
+    vm.qmp("device_del", id="kbd2")
+    require(vm.service_logs("usb_hid", "DEVICE GONE"), "[USB_HID] DEVICE GONE")
+    vm.qmp("device_add", driver="usb-kbd", bus="xhci2.0", id="kbd3")
+    require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
+    assert re.search(r"\[USB\] XHCI 1: 0627:0001 ON PORT \d+ \(\w+ SPEED\)", vm.command("dmesg -s usb_host", raw=True))
+    in_order(typed(["k", "j"]), ["char=k U+006B", "char=j U+006A"])
     # Both drivers restart; the keyboard works again (usb_hid claims it from the new usb_host).
     for driver in ("usb_hid", "usb_host"):
         pid = vm.services()[driver]
@@ -12157,8 +12155,8 @@ def usb_suite(vm):
         require(vm.service_logs("init", f"{driver} RESTARTED"), f"{driver} RESTARTED")
         require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
         in_order(typed(["z"]), ["char=z U+007A"])
-    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, a click, movement, hot plug, driver restarts"
-          + (", a keyboard on a second xHCI" if second else ""), flush=True)
+    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, a click, movement, hot plug, driver restarts, "
+          "a keyboard on a second xHCI", flush=True)
 
 
 def tablet_suite(vm, wav):
