@@ -51,6 +51,9 @@ pub const MAX_ENDPOINTS: usize = 4;
 /// region's size; init grants them, after the xHCI controller's own. 128 KiB of schedules and buffers, then an
 /// isochronous stream's 64 descriptors and 768 KiB of their buffers (158).
 pub const EHCI: [(usize, usize); 2] = [(3, 8), (7, 9)];
+/// `usb_host`'s further xHCI controllers after the first (213-DRV-0048: the Ryzen 9 5900HX machine's second): the slots
+/// of each one's register window (BAR0) and DMA region, of the first's size; init grants them as it does the EHCI ones.
+pub const XHCI: [(usize, usize); 1] = [(10, 11)];
 pub const EHCI_DMA_BYTES: usize = 128 * 1024 + 8 * 1024 + 768 * 1024;
 
 /// One endpoint of an interface: address (bit 7: IN), attributes (bits 0-1: 1 isochronous, 2 bulk, 3 interrupt), packet

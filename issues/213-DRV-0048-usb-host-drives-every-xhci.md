@@ -1,0 +1,33 @@
+# 213-DRV-0048 — `usb_host` drives every xHCI controller init grants it
+
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-11-01) · **Blocked by:** `KRN`: init's grant of the second xHCI to `usb_host` (asked on `internal-dev-messages`, 2026-11-01, for [213-KRN-0099](213-KRN-0099-a-usb-host-for-every-xhci.md)) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-12.1
+
+## Problem
+
+The maintainer (2026-11-01) booted the MacBook Pro's stick (release 202610310825, `main` 1c68b668) on the Ryzen 9 5900HX machine. A keyboard and mouse receiver in a blue USB port did nothing, and this is to be fixed.
+
+**The log:**
+- `usb_host` drove one controller: `XHCI: 6 PORTS, 16 SLOTS`, with the Bluetooth (0BDA:B85B on port 3), the stick (port 5) and, at first, the receiver (046D:C534 on port 4, keyboard and mouse, reports at 305 s).
+- When the receiver went to a blue port, `usb_hid` logged `DEVICE GONE`, and nothing showed it again.
+- The machine has two xHCI controllers (05:00.3 and 05:00.4, 1022:1639). The blue ports are on the second, which no driver held.
+
+## Plan
+
+**One `usb_host` for every xHCI controller,** as it already drives the Mac's EHCI buses, rather than 213-KRN-0099's `usb_host#1` instances. Every class driver stays as it is.
+1. **`mind::usb::XHCI`:** the slots of each further controller's register window (BAR0) and DMA region, `[(10, 11)]`. `init` grants them after the first controller's, as it does the EHCI ones. That part is KRN's.
+2. **`usb_host`:**
+   - each controller's state (its `Xhci`, devices, root ports) is a `Controller` in static memory;
+   - each is pumped and scanned;
+   - a handle's device byte is 0x20 times the controller plus the device's index (EHCI's 0x40 and above unchanged), so every request goes to its controller.
+3. **The log:** a further controller's lines start `XHCI n: `, and the first's read as before.
+4. **The QEMU `usb` suite:** a second `qemu-xhci`. With init's grant, a keyboard plugged into it, the first's unplugged, types in `keys`. Without the grant it prints a SKIP naming it.
+
+## Acceptance criteria
+
+- [ ] Host tests, the x86 and aarch64 builds; the QEMU `usb` suite on x86 and aarch64.
+- [ ] With init's grant, in QEMU a keyboard on the second controller types, also after `usb_hid` and `usb_host` restart.
+- [ ] On the Ryzen machine, the receiver in a blue port types and moves the pointer. Evidence for that machine only (MC-12.1).
+
+## Related
+
+[213-KRN-0099](213-KRN-0099-a-usb-host-for-every-xhci.md), [213](213-amd-ryzen-pc.md), [requests-DRV.md](requests-DRV.md).
