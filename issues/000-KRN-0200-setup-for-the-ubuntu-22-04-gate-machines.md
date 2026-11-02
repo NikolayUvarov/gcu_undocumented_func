@@ -1,6 +1,6 @@
 # 000-KRN-0200 — `setup_build_env.sh` for the Ubuntu 22.04 gate machines: QEMU from gitlab.com, Python 3.11, KVM at once
 
-**Type:** scripts · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; waits for its landing and the maintainer's run on x32-128) · **Blocked by:** — · **Roadmap:** the landing queue's machines (AGENTS.md, section 4) · **Constitution:** MC-12.1
+**Type:** scripts · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` 2455c4b0; waits for the maintainer's run on x32-128) · **Blocked by:** — · **Roadmap:** the landing queue's machines (AGENTS.md, section 4) · **Constitution:** MC-12.1
 
 ## Problem
 
@@ -39,6 +39,9 @@ x32-128, after its CPU swap (2026-11-02, [docs/effector.md](../docs/effector.md)
   - apt's candidates for `python3.11` and `python3.11-venv`.
 - **Tested here:** `bash -n` of both scripts.
 - **Not run yet:** the root parts. They are the maintainer's to run.
+- **Landed in `main` 2455c4b0 (round 68).** Its copy for the maintainer's run is `/home/gater/mind-core/setup_build_env.sh` on x32-128, SHA-256 `c2ef881559c372d9fc740f44e06f3e97af80dadc2d6e10535c02a8e84d087a13`.
+  - The whole script: `sudo bash /home/gater/mind-core/setup_build_env.sh gater /home/gater/mind-core/KRN/gcu_undocumented_func`.
+  - KVM alone: `sudo bash /home/gater/mind-core/setup_build_env.sh --only kvm gater`.
 
 ## Related
 
