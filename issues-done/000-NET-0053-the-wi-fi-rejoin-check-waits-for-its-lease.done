@@ -1,6 +1,6 @@
-# 000-NET-0053 — The Wi-Fi rejoin check waits for its lease before the echo
+# 000-NET-0053 — The Wi-Fi rejoin check waits for its lease before the echo — done
 
-**Type:** test · **Owner:** kernel session (`NET`) · **Priority:** P2 · **Status:** in progress (made; on the machines) · **Blocked by:** — · **Roadmap:** the network track · **Constitution:** MC-12.2
+**Type:** test · **Owner:** kernel session (`NET`) · **Priority:** P2 · **Status:** done (2026-11-02) · **Blocked by:** — · **Roadmap:** the network track · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -20,6 +20,12 @@
 ## Acceptance criteria
 
 - **The group passes on the gate's lanes,** PCU among them.
+
+## Resolution
+
+**`tests/qemu_smoke.py`, `wifi_join_check`:** `leased_and_pinged()` serves both joins. It waits up to 60 s for the lease in `ip`, then sends up to three echoes; the assertions are as before.
+
+**Landed in `main` d359058b** (round 69). "aarch64: network above 4 GiB" passed in that round's gate on `acc-2`, and then alone on PCU, where it had failed: 667 s, on the same commit (2026-11-02).
 
 ## Related
 
