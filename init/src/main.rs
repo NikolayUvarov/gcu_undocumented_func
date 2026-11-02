@@ -489,6 +489,17 @@ impl Init {
                 let device = platform::find_device(0x0C_03_30, 0xFF_FF_FF, 0)?; self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
+                // Further xHCI controllers in PCI order (213-KRN-0099, driven by 213-DRV-0048): each its BAR0 and its own
+                // DMA region in mind::usb::XHCI's slots; the second is stopped and resumed with the first.
+                for (nth, &(bar_slot, dma_slot)) in mind::usb::XHCI.iter().enumerate() {
+                    let Ok(xhci) = platform::find_device(0x0C_03_30, 0xFF_FF_FF, nth + 1) else { break };
+                    let bar = match Self::bar(&mut minted, xhci, 0, CAP_KIND_MMIO) { Ok(bar) => bar, Err(e) => {
+                        let at = mind::dev::device_config_at(SLOT_DEV0, xhci, 0x10).unwrap_or(0) & !0xF;
+                        mind::println!("[INIT] XHCI {}: REGISTERS AT {:08X} NOT GRANTED ({:?})", nth + 1, at, e); continue
+                    } };
+                    grants.add(bar_slot, bar, 0); grants.add(dma_slot, platform::cap(PLATFORM_DMA, XHCI_DMA_BYTES, 0)?, 0);
+                    if nth == 0 { self.others[index] = Some(xhci); }
+                }
                 // EHCI controllers (class 0C:03:20, 211-DRV-0004): an Intel Mac's internal keyboard and trackpad sit
                 // behind them; each its BAR0 and its own DMA region.
                 for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
