@@ -9001,21 +9001,26 @@ def wifi_join_check(vm):
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
     # network, and its gateway answers a ping through the WPA2 link.
     require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
-    # The log holds the first join's lease too: ip is asked until this join's lease is there (DHCP is slow under TCG).
-    # The whole line: a card's own line holds `IP 10.0.4.15/24` too, while the stack's may still say NoNetwork.
-    for _ in range(60):
-        shown = vm.command("ip")
-        if "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)" in shown:
-            break
-        time.sleep(1)
-    require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
+
+    def leased_and_pinged():  # this join's lease in the stack, then the gateway's echo through the WPA2 link
+        # The log holds an earlier join's lease too: ip is asked until this join's lease is there (DHCP is slow under
+        # TCG). The whole line: a card's own line holds `IP 10.0.4.15/24` too, while the stack's may still say NoNetwork.
+        for _ in range(60):
+            shown = vm.command("ip")
+            if "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)" in shown:
+                break
+            time.sleep(1)
+        require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
+        # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU).
+        for _ in range(3):
+            pinged = vm.command("wifiping ping:10.0.4.1")
+            if "NETCHECK ping:10.0.4.1 OK" in pinged:
+                break
+        require(pinged, "NETCHECK ping:10.0.4.1 OK")
+        return shown
+
+    shown = leased_and_pinged()
     assert re.search(r"^CARD 2 MAC \S+ IP 10\.0\.4\.15/24 .* WI-FI", shown, re.M), shown  # 550-APP-0085
-    # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU).
-    for _ in range(3):
-        pinged = vm.command("wifiping ping:10.0.4.1")
-        if "NETCHECK ping:10.0.4.1 OK" in pinged:
-            break
-    require(pinged, "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
     # wm's network line over Wi-Fi alone (000-APP-0096): no wired card, so no card client for the shell to lend; the
@@ -9085,11 +9090,8 @@ def wifi_join_check(vm):
     require(wlan_until("[WLAN] AUTO-JOIN MIND-TEST: JOINED", 120), "[WLAN] AUTO-JOIN MIND-TEST: JOINED (TRY ")
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
-    for _ in range(3):
-        pinged = vm.command("wifiping ping:10.0.4.1")
-        if "NETCHECK ping:10.0.4.1 OK" in pinged:
-            break
-    require(pinged, "NETCHECK ping:10.0.4.1 OK")
+    # The restarted station is a new card: its lease comes before the echo (000-NET-0053: gate 68 pinged at once, NoNetwork).
+    leased_and_pinged()
     # The network lost: the access point sends a deauthentication and is away for 25 s. The station's own rejoin finds no
     # answer; the automatic join tries until it hears the network again, each try one line.
     vm.command("ping 10.0.4.98", timeout=30)
