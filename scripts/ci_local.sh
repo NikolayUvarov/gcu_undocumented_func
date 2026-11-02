@@ -61,6 +61,11 @@ X86="python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware $OVMF \
  --loader-abi-kernel $MIND_TEST_OUT/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel $MIND_TEST_OUT/mind-trial-target/x86_64-unknown-none/release/kernel --bar-kernel $MIND_TEST_OUT/mind-bar-target/x86_64-unknown-none/release/kernel"
 A64="python3 tests/qemu_smoke.py --arch aarch64"
 
+# Python 3.11 for the host tests where python3 is older (Ubuntu 22.04): the venv of scripts/setup_build_env.sh, first in
+# PATH for that group alone (000-KRN-0200); the builds and the Secure Boot groups use the system's pefile and virt-firmware.
+HOST_TESTS_PATH=$PATH
+python3 -c 'import tomllib' 2>/dev/null || [[ ! -x /opt/mind-python3.11/bin/python3 ]] || HOST_TESTS_PATH=/opt/mind-python3.11/bin:$PATH
+
 # Group name | command; a failed "build" step skips the rest of its part. No group runs much past 15 minutes on un-rizen,
 # so the gate's lanes share them out evenly (suites timed one by one on 2026-10-29).
 HOST_GROUPS=(
@@ -142,7 +147,7 @@ SSHD_PATH=${MIND_SSHD:-/usr/sbin/sshd}
 want host && { [[ $SSHD_PATH == /* && -f $SSHD_PATH && -x $SSHD_PATH ]] || missing+=("sshd (openssh-server or MIND_SSHD: $SSHD_PATH)"); } # the SSH client's host tests (351-NET-0026)
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
 want aarch64 && { command -v qemu-system-aarch64 >/dev/null || missing+=(qemu-system-aarch64); [[ -f /usr/share/AAVMF/AAVMF_CODE.fd ]] || missing+=(AAVMF); }
-want host && selected "host tests" && { python3 -c 'import tomllib' 2>/dev/null || missing+=("Python 3.11 or later (tomllib)"); } # scripts/models.py and tests/models_host.rs; "build (x86)" of the host part does not need it
+want host && selected "host tests" && { PATH=$HOST_TESTS_PATH python3 -c 'import tomllib' 2>/dev/null || missing+=("Python 3.11 or later (tomllib): sudo scripts/setup_build_env.sh --only python $(id -un)"); } # scripts/models.py and tests/models_host.rs; "build (x86)" of the host part does not need it
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "Missing: ${missing[*]}" >&2
     echo "sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm swtpm-tools default-jre-headless" >&2
@@ -208,7 +213,7 @@ run_part() {
         echo "....  $name"
         rm -f "$TMP"/mind-core-*.log
         start=$(date +%s)
-        eval "$cmd" >"$log" 2>&1; status=$?
+        if [[ $name == "host tests" ]]; then (PATH=$HOST_TESTS_PATH; eval "$cmd") >"$log" 2>&1; else eval "$cmd" >"$log" 2>&1; fi; status=$?
         TIMES+=("$(( $(date +%s) - start ))s")
         if [[ $status == 0 ]]; then
             RESULTS+=(PASS); echo "PASS  $name"
