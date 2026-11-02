@@ -1,6 +1,6 @@
 # 213-KRN-0099 — `init` grants every xHCI controller to `usb_host`
 
-**Type:** `init`, with the drivers track's `usb_host` (213-DRV-0048) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (the grant made; QEMU, then the Ryzen machine) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3
+**Type:** `init`, with the drivers track's `usb_host` (213-DRV-0048) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` c7cef477; the Ryzen machine's report is left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3
 
 ## Problem
 
@@ -27,6 +27,11 @@
   - the second controller is the service's second device, so `init` stops it when `usb_host` ends and resumes it on a restart, as for the first.
 - **Tests:** the `usb` suite asserts `XHCI 1:` in `usb_host`'s log, then that a keyboard on the second `qemu-xhci` types, also after `usb_hid` and `usb_host` restart.
 - **Docs:** README's `usb_host` row, `docs/profile/bootstrap.md`.
+
+## Progress (2026-11-02)
+
+- **Landed in `main` c7cef477** (round 67), with DRV's 213-DRV-0048. The first criterion is met: in the gate, the `usb` suite's keyboard on a second `qemu-xhci` typed, also after `usb_hid` and `usb_host` restarted, on x86 ("x86: keys, shell, tools", `acc-2`) and on aarch64 ("aarch64: programs, shell and four CPUs", `acc-2`). That is evidence for QEMU only (MC-12.1).
+- **Left:** the second criterion. On the Ryzen machine, both controllers (05:00.3 and 05:00.4) must show "(granted to a driver)" in the hardware report of a release with c7cef477.
 
 ## Related
 
