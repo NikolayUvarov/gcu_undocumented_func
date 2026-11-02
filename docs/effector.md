@@ -113,6 +113,8 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - the host tests: `scripts/models.py` and `tests/models_host.rs` read TOML with `tomllib` (Python 3.11). `scripts/ci_local.sh` now names it among the missing tools for the host part. Run the host part on un-rizen or i9;
   - the Effector suites: `tests/effector_server.py` answers 400 to every POST without a query, as Python 3.10's `parse_qs` refuses an empty query in strict mode (`issues/requests-EFF.md`). The groups with them, x86 "boot, display, network, TLS, shell, memory, clock" and aarch64 "files, network and TLS", run elsewhere until EFF's fix.
 - **Setting up another machine.** `scripts/setup_build_env.sh` installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone. Run it once as root, for example from Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
+  - **On Ubuntu 22.04** it also builds QEMU 8.2.2 from its signed tag on `gitlab.com` into `/opt`, and makes a Python 3.11 venv in `/opt/mind-python3.11`, which `ci_local.sh` puts first for the host tests (000-KRN-0200).
+  - **`--only PART[,PART...]`** runs single parts: `packages`, `kvm`, `python`, `rust`, `qemu`. For example `sudo scripts/setup_build_env.sh --only kvm gater` gives `gater` `/dev/kvm` at once, through an ACL; the `kvm` group applies to the agent's service from its next start.
 
 ### The MIND Core machines (1.4)
 
