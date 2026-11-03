@@ -215,6 +215,8 @@ MACHINES = {
     # The maintainer's gate machines of 2026-10-28 (docs/effector.md, section 1): the agent runs as un, in sh.
     "acc1": {"agent": "acc-1_e9f12f8b0550", "run_as": None, "env": ""},
     "acc2": {"agent": "acc-2_a01a5832facb", "run_as": None, "env": ""},
+    # x32-128 (i9-14900K, 2026-11-03, the maintainer): the agent runs as gater, in sh; clones under its home.
+    "x32": {"agent": "x32-128_f5832ee52625", "run_as": None, "env": "", "home": "/home/gater"},
 }
 # Lanes: one queue of the track on one machine ("rz-2": its second clone there, docs/effector.md, section 3, rule 1).
 # Each preset is a measured split; a group no preset names runs on its part's default lane.
@@ -294,14 +296,15 @@ PRESETS = {
 BUILDS = {"x86": ["build (x86)", "build (x86 test programs)"], "aarch64": ["build (aarch64)"]}
 # A pool holds no list per lane: each lane, as it frees, takes the group worth the most to it from one queue, and builds
 # a part's image the first time it takes one of its groups (the maintainer's ask, 2026-10-29). The parts each machine
-# runs (docs/effector.md, section 1): the host part only on un-rizen (sshd and Python 3.11 for the host tests and the
-# models), aarch64 nowhere on i9 (WSL2), x86 nowhere on PCU (it gates aarch64 alone).
-POOL_PARTS = {"i9": {"x86"}, "rz": {"host", "x86", "aarch64"}, "acc1": {"x86", "aarch64"}, "acc2": {"x86", "aarch64"}, "pcu": {"aarch64"}}
+# runs (docs/effector.md, section 1): the host part on un-rizen and x32-128 (sshd and Python 3.11 for the host tests and
+# the models), aarch64 nowhere on i9 (WSL2), x86 nowhere on PCU (it gates aarch64 alone).
+POOL_PARTS = {"i9": {"x86"}, "rz": {"host", "x86", "aarch64"}, "acc1": {"x86", "aarch64"}, "acc2": {"x86", "aarch64"}, "pcu": {"aarch64"},
+              "x32": {"host", "x86", "aarch64"}}
 # Two lanes on un-rizen: with a third, round 44's kbench measured a call and reply at 7 ms against its 1 ms limit, and
-# the groups there ran a third longer than alone.
+# the groups there ran a third longer than alone. Two on x32-128 too (32 threads, PL1 = PL2 = 200 W), each its own clone.
 POOLS = {
-    "pool": ["i9", "acc1", "acc2", "rz", "rz-2", "pcu"],
-    "pool-no-i9": ["acc1", "acc2", "rz", "rz-2", "pcu"],
+    "pool": ["i9", "acc1", "acc2", "rz", "rz-2", "pcu", "x32", "x32-2"],
+    "pool-no-i9": ["acc1", "acc2", "rz", "rz-2", "pcu", "x32", "x32-2"],
 }
 BUILT_BY = {"host": "x86", "x86": "x86", "aarch64": "aarch64"}  # the image a part's groups read
 # A clean build of each image (and the x86 test programs), round 43; a machine not named here takes un-rizen's.
@@ -530,7 +533,7 @@ class Gate:
     def lane(self, name):
         machine, _, n = name.partition("-")
         suffix = f"-{n}" if n else ""
-        home = f"/home/un/mind-core/{TRACK}{suffix}"
+        home = f"{MACHINES[machine].get('home', '/home/un')}/mind-core/{TRACK}{suffix}"
         return MACHINES[machine], f"{home}/gcu_undocumented_func", f"/tmp/mind-{TRACK}{suffix}"
 
     def prelude(self, name):
@@ -584,7 +587,7 @@ class Gate:
 
     def group(self, name, part, group, n):
         machine, clone, _ = self.lane(name)
-        logs = f"/home/un/mind-core/{TRACK}/logs/{self.tag}/{name}-{n:02d}"
+        logs = f"{machine.get('home', '/home/un')}/mind-core/{TRACK}/logs/{self.tag}/{name}-{n:02d}"
         command = self.prelude(name) + (
             f"cd {clone} || exit 3\n[ \"$(git rev-parse HEAD)\" = \"{self.commit}\" ] || {{ echo \"TREE MOVED\"; exit 5; }}\n"
             # Only the SSH client's host tests need sshd; a machine without it (i9) still runs the host part's other groups.
