@@ -2568,15 +2568,21 @@ def storefs_check(vm):
     require(vm.expect("EXITED. SHELL RESUMED."), "[EDIT] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command("cat notes:docs/b.txt"), "in a scope")
+    # storefs ends an ended task's scope when it next makes one or is asked through one: the next edit's ends the first.
+    vm.send_bytes(b"edit notes:docs/b.txt\n")
+    status_line(vm, "[EDIT] READY")
+    vm.send_bytes(b"\x1b[21~")  # F10, nothing changed
+    require(vm.expect("EXITED. SHELL RESUMED."), "[EDIT] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
     scopes = vm.service_logs("storefs", "ENDED")
-    made = re.search(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes)
-    assert made and f"[STOREFS] SCOPE {made[1]} ENDED" in scopes, scopes[-1500:]
+    made = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes)
+    assert len(made) == 2 and f"[STOREFS] SCOPE {made[0]} ENDED" in scopes, scopes[-1500:]
     require(vm.command("rm notes:docs/b.txt"), "OK")
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
           "vfs_server's volumes as before; a program without storefs's client gets NotFound; edit on a store volume wrote "
-          "through a writable scope of its directory, which ended with it (311-APP-0121)", flush=True)
+          "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 
 def search_check(vm):
