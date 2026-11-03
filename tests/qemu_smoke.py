@@ -9496,13 +9496,13 @@ def browse_check(args):
             pid = asked(30)
             time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
             vm.send_bytes(b"n")
-            vm.expect("MIND> ", timeout=10, after="ALWAYS? NO")
+            vm.expect("MIND> ", timeout=10, after="NO\n")  # the answer on the question's line, then the prompt
             require(vm.program_logs(pid, "NETCHECK ANSWER", tries=80), "NETCHECK ANSWER REFUSED")
             # Once: allowed for this connection; nothing listens on that port, so the connection itself fails.
             pid = asked(30)
             time.sleep(.6)
             vm.send_bytes(b"o")
-            vm.expect("MIND> ", timeout=10, after="ALWAYS? ONCE")
+            vm.expect("MIND> ", timeout=10, after="ONCE\n")
             require(vm.program_logs(pid, "NETCHECK ANSWER", tries=80), "NETCHECK ANSWER ALLOWED 11.0.2.80")
             require(vm.command("dmesg -s shell", raw=True), "ANSWERED ONCE")
             # No answer: refused at 60 s, and the shell takes the question down. Nothing is typed meanwhile.
