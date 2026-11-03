@@ -1,6 +1,6 @@
-# 000-APP-0120 — The shell puts a running program's question about a flow to the user
+# 000-APP-0120 — The shell puts a running program's question about a flow to the user — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written; the `net` suite's run) · **Blocked by:** — (`netpolicy.wit` 1.3 is in `main` since landing round 66, ff58632f) · **Main task:** — · **Roadmap:** track C · **Constitution:** MC-3.1, MC-3.8, MC-3.11, MC-11.6
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-03) · **Blocked by:** — (`netpolicy.wit` 1.3 is in `main` since landing round 66, ff58632f) · **Main task:** — · **Roadmap:** track C · **Constitution:** MC-3.1, MC-3.8, MC-3.11, MC-11.6
 
 **Recorded by:** the tools track, 2026-10-31, from NET's request in `issues/requests-APP.md` and its message `APP/2026-10-31T0650Z-NET-a-flow-question-for-the-shell-to-put-to-the-user.md`.
 
@@ -45,17 +45,36 @@ A program such as `get` reaches a host the user names only when it runs. Today a
     - `O` allowed once;
     - no answer refused at 60 s.
   
-  `session` and `always` are NET's checks to add, as NET wrote (`APP/2026-10-31T1338Z-NET-…`).
+  `session` and `always` were added too (f51b4ede), so NET need not add them.
 
 ## Acceptance criteria
 
-- **QEMU, x86,** with the network track's test program:
+- [x] **QEMU, x86,** with the network track's test program:
   - asked, it is refused, then allowed once;
   - asked again, it is asked again;
   - `session` holds until the program ends;
   - `always` leaves the line in `netpolicy`.
-- **The program cannot answer** its own question through its output or input.
+- [x] **The program cannot answer** its own question through its output or input.
 
 ## Related
 
-[000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md), [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done) (a question the shell already asks while a program waits).
+[000-NET-0049](../issues/000-NET-0049-a-flow-grant-asked-at-run-time.md), [351-KRN-0027](351-KRN-0027-uefi-variables.done) (a question the shell already asks while a program waits).
+
+## Resolution
+
+Done on 2026-11-03: f0e151ec (the shell), with the check's fixes 16078cdb and f51b4ede.
+
+**The `net` suite's `browse_check`** passed on x86 QEMU with 4 CPUs, TCG, in this container. The whole `net` suite passed on 16078cdb; `browse_check` alone, with S and A, on f51b4ede. Through `netcheck ask:…`:
+- **A foreground program's question** is shown on its console and taken down when the program ends: `(GONE: ITS PROGRAM ENDED…)`. The broker logs `ITS PROGRAM ENDED`.
+- **`N`** refused it: `NETCHECK ANSWER REFUSED`.
+- **`O`** allowed one connection. The next connection of the same run was `Denied`, and a new run was asked again.
+- **`S`** allowed the rest of the run: its next connection was not denied.
+- **No answer:** refused at 60 s (`NO ANSWER IN 60 S, REFUSED`), and the shell took the question down.
+- **`A`** left `netcheck 11.0.2.80 tcp 81` in `netpolicy`. A new run then reached the host with no question.
+
+**The program's own output** ran beside its question in the foreground case without answering it: it ended `PENDING`. The shell reads the answer from the keyboard and the serial line alone, and holds back every other key while the question shows.
+
+**The `shell` and `wm` suites** passed on 16078cdb, with the shell's key paths changed.
+
+What it shows is for that configuration only (MC-12.1).
+
