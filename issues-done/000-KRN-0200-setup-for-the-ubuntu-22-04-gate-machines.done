@@ -1,6 +1,6 @@
-# 000-KRN-0200 — `setup_build_env.sh` for the Ubuntu 22.04 gate machines: QEMU from gitlab.com, Python 3.11, KVM at once
+# 000-KRN-0200 — `setup_build_env.sh` for the Ubuntu 22.04 gate machines: QEMU from gitlab.com, Python 3.11, KVM at once — done
 
-**Type:** scripts · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` 2455c4b0; waits for the maintainer's run on x32-128) · **Blocked by:** — · **Roadmap:** the landing queue's machines (AGENTS.md, section 4) · **Constitution:** MC-12.1
+**Type:** scripts · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-11-03) · **Blocked by:** — · **Roadmap:** the landing queue's machines (AGENTS.md, section 4) · **Constitution:** MC-12.1
 
 ## Problem
 
@@ -54,6 +54,23 @@ x32-128, after its CPU swap (2026-11-02, [docs/effector.md](../docs/effector.md)
   - "build (x86)", "network driver without legacy", "models (TLC)" and "NRL checks" passed;
   - "host tests" failed in `tests/land_test.py`, where `scripts/land.py` ran `git merge-tree --write-tree`, which git 2.34 (Ubuntu 22.04) lacks. Every host test after it passed there.
 - **`scripts/land.py`:** `conflicts()` now merges in a probe worktree, with `--no-commit` and without rerere, lists the unmerged paths and aborts. It needs no newer git, and the candidate's own tree is still left alone.
+
+## Resolution
+
+**What changed:**
+- **`scripts/setup_build_env.sh`:** QEMU 8.2.2 from its signed tag on `gitlab.com`, a Python 3.11 venv for the host tests, KVM through an ACL at once, and `--only` parts;
+- **`scripts/ci_local.sh`:** the venv first in `PATH` for "host tests" alone;
+- **`scripts/land.py`:** request conflicts found by a trial merge, with no newer git needed.
+
+**Where it landed:** `main` 2455c4b0 (round 68) and 57ea5166 (round 70).
+
+**On x32-128 (2026-11-03)**, after the maintainer's run, every criterion is met:
+- the script ended with `Ready`;
+- `gater`'s agent opens `/dev/kvm`;
+- QEMU 8.2.2 is first in `PATH`;
+- `scripts/ci_local.sh --only host` passed at 57ea5166, "host tests" in 1130 s.
+
+Whether x32-128 joins the gate's pool is the maintainer's decision ([docs/effector.md](../docs/effector.md), section 1).
 
 ## Related
 
