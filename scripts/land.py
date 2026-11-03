@@ -113,11 +113,15 @@ MARKER = re.compile(r"^(<<<<<<<|>>>>>>>)( |$)|^=======$", re.M)
 
 
 def conflicts(commit, tree):
-    """The paths a merge of commit into the tree's HEAD leaves conflicted, found without touching the tree."""
-    run = git("merge-tree", "--write-tree", "--name-only", "--no-messages", "HEAD", commit, cwd=tree, check=False)
-    if run.returncode not in (0, 1):
-        raise SystemExit(f"git merge-tree: {run.stderr.strip()}")
-    return [path for path in run.stdout.splitlines()[1:] if path]
+    """The paths a merge of commit into the tree's HEAD leaves conflicted, found by a trial merge in a probe worktree
+    without touching the tree. Not `git merge-tree --write-tree`: Ubuntu 22.04's git 2.34 lacks it (000-KRN-0200)."""
+    probe = worktree("probe", git("rev-parse", "HEAD", cwd=tree))
+    run = git("-c", "rerere.enabled=false", "merge", "--no-commit", "--no-ff", "-q", commit, cwd=probe, check=False)
+    paths = git("diff", "--name-only", "--diff-filter=U", cwd=probe).split() if run.returncode else []
+    git("merge", "--abort", cwd=probe, check=False)
+    if run.returncode and not paths:
+        raise SystemExit(f"git merge in {probe}: {run.stderr.strip()}")
+    return paths
 
 
 def cmd_resolve(args):
