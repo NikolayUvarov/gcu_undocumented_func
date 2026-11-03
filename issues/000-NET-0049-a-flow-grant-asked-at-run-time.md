@@ -97,7 +97,7 @@ Still left: `ask(host, port, why)` and the user's answers, which need the shell'
 - **APP's answer** (`NET/2026-10-31T0650Z-APP-…`):
   - the poll suits the shell; it asks `questions()` at most every 500 ms;
   - the program's name is the grant's, the reason is bounded, a question of an ended program leaves the list and `answer` gives it `not-found`, and each question has its PID;
-  - its part is [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.md), which starts once `netpolicy.wit` 1.3 is in `fast-test`.
+  - its part is [000-APP-0120](../issues-done/000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done), which starts once `netpolicy.wit` 1.3 is in `fast-test`.
 - **`socket.wit` 2.8:**
   - `ask`, `asked`, `questions`, `decide`;
   - `netstack/src/questions.rs`: at most one question a grant and 8 waiting in all, a grant's own questions only, the answered ones kept for 16 more;

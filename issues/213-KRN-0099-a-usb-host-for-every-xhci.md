@@ -8,7 +8,7 @@
 
 ## Plan
 
-**One `usb_host` for every controller,** as it drives the EHCI ones: the drivers track's shape ([213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.md)), taken instead of this issue's first plan of `usb_host#1` instances, so a Bluetooth adapter, a serial converter or a camera works on either controller too.
+**One `usb_host` for every controller,** as it drives the EHCI ones: the drivers track's shape ([213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done)), taken instead of this issue's first plan of `usb_host#1` instances, so a Bluetooth adapter, a serial converter or a camera works on either controller too.
 
 1. **`init`:** after the first controller, each further xHCI controller in PCI order gets its BAR0 and its own DMA region in `mind::usb::XHCI`'s slots, as the EHCI controllers get theirs.
 2. **A driver's restart:** the second controller is stopped and resumed with the first.
@@ -35,4 +35,4 @@
 
 ## Related
 
-[213](213-amd-ryzen-pc.md), [213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.md), 164 (`usb_host`), [requests-DRV.md](requests-DRV.md).
+[213](213-amd-ryzen-pc.md), [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done), 164 (`usb_host`), [requests-DRV.md](requests-DRV.md).
