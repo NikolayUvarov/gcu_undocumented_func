@@ -29,7 +29,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md) | RTL8168 Ethernet: bounded controller, retained DMA and boot/net endpoint integrated | `DRV` / ASTRA auditor-fixer | P1 | Actual Ryzen link, load and recovery acceptance | H / 213 |
 | [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) | RTL8852BE Wi-Fi first: power, calibration, firmware transport and radio integration | `DRV` / ASTRA auditor-fixer | P1 | 213-DRV-0033; integration and hardware | H / 213 |
 | [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md) | Pin and validate RTL8852BE firmware; read the actual silicon cut before initialization | `DRV` / ASTRA auditor-fixer | P1 | Ryzen MIND raw SYS_CFG1 report | H / 213 |
-| [213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.md) | `usb_host` drives every xHCI controller init grants it: the Ryzen's second xHCI (its blue ports), in `mind::usb::XHCI`'s slots | `DRV` | P1 | `KRN`: init's grant of the second xHCI (213-KRN-0099) | H / 213 |
 | [000-APP-0081](000-APP-0081-visible-window-placement-mode.md) | Alt+M immediately marks the moving/resizing window, including fullscreen | `APP` / ASTRA auditor-fixer | P2 | Full gate | track G |
 | [175](175-audit-2026-10-09.md) | The 2026-10-09 audit's eight findings, fixed in their tracks (main task; routing: `vfs_server` joins `KRN`) | `KRN` | P1 | — | S0 |
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open; next: the MacBook Pro's FaceTime HD camera (EHCI, isochronous, UVC) | kernel + services | P1 | — | tracks A, G |
@@ -320,6 +319,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done) | `usb_host` drives every xHCI controller init grants it: the Ryzen's second xHCI (its blue ports) | a `Controller` per xHCI, `mind::usb::XHCI`; the `usb` suite's keyboard on a second `qemu-xhci`; on the Ryzen the receiver in a blue port typed and moved the pointer |
 | [351-KRN-0195](../issues-done/351-KRN-0195-no-firmware-network-boot-before-the-loader.done) | The firmware's own network boot stays off: named out of scope in the threat model and the disk-writing guide; `efivar` marks network entries and refuses them in `BootOrder` or `BootNext` | `mind::firmware::path_kind`, `efivar` marks and refuses; OVMF's and AAVMF's PXE entries refused in the `efivar` suite; the firmware settings a task in `issues-human/` |
 | [000-KRN-0202](../issues-done/000-KRN-0202-x32-128-in-the-gate-pools.done) | x32-128 in the gate's pools | two lanes, `x32` and `x32-2`; round 72 green on its first run in 56 minutes over five lanes, the host tests on `x32-2` |
 | [000-KRN-0201](../issues-done/000-KRN-0201-the-idle-halt-window-holds-a-loaded-hosts-frame-copy.done) | The idle CPUs' HLT check waits out a loaded host's last frame copy | `IDLE_HALT_SECONDS` = 10 for both checks; x2APIC passed on `acc-2` in round 71 |
