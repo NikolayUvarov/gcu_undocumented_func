@@ -47,6 +47,9 @@ FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_referenc
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+# How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
+# acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
+IDLE_HALT_SECONDS = 10
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -1050,13 +1053,13 @@ def normal_suite(vm):
     vm.serial()
     assert task_rows_reaped(vm) == {}
     # Idle: the CPU sleeps in HLT (a sample may catch it handling a tick or drawing the last output, so it is sampled
-    # for up to 2 s; one that spins never halts). QEMU shows no WFI state for aarch64: there no QEMU thread stays
-    # runnable for most of a second.
+    # for up to IDLE_HALT_SECONDS; one that spins never halts). QEMU shows no WFI state for aarch64: there no QEMU thread
+    # stays runnable for most of a second.
     idle = "HLT"
     if vm.arch == "aarch64":
         idle = f"WFI (a thread runnable {idle_check(vm):.0%})"
     else:
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + IDLE_HALT_SECONDS
         while "HLT=1" not in (registers := vm.hmp("info registers")) and time.monotonic() < deadline:
             time.sleep(.02)
         require(registers, "HLT=1")
@@ -2763,7 +2766,7 @@ def smp_suite(vm):
         # A CPU still drawing the last output (the compositor's frame copy) halts once it is done; one that spins never.
         for cpu in range(vm.cpus):
             vm.hmp(f"cpu {cpu}")
-            deadline = time.monotonic() + 2
+            deadline = time.monotonic() + IDLE_HALT_SECONDS
             while "HLT=1" not in (regs := vm.hmp("info registers")) and time.monotonic() < deadline:
                 time.sleep(.02)
             if "HLT=1" not in regs:
