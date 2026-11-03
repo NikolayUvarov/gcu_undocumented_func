@@ -43,6 +43,18 @@ x32-128, after its CPU swap (2026-11-02, [docs/effector.md](../docs/effector.md)
   - The whole script: `sudo bash /home/gater/mind-core/setup_build_env.sh gater /home/gater/mind-core/KRN/gcu_undocumented_func`.
   - KVM alone: `sudo bash /home/gater/mind-core/setup_build_env.sh --only kvm gater`.
 
+## Progress (2026-11-03)
+
+- **The maintainer's run on x32-128** ended with `Ready`:
+  - QEMU 8.2.2 (x86_64 and aarch64) in `/opt/qemu-8.2.2`, first in `PATH`;
+  - Python 3.11.0rc1 in `/opt/mind-python3.11`, with `tomllib`;
+  - `/dev/kvm` opened by the agent's processes through the ACL, and `gater` in `kvm`.
+  - The configure step prints `cannot create tests/tcg/tests/tcg/config-host.mak`. It printed the same in the 58 burn-in builds, which built: QEMU's cross-compiled TCG tests only, which we do not build.
+- **The host part there, through `ci_local.sh`:**
+  - "build (x86)", "network driver without legacy", "models (TLC)" and "NRL checks" passed;
+  - "host tests" failed in `tests/land_test.py`, where `scripts/land.py` ran `git merge-tree --write-tree`, which git 2.34 (Ubuntu 22.04) lacks. Every host test after it passed there.
+- **`scripts/land.py`:** `conflicts()` now merges in a probe worktree, with `--no-commit` and without rerere, lists the unmerged paths and aborts. It needs no newer git, and the candidate's own tree is still left alone.
+
 ## Related
 
 [docs/effector.md](../docs/effector.md), sections 1 and 6.
