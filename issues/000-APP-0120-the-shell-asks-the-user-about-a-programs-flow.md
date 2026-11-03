@@ -1,6 +1,6 @@
 # 000-APP-0120 — The shell puts a running program's question about a flow to the user
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** `netpolicy.wit` 1.3 (`questions`, `answer`), the network track's part of [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.md) · **Main task:** — · **Roadmap:** track C · **Constitution:** MC-3.1, MC-3.8, MC-3.11, MC-11.6
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written; the `net` suite's run) · **Blocked by:** — (`netpolicy.wit` 1.3 is in `main` since landing round 66, ff58632f) · **Main task:** — · **Roadmap:** track C · **Constitution:** MC-3.1, MC-3.8, MC-3.11, MC-11.6
 
 **Recorded by:** the tools track, 2026-10-31, from NET's request in `issues/requests-APP.md` and its message `APP/2026-10-31T0650Z-NET-a-flow-question-for-the-shell-to-put-to-the-user.md`.
 
@@ -22,6 +22,30 @@ A program such as `get` reaches a host the user names only when it runs. Today a
   - **A program in front** has the keys while it runs: the shell takes them for the question, as for the firmware's question, and gives them back.
   - **Then** `answer(id, choice)`. A question `netpolicy` refused meanwhile (its 60 s) is taken down with a line saying so.
 - **The text** in `docs/tools` (EN, RU) and the shell's `HELP`.
+
+## Progress (2026-11-03)
+
+- **The text and the keys** (`shell/src/flowask.rs`, no system calls):
+  - the question's lines;
+  - the program's words with every control character shown as `?`;
+  - N, O, S and A, with Esc and Enter for no;
+  - `GUARD_MS`, 500 ms in which a key does not answer.
+- **The calls** (`shell/src/flowctl.rs`):
+  - `questions` every 500 ms (2 s after the broker did not answer);
+  - the oldest question of a program still running shown on its console. For one the shell did not start, it shows in the shell's window when a window manager the shell started runs;
+  - the keys taken from a program in front of that console and given back, also across a console switch;
+  - `answer`, and each of its errors named;
+  - the question taken down when its program ends or the broker drops it.
+- **Where the keys are taken:** the keyboard's, the serial line's and the shell's windows' keys go to the question while it waits on their session. A key the question does not take while its program has ended goes on as before.
+- **Tests:**
+  - a host test in `tests/shell_host.rs`;
+  - the `net` suite's `browse_check` (NET's, changed with it), where the shell now shows the question:
+    - a foreground question taken down at its program's end;
+    - `N` refused;
+    - `O` allowed once;
+    - no answer refused at 60 s.
+  
+  `session` and `always` are NET's checks to add, as NET wrote (`APP/2026-10-31T1338Z-NET-…`).
 
 ## Acceptance criteria
 

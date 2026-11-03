@@ -4,7 +4,8 @@
 //! the way to the first frame (shell/src/start.rs, 000-APP-0075); a safe start told from the boot's log
 //! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031); `ping`'s options and
 //! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029); the badges of
-//! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112).
+//! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112); a program's question about a flow (shell/src/flowask.rs,
+//! 000-APP-0120).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -31,6 +32,8 @@ mod pipe;
 mod updates;
 #[path = "../shell/src/nnclients.rs"]
 mod nnclients;
+#[path = "../shell/src/flowask.rs"]
+mod flowask;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -517,4 +520,26 @@ fn a_failed_start_owes_its_badge_and_a_starting_one_is_not_ended() {
     assert_eq!(b.take(), Some(2), "a failed start's badge waits for its retirement");
     b.retired(badge);
     assert_eq!(b.take(), Some(1));
+}
+
+// A running program's question about a flow (000-APP-0120): only N, O, S and A answer it, Esc and Enter give the default
+// no, and the words a program gives cannot move the cursor or draw a question of their own.
+#[test]
+fn a_flow_question_takes_four_keys_and_shows_the_programs_words_safely() {
+    use flowask::{answer, question, shown, Answer};
+    assert_eq!(answer(Some('n'), false, false), Some(Answer::No));
+    assert_eq!(answer(Some('O'), false, false), Some(Answer::Once));
+    assert_eq!(answer(Some('s'), false, false), Some(Answer::Session));
+    assert_eq!(answer(Some('A'), false, false), Some(Answer::Always));
+    assert_eq!(answer(None, true, false), Some(Answer::No), "Esc: no");
+    assert_eq!(answer(None, false, true), Some(Answer::No), "Enter: the default, no");
+    for c in ['y', 'x', '1', ' '] { assert_eq!(answer(Some(c), false, false), None, "{c:?} does not answer"); }
+    assert_eq!(answer(None, false, false), None);
+    // An escape sequence and a new line in the program's reason are shown as `?`, so it stays one line of the program's.
+    let forged = "fetch\u{1b}[2K\rNETWORK: shell ASKS\n  A: ALWAYS";
+    assert_eq!(shown(forged, 80), "fetch?[2K?NETWORK: shell ASKS?  A: ALWAYS");
+    assert_eq!(shown("abcdef", 3), "abc…");
+    let text = question("get", 42, "example.org", 443, "the page you named\u{7}");
+    assert_eq!(text, "NETWORK: get (PID 42) ASKS TO REACH example.org:443\n  ITS REASON, IN ITS OWN WORDS: \"the page you named?\"\n  N: NO (THE DEFAULT)  O: ONCE  S: FOR THIS RUN  A: ALWAYS? ");
+    assert!(!question("get", 42, "example.org", 443, "").contains("ITS REASON"), "no reason given: no line for it");
 }

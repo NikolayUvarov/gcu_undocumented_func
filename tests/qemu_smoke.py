@@ -9495,20 +9495,49 @@ def browse_check(args):
             require_all(log, "[NETSTACK] GRANT ", " BROWSES A NEW PUBLIC HOST 11.0.2.80:80 (1 SO FAR)", " BROWSES A NEW PUBLIC HOST 11.0.2.81:80 (2 SO FAR)")
             assert log.count("BROWSES A NEW PUBLIC HOST 11.0.2.80:80") == 1, log  # once per host
             require(vm.service_logs("netpolicy", "TO netcheck"), "TO netcheck: 1 RULES, BROWSING ANY PUBLIC ADDRESS, 600 S, 1000000 BYTES")
-            # A question at run time (socket.wit 2.8, netpolicy.wit 1.3). The shell does not put it to the user yet
-            # (000-APP-0120): one whose program ends leaves the broker's list, and one no one answers is refused at 60 s.
+            # A question at run time (socket.wit 2.8, netpolicy.wit 1.3), which the shell puts to the user on the console
+            # its program was started from (000-APP-0120). One whose program ends leaves the broker's list, and the shell
+            # takes it down.
+            question = "NETWORK: netcheck (PID "
             out = vm.command("netcheck ask:11.0.2.80:81:3", timeout=30)
-            require_all(out, "FOR 11.0.2.80:81", "NETCHECK ANSWER PENDING", "NETCHECK ask:11.0.2.80:81:3 Timeout")
+            require_all(out, question, ") ASKS TO REACH 11.0.2.80:81", "ITS REASON, IN ITS OWN WORDS: \"netcheck's check of a question at run time\"",
+                        "N: NO (THE DEFAULT)  O: ONCE  S: FOR THIS RUN  A: ALWAYS?", "NETCHECK ANSWER PENDING", "NETCHECK ask:11.0.2.80:81:3 Timeout")
+            if "(GONE: ITS PROGRAM ENDED" not in out:  # the take-down may come before the prompt or after it
+                vm.expect("MIND> ", timeout=10, after="(GONE: ITS PROGRAM ENDED")
             log = vm.service_logs("netpolicy", "ITS PROGRAM ENDED")
             require_all(log, "netcheck (PID ", ") ASKS FOR 11.0.2.80:81 TCP: \"netcheck's check of a question at run time\"", "OF netcheck: ITS PROGRAM ENDED")
-            pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", vm.command("run netcheck ask:11.0.2.80:81:90 &"))[1]
+
+            def asked(seconds):  # netcheck asks from the background; the shell shows the question at the prompt
+                out = vm.command(f"run netcheck ask:11.0.2.80:81:{seconds} &")
+                pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", out)[1]
+                if "ALWAYS? " not in out.partition(question)[2]:  # it may show before the prompt or after it
+                    vm.expect("ALWAYS? ", timeout=20, after=question)
+                return pid
+
+            # No, typed once the question shows: refused at once.
+            pid = asked(30)
+            time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
+            vm.send_bytes(b"n")
+            vm.expect("MIND> ", timeout=10, after="ALWAYS? NO")
+            require(vm.program_logs(pid, "NETCHECK ANSWER", tries=80), "NETCHECK ANSWER REFUSED")
+            # Once: allowed for this connection; nothing listens on that port, so the connection itself fails.
+            pid = asked(30)
+            time.sleep(.6)
+            vm.send_bytes(b"o")
+            vm.expect("MIND> ", timeout=10, after="ALWAYS? ONCE")
+            require(vm.program_logs(pid, "NETCHECK ANSWER", tries=80), "NETCHECK ANSWER ALLOWED 11.0.2.80")
+            require(vm.command("dmesg -s shell", raw=True), "ANSWERED ONCE")
+            # No answer: refused at 60 s, and the shell takes the question down. Nothing is typed meanwhile.
+            pid = asked(90)
+            vm.expect("MIND> ", timeout=90, after="(GONE: ")
             require(vm.program_logs(pid, "NETCHECK ANSWER", tries=400), "NETCHECK ANSWER REFUSED")
             require(vm.service_logs("netpolicy", "REFUSED"), "OF netcheck: NO ANSWER IN 60 S, REFUSED")
         finally:
             vm.close()
     print("PASS: a browsing grant (000-NET-0049): netcheck reached two public addresses on its port, each new host logged once "
-          "by the stack, and was refused another port and two private addresses; a question at run time left the broker's "
-          "list when its program ended, and was refused when no one answered it in 60 s", flush=True)
+          "by the stack, and was refused another port and two private addresses; a question at run time, put to the user "
+          "by the shell (000-APP-0120), was taken down when its program ended, refused by N, allowed once by O, and refused "
+          "when no one answered it in 60 s", flush=True)
 
 
 def late_attach_check(args):
