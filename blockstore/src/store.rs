@@ -346,16 +346,17 @@ impl Head {
     fn removed(&self) -> bool { !self.kept[0].points }
     // The roots the name retains: those of its kept versions, none once it is removed.
     fn retains(&self) -> impl Iterator<Item = &Version> { self.versions().iter().filter(move |v| v.points && !self.removed()) }
-    // Keeps `v` among the newest HISTORY versions; once the newest removes the name, only it is kept.
+    // Keeps `v` among the newest HISTORY versions; a removal ends the versions before it, so none older than one is
+    // kept, whatever order a mount meets them in (a commit record may lie after a removal on the medium).
     fn keep(&mut self, v: Version) {
         let n = self.count as usize;
-        if self.kept[..n].iter().any(|k| k.version == v.version) { return; }
+        if self.kept[..n].iter().any(|k| k.version == v.version || !k.points && k.version > v.version) { return; }
         let at = self.kept[..n].iter().position(|k| k.version < v.version).unwrap_or(n);
         if at == HISTORY { return; }
         self.kept.copy_within(at..HISTORY - 1, at + 1);
         self.kept[at] = v;
         self.count = (n + 1).min(HISTORY) as u8;
-        if self.removed() { self.count = 1; }
+        if !v.points { self.count = at as u8 + 1; }
     }
 }
 

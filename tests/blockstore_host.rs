@@ -1265,6 +1265,39 @@ fn each_version_links_the_one_before() {
 }
 
 // Two names and a third, each with a stored object; the store after `commit(a, b)` from their first versions.
+#[test]
+fn a_removal_ends_the_versions_before_it_at_a_mount_too() {
+    let mut medium = Memory::new(512);
+    let (x, y, z);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        // A block nothing retains first, so that its sectors are free again before the commit record.
+        store.put(Codec::Raw, &block(1, 3000)).unwrap();
+        (x, y) = (store.put(Codec::Raw, b"x").unwrap(), store.put(Codec::Raw, b"y").unwrap());
+        // Both names in one commit record, which stays while `b` keeps its version from it.
+        store.commit(&[Update { name: b"a", expected: 0, root: Some(x) }, Update { name: b"b", expected: 0, root: Some(y) }], OWNER).unwrap();
+        store.set_time(LEASE_NS);
+        assert_eq!(store.collect().map(|c| c.blocks), Ok(1));
+        // The removal and the next version go before the commit record on the medium.
+        z = store.put(Codec::Raw, b"z").unwrap();
+        assert_eq!(store.unpublish(b"a", 1, OWNER), Ok(2));
+        assert_eq!(store.publish(b"a", 2, &z, OWNER), Ok(3));
+        assert!(find(store.device(), b"MIND-REF").iter().all(|&lba| lba < find(store.device(), b"MIND-TXN")[0]));
+        // The removal ended version 1: its root goes at the next collection.
+        assert_eq!(store.collect().map(|c| c.blocks), Ok(1));
+        assert!(!store.has(&x));
+        assert_eq!(store.history(b"a").unwrap().iter().map(|v| v.version).collect::<Vec<_>>(), [3, 2]);
+    }
+    // A mount that meets version 1 in the commit record after them keeps it no more than the store did (309-STO-0040's
+    // model found it).
+    let mut room = Room::new(64).at(LEASE_NS);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.history(b"a").unwrap().iter().map(|v| v.version).collect::<Vec<_>>(), [3, 2]);
+    assert_eq!(store.collect().map(|c| c.blocks), Ok(0));
+    assert_eq!((store.resolve(b"a"), store.resolve(b"b")), (Ok((3, z)), Ok((1, y))));
+}
+
 fn two_names(store: &mut Store<&mut Memory>) -> [Cid; 4] {
     let roots = [object(store, 21, 20_000), object(store, 22, 100), object(store, 23, 30_000), object(store, 24, 50)];
     assert_eq!(store.publish(b"a", 0, &roots[0], OWNER), Ok(1));
