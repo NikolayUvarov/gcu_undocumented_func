@@ -13,7 +13,7 @@ impl Device{
             late_counter:None,late_guard:None,fail_cleanup:false,reads:0};
         for(at,v)in[(SYS_CFG1,1<<12),(R_AX_IC_PWR_STATE,1<<8),(R_AX_PLATFORM_ENABLE,3),
             (R_AX_CMAC_FUNC_EN,1<<30),(download::FW_CONTROL,0xe0),(mac::PLE_CONFIG,0x00400801),
-            (fwcmd::INIT_CONFIG,1<<11),(fwcmd::DMA_STOP,0xb0f03),(fwcmd::BASE_LOW,q.physical()as u32),
+            (fwcmd::INIT_CONFIG,1<<11),(fwcmd::DMA_STOP,0xb0f00),(fwcmd::BASE_LOW,q.physical()as u32),
             (fwcmd::BDRAM,28|4<<8|1<<16),(fwcmd::NUMBER,32)]{d.put(at,4,v);}d
     }
     fn put(&mut self,at:usize,n:usize,v:u32){self.regs[at..at+n].copy_from_slice(&v.to_le_bytes()[..n]);}

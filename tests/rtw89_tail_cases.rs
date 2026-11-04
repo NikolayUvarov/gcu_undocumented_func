@@ -21,7 +21,7 @@ pub(super) fn prepared(p:&mut Phy<Device>,cap:&Capabilities,band:dack::Band)->dm
 fn off(d:&Device){
     assert_eq!(d.get(2,1)&3,0);assert_eq!(d.get(0x2f0,4)&(1<<17),0);
     assert_eq!(d.xtal[0x80]&7,0);assert_eq!(d.xtal[0x81]&7,0);
-    assert_eq!(d.get(0x1010,4),0xb0f03);assert_eq!(d.get(0xc348,4),0);assert_eq!(d.command,6);
+    assert_eq!(d.get(0x1010,4),0xb0f00);assert_eq!(d.get(0xc348,4),0);assert_eq!(d.command,6);
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn tail_orders_source_power_trim_and_receive_configuration_without_packet_tx(){
         let pos:Vec<_>=order.iter().map(|at|writes.iter().position(|w|w.0==*at).unwrap()).collect();assert!(pos.windows(2).all(|v|v[0]<v[1]));
         assert_eq!(d.rf[0][0x43],0x9bcde);assert_eq!(d.rf[1][0x43],0xf2345);
         assert_eq!(d.rf[0][0x60],0x34456);assert_eq!(d.rf[1][0x60],0xff567);
-        assert_eq!(d.get(0x1010,4),0xb0f03);assert_eq!(d.get(0xc348,4),0);assert_eq!(d.get(0x109a4,4)&0x1c,0);
+        assert_eq!(d.get(0x1010,4),0xb0f00);assert_eq!(d.get(0xc348,4),0);assert_eq!(d.get(0x109a4,4)&0x1c,0);
         assert!(d.events.iter().all(|e|matches!(e,Event::Write(_,_,_))));
         let count=d.events.len();assert!(tail::run(&mut p,&b,&prefix,&cap,Subband::Ghz2).is_err());assert_eq!(p.bus_between_stages().events.len(),count);
     });

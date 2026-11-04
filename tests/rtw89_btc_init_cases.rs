@@ -25,7 +25,7 @@ impl Device {
             swsi_stuck: false, backward_at: None };
         for (at, value) in [(0xf0, 0x1000), (0x3f0, 0x100), (0x88, 3), (0x1e0, 0xe0), (0x8400, 0xfffd0000),
             (0x8404, 0x0f9f0000), (0xc000, 0xf000003f), (0xc004, 0x4000003f), (0x200, 1 << 17),
-            (0x2f0, 1 << 17), (0x1000, 0x800), (0x1010, 0xb0f03), (0xda30, 0x80), (0xda10, 0x80)] { d.put(at, 4, value); }
+            (0x2f0, 1 << 17), (0x1000, 0x800), (0x1010, 0xb0f00), (0xda30, 0x80), (0xda10, 0x80)] { d.put(at, 4, value); }
         d.put(2, 1, 3); d.put(0x8040, 1, 14); d.put(0x40, 1, 0xc8); d.put(0x41, 1, 0x85);
         d.put(0xc340, 2, 0x0201); d.put(0xcc07, 1, 0x82); d.put(0xda6c, 1, 0xc0); d
     }
@@ -73,7 +73,7 @@ impl Device {
         Ok(())
     }
     fn quiet(&self) {
-        assert_eq!(self.get(0x1010, 4), 0xb0f03); assert_eq!(self.get(0x1000, 4), 0x800);
+        assert_eq!(self.get(0x1010, 4), 0xb0f00); assert_eq!(self.get(0x1000, 4), 0x800);
         assert_eq!(self.get(0xc348, 4), 0); assert_eq!(self.get(0xac, 4), 0);
         assert!(!self.events.iter().any(|e| matches!(e, Event::Write(0x18000, _, _))));
     }
@@ -137,7 +137,7 @@ fn unsupported_board_security_or_firmware_refuses_before_writes() {
 
 #[test]
 fn active_rx_or_scheduler_guard_cannot_be_bypassed() {
-    for (at, value) in [(0x1000,0x2800),(0x1010,0xb0f00),(0xc348,1),(0x8040,15),(0x1e0,0xc0)] {
+    for (at, value) in [(0x1000,0x2800),(0x1010,0xb0e00),(0xc348,1),(0x8040,15),(0x1e0,0xc0)] {
         let mut d = Device::new(); let mut p = loaded(&mut d); p.bus_between_stages().put(at,4,value);
         assert_eq!(run(&mut p).unwrap_err().stage,Stage::Guard); assert!(p.bus_between_stages().events.is_empty());
     }

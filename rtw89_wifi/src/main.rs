@@ -120,7 +120,14 @@ impl startup::Diagnostic for Attempt<'_> {
                 power::on_for_board_read(&mut timed).map_err(Error::Io)?;
                 timed.delay_us(0).map_err(Error::Io)?;
             }
-            Stage::Mac => mac::prepare_download(&mut self.native).map_err(Error::Mac)?,
+            Stage::Mac => {
+                if let Some(found) = mac::quiesce(&mut self.native).map_err(Error::Io)? {
+                    mind::println!("[RTW89] HCI LEFT ON (INIT_CONFIG {:08X}): STOPPED WITH PCI MASTERING OFF", found);
+                }
+                let masks = mac::mask_host(&mut self.native).map_err(Error::Io)?;
+                if masks != [0; 3] { mind::println!("[RTW89] HOST INTERRUPTS LEFT ENABLED (HIMR {:08X?}): MASKED", masks); }
+                mac::prepare_download(&mut self.native).map_err(Error::Mac)?
+            }
             Stage::Pcie => self.prepared = Some(pcie::prepare(&mut self.native).map_err(Error::Pcie)?),
             Stage::Install => self.queues.as_mut().ok_or(Error::State)?.command.install(&mut self.native).map_err(Error::Queue)?,
             Stage::Finish => self.prepared.take().ok_or(Error::State)?.finish(&mut self.native, &self.queues.as_ref().ok_or(Error::State)?.command).map_err(Error::Pcie)?,
@@ -135,6 +142,9 @@ impl startup::Diagnostic for Attempt<'_> {
             Stage::Download => {
                 let ready = download::run(&mut self.native, &mut self.queues.as_mut().ok_or(Error::State)?.command, self.verified.take().ok_or(Error::State)?).map_err(Error::Download)?;
                 mind::println!("[RTW89] FW STATUS 7 OBSERVED: {:?}", ready.version());
+                // The firmware enables its halt interrupt (HIMR0 bit 21); this polled driver keeps host interrupts masked.
+                let masks = mac::mask_host(&mut self.native).map_err(Error::Io)?;
+                if masks != [0; 3] { mind::println!("[RTW89] THE FIRMWARE ENABLED HOST INTERRUPTS (HIMR {:08X?}): MASKED", masks); }
                 self.ready = Some(ready);
             }
             Stage::PhyCap => {

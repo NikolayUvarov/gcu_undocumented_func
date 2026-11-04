@@ -23,7 +23,7 @@ impl Device{
         for (at,value)in[(0xf0,1<<12),(0x3f0,1<<8),(R_AX_PLATFORM_ENABLE,3),(download::FW_CONTROL,0xe0),
             (R_AX_CMAC_FUNC_EN,0x7000803f),(R_AX_DMAC_FUNC_EN,0x64c40000),(crate::mac::DMAC_CLOCK,0x04840000),
             (crate::mac::PLE_CONFIG,0x00400801),(crate::mac::WDE_READY,3),(crate::mac::PLE_READY,3),(crate::mac::HFC_CONTROL,8),
-            (fwcmd::INIT_CONFIG,1<<11),(fwcmd::DMA_STOP,0xb0f03),(fwcmd::INDEX,index),(fwcmd::BASE_LOW,0x100000),
+            (fwcmd::INIT_CONFIG,1<<11),(fwcmd::DMA_STOP,0xb0f00),(fwcmd::INDEX,index),(fwcmd::BASE_LOW,0x100000),
             (fwcmd::BDRAM,28|4<<8|1<<16),(fwcmd::NUMBER,32),(R_AX_CTN_TXEN,0xffff),(0x8a9c,446)]{d.set(at,value);}
         d.xtal[0x80]=0xc0;d.xtal[0x81]=0xb8;d
     }
@@ -178,7 +178,7 @@ fn wrong_or_missing_ack_poison_without_resending(){for reply in [Reply::WrongSeq
 fn failed_session_rejects_phy_stages_but_raw_register_cleanup_remains(){with_session(|s|{
     s.bus.reply=Reply::Missing;assert!(s.command(command(),&[],both(),100).is_err());
     assert_eq!(PhyIo::command_session(s),0);assert!(PhyIo::pci_id(s).is_err());assert!(PhyIo::pci_command(s).is_err());assert!(s.receive_permit(100).is_err());
-    s.write32(fwcmd::DMA_STOP,0x1f0f03).unwrap();assert_eq!(s.read32(fwcmd::DMA_STOP).unwrap(),0x1f0f03);
+    s.write32(fwcmd::DMA_STOP,0x1f0f00).unwrap();assert_eq!(s.read32(fwcmd::DMA_STOP).unwrap(),0x1f0f00);
 });}
 #[test]
 fn btc_events_are_ordered_and_survive_dma_buffer_release(){with_session(|s|{
@@ -222,7 +222,7 @@ fn frozen_clock_and_unconsumed_or_busy_command_are_bounded(){for mode in 0..3{wi
 #[test]
 fn failed_receive_validation_prevents_later_stopped_rx_phy_bypass(){with_session(|s|{
     s.bus.set(0x1108,0x300000);assert!(s.receive_permit(1000).is_err());assert!(s.failed().is_some());
-    s.write32(fwcmd::DMA_STOP,0xb0f03).unwrap();s.write32(fwcmd::INIT_CONFIG,1<<11).unwrap();
+    s.write32(fwcmd::DMA_STOP,0xb0f00).unwrap();s.write32(fwcmd::INIT_CONFIG,1<<11).unwrap();
     assert!(PhyIo::pci_id(s).is_err());assert_eq!(PhyIo::command_session(s),0);assert!(s.bus.packets.is_empty());
 });}
 
@@ -534,7 +534,7 @@ fn owned_scheduler_failure_poisons_without_retry_and_retains_raw_shutdown(){for 
     use crate::rxdck::RxdckIo;s.bus.scheduler_reply=reply;assert!(s.scheduler_zero(1000).is_err());assert!(s.failed().is_some());
     assert_eq!(s.bus.writes.iter().filter(|(at,_,v)|*at==R_AX_H2CREG_CTRL&&*v==1).count(),1);
     let n=s.bus.writes.len();assert!(s.scheduler_zero(1000).is_err());assert_eq!(s.bus.writes.len(),n);assert_eq!(PhyIo::command_session(s),0);
-    s.write32(fwcmd::DMA_STOP,0x1f0f03).unwrap();assert_eq!(s.bus.get(fwcmd::DMA_STOP),0x1f0f03);assert_eq!(s.submitted(),0);
+    s.write32(fwcmd::DMA_STOP,0x1f0f00).unwrap();assert_eq!(s.bus.get(fwcmd::DMA_STOP),0x1f0f00);assert_eq!(s.submitted(),0);
 });}}
 #[test]
 fn owned_scheduler_pending_response_is_not_discarded_or_replaced(){with_session(|s|{

@@ -9,7 +9,7 @@ fn prepared(p:&mut Phy<Device>){
     d.put(0x149b0,4,0x123456e1);d.put(0x14a00,4,0x6543217f);
     for at in (0x1073c..=0x10774).step_by(4){d.put(at,4,0x000500f0);}
 }
-fn off(d:&Device){d.reset();assert_eq!(d.get(0x1010,4),0xb0f03);assert_eq!(d.get(0xc348,4),0);}
+fn off(d:&Device){d.reset();assert_eq!(d.get(0x1010,4),0xb0f00);assert_eq!(d.get(0xc348,4),0);}
 
 #[test]
 fn dm_rejects_wrong_state_unknown_xtal_and_live_tx_without_writes(){
@@ -17,7 +17,7 @@ fn dm_rejects_wrong_state_unknown_xtal_and_live_tx_without_writes(){
     assert_eq!(dm::run(&mut p,dack::Band::Ghz2).unwrap_err().stage,dm::Stage::Guard);assert!(p.bus_between_stages().events.is_empty());
     let mut id=identity();id.xtal=255;let mut d=Device::new();let mut p=Phy::new(&mut d,id);prepared(&mut p);
     assert_eq!(dm::run(&mut p,dack::Band::Ghz2).unwrap_err().cause.kind,FaultKind::Xtal);assert!(p.bus_between_stages().events.is_empty());
-    for (at,value) in [(0xc348,1),(0x1010,0xb0f00),(0x8040,15),(0x1000,0x2800)]{
+    for (at,value) in [(0xc348,1),(0x1010,0xb0e00),(0x8040,15),(0x1000,0x2800)]{
         let mut d=Device::new();let mut p=Phy::new(&mut d,identity());prepared(&mut p);p.bus_between_stages().put(at,4,value);
         assert_eq!(dm::run(&mut p,dack::Band::Ghz2).unwrap_err().stage,dm::Stage::Guard);
         assert!(p.bus_between_stages().events.is_empty());assert_eq!(p.state(),State::Failed);
@@ -38,7 +38,7 @@ fn dm_orders_the_contiguous_prefix_and_clears_all_128_macid_limits(){
     assert_eq!((result.thermal,result.thermal_ewma_fixed4,result.last_thermal_max),([34,43],[544,688],43));
     assert_eq!((result.gain_offset,result.gain_rssi),(-31,127));
     assert_eq!(d.get(0x10d7c,4),0xa5a5a5a5&!2);assert_eq!(d.get(0x12d7c,4),0xa5a5a5a5&!2);
-    assert_eq!(d.get(0x1010,4),0xb0f03);assert_eq!(d.get(0xc348,4),0);assert!(d.btc.is_empty());
+    assert_eq!(d.get(0x1010,4),0xb0f00);assert_eq!(d.get(0xc348,4),0);assert!(d.btc.is_empty());
 }
 #[test]
 fn dm_ccx_bins_use_32us_units_and_preserve_enable_order(){
@@ -100,7 +100,7 @@ fn every_applied_dm_write_error_poisoned_and_retains_dma(){
     for index in 1..=count{
         let mut d=Device::new();let mut p=Phy::new(&mut d,identity());prepared(&mut p);let d=p.bus_between_stages();d.fail_write=Some(d.writes+index);
         let e=dm::run(&mut p,dack::Band::Ghz2).unwrap_err();assert_eq!(e.cause.kind,FaultKind::Access,"write{index}");assert_eq!(p.state(),State::Failed);
-        let d=p.bus_between_stages();assert_eq!(d.command,6);assert_eq!(d.get(0x1010,4),0xb0f03);assert_eq!(d.get(2,1)&3,0);
+        let d=p.bus_between_stages();assert_eq!(d.command,6);assert_eq!(d.get(0x1010,4),0xb0f00);assert_eq!(d.get(2,1)&3,0);
         let n=d.events.len();assert!(dm::run(&mut p,dack::Band::Ghz2).is_err());assert_eq!(p.bus_between_stages().events.len(),n);
     }
 }

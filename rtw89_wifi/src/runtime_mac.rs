@@ -11,7 +11,7 @@ use crate::registers::*;
 use crate::runtime_mac_regs::*;
 
 pub const BAR_BYTES: usize = 0x20000;
-const PACKET_STOP: u32 = 0x000b_0f03;
+const PACKET_STOP: u32 = 0x000b_0f00;
 const STAGE_US: u64 = 2_000_000;
 const DLE: u32 = 0x0480_0000;
 const HFC_ENABLE: u32 = 9;
@@ -66,14 +66,16 @@ pub(crate) fn guard(bus: &mut impl Bus, queue: &Queue<'_>, board: &Board, bar_by
     require(bus,R_AX_IC_PWR_STATE,B_AX_WLMAC_PWR_STE_MASK,1<<8)?;
     require(bus,R_AX_PLATFORM_ENABLE,3,3)?;
     require(bus,R_AX_CMAC_FUNC_EN,1<<30,1<<30)?;
-    require(bus,0xe000,1<<30,0)?;
+    // Band 1's CMAC is off, or absent (reads 0xdeadbeef/0xeaeaeaea, as mac.c's check_mac_en takes it) on this single-band chip.
+    let band1=io::read32(bus,0xe000)?;
+    if !matches!(band1,0xdead_beef|0xeaea_eaea) && band1&1<<30!=0 { return Err(fault(0xe000,band1)); }
     require(bus,download::FW_CONTROL,0xe0,0xe0)?;
     let bb=bus.read8(R_AX_SYS_FUNC_EN)?;
     if bb&3!=0 { return Err(fault(R_AX_SYS_FUNC_EN,bb as u32)); }
     require(bus,mac::WDE_CONFIG,0x1fff3f03,0)?;
     require(bus,mac::PLE_CONFIG,0x1fff3f03,0x00400801)?;
     require(bus,fwcmd::INIT_CONFIG,1<<11|1<<13,1<<11)?;
-    require(bus,fwcmd::DMA_STOP,0x001f0f03,PACKET_STOP)?;
+    require(bus,fwcmd::DMA_STOP,0x001f0f00,PACKET_STOP)?;
     require(bus,fwcmd::DMA_BUSY,fwcmd::BUSY_MASK,0)?;
     require(bus,fwcmd::BASE_LOW,u32::MAX,queue.physical() as u32)?;
     require(bus,fwcmd::BASE_HIGH,u32::MAX,0)?;
@@ -177,7 +179,8 @@ pub fn disable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
 fn functions(bus: &mut impl RegisterIo) -> io::Result<()> {
     write(bus,R_AX_DMAC_FUNC_EN,0xfb7d0000)?;
     write(bus,mac::DMAC_CLOCK,0x0b1f0000)?;
-    modify(bus,0xc004,0,0x4000003f)?;
+    // CK_EN reads all ones with every clock on (see io::cmac_ready); a modify would refuse that read.
+    if bus.read32(0xc004)?!=u32::MAX { modify(bus,0xc004,0,0x4000003f)?; }
     modify(bus,R_AX_CMAC_FUNC_EN,0,0xf000003f)?;
     modify(bus,R_AX_SPS_DIG_ON_CTRL0,0,B_AX_OCP_L1_MASK)
 }
@@ -303,7 +306,7 @@ fn prepare_inner(bus: &mut impl Bus, queue: &mut Queue<'_>, board: &Board, bar_b
         require(&mut timed,download::FW_CONTROL,0xe0,0xe0)?;
         require(&mut timed,R_AX_DMAC_FUNC_EN,0xfffd0000,0xfffd0000)?;
         require(&mut timed,mac::DMAC_CLOCK,0x0f9f0000,0x0f9f0000)?;
-        require(&mut timed,fwcmd::DMA_STOP,0x001f0f03,PACKET_STOP)?;
+        require(&mut timed,fwcmd::DMA_STOP,0x001f0f00,PACKET_STOP)?;
         require(&mut timed,fwcmd::INIT_CONFIG,1<<11|1<<13,1<<11)?;
         require(&mut timed,R_AX_CTN_TXEN,0xffff,0)?;
         require(&mut timed,R_AX_PTCL_TX_CTN_SEL,B_AX_PTCL_TX_ON_STAT,0)?;

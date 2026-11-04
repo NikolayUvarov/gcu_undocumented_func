@@ -50,6 +50,19 @@ pub fn modify16(io: &mut impl RegisterIo, at: usize, clear: u16, set: u16) -> Re
     io.write16(at, (value & !clear) | set)
 }
 
+/// CMAC 0's clocks and functions on, band 1's CMAC off or absent; the RTL8852B has one band.
+/// CK_EN (0xc004) reads all ones with every clock on, which `read32` would take for a lost device;
+/// band 1 (0xe000) reads 0xdeadbeef or 0xeaeaeaea where it does not exist, as mac.c's check_mac_en takes it.
+pub fn cmac_ready(io: &mut impl RegisterIo) -> Result<()> {
+    let functions = read32(io, 0xc000)?;
+    if functions & 0xf000_003f != 0xf000_003f { return Err(Fault::new(FaultKind::PowerState, 0xc000, functions)); }
+    let clocks = io.read32(0xc004)?;
+    if clocks & 0x4000_003f != 0x4000_003f { return Err(Fault::new(FaultKind::PowerState, 0xc004, clocks)); }
+    let band1 = read32(io, 0xe000)?;
+    if !matches!(band1, 0xdead_beef | 0xeaea_eaea) && band1 & 1 << 30 != 0 { return Err(Fault::new(FaultKind::PowerState, 0xe000, band1)); }
+    Ok(())
+}
+
 pub fn read32(io: &mut impl RegisterIo, at: usize) -> Result<u32> {
     let value = io.read32(at)?;
     if value == u32::MAX { return Err(Fault::new(FaultKind::Unavailable, at, value)); }

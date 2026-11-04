@@ -96,7 +96,7 @@ impl Device {
     }
     fn stopped(&self) {
         assert_eq!(self.command, 2); assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0);
-        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, 0x001f_0f03);
+        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f00, 0x001f_0f00);
         assert!(self.writes.iter().all(|(at, _, value)| *at != fwcmd::INIT_CONFIG || value & 0x2800 == 0));
         assert!(self.writes.iter().all(|(at, _, _)| ![R_AX_PLATFORM_ENABLE, R_AX_SYS_FUNC_EN, R_AX_WLRF_CTRL, R_AX_CMAC_FUNC_EN].contains(at)));
     }

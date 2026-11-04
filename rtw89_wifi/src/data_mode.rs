@@ -121,7 +121,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
                 stage=Stage::Dma;modified=true;
                 fence(Ordering::Release);
                 io::modify32(&mut window,fwcmd::DMA_STOP,OWN_DMA,0)?;
-                require(&mut window,fwcmd::DMA_STOP,0x001f0f03,STOPPED_UNUSED)?;
+                require(&mut window,fwcmd::DMA_STOP,0x001f0f00,STOPPED_UNUSED)?;
                 stage=Stage::Scheduler;
                 runtime_mac::exchange_register(&mut window,[0x205|u32::from(SCHEDULER)<<16,0xffff,0,0],4)?;
                 require(&mut window,0xc348,0xffff,u32::from(SCHEDULER))?;

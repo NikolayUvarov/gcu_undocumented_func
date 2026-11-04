@@ -523,3 +523,20 @@ NCTL/AGC and explicit uncertain-command shutdown; fourteen model regressions
 compile, with execution pending raw publication. No native authority provider
 exists, and full typed cold-start composition, physical RFK quality and WLAN
 traffic are unvalidated. [Scope and failure evidence](../../hwdocs/rtl8852be-dpk.md).
+
+**The first Ryzen runs past the board read (2026-11-03 and 04).** On the Ryzen's RTL8852BE, `rtw89_wifi` put in over the link on `fast-test` 13253dc8 completed its whole bounded diagnostic with no failure. The run covered:
+- the MAC and PCIe preparation;
+- the BDRAM reset;
+- the firmware download (status 7, version 0.29.29.15), with the capability query reporting 2×2;
+- the runtime MAC with RX DMA prepared;
+- the initial PHY/BTC calibration;
+- the shutdown: stop, registers, power-off and quiesce, each `Ok`.
+
+It got there with five changes, each following the pinned `pci.c`/`mac.c`:
+- TX/RX HCI and host interrupt masks left on by an earlier owner are cleared with PCI mastering off;
+- `R_AX_HCI_FUNC_EN` TX/RX DMA is set before the DMAC preparation;
+- the DMA stop mask is the RTL8852B's `0x001f0f00`, because the chip keeps no RXQ/RPQ stop bit, so RX stops by RXHCI alone;
+- CK_EN reading all ones and band 1's absent CMAC (`0xdeadbeef`) are taken as Linux takes them;
+- the halt interrupt the firmware enables is masked again.
+
+Evidence: that machine and build only (MC-12.1), plus every `rtw89` host test. Channel calibration, the WLAN endpoint, association and traffic are not reached by this diagnostic, so no network guarantee follows.

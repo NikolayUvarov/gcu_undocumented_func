@@ -49,7 +49,7 @@ fn complete_channel_transaction_orders_mac_bb_rf_power_and_retains_zero_packet_t
     with_prepared(|p,prefix,configured,tables|{
         let done=channel::run(p,&board(),&prefix,&configured,&tables,&Policy::resolve(&board(),rule(),platform()).unwrap()).unwrap();
         assert_eq!(p.state(),State::ChannelTuned);assert_eq!((done.channel,done.policy_version,done.access),(6,1,Access::InitiateRadiation));
-        let d=p.bus_between_stages();assert_eq!(d.scheduler_calls.len(),2);assert_eq!(d.get(0xc348,4),0);assert_eq!(d.get(0x1010,4),0xb0f03);
+        let d=p.bus_between_stages();assert_eq!(d.scheduler_calls.len(),2);assert_eq!(d.get(0xc348,4),0);assert_eq!(d.get(0x1010,4),0xb0f00);
         let positions:Vec<_>=[0xce40,0x158dc,0x120fc,0xc010,0x123b0,0x1e060,0xd2c0,0xd2ec,0xd33c,0xd200].iter()
             .map(|at|d.events.iter().position(|e|matches!(e,Event::Write(a,_,_)if a==at)).unwrap()).collect();
         assert!(positions.windows(2).all(|p|p[0]<p[1]));

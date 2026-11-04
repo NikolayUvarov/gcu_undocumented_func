@@ -14,7 +14,7 @@ fn pair(d:&Device,band:u8) {
 }
 fn off(d:&Device) {
     assert_eq!(d.get(2,1)&3,0);assert_eq!(d.get(0x2f0,4)&(1<<17),0);assert_eq!(d.xtal[0x80]&7,0);assert_eq!(d.xtal[0x81]&7,0);
-    assert_eq!(d.get(0xc348,4),0);assert_eq!(d.command,6);assert_eq!(d.get(0x1010,4),0xb0f03);
+    assert_eq!(d.get(0xc348,4),0);assert_eq!(d.command,6);assert_eq!(d.get(0x1010,4),0xb0f00);
 }
 #[test]
 fn rxdck_rechecks_post_dack_phase_and_stopped_scheduler_before_callbacks() {

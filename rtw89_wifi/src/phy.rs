@@ -29,7 +29,7 @@ const SWSI_DATA: usize = PHY_BASE + 0x370;
 const SWSI_STATUS: usize = PHY_BASE + 0x174c;
 const SWSI_BUSY: u32 = 3 << 24;
 const STAGE_US: u64 = 100_000;
-const DATA_STOP: u32 = 0x000b_0f03;
+const DATA_STOP: u32 = 0x000b_0f00;
 const DATA_BUSY: u32 = 0x006b_0f03;
 
 /// All reads and the H2C transport refer to the same exclusively owned RTL8852BE function.
@@ -132,9 +132,7 @@ pub(crate) fn guard(bus: &mut impl PhyIo, identity: &Identity, phase: RegisterPh
     require(bus, 0x1e0, 0xe0, 0xe0)?;
     require(bus, R_AX_DMAC_FUNC_EN, 0xfffd_0000, 0xfffd_0000)?;
     require(bus, 0x8404, 0x0f9f_0000, 0x0f9f_0000)?;
-    require(bus, R_AX_CMAC_FUNC_EN, 0xf000_003f, 0xf000_003f)?;
-    require(bus, 0xc004, 0x4000_003f, 0x4000_003f)?;
-    require(bus, 0xe000, 1 << 30, 0)?;
+    io::cmac_ready(bus)?;
     let bb = bus.read8(R_AX_SYS_FUNC_EN)?;
     if bb == u8::MAX || bb & 3 != 3 { return Err(state(R_AX_SYS_FUNC_EN, bb as u32)); }
     require(bus, R_AX_SPS_DIG_ON_CTRL0, B_AX_REG_ZCDC_H_MASK, 1 << 17)?;

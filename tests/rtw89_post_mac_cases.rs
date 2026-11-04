@@ -15,7 +15,7 @@ impl Device{
         for (at,value) in [(0xf0,0x1000),(0x3f0,0x100),(0x88,3),(download::FW_CONTROL,0xe0),
             (0x8400,0xfffd0000),(0x8404,0x0f9f0000),(0xc000,0xf000003f),(0xc004,0x4000003f),
             (mac::WDE_CONFIG,510<<16),(mac::PLE_CONFIG,496<<16|4<<8|1),(mac::HFC_CONTROL,0x19),
-            (fwcmd::DMA_STOP,0x1f0f03),(0x2f0,1<<17),(0x8040,14)]{d.put(at,4,value);}
+            (fwcmd::DMA_STOP,0x1f0f00),(0x2f0,1<<17),(0x8040,14)]{d.put(at,4,value);}
         d.put(2,1,3);d.xtal[0x80]=0xc7;d.xtal[0x81]=0xc7;d
     }
     fn get(&self,at:usize,width:usize)->u32{let mut v=[0;4];v[..width].copy_from_slice(&self.regs[at..at+width]);u32::from_le_bytes(v)}
@@ -33,10 +33,10 @@ impl Device{
                 else{let mask=(v>>16)as u8;self.xtal[offset]=(self.xtal[offset]&!mask)|((v>>8)as u8&mask);}
                 self.regs[at+3]&=!0x80;
             }
-            if at==fwcmd::DMA_STOP&&v&3==0{self.rx_active=true;}
+            if at==fwcmd::INIT_CONFIG&&v&1<<13!=0{self.rx_active=true;}
         }
         if self.late_write==Some(self.writes.len()){self.now+=TIMEOUT_US;}
-        if self.fail==Some(self.writes.len())||(self.fail_rx&&at==fwcmd::DMA_STOP&&v&3==3)||(self.fail_radio&&at==0x2f0)||(self.fail_cpu&&at==0x88){return Err(Fault::new(FaultKind::Access,at,v));}
+        if self.fail==Some(self.writes.len())||(self.fail_rx&&at==fwcmd::INIT_CONFIG&&v&1<<13==0)||(self.fail_radio&&at==0x2f0)||(self.fail_cpu&&at==0x88){return Err(Fault::new(FaultKind::Access,at,v));}
         Ok(())
     }
     fn stopped(&self){assert_eq!(self.get(fwcmd::INIT_CONFIG,4)&HCI,0);assert_eq!(self.get(fwcmd::DMA_STOP,4)&STOP_MASK,STOP_MASK);assert_eq!(self.get(2,1)&3,0);assert_eq!(self.get(0x88,4)&2,0);}
@@ -71,7 +71,7 @@ fn exact_poh_ltr_and_receive_only_activation_preserve_uninstalled_channels(){
     assert_eq!(d.get(0x8810,4)&1,1);assert_eq!(d.get(0x9a00,4)&2,0);
     assert!(d.writes.iter().all(|(at,_,_)|!HOST_MASKS.contains(at)&&*at!=0xc348&&*at!=fwcmd::INDEX&&!(0x1020..=0x1054).contains(at)&&!(0x1100..=0x11ff).contains(at)));
     let enable=d.writes.iter().position(|(at,_,v)|*at==fwcmd::INIT_CONFIG&&v&(1<<13)!=0).unwrap();
-    let release=d.writes.iter().position(|(at,_,v)|*at==fwcmd::DMA_STOP&&v&3==0).unwrap();assert!(enable<release);
+    assert!(enable>0&&d.writes.iter().all(|(at,_,v)|*at!=fwcmd::DMA_STOP||v&3==0));
     stop(&mut d,&mut q,&mut r);
 }
 #[test]
