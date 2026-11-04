@@ -1058,7 +1058,4 @@ All `rtw89` host tests pass, with new ones for `quiesce`, `mask_host`, `HCI_FUNC
 - the persistent driver loop: channel calibration, the station and the data path, all already library slices;
 - KRN's WLAN endpoint ([213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md)), which waits for that loop.
 
-**Also seen, not explained:**
-- One reboot from Linux with BootNext to the stick (2026-11-03 18:56 UTC) left a dark screen and no MIND log until the maintainer's restart.
-- Its stick's log volume shows a Windows `$RECYCLE.BIN` at 20:34 UTC. MIND Core then booted at 20:35 without the CH340 on the bus (port 4 empty) and without an Ethernet link.
-- The maintainer moved nothing.
+**Also seen, not explained:** one reboot from Linux with BootNext to the stick (2026-11-03 18:56 UTC, after trial 7) left a dark screen until the maintainer's restart. That boot wrote no MIND log: the newest before it is `boot0008.log`, at 18:53, and `boot_switch.py logs` said "MIND Core did not boot". The stick's `boot0001.log` reads "20:35:41 by the machine's clock", but it is that stick's first boot, older than `boot0002.log` (17:55 UTC). Its clock was not UTC then, so it is no boot inside that gap.
