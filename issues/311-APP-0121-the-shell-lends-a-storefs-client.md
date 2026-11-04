@@ -39,4 +39,4 @@ Once the storage track's part is there:
 
 ## Related
 
-[311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done), [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md), [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md), [311-APP-0116](311-APP-0116-the-shell-names-a-vfs-conflict.md).
+[311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done), [311-STO-0032](../issues-done/311-STO-0032-storefs-a-vfs-view-of-a-named-root.done), [311-STO-0037](../issues-done/311-STO-0037-a-scope-of-a-store-volume.done), [311-APP-0116](311-APP-0116-the-shell-names-a-vfs-conflict.md).
