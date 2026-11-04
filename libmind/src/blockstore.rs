@@ -2,7 +2,8 @@
 //! mints each client's capability with a badge, and `blockstore` decides every request by it. No system calls:
 //! tests/blockstore_host.rs. Badges from `FIRST_DOMAIN_CLIENT` up are the clients `blockstore` mints for memory domains
 //! (308-STO-0023), each with the rights of the client that asked for it. A store's recovery key in the form its owner
-//! writes down and types back, and the right to make, keep, forget and use one (308-STO-0028).
+//! writes down and types back, and the right to make, keep, forget and use one (308-STO-0028). A name's copy on a second
+//! medium is retention, as a publication is (309-STO-0040).
 use crate::sha256;
 
 /// May read blocks and names (`get`, `has`, `resolve`, `history`, `snapshot`, `names`). Knowing a CID grants nothing: reading needs this right (MC-4.7).
@@ -22,7 +23,7 @@ pub const FIRST_DOMAIN_CLIENT: u16 = 0x100;
 /// A request to the store, as its rights see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation { Put, Get, Has, Stat, Publish, Resolve, Collect, Unpublish, History, Pin, Unpin, Pins, Usage, Commit, Snapshot, Names, DomainCreate, DomainClient, DomainForget, Domains, Scrub, Scrubbed,
-    RecoveryNew, RecoveryKeep, RecoveryForget, Recoveries, Recover }
+    RecoveryNew, RecoveryKeep, RecoveryForget, Recoveries, Recover, Copy, CopyStat }
 
 /// Whether a client whose capability carries `badge` may make `operation`; bits of later rights are ignored.
 pub fn allowed(badge: u16, operation: Operation) -> bool {
@@ -32,11 +33,13 @@ pub fn allowed(badge: u16, operation: Operation) -> bool {
         Operation::Put | Operation::Collect | Operation::Scrub => badge & BADGE_PUT != 0,
         Operation::Get | Operation::Has | Operation::Resolve | Operation::History | Operation::Snapshot | Operation::Names => badge & BADGE_GET != 0,
         // Names and pins retain objects: retention is its own right, apart from reading and storing (MC-4.11).
-        // Making and forgetting a memory domain is retention too (308-STO-0023).
+        // Making and forgetting a memory domain is retention too (308-STO-0023), and so is a name's copy on a second
+        // medium (309-STO-0040).
         Operation::Publish | Operation::Unpublish | Operation::Commit | Operation::Pin | Operation::Unpin
-            | Operation::DomainCreate | Operation::DomainForget => badge & BADGE_PUBLISH != 0,
+            | Operation::DomainCreate | Operation::DomainForget | Operation::Copy => badge & BADGE_PUBLISH != 0,
         // A domain's client carries the rights of the client that asked for it.
-        Operation::Stat | Operation::Pins | Operation::Usage | Operation::DomainClient | Operation::Domains | Operation::Scrubbed => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH) != 0,
+        Operation::Stat | Operation::Pins | Operation::Usage | Operation::DomainClient | Operation::Domains | Operation::Scrubbed
+            | Operation::CopyStat => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH) != 0,
         // A recovery key opens the medium anywhere: only its own right makes, keeps, forgets or uses one (308-STO-0028).
         Operation::RecoveryNew | Operation::RecoveryKeep | Operation::RecoveryForget | Operation::Recover => badge & BADGE_RECOVER != 0,
         // How many there are is any client's, and the recovering one's.
