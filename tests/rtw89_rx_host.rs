@@ -18,7 +18,7 @@ struct Device{regs:Vec<u8>,command:u16,now:u64,writes:Vec<(usize,usize,u32)>,bas
     replace_on_release:bool,fail_write:Option<usize>,ignored_write:Option<usize>,jump_release:bool,jump_read:bool,time_step:u64}
 impl Device{
     fn new()->Self{let mut d=Self{regs:vec![0;0x2000],command:2,now:0,writes:Vec::new(),base:std::ptr::null_mut(),
-        replace_on_release:false,fail_write:None,ignored_write:None,jump_release:false,jump_read:false,time_step:0};d.set(fwcmd::DMA_STOP,0x1f0f03);d}
+        replace_on_release:false,fail_write:None,ignored_write:None,jump_release:false,jump_read:false,time_step:0};d.set(fwcmd::DMA_STOP,0x1f0f00);d}
     fn get(&self,at:usize)->u32{u32::from_le_bytes(self.regs[at..at+4].try_into().unwrap())}
     fn set(&mut self,at:usize,value:u32){self.regs[at..at+4].copy_from_slice(&value.to_le_bytes());}
     fn apply(&mut self,at:usize,width:usize,value:u32)->io::Result<()>{
@@ -86,15 +86,15 @@ fn exact_upstream_descriptors_fit_disjoint_future_pool(){
 #[test]
 fn installation_changes_only_owned_ring_registers_without_activation(){
     let mut d=Device::new();let mut r=Region::new();let mut q=r.rings(&mut d);q.install(&mut d).unwrap();
-    assert_eq!(q.state(),State::Installed);assert_eq!(d.command,2);assert_eq!(d.get(fwcmd::DMA_STOP),0x1f0f03);
+    assert_eq!(q.state(),State::Installed);assert_eq!(d.command,2);assert_eq!(d.get(fwcmd::DMA_STOP),0x1f0f00);
     assert_eq!(d.read16(0x1020).unwrap(),256);assert_eq!(d.read16(0x1022).unwrap(),256);
     assert_eq!(d.get(0x1100),0x200000);assert_eq!(d.get(0x1108),0x200800);
     assert!(d.writes.iter().all(|(at,_,_)|[0x1018,0x1020,0x1022,0x1100,0x1104,0x1108,0x110c].contains(at)));
 }
 #[test]
 fn install_refuses_active_or_busy_receive_before_programming_rings(){
-    for variant in 0..4{let mut d=Device::new();let mut r=Region::new();let mut q=r.rings(&mut d);
-        match variant{0=>d.command=6,1=>d.set(fwcmd::INIT_CONFIG,1<<13),2=>d.set(fwcmd::DMA_STOP,0),_=>d.set(fwcmd::DMA_BUSY,1<<22)}
+    for variant in 0..3{let mut d=Device::new();let mut r=Region::new();let mut q=r.rings(&mut d);
+        match variant{0=>d.command=6,1=>d.set(fwcmd::INIT_CONFIG,1<<13),_=>d.set(fwcmd::DMA_BUSY,1<<22)}
         assert!(q.install(&mut d).is_err());assert!(d.writes.is_empty());assert_eq!(q.state(),State::Faulted);
     }
 }
@@ -108,7 +108,7 @@ fn ignored_or_failed_installation_never_admits_start(){
 #[test]
 fn start_requires_installed_unchanged_packet_mode_rings_and_never_writes(){
     for variant in 0..5{let mut d=Device::new();let mut r=Region::new();let mut q=r.rings(&mut d);q.install(&mut d).unwrap();d.enable();d.writes.clear();
-        match variant{0=>d.command=0xffff,1=>d.set(0x1100,0),2=>d.set(fwcmd::INIT_CONFIG,1<<13|1<<18),3=>d.set(0x1050,256<<16),_=>d.set(fwcmd::DMA_STOP,1)}
+        match variant{0=>d.command=0xffff,1=>d.set(0x1100,0),2=>d.set(fwcmd::INIT_CONFIG,1<<13|1<<18),3=>d.set(0x1050,256<<16),_=>d.set(fwcmd::DMA_STOP,1<<20)}
         assert!(unsafe{q.start(&mut d)}.is_err());assert!(d.writes.is_empty());
     }
 }
@@ -166,7 +166,7 @@ fn late_empty_read_and_last_doorbell_cannot_report_success(){
 #[test]
 fn stop_attempts_hci_even_when_stop_write_errors_and_preserves_command_tx(){
     let mut d=Device::new();let mut r=Region::new();let mut q=active(&mut r,&mut d);d.fail_write=Some(1);let result=q.stop(&mut d);
-    assert!(result.request.is_some());assert!(result.hci.is_none()&&result.idle.is_none());assert_eq!(d.get(fwcmd::INIT_CONFIG),1<<11);assert_eq!(d.get(fwcmd::DMA_STOP),0xb0f03);assert_eq!(q.state(),State::Faulted);
+    assert!(result.request.is_some());assert!(result.hci.is_none()&&result.idle.is_none());assert_eq!(d.get(fwcmd::INIT_CONFIG),1<<11);assert_eq!(d.get(fwcmd::DMA_STOP),0xb0f00);assert_eq!(q.state(),State::Faulted);
 }
 #[test]
 fn descriptor_shift_long_header_and_driver_info_are_bounds_checked(){

@@ -26,7 +26,7 @@ impl Device {
         for (at,value) in [(SYS_CFG1,1<<12),(R_AX_IC_PWR_STATE,1<<8),(R_AX_PLATFORM_ENABLE,3),
             (download::FW_CONTROL,0xe0),(R_AX_CMAC_FUNC_EN,0x7000803f),(R_AX_DMAC_FUNC_EN,0x64c40000),
             (mac::DMAC_CLOCK,0x04840000),(mac::PLE_CONFIG,0x00400801),(mac::WDE_READY,3),(mac::PLE_READY,3),
-            (mac::HFC_CONTROL,8),(fwcmd::DMA_STOP,0x1f0f03),(R_AX_CTN_TXEN,0xffff),(0x8a9c,446)] {d.set(at,value);}
+            (mac::HFC_CONTROL,8),(fwcmd::DMA_STOP,0x1f0f00),(R_AX_CTN_TXEN,0xffff),(0x8a9c,446)] {d.set(at,value);}
         d.xtal[0x80]=0xc0;d.xtal[0x81]=0xb8; d
     }
     fn get(&self,at:usize)->u32 {u32::from_le_bytes(self.regs[at..at+4].try_into().unwrap())}
@@ -58,7 +58,7 @@ impl Device {
     }
     fn stopped(&self){
         assert_eq!(self.regs[R_AX_SYS_FUNC_EN]&3,0);assert_eq!(self.get(R_AX_WLRF_CTRL)&B_AX_AFC_AFEDIG,0);
-        assert_eq!(self.get(fwcmd::DMA_STOP)&0x1f0f03,0x1f0f03);assert_eq!(self.get(fwcmd::INIT_CONFIG)&(1<<11|1<<13),0);
+        assert_eq!(self.get(fwcmd::DMA_STOP)&0x1f0f00,0x1f0f00);assert_eq!(self.get(fwcmd::INIT_CONFIG)&(1<<11|1<<13),0);
         assert_eq!(self.get(R_AX_PLATFORM_ENABLE)&2,0);
     }
 }
@@ -119,6 +119,20 @@ fn source_scc_geometry_and_quiet_packet_paths_after_preparation(){
     assert_eq!(d.get(R_AX_RX_FLTR_OPT)&0x3f0000,22<<16);assert_eq!(d.get(R_AX_DLK_PROTECT_CTL&!3)>>16,0x20f0);
     assert!(!d.writes.iter().any(|(at,_,_)|*at==R_AX_CTN_TXEN||*at==R_AX_PTCL_TX_CTN_SEL));
     assert!(!d.writes.iter().any(|(at,_,_)|*at==fwcmd::INDEX||*at==fwcmd::BASE_LOW||*at==fwcmd::CLEAR_INDEX));
+    d.stopped_for_drop(&mut q);
+}
+#[test]
+fn the_ryzens_cmac_reads_admit_preparation(){
+    // The Ryzen's RTL8852BE, 2026-11-03: CK_EN reads all ones once powered, and band 1's CMAC is absent.
+    let mut d=Device::new();d.set(0xc004,u32::MAX);d.set(0xe000,0xdead_beef);let mut r=Region::new();let mut q=r.queue(&mut d);
+    prepare_inner(&mut d,&mut q,&board(),BAR_BYTES).unwrap();
+    assert_eq!(d.get(0xc004),u32::MAX);assert!(!d.writes.iter().any(|(at,_,_)|*at==0xc004||*at==0xe000));
+    d.stopped_for_drop(&mut q);
+}
+#[test]
+fn an_enabled_band1_cmac_is_refused_before_writes(){
+    let mut d=Device::new();d.set(0xe000,1<<30);let mut r=Region::new();let mut q=r.queue(&mut d);let before=d.writes.len();
+    assert_eq!(prepare_inner(&mut d,&mut q,&board(),BAR_BYTES).unwrap_err().stage,Stage::Guard);assert_eq!(d.writes.len(),before);
     d.stopped_for_drop(&mut q);
 }
 impl Device{fn stopped_for_drop(&mut self,q:&mut Queue<'_>){let stop=download::stop(self,q);assert!(stop.dma.is_none()&&stop.cpu.is_none());}}

@@ -1026,3 +1026,39 @@ before the 9 Rust and 11 Python fixtures all passed on its own branch;
 exact source regeneration also passed. Configuration and evidence are in the
 catalog document. This task remains open for native integration and actual
 radio acceptance.
+
+## The first runs past the board read on the Ryzen (2026-11-03 and 04)
+
+The maintainer let DRV reboot the Ryzen freely. Each trial build of `rtw89_wifi` was put in with the link's `replace` on `fast-test` 13253dc8, slot A, mostly on a fresh boot (Linux, then `boot_switch.py once`); eleven trials, 2026-11-03 and 04. Linux's pinned sources (05f7e89a: `pci.c`, `pci.h`, `mac.c`, `mac.h`, `reg.h`, `rtw8852be.c`) were the reference.
+
+**What each run found, in order:**
+
+| Stage reached | What the chip did | Linux | The change tried |
+|---|---|---|---|
+| `Mac` guard | `INIT_CONFIG` (0x1000) `00C15F00` at start: TXHCI on, left by Linux's driver before the reboot (also after a cold start) | pre-init stops DMA and clears TX/RX HCI without checking | `mac::quiesce`: with PCI mastering off, stop DMA and clear both HCI bits, logged as `HCI LEFT ON` |
+| `quiesce` readback | `DMA_STOP` (0x1010) keeps `001FFF00`; bits 0 and 1 (`STOP_RXQ`, `STOP_RPQ`) never hold, in any state tried | the 8852B's stop set is `B_AX_TX_STOP1_MASK_V1` plus WPDMA and PCIEIO (`001F0F00`); RXQ/RPQ bits are never written | every `0x001f0f03`/`0x000b0f03` mask without bits 0 and 1; RX stopped means RXHCI off |
+| `Finish`, BDRAM reset | `INIT_CONFIG` bit 3 never clears, not in 4 ms, not with mastering on; it stays set until the next boot | `rtw89_mac_partial_init` first sets `R_AX_HCI_FUNC_EN` (0x8380) TXDMA and RXDMA | 0x8380 read `00000000`; with bits 0 and 1 set, the BDRAM reset ended in 3 to 4 µs |
+| `Download` | firmware status 7, version `[0, 29, 29, 15]` | — | — |
+| `PhyCap` | `TX/RX NSS 2/2`, raw `[06020403, 0F030302, 4357280F, 000202C5]` | — | `runtime_mac::guard` took band 1's CMAC (0xE000) reading `DEADBEEF` for on; this single-band chip has none, and `check_mac_en` takes `0xdeadbeef`/`0xeaeaeaea` as absent |
+| `RuntimeMac`, `Functions` | `R_AX_CK_EN` (0xC004) reads `FFFFFFFF` once powered, while 0xC000 reads `7000803F` and the device answers; `io::read32` refused it as a lost device | `cmac_func_en` sets its bits without reading them back | `io::cmac_ready` takes CK_EN all ones and band 1 absent, used by `runtime_mac`, `post_mac` and `phy` |
+| `PostMac` guard | HIMR0 (0x1A0) `00200000` (`B_AX_HALT_C2H_INT_EN`) after the download; 0 before it | `disable_intr` writes 0 to the three host masks | `mac::mask_host` before the MAC preparation and after the download |
+| the whole diagnostic | `failure: None`: MAC/RX DMA prepared, the initial PHY/BTC (thermal 34/34, RCK, DACK), then stop, registers, power-off and quiesce all `Ok` | — | — |
+
+**The driver without trial probes** (build `d922e3db…`, 2026-11-04 04:51 UTC, a fresh boot) did the same:
+- `HCI LEFT ON (INIT_CONFIG 00C15F00)`;
+- firmware status 7;
+- `THE FIRMWARE ENABLED HOST INTERRUPTS (HIMR [00200000, 0, 0]): MASKED`;
+- `FAILURE: None`.
+
+All `rtw89` host tests pass, with new ones for `quiesce`, `mask_host`, `HCI_FUNC_EN`, `cmac_ready` and the Ryzen's CMAC reads.
+
+**What this shows:** that machine and that build only (MC-12.1).
+
+**Next, for an actual network:**
+- the persistent driver loop: channel calibration, the station and the data path, all already library slices;
+- KRN's WLAN endpoint ([213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md)), which waits for that loop.
+
+**Also seen, not explained:**
+- One reboot from Linux with BootNext to the stick (2026-11-03 18:56 UTC) left a dark screen and no MIND log until the maintainer's restart.
+- Its stick's log volume shows a Windows `$RECYCLE.BIN` at 20:34 UTC. MIND Core then booted at 20:35 without the CH340 on the bus (port 4 empty) and without an Ethernet link.
+- The maintainer moved nothing.

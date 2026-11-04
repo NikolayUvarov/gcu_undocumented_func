@@ -16,7 +16,7 @@ pub(super) fn prepare_results(p:&mut Phy<Device>){
 fn stopped(d:&Device) {
     assert_eq!(d.get(2,1)&3,0); assert_eq!(d.get(0x2f0,4)&(1<<17),0);
     assert_eq!(d.xtal[0x80]&7,0); assert_eq!(d.xtal[0x81]&7,0); assert_eq!(d.command,6);
-    assert_eq!(d.get(0xc348,4),0); assert_eq!(d.get(0x1010,4),0xb0f03);
+    assert_eq!(d.get(0xc348,4),0); assert_eq!(d.get(0x1010,4),0xb0f00);
 }
 fn pair(d:&Device,band:u8) {
     assert_eq!(d.btc.len(),2);
@@ -46,7 +46,7 @@ fn source_dack_sequence_collects_calibration_then_restores_rf_and_stops_btc() {
     assert_eq!(d.rf[0][5],0x65433);assert_eq!(d.rf[1][5],0x76543);
     assert_eq!(d.get(0x1c0f0,4)&0xffff0000,(0x123<<16)|(0x15<<26));
     assert_eq!(d.get(0x1c1f0,4)&0xffff0000,(0x234<<16)|(0x2b<<26));
-    assert_eq!(d.get(0xc348,4),0);assert_eq!(d.command,6);assert_eq!(d.get(0x1010,4),0xb0f03);
+    assert_eq!(d.get(0xc348,4),0);assert_eq!(d.command,6);assert_eq!(d.get(0x1010,4),0xb0f00);
 }
 #[test]
 fn btc_start_refusal_and_late_grant_cannot_begin_afe_and_always_attempt_stop() {

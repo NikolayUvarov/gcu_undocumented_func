@@ -61,7 +61,7 @@ impl Device {
             swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_us: 100_000, deadline_write_number: None, delay_jump: None };
         for (at, value) in [(0xf0, 0x1000), (0x3f0, 0x100), (0x88, 3), (0x1e0, 0xe0),
             (0x8400, 0xfffd0000), (0x8404, 0x0f9f0000), (0xc000, 0xf000003f),
-            (0xc004, 0x4000003f), (0x200, 1 << 17), (0x2f0, 1 << 17), (0x1000, 0x800), (0x1010, 0xb0f03)] {
+            (0xc004, 0x4000003f), (0x200, 1 << 17), (0x2f0, 1 << 17), (0x1000, 0x800), (0x1010, 0xb0f00)] {
             d.put(at, 4, value);
         }
         d.put(2, 1, 3); d.put(0x8040, 1, 14); d.xtal[0x80]=0xc7; d.xtal[0x81]=0xc7;
@@ -464,7 +464,7 @@ fn txpower_and_chip_reset_follow_bb_in_exact_order_preserving_other_fields() {
         Event::Write(0x10704,4,0x601c05ff), Event::Write(0x158dc,4,0x80001234),
         Event::Write(0x15818,4,0x082c1800), Event::Write(0x178dc,4,0x80005678), Event::Write(0x17818,4,0x082c1800),
     ]);
-    assert_eq!(d.get(0xc348,4),0); assert_eq!(d.get(0x1010,4),0xb0f03); assert_eq!(d.command,6);
+    assert_eq!(d.get(0xc348,4),0); assert_eq!(d.get(0x1010,4),0xb0f00); assert_eq!(d.command,6);
 }
 
 #[test]

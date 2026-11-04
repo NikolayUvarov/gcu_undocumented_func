@@ -521,8 +521,24 @@ gate containing this slice remain pending. Interrupts, RX activation, command
 ACK routing, BTC coordination and WLAN service registration remain separate.
 A warm device is not silently reset: MEM-only PCI decoding does not imply
 MAC-off or establish ownership of old DMA. The board's cold-state guard
-remains; an owned quiescence/reset transition is still required for warm
-boot/restart support.
+remains.
+
+**The owned quiescence (2026-11-03).** On the Ryzen, `INIT_CONFIG` comes up as
+`00C15F00`, with TXHCI on, after Linux's driver and also after a cold start:
+that register is outside the MAC's power domain. Before the guard,
+`mac::quiesce` refuses unless PCI mastering is off. It then does what
+`pci.c`'s pre-init does:
+- sets the RTL8852B stop set (`0x001f0f00`, as `B_AX_TX_STOP1_MASK_V1` plus WPDMA and PCIEIO);
+- clears TX/RX HCI;
+- waits for DMA idle;
+- logs the value it found.
+
+`mac::mask_host` clears HIMR0, PCIE_HIMR00 and PCIE_HIMR10, as `disable_intr`
+does. It runs before the MAC preparation and again after the download,
+because the firmware enables its halt interrupt (HIMR0 bit 21).
+`prepare_download` then sets `R_AX_HCI_FUNC_EN` (0x8380) TX/RX DMA first, as
+`rtw89_mac_partial_init` does. Without it the PCIe BDRAM reset bit stays set
+forever (seen for 4 ms, and with mastering on); with it the reset ends in 3–4 µs.
 
 ## Native firmware diagnostic integration (213-KRN-0114)
 

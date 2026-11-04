@@ -12,7 +12,7 @@ BSD-3-Clause option recorded in THIRD_PARTY.md. Queue enable follows
 The private raw TX engine owns CH0–3 and CH8 (management), so activation clears
 only `0x00090f00` (these five channels plus write-pointer release). CH9 remains
 stopped; command/RX/PCIe I/O remain in their already validated running state.
-The complete checked STOP mask is `0x001f0f03`, with value `0x00020000`.
+The complete checked STOP mask is `0x001f0f00`, with value `0x00020000`: the RTL8852B keeps no RXQ/RPQ stop bit (bits 0 and 1 never hold on the Ryzen, 2026-11-03), so RX stops by RXHCI alone.
 
 [`reg.h:2258–2273`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/reg.h)
 assigns CTN BE/BK/VI/VO0 bits 0–3 and MGQ bit 8: `0x010f`.

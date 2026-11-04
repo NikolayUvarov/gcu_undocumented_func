@@ -84,7 +84,7 @@ impl<'a> Rings<'a>{
     pub fn install(&mut self,bus:&mut impl Bus)->Result<(),Error>{
         if self.state!=State::Allocated{return Err(Error::State);}
         let result=(||{
-            if bus.pci_command()?&7!=2||io::read32(bus,fwcmd::INIT_CONFIG)?&RX_ENABLE!=0||io::read32(bus,fwcmd::DMA_STOP)?&3!=3{return Err(Error::State);}
+            if bus.pci_command()?&7!=2||io::read32(bus,fwcmd::INIT_CONFIG)?&RX_ENABLE!=0{return Err(Error::State);}
             let mut timed=TimedIo::new(bus,10_000);
             io::poll32(&mut timed,fwcmd::DMA_BUSY,RX_BUSY,0,10,100)?;
             io::modify32(&mut timed,RX_CLEAR,0,3)?;
@@ -107,7 +107,7 @@ impl<'a> Rings<'a>{
         let result=(||{
             let command=bus.pci_command()?;
             if command==u16::MAX||command&6!=6||io::read32(bus,fwcmd::INIT_CONFIG)?&(RX_ENABLE|1<<18)!=RX_ENABLE
-                ||io::read32(bus,fwcmd::DMA_STOP)?&(3|1<<20)!=0{return Err(Error::State);}
+                ||io::read32(bus,fwcmd::DMA_STOP)?&(1<<20)!=0{return Err(Error::State);}
             self.check_rings(bus,false)?;Ok(())
         })();
         self.poison(result)?;self.state=State::Running;Ok(())
@@ -151,14 +151,9 @@ impl<'a> Rings<'a>{
     pub fn stop(&mut self,bus:&mut impl RegisterIo)->Stop{
         self.state=State::Faulted;
         let mut timed=TimedIo::new(bus,1000);
-        let request=(||{
-            io::modify32(&mut timed,fwcmd::DMA_STOP,0,3)?;
-            let value=io::read32(&mut timed,fwcmd::DMA_STOP)?;
-            if value&3!=3{return Err(Fault::new(FaultKind::PowerState,fwcmd::DMA_STOP,value));}
-            timed.delay_us(0)
-        })().err();
+        // RXHCI alone stops RX: the RTL8852B keeps no RXQ/RPQ stop bit in DMA_STOP (Ryzen, 2026-11-03).
+        let request=(||{io::modify32(&mut timed,fwcmd::INIT_CONFIG,RX_ENABLE,0)?;timed.delay_us(0)})().err();
         let hci=(||{
-            io::modify32(&mut timed,fwcmd::INIT_CONFIG,RX_ENABLE,0)?;
             let value=io::read32(&mut timed,fwcmd::INIT_CONFIG)?;
             if value&RX_ENABLE!=0{return Err(Fault::new(FaultKind::PowerState,fwcmd::INIT_CONFIG,value));}
             timed.delay_us(0)

@@ -17,7 +17,7 @@ fn cold_native_layout_installs_packet_queues_before_mastering_without_enabling_t
         assert_eq!(bus.command, 2);
         assert_eq!(queues.transmit.state(), tx::State::Installed);
         assert_eq!(queues.receive.state(), rx::State::Installed);
-        assert_eq!(bus.get(fwcmd::DMA_STOP, 4) & 0x001f0f03, 0x001f0f03);
+        assert_eq!(bus.get(fwcmd::DMA_STOP, 4) & 0x001f0f00, 0x001f0f00);
         assert_eq!(bus.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0);
         assert_eq!(bus.get(fwcmd::BASE_LOW, 4), 0x200000);
         assert_eq!(queues.receive.physical(), 0x200000 + native_dma::COMMAND_BYTES as u64);
@@ -28,7 +28,7 @@ fn cold_native_layout_installs_packet_queues_before_mastering_without_enabling_t
         startup::command_dma(&mut bus).unwrap();
         unsafe { queues.command.start(&mut bus) }.unwrap();
         assert_eq!(queues.transmit.state(), tx::State::Installed);
-        assert_eq!(bus.get(fwcmd::DMA_STOP, 4) & 0x001f0f03, 0x000b0f03);
+        assert_eq!(bus.get(fwcmd::DMA_STOP, 4) & 0x001f0f00, 0x000b0f00);
         let stop = queues.stop_transmit(&mut bus);
         assert!(stop.request.is_none() && stop.idle.is_none());
         assert_eq!(queues.transmit.state(), tx::State::Stopped);

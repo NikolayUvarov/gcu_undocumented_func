@@ -7,8 +7,8 @@ pub const COMMAND_REGION_BYTES: usize = 128 * 1024;
 pub const RECEIVE_REGION_BYTES: usize = rtw89_wifi::rx::DMA_BYTES;
 pub const TRANSMIT_REGION_OFFSET: usize = COMMAND_REGION_BYTES + RECEIVE_REGION_BYTES;
 pub const TRANSMIT_REGION_BYTES: usize = DMA_GRANT_BYTES - TRANSMIT_REGION_OFFSET;
-const STOP_ALL: u32 = 0x001f_0f03;
-const STOP_DATA: u32 = 0x000b_0f03;
+const STOP_ALL: u32 = 0x001f_0f00;
+const STOP_DATA: u32 = 0x000b_0f00;
 const HCI: u32 = 1 << 11 | 1 << 13;
 
 pub fn valid_dma(address: usize, length: usize, physical: u64) -> bool {

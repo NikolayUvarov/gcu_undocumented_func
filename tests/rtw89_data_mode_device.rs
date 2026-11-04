@@ -100,7 +100,7 @@ impl Device{
         if armed&&self.active&&filter_fault==6&&!self.control.borrow().cam_packets.is_empty()&&at==0xc04&&value==0x18888000{
             return Err(io::Fault::new(io::FaultKind::Access,at,value));
         }
-        let enable=armed&&at==fwcmd::DMA_STOP&&value&0x001f0f03==0x20000;
+        let enable=armed&&at==fwcmd::DMA_STOP&&value&0x001f0f00==0x20000;
         if enable&&fault==1{return Ok(())}
         let scheduler=armed&&at==0x8160&&width==1&&value==1&&self.raw().get(0x8140,4)==0x010f0205;
         if self.active&&at==fwcmd::INDEX&&width==2&&std::mem::take(&mut self.control.borrow_mut().burst){

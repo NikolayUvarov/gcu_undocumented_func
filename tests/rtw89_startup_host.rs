@@ -109,7 +109,7 @@ fn dma_requires_full_retained_aligned_region_below_four_gib() {
 }
 
 struct Bus { command: u16, stop: u32, config: u32, writes: Vec<(usize, u32)>, ignore: bool, xtal: u32, now: u64 }
-impl Bus { fn new(command: u16) -> Self { Self { command, stop: 0x801f_0f03, config: 0x80, writes: Vec::new(), ignore: false, xtal: 0, now: 0 } } }
+impl Bus { fn new(command: u16) -> Self { Self { command, stop: 0x801f_0f00, config: 0x80, writes: Vec::new(), ignore: false, xtal: 0, now: 0 } } }
 impl io::RegisterIo for Bus {
     fn read8(&mut self, _: usize) -> io::Result<u8> { panic!("unexpected width") }
     fn read16(&mut self, _: usize) -> io::Result<u16> { panic!("unexpected width") }
@@ -133,9 +133,9 @@ fn native_activation_opens_only_command_channel_and_tx_hci() {
     for command in [6, 7] {
         let mut bus = Bus::new(command);
         startup::command_dma(&mut bus).unwrap();
-        assert_eq!(bus.stop, 0x800b_0f03);
+        assert_eq!(bus.stop, 0x800b_0f00);
         assert_eq!(bus.config, 0x880);
-        assert_eq!(bus.writes, [(fwcmd::DMA_STOP, 0x800b_0f03), (fwcmd::INIT_CONFIG, 0x880)]);
+        assert_eq!(bus.writes, [(fwcmd::DMA_STOP, 0x800b_0f00), (fwcmd::INIT_CONFIG, 0x880)]);
     }
 }
 
@@ -152,7 +152,7 @@ fn missing_mastering_or_inaccessible_pci_cannot_activate_any_channel() {
 fn unexpected_active_packet_channel_or_hci_is_rejected_before_writes() {
     for change in 0..2 {
         let mut bus = Bus::new(6);
-        if change == 0 { bus.stop &= !1; } else { bus.config |= 1 << 13; }
+        if change == 0 { bus.stop &= !(1 << 8); } else { bus.config |= 1 << 13; }
         assert!(startup::command_dma(&mut bus).is_err());
         assert!(bus.writes.is_empty());
     }
