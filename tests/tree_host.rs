@@ -1,7 +1,8 @@
 //! Host tests of libmind/src/tree.rs (issue 311-STO-0027; MC-4.2, 4.5, 4.13): directories as DAG-CBOR nodes and the
 //! walk of a tree of them. Node bytes are checked against an encoding written here from the schema; every non-canonical
 //! node, bad entry and node over a block is refused; a walk visits exactly the blocks of a tree, and refuses a missing
-//! block, a changed one, an entry that disagrees with its object and a tree past the depth.
+//! block, a changed one, an entry that disagrees with its object and a tree past the depth. Two roots compared
+//! (311-STO-0039) against a comparison of the trees' models, random ones among them, an equal subtree never read.
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -15,11 +16,12 @@ mod tree;
 use cid::{Cid, Codec};
 use dag::{Blocks, Builder, Error, CHUNK, FANOUT};
 use std::collections::{HashMap, HashSet};
-use tree::{decode, encode, size, walk, Entry, Kind, DEPTH, NAME_MAX};
+use std::collections::BTreeMap;
+use tree::{decode, diff, encode, size, walk, Change, Entry, Kind, Side, DEPTH, NAME_MAX, PATH_MAX};
 
-/// Blocks in memory; `replace` makes the store answer a CID with other bytes.
+/// Blocks in memory; `replace` makes the store answer a CID with other bytes; `reads` counts the blocks read.
 #[derive(Default)]
-struct Memory { blocks: HashMap<Cid, Vec<u8>>, replace: HashMap<Cid, Vec<u8>> }
+struct Memory { blocks: HashMap<Cid, Vec<u8>>, replace: HashMap<Cid, Vec<u8>>, reads: usize }
 impl Blocks for Memory {
     fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, Error> {
         let cid = Cid::of(codec, data);
@@ -27,6 +29,7 @@ impl Blocks for Memory {
         Ok(cid)
     }
     fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, Error> {
+        self.reads += 1;
         let data = self.replace.get(cid).or_else(|| self.blocks.get(cid)).ok_or(Error::NotFound)?;
         out[..data.len()].copy_from_slice(data);
         Ok(data.len())
@@ -378,3 +381,259 @@ fn a_walk_takes_at_most_the_steps_it_is_given() {
     assert_eq!(walk(&mut blocks, &big, &mut buffer, 3, |_, _| Ok(())), Err(Error::TooLarge));
 }
 
+
+/// A tree's model: a file's bytes, or a directory's entries by name.
+#[derive(Clone, PartialEq, Debug)]
+enum M { F(Vec<u8>), D(BTreeMap<String, M>) }
+
+/// Stores the directory `entries` models, its directories first; its CID.
+fn build(blocks: &mut Memory, entries: &BTreeMap<String, M>) -> Cid {
+    let mut sides = Vec::new();
+    for (name, m) in entries { sides.push((name, side_of(blocks, m))); }
+    let listed: Vec<Entry> = sides.iter().map(|(name, s)| Entry { name: name.as_bytes(), kind: s.kind, size: s.size, cid: s.cid }).collect();
+    put_dir(blocks, &listed)
+}
+
+/// What an entry of the model `m` names, stored.
+fn side_of(blocks: &mut Memory, m: &M) -> Side {
+    match m {
+        M::F(data) => { let (cid, size) = store(blocks, data); Side { kind: Kind::File, size, cid } }
+        M::D(entries) => Side { kind: Kind::Directory, size: entries.len() as u64, cid: build(blocks, entries) },
+    }
+}
+
+/// The comparison of two models, as `diff` should make it: each path where they differ, in the names' order.
+fn model_diff(blocks: &mut Memory, a: &BTreeMap<String, M>, b: &BTreeMap<String, M>, prefix: &str, out: &mut Vec<(String, Change)>) {
+    let names: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    for name in names {
+        let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        match (a.get(name), b.get(name)) {
+            (Some(x), Some(y)) if x == y => {}
+            (Some(M::D(x)), Some(M::D(y))) => model_diff(blocks, x, y, &path, out),
+            (Some(x), Some(y)) => { let change = Change::Changed(side_of(blocks, x), side_of(blocks, y)); out.push((path, change)) }
+            (Some(x), None) => { let change = Change::Removed(side_of(blocks, x)); out.push((path, change)) }
+            (None, Some(y)) => { let change = Change::Added(side_of(blocks, y)); out.push((path, change)) }
+            (None, None) => unreachable!(),
+        }
+    }
+}
+
+/// `diff` of two roots within a million steps, more than any tree here needs, so one that never ends fails: what it visited, its count checked.
+fn compared(blocks: &mut Memory, a: Option<&Cid>, b: Option<&Cid>) -> Result<Vec<(String, Change)>, Error> {
+    let (mut one, mut two) = (Box::new([0u8; CHUNK]), Box::new([0u8; CHUNK]));
+    let mut path = vec![0u8; PATH_MAX];
+    let mut seen = Vec::new();
+    let mut left = 1 << 20;
+    let n = diff(blocks, a, b, [&mut one, &mut two], &mut path, &mut left, |p, c| { seen.push((String::from_utf8(p.to_vec()).unwrap(), c)); Ok(()) })?;
+    assert_eq!(n as usize, seen.len());
+    Ok(seen)
+}
+
+fn d(entries: &[(&str, M)]) -> BTreeMap<String, M> { entries.iter().map(|(n, m)| (n.to_string(), m.clone())).collect() }
+fn f(text: &str) -> M { M::F(text.as_bytes().to_vec()) }
+
+#[test]
+fn two_roots_compared_name_each_change() {
+    let mut blocks = Memory::default();
+    let deep = d(&[("x.txt", f("x")), ("y.txt", f("y"))]);
+    let a = d(&[("a.txt", f("one")), ("big.bin", M::F(pattern(4, 3 * CHUNK + 5))), ("docs", M::D(d(&[("deep", M::D(deep.clone())), ("n.txt", f("n"))]))),
+                ("gone", M::D(d(&[("g", f("g"))]))), ("kind", f("a file")), ("same", M::D(d(&[("s", f("s"))])))]);
+    let mut deep2 = deep.clone();
+    deep2.insert("y.txt".into(), f("y, changed"));
+    deep2.insert("z.txt".into(), f("z"));
+    let b = d(&[("a.txt", f("one")), ("big.bin", M::F(pattern(5, 3 * CHUNK + 5))), ("docs", M::D(d(&[("deep", M::D(deep2)), ("n.txt", f("n"))]))),
+                ("kind", M::D(d(&[]))), ("new", M::D(d(&[("w", f("w"))]))), ("same", M::D(d(&[("s", f("s"))])))]);
+    let (ra, rb) = (build(&mut blocks, &a), build(&mut blocks, &b));
+    let seen = compared(&mut blocks, Some(&ra), Some(&rb)).unwrap();
+    let paths: Vec<&str> = seen.iter().map(|(p, _)| p.as_str()).collect();
+    // A file changed at the root, a file changed and one added two levels down, a directory gone whole, a file become a
+    // directory, a directory new whole; equal entries and the equal directory `same` not named.
+    assert_eq!(paths, ["big.bin", "docs/deep/y.txt", "docs/deep/z.txt", "gone", "kind", "new"]);
+    let kinds: Vec<&str> = seen.iter().map(|(_, c)| match c { Change::Added(_) => "added", Change::Removed(_) => "removed", Change::Changed(..) => "changed" }).collect();
+    assert_eq!(kinds, ["changed", "changed", "added", "removed", "changed", "added"]);
+    let mut expected = Vec::new();
+    model_diff(&mut blocks, &a, &b, "", &mut expected);
+    assert_eq!(seen, expected);
+    // The sides: a directory's size is its entries; a kind changed keeps both kinds.
+    assert_eq!(seen[3].1, Change::Removed(Side { kind: Kind::Directory, size: 1, cid: build(&mut blocks, &d(&[("g", f("g"))])) }));
+    assert!(matches!(seen[4].1, Change::Changed(Side { kind: Kind::File, size: 6, .. }, Side { kind: Kind::Directory, size: 0, .. })));
+    // The other way round, every change turned over.
+    let back = compared(&mut blocks, Some(&rb), Some(&ra)).unwrap();
+    let turned: Vec<(String, Change)> = seen.iter().map(|(p, c)| (p.clone(), match *c { Change::Added(s) => Change::Removed(s), Change::Removed(s) => Change::Added(s), Change::Changed(x, y) => Change::Changed(y, x) })).collect();
+    assert_eq!(back, turned);
+    // A root with itself, and the empty tree with itself: nothing, and nothing read.
+    blocks.reads = 0;
+    assert_eq!(compared(&mut blocks, Some(&ra), Some(&ra)), Ok(vec![]));
+    assert_eq!(compared(&mut blocks, None, None), Ok(vec![]));
+    assert_eq!(blocks.reads, 0);
+    // From the empty tree: each entry of the root added, none gone into.
+    let all = compared(&mut blocks, None, Some(&ra)).unwrap();
+    assert_eq!(all.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["a.txt", "big.bin", "docs", "gone", "kind", "same"]);
+    assert!(all.iter().all(|(_, c)| matches!(c, Change::Added(_))));
+    let none = compared(&mut blocks, Some(&ra), None).unwrap();
+    assert!(none.len() == 6 && none.iter().all(|(_, c)| matches!(c, Change::Removed(_))));
+    // The empty directory as a root is the empty tree.
+    let empty = put_dir(&mut blocks, &[]);
+    assert_eq!(compared(&mut blocks, Some(&empty), Some(&ra)), Ok(all));
+}
+
+#[test]
+fn an_equal_subtree_is_never_read() {
+    // Two trees that differ in one file two levels down, beside a subtree of 1 directory, then of 200.
+    let reads = |wide: usize| {
+        let mut blocks = Memory::default();
+        let big: BTreeMap<String, M> = (0..wide).map(|k| (format!("d{k:03}"), M::D(d(&[("f", M::F(pattern(k, 10)))])))).collect();
+        let a = d(&[("big", M::D(big.clone())), ("p", M::D(d(&[("q", M::D(d(&[("r", f("one"))])))])))]);
+        let b = d(&[("big", M::D(big)), ("p", M::D(d(&[("q", M::D(d(&[("r", f("two"))])))])))]);
+        let (ra, rb) = (build(&mut blocks, &a), build(&mut blocks, &b));
+        blocks.reads = 0;
+        let seen = compared(&mut blocks, Some(&ra), Some(&rb)).unwrap();
+        assert_eq!(seen.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["p/q/r"]);
+        blocks.reads
+    };
+    // The pairs on the way down (the roots, p, q), each read again on the way back once a pair below it was: 10 blocks.
+    assert_eq!(reads(1), 10);
+    assert_eq!(reads(200), 10);
+}
+
+/// A small random number generator, so the trees are the same on every run.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self, n: usize) -> usize {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.0 >> 33) % n as u64) as usize
+    }
+}
+
+/// A random directory: names from a few, so the same name meets itself; files from a few contents, some equal.
+fn random_dir(rng: &mut Rng, depth: usize) -> BTreeMap<String, M> {
+    let mut out = BTreeMap::new();
+    for _ in 0..rng.next(5) {
+        let name = ["a", "b", "c", "d", "e", "f"][rng.next(6)].to_string();
+        let m = if depth < 4 && rng.next(3) == 0 { M::D(random_dir(rng, depth + 1)) } else { M::F(pattern(rng.next(4), rng.next(3) * 7)) };
+        out.insert(name, m);
+    }
+    out
+}
+
+/// One random edit somewhere in `dir`: an entry added, removed, its file changed, or its kind changed.
+fn mutate(rng: &mut Rng, dir: &mut BTreeMap<String, M>, depth: usize) {
+    let subs: Vec<String> = dir.iter().filter(|(_, m)| matches!(m, M::D(_))).map(|(n, _)| n.clone()).collect();
+    if !subs.is_empty() && rng.next(2) == 0 {
+        if let Some(M::D(sub)) = dir.get_mut(&subs[rng.next(subs.len())]) { return mutate(rng, sub, depth + 1); }
+    }
+    let name = ["a", "b", "c", "d", "e", "f", "g"][rng.next(7)].to_string();
+    match rng.next(4) {
+        0 => { dir.remove(&name); }
+        1 => { dir.insert(name, M::F(pattern(rng.next(9), 1 + rng.next(30)))); }
+        2 => { dir.insert(name, M::D(random_dir(rng, depth + 1))); }
+        _ => { dir.insert(name, M::D(BTreeMap::new())); }
+    }
+}
+
+#[test]
+fn random_trees_compare_as_their_models() {
+    let mut rng = Rng(311_0039);
+    let mut changed = 0;
+    for _ in 0..300 {
+        let mut blocks = Memory::default();
+        let a = random_dir(&mut rng, 0);
+        let mut b = a.clone();
+        for _ in 0..1 + rng.next(4) { mutate(&mut rng, &mut b, 0); }
+        let (ra, rb) = (build(&mut blocks, &a), build(&mut blocks, &b));
+        let mut expected = Vec::new();
+        model_diff(&mut blocks, &a, &b, "", &mut expected);
+        assert_eq!(compared(&mut blocks, Some(&ra), Some(&rb)).unwrap(), expected, "{a:?}\n{b:?}");
+        changed += expected.len();
+    }
+    // The edits made changes of every sort, many of them.
+    assert!(changed > 300, "{changed}");
+}
+
+#[test]
+fn a_bad_node_is_refused_when_read() {
+    let mut blocks = Memory::default();
+    let a = d(&[("s", M::D(d(&[("f", f("one"))])))]);
+    let b = d(&[("s", M::D(d(&[("f", f("two"))])))]);
+    let (ra, rb) = (build(&mut blocks, &a), build(&mut blocks, &b));
+    let sub = side_of(&mut blocks, &M::D(d(&[("f", f("two"))]))).cid;
+    // A node missing, a node changed.
+    let kept = blocks.blocks.remove(&sub).unwrap();
+    assert_eq!(compared(&mut blocks, Some(&ra), Some(&rb)), Err(Error::NotFound));
+    blocks.blocks.insert(sub, kept);
+    blocks.replace.insert(sub, put_dir_bytes(&[]));
+    assert_eq!(compared(&mut blocks, Some(&ra), Some(&rb)), Err(Error::Corrupt));
+    blocks.replace.clear();
+    // A root that is a file, and one that is a file's node.
+    let raw = blocks.put(Codec::Raw, b"not a directory").unwrap();
+    assert_eq!(compared(&mut blocks, Some(&raw), Some(&rb)), Err(Error::Shape));
+    let (node, _) = store(&mut blocks, &pattern(1, 2 * CHUNK));
+    assert_eq!(compared(&mut blocks, Some(&node), Some(&rb)), Err(Error::Shape));
+    // An entry naming a directory with another count of entries than it has.
+    let two = side_of(&mut blocks, &M::D(d(&[("f", f("two"))])));
+    let lying = put_dir(&mut blocks, &[Entry { name: b"s", kind: Kind::Directory, size: 2, cid: two.cid }]);
+    assert_eq!(compared(&mut blocks, Some(&ra), Some(&lying)), Err(Error::Shape));
+    // Entries of one CID with two counts: gone into, and the one that disagrees with the node is refused.
+    let one = side_of(&mut blocks, &M::D(d(&[("f", f("one"))])));
+    let miscounted = put_dir(&mut blocks, &[Entry { name: b"s", kind: Kind::Directory, size: 3, cid: one.cid }]);
+    assert_eq!(compared(&mut blocks, Some(&ra), Some(&miscounted)), Err(Error::Shape));
+    // An entry naming a file's node as a directory.
+    let posing = put_dir(&mut blocks, &[Entry { name: b"s", kind: Kind::Directory, size: 1, cid: node }]);
+    assert_eq!(compared(&mut blocks, Some(&ra), Some(&posing)), Err(Error::Shape));
+}
+
+/// A directory's encoding, as `put_dir` stores it.
+fn put_dir_bytes(entries: &[Entry]) -> Vec<u8> {
+    let mut out = Box::new([0u8; CHUNK]);
+    let len = encode(entries, &mut out).unwrap();
+    out[..len].to_vec()
+}
+
+#[test]
+fn a_comparison_is_bounded_by_its_steps_depth_and_path() {
+    let mut blocks = Memory::default();
+    // Two chains of DEPTH directories with a file at the bottom that differs: DEPTH pairs, the last one's file changed.
+    let chain = |blocks: &mut Memory, levels: usize, text: &str| {
+        let mut m = d(&[("f", f(text))]);
+        for _ in 1..levels { m = d(&[("dddd", M::D(m))]); }
+        build(blocks, &m)
+    };
+    let (a, b) = (chain(&mut blocks, DEPTH, "one"), chain(&mut blocks, DEPTH, "two"));
+    let seen = compared(&mut blocks, Some(&a), Some(&b)).unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].0, format!("{}f", "dddd/".repeat(DEPTH - 1)));
+    // One level more is past the depth.
+    let (a2, b2) = (chain(&mut blocks, DEPTH + 1, "one"), chain(&mut blocks, DEPTH + 1, "two"));
+    assert_eq!(compared(&mut blocks, Some(&a2), Some(&b2)), Err(Error::Shape));
+    // The steps: each pair read on the way down and again on the way back (but the last), each entry compared.
+    let needed = (DEPTH * 2 + (DEPTH - 1) * 2 + DEPTH) as u64;
+    let (mut one, mut two) = (Box::new([0u8; CHUNK]), Box::new([0u8; CHUNK]));
+    let mut path = vec![0u8; PATH_MAX];
+    let mut left = needed;
+    assert_eq!(diff(&mut blocks, Some(&a), Some(&b), [&mut one, &mut two], &mut path, &mut left, |_, _| Ok(())), Ok(1));
+    assert_eq!(left, 0);
+    let mut left = needed - 1;
+    assert_eq!(diff(&mut blocks, Some(&a), Some(&b), [&mut one, &mut two], &mut path, &mut left, |_, _| Ok(())), Err(Error::TooLarge));
+    // A path buffer one byte short of the changed file's path.
+    let mut short = vec![0u8; seen[0].0.len() - 1];
+    let mut left = u64::MAX;
+    assert_eq!(diff(&mut blocks, Some(&a), Some(&b), [&mut one, &mut two], &mut short, &mut left, |_, _| Ok(())), Err(Error::TooLarge));
+    let mut exact = vec![0u8; seen[0].0.len()];
+    assert_eq!(diff(&mut blocks, Some(&a), Some(&b), [&mut one, &mut two], &mut exact, &mut left, |_, _| Ok(())), Ok(1));
+    // PATH_MAX holds DEPTH names of NAME_MAX bytes.
+    let long = "n".repeat(NAME_MAX);
+    let deep = |blocks: &mut Memory, text: &str| {
+        let mut m = d(&[(long.as_str(), f(text))]);
+        for _ in 1..DEPTH { m = d(&[(long.as_str(), M::D(m))]); }
+        build(blocks, &m)
+    };
+    let (la, lb) = (deep(&mut blocks, "one"), deep(&mut blocks, "two"));
+    let seen = compared(&mut blocks, Some(&la), Some(&lb)).unwrap();
+    assert_eq!(seen[0].0.len(), DEPTH * (NAME_MAX + 1) - 1);
+    // A visit's error ends the comparison, and is its answer.
+    let both = (build(&mut blocks, &d(&[("x", f("1")), ("y", f("1"))])), build(&mut blocks, &d(&[("x", f("2")), ("y", f("2"))])));
+    let mut visits = 0;
+    let mut left = u64::MAX;
+    assert_eq!(diff(&mut blocks, Some(&both.0), Some(&both.1), [&mut one, &mut two], &mut path, &mut left, |_, _| { visits += 1; Err(Error::Store) }), Err(Error::Store));
+    assert_eq!(visits, 1);
+}

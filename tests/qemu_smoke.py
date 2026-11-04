@@ -4245,6 +4245,27 @@ def store_tree_check(vm):
     assert [(k, n) for k, _, _, n in listed("docs", 2)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
     require(blocks("tree cat home docs/c.bin ram:back.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
     print("PASS: blocks tree: a move and two removals, each published; a directory with entries is not removed", flush=True)
+    # 311-STO-0039: the versions kept (5 to 8) compared and read. The move and the removals, from version 5 to the current one.
+    out = blocks("tree diff home@5 home")
+    found = re.findall(r"^(ADDED|REMOVED|CHANGED) (FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)
+    assert [(c, k, s, p) for c, k, s, _, p in found] == [("REMOVED", "FILE", "20000", "c.bin"), ("ADDED", "FILE", "20000", "docs/c.bin"), ("REMOVED", "DIR", "1", "docs/deep")], out
+    assert found[0][3] == found[1][3] == put[1], out
+    require(out, "3 CHANGES FROM home VERSION 5 TO home VERSION 8")
+    # One file removed two levels down; the empty tree to version 5, the root's two entries added whole; a tree with itself.
+    require_all(blocks("tree diff home@6 home@7"), f"REMOVED FILE 12 {cid_raw(second)} docs/deep/b.txt", "1 CHANGES FROM home VERSION 6 TO home VERSION 7")
+    out = blocks("tree diff home@0 home@5")
+    assert [(c, k, s, p) for c, k, s, _, p in re.findall(r"^(ADDED|REMOVED|CHANGED) (FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)] == [("ADDED", "FILE", "20000", "c.bin"), ("ADDED", "DIR", "2", "docs")], out
+    require(out, "2 CHANGES FROM home VERSION 0 TO home VERSION 5")
+    out = blocks("tree diff home home@8")
+    assert not re.search(r"^(ADDED|REMOVED|CHANGED) ", out, re.M), out
+    require(out, "0 CHANGES FROM home VERSION 8 TO home VERSION 8")
+    # Older versions read as they were: version 5's root and c.bin at its old path, version 6's b.txt removed since.
+    require(blocks("tree ls home@5"), "2 ENTRIES IN / OF home VERSION 5")
+    require(blocks("tree cat home@5 c.bin ram:old.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
+    require(blocks("tree cat home@6 docs/deep/b.txt ram:old.txt"), f"READ 12 BYTES SHA-256 {hashlib.sha256(second).hexdigest()}")
+    require(blocks("tree ls home@4"), "blocks: tree home: no version 4 kept")
+    print("PASS: blocks tree diff: between kept versions, a move and the removals named, an equal tree none; older versions "
+          "listed and read back (SHA-256), one no longer kept refused", flush=True)
 
 
 def store_copy_check(vm):
@@ -10821,6 +10842,7 @@ def device_key_check(args, cpu):
             # 108: a change of the network policy is kept on the disk too.
             require(policy_answer(vm, "netpolicy add kept 10.0.2.2 tcp 7", "y"), "NETPOLICY: ADDED 1 LINE(S)")
             secrets_first_boot(vm)
+            passphrase_calls_check(vm)
             volume = service_secrets_first_boot(vm)
         finally:
             vm.close()
@@ -10846,6 +10868,7 @@ def device_key_check(args, cpu):
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
         assert third != first, (first, third)
+        locked_file_check(args, cpu, image, part, Path(temp), store)
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
           "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
@@ -10853,10 +10876,65 @@ def device_key_check(args, cpu):
           f"after a reboot (SHA-256 checked); netpeer, the same program by another name, finds none, nor opens netcheck's file "
           f"copied under its name; a copy run by a path gets no secrets client; the file ({kept} bytes) is sealed, and the value "
           "is in no log line and no command line", flush=True)
+    print("PASS: keystore's passphrase (308-NET-0055): key-state Held without a TPM; unlock and passphrase-set refused (Denied) to a "
+          "client without the passphrase's badge and logged; a sealed file placed from the host waits (key-state Waiting, no key, the "
+          "unencrypted file kept beside it), a damaged one leaves no key, and neither file is changed; unlock itself not run (no task "
+          "holds badge 6 before 308-KRN-0205)", flush=True)
     print(f"PASS: the block store's own secrets in keystore (308-KRN-0183): its client from init in slot 3 (BADGE_KEY_BLOCKSTORE), "
           f"the volume key of its blank disk kept as {volume} and read back at the next boot, not on the medium; no program runs by the "
           "store's name, another program's client sees none of it nor opens the store's file copied under its name; under a new device "
           "key it opens no more", flush=True)
+
+
+def passphrase_calls_check(vm):
+    """308-NET-0055: any client reads the device key's state (keystore.wit 1.6); the passphrase's calls, tried with
+    netcheck's own fixed word, are refused to its secrets client, which lacks BADGE_KEY_PASSPHRASE, and logged."""
+    require_all(vm.command("netcheck key-state unlock passphrase-set"), "NETCHECK key-state OK Held", "NETCHECK unlock Denied", "NETCHECK passphrase-set Denied")
+    log = vm.service_logs("keystore", "REFUSED PASSPHRASE-SET FOR PID")
+    for call in ("UNLOCK", "PASSPHRASE-SET"):
+        assert re.search(fr"\[KEYSTORE\] REFUSED {call} FOR PID \d+: NOT THE PASSPHRASE'S CLIENT", log), log
+    assert "netcheck-is-not-the-owner" not in vm.log, "the word tried is in the log"
+
+
+def locked_file_check(args, cpu, image, part, temp, store):
+    """308-NET-0055: a device.locked placed from the host beside device.key, of the file's form (passlock) with a sealed
+    part that opens under no passphrase: keystore waits for its passphrase, holds no key, and changes neither file.
+    Then the same file damaged: no key, nothing made in its place, the file left as it is."""
+    def stored(name):
+        out = temp / f"stored-{name}"
+        subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
+        return out.read_bytes()
+
+    def boot(locked, until):
+        path = temp / "device.locked"
+        path.write_bytes(locked)
+        subprocess.run(["mcopy", "-o", "-i", part, str(path), "::/system/keystore/device.locked"], env=MTOOLS_ENV, check=True, capture_output=True)
+        plain = stored("device.key")
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
+                extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
+                       "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"])
+        try:
+            log = vm.service_logs("keystore", until)
+            require(log, until)
+            assert "DEVICE KEY READY" not in log and "DEVICE KEY MADE" not in log, log
+            out = vm.command("netcheck key-state unlock secret-get:token")
+        finally:
+            vm.close()
+        assert stored("device.locked") == locked and stored("device.key") == plain, "a file changed"
+        return log, out
+
+    # MINDPWD1, version 1, 9216 KiB, 4 passes, 1 lane, a salt and a nonce, then 48 random bytes for the sealed seed.
+    header = b"MINDPWD1" + bytes([1]) + struct.pack("<III", 9216, 4, 1) + os.urandom(16 + 12)
+    locked = header + os.urandom(48)
+    log, out = boot(locked, "IT WAITS FOR IT")
+    require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN system/keystore/device.locked: IT WAITS FOR IT")
+    require(log, "[KEYSTORE] THE UNENCRYPTED COPY system/keystore/device.key IS REMOVED ONCE THE PASSPHRASE OPENS THE KEY")
+    assert "NO TPM: THE DEVICE KEY IS KEPT ON DISK" not in log, log
+    require_all(out, "NETCHECK key-state OK Waiting", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
+    damaged = b"MINDPWX1" + locked[8:]
+    log, out = boot(damaged, "NO NEW KEY MADE")
+    require(log, "[KEYSTORE] system/keystore/device.locked DAMAGED: NO DEVICE KEY, THE FILE LEFT AS IT IS AND NO NEW KEY MADE")
+    require_all(out, "NETCHECK key-state OK None", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
 
 
 def service_log(vm, name, until, tries=120):
@@ -11076,6 +11154,7 @@ def tpm_check(args, cpu):
             require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key SEALED BY THE TPM IN system/keystore/device.sealed; THE UNENCRYPTED COPY REMOVED")
             require(vm.command("tpm"), f"TPM 2.0 BY IBM, {interface} INTERFACE")
             require(vm.command("tpm seal not mine"), "TPM: Rights")
+            require_all(vm.command("netcheck key-state unlock"), "NETCHECK key-state OK Held", "NETCHECK unlock Denied")  # 308-NET-0055
             log = vm.command("dmesg -s tpm")
             assert re.search(r"\[TPM\] SEALED 32 BYTES FOR PID \d+", log) and re.search(r"\[TPM\] REFUSED SEAL FOR PID \d+ \(BADGE 0\)", log), log
             store_opens(vm, root)
