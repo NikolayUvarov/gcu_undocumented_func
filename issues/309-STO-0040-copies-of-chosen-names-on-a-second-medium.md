@@ -1,6 +1,6 @@
 # 309-STO-0040 — Copies of chosen names on a second medium, and a damaged block repaired from the other
 
-**Type:** storage (`blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** for the QEMU criteria, `init` granting `blockstore` a second store disk (`requests-KRN.md`, "A second store disk for the block store's copy", 2026-11-04) · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-5.1
+**Type:** storage (`blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** for the QEMU criteria, 309-KRN-0209 (`init` grants `blockstore` the copy's disk in slot 4; built on the kernel track's branch, not in `main` yet) · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-5.1
 
 Split from [309](309-copies-scrub-and-repair.md) (2026-11-04), its plan's "Copies". The scrub ([309-STO-0025](../issues-done/309-STO-0025-scrub.done)) and a copy in a file ([309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)) are done. A store that cannot be mounted, rebuilt from its copy, is left to a later task of 309.
 
@@ -51,7 +51,7 @@ Everything here is plan, not a guarantee (MC-12.3).
 
 ## The request to `KRN`
 
-`init` is the kernel track's, so the copy's medium is a request in `requests-KRN.md`, "A second store disk for the block store's copy" (2026-11-04):
+`init` is the kernel track's, so the copy's medium was a request in `requests-KRN.md` (2026-11-04). The kernel track took it as **309-KRN-0209**, as proposed, with its own QEMU check `store_copy_disk_check` in the `store` suite (`STO/2026-11-04T1535Z-KRN-…` on `internal-dev-messages`):
 - in QEMU, the next VirtIO disk after the store's that is blank or starts with the store's superblock;
 - granted to `blockstore` in slot 4, with the write badge, and never to `vfs_server`;
 - logged as the store's disk is;

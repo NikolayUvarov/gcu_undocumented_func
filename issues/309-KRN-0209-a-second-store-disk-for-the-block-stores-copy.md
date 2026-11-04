@@ -14,7 +14,7 @@
 
 1. **In QEMU, the copy's disk** is the next VirtIO disk after the store's own that is blank or starts with `MIND-STO`.
    - `init` looks at the disks as `store_disk` does, in the same order (`virtio_blk`, `virtio_blk#1`, `virtio_blk#2`), and in the same pass.
-   - On aarch64 `virtio_blk` is the boot disk, so the store is `virtio_blk#1` and its copy `virtio_blk#2`.
+   - On aarch64 the boot disk is a VirtIO disk too. Which instance drives it follows the PCI order. In the check's machine the two blank disks came first (`virtio_blk`, `virtio_blk#1`) and the boot disk third. A disk that is not blank and holds no superblock is passed over either way.
    - A copy is given only when the store has a disk of its own, never beside `ramdisk#1`.
 2. **`blockstore` gets it in slot 4,** a block client with `BADGE_WRITE`, as slot 2 holds the store's own. Without a second disk, slot 4 stays empty and the store runs as now.
 3. **`vfs_server` never gets it,** as it never gets the store's disk (Appendix B.6).
@@ -43,6 +43,13 @@
   - that `vfs_server` holds no client of either driver;
   - after an object is published and the machine reboots: the store's disk as `THE STORE'S` with its name, and the copy's again on the same driver.
 - **Docs:** [bootstrap.md](../docs/profile/bootstrap.md)'s `blockstore` row, and a row in [evidence.md](../docs/profile/evidence.md).
+- **Runs** (through Effector, KVM):
+  - `aarch64: files and the block store` on acc-2 at 3f5b5b32;
+  - `x86: files and block writes` on acc-1 at 2bd97ca5.
+
+  Both passed, with `store_copy_disk_check` and the `store` suite on one disk as before. On both, the store's disk was `virtio_blk` and its copy's `virtio_blk#1`, after a reboot `THE STORE'S` and `BLANK`.
+
+**Left:** after a reboot the copy's disk is found as `THE STORE'S` once `blockstore` writes it, which is 309-STO-0040's.
 
 ## Related
 
