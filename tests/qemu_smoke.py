@@ -9546,7 +9546,8 @@ def timed_check(args, disk):
         policy.write_text((before or "") + "".join(f"timed 10.0.2.2 udp {s.port} {2**32 - 1}\n" for s in servers))
         (disk / "data").mkdir(exist_ok=True)
         (disk / "data/sleep.msh").write_text("#!msh\nlet start = now()\nsleep(25000)\nprint(\"SLEPT {now() - start} MS\")\n")
-        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00")
+        card = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
         try:
             require(vm.service_logs("timed", "NO ANSWER IN"), "[TIMED] STARTED: THE FLOOR IS ")
             require(vm.command("date"), "DATE: 2024-01-01 ")
@@ -9578,9 +9579,9 @@ def timed_check(args, disk):
         for server in servers:
             server.answering.set()
         policy.write_text((before or "") + "".join(f"timed 10.0.2.2 udp {s.port} {2**32 - 1}\n" for s in servers))
-        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
         try:
-            log = vm.service_logs("timed", "NOTHING SET")
+            log = vm.service_logs("timed", "IS BEFORE THE FLOOR")
             assert re.search(r"\[TIMED\] NOTHING SET: 2020-01-01 \d\d:\d\d:\d\d IS BEFORE THE FLOOR 20(2[6-9]|[3-9]\d)-", log), log[-3000:]
             assert "[TIMED] SET " not in log, log[-3000:]
             require(vm.command("date"), "DATE: 2024-01-01 ")
@@ -9588,7 +9589,7 @@ def timed_check(args, disk):
             vm.close()
         # No time line: init does not start it.
         policy.write_text(before or "")
-        vm = VM(args, disk.relative_to(ROOT).as_posix())
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=card)
         try:
             require(vm.command("dmesg -s init", raw=True), "[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER")
             assert "timed" not in vm.services(), vm.command("ps", raw=True)

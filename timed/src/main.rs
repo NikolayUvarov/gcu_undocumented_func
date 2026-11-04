@@ -132,11 +132,11 @@ fn nonce(salt: u64) -> u64 {
     if n == 0 { 1 } else { n }
 }
 
-// Asks every server once, on one socket; the answers come within ANSWER_MS.
-fn ask(base: &Base, servers: &mut [Server]) {
+// Asks every server once, on one socket; the answers come within ANSWER_MS. False without a socket.
+fn ask(base: &Base, servers: &mut [Server]) -> bool {
     let socket = match socket::udp_open(STACK, 0) {
         Ok(Ok(socket)) => socket,
-        other => { mind::println!("[TIMED] NO UDP SOCKET: {:?}", other.map(|r| r.err())); return; }
+        other => { mind::println!("[TIMED] NO UDP SOCKET: {:?}", other.map(|r| r.err())); return false; }
     };
     for (i, server) in servers.iter_mut().enumerate() {
         server.nonce = nonce(i as u64);
@@ -160,13 +160,14 @@ fn ask(base: &Base, servers: &mut [Server]) {
         }
     }
     let _ = socket::close(STACK, socket);
+    true
 }
 
 // One round: the servers asked, the agreeing ones followed within the bounds; the time set, if any.
 fn round(floor: i64, first: bool) -> Option<i64> {
     let mut servers = servers()?;
     let Some(base) = read_clock() else { mind::println!("[TIMED] THE CLOCK CANNOT BE READ"); return None };
-    ask(&base, &mut servers);
+    if !ask(&base, &mut servers) { return None; }
     for s in servers.iter().filter(|s| s.sample.is_none()) { mind::println!("[TIMED] {}: NO ANSWER IN {} MS", Ip(s.address, s.port), ANSWER_MS); }
     let answered: Vec<(usize, Sample)> = servers.iter().enumerate().filter_map(|(i, s)| s.sample.map(|sample| (i, sample))).collect();
     let samples: Vec<Sample> = answered.iter().map(|&(_, s)| s).collect();
