@@ -1,4 +1,4 @@
-# 000-NET-0056 — The TLS lending check lists the grant while its program runs
+# 000-NET-0056 — The TLS lending check lists the grant while its program runs; the run-time question read across the prompt
 
 **Type:** test · **Owner:** kernel session (network track) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
@@ -8,16 +8,24 @@
 
 **Why.** The check ran `netgrants` after it had killed `tlsclock`. `netpolicy` drops the grant of a process that ended at its next sweep (`expire`). So the check passed only when the sweep came after `netgrants`'s answer.
 
-**The candidate is not the cause.** None of its changes touch grants or their sweep. The race is in the test since the check came in.
+**The second failure.** The group ran again alone, and failed in the net suite's `browse_check`, at the question asked at run time (000-NET-0049, 000-APP-0120).
+- `asked()` read the start of the question (`NETWORK: netcheck (PID `) in the output of `run … &`, whose prompt came first.
+- The question's end (`ALWAYS? `) came after that output.
+- `expect("ALWAYS? ", after=question)` then looked for the question's start in the new output, where it no longer was, and timed out on ` FOR THIS RUN  A: ALWAYS? `.
+
+**The candidate is not the cause** of either. None of its changes touch grants, their sweep or the shell's questions.
+- Both are races in the tests, which x32-128 hit and the slower machines had not. The group passed on x32-2 in round 73, beside other groups.
+- The repeat, alone on x32, was faster still (576 s against 722 s and 897 s).
 
 ## Plan
 
 1. **`lent()`** takes a check to run while the program is still alive: after `stat caps`, before the kill.
 2. **The grant check** runs there and names the program: `tlsclock RULES=`, where it was any `GRANT `.
+3. **`asked()`** waits for the question's end with no `after` when its start was already read in the command's output.
 
 ## Acceptance criteria
 
-The TLS suite passes with the check before the kill, on x86 in QEMU, locally and in a gate.
+The group `x86: network, TLS and Effector` passes on x32-128, alone and in a gate.
 
 ## Related
 

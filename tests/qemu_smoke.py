@@ -9618,8 +9618,11 @@ def browse_check(args):
             def asked(seconds, then=""):  # netcheck asks from the background; the shell shows the question at the prompt
                 out = vm.command(f"run netcheck ask:11.0.2.80:81:{seconds}{then} &")
                 pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", out)[1]
-                if "ALWAYS? " not in out.partition(question)[2]:  # it may show before the prompt or after it
+                # It may show before the prompt, after it, or begin before it and end after it.
+                if question not in out:
                     vm.expect("ALWAYS? ", timeout=20, after=question)
+                elif "ALWAYS? " not in out.partition(question)[2]:
+                    vm.expect("ALWAYS? ", timeout=20)
                 return pid
 
             # No, typed once the question shows: refused at once.
