@@ -1233,8 +1233,9 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(self.heads[self.find(name).map_err(|_| Error::NotFound)?].versions())
     }
 
-    // Walks the object, directory tree or journal `root` through the store; `visit` sees the store and each block's CID.
-    fn walk(&mut self, root: &Cid, visit: impl FnMut(&mut Self, &Cid) -> Result<(), dag::Error>) -> Result<u64, Error> {
+    /// Walks the object, directory tree or journal `root` through the store, within the steps it gives its own walks;
+    /// `visit` sees the store and each block's CID before the walk reads it (a copy's blocks follow it, 309-STO-0040).
+    pub fn walk(&mut self, root: &Cid, visit: impl FnMut(&mut Self, &Cid) -> Result<(), dag::Error>) -> Result<u64, Error> {
         let scratch = self.scratch.take().ok_or(Error::Device)?;
         let steps = self.steps();
         let walked = journal::walk(self, root, scratch, steps, visit);
@@ -1512,6 +1513,16 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(len)
     }
 
+    /// Whether the block `cid` names reads back whole, checked as `get` checks it and copied nowhere; one that does not
+    /// leaves the index as with `get`, so a put of the same bytes stores it again (309-STO-0040: a repair).
+    pub fn check_block(&mut self, cid: &Cid) -> Result<bool, Error> {
+        let at = self.position(&cid.to_bytes(), self.domain).map_err(|_| Error::NotFound)?;
+        let Entry { lba, len, .. } = self.index[at];
+        if self.verify(lba as u64, cid, len as usize)? { return Ok(true); }
+        self.remove(at);
+        Ok(false)
+    }
+
     pub fn stats(&self) -> Stats {
         Stats {
             blocks: self.count as u32, bytes: self.bytes, used: self.end, sectors: self.dev.sectors(),
@@ -1569,6 +1580,9 @@ impl<'a, D: Device> Store<'a, D> {
         let mut i = 0;
         while i < self.index.len() { if self.index[i].used() && self.index[i].domain == id { self.remove(i); } else { i += 1; } }
     }
+
+    /// The domain requests work in.
+    pub fn domain(&self) -> u16 { self.domain }
 
     /// Works in domain `id` for the requests that follow (VOLUME: the volume's own); `NotFound` for one not live.
     pub fn set_domain(&mut self, id: u16) -> Result<(), Error> {
