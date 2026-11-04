@@ -34,6 +34,8 @@ mod updates;
 mod nnclients;
 #[path = "../shell/src/flowask.rs"]
 mod flowask;
+#[path = "../shell/src/named.rs"]
+mod named;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -542,4 +544,19 @@ fn a_flow_question_takes_four_keys_and_shows_the_programs_words_safely() {
     let text = question("get", 42, "example.org", 443, "the page you named\u{7}");
     assert_eq!(text, "NETWORK: get (PID 42) ASKS TO REACH example.org:443\n  ITS REASON, IN ITS OWN WORDS: \"the page you named?\"\n  N: NO (THE DEFAULT)  O: ONCE  S: FOR THIS RUN  A: ALWAYS? ");
     assert!(!question("get", 42, "example.org", 443, "").contains("ITS REASON"), "no reason given: no line for it");
+}
+
+// 311-APP-0121: the store volume a program's arguments name, for its read-only scope; vfs_server's volumes, a URL and a
+// word without a volume name none.
+#[test]
+fn the_store_volume_a_programs_arguments_name() {
+    use named::store_volume;
+    let vfs = |v: &str| ["", "ram", "log", "models"].iter().any(|n| n.eq_ignore_ascii_case(v));
+    assert_eq!(store_volume("notes:", &vfs), Some("notes"));
+    assert_eq!(store_volume("-name *.txt notes:docs", &vfs), Some("notes"));
+    assert_eq!(store_volume("ram:a.txt photos:2026/a.jpg notes:b", &vfs), Some("photos"), "the first store volume");
+    assert_eq!(store_volume("ram:a.txt RAM:b log:c models:d", &vfs), None, "vfs_server's, in any case");
+    assert_eq!(store_volume("https://example.org/a:b http://x", &vfs), None, "a URL is not a path");
+    assert_eq!(store_volume("docs/a:b :x 12345678901234567:y", &vfs), None, "a slash before the colon, no name, too long a name");
+    assert_eq!(store_volume("kernel.elf", &vfs), None);
 }
