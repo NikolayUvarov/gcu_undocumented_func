@@ -1,6 +1,6 @@
 # 311-STO-0037 — A scope of a store volume: a subtree as a capability, read-only or writable, from `storefs`
 
-**Type:** storage (`storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open (its QEMU checks run since 2026-11-04, for the storage session's review) · **Blocked by:** none ([311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md) lends a scope for `REQUEST_FILE` since 2026-11-03) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-3.1, MC-3.4, MC-4.7
+**Type:** storage (`storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open (its QEMU checks pass, 2026-11-04; it closes when they land) · **Blocked by:** none ([311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md) lends a scope for `REQUEST_FILE` since 2026-11-03) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-3.1, MC-3.4, MC-4.7
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-31): "rights: a mount is a capability for a subtree (MC-4.7)". It is what APP's request "The shell lends a `storefs` client to programs" in [requests-APP.md](requests-APP.md) waits for: "`storefs` minting a client that does not write, or serving `scope`". Until a program holds a client of `storefs`, [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md)'s QEMU checks of two writers and of a cut publication cannot run.
 
@@ -66,7 +66,7 @@ Split from [311](311-storefs-a-file-face.md) (2026-10-31): "rights: a mount is a
 - **The lazy end** (APP's note of 2026-11-03): `storefs`'s behaviour is left as it is. A scope of an ended task, or one nobody took up within a minute, ends at the first of these: the next `scope` made, an `adopt`, a request with a scope's badge, or a `root`, `open-dir` or `open` while the table of handles, trees or open files is full. Until then it holds its capability, handles, tree and chunks, unpublished, and no other task can use them, as a scope's first task is its only user. docs/storage says so in the scope's "its end".
 - **Not run on the platform:** `adopt`, a copy of a scope used by a second task, the end of a scope nobody took up, and the tables' bounds; they stay host-tested.
 - **Ran:** as 311-STO-0032's Progress of today says (x86: `store` and `shell` 37 `PASS` lines, `wm` and `tools` 27; aarch64: `store` and `shell` 38; `scripts/host_tests.sh` whole passed).
-- **Acceptance criteria:** the two QEMU ones are met on x86 and aarch64, as said; docs/storage (0.26) and the profile's rows on rights (docs/profile/README.md, evidence.md and their aarch64 pages) say what ran. The issue is left open for the storage session to review and close.
+- **Acceptance criteria:** the two QEMU ones are met on x86 and aarch64, as said; docs/storage (0.26) and the profile's rows on rights (docs/profile/README.md, evidence.md and their aarch64 pages) say what ran. The issue closes when these checks land.
 
 ## Acceptance criteria
 

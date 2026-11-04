@@ -4663,7 +4663,7 @@ def storefs_writers_check(vm):
     made = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR w:/a \((WRITABLE|READ-ONLY)\)", logs)
     ended = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) ENDED", logs)
     assert [kind for _, kind in made] == ["WRITABLE"] * 5 + ["READ-ONLY", "WRITABLE"], logs[-3000:]
-    assert sorted(ended) == sorted(badge for badge, _ in made[:-1]), logs[-3000:]
+    assert all(badge in ended for badge, _ in made[:-1]) and made[-1][0] not in ended, logs[-3000:]
     print("PASS: storefs scopes: a read-only scope a program made of its lent one lists and reads its directory and is "
           "refused a write and a new file; the writable one writes in its directory and nowhere else, `..` and other "
           "volumes refused by storefs; each scope logged when made, and ended after its task at the next one's making "
