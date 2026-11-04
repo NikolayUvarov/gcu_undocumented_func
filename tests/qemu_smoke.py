@@ -10034,15 +10034,17 @@ def slow_radio_check(args):
             else:
                 raise AssertionError(("the radio never answered", radio))
             require(vm.service_logs("wlan", "[WLAN] RADIO "), "[WLAN] RADIO 02:00:00:57:4C:01")
-            # The station's last scan was made while the radio was silent, as on the MacBook Pro at a boot's start: the join
-            # scans once by itself, then joins (550-APP-0098; before it, wifi's window scanned first).
+            # 550-NET-0035 stage B: once the radio answers, the station's first scan listens for the country, and a join
+            # meanwhile is refused as busy; so the check waits for the country the access point announces.
+            require(vm.service_logs("wlan", "[WLAN] COUNTRY "), "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS")
+            # Where the station's last scan missed the network, the join scans once by itself, then joins (550-APP-0098).
             join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
             vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
             joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
             require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
                              joined + vm.command("dmesg -s wifi", raw=True))
-            assert scan and scan.group(1) == "IT AMONG THEM", joined
+            assert scan is None or scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
             vm.command("ping 10.0.4.99")
@@ -10054,7 +10056,7 @@ def slow_radio_check(args):
             vm.close()
             web.shutdown()
     print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms and a page fetched while it was "
-          f"silent, the station joined once it answered, scanning by itself first; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
+          f"silent, the station joined once it answered and its first scan had found the country; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
 def _roots_with_test_ca(certificates, disk):
