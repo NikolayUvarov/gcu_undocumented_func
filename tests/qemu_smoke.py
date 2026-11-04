@@ -4052,6 +4052,7 @@ def store_suite(vm):
     store_index_check(vm)
     store_assertion_check(vm)
     storefs_writers_check(vm)
+    store_recovery_check(vm)
 
 
 def run_tally(vm, args):
@@ -4668,6 +4669,30 @@ def storefs_writers_check(vm):
           "refused a write and a new file; the writable one writes in its directory and nowhere else, `..` and other "
           "volumes refused by storefs; each scope logged when made, and ended after its task at the next one's making "
           "(311-STO-0037)", flush=True)
+
+
+def store_recovery_check(vm):
+    """308-STO-0028: blockstore.wit 2.4's recovery calls answer only a client badged BADGE_RECOVER, which no program
+    holds yet (308-KRN-0204). `blocks` holds the shell's client (badge 7) and `blocksro` the read-only one (badge 1):
+    each of recovery-new, recovery-keep, recover and recovery-forget is refused (`Rights`) and logged with the badge,
+    and nothing is written; how many recovery records there are is any client's: none on the RAM disk, whose key is in
+    its superblock."""
+    def used():
+        found = re.search(r"SECTORS=(\d+)/", vm.command("blocks stat"))
+        assert found, "no stat"
+        return int(found[1])
+    before = used()
+    for tool, badge in (("blocks", 7), ("blocksro", 1)):
+        require_all(vm.command(f"{tool} recovery try"), "RECOVERY-NEW Rights", "RECOVERY-KEEP Rights", "RECOVER Rights", "RECOVERY-FORGET Rights")
+        require(vm.command(f"{tool} recovery"), "RECOVERY RECORDS 0")
+        log = vm.service_logs("blockstore", f"REFUSED RecoveryForget FOR PID")
+        for operation in ("RecoveryNew", "RecoveryKeep", "Recover", "RecoveryForget"):
+            assert re.search(rf"\[BLOCKSTORE\] REFUSED {operation} FOR PID \d+ \(BADGE {badge}\)", log), (tool, operation, log)
+        assert "RECOVERY KEY" not in log and "RECOVERED" not in log, log
+    assert used() == before, "a refused recovery call wrote to the medium"
+    print("PASS: recovery keys: each of blockstore.wit 2.4's recovery calls refused to the shell's client (badge 7) and to "
+          "the read-only one (badge 1), and logged with the badge; nothing written; the count of recovery records, none "
+          "on the RAM disk, any client's (308-STO-0028)", flush=True)
 
 
 def store_domains_check(vm):

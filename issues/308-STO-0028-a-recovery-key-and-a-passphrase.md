@@ -1,6 +1,6 @@
 # 308-STO-0028 — A recovery key and a passphrase for the store's volume key
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** the requests in [requests-KRN.md](requests-KRN.md) ("A store client that may recover the volume key") and [requests-APP.md](requests-APP.md) ("A recovery key shown once and typed back"), recorded 2026-11-04 after the proposals of 2026-10-30 went unanswered · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md) (a client badged `BADGE_RECOVER`, the shell's alone), [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md) (the key shown and typed back), [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.md) and this track's [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md) (the passphrase) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
 Split from [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done) (2026-10-30): the part that needs the owner, once the volume key is off the medium.
 
@@ -45,6 +45,22 @@ Since 308-STO-0022 a medium's volume key is kept by `keystore`, under a key deri
 - **Decision: a rotation in two steps.** A new key's record is flushed, and the older ones are erased only once the owner types the new key back. So a cut, or a key shown but never written down, leaves the owner a key that opens the medium: the old one, or the new one once it was shown.
 - **Changed from the proposal to `APP` and `KRN`.** The message `ALL/2026-10-30T1846Z-STO-a-recovery-key-and-a-passphrase-who-shows-and-who-asks.md` on `internal-dev-messages` proposed a copy in the superblock and a one-step rotation, `recovery-new` replacing that copy in one write. Both are changed here, as above. The wire it proposed will need a call for the second step (`recovery-keep`).
 - **Still open:** the wire and who may call it; showing a key and taking it back (`APP`); the passphrase (`KRN`); the QEMU criteria; the profile.
+
+## Progress (2026-11-04)
+
+- **Numbered** by the tracks asked (`internal-dev-messages`, `STO/2026-11-04T0441Z-APP-…` and `…0446Z-KRN-…`):
+  - `KRN`: 308-KRN-0204, the client badged `BADGE_RECOVER`, minted by `init` for the shell alone (not `wm`), lent on by a request bit `REQUEST_RECOVER`; 308-KRN-0205, the boot waiting for `keystore`'s passphrase;
+  - `APP`: 308-APP-0122, `recovery`, a program with a window of its own, and `--key-file` for the tests;
+  - `keystore`'s passphrase is 308-NET-0055, a task of the network track's code that this track makes (its owner's answer).
+- **Built: the wire, `blockstore.wit` 2.4** (a minor version, no earlier call changed), described in [docs/storage](../docs/storage/README.md) 0.27, "The wire":
+  - `recovery-new() -> string<39>`, `recovery-keep(key: string<39>) -> u32`, `recovery-forget() -> u32`, `recover(key: string<39>)` and `recoveries() -> u32`. The count is a call of its own rather than a field of `stat`, so `stats` is unchanged and 2.4 stays a minor version;
+  - `mind::blockstore::BADGE_RECOVER` (8): the four calls need it, no other right gives them, and they are refused through a memory domain's client; the count is any client's;
+  - the service (`blockstore/src/main.rs`): the four calls over the store's part above. A typed key is parsed first, so a typo is `invalid`. `recover` serves a store that is not mounted because no keeper of this machine keeps its key: it opens the medium again, gives `keystore` the volume key and mounts it, and the store then serves every client. Without `keystore`'s client it is `key`, as the key could only go into the superblock in the clear. No key is logged, and the service zeroes its copies (the key made, the parsed key, the decoded text and the request's copy) once it has answered;
+  - `blocks recovery` (the count) and `blocks recovery try` (each call, and what the store answers). `blocks` shows no key.
+- **Ran,** on this session's container:
+  - host: `tests/blockstore_host.rs` (73 passed, `rights_come_from_the_badge` with the recovery right; two changes of the badge rule made it fail), `tests/idl_host.rs`, `tests/idl_fuzz_host.rs`, `tests/storefs_host.rs`, `tests/idl_test.py`, `mind_idl.py --check`;
+  - QEMU, the `store` suite's `store_recovery_check` (x86 and aarch64): through the shell's client (badge 7) and the read-only one (badge 1), each call refused (`rights`) and logged with its badge, nothing written; `blocks recovery` 0 records on the RAM disk.
+- **Not run on the platform:** making, keeping, forgetting and recovering with a key. No program holds a client badged `BADGE_RECOVER` until 308-KRN-0204, and none shows a key until 308-APP-0122.
 
 ## Related
 

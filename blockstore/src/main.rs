@@ -10,6 +10,8 @@
 // where init lends its client, else in the superblock in the clear (308-STO-0022).
 // A memory domain's calls come through a client the store mints for it, and work under the domain's own key (308-STO-0023).
 // Between requests it scrubs the medium, a step at a time, a pass a day; a client may ask for a whole pass (309-STO-0025).
+// A client badged BADGE_RECOVER makes, keeps and forgets recovery keys, and opens with one a medium whose volume key no
+// keeper of this machine holds, which is then mounted (308-STO-0028); no key is ever logged.
 mod store;
 
 // store.rs names these as crate::cid, crate::dag, crate::sha256 and crate::tree, so the host tests build it from the
@@ -21,7 +23,7 @@ use chacha20poly1305::ChaCha20Poly1305;
 use cid::Cid;
 use mind::abi::{BootInfo, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_SERVICE};
 use mind::block::Device as Client;
-use mind::blockstore::{allowed, Operation, FIRST_DOMAIN_CLIENT};
+use mind::blockstore::{allowed, recovery_parse, recovery_text, Operation, FIRST_DOMAIN_CLIENT};
 use mind::idl::blockstore::{self, Collected, Committed, Durability, Error, Head as Current, Kept, Named, PinTaken, Pinned, Published, Request, Stats, Usage};
 use mind::idl::codec::{List, Text};
 use mind::idl::wire;
@@ -207,33 +209,24 @@ fn index_for(sectors: u64) -> &'static mut [Entry] {
     &mut []
 }
 
-mind::entry!(main);
-fn main(_info: &'static BootInfo) {
-    let (heads, pinned, runs, record, walk, scratch, out) = unsafe {
+// Mounts the store on the driver's medium, at boot and again after a recovery (308-STO-0028), its index made once for
+// the medium's size; whether the medium is a RAM disk. Called only while no store is mounted, which holds the statics.
+fn mount(index: &mut Option<*mut [Entry]>, secrets: &mut Secrets, lent: bool) -> (Result<Store<'static, Medium>, store::Error>, bool) {
+    let Ok(client) = Client::open(Endpoint(BLOCK)) else { return (Err(store::Error::Device), true) };
+    let ram = client.kind() == mind::block::KIND_RAM;
+    let slots = *index.get_or_insert_with(|| index_for(client.sectors()) as *mut [Entry]);
+    let (heads, pinned, runs, record, walk, index) = unsafe {
         (&mut *core::ptr::addr_of_mut!(HEADS), &mut *core::ptr::addr_of_mut!(PINNED), &mut *core::ptr::addr_of_mut!(RUNS),
-         &mut *core::ptr::addr_of_mut!(RECORD), &mut *core::ptr::addr_of_mut!(WALK), &mut *core::ptr::addr_of_mut!(SCRATCH),
-         &mut *core::ptr::addr_of_mut!(OUT))
+         &mut *core::ptr::addr_of_mut!(RECORD), &mut *core::ptr::addr_of_mut!(WALK), &mut *slots)
     };
-    // How far a write reaches is the medium's: nothing outlives a reset on a RAM disk; elsewhere the driver acknowledged
-    // a flush after it, and what that reaches is the driver's to state (307-STO-0019).
-    let mut durability = Durability::Volatile;
-    // A RAM disk keeps its key in its own superblock, as nothing of it outlives a reset; any other medium's key is kept
-    // by keystore, when init lent its client (308-STO-0022).
-    let lent = mind::dev::cap_info(SECRETS).0 == CAP_KIND_ENDPOINT;
-    let mut ram = true;
-    let mut secrets = Secrets(Endpoint(SECRETS));
-    let mounted = match Client::open(Endpoint(BLOCK)) {
-        Ok(client) => {
-            ram = client.kind() == mind::block::KIND_RAM;
-            if !ram { durability = Durability::Flushed; }
-            let index = index_for(client.sectors());
-            let keeper = (!ram && lent).then_some(&mut secrets as &mut dyn Keeper);
-            Store::mount(Medium(client), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns())
-        }
-        Err(_) => Err(store::Error::Device),
-    };
-    // Without a medium every request is answered with the reason, so clients are not left waiting.
-    let mut store = match mounted {
+    let keeper = (!ram && lent).then_some(secrets as &mut dyn Keeper);
+    (Store::mount(Medium(client), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()), ram)
+}
+
+// What a mount gave, logged: the store, or the reason every request is answered with.
+fn ready(mounted: Result<Store<'static, Medium>, store::Error>, ram: bool, lent: bool) -> Result<Store<'static, Medium>, Error> {
+    let durability = if ram { Durability::Volatile } else { Durability::Flushed };
+    match mounted {
         Ok(mut store) => {
             store.renew(mind::time::monotonic_ns());
             let s = store.stats();
@@ -271,7 +264,47 @@ fn main(_info: &'static BootInfo) {
             Err(Error::Device)
         }
         Err(e) => { mind::println!("[BLOCKSTORE] NOT MOUNTED: {:?}", e); Err(error(e)) }
+    }
+}
+
+// Zeroes a key's bytes, so they do not outlive their use in memory the compiler might leave alone.
+fn wipe(bytes: &mut [u8]) { for b in bytes { unsafe { core::ptr::write_volatile(b, 0) } } }
+// Zeroes a typed key decoded from a request.
+fn wipe_text(text: &mut Text<{ mind::blockstore::RECOVERY_TEXT }>) { unsafe { core::ptr::write_volatile(text, Text::default()) } }
+
+// Opens the medium with a recovery key typed by its owner, then mounts it (308-STO-0028): the volume key goes to
+// keystore under the medium's id, and the store mounts as this machine's own. Called only while none is mounted.
+fn recover(key: &str, index: &mut Option<*mut [Entry]>, secrets: &mut Secrets, lent: bool) -> Result<Result<Store<'static, Medium>, Error>, Error> {
+    let mut recovery = recovery_parse(key.as_bytes()).map_err(|_| Error::Invalid)?;
+    // Without keystore's client the key could only go to the superblock, in the clear.
+    if !lent { wipe(&mut recovery); return Err(Error::Key); }
+    let found = match Client::open(Endpoint(BLOCK)) {
+        Ok(client) => {
+            let buffer = unsafe { &mut *core::ptr::addr_of_mut!(RECORD) };
+            store::recover(&mut Medium(client), &Sealing, secrets, &recovery, buffer).map_err(error)
+        }
+        Err(_) => Err(Error::Device),
     };
+    wipe(&mut recovery);
+    found?;
+    let (mounted, ram) = mount(index, secrets, lent);
+    Ok(ready(mounted, ram, lent))
+}
+
+mind::entry!(main);
+fn main(_info: &'static BootInfo) {
+    let (scratch, out) = unsafe { (&mut *core::ptr::addr_of_mut!(SCRATCH), &mut *core::ptr::addr_of_mut!(OUT)) };
+    // A RAM disk keeps its key in its own superblock, as nothing of it outlives a reset; any other medium's key is kept
+    // by keystore, when init lent its client (308-STO-0022).
+    let lent = mind::dev::cap_info(SECRETS).0 == CAP_KIND_ENDPOINT;
+    let mut secrets = Secrets(Endpoint(SECRETS));
+    let mut index = None;
+    let (mounted, ram) = mount(&mut index, &mut secrets, lent);
+    // How far a write reaches is the medium's: nothing outlives a reset on a RAM disk; elsewhere the driver acknowledged
+    // a flush after it, and what that reaches is the driver's to state (307-STO-0019).
+    let durability = if ram { Durability::Volatile } else { Durability::Flushed };
+    // Without a medium every request is answered with the reason, so clients are not left waiting.
+    let mut store = ready(mounted, ram, lent);
     let mut clients = DomainClients([None; DOMAIN_CLIENTS]);
     let mut scrubs = Scrubs { passes: 0, last: store::Scrubbed::default(), ended: 0, next: mind::time::monotonic_ns() + SCRUB_EVERY_NS };
     loop {
@@ -316,7 +349,9 @@ fn main(_info: &'static BootInfo) {
             mind::println!("[BLOCKSTORE] REFUSED {:?} FOR PID {}: THROUGH DOMAIN {}'S CLIENT", operation, pid, domain);
             true
         };
-        let _ = match blockstore::decode(&request, RECEIVED, scratch) {
+        // A request that carried a recovery key; its copy is zeroed once it is answered.
+        let mut secret = false;
+        let _ = match blockstore::decode(&request, RECEIVED, &mut *scratch) {
             Err(reason) => wire::reject(reason),
             Ok((Request::Put { .. }, call)) if refused(Operation::Put) => blockstore::reply_put(call, Err(Error::Rights)),
             Ok((Request::Get { .. }, call)) if refused(Operation::Get) => blockstore::reply_get(call, Err(Error::Rights)),
@@ -340,6 +375,12 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Domains, call)) if refused(Operation::Domains) || through_domain(Operation::Domains) => blockstore::reply_domains(call, Err(Error::Rights)),
             Ok((Request::Scrub, call)) if refused(Operation::Scrub) => blockstore::reply_scrub(call, Err(Error::Rights)),
             Ok((Request::Scrubbed, call)) if refused(Operation::Scrubbed) => blockstore::reply_scrubbed(call, Err(Error::Rights)),
+            // Recovery keys are the volume's, never a domain's (308-STO-0028).
+            Ok((Request::RecoveryNew, call)) if refused(Operation::RecoveryNew) || through_domain(Operation::RecoveryNew) => blockstore::reply_recovery_new(call, Err(Error::Rights)),
+            Ok((Request::RecoveryKeep { .. }, call)) if refused(Operation::RecoveryKeep) || through_domain(Operation::RecoveryKeep) => blockstore::reply_recovery_keep(call, Err(Error::Rights)),
+            Ok((Request::RecoveryForget, call)) if refused(Operation::RecoveryForget) || through_domain(Operation::RecoveryForget) => blockstore::reply_recovery_forget(call, Err(Error::Rights)),
+            Ok((Request::Recoveries, call)) if refused(Operation::Recoveries) => blockstore::reply_recoveries(call, Err(Error::Rights)),
+            Ok((Request::Recover { .. }, call)) if refused(Operation::Recover) || through_domain(Operation::Recover) => blockstore::reply_recover(call, Err(Error::Rights)),
             Ok((Request::Put { codec, data }, call)) => {
                 let codec = match codec { blockstore::Codec::Raw => cid::Codec::Raw, blockstore::Codec::DagCbor => cid::Codec::DagCbor };
                 let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(codec, data).map_err(error)).map(|c| c.to_bytes());
@@ -537,6 +578,63 @@ fn main(_info: &'static BootInfo) {
                 let report = store.as_ref().map_err(|e| *e).map(|_| scrubs.report(mind::time::monotonic_ns()));
                 blockstore::reply_scrubbed(call, report.as_ref().map_err(|e| *e))
             }
+            Ok((Request::RecoveryNew, call)) => {
+                // The key goes to the caller alone, in the form its owner writes down; no line logs it.
+                let mut made = store.as_mut().map_err(|e| *e).and_then(|s| {
+                    let mut key = s.recovery_new().map_err(error)?;
+                    let text = recovery_text(&key);
+                    wipe(&mut key);
+                    mind::println!("[BLOCKSTORE] RECOVERY KEY MADE BY PID {}: {} RECORDS UNTIL IT IS TYPED BACK", pid, s.recovery());
+                    Ok(text)
+                });
+                let replied = blockstore::reply_recovery_new(call, made.as_ref().map(|t| core::str::from_utf8(t).unwrap_or("")).map_err(|e| *e));
+                if let Ok(text) = made.as_mut() { wipe(text); }
+                replied
+            }
+            Ok((Request::RecoveryKeep { mut key }, call)) => {
+                let kept = store.as_mut().map_err(|e| *e).and_then(|s| {
+                    let mut recovery = recovery_parse(key.as_str().as_bytes()).map_err(|_| Error::Invalid)?;
+                    let erased = s.recovery_keep(&recovery).map_err(error);
+                    wipe(&mut recovery);
+                    let erased = erased?;
+                    mind::println!("[BLOCKSTORE] RECOVERY KEY KEPT BY PID {}: {} OTHER RECORDS ERASED, {} LEFT", pid, erased, s.recovery());
+                    Ok(erased as u32)
+                });
+                wipe_text(&mut key);
+                secret = true;
+                blockstore::reply_recovery_keep(call, kept)
+            }
+            Ok((Request::RecoveryForget, call)) => {
+                let erased = store.as_mut().map_err(|e| *e).and_then(|s| s.recovery_forget().map_err(error)).map(|n| n as u32);
+                if let Ok(n) = erased { mind::println!("[BLOCKSTORE] RECOVERY KEYS FORGOTTEN BY PID {}: {} RECORDS ERASED", pid, n); }
+                blockstore::reply_recovery_forget(call, erased)
+            }
+            Ok((Request::Recoveries, call)) => {
+                blockstore::reply_recoveries(call, store.as_ref().map_err(|e| *e).map(|s| s.recovery() as u32))
+            }
+            Ok((Request::Recover { mut key }, call)) => {
+                // Only a medium that no keeper of this machine opens is recovered: not a mounted one, nor one refused for another reason.
+                secret = true;
+                let done = match store.as_ref().err().copied() {
+                    None => Err(Error::Invalid),
+                    Some(Error::Key) => match recover(key.as_str(), &mut index, &mut secrets, lent) {
+                        Ok(mounted) => {
+                            let answer = mounted.as_ref().map(|_| ()).map_err(|e| *e);
+                            match answer {
+                                Ok(()) => mind::println!("[BLOCKSTORE] RECOVERED BY PID {}: THE VOLUME KEY KEPT BY KEYSTORE UNDER THE MEDIUM'S ID, AND MOUNTED", pid),
+                                Err(e) => mind::println!("[BLOCKSTORE] RECOVERED BY PID {}: THE VOLUME KEY KEPT BY KEYSTORE, BUT NOT MOUNTED: {:?}", pid, e),
+                            }
+                            store = mounted;
+                            answer
+                        }
+                        Err(e) => { mind::println!("[BLOCKSTORE] NOT RECOVERED FOR PID {}: {:?}", pid, e); Err(e) }
+                    },
+                    Some(e) => Err(e),
+                };
+                wipe_text(&mut key);
+                blockstore::reply_recover(call, done)
+            }
         };
+        if secret { wipe(scratch); }
     }
 }

@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.26 (2026-11-04): `storefs`'s two writers, a writer cut and its scopes run on the platform through `fsstep` (311-STO-0032, 0037); 0.25 (2026-10-31): assertions about objects, kept in a journal, `blocks assert` (312-STO-0038); 0.24 (2026-10-31): a scope of a store volume, `storefs`'s `scope` and `adopt`, host-tested (311-STO-0037); 0.23 (2026-10-31): a text index derived from a journal, `blocks index` (312-STO-0035); 0.22 (2026-10-30): a journal checked from its head, `blocks journal` (312-STO-0034); 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.27 (2026-11-04): the recovery key's calls on the wire, `blockstore.wit` 2.4, answered only through a client badged `BADGE_RECOVER`, which no program holds yet (308-STO-0028); 0.26 (2026-11-04): `storefs`'s two writers, a writer cut and its scopes run on the platform through `fsstep` (311-STO-0032, 0037); 0.25 (2026-10-31): assertions about objects, kept in a journal, `blocks assert` (312-STO-0038); 0.24 (2026-10-31): a scope of a store volume, `storefs`'s `scope` and `adopt`, host-tested (311-STO-0037); 0.23 (2026-10-31): a text index derived from a journal, `blocks index` (312-STO-0035); 0.22 (2026-10-30): a journal checked from its head, `blocks journal` (312-STO-0034); 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -575,7 +575,7 @@ A medium that outlives the machine's memory keeps no key: `keystore` keeps it as
 - **The ready line** says `SEALED, KEY KEPT BY KEYSTORE` or `SEALED, KEY IN THE CLEAR`; a key made at this mount is logged with where it went and why.
 - **What it does not give:**
   - where there is no TPM, the device key lies on the boot volume in the clear. So a store disk alone opens nothing, but with the boot volume beside it, it opens. The stick's own store partition (307-STO-0020) is beside it. Where there is a TPM, it seals the device key (351-NET-0006), and the store opens only on that TPM;
-  - a recovery key and a passphrase are still to come, with `APP` and `KRN` ([308-STO-0028](../../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)); the store's part of the recovery key is host-tested (next section), but no program can make or use one. Until then, a medium whose machine is gone or whose device key was made anew stays closed;
+  - a recovery key and a passphrase are still to come, with `APP` and `KRN` ([308-STO-0028](../../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)); the store's part of the recovery key is host-tested and its calls are on the wire (next section), but no program holds a client that may call them. Until then, a medium whose machine is gone or whose device key was made anew stays closed;
   - the key of a medium that is gone stays kept until deleted.
 
 Evidence, `tests/blockstore_host.rs` (a keeper in memory):
@@ -590,9 +590,13 @@ On the platform, the QEMU `tls` suite (x86 and aarch64), on a raw image with a b
 
 These are tests of the configurations named, not a proof (MC-12.2). The device key on the boot volume beside the disk, without a TPM, is not a protection, as said above.
 
-## The recovery key — host-tested, not on the wire yet (308-STO-0028)
+## The recovery key — host-tested; its calls on the wire, refused to every client so far (308-STO-0028)
 
-**No program can make or use a recovery key yet.** What follows is the store's own part, in `blockstore/src/store.rs` and `libmind/src/blockstore.rs`, tested on the host only. The wire (`blockstore.wit` 2.4), who may call it, and how the console shows a key and takes it back wait for an agreement with `APP` and `KRN`. Until then, the previous section's limits stand on the platform.
+**No program can make or use a recovery key yet.** The store's own part, in `blockstore/src/store.rs` and `libmind/src/blockstore.rs`, is tested on the host. Its calls are on the wire (`blockstore.wit` 2.4, below), and answer only a client badged `BADGE_RECOVER`. No program holds one:
+- `init` is to mint it and grant it to the shell alone, which lends it on to a program that asks for it (308-KRN-0204, the kernel session's);
+- the program that shows a key once and takes it back is `recovery`, with a window of its own, so the key reaches no serial line (308-APP-0122, the tools track's).
+
+Until then, the previous section's limits stand on the platform.
 
 A medium whose volume key `keystore` keeps opens on no other machine, nor on its own once its device key is made anew. A recovery key, kept by the owner away from the machine, is the way back.
 
@@ -615,6 +619,19 @@ A medium whose volume key `keystore` keeps opens on no other machine, nor on its
   - a store whose key is in the clear has nothing to recover (`invalid`).
 - **The layout stays 4.** A medium without a recovery record is one this build wrote before, so nothing converts anything.
 
+**The wire** (`blockstore.wit` 2.4, a minor version: no earlier call changes):
+- **Who may.** `recovery-new`, `recovery-keep`, `recovery-forget` and `recover` need `BADGE_RECOVER` (8, `mind::blockstore`), a right of its own: a recovery key opens the whole medium on any machine, so no other right gives it. They are refused through a memory domain's client, as recovery keys are the volume's. `recoveries`, the count of records, is any client's. Each refusal is logged with the badge (`REFUSED RecoveryNew FOR PID <pid> (BADGE <b>)`).
+- **`recovery-new`** writes and flushes a new record and returns the key in its text form, 39 characters. The key goes in the reply alone: no line logs it, and the service zeroes its copies once it has answered. The log says `RECOVERY KEY MADE BY PID <pid>: <n> RECORDS UNTIL IT IS TYPED BACK`.
+- **`recovery-keep(key)`** parses the typed text first: a typo is `invalid`, before any record is tried. Then it erases every record the key does not open, and returns how many (`RECOVERY KEY KEPT BY PID <pid>: <e> OTHER RECORDS ERASED, <n> LEFT`). A key that opens none is `key`, and nothing is erased.
+- **`recovery-forget`** erases them all and returns how many (`RECOVERY KEYS FORGOTTEN BY PID <pid>: <n> RECORDS ERASED`).
+- **`recover(key)`** is for a medium that is not mounted because no keeper of this machine keeps its volume key (`NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS volume-…`):
+  - the service opens the medium again, gives `keystore` the volume key from the first record the key opens, and mounts the store, which then serves every client as if it had mounted at boot (`RECOVERED BY PID <pid>: …, AND MOUNTED`, then the ready line);
+  - a store already mounted, a typo or a key in the clear is `invalid`. A store not mounted for another reason (a damaged medium, another layout) answers that reason;
+  - a key that opens nothing, or no secrets client to give the key to, is `key`, and nothing is kept (`NOT RECOVERED FOR PID <pid>: Key`). Without `keystore`'s client the volume key could only go into the superblock in the clear, so it is not recovered.
+
+  The request's copy of a typed key is zeroed once it is answered.
+- **`blocks recovery`** prints `RECOVERY RECORDS <n>`. **`blocks recovery try`** asks each of the four calls, with a well-formed key that opens nothing, and prints what the store answers. `blocks` shows no key: the console reaches the serial line, and the shell lends `blocks` its own client, which may not recover.
+
 Evidence, `tests/blockstore_host.rs`: host tests of the logic on a simulated medium with the stand-in cipher, not a proof (MC-12.2).
 - `a_recovery_key_opens_a_medium_whose_keeper_lacks_its_key`: a fresh keeper gives `kept`; the recovery key puts the volume key in it, writing nothing; the medium then mounts whole, and the object and its name read back. The record is opened as this section describes it, with HKDF checked against RFC 5869's first test case;
 - `a_wrong_recovery_key_opens_nothing_and_writes_nothing`: a wrong key, `key`; a forged record that opens but holds another volume key, `key`; a refusing keeper, `kept`; nothing written or kept; a key in the clear, `invalid`;
@@ -624,13 +641,16 @@ Evidence, `tests/blockstore_host.rs`: host tests of the logic on a simulated med
 - `a_recovery_record_is_sealed_kept_by_a_collection_and_not_reported_by_a_scrub`: neither key in any 16 or 32 bytes of the medium; a mount counts nothing corrupt or damaged, a whole scrub reports nothing, and a collection that frees a block keeps the record;
 - `a_recovery_key_needs_a_kept_key_and_a_random_source_and_is_forgotten_whole`: a key in the clear, no random source and a read-only medium refused with nothing written; two records forgotten, after which neither key opens anything;
 - `recovery_records_past_those_a_mount_remembers_are_found_and_erased`: 6 records of keys never typed back, all erased by a forget, and all but its own by the last key typed back, whose record the mount did not remember;
-- `a_domains_records_before_its_key_record_are_found`: a mount that scans twice counts a recovery record once.
+- `a_domains_records_before_its_key_record_are_found`: a mount that scans twice counts a recovery record once;
+- `rights_come_from_the_badge`: the four calls only with `BADGE_RECOVER`, which grants nothing else, and no other right gives them; the count with any right.
+
+On the platform, the QEMU `store` suite (x86 and aarch64), `store_recovery_check`: through the shell's client (badge 7) and the read-only one (badge 1), each of the four calls is refused (`Rights`) and logged with its badge, and nothing is written to the medium. `blocks recovery` gives 0 records on the RAM disk, whose key is in its superblock. Making a key, keeping it and recovering a medium with it have not run on the platform: no program holds a client that may.
 
 **What erasing a recovery record does not reach:**
 - a flash medium's spare blocks, which may keep the erased sector beneath its interface, as for a forgotten domain's key record;
 - a record whose frame is damaged: it is no longer taken for a recovery record (a damaged magic, for one, leaves its sector counted as damaged), so neither a replacement nor a forget erases it.
 
-**Not provided:** anything on the platform (above), and the passphrase where there is no TPM (308-STO-0028's other half).
+**Not provided:** a client that may recover, and a program that shows a key and takes it back (above), so no recovery has run on the platform; the passphrase where there is no TPM (308-STO-0028's other half, with `keystore`'s part in 308-NET-0055 and the boot's wait in 308-KRN-0205).
 
 ## Memory domains — run on the platform (308-STO-0023)
 

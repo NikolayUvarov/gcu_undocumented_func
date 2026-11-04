@@ -180,9 +180,39 @@ fn domains(mut words: core::str::SplitWhitespace) {
     }
 }
 
+// The store's recovery keys (308-STO-0028): how many records it holds, and `try`, which asks each call that needs
+// BADGE_RECOVER and prints what the store answers. It shows no key, as the console reaches the serial line: the shell
+// lends `blocks` its own client, which may not recover, and a key made all the same would be dropped unread.
+fn recovery(mut words: core::str::SplitWhitespace) {
+    fn answer<T>(call: &str, got: mind::Result<Result<T, blockstore::Error>>) {
+        match got {
+            Ok(Ok(_)) => mind::println!("{} ALLOWED", call),
+            Ok(Err(e)) => mind::println!("{} {:?}", call, e),
+            Err(e) => mind::println!("{}: the store does not answer: {:?}", call, e),
+        }
+    }
+    match (words.next(), words.next()) {
+        (None, _) => match blockstore::recoveries(store()) {
+            Ok(Ok(n)) => mind::println!("RECOVERY RECORDS {}", n),
+            Ok(Err(e)) => mind::println!("blocks: recoveries: {:?}", e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
+        (Some("try"), None) => {
+            // A well-formed key that opens no record, so a call's right is what decides its answer.
+            let none = mind::blockstore::recovery_text(&[0; mind::blockstore::RECOVERY_KEY]);
+            let none = core::str::from_utf8(&none).unwrap_or("");
+            answer("RECOVERY-NEW", blockstore::recovery_new(store()));
+            answer("RECOVERY-KEEP", blockstore::recovery_keep(store(), none));
+            answer("RECOVER", blockstore::recover(store(), none));
+            answer("RECOVERY-FORGET", blockstore::recovery_forget(store()));
+        }
+        _ => mind::println!("blocks: recovery | recovery try"),
+    }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion>");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -215,6 +245,7 @@ fn main(_info: &'static BootInfo) {
         Some("index") => return index::command(rest, &mut remote),
         Some("assert") => return assertion::command(rest, buffer, data, &mut remote),
         Some("domain") | Some("domains") => return domains(words),
+        Some("recovery") => return recovery(rest),
         _ => {}
     }
     match (words.next(), words.next(), words.next(), words.next()) {
