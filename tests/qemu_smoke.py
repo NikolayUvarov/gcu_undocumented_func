@@ -4236,6 +4236,27 @@ def store_tree_check(vm):
     assert [(k, n) for k, _, _, n in listed("docs", 2)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
     require(blocks("tree cat home docs/c.bin ram:back.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
     print("PASS: blocks tree: a move and two removals, each published; a directory with entries is not removed", flush=True)
+    # 311-STO-0039: the versions kept (5 to 8) compared and read. The move and the removals, from version 5 to the current one.
+    out = blocks("tree diff home@5 home")
+    found = re.findall(r"^(ADDED|REMOVED|CHANGED) (FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)
+    assert [(c, k, s, p) for c, k, s, _, p in found] == [("REMOVED", "FILE", "20000", "c.bin"), ("ADDED", "FILE", "20000", "docs/c.bin"), ("REMOVED", "DIR", "1", "docs/deep")], out
+    assert found[0][3] == found[1][3] == put[1], out
+    require(out, "3 CHANGES FROM home VERSION 5 TO home VERSION 8")
+    # One file removed two levels down; the empty tree to version 5, the root's two entries added whole; a tree with itself.
+    require_all(blocks("tree diff home@6 home@7"), f"REMOVED FILE 12 {cid_raw(second)} docs/deep/b.txt", "1 CHANGES FROM home VERSION 6 TO home VERSION 7")
+    out = blocks("tree diff home@0 home@5")
+    assert [(c, k, s, p) for c, k, s, _, p in re.findall(r"^(ADDED|REMOVED|CHANGED) (FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)] == [("ADDED", "FILE", "20000", "c.bin"), ("ADDED", "DIR", "2", "docs")], out
+    require(out, "2 CHANGES FROM home VERSION 0 TO home VERSION 5")
+    out = blocks("tree diff home home@8")
+    assert not re.search(r"^(ADDED|REMOVED|CHANGED) ", out, re.M), out
+    require(out, "0 CHANGES FROM home VERSION 8 TO home VERSION 8")
+    # Older versions read as they were: version 5's root and c.bin at its old path, version 6's b.txt removed since.
+    require(blocks("tree ls home@5"), "2 ENTRIES IN / OF home VERSION 5")
+    require(blocks("tree cat home@5 c.bin ram:old.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
+    require(blocks("tree cat home@6 docs/deep/b.txt ram:old.txt"), f"READ 12 BYTES SHA-256 {hashlib.sha256(second).hexdigest()}")
+    require(blocks("tree ls home@4"), "blocks: tree home: no version 4 kept")
+    print("PASS: blocks tree diff: between kept versions, a move and the removals named, an equal tree none; older versions "
+          "listed and read back (SHA-256), one no longer kept refused", flush=True)
 
 
 def store_copy_check(vm):

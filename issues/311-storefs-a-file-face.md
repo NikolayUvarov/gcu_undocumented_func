@@ -26,12 +26,13 @@ Programs keep their data as files on FAT, which has no history, no snapshots, no
 - [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done): a working tree in memory, published by compare-and-swap; `blocks tree`. Done 2026-10-30.
 - [311-STO-0032](../issues-done/311-STO-0032-storefs-a-vfs-view-of-a-named-root.done): `storefs`, a `vfs.wit` view of a named root, at boot since 311-KRN-0190. Done 2026-11-04.
 - [311-STO-0037](../issues-done/311-STO-0037-a-scope-of-a-store-volume.done): a scope of a store volume, a subtree as a capability, read-only or writable, so the shell can lend a program a client. Done 2026-11-04.
+- [311-STO-0039](311-STO-0039-two-roots-compared.md): two roots of a tree compared, and a name's kept versions read.
 
 ## Progress (2026-11-04)
 
 - **The acceptance criteria are met** on x86 and aarch64 in QEMU, in `main` e28cfe4d: the shell's file commands on a store volume (the `shell` suite's `storefs_check`), two writers with one told of the conflict, and a writer cut while its data is held leaving the old root (the `store` suite's `storefs_writers_check`). A cut inside a flush's writes to the medium runs in the host tests only.
 - **Still open in the plan:**
-  - a directory's history and two roots compared: `blocks` gives a name's history, and nothing compares two roots yet;
+  - a directory's history and two roots compared: [311-STO-0039](311-STO-0039-two-roots-compared.md);
   - the programs' data directories in the store (000-KRN-0170, the kernel track's);
   - `fm` over `storefs` (APP's).
 
