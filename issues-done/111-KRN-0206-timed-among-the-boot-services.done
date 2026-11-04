@@ -1,6 +1,6 @@
-# 111-KRN-0206 — `timed` among the boot services, with its three grants (handoff 29)
+# 111-KRN-0206 — `timed` among the boot services, with its three grants (handoff 29) — done
 
-**Type:** `init`, the loader's handoff, `vfs_server` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [111](111-network-time.md), for [111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.md) · **Constitution:** MC-3.1, MC-11.4, MC-11.6, MC-12.4
+**Type:** `init`, the loader's handoff, `vfs_server` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md), for [111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done) · **Constitution:** MC-3.1, MC-11.4, MC-11.6, MC-12.4
 
 ## Problem
 
@@ -35,6 +35,10 @@
 - **Host tests:** `boot_abi`, `vfs_zone` and `services` pass, and all of `scripts/host_tests.sh` on the branch.
 - **QEMU:** `timed_check` on x86 and aarch64 (111-NET-0057's progress). It was started with a time line and set the clock; without one, init logged `[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER` and no `timed` ran.
 
+## Resolution
+
+Handoff 29; init's three grants and `HOLDS` row; `BADGE_TIMED` and `system/timed` in `vfs_server`'s zone; the bootstrap profile's row. `boot_abi`, `vfs_zone` and `services` host tests, and `timed_check` (started with a time line, not without one) in round 78's gate (candidate 6fc5b253, `main` e28cfe4d). Landed in `main` e28cfe4d.
+
 ## Related
 
-[111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.md), [111](111-network-time.md).
+[111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done), [111](../issues/111-network-time.md).

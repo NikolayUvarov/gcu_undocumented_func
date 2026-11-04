@@ -1,6 +1,6 @@
-# 000-NET-0056 — The TLS lending check lists the grant while its program runs; the run-time question read across the prompt
+# 000-NET-0056 — The TLS lending check lists the grant while its program runs; the run-time question read across the prompt — done
 
-**Type:** test · **Owner:** kernel session (network track) · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** test · **Owner:** kernel session (network track) · **Priority:** P1 · **Status:** done (2026-11-04) · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -33,6 +33,10 @@ The group `x86: network, TLS and Effector` passes on x32-128, alone and in a gat
 - In this session's container (QEMU TCG, 4 CPUs), the group passed in full with the first.
 - On x32-128 at 4469f706, beside the aarch64 network group: `x86: network, TLS and Effector` passed (949 s).
 - The run alone on x32-128 and the gate are still to come.
+
+## Resolution
+
+Both fixes in `tests/qemu_smoke.py` (fa6d3758, 4469f706). `x86: network, TLS and Effector` then passed on x32-128 beside the aarch64 group (949 s), alone (951 s), and in round 78's gate (candidate 6fc5b253, `main` e28cfe4d) on x32-2 (1030 s). Landed in `main` e28cfe4d.
 
 ## Related
 

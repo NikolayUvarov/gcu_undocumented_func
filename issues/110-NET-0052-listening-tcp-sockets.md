@@ -69,6 +69,8 @@
 - The half-open limit is the backlog, a port at a time. There is no limit of its own over all ports beyond the 32 listening sockets.
 - A UDP server.
 
+**Landed (2026-11-04).** Round 78's gate (candidate 6fc5b253, `main` e28cfe4d) passed `listen_check` in both network groups, x86 on x32-2 and aarch64 on pcu, and the IDL fuzzer with `socket.wit` 2.9's types. The host tests of the backlog and the half-open limit are still to come, so the issue stays open.
+
 ## Related
 
 [110](110-our-own-web-server.md), [112](112-our-own-ssh-server.md), [101](../issues-done/101-network-stack.done), [102](../issues-done/102-network-policy-broker.done).

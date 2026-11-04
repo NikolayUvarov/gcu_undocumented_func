@@ -133,6 +133,12 @@ So the three steps of the criterion were seen on that machine with the earlier s
 - the same cycle with this branch's script, whose `--reboot` goes through `systemd-run`, once it is in `main`;
 - the cycle that did not boot: its cause, if it comes back.
 
+## Landed (2026-11-04)
+
+Round 78's gate (candidate 6fc5b253, `main` e28cfe4d): the host tests of `boot_switch.py`, with its `systemd-run` reboot and its Fast Boot warning.
+
+**Left:** the cycle on the Ryzen with this version.
+
 ## Related
 
 [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done) (`efivar`, `BootNext` from MIND Core), [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done) (each slot's own loader, which the one at `EFI/BOOT/` starts), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (the watchdog), [213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md), [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) (the rig), [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) (`write_usb_linux.py`), [docs/write-disk.md](../docs/write-disk.md), [docs/effector.md](../docs/effector.md).

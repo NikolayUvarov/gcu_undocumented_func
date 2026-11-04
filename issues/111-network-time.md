@@ -64,12 +64,19 @@ Time zones for `date` and `wm` (APP's), and serving time to other machines.
 
 ## Progress
 
-2026-11-04: stage 1 is split into [111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.md), the service and its bounds, and [111-KRN-0206](111-KRN-0206-timed-among-the-boot-services.md), its place among the boot services. Three points of the plan changed, each for a reason:
+2026-11-04: stage 1 is split into [111-NET-0057](../issues-done/111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done), the service and its bounds, and [111-KRN-0206](../issues-done/111-KRN-0206-timed-among-the-boot-services.done), its place among the boot services. Three points of the plan changed, each for a reason:
 - **The servers** come from the grant's own rules (`socket.wit` 2.10 `grant-rules`), each on the port its line names: a test's servers on the host cannot listen on 123 without root.
 - **The floor's first part** is the build's commit time, as the release's manifest carries no build time.
 - **The floor's file** is `system/timed/floor`, a private directory that only `timed`'s badge opens.
 
 `date sync`, the user's ask, waits for a service endpoint of `timed`, which stage 1 does not have.
+
+**Stage 1 is done (2026-11-04).** [111-NET-0057](../issues-done/111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done) and [111-KRN-0206](../issues-done/111-KRN-0206-timed-among-the-boot-services.done) landed in `main` e28cfe4d.
+
+**Left:**
+- stage 2, NTS;
+- `date sync`, which needs a service endpoint of `timed`;
+- a run on a machine.
 
 ## Related
 

@@ -1,10 +1,10 @@
-# 111-NET-0057 — `timed` sets the calendar clock by SNTP within bounds (111's stage 1)
+# 111-NET-0057 — `timed` sets the calendar clock by SNTP within bounds (111's stage 1) — done
 
-**Type:** network (a client service, `idl/socket.wit`) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [111](111-network-time.md) · **Roadmap:** track D (network) · **Constitution:** MC-5.6, MC-9.4, MC-10.3, MC-11.4, MC-11.6, MC-11.11, MC-12.3, MC-12.4
+**Type:** network (a client service, `idl/socket.wit`) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md) · **Roadmap:** track D (network) · **Constitution:** MC-5.6, MC-9.4, MC-10.3, MC-11.4, MC-11.6, MC-11.11, MC-12.3, MC-12.4
 
 ## Problem
 
-Nothing sets the calendar clock but the user (111's problem). This task makes 111's stage 1, the service and its bounds. Starting it at boot with its grants is [111-KRN-0206](111-KRN-0206-timed-among-the-boot-services.md).
+Nothing sets the calendar clock but the user (111's problem). This task makes 111's stage 1, the service and its bounds. Starting it at boot with its grants is [111-KRN-0206](111-KRN-0206-timed-among-the-boot-services.done).
 
 ## Plan
 
@@ -63,6 +63,10 @@ Nothing sets the calendar clock but the user (111's problem). This task makes 11
 - A machine (MC-12.1).
 - The gate's run of the whole `net` suite with the check.
 
+## Resolution
+
+`mind::sntp` with its host tests and seeded fuzzing; `socket.wit` 2.10 `grant-rules`; `timed`; the `net` suite's `timed_check`, which passed alone on x86 and aarch64 (QEMU TCG) and in round 78's gate (candidate 6fc5b253, `main` e28cfe4d) in both network groups (x86 on x32-2, aarch64 on pcu); `docs/profile/clocks.md`'s "Network time". Not claimed: the floor read back at the next boot (the suite boots on a snapshot), and any machine (MC-12.1). Landed in `main` e28cfe4d.
+
 ## Related
 
-[111](111-network-time.md), [111-KRN-0206](111-KRN-0206-timed-among-the-boot-services.md), [211-KRN-0051](211-KRN-0051-setting-the-clock.md).
+[111](../issues/111-network-time.md), [111-KRN-0206](111-KRN-0206-timed-among-the-boot-services.done), [211-KRN-0051](../issues/211-KRN-0051-setting-the-clock.md).
