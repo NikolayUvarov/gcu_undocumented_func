@@ -2560,8 +2560,11 @@ def storefs_check(vm):
     require_all(vm.command("grep -r store notes:"), "notes:docs/a.txt", "from the store")
     # Its scope is of the first store volume it names, which it reads alone: through other:'s scope, notes: is not reached.
     require(vm.command("mkdir other:x"), "OK")
-    out = vm.command("find other: notes:")
-    assert "other:x/" in out and "notes:docs/a.txt" not in out, out
+    require(vm.command("write other:x/c.txt a store too"), "WROTE 12 BYTES")
+    out = vm.command("grep -r store other: notes:")
+    assert "other:x/c.txt" in out and "notes:docs/a.txt" not in out, out
+    require(vm.command("rm other:x/c.txt"), "OK")
+    require(vm.command("rm other:x"), "OK")
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
     # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
