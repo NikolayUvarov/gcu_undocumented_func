@@ -1,6 +1,6 @@
 # 213-KRN-0122 — The platform's transmit power policy for one WLAN device: known limits, known absent, or unknown
 
-**Type:** kernel, `init` (an interface to choose: a typed result or a scoped snapshot) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — (the drivers track's 213-DRV-0032 waits for it before it lets the RTL8852BE transmit) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3
+**Type:** kernel, `init` (an interface to choose: a typed result or a scoped snapshot) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the drivers track's 213-DRV-0032 waits for it before it lets the RTL8852BE transmit) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -27,6 +27,32 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 - [ ] Host tests with fixtures: valid limits, a supported absence, truncated and malformed tables, an unsupported method, and a policy in an unrelated scope; each gives its own result with the device's identity and the source.
 - [ ] A service cannot get another device's result, and an error never becomes `KnownAbsent`.
 - [ ] On the Ryzen, the result for `03:00.0` is recorded with its log, apart from the fixtures.
+
+## Progress
+
+2026-11-04 (d47cd90a):
+
+- **`mind::platform_power`** (`libmind/src/platform_power.rs`):
+  - every DSDT and SSDT read whole, its length and checksum checked;
+  - the five names searched for as bytes, so no AML is run.
+  - **The answers:**
+    - `Absent`: every AML table was read whole and checked, there is a DSDT, and no name occurs anywhere;
+    - `Unknown`, with its reason, otherwise: a name anywhere, a table cut short, a bad checksum, a table that could not be mapped, no DSDT, or more than 64 tables or 16 MiB.
+
+    A byte search cannot miss a name the AML holds. So `Absent` is never given in error; a false match only makes it `Unknown`.
+- **`KnownLimits` is not made yet.** A table that names any of the five is `Unknown` until its AML (a `Name` with a `Package`, or a method) is read. The Ryzen's Ubuntu read found none of the five, so `Absent` is what MIND Core should find there.
+- **`init`** reads it once at boot, while the platform privilege allows, keeps it for the radio's starts, and logs:
+  - `[INIT] PLATFORM POWER POLICY FOR WLAN: ABSENT (n AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG)`;
+  - or `… UNKNOWN (<reason>): A RADIO SENDS NOTHING`.
+- **Tests:**
+  - host tests in `tests/platform_power_host.rs` (6), with tables made in the test: an absence; each name in an SSDT; a cut table; a short header; a bad checksum; an unmapped table; no DSDT; too many tables;
+  - QEMU: the `normal` suite requires `ABSENT`. Seen once on x86 in this session's container (QEMU's one DSDT).
+- **Not given to the driver yet.** `rtw89_wifi` reads its arguments as one number, its PCI device index. \`init\` will add `platform=absent` or `platform=unknown:<reason>` after the index once DRV's parser takes the word. The form is in `DRV/2026-11-04T1003Z-KRN-…`.
+
+**Left:**
+- the word in the driver's arguments, after DRV;
+- the result on the Ryzen with its log;
+- a service that is refused another device's result: today the record goes to the one driver `init` starts for the device it found.
 
 ## Related
 
