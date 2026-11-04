@@ -9570,6 +9570,8 @@ def timed_check(args, disk):
             shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
             gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
             assert gap < 3, (shown, gap)
+            # The floor, written in system/timed after the set (`logs` drains: the lines since the set).
+            require(log + vm.service_logs("timed", "THE FLOOR IS NOW"), "STORED IN system/timed/floor")
         finally:
             vm.close()
         # Two servers that agree on a time before the floor.

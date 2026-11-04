@@ -80,7 +80,10 @@ fn write_floor(unix_ms: i64) {
         .and_then(|mut file| { file.write_at(0, &text[..n])?; file.flush() })
         .and_then(|()| match mind::fs::remove(FLOOR) { Ok(()) | Err(mind::fs::Error::NotFound) => Ok(()), Err(e) => Err(e) })
         .and_then(|()| mind::fs::rename(FLOOR_NEW, FLOOR));
-    if let Err(error) = written { mind::println!("[TIMED] THE FLOOR WAS NOT STORED: {:?}", error); }
+    match written {
+        Ok(()) => mind::println!("[TIMED] THE FLOOR IS NOW {}, STORED IN {}", When(unix_ms), FLOOR),
+        Err(error) => mind::println!("[TIMED] THE FLOOR WAS NOT STORED: {:?}", error),
+    }
 }
 
 struct When(i64);
