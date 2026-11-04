@@ -2558,7 +2558,10 @@ def storefs_check(vm):
     found = vm.command("find notes:")
     require_all(found, "notes:docs/", "notes:docs/a.txt")
     require_all(vm.command("grep -r store notes:"), "notes:docs/a.txt", "from the store")
-    require(vm.command("find other:"), "FIND: other:: NOTFOUND")  # none named that storefs has: no scope, nobody asked
+    # Its scope is of the first store volume it names, which it reads alone: through other:'s scope, notes: is not reached.
+    require(vm.command("mkdir other:x"), "OK")
+    out = vm.command("find other: notes:")
+    assert "other:x/" in out and "notes:docs/a.txt" not in out, out
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
     # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
@@ -2587,7 +2590,7 @@ def storefs_check(vm):
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
           "vfs_server's volumes as before; find and grep read the store volume their arguments name through a read-only scope, "
-          "and one storefs has not they do not find; edit on a store volume wrote "
+          "and no other store volume; edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 

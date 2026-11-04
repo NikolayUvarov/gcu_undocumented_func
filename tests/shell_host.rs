@@ -546,17 +546,19 @@ fn a_flow_question_takes_four_keys_and_shows_the_programs_words_safely() {
     assert!(!question("get", 42, "example.org", 443, "").contains("ITS REASON"), "no reason given: no line for it");
 }
 
-// 311-APP-0121: the store volume a program's arguments name, for its read-only scope; vfs_server's volumes, a URL and a
-// word without a volume name none.
+// 311-APP-0121: the words that may name a path on a store volume, for the program's read-only scope; vfs_server's
+// volumes, a URL and a word without a volume name none.
 #[test]
-fn the_store_volume_a_programs_arguments_name() {
-    use named::store_volume;
+fn the_store_paths_a_programs_arguments_may_name() {
+    use named::store_paths;
     let vfs = |v: &str| ["", "ram", "log", "models"].iter().any(|n| n.eq_ignore_ascii_case(v));
-    assert_eq!(store_volume("notes:", &vfs), Some("notes"));
-    assert_eq!(store_volume("-name *.txt notes:docs", &vfs), Some("notes"));
-    assert_eq!(store_volume("ram:a.txt photos:2026/a.jpg notes:b", &vfs), Some("photos"), "the first store volume");
-    assert_eq!(store_volume("ram:a.txt RAM:b log:c models:d", &vfs), None, "vfs_server's, in any case");
-    assert_eq!(store_volume("https://example.org/a:b http://x", &vfs), None, "a URL is not a path");
-    assert_eq!(store_volume("docs/a:b :x 12345678901234567:y", &vfs), None, "a slash before the colon, no name, too long a name");
-    assert_eq!(store_volume("kernel.elf", &vfs), None);
+    let paths = |args| store_paths(args, &vfs).collect::<Vec<_>>();
+    assert_eq!(paths("notes:"), [("notes:", "notes")]);
+    assert_eq!(paths("-name *.txt notes:docs"), [("notes:docs", "notes")]);
+    assert_eq!(paths("ram:a.txt photos:2026/a.jpg notes:b"), [("photos:2026/a.jpg", "photos"), ("notes:b", "notes")], "in order");
+    assert_eq!(paths("ask:11.0.2.80:81:3 notes:"), [("ask:11.0.2.80:81:3", "ask"), ("notes:", "notes")], "the shell keeps the first that is a path");
+    assert!(paths("ram:a.txt RAM:b log:c models:d").is_empty(), "vfs_server's, in any case");
+    assert!(paths("https://example.org/a:b http://x").is_empty(), "a URL is not a path");
+    assert!(paths("docs/a:b :x 12345678901234567:y").is_empty(), "a slash before the colon, no name, too long a name");
+    assert!(paths("kernel.elf").is_empty());
 }

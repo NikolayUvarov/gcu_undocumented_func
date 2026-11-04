@@ -781,7 +781,7 @@ impl Shell {
         let storefs = mind::dev::cap_info(SLOT_STOREFS).0 != 0;
         let store_files = storefs && needs.files;
         let store_named = (storefs && !needs.files && !(needs.file && !needs.files) && (granted("file") || granted("files")))
-            .then(|| named::store_volume(args, &mind::fs::on_vfs)).flatten().map(String::from);
+            .then(|| named::store_paths(args, &mind::fs::on_vfs).find(|(path, _)| mind::fs::metadata(path).is_ok()).map(|(_, volume)| String::from(volume))).flatten();
         let firmware_granted = granted("firmware") && !help;
         // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
         // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
@@ -815,7 +815,7 @@ impl Shell {
         if store_files {
             if let Ok(copy) = mind::ipc::mint(SLOT_STOREFS, CAP_WRITE | CAP_GRANT, 0, 0) { let _ = lend(SLOT_STOREFS, copy); let _ = mind::ipc::drop_cap(copy); }
         } else if let Some(volume) = &store_named {
-            // One that names no volume storefs has (`ask:…`, `tcp:…`) is left without, unsaid.
+            // A word that names no path there (`ask:…`, `tcp:…`) gives none: no scope is spent on it.
             if mind::fs::Dir::root(volume).and_then(|root| root.scope(false, SCOPE_RECEIVE)).is_ok() {
                 let _ = lend(SLOT_STOREFS, SCOPE_RECEIVE);
                 let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); // the loader holds its copy
