@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.6 (2026-10-31: a question at run time, the stack's and the broker's part, 000-NET-0049; 0.5: 2026-10-28, the browsing grant; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.7 (2026-11-04: the time servers of `timed`, 111-NET-0057; 0.6: 2026-10-31, a question at run time, the stack's and the broker's part, 000-NET-0049; 0.5: 2026-10-28, the browsing grant; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 
@@ -54,6 +54,14 @@ A server on MIND Core (a web server, an SSH server) listens through such a grant
 - **The audit:**
   - the broker logs each port a grant may listen on: `[NETPOLICY] GRANT n TO program: LISTENS ON TCP p FROM A.B.C.D/BITS`;
   - the stack logs each listening socket (`PORT p LISTENS FOR PID …`) and each connection it accepts (`PORT p ACCEPTED A.B.C.D:PORT FOR PID …`).
+
+### The time servers
+
+The network time service `timed` (111-NET-0057) asks the servers its lines name, and sets the calendar clock from them.
+- **Its lines** are ordinary rules of program `timed`, one a server: `timed 192.0.2.10 udp 123 4294967295`. Give each the longest term: the grant is made once at boot and is kept for the service's restarts.
+- **Without such a line** `init` does not start it: `[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER`.
+- **It reads them back** from its own grant (`grant-rules`, `idl/socket.wit` 2.10): its UDP rules with an address, at most 4, each on its port (123 when a line names none).
+- **What it takes** (`docs/profile/clocks.md`): at least two servers that agree within a second, never a time before its floor, and a step of more than 24 hours only at the first set after boot.
 
 ### A question at run time
 

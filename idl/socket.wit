@@ -42,7 +42,7 @@
 /// and takes each connection a peer set up (`tcp-accept`) as a connected socket, used and charged as one it made. A
 /// peer outside the port's networks is reset as soon as the stack sees it, and a port nothing listens on answers a SYN
 /// with a reset.
-package mind:socket@2.9.0;
+package mind:socket@2.10.0;
 
 interface socket {
     /// Why a request failed.
@@ -160,4 +160,7 @@ interface socket {
     /// The oldest connection listening socket `listener` holds, as a connected socket (2.9). `again`: none yet;
     /// `limit`: the client holds 8 sockets (the connection waits).
     tcp-accept: func(listener: u32) -> result<accepted, error>;
+    /// The rules of the caller's own grant (2.10, 111-NET-0057): the destinations the broker registered and the user's
+    /// answers added, so that a service the policy gives its servers learns them here. `denied`: not a live grant's badge.
+    grant-rules: func() -> result<list<rule, 16>, error>;
 }

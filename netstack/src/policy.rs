@@ -3,7 +3,7 @@
 //! only, reaches any public address on its port: a browsing grant (socket.wit 2.7, 000-NET-0049), whose every new host
 //! is logged. A rule the user gave in answer to a grant's question is added to it (socket.wit 2.8); one given once ends
 //! with the grant's first connection through it. A grant may listen on the TCP ports its listening rules name, and take
-//! connections from the networks they name (socket.wit 2.9, 110-NET-0052).
+//! connections from the networks they name (socket.wit 2.9, 110-NET-0052). A grant reads its own rules (socket.wit 2.10).
 use alloc::vec::Vec;
 use mind::idl::socket::{self, Error, ListenRule, Protocol, Rule};
 use mind::network::{BADGE_GRANT_LAST, BADGE_OPERATOR, BADGE_POLICY};
@@ -104,6 +104,8 @@ impl Policy {
     pub fn admits(&self, badge: u16, port: u16, address: u32, now: u64) -> bool {
         self.live(badge, now).is_ok_and(|g| g.listen.iter().any(|r| r.port == port && mind::network::in_network(address, r.network, r.prefix)))
     }
+    /// The rules of live grant `badge` (socket.wit 2.10): what it may reach, as registered and as the user's answers added.
+    pub fn rules(&self, badge: u16, now: u64) -> Result<&[Rule], Error> { self.live(badge, now).map(|g| g.rules.as_slice()) }
     /// Any request of a live grant (sockets it already holds).
     pub fn alive(&self, badge: u16, now: u64) -> Result<(), Error> { self.live(badge, now).map(drop) }
     pub fn charge(&mut self, badge: u16, sent: usize, received: usize) {
