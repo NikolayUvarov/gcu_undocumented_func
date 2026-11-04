@@ -5710,6 +5710,9 @@ def link_suite(args):
             require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
             time.sleep(.1); vm.collect(); vm.output = ""
             require(vm.command("dmesg -s link", raw=True), 'INPUT REFUSED: link.conf HAS NO "dev"')
+            # 800-KRN-0191: without `dev` link holds no input privilege at all.
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert "KIND=6 " not in caps, caps
             # Another address and a frame with none go unanswered: bounded by the tries.
             for other in (("--address", "6"), ()):
                 r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
@@ -5718,6 +5721,25 @@ def link_suite(args):
             require(link(port, "--address", "5", "hello"), '"MIND Core link"')
         finally:
             vm.close()
+    # 800-KRN-0191: in a safe start with `dev`, link gets its developer grants but not the input privilege, as whoever asked
+    # for the safe start is at the machine. A reset within the minute after READY leaves the run's mark (000-KRN-0076).
+    with tempfile.TemporaryDirectory(prefix="smoke-link-safe-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            require(vm.command(f"stat caps {vm.services()['link']}", raw=True), "KIND=6 ")  # the normal start: input held
+            vm.qmp("system_reset")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
+            require(log, "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; NO INPUT IN A SAFE START; ")
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert "KIND=6 " not in caps, caps
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-link-safe-{args.cpus}cpu.log").write_text(vm.log)
     # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
     # (800-APP-0108), its line logged whole; `mode` stays refused.
     with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
