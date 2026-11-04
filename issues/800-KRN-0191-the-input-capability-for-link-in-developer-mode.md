@@ -54,6 +54,19 @@
 
 **A gate group for aarch64,** `aarch64: the link` (`--suites link`), in `scripts/ci_local.sh` and `ci.yml`, as no aarch64 group ran the suite. Its estimate in `land.py` is 225 s.
 
+## Landed (2026-11-04)
+
+Round 78's gate (candidate 6fc5b253, `main` e28cfe4d) passed the `link` suite's checks:
+- with `dev`, the input privilege in `SLOT_INPUT`;
+- none without `dev`;
+- none in a safe start with `dev`.
+
+They ran on x86 in `x86: services, storage, audio` (x32-2) and on aarch64 in the new group `aarch64: the link` (acc1, 188 s).
+
+**Left:**
+- LNK's check that keys posted over the cable reach the shell (800-LNK-0032);
+- LNK's run on the MacBook Pro.
+
 ## Related
 
 [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), [800-KRN-0148](800-KRN-0148-a-shell-client-for-link-in-developer-mode.md), [800-KRN-0173](800-KRN-0173-a-firmware-scope-for-link-in-developer-mode.md), [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md), 800-LNK-0032.

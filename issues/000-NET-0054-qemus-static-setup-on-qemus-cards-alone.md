@@ -26,6 +26,14 @@ DRV's report from the Ryzen 9 5900HX (2026-11-03, `ALL/2026-11-03T1817Z-DRV-…`
 - **The `netbench` suite with `--tap` still gets its static 10.0.2.15** (QEMU's MAC).
 - **On a real machine,** a card waits for its lease with no 10.0.2.15 line. That is evidence for that machine only (MC-12.1).
 
+## Landed (2026-11-04)
+
+Round 78's gate (candidate 6fc5b253, `main` e28cfe4d) passed the `net` suite with `static_setup_check` on x86 (x32-2) and aarch64 (pcu).
+
+**Left:**
+- the `netbench` suite with `--tap`, which needs a tap interface and is not in the gate;
+- the Ryzen: a card that waits for its lease with no `STATIC 10.0.2.15` line.
+
 ## Related
 
 000-NET-0044 (a card without a lease), the `netbench` suite (issue 106).
