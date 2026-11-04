@@ -1,6 +1,6 @@
 # 000-NET-0056 — The TLS lending check lists the grant while its program runs; the run-time question read across the prompt
 
-**Type:** test · **Owner:** kernel session (network track) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** test · **Owner:** kernel session (network track) · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -26,6 +26,13 @@
 ## Acceptance criteria
 
 The group `x86: network, TLS and Effector` passes on x32-128, alone and in a gate.
+
+## Progress
+
+2026-11-04 (fa6d3758, 4469f706): both fixes made.
+- In this session's container (QEMU TCG, 4 CPUs), the group passed in full with the first.
+- On x32-128 at 4469f706, beside the aarch64 network group: `x86: network, TLS and Effector` passed (949 s).
+- The run alone on x32-128 and the gate are still to come.
 
 ## Related
 
