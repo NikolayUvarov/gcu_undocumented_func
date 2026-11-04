@@ -54,6 +54,8 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 - the result on the Ryzen with its log;
 - a service that is refused another device's result: today the record goes to the one driver `init` starts for the device it found.
 
+**Landed (2026-11-04).** The policy and `init`'s line landed in round 80 (`main` 4130cff6), and the gate's `normal` suite required `ABSENT` under QEMU on both architectures. The word in `rtw89_wifi`'s arguments still waits on DRV.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), 174-KRN-0038 (the hardware report), [213](213-amd-ryzen-pc.md).
