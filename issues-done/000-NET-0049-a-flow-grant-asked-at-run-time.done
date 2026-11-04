@@ -1,6 +1,6 @@
-# 000-NET-0049 — A flow grant asked of the user at run time, and the browsing grant
+# 000-NET-0049 — A flow grant asked of the user at run time, and the browsing grant — done
 
-**Type:** network (`netpolicy`, `idl/netpolicy.wit`) · **Owner:** `NET` · **Priority:** P1 · **Status:** open (the browsing grant done; asking at run time left) · **Blocked by:** for the user's answers, the shell's part ([requests-APP.md](requests-APP.md), "The shell puts a running program's question about a flow to the user", 2026-10-31) · **Main task:** — (for 255, 261 and 000-NET-0048) · **Constitution:** MC-3.1, MC-3.8, MC-10.3, MC-11.6, MC-12.4
+**Type:** network (`netpolicy`, `idl/netpolicy.wit`) · **Owner:** `NET` · **Priority:** P1 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** — (for 255, 261 and 000-NET-0048) · **Constitution:** MC-3.1, MC-3.8, MC-10.3, MC-11.6, MC-12.4
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md). 255 asks for the browsing grant when its stage 1 starts.
 
@@ -97,7 +97,7 @@ Still left: `ask(host, port, why)` and the user's answers, which need the shell'
 - **APP's answer** (`NET/2026-10-31T0650Z-APP-…`):
   - the poll suits the shell; it asks `questions()` at most every 500 ms;
   - the program's name is the grant's, the reason is bounded, a question of an ended program leaves the list and `answer` gives it `not-found`, and each question has its PID;
-  - its part is [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.md), which starts once `netpolicy.wit` 1.3 is in `fast-test`.
+  - its part is [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done), which starts once `netpolicy.wit` 1.3 is in `fast-test`.
 - **`socket.wit` 2.8:**
   - `ask`, `asked`, `questions`, `decide`;
   - `netstack/src/questions.rs`: at most one question a grant and 8 waiting in all, a grant's own questions only, the answered ones kept for 16 more;
@@ -140,4 +140,26 @@ Still left:
 
 ## Related
 
-[351-NET-0003](../issues-done/351-NET-0003-names-in-the-network-policy.done), [108](../issues-done/108-editable-network-policy.done), [255](255-text-web-browser.md), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md).
+[351-NET-0003](351-NET-0003-names-in-the-network-policy.done), [108](108-editable-network-policy.done), [255](../issues/255-text-web-browser.md), [000-NET-0048](../issues/000-NET-0048-get-a-wget-and-curl-analog.md).
+
+## Resolution
+
+**Done, with the shell's part:**
+- **The browsing grant:** `browse` lines, the stack's log of each new host (`socket.wit` 2.7), in `main` ef3faf0d (round 41).
+- **The question asked at run time:**
+  - `socket.wit` 2.8's `ask` through a program's grant;
+  - `netpolicy.wit` 1.3's `questions` and `answer` for the shell's client;
+  - each answer applied to the live grant, `always` also as a policy line;
+  - an unanswered question refused at 60 s.
+- **The shell's half:** APP's 000-APP-0120 (`shell/src/flowask.rs`, `flowctl.rs`), in `main` 9a620b0e (round 73).
+
+**Evidence.** In round 73's gate (`main` 9a620b0e), on x86 and aarch64, the `net` suite's `browse_check` covered:
+- the question shown and taken down;
+- `N` refused;
+- `O` once, the next connection `Denied`;
+- `S` for the session;
+- no answer refused at 60 s;
+- `A` with `netcheck 11.0.2.80 tcp 81` written, a new run reaching the host with no question;
+- the browsing grant's two public hosts, and its refusals of another port and of private addresses.
+
+**Docs:** `docs/network/policy.md`, and the profile's MC-11.6 row.

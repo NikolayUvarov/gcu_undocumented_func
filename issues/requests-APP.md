@@ -69,4 +69,4 @@ Numbered on 2026-10-31 as [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-
 
 ## The shell puts a running program's question about a flow to the user (for 000-NET-0049)
 
-Numbered on 2026-10-31 as [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.md).
+Numbered on 2026-10-31 as [000-APP-0120](../issues-done/000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done).

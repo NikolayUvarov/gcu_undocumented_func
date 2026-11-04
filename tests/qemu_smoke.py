@@ -2555,10 +2555,34 @@ def storefs_check(vm):
     require(listing, "1 FILES, 15 BYTES")
     # find is a console program: the shell lends it no storefs client yet (APP's part), so mind::fs asks nobody.
     require(vm.command("find notes:"), "FIND: notes:: NOTFOUND")
+    # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
+    # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
+    # scope ends with the program.
+    vm.send_bytes(b"edit notes:docs/b.txt\n")
+    status_line(vm, "[EDIT] READY")
+    vm.send_bytes(b"in a scope")
+    status_line(vm, "BYTES=10 ")
+    vm.send_bytes(b"\x1bOQ")  # F2
+    status_line(vm, "[EDIT] SAVED 10 BYTES TO notes:docs/b.txt")
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[EDIT] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("cat notes:docs/b.txt"), "in a scope")
+    # storefs ends an ended task's scope when it next makes one or is asked through one: the next edit's ends the first.
+    vm.send_bytes(b"edit notes:docs/b.txt\n")
+    status_line(vm, "[EDIT] READY")
+    vm.send_bytes(b"\x1b[21~")  # F10, nothing changed
+    require(vm.expect("EXITED. SHELL RESUMED."), "[EDIT] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    scopes = vm.service_logs("storefs", "ENDED")
+    made = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes)
+    assert len(made) == 2 and f"[STOREFS] SCOPE {made[0]} ENDED" in scopes, scopes[-1500:]
+    require(vm.command("rm notes:docs/b.txt"), "OK")
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
-          "vfs_server's volumes as before; a program without storefs's client gets NotFound", flush=True)
+          "vfs_server's volumes as before; a program without storefs's client gets NotFound; edit on a store volume wrote "
+          "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 
 def search_check(vm):
@@ -9522,20 +9546,68 @@ def browse_check(args):
             require_all(log, "[NETSTACK] GRANT ", " BROWSES A NEW PUBLIC HOST 11.0.2.80:80 (1 SO FAR)", " BROWSES A NEW PUBLIC HOST 11.0.2.81:80 (2 SO FAR)")
             assert log.count("BROWSES A NEW PUBLIC HOST 11.0.2.80:80") == 1, log  # once per host
             require(vm.service_logs("netpolicy", "TO netcheck"), "TO netcheck: 1 RULES, BROWSING ANY PUBLIC ADDRESS, 600 S, 1000000 BYTES")
-            # A question at run time (socket.wit 2.8, netpolicy.wit 1.3). The shell does not put it to the user yet
-            # (000-APP-0120): one whose program ends leaves the broker's list, and one no one answers is refused at 60 s.
+            # A question at run time (socket.wit 2.8, netpolicy.wit 1.3), which the shell puts to the user on the console
+            # its program was started from (000-APP-0120). One whose program ends leaves the broker's list, and the shell
+            # takes it down.
+            question = "NETWORK: netcheck (PID "
             out = vm.command("netcheck ask:11.0.2.80:81:3", timeout=30)
-            require_all(out, "FOR 11.0.2.80:81", "NETCHECK ANSWER PENDING", "NETCHECK ask:11.0.2.80:81:3 Timeout")
+            require_all(out, question, ") ASKS TO REACH 11.0.2.80:81", "ITS REASON, IN ITS OWN WORDS: \"netcheck's check of a question at run time\"",
+                        "N: NO (THE DEFAULT)  O: ONCE  S: FOR THIS RUN  A: ALWAYS?", "NETCHECK ANSWER PENDING", "NETCHECK ask:11.0.2.80:81:3 Timeout")
+            if "(GONE: ITS PROGRAM ENDED" not in out:  # the take-down may come before the prompt or after it
+                vm.expect("MIND> ", timeout=10, after="(GONE: ITS PROGRAM ENDED")
             log = vm.service_logs("netpolicy", "ITS PROGRAM ENDED")
             require_all(log, "netcheck (PID ", ") ASKS FOR 11.0.2.80:81 TCP: \"netcheck's check of a question at run time\"", "OF netcheck: ITS PROGRAM ENDED")
-            pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", vm.command("run netcheck ask:11.0.2.80:81:90 &"))[1]
+
+            def asked(seconds, then=""):  # netcheck asks from the background; the shell shows the question at the prompt
+                out = vm.command(f"run netcheck ask:11.0.2.80:81:{seconds}{then} &")
+                pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", out)[1]
+                if "ALWAYS? " not in out.partition(question)[2]:  # it may show before the prompt or after it
+                    vm.expect("ALWAYS? ", timeout=20, after=question)
+                return pid
+
+            # No, typed once the question shows: refused at once.
+            pid = asked(30)
+            time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
+            vm.send_bytes(b"n")
+            vm.expect("MIND> ", timeout=10, after="NO\n")  # the answer on the question's line, then the prompt
+            require(vm.program_logs(pid, "NETCHECK ANSWER", tries=80), "NETCHECK ANSWER REFUSED")
+            # Once: allowed for that connection alone (nothing listens on the port, so the connection itself fails); the
+            # next one of the same run is denied.
+            pid = asked(30, " tcp:11.0.2.80:81")
+            time.sleep(.6)
+            vm.send_bytes(b"o")
+            vm.expect("MIND> ", timeout=10, after="ONCE\n")
+            log = vm.program_logs(pid, "NETCHECK tcp:11.0.2.80:81 ", tries=80)
+            require_all(log, "NETCHECK ANSWER ALLOWED 11.0.2.80", "NETCHECK tcp:11.0.2.80:81 Denied")
+            require(vm.command("dmesg -s shell", raw=True), "ANSWERED ONCE")
+            # For this run: the next connection of the same run is not denied.
+            pid = asked(30, " tcp:11.0.2.80:81")
+            time.sleep(.6)
+            vm.send_bytes(b"s")
+            vm.expect("MIND> ", timeout=10, after="FOR THIS RUN\n")
+            log = vm.program_logs(pid, "NETCHECK tcp:11.0.2.80:81 ", tries=80)
+            require(log, "NETCHECK ANSWER ALLOWED 11.0.2.80")
+            assert "NETCHECK tcp:11.0.2.80:81 Denied" not in log, log
+            # No answer: refused at 60 s, and the shell takes the question down. Nothing is typed meanwhile.
+            pid = asked(90)
+            vm.expect("MIND> ", timeout=90, after="(GONE: ")
             require(vm.program_logs(pid, "NETCHECK ANSWER", tries=400), "NETCHECK ANSWER REFUSED")
             require(vm.service_logs("netpolicy", "REFUSED"), "OF netcheck: NO ANSWER IN 60 S, REFUSED")
+            # Always, last, as it leaves the host allowed: a line of the policy, so the next run reaches it with no question.
+            pid = asked(30)
+            time.sleep(.6)
+            vm.send_bytes(b"a")
+            vm.expect("MIND> ", timeout=10, after="ALWAYS (A LINE OF THE POLICY)\n")
+            require(vm.program_logs(pid, "NETCHECK ANSWER", tries=80), "NETCHECK ANSWER ALLOWED 11.0.2.80")
+            require(vm.command("netpolicy"), "netcheck 11.0.2.80 tcp 81")
+            out = vm.command("netcheck tcp:11.0.2.80:81", timeout=30)
+            assert "NETCHECK tcp:11.0.2.80:81 Denied" not in out and question not in out, out
         finally:
             vm.close()
     print("PASS: a browsing grant (000-NET-0049): netcheck reached two public addresses on its port, each new host logged once "
-          "by the stack, and was refused another port and two private addresses; a question at run time left the broker's "
-          "list when its program ended, and was refused when no one answered it in 60 s", flush=True)
+          "by the stack, and was refused another port and two private addresses; a question at run time, put to the user "
+          "by the shell (000-APP-0120), was taken down when its program ended, refused by N, allowed for one connection by O, "
+          "for the rest of the run by S and as a line of the policy by A, and refused when no one answered it in 60 s", flush=True)
 
 
 def late_attach_check(args):
