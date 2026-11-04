@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.6 (2026-10-31: a question at run time, the stack's and the broker's part, 000-NET-0049; 0.5: 2026-10-28, the browsing grant; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.7 (2026-11-04: the time servers of `timed`, 111-NET-0057; 0.6: 2026-10-31, a question at run time, the stack's and the broker's part, 000-NET-0049; 0.5: 2026-10-28, the browsing grant; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 
@@ -21,6 +21,7 @@ One line per rule, `#` starts a comment:
 | `resolver A.B.C.D[:PORT]` | host names in this file are looked up at this server (default: the stack's DNS server) |
 | `default card N` | card `N` (0 or 1: the wired cards, 2: the Wi-Fi station) is the default while its link is up and it has an address and a gateway; the last such line counts (550-NET-0025) |
 | `browse program public tcp PORT[,PORT…] [seconds [bytes]]` | `program` may reach **any public address** over TCP on these ports (at most 4, none 0): a browsing grant (000-NET-0049, below) |
+| `listen program tcp PORT from A.B.C.D/BITS[,A.B.C.D/BITS…] [seconds [bytes]]` | `program` may **listen** on TCP `PORT` and take connections from peers in these networks (at most 4 a port, host bits 0; `0.0.0.0/0`: anywhere): a listening grant (110-NET-0052, below) |
 
 ### The browsing grant
 
@@ -34,6 +35,33 @@ One line per rule, `#` starts a comment:
 - **The audit.** The stack logs each new host a grant reaches through its browsing rule, once per host: `[NETSTACK] GRANT n BROWSES A NEW PUBLIC HOST A.B.C.D:PORT (k SO FAR)`. It remembers the last 256 hosts of a grant, so past them a host can be logged again.
 - **The broker's line** for such a grant says so: `[NETPOLICY] GRANT n TO program: k RULES, BROWSING ANY PUBLIC ADDRESS, …`.
 - **Names.** A program that looks names up needs `program dns` too. The answer is plain DNS, as for any grant.
+
+### The listening grant
+
+A server on MIND Core (a web server, an SSH server) listens through such a grant (110-NET-0052, `idl/socket.wit` 2.9).
+- **Listening.** The program calls `tcp-listen(port, backlog)` for a port its lines name, with a backlog of 1 to 16 connections set up and not yet accepted. It listens on the default card.
+- **Taking a connection.** `tcp-accept` hands over the oldest connection set up, as a connected socket with the peer's address and port. It is used and charged as a connection the program made, within its grant's term and volume.
+- **What the stack refuses:**
+  - a port no line names: `tcp-listen` is `denied`;
+  - a port another socket listens on: `refused`;
+  - a peer outside the port's networks: reset as soon as the stack sees it, logged as `[NETSTACK] PORT p REFUSED A.B.C.D:PORT (BADGE n): NOT A NETWORK ITS GRANT NAMES`;
+  - a SYN to a port nothing listens on: answered with a reset.
+- **Limits:**
+  - a backlog of at most 16;
+  - at most 32 listening sockets in the stack, against a flood of SYNs;
+  - a connection set up no further than 10 s is dropped;
+  - a program holds at most 8 sockets, the accepted ones among them.
+- **The audit:**
+  - the broker logs each port a grant may listen on: `[NETPOLICY] GRANT n TO program: LISTENS ON TCP p FROM A.B.C.D/BITS`;
+  - the stack logs each listening socket (`PORT p LISTENS FOR PID …`) and each connection it accepts (`PORT p ACCEPTED A.B.C.D:PORT FOR PID …`).
+
+### The time servers
+
+The network time service `timed` (111-NET-0057) asks the servers its lines name, and sets the calendar clock from them.
+- **Its lines** are ordinary rules of program `timed`, one a server: `timed 192.0.2.10 udp 123 4294967295`. Give each the longest term: the grant is made once at boot and is kept for the service's restarts.
+- **Without such a line** `init` does not start it: `[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER`.
+- **It reads them back** from its own grant (`grant-rules`, `idl/socket.wit` 2.10): its UDP rules with an address, at most 4, each on its port (123 when a line names none).
+- **What it takes** (`docs/profile/clocks.md`): at least two servers that agree within a second, never a time before its floor, and a step of more than 24 hours only at the first set after boot.
 
 ### A question at run time
 
@@ -137,4 +165,6 @@ In the `tls` suite's raw-image check, a change is still there after a reboot.
 - **Limits on the shell's operator client,** which reaches every destination.
 - **A change that applies to grants already made:** `netrevoke` ends them.
 - **A renewable grant, a volume per period, a name looked up again on reconnecting:** a long-running service holds one grant for its life (750-NET-0014).
+- **Listening on another card than the default one, or on every card:** a listening socket takes connections on the card that was the default when it was opened.
+- **A refusal before the handshake:** smoltcp answers a SYN on a listening port before the stack sees the peer, so a peer outside the grant's networks may see its connection set up, then reset.
 - **Grants across a restart of `netstack`:** the stack keeps them in memory only, so after a restart a grant's requests are refused until its program is started again with a new one (read from the code, not tested).

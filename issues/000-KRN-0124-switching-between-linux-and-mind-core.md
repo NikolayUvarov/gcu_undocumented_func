@@ -1,6 +1,6 @@
 # 000-KRN-0124 — Switching a machine between Linux and MIND Core: one boot of MIND Core by `BootNext`, and back to Linux by any restart
 
-**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` at 1b1436a; the Ryzen's run left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1, MC-12.9
+**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (the Ryzen's switch ran; `logs` there left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1, MC-12.9
 
 ## Problem
 
@@ -101,6 +101,37 @@ With `BootNext`, every way a run of MIND Core can end returns to Linux: `reboot`
 - **Left:** the run on the Ryzen with the maintainer.
 
 **The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. The host tests ran in it.
+
+## Progress (2026-11-03, on the Ryzen)
+
+**DRV's report** (`ALL/2026-11-03T1817Z-DRV-…`):
+- **With the firmware's Fast Boot on,** the Ryzen ignored `BootNext` to the stick and started Ubuntu. Choosing the stick in the firmware's menu worked.
+- **The maintainer turned Fast Boot off.** One full cycle then ran with nobody at the machine, in about two minutes:
+  - MIND's `reboot` came back to Ubuntu (`BootCurrent: 0002`);
+  - `once` (`BootNext: 0003`) and a reboot started MIND Core, which answered the link at 18:00:40.
+- **The reboot outlived the Effector exec** only as `systemd-run --on-active=5 /bin/systemctl reboot`; a background `&` was killed with the exec.
+
+**The script now:**
+- `once` says that Fast Boot may skip the stick and `BootNext`;
+- `--reboot` asks systemd to restart in 5 s (`systemd-run`), so the restart outlives the command that ran the script.
+
+**`docs/write-disk.md`** (EN, RU) says both.
+
+**Left of the criterion:** on the Ryzen, `logs` after such a boot, copying its log and saying it booted.
+
+## Progress (2026-11-04, on the Ryzen)
+
+**DRV's report** (`KRN/2026-11-04T0509Z-DRV-boot-switch-logs-on-un-rizen.md`). The runs used the script as it was in `main` before this branch's change, run as root through Effector, with the stick's partitions unmounted first.
+- **Fourteen `BootNext` cycles**, about two minutes each. Thirteen started MIND Core from the stick, and its `reboot` came back to Ubuntu.
+- **`logs` after a MIND Core boot** (05:07 UTC): `copied /dev/sda2 into …` and `MIND Core booted: boot0013.log; autorun in the last: none`, exit 0.
+- **`logs` after the one cycle that did not reach MIND Core** (the 2026-11-03 18:56 reboot, a dark screen until the maintainer restarted the machine): `MIND Core did not boot: no new boot log…`, exit 1. Fast Boot was already off, and six cycles before it had booted the stick. The cause is not known.
+- **The logs' own clock.** `boot0001.log` reads a later time than `boot0002.log`: the RTC was not UTC at the first boot (the machine also has Windows). `logs` orders the logs by number, not by their clock.
+
+So the three steps of the criterion were seen on that machine with the earlier script: `once --reboot` started MIND Core, its `reboot` came back, and `logs` copied the boot's log and said whether it booted. They are recorded for that machine and its firmware only (MC-12.1).
+
+**Left:**
+- the same cycle with this branch's script, whose `--reboot` goes through `systemd-run`, once it is in `main`;
+- the cycle that did not boot: its cause, if it comes back.
 
 ## Related
 

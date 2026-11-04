@@ -37,6 +37,12 @@
 //! 2.8 (000-NET-0049): a grant may ask for a TCP flow its rules do not name (`ask`, `asked`). The stack decides
 //! nothing: the policy badge reads the questions (`questions`) and gives the user's answer (`decide`), which adds the
 //! rule to the grant.
+//!
+//! 2.9 (110-NET-0052): a grant may listen. The policy badge registers which TCP ports it may listen on and from which
+//! networks a peer may connect (`policy-listen`); the grant opens a listening socket (`tcp-listen`) on the default card
+//! and takes each connection a peer set up (`tcp-accept`) as a connected socket, used and charged as one it made. A
+//! peer outside the port's networks is reset as soon as the stack sees it, and a port nothing listens on answers a SYN
+//! with a reset.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -46,7 +52,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 8, 0);
+pub const VERSION: (u8, u8, u8) = (2, 10, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -213,6 +219,25 @@ impl Wire for Ruling {
     const MAX: usize = <QuestionState as Wire>::MAX + <u32 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.state.encode(w)?; self.address.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { state: Wire::decode(r)?, address: Wire::decode(r)? }) }
+}
+
+/// Who may connect to a grant's listening socket (2.9): its TCP port and a network a peer's address must be in
+/// (`prefix` bits of `network`; 0 bits: any address).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ListenRule { pub port: u16, pub network: u32, pub prefix: u8 }
+impl Wire for ListenRule {
+    const MAX: usize = <u16 as Wire>::MAX + <u32 as Wire>::MAX + <u8 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.port.encode(w)?; self.network.encode(w)?; self.prefix.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { port: Wire::decode(r)?, network: Wire::decode(r)?, prefix: Wire::decode(r)? }) }
+}
+
+/// A connection a listening socket took (2.9): the connected socket's handle, the peer's address and port.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Accepted { pub socket: u32, pub address: u32, pub port: u16 }
+impl Wire for Accepted {
+    const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u16 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.socket.encode(w)?; self.address.encode(w)?; self.port.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { socket: Wire::decode(r)?, address: Wire::decode(r)?, port: Wire::decode(r)? }) }
 }
 
 pub fn config(endpoint: Endpoint) -> Result<core::result::Result<Config, Error>> {
@@ -528,6 +553,66 @@ pub fn decide(endpoint: Endpoint, id: u32, address: u32, allowed: bool, once: bo
     Ok(Ok(()))
 }
 
+/// Registers who may connect to grant `badge`'s listening sockets, replacing what it had (policy badge, 2.9).
+/// `not-found`: no grant with that badge; `invalid`: port 0, a prefix over 32, or more than 4 networks for a port.
+pub fn policy_listen(endpoint: Endpoint, badge: u16, rules: &[ListenRule]) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        badge.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<ListenRule, 16>(rules, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 24 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// A listening TCP socket on `port`, on the default card, holding up to `backlog` connections (1 to 16) set up and
+/// not yet accepted (2.9). `denied`: no listening rule names the port; `refused`: another socket listens on it;
+/// `invalid`: port 0 or a backlog out of range; `limit`: the client holds 8 sockets, or the stack's listening
+/// sockets would pass 32; `no-network`: no card.
+pub fn tcp_listen(endpoint: Endpoint, port: u16, backlog: u8) -> Result<core::result::Result<u32, Error>> {
+    let words = [25 | MAJOR << 8 | ((port) as usize) << 16 | ((backlog) as usize) << 32, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+}
+
+/// The oldest connection listening socket `listener` holds, as a connected socket (2.9). `again`: none yet;
+/// `limit`: the client holds 8 sockets (the connection waits).
+pub fn tcp_accept(endpoint: Endpoint, listener: u32) -> Result<core::result::Result<Accepted, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        listener.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 26 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 10, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Accepted as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The rules of the caller's own grant (2.10, 111-NET-0057): the destinations the broker registered and the user's
+/// answers added, so that a service the policy gives its servers learns them here. `denied`: not a live grant's badge.
+pub fn grant_rules(endpoint: Endpoint) -> Result<core::result::Result<List<Rule, 16>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 27 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 114, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Rule, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -557,6 +642,10 @@ pub enum Request<'a> {
     Asked { id: u32 },
     Questions,
     Decide { id: u32, address: u32, allowed: bool, once: bool },
+    PolicyListen { badge: u16, rules: List<ListenRule, 16> },
+    TcpListen { port: u16, backlog: u8 },
+    TcpAccept { listener: u32 },
+    GrantRules,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -731,6 +820,34 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0xffffffff0000, 0x3ffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::Decide { id: wire::field(&words, 0, 16, 32) as u32, address: wire::field(&words, 1, 0, 32) as u32, allowed: wire::field(&words, 1, 32, 1) != 0, once: wire::field(&words, 1, 33, 1) != 0 }, Call::words(request, cap)))
         }
+        24 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let badge = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let rules = <List<ListenRule, 16> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::PolicyListen { badge, rules }, call))
+        }
+        25 => {
+            wire::body(request, cap, [0xffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::TcpListen { port: wire::field(&words, 0, 16, 16) as u16, backlog: wire::field(&words, 0, 32, 8) as u8 }, Call::words(request, cap)))
+        }
+        26 => {
+            let (call, length) = wire::take_buffer(request, cap, 10, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let listener = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::TcpAccept { listener }, call))
+        }
+        27 => {
+            let (call, length) = wire::take_buffer(request, cap, 114, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::GrantRules, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -826,4 +943,20 @@ pub fn reply_questions(call: Call, value: core::result::Result<&[Question], Erro
 pub fn reply_decide(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_policy_listen(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_tcp_listen(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_tcp_accept(call: Call, value: core::result::Result<&Accepted, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_grant_rules(call: Call, value: core::result::Result<&[Rule], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Rule, 16>(value, w))
 }

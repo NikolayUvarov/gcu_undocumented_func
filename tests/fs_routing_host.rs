@@ -27,9 +27,15 @@ fn another_volume_goes_to_storefs_or_to_nobody() {
 }
 
 #[test]
-fn a_lent_client_takes_every_volume() {
-    for v in ["", "ram", "notes"] {
+fn a_lent_client_takes_vfs_servers_volumes_and_storefs_the_others_when_held() {
+    // 311-KRN-0203: a program the shell lent its files client (fm, get -o) reaches a store volume through the storefs
+    // client it holds too; without one, the lent client is asked, as before.
+    for v in ["", "ram", "log", "models"] {
         assert_eq!(route(v, FILE, VFS, Some(STORE)), Some(FILE), "{v}");
+        assert_eq!(route(v, FILE, VFS, None), Some(FILE), "{v}");
+    }
+    for v in ["notes", "data"] {
+        assert_eq!(route(v, FILE, VFS, Some(STORE)), Some(STORE), "{v}");
         assert_eq!(route(v, FILE, VFS, None), Some(FILE), "{v}");
     }
 }

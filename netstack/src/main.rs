@@ -43,6 +43,9 @@ const UDP_PACKETS: usize = 8;
 const UDP_BUFFER: usize = 8192;
 const POLL_MS: u32 = 10;
 const FALLBACK_MS: u64 = 3000; // without a DHCP lease by then: QEMU user networking's static setup
+// QEMU's own MAC prefix (52:54:00), its default for a card: that setup is for such a card alone, never a real one on a real
+// network (000-NET-0054: the Ryzen's RTL8168 showed 10.0.2.15 for 11 s before its lease).
+const QEMU_OUI: u64 = 0x52_54_00;
 const ICMP_IDENT: u16 = 0x4D49;
 const PINGS: usize = 16; // echo requests waiting for their replies, all clients together
 const ECHO_MAX: u16 = 1472; // an echo's data bytes: one frame on a 1500-byte MTU (socket.wit 2.6)
@@ -52,6 +55,9 @@ const CARDS: usize = 3; // SLOT_DEV0, SLOT_DEV1 (one virtio_net instance per car
 const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1, SLOT_STATION];
 const KINDS: [socket::CardKind; CARDS] = [socket::CardKind::Wired, socket::CardKind::Wired, socket::CardKind::Wireless];
 const NO_CARD: u8 = 255; // socket.wit 2.5 `prefer`: no preferred card
+const BACKLOG_MAX: u8 = 16; // connections a listening socket holds set up and not yet accepted (socket.wit 2.9)
+const LISTENING_MAX: usize = 32; // listening sockets of every listener together: what a flood of SYNs can hold
+const HALF_OPEN_MS: u64 = 10_000; // a connection set up no further than that long is dropped (smoltcp's timeout)
 
 // Transmit checksum offload (issue 106, socket.wit `offload`): off until the operator turns it on; the benchmark
 // (docs/profile/network.md) showed no gain worth trusting the device with it by default.
@@ -222,7 +228,11 @@ impl Device for Card {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Kind { Udp, Tcp }
+enum Kind { Udp, Tcp, Listen }
+
+// A listening socket (socket.wit 2.9, 110-NET-0052): smoltcp sockets listening on `port` in its link's set, as many as
+// the backlog leaves room for, and the connections peers set up on them that wait to be accepted (handle, peer).
+struct Listener { port: u16, backlog: usize, listening: Vec<SocketHandle>, ready: Vec<(SocketHandle, u32, u16)> }
 // A client's socket: its interface (`link`) and its handle in that interface's socket set.
 #[derive(Clone, Copy)]
 struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64 }
@@ -261,6 +271,8 @@ struct Stack {
     default: Option<usize>,
     // The card the operator or the policy prefers as the default (socket.wit 2.5, 550-NET-0025).
     preferred: Option<usize>,
+    // The listening sockets, by their slot's index (socket.wit 2.9).
+    listeners: [Option<Listener>; SOCKETS],
 }
 
 fn now_ms() -> u64 { mind::time::monotonic_ns() / 1_000_000 }
@@ -314,8 +326,9 @@ impl Link {
         match event {
             Some(Some((address, router, dns))) => self.configure(address, router, dns, true),
             Some(None) => { self.address = None; self.leased = false; }
-            // QEMU user networking's static setup, for the first card only (another card's network is unknown).
-            None => if self.card.index == 0 && self.up && self.address.is_none() && now_ms() - self.started > FALLBACK_MS {
+            // QEMU user networking's static setup, for the first card only (another card's network is unknown), if QEMU's.
+            None => if self.card.index == 0 && (self.mac >> 24) & 0xFF_FFFF == QEMU_OUI && self.up && self.address.is_none()
+                && now_ms() - self.started > FALLBACK_MS {
                 self.configure(Ipv4Cidr::new(Ipv4Address::new(10, 0, 2, 15), 24), Some(Ipv4Address::new(10, 0, 2, 2)), Some(Ipv4Address::new(10, 0, 2, 3)), false);
             },
         }
@@ -331,7 +344,7 @@ impl Link {
 impl Stack {
     fn new() -> Self {
         Self { links: [const { None }; CARDS], tried: [0; CARDS], turn: turn::Turn::new(), slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
-               sequence: 0, next_port: EPHEMERAL, default: None, preferred: None }
+               sequence: 0, next_port: EPHEMERAL, default: None, preferred: None, listeners: [const { None }; SOCKETS] }
     }
 
     fn link(&mut self, index: usize) -> &mut Link { self.links[index].as_mut().expect("sockets live only on present links") }
@@ -528,6 +541,104 @@ impl Stack {
         match slot.kind {
             Kind::Udp => { link.sockets.remove(slot.handle); }
             Kind::Tcp => { link.sockets.get_mut::<tcp::Socket>(slot.handle).close(); self.closing.push((slot.link, slot.handle, now_ms())); }
+            Kind::Listen => {
+                let Some(listener) = self.listeners[index].take() else { return };
+                for handle in listener.listening { link.sockets.remove(handle); }
+                // Connections set up and never accepted are reset.
+                for (handle, ..) in listener.ready { link.sockets.get_mut::<tcp::Socket>(handle).abort(); self.closing.push((slot.link, handle, now_ms())); }
+                mind::println!("[NETSTACK] PORT {} NO LONGER LISTENS", listener.port);
+            }
+        }
+    }
+    // Whether `owner` may hold one more socket and the table has a free slot.
+    fn room(&self, owner: (u64, u16)) -> bool {
+        self.slots.iter().flatten().filter(|s| s.owner == owner).count() < PER_CLIENT && self.slots.iter().any(Option::is_none)
+    }
+    // A smoltcp socket listening on `port` in link `link`'s set; one set up no further than HALF_OPEN_MS is dropped.
+    fn listening(&mut self, link: usize, port: u16) -> Result<SocketHandle, Error> {
+        let mut socket = tcp::Socket::new(tcp::SocketBuffer::new(vec![0; TCP_BUFFER]), tcp::SocketBuffer::new(vec![0; TCP_BUFFER]));
+        socket.set_timeout(Some(smoltcp::time::Duration::from_millis(HALF_OPEN_MS)));
+        socket.listen(port).map_err(|_| Error::Invalid)?;
+        Ok(self.link(link).sockets.add(socket))
+    }
+    // socket.wit 2.9 `tcp-listen`, once the grant may.
+    fn listen(&mut self, owner: (u64, u16), port: u16, backlog: u8) -> Result<u32, Error> {
+        if port == 0 || !(1..=BACKLOG_MAX).contains(&backlog) { return Err(Error::Invalid); }
+        let link = self.route(0).ok_or(Error::NoNetwork)?;
+        if self.listeners.iter().flatten().any(|l| l.port == port) { return Err(Error::Refused); }
+        let held: usize = self.listeners.iter().flatten().map(|l| l.listening.len()).sum();
+        if held + backlog as usize > LISTENING_MAX || !self.room(owner) { return Err(Error::Limit); }
+        let mut listening = Vec::new();
+        for _ in 0..backlog {
+            match self.listening(link, port) {
+                Ok(handle) => listening.push(handle),
+                Err(error) => { for handle in listening { self.link(link).sockets.remove(handle); } return Err(error); }
+            }
+        }
+        // take() drops the first handle if it fails; the others go with it.
+        let index = match self.take(owner, Kind::Listen, link, listening[0]) {
+            Ok(index) => index,
+            Err(error) => { for &handle in &listening[1..] { self.link(link).sockets.remove(handle); } return Err(error); }
+        };
+        self.listeners[index] = Some(Listener { port, backlog: backlog as usize, listening, ready: Vec::new() });
+        Ok(self.id(index))
+    }
+    // socket.wit 2.9 `tcp-accept`: the oldest connection set up on listener `id`, taken out as a connected socket.
+    fn accept(&mut self, id: u32, owner: (u64, u16)) -> Result<socket::Accepted, Error> {
+        let (index, slot) = self.slot(id, owner, Kind::Listen)?;
+        let listener = self.listeners[index].as_ref().ok_or(Error::NoSocket)?;
+        let Some(&(handle, address, port)) = listener.ready.first() else { return Err(Error::Again) };
+        if !self.room(owner) { return Err(Error::Limit); }
+        let listening_port = listener.port;
+        self.listeners[index].as_mut().map(|l| l.ready.remove(0));
+        let socket = self.take(owner, Kind::Tcp, slot.link, handle)?;
+        let [a, b, c, d] = address.to_be_bytes();
+        mind::println!("[NETSTACK] PORT {} ACCEPTED {}.{}.{}.{}:{} FOR PID {} (BADGE {}), SOCKET {}", listening_port, a, b, c, d, port, owner.0, owner.1, self.id(socket));
+        Ok(socket::Accepted { socket: self.id(socket), address, port })
+    }
+    // Each listener's sockets once the interfaces ran (socket.wit 2.9): a connection a peer is setting up, or set up, is
+    // kept if `admits` (its owner, its port, the peer's address) and reset at once if not; one dropped half set up goes;
+    // the backlog is filled again with listening sockets.
+    fn listen_turn(&mut self, admits: &dyn Fn((u64, u16), u16, u32) -> bool) {
+        let now = now_ms();
+        for index in 0..SOCKETS {
+            let (Some(slot), Some(listener)) = (self.slots[index], self.listeners[index].as_mut()) else { continue };
+            let Some(link) = self.links[slot.link].as_mut() else { continue };
+            let mut kept = Vec::with_capacity(listener.listening.len());
+            for handle in listener.listening.drain(..) {
+                let tcp = link.sockets.get_mut::<tcp::Socket>(handle);
+                let peer = tcp.remote_endpoint().map(|e| { let IpAddress::Ipv4(a) = e.addr; (u32::from(a), e.port) });
+                match (tcp.state(), peer) {
+                    (tcp::State::Listen, _) | (tcp::State::SynReceived, None) => kept.push(handle),
+                    (tcp::State::SynReceived | tcp::State::Established | tcp::State::CloseWait, Some((address, port))) => {
+                        let [a, b, c, d] = address.to_be_bytes();
+                        if !admits(slot.owner, listener.port, address) {
+                            tcp.abort();
+                            self.closing.push((slot.link, handle, now));
+                            mind::println!("[NETSTACK] PORT {} REFUSED {}.{}.{}.{}:{} (BADGE {}): NOT A NETWORK ITS GRANT NAMES", listener.port, a, b, c, d, port, slot.owner.1);
+                        } else if tcp.state() == tcp::State::SynReceived {
+                            kept.push(handle);
+                        } else {
+                            tcp.set_timeout(None);
+                            listener.ready.push((handle, address, port));
+                        }
+                    }
+                    // Dropped half set up, or closed by the peer before it was set up: it goes.
+                    _ => { link.sockets.remove(handle); }
+                }
+            }
+            listener.listening = kept;
+            let port = listener.port;
+            while listener.listening.len() + listener.ready.len() < listener.backlog {
+                let mut socket = tcp::Socket::new(tcp::SocketBuffer::new(vec![0; TCP_BUFFER]), tcp::SocketBuffer::new(vec![0; TCP_BUFFER]));
+                socket.set_timeout(Some(smoltcp::time::Duration::from_millis(HALF_OPEN_MS)));
+                if socket.listen(port).is_err() { break; }
+                listener.listening.push(link.sockets.add(socket));
+            }
+            // The slot's handle names one of its sockets that lives: a listening one, else a ready one.
+            if let Some(&handle) = listener.listening.first().or(listener.ready.first().map(|(h, ..)| h)) {
+                if let Some(slot) = self.slots[index].as_mut() { slot.handle = handle; }
+            }
         }
     }
     // The open sockets from table index `start` that a client may see (`only` its badge's, None every one), for
@@ -544,6 +655,7 @@ impl Stack {
                     let tcp = link.sockets.get::<tcp::Socket>(slot.handle);
                     (Protocol::Tcp, tcp.local_endpoint().map_or(0, |e| e.port), tcp.remote_endpoint(), tcp_state(tcp.state()))
                 }
+                Kind::Listen => (Protocol::Tcp, self.listeners[index].as_ref().map_or(0, |l| l.port), None, socket::TcpState::Listen),
             };
             let (remote_address, remote_port) = remote.map_or((0, 0), |e| { let IpAddress::Ipv4(address) = e.addr; (u32::from(address), e.port) });
             let info = socket::SocketInfo { id: self.id(index), protocol, card: link.card.index as u8, local_port, remote_address, remote_port, state,
@@ -734,8 +846,20 @@ impl Stack {
                 if let Ok(n) = result { moved.1 = n; }
                 socket::reply_tcp_receive(call, result.map(|n| &buffer[..n]))
             }
+            // A listening socket on the default card (socket.wit 2.9): the backlog's sockets listen at once.
+            socket::Request::TcpListen { port, backlog } => {
+                let result = self.listen(owner, port, backlog);
+                if let Ok(id) = result { mind::println!("[NETSTACK] PORT {} LISTENS FOR PID {} (BADGE {}), BACKLOG {}, SOCKET {}", port, owner.0, owner.1, backlog, id); }
+                socket::reply_tcp_listen(call, result)
+            }
+            // The oldest connection set up on it, as a connected socket of the same client (socket.wit 2.9).
+            socket::Request::TcpAccept { listener: id } => {
+                let result = self.accept(id, owner);
+                socket::reply_tcp_accept(call, result.as_ref().map_err(|e| *e))
+            }
             socket::Request::Close { socket: id } => {
-                let result = self.slot(id, owner, Kind::Udp).or_else(|_| self.slot(id, owner, Kind::Tcp)).map(|(index, _)| self.free(index));
+                let result = self.slot(id, owner, Kind::Udp).or_else(|_| self.slot(id, owner, Kind::Tcp)).or_else(|_| self.slot(id, owner, Kind::Listen))
+                    .map(|(index, _)| self.free(index));
                 socket::reply_close(call, result)
             }
             // Policy requests are answered in main.
@@ -792,6 +916,12 @@ fn main(_info: &'static BootInfo) {
         // One shared driver budget, then a client receive opportunity (550-NET-0032).
         stack.poll();
         let now = now_ms();
+        // Connections peers set up on listening sockets: the operator's from anywhere, a grant's from its networks.
+        stack.listen_turn(&|owner: (u64, u16), port: u16, peer: u32| match policy::access(owner.1) {
+            Access::Operator => true,
+            Access::Grant(grant) => policy.admits(grant, port, peer, now),
+            _ => false,
+        });
         if now - reaped >= 1000 { reaped = now; stack.reap(); }
         // Grants that ran out of time or volume lose their flows.
         for badge in policy.ended(now) {
@@ -813,6 +943,11 @@ fn main(_info: &'static BootInfo) {
             socket::Request::PolicyDrop { badge: grant } => {
                 let result = if !matches!(policy::access(badge), Access::Policy) { Err(Error::Denied) } else if policy.drop(grant) { questions.forget(grant); Ok(stack.close_badge(grant)) } else { Err(Error::NotFound) };
                 let _ = socket::reply_policy_drop(call, result); continue;
+            }
+            // Who may connect to a grant's listening sockets (socket.wit 2.9): only the broker sets it.
+            socket::Request::PolicyListen { badge: grant, rules } => {
+                let result = if matches!(policy::access(badge), Access::Policy) { policy.set_listen(grant, rules.as_slice()) } else { Err(Error::Denied) };
+                let _ = socket::reply_policy_listen(call, result); continue;
             }
             socket::Request::PolicyUsage { badge: grant } => {
                 let sockets = stack.sockets_of(grant);
@@ -846,6 +981,11 @@ fn main(_info: &'static BootInfo) {
                 } else { Err(Error::Denied) };
                 let _ = socket::reply_questions(call, result.as_ref().map(|l| l.as_slice()).map_err(|e| *e)); continue;
             }
+            // A grant's own rules (socket.wit 2.10): a service the policy gives its servers learns them (111-NET-0057).
+            socket::Request::GrantRules => {
+                let result = match policy::access(badge) { Access::Grant(grant) => policy.rules(grant, now), _ => Err(Error::Denied) };
+                let _ = socket::reply_grant_rules(call, result); continue;
+            }
             socket::Request::Decide { id, address, allowed, once } => {
                 let result = if !matches!(policy::access(badge), Access::Policy) { Err(Error::Denied) } else {
                     match questions.pending(id) {
@@ -877,6 +1017,7 @@ fn main(_info: &'static BootInfo) {
                 socket::Request::UdpOpen { .. } => policy.allows(grant, Protocol::Udp, 0, 0, now),
                 socket::Request::UdpSend { address, port, .. } => policy.allows(grant, Protocol::Udp, *address, *port, now),
                 socket::Request::TcpConnect { address, port, .. } => policy.allows(grant, Protocol::Tcp, *address, *port, now),
+                socket::Request::TcpListen { port, .. } => policy.may_listen(grant, *port, now),
                 socket::Request::Close { .. } => Ok(()),
                 _ => policy.alive(grant, now),
             },
@@ -920,6 +1061,10 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::Asked { .. } => socket::reply_asked(call, Err(error)),
         socket::Request::Questions => socket::reply_questions(call, Err(error)),
         socket::Request::Decide { .. } => socket::reply_decide(call, Err(error)),
+        socket::Request::PolicyListen { .. } => socket::reply_policy_listen(call, Err(error)),
+        socket::Request::TcpListen { .. } => socket::reply_tcp_listen(call, Err(error)),
+        socket::Request::TcpAccept { .. } => socket::reply_tcp_accept(call, Err(error)),
+        socket::Request::GrantRules => socket::reply_grant_rules(call, Err(error)),
     }
 }
 

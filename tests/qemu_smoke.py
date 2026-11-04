@@ -46,7 +46,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -5734,6 +5734,9 @@ def link_suite(args):
             require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
             time.sleep(.1); vm.collect(); vm.output = ""
             require(vm.command("dmesg -s link", raw=True), 'INPUT REFUSED: link.conf HAS NO "dev"')
+            # 800-KRN-0191: without `dev` link holds no input privilege at all.
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert "KIND=6 " not in caps, caps
             # Another address and a frame with none go unanswered: bounded by the tries.
             for other in (("--address", "6"), ()):
                 r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
@@ -5742,6 +5745,25 @@ def link_suite(args):
             require(link(port, "--address", "5", "hello"), '"MIND Core link"')
         finally:
             vm.close()
+    # 800-KRN-0191: in a safe start with `dev`, link gets its developer grants but not the input privilege, as whoever asked
+    # for the safe start is at the machine. A reset within the minute after READY leaves the run's mark (000-KRN-0076).
+    with tempfile.TemporaryDirectory(prefix="smoke-link-safe-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            require(vm.command(f"stat caps {vm.services()['link']}", raw=True), "KIND=6 ")  # the normal start: input held
+            vm.qmp("system_reset")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
+            require(log, "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; NO INPUT IN A SAFE START; ")
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert "KIND=6 " not in caps, caps
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-link-safe-{args.cpus}cpu.log").write_text(vm.log)
     # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
     # (800-APP-0108), its line logged whole; `mode` stays refused.
     with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
@@ -9444,6 +9466,9 @@ def net_suite(args, disk):
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-net-cards-{mode.split()[0].lower()}-{args.cpus}cpu.log").write_text(vm.log)
+    static_setup_check(args, disk)
+    listen_check(args, disk)
+    timed_check(args, disk)
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
@@ -9472,6 +9497,199 @@ def net_suite(args, disk):
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+class _Sntp:
+    """A time server on the host for timed's check (111-NET-0057): SNTPv4 answers, `shift` seconds from the host's
+    clock or from `since` (a fixed time, counted on), only while `answering` is set."""
+
+    def __init__(self, shift=0.0, since=None):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(("127.0.0.1", 0))
+        self.port = self.socket.getsockname()[1]
+        self.shift, self.since, self.started = shift, since, time.time()
+        self.answering, self.asked = threading.Event(), 0
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def now(self):
+        return (self.since + time.time() - self.started if self.since is not None else time.time()) + self.shift
+
+    def serve(self):
+        stamp = lambda t: struct.pack(">II", int(t) + 2_208_988_800, int((t % 1) * 2**32))
+        while True:
+            try:
+                data, peer = self.socket.recvfrom(512)
+            except OSError:
+                return
+            self.asked += 1
+            if not self.answering.is_set() or len(data) < 48:
+                continue
+            t = self.now()
+            reply = bytes([0x24, 2, 6, 0xEC]) + bytes(8) + b"MIND" + stamp(t) + data[40:48] + stamp(t) + stamp(t)
+            self.socket.sendto(reply, peer)
+
+    def close(self):
+        self.socket.close()
+
+
+def timed_check(args, disk):
+    """111-NET-0057, 111-KRN-0206: timed sets the clock from the time servers its policy names. Three servers on the
+    host, the third an hour ahead; the RTC two years and more behind. The servers stay silent until a script's sleep has
+    begun, so that the clock is set while it sleeps: timed follows the two that agree, leaves the third out, and the
+    sleep lasts what it asked. Then two servers that agree on a time before the floor (the build's commit time) are
+    refused, and with no time line in the policy timed does not start."""
+    import datetime
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    servers = [_Sntp(), _Sntp(0.2), _Sntp(3600)]
+    try:
+        policy.write_text((before or "") + "".join(f"timed 10.0.2.2 udp {s.port} {2**32 - 1}\n" for s in servers))
+        (disk / "data").mkdir(exist_ok=True)
+        (disk / "data/sleep.msh").write_text("#!msh\nlet start = now()\nsleep(25000)\nprint(\"SLEPT {now() - start} MS\")\n")
+        card = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
+        try:
+            require(vm.service_logs("timed", "NO ANSWER IN"), "[TIMED] STARTED: THE FLOOR IS ")
+            require(vm.command("date"), "DATE: 2024-01-01 ")
+            vm.send("msh data/sleep.msh\n")
+            time.sleep(1)
+            for server in servers:
+                server.answering.set()
+            started = time.monotonic()
+            out = vm.expect("MIND> ", timeout=60, after="SLEPT ")
+            slept = time.monotonic() - started
+            guest = int(re.search(r"SLEPT (\d+) MS", out)[1])
+            log = vm.service_logs("timed", "[TIMED] SET ")
+            for server in servers[:2]:
+                assert re.search(rf"\[TIMED\] 10\.0\.2\.2:{server.port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, AGREES", log), log[-3000:]
+            require(log, f"[TIMED] 10.0.2.2:{servers[2].port}: OFFSET ")
+            assert re.search(rf"10\.0\.2\.2:{servers[2].port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, LEFT OUT: IT DISAGREES WITH THE OTHERS", log), log[-3000:]
+            require_all(log, "(WAS 2024-01-01 ", "2 OF 3 SERVERS AGREED")
+            # The sleep that spanned the step lasted what it asked, by the guest's monotonic clock and by the host's.
+            assert 25_000 <= guest < 26_500 and 24 <= slept < 32, (guest, slept)
+            shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
+            gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
+            assert gap < 3, (shown, gap)
+            # The floor, written in system/timed after the set (`logs` drains: the lines since the set).
+            require(log + vm.service_logs("timed", "THE FLOOR IS NOW"), "STORED IN system/timed/floor")
+        finally:
+            vm.close()
+        # Two servers that agree on a time before the floor.
+        for server in servers:
+            server.close()
+        servers = [_Sntp(since=1_577_836_800), _Sntp(since=1_577_836_800)]
+        for server in servers:
+            server.answering.set()
+        policy.write_text((before or "") + "".join(f"timed 10.0.2.2 udp {s.port} {2**32 - 1}\n" for s in servers))
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
+        try:
+            log = vm.service_logs("timed", "IS BEFORE THE FLOOR")
+            assert re.search(r"\[TIMED\] NOTHING SET: 2020-01-01 \d\d:\d\d:\d\d IS BEFORE THE FLOOR 20(2[6-9]|[3-9]\d)-", log), log[-3000:]
+            assert "[TIMED] SET " not in log, log[-3000:]
+            require(vm.command("date"), "DATE: 2024-01-01 ")
+        finally:
+            vm.close()
+        # No time line: init does not start it.
+        policy.write_text(before or "")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=card)
+        try:
+            require(vm.command("dmesg -s init", raw=True), "[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER")
+            assert "timed" not in vm.services(), vm.command("ps", raw=True)
+        finally:
+            vm.close()
+    finally:
+        for server in servers:
+            server.close()
+        if before is None:
+            policy.unlink()
+        else:
+            policy.write_text(before)
+        (disk / "data/sleep.msh").unlink(missing_ok=True)
+    print(f"PASS: network time (111-NET-0057): timed set the clock from 2024 to the host's time ({gap:.1f} s apart) by the "
+          f"two servers that agreed, the one an hour ahead left out; a sleep across the step lasted {guest} ms ({slept:.1f} s "
+          "on the host); two servers agreeing on 2020 refused below the floor; not started without a time line", flush=True)
+
+
+def listen_check(args, disk):
+    """110-NET-0052: a program listens (socket.wit 2.9) on a port its policy names, through QEMU's forwarded port.
+    `listen netcheck tcp 7000 from 10.0.2.0/24 60 20`: netcheck takes the host's connection (QEMU's 10.0.2.2), reads a
+    line and sends it back, and the 27 bytes pass the grant's 20, so the stack ends the grant: the accepted connection is
+    charged to it. A port without a line is denied; a peer outside 7002's 192.168.0.0/16 is reset and logged."""
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    policy.write_text((before or "") + "listen netcheck tcp 7000 from 10.0.2.0/24 60 20\nlisten netcheck tcp 7002 from 192.168.0.0/16\n")
+    allowed, outside = free_port(), free_port()
+    network = f"user,id=n0,hostfwd=tcp:127.0.0.1:{allowed}-:7000,hostfwd=tcp:127.0.0.1:{outside}-:7002"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", network, "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+        vm.send("netcheck listen:7000:30\n")
+        vm.expect("NETCHECK LISTENING ON 7000", timeout=20)
+        with socket.create_connection(("127.0.0.1", allowed), timeout=20) as peer:
+            peer.sendall(b"hello mind\n")
+            got = b""
+            while not got.endswith(b"\n"):
+                chunk = peer.recv(256)
+                if not chunk:
+                    break
+                got += chunk
+        assert got == b"ECHO hello mind\n", got
+        require(vm.expect("MIND> ", timeout=20, after="NETCHECK listen:7000:30 OK"), "NETCHECK RECEIVED hello mind")
+        stack = vm.service_logs("netstack", "ENDED")
+        require(stack, "[NETSTACK] PORT 7000 LISTENS FOR PID")
+        assert re.search(r"\[NETSTACK\] PORT 7000 ACCEPTED 10\.0\.2\.2:\d+ FOR PID \d+ \(BADGE (\d+)\)", stack), stack[-2000:]
+        badge = re.search(r"PORT 7000 ACCEPTED .*\(BADGE (\d+)\)", stack)[1]
+        require(stack, f"[NETSTACK] GRANT {badge} ENDED")  # 27 bytes through the accepted connection against its 20
+        require(vm.service_logs("netpolicy", "LISTENS ON TCP 7000"), "LISTENS ON TCP 7000 FROM 10.0.2.0/24")
+        # A port no line names.
+        require(vm.command("netcheck listen:7001:2", timeout=20), "NETCHECK listen:7001:2 Denied")
+        # A peer outside the port's networks: reset as soon as the stack sees it, and logged.
+        vm.send("netcheck listen:7002:8\n")
+        vm.expect("NETCHECK LISTENING ON 7002", timeout=20)
+        try:
+            with socket.create_connection(("127.0.0.1", outside), timeout=10) as peer:
+                peer.sendall(b"let me in\n")
+                reply = peer.recv(256)
+        except OSError:
+            reply = b""
+        assert reply == b"", reply
+        vm.expect("MIND> ", timeout=30, after="NETCHECK listen:7002:8 Again")
+        require(vm.service_logs("netstack", "REFUSED"), "[NETSTACK] PORT 7002 REFUSED 10.0.2.2:")
+    finally:
+        vm.close()
+        if before is None:
+            policy.unlink()
+        else:
+            policy.write_text(before)
+    print("PASS: a listening grant (110-NET-0052): netcheck took the host's connection on 7000 and echoed its line, the "
+          "connection charged to the grant until its volume ended it; 7001 denied without a line; a peer outside 7002's "
+          "network reset and logged", flush=True)
+
+
+def static_setup_check(args, disk):
+    """000-NET-0054: QEMU user networking's static setup (10.0.2.15) is for a card with QEMU's own MAC prefix alone. A card
+    on a hub port with nothing else on it hears no DHCP: with QEMU's default MAC the stack takes the static setup, with
+    another MAC it stays without an address, as a real card on a real network waits for its lease."""
+    waited = None
+    for mac in (None, "02:00:00:4d:43:01"):
+        device = "virtio-net-pci,netdev=n0" + (f",mac={mac}" if mac else "")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "hubport,id=n0,hubid=7", "-device", device])
+        try:
+            require(vm.service_logs("netstack", "WAITING FOR DHCP"), "[NETSTACK] CARD 0")
+            start = time.monotonic()
+            if mac is None:
+                require(vm.service_logs("netstack", "[NETSTACK] STATIC"), "[NETSTACK] STATIC 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 ON CARD 0")
+                waited = time.monotonic() - start
+            else:
+                # Three times as long as QEMU's MAC needed, and at least 8 s: still no address.
+                time.sleep(max(8, 3 * waited))
+                log = vm.command("dmesg -s netstack", raw=True)
+                assert "[NETSTACK] STATIC" not in log and "10.0.2.15" not in log, log[-2000:]
+                require(vm.command("ip"), "IP: NoNetwork")
+        finally:
+            vm.close()
+    print(f"PASS: QEMU's static setup (000-NET-0054): 10.0.2.15 without DHCP on QEMU's MAC in {waited:.1f} s, none on "
+          f"another MAC in {max(8, 3 * waited):.0f} s", flush=True)
 
 
 def browse_check(args):
@@ -9512,8 +9730,11 @@ def browse_check(args):
             def asked(seconds, then=""):  # netcheck asks from the background; the shell shows the question at the prompt
                 out = vm.command(f"run netcheck ask:11.0.2.80:81:{seconds}{then} &")
                 pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", out)[1]
-                if "ALWAYS? " not in out.partition(question)[2]:  # it may show before the prompt or after it
+                # It may show before the prompt, after it, or begin before it and end after it.
+                if question not in out:
                     vm.expect("ALWAYS? ", timeout=20, after=question)
+                elif "ALWAYS? " not in out.partition(question)[2]:
+                    vm.expect("ALWAYS? ", timeout=20)
                 return pid
 
             # No, typed once the question shows: refused at once.
@@ -10553,10 +10774,12 @@ def tls_lending_check(vm, servers, tls, ssh):
     what the script declares."""
     services = {name: {ep for ep, server in servers.items() if server == pid} for name, pid in (("tls", tls), ("ssh", ssh))}
 
-    def lent(command):
+    def lent(command, alive=None):
         out = vm.command(command)
         pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
         caps = vm.command(f"stat caps {pid + BASE}", raw=True)
+        if alive:
+            alive()  # while the program runs: netpolicy drops its grant at a sweep after the exit
         require(vm.command(f"kill {pid}"), "KILLED")
         held = {}
         for slot, name in ((20, "tls"), (34, "ssh")):
@@ -10565,9 +10788,8 @@ def tls_lending_check(vm, servers, tls, ssh):
                 held[name] = int(found[1])
         return out, held
 
-    out, held = lent("run tlsclock &")
+    out, held = lent("run tlsclock &", alive=lambda: require(vm.command("netgrants"), "tlsclock RULES="))
     assert held == {"tls": 1, "ssh": 0}, (held, out)  # BADGE_TLS_NO_DEVICE; the SSH service's as it is
-    require(vm.command("netgrants"), "GRANT ")
     out, held = lent("run tlsnone &")
     require(out, "NETWORK FOR tlsnone: NoPolicy")
     assert not held, "no flow grant, no TLS or SSH client"
