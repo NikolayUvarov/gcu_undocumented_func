@@ -981,6 +981,11 @@ fn main(_info: &'static BootInfo) {
                 } else { Err(Error::Denied) };
                 let _ = socket::reply_questions(call, result.as_ref().map(|l| l.as_slice()).map_err(|e| *e)); continue;
             }
+            // A grant's own rules (socket.wit 2.10): a service the policy gives its servers learns them (111-NET-0057).
+            socket::Request::GrantRules => {
+                let result = match policy::access(badge) { Access::Grant(grant) => policy.rules(grant, now), _ => Err(Error::Denied) };
+                let _ = socket::reply_grant_rules(call, result); continue;
+            }
             socket::Request::Decide { id, address, allowed, once } => {
                 let result = if !matches!(policy::access(badge), Access::Policy) { Err(Error::Denied) } else {
                     match questions.pending(id) {
@@ -1059,6 +1064,7 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::PolicyListen { .. } => socket::reply_policy_listen(call, Err(error)),
         socket::Request::TcpListen { .. } => socket::reply_tcp_listen(call, Err(error)),
         socket::Request::TcpAccept { .. } => socket::reply_tcp_accept(call, Err(error)),
+        socket::Request::GrantRules => socket::reply_grant_rules(call, Err(error)),
     }
 }
 

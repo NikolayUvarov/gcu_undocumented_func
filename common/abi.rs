@@ -3,11 +3,11 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 47;
+pub const BOOT_IMAGES: usize = 48;
 // ABI 10's image array stays in the fixed prefix; later images are appended after all ABI 10 fields.
 pub const BOOT_PREFIX_IMAGES: usize = 36;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bt_hci.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "storefs.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "nnd.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bt_hci.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "storefs.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "timed.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "nnd.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 5] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2", "rtl8168#1"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64); rtl8168#1: the DEXP's second wired port (211-KRN-0187)
@@ -72,10 +72,11 @@ pub const ABI_VERSION: u32 = 27;
 // BOOT_FILES sets it to one number above every ABI_VERSION so far (MC-12.4). Handoff 25: two images, `bt_hci` after
 // `rtw88_wifi` (700-KRN-0176) and `nnd` after `sysmon` (262-KRN-0178), renumber the images after them and move every
 // field after extra_programs, so an older loader is refused by name. Handoff 28: `storefs` after `keystore`
-// (311-KRN-0190) renumbers the images after it.
+// (311-KRN-0190) renumbers the images after it. Handoff 29: `timed`, the network time service, after `netpolicy`
+// (111-KRN-0206), renumbers the images after it.
 // Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
 // refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
-pub const BOOT_HANDOFF_VERSION: u32 = 28;
+pub const BOOT_HANDOFF_VERSION: u32 = 29;
 // BootInfo.boot_flags: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init ignores
 // data/services.txt (173-KRN-0036).
 pub const BOOT_SAFE: u32 = 1;

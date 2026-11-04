@@ -37,7 +37,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
     "its endpoint, which badges its clients; the block store's client that may get, put and publish", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
-    "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
+    "network stack clients: minting source and policy control; a VFS client", "the flow of program timed; the RTC's setting client; a VFS client of system/timed", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
     "observe privilege", "read-only scopes of data/models/ and models:; its quota and workers by its line of data/memory.conf, read at each start",
     "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
@@ -858,6 +858,15 @@ impl Init {
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NOTICE)?, CLIENT);
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
+            // Network time (111-KRN-0206): the flow the policy gives program `timed`, whose UDP rules are its time servers;
+            // the clock with the setting badge; and its private directory, system/timed, for the floor. Nothing else. Not
+            // started when the policy gives it no flow.
+            "timed" => {
+                let Some(flow) = self.flow(&mut minted, "timed") else { return Err(Error::NotFound) };
+                grants.add(SLOT_NETWORK, flow, CLIENT);
+                grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_TIMED)?, CLIENT);
+            }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
@@ -1497,7 +1506,7 @@ impl Init {
                 (Ok(()), _) => mind::println!("[INIT] {} OFF BY {}: PREPARED, `svc start {}` STARTS IT", name, services::FILE, name),
                 (Err(Error::NotFound), _) => {
                     self.missing[index] = true; self.stopped[index] = true; self.placed[index].off = Off::NoDevice;
-                    mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name);
+                    mind::println!("[INIT] {} NOT STARTED: {}", name, not_found(name));
                 }
                 (Err(error), Off::Safe) => { self.stopped[index] = true; mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, NOT PREPARED: {:?}", name, error) }
                 (Err(error), _) => { self.stopped[index] = true; mind::println!("[INIT] {} OFF BY {}, NOT PREPARED: {:?}", name, services::FILE, error) }
@@ -1512,7 +1521,7 @@ impl Init {
                 kernel_lines();
             }
             Ok(_) => {}
-            Err(Error::NotFound) => { self.missing[index] = true; self.placed[index].off = Off::NoDevice; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name); }
+            Err(Error::NotFound) => { self.missing[index] = true; self.placed[index].off = Off::NoDevice; mind::println!("[INIT] {} NOT STARTED: {}", name, not_found(name)); }
             Err(error) => { self.placed[index].off = Off::Failed; mind::println!("[INIT] {} FAILED: {:?}", name, error); return false; }
         }
         true
@@ -1710,6 +1719,9 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
     mind::println!("[INIT] {} REFUSED: PID {} (BADGE {}) MAY NOT {} ({})", what, sender, badge, action, clause);
     idl_init::Error::Denied
 }
+
+// Why a service whose plan found nothing to drive is not started: its device, or for timed its time servers.
+fn not_found(name: &str) -> &'static str { if name == "timed" { "THE POLICY GIVES IT NO TIME SERVER" } else { "NO DEVICE" } }
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 

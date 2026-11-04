@@ -46,7 +46,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -9608,6 +9608,7 @@ def net_suite(args, disk):
             (Path(tempfile.gettempdir()) / f"mind-core-net-cards-{mode.split()[0].lower()}-{args.cpus}cpu.log").write_text(vm.log)
     static_setup_check(args, disk)
     listen_check(args, disk)
+    timed_check(args, disk)
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
@@ -9636,6 +9637,117 @@ def net_suite(args, disk):
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+class _Sntp:
+    """A time server on the host for timed's check (111-NET-0057): SNTPv4 answers, `shift` seconds from the host's
+    clock or from `since` (a fixed time, counted on), only while `answering` is set."""
+
+    def __init__(self, shift=0.0, since=None):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(("127.0.0.1", 0))
+        self.port = self.socket.getsockname()[1]
+        self.shift, self.since, self.started = shift, since, time.time()
+        self.answering, self.asked = threading.Event(), 0
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def now(self):
+        return (self.since + time.time() - self.started if self.since is not None else time.time()) + self.shift
+
+    def serve(self):
+        stamp = lambda t: struct.pack(">II", int(t) + 2_208_988_800, int((t % 1) * 2**32))
+        while True:
+            try:
+                data, peer = self.socket.recvfrom(512)
+            except OSError:
+                return
+            self.asked += 1
+            if not self.answering.is_set() or len(data) < 48:
+                continue
+            t = self.now()
+            reply = bytes([0x24, 2, 6, 0xEC]) + bytes(8) + b"MIND" + stamp(t) + data[40:48] + stamp(t) + stamp(t)
+            self.socket.sendto(reply, peer)
+
+    def close(self):
+        self.socket.close()
+
+
+def timed_check(args, disk):
+    """111-NET-0057, 111-KRN-0206: timed sets the clock from the time servers its policy names. Three servers on the
+    host, the third an hour ahead; the RTC two years and more behind. The servers stay silent until a script's sleep has
+    begun, so that the clock is set while it sleeps: timed follows the two that agree, leaves the third out, and the
+    sleep lasts what it asked. Then two servers that agree on a time before the floor (the build's commit time) are
+    refused, and with no time line in the policy timed does not start."""
+    import datetime
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    servers = [_Sntp(), _Sntp(0.2), _Sntp(3600)]
+    try:
+        policy.write_text((before or "") + "".join(f"timed 10.0.2.2 udp {s.port} {2**32 - 1}\n" for s in servers))
+        (disk / "data").mkdir(exist_ok=True)
+        (disk / "data/sleep.msh").write_text("#!msh\nlet start = now()\nsleep(25000)\nprint(\"SLEPT {now() - start} MS\")\n")
+        card = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
+        try:
+            require(vm.service_logs("timed", "NO ANSWER IN"), "[TIMED] STARTED: THE FLOOR IS ")
+            require(vm.command("date"), "DATE: 2024-01-01 ")
+            vm.send("msh data/sleep.msh\n")
+            time.sleep(1)
+            for server in servers:
+                server.answering.set()
+            started = time.monotonic()
+            out = vm.expect("MIND> ", timeout=60, after="SLEPT ")
+            slept = time.monotonic() - started
+            guest = int(re.search(r"SLEPT (\d+) MS", out)[1])
+            log = vm.service_logs("timed", "[TIMED] SET ")
+            for server in servers[:2]:
+                assert re.search(rf"\[TIMED\] 10\.0\.2\.2:{server.port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, AGREES", log), log[-3000:]
+            require(log, f"[TIMED] 10.0.2.2:{servers[2].port}: OFFSET ")
+            assert re.search(rf"10\.0\.2\.2:{servers[2].port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, LEFT OUT: IT DISAGREES WITH THE OTHERS", log), log[-3000:]
+            require_all(log, "(WAS 2024-01-01 ", "2 OF 3 SERVERS AGREED")
+            # The sleep that spanned the step lasted what it asked, by the guest's monotonic clock and by the host's.
+            assert 25_000 <= guest < 26_500 and 24 <= slept < 32, (guest, slept)
+            shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
+            gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
+            assert gap < 3, (shown, gap)
+            # The floor, written in system/timed after the set (`logs` drains: the lines since the set).
+            require(log + vm.service_logs("timed", "THE FLOOR IS NOW"), "STORED IN system/timed/floor")
+        finally:
+            vm.close()
+        # Two servers that agree on a time before the floor.
+        for server in servers:
+            server.close()
+        servers = [_Sntp(since=1_577_836_800), _Sntp(since=1_577_836_800)]
+        for server in servers:
+            server.answering.set()
+        policy.write_text((before or "") + "".join(f"timed 10.0.2.2 udp {s.port} {2**32 - 1}\n" for s in servers))
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
+        try:
+            log = vm.service_logs("timed", "IS BEFORE THE FLOOR")
+            assert re.search(r"\[TIMED\] NOTHING SET: 2020-01-01 \d\d:\d\d:\d\d IS BEFORE THE FLOOR 20(2[6-9]|[3-9]\d)-", log), log[-3000:]
+            assert "[TIMED] SET " not in log, log[-3000:]
+            require(vm.command("date"), "DATE: 2024-01-01 ")
+        finally:
+            vm.close()
+        # No time line: init does not start it.
+        policy.write_text(before or "")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=card)
+        try:
+            require(vm.command("dmesg -s init", raw=True), "[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER")
+            assert "timed" not in vm.services(), vm.command("ps", raw=True)
+        finally:
+            vm.close()
+    finally:
+        for server in servers:
+            server.close()
+        if before is None:
+            policy.unlink()
+        else:
+            policy.write_text(before)
+        (disk / "data/sleep.msh").unlink(missing_ok=True)
+    print(f"PASS: network time (111-NET-0057): timed set the clock from 2024 to the host's time ({gap:.1f} s apart) by the "
+          f"two servers that agreed, the one an hour ahead left out; a sleep across the step lasted {guest} ms ({slept:.1f} s "
+          "on the host); two servers agreeing on 2020 refused below the floor; not started without a time line", flush=True)
 
 
 def listen_check(args, disk):

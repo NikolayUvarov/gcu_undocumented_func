@@ -41,6 +41,8 @@ pub const BADGE_READER: u16 = 5;
 /// Badge of the loader's client that alone opens `system/own/`, where it makes each program's own directory and scopes
 /// it into the program's SLOT_OWN (000-KRN-0170); set by init.
 pub const BADGE_OWNERS: u16 = 8;
+/// Badge of the network time service's client (111-KRN-0206): it alone opens `system/timed`, where it keeps the floor.
+pub const BADGE_TIMED: u16 = 9;
 
 /// Why a file operation failed. `Conflict`: another writer published the file first, so read it again (vfs.wit 2.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

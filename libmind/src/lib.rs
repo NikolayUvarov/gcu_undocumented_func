@@ -84,6 +84,7 @@ pub mod jpegdec;
 pub mod inflate;
 #[cfg(feature = "alloc")]
 pub mod http_coding;
+pub mod sntp;
 #[cfg(feature = "alloc")]
 pub mod sse;
 #[cfg(feature = "alloc")]
