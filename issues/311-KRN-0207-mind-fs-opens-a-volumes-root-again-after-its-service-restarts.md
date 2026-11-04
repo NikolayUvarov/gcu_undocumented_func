@@ -1,6 +1,6 @@
 # 311-KRN-0207 — `mind::fs` opens a volume's root again after its service restarts
 
-**Type:** `libmind` (`mind::fs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-6.6
+**Type:** `libmind` (`mind::fs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-6.6
 
 **Asked by:** STO, 2026-11-04 (`requests-KRN.md`, taken out of it with this issue), from a run by hand on x86 while building 311-STO-0032's QEMU checks.
 
@@ -26,6 +26,21 @@
   - a second `invalid` is returned as it is;
   - an open file's handle is never reopened.
 - **QEMU, x86 and aarch64** (the `store` or `shell` suite): after `svc restart storefs`, the shell's `ls` of a store volume answers again without a restart of the shell.
+
+## Progress
+
+2026-11-04 (07400872):
+- **`volumes::again`** (`libmind/src/fs/volumes.rs`): a call that answers `invalid` is asked once more after `forget` drops the kept root. A second `invalid`, one with no kept root, and any other answer come back as they are.
+- **`mind::fs`** goes through it in `Dir::open`, `Dir::create`, `File::open_mode`, `remove`, `rename` and `volume`.
+  - `Dir::open` and `Dir::create` of a volume's root check the root with a `stat`, so that `ls w:` finds a stale root out where it can still be opened again.
+  - An open file's handle is never reopened.
+- **Host tests** (`tests/fs_routing_host.rs`, 2 more): the root opened again once; a second `invalid`; no kept root; another answer.
+- **QEMU x86** (this session's container, TCG): the shell suite's `storefs_check` passed. After `svc restart storefs`, `ls notes:docs`, `cat notes:docs/a.txt` and `ls notes:` answered, with no restart of the shell. The group's `bench` failed here on TCG's timing (`uptime (empty call)`), as it does in this container. It runs on KVM in the gate.
+
+**Left:**
+- aarch64;
+- `vfs_server`'s roots: whether `vfs_server` restarts at all, which is not tried yet;
+- `check`, whose visit runs once, so it is not asked again.
 
 ## Related
 
