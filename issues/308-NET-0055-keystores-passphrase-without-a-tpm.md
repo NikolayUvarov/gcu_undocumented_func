@@ -81,7 +81,7 @@ Made while building it:
 
 ## Progress (2026-11-04)
 
-`keystore`'s side is built, by STO on its own branch; nothing of it is in `main` yet. The issue stays open for the criteria that need 308-KRN-0205 and `APP`.
+`keystore`'s side is built, by STO on its own branch, and is in `main` 4130cff6 (landing round 80, 2026-11-04, from `claude/relaxed-meitner-5bmhpz` 2e74d4959). The issue stays open for the criteria that need 308-KRN-0205 and `APP`.
 
 **Built:**
 - **`passlock/`,** a library crate: the file (decision 8), `seal`, `open`, `header`, the bounds on the parameters, and `Tries`, the count of wrong passphrases and the waits. Its host tests run in `scripts/host_tests.sh`.
