@@ -4191,6 +4191,8 @@ def store_suite(vm):
     store_journal_check(vm)
     store_index_check(vm)
     store_assertion_check(vm)
+    storefs_writers_check(vm)
+    store_recovery_check(vm)
 
 
 def run_tally(vm, args):
@@ -4718,6 +4720,119 @@ def store_assertion_check(vm):
     require(blocks(f"-d {domain} assert about claims {subject}"), f"blocks: domain {domain}: NotFound")
     about(3, [second])
     print("PASS: assertions: one in a memory domain is the domain's alone and goes with it", flush=True)
+
+
+def storefs_writers_check(vm):
+    """311-STO-0032, 0037: storefs's writers and scopes on the platform, through `fsstep`, which the shell starts with a
+    writable scope of its file's directory on the store volume `w:` (the store's name `fs/w`), as for every program that
+    asks for its file. Two writers: fsstep holds the first 20000 bytes of the pattern unpublished while the shell writes
+    another file of the volume; its close is told Conflict, the name stays at the shell's version and the file as its
+    creation left it, and written again without a hold it reads back whole. A cut: a writer killed between its writes and
+    its close leaves the name at the version it had, the file empty, and a later write works. A read-only scope that
+    fsstep makes of its directory lists and reads it and is refused a write and a new file; the writable one writes in
+    its directory and nowhere else. storefs logs each scope made, and ends an ended task's scope at the next one made."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def fsstep(args, timeout=240):
+        vm.send(f"fsstep {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"fsstep {args}\n")
+    def background(args):
+        started = re.search(r"PID=(\d+) NAME=fsstep BACKGROUND", vm.command(f"run fsstep {args} &"))
+        assert started, f"fsstep {args} did not start in the background"
+        require(vm.program_logs(started[1], "FSSTEP HOLDING"), "FSSTEP HOLDING 20000 BYTES")
+        return started[1]
+    def head():
+        found = re.search(r"^fs/w VERSION (\d+) ROOT (\S+)\r?$", blocks("resolve fs/w"), re.M)
+        assert found, "fs/w has no head"
+        return int(found[1]), found[2]
+    def entries(path):
+        return [(kind, int(size), cid, name) for kind, size, cid, name in re.findall(r"^(FILE|DIR) (\d+) (\S+) (\S+)\r?$", blocks(f"tree ls fs/w {path}".rstrip()), re.M)]
+    data = bytes((i * 31 + 7) % 251 for i in range(40000))
+    whole, empty = f"READ 40000 BYTES SHA-256 {hashlib.sha256(data).hexdigest()}", cid_raw(b"")
+    require(vm.command("mkdir w:a"), "OK")
+    # Two writers from one version: fsstep made x.bin (one version) and holds 20000 bytes of it; the shell publishes
+    # b.txt meanwhile (its creation and its flush); fsstep's close is refused, and nothing of its data is published.
+    pid = background("w:a/x.bin 20000 15 20000")
+    created = head()
+    assert entries("a") == [("FILE", 0, empty, "x.bin")], blocks("tree ls fs/w a")
+    require(vm.command("write w:b.txt the other writer"), "WROTE 17 BYTES TO w:b.txt")
+    other = head()
+    assert other[0] == created[0] + 2, (created, other)
+    require(vm.program_logs(pid, "FSSTEP CLOSE"), "FSSTEP CLOSE: Conflict")
+    assert head() == other, "fsstep published after the conflict"
+    require(blocks("history fs/w"), f"fs/w VERSION {other[0]} ROOT {other[1]}")
+    assert entries("a") == [("FILE", 0, empty, "x.bin")], blocks("tree ls fs/w a")
+    require_all(vm.command("ls w:a"), "x.bin", "1 ENTRIES, 1 FILES, 0 BYTES")
+    require(vm.command("cat w:b.txt"), "the other writer")
+    # The writer writes again from the name's current version, through a new scope: published whole.
+    require(fsstep("w:a/x.bin 20000 0 20000"), "FSSTEP CLOSED 40000 BYTES")
+    require(blocks("tree cat fs/w a/x.bin ram:x.bin"), whole)
+    require(vm.command("ls w:a"), "1 ENTRIES, 1 FILES, 40000 BYTES")
+    print("PASS: storefs: two writers on a store volume, a program through its lent scope and the shell; the program's "
+          "close is told Conflict, the name keeps the shell's version and the file as its creation left it; written "
+          "again, it reads back whole (SHA-256) through the store (311-STO-0032)", flush=True)
+    # A cut: the writer killed between its writes and its close, its data held. The name stays where the file's creation
+    # left it; the next scope made ends the killed task's, its handles closed unpublished, and a write then works.
+    pid = background("w:a/y.bin 20000 120 20000")
+    cut = head()
+    require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
+    assert head() == cut, "the killed writer's data was published"
+    assert [e for e in entries("a") if e[3] == "y.bin"] == [("FILE", 0, empty, "y.bin")], blocks("tree ls fs/w a")
+    require(vm.command("ls w:a"), "2 ENTRIES, 2 FILES, 40000 BYTES")
+    require(fsstep("w:a/y.bin 20000 0 20000"), "FSSTEP CLOSED 40000 BYTES")
+    require(blocks("tree cat fs/w a/y.bin ram:y.bin"), whole)
+    print("PASS: storefs: a writer killed between its writes and its close leaves the name at the version it had and the "
+          "file as its creation left it; a later write works and reads back whole (311-STO-0032)", flush=True)
+    # 311-STO-0037: a read-only scope of the lent one's directory reads it and is refused every change.
+    before = head()
+    out = fsstep("w:a/x.bin --read-only")
+    require_all(out, "FSSTEP SCOPE READ-ONLY OF w:a", "FSSTEP ENTRY FILE 40000 x.bin", "FSSTEP ENTRY FILE 40000 y.bin", "FSSTEP LISTED 2 ENTRIES",
+                f"FSSTEP {whole}", "FSSTEP WRITE w:a/x.bin REFUSED: Denied", "FSSTEP CREATE w:a/fsstep.new REFUSED: Denied")
+    assert head() == before, "the read-only scope published"
+    # The writable scope writes in its directory and nowhere else: its volume's root is the directory, and `..` and
+    # other volumes' roots are refused by storefs itself.
+    out = fsstep("w:a/inside.txt --bounds")
+    require_all(out, "FSSTEP WROTE 17 BYTES TO w:a/inside.txt", "FSSTEP ROOT OF w IS a", "FSSTEP OPEN ../fsstep.out REFUSED: Invalid",
+                "FSSTEP OPEN-DIR .. REFUSED: Invalid", "FSSTEP ROOT ram REFUSED: Denied", "FSSTEP ROOT notes REFUSED: Denied")
+    require(vm.command("cat w:a/inside.txt"), "in its directory")
+    top = entries("")
+    assert [(k, s, n) for k, s, _, n in top] == [("DIR", 3, "a"), ("FILE", 17, "b.txt")] and top[1][2] == cid_raw(b"the other writer\n"), top
+    assert [n for _, _, _, n in entries("a")] == ["inside.txt", "x.bin", "y.bin"], blocks("tree ls fs/w a")
+    # Each scope made is logged; each of an ended task ended when the next was made, the last one's task's still to end.
+    logs = vm.service_logs("storefs", "(READ-ONLY)")
+    made = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR w:/a \((WRITABLE|READ-ONLY)\)", logs)
+    ended = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) ENDED", logs)
+    assert [kind for _, kind in made] == ["WRITABLE"] * 5 + ["READ-ONLY", "WRITABLE"], logs[-3000:]
+    assert all(badge in ended for badge, _ in made[:-1]) and made[-1][0] not in ended, logs[-3000:]
+    print("PASS: storefs scopes: a read-only scope a program made of its lent one lists and reads its directory and is "
+          "refused a write and a new file; the writable one writes in its directory and nowhere else, `..` and other "
+          "volumes refused by storefs; each scope logged when made, and ended after its task at the next one's making "
+          "(311-STO-0037)", flush=True)
+
+
+def store_recovery_check(vm):
+    """308-STO-0028: blockstore.wit 2.4's recovery calls answer only a client badged BADGE_RECOVER, which no program
+    holds yet (308-KRN-0204). `blocks` holds the shell's client (badge 7) and `blocksro` the read-only one (badge 1):
+    each of recovery-new, recovery-keep, recover and recovery-forget is refused (`Rights`) and logged with the badge,
+    and nothing is written; how many recovery records there are is any client's: none on the RAM disk, whose key is in
+    its superblock."""
+    def used():
+        found = re.search(r"SECTORS=(\d+)/", vm.command("blocks stat"))
+        assert found, "no stat"
+        return int(found[1])
+    before = used()
+    for tool, badge in (("blocks", 7), ("blocksro", 1)):
+        require_all(vm.command(f"{tool} recovery try"), "RECOVERY-NEW Rights", "RECOVERY-KEEP Rights", "RECOVER Rights", "RECOVERY-FORGET Rights")
+        require(vm.command(f"{tool} recovery"), "RECOVERY RECORDS 0")
+        log = vm.service_logs("blockstore", f"REFUSED RecoveryForget FOR PID")
+        for operation in ("RecoveryNew", "RecoveryKeep", "Recover", "RecoveryForget"):
+            assert re.search(rf"\[BLOCKSTORE\] REFUSED {operation} FOR PID \d+ \(BADGE {badge}\)", log), (tool, operation, log)
+        assert "RECOVERY KEY" not in log and "RECOVERED" not in log, log
+    assert used() == before, "a refused recovery call wrote to the medium"
+    print("PASS: recovery keys: each of blockstore.wit 2.4's recovery calls refused to the shell's client (badge 7) and to "
+          "the read-only one (badge 1), and logged with the badge; nothing written; the count of recovery records, none "
+          "on the RAM disk, any client's (308-STO-0028)", flush=True)
 
 
 def store_domains_check(vm):
