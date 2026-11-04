@@ -689,7 +689,6 @@ pub fn kept_id(s: &[u8]) -> Option<[u8; 8]> { (s[..8] == *SUPER_MAGIC && s[12] =
 /// `recovery` opens (308-STO-0028), so a medium whose keeper lacks it mounts. Nothing is written to the medium. A key
 /// in the clear or none is `Invalid`; a recovery key that opens none, or a record whose key does not open the
 /// superblock's check, `Key`; a keeper that does not keep it, `Kept`, and nothing is kept.
-#[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
 pub fn recover<D: Device>(dev: &mut D, crypto: &dyn Crypto, keeper: &mut dyn Keeper, recovery: &[u8; 16], buffer: &mut [u8; BUFFER]) -> Result<(), Error> {
     if dev.sectors() < 2 { return Err(Error::Foreign); }
     if !dev.read(0, &mut buffer[..SECTOR]) { return Err(Error::Device); }
@@ -1584,8 +1583,7 @@ impl<'a, D: Device> Store<'a, D> {
     /// bytes, under which a new recovery record keeps the volume key, written and flushed; returns the key. Nothing is
     /// erased: the older keys open the medium until the owner types the new one back (`recovery_keep`). `Invalid` for
     /// a key in the clear and `NoRandom` without a random source, nothing written.
-    #[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
-    pub fn recovery_new(&mut self) -> Result<[u8; 16], Error> {
+        pub fn recovery_new(&mut self) -> Result<[u8; 16], Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         let (id, volume) = self.kept.ok_or(Error::Invalid)?;
         let mut recovery = [0u8; 16];
@@ -1602,8 +1600,7 @@ impl<'a, D: Device> Store<'a, D> {
     /// The second step (308-STO-0028): the owner types the key `recovery_new` showed back, and every recovery record
     /// it does not open is erased; returns how many. `Key` if it opens none, nothing erased: so the owner never holds
     /// only a key that no longer opens the medium.
-    #[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
-    pub fn recovery_keep(&mut self, recovery: &[u8; 16]) -> Result<usize, Error> {
+        pub fn recovery_keep(&mut self, recovery: &[u8; 16]) -> Result<usize, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         let (id, volume) = self.kept.ok_or(Error::Invalid)?;
         let keep = (Keys::recovery(recovery, &id), volume);
@@ -1618,15 +1615,13 @@ impl<'a, D: Device> Store<'a, D> {
 
     /// Erases every recovery record, as forgetting a domain erases its key record, and returns how many: no recovery
     /// key opens the medium after it (308-STO-0028).
-    #[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
-    pub fn recovery_forget(&mut self) -> Result<usize, Error> {
+        pub fn recovery_forget(&mut self) -> Result<usize, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         self.erase_recoveries(None)
     }
 
     /// The recovery records on the medium: those the mount met and this mount wrote, less those it erased.
-    #[allow(dead_code)] // the wire waits for APP and KRN (308-STO-0028); the host tests use it
-    pub fn recovery(&self) -> usize { self.recovered }
+        pub fn recovery(&self) -> usize { self.recovered }
 
     // Erases every recovery record but those that `keep`'s keys open to its volume key (none: every one); returns how
     // many.

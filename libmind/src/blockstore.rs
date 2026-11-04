@@ -2,7 +2,7 @@
 //! mints each client's capability with a badge, and `blockstore` decides every request by it. No system calls:
 //! tests/blockstore_host.rs. Badges from `FIRST_DOMAIN_CLIENT` up are the clients `blockstore` mints for memory domains
 //! (308-STO-0023), each with the rights of the client that asked for it. A store's recovery key in the form its owner
-//! writes down and types back (308-STO-0028).
+//! writes down and types back, and the right to make, keep, forget and use one (308-STO-0028).
 use crate::sha256;
 
 /// May read blocks and names (`get`, `has`, `resolve`, `history`, `snapshot`, `names`). Knowing a CID grants nothing: reading needs this right (MC-4.7).
@@ -12,12 +12,17 @@ pub const BADGE_PUT: u16 = 2;
 /// May retain objects: make names point at new roots or remove them (`publish`, `unpublish`, `commit`, MC-4.3: an
 /// authorized publication) and pin or unpin objects (MC-4.11). Resolving a name or reading its history is reading.
 pub const BADGE_PUBLISH: u16 = 4;
+/// May make, keep and forget recovery keys of the volume key, and open a medium with one (`recovery-new`,
+/// `recovery-keep`, `recovery-forget`, `recover`, blockstore.wit 2.4): a right of its own, as a recovery key opens the
+/// whole medium on any machine (308-STO-0028).
+pub const BADGE_RECOVER: u16 = 8;
 /// The first badge of a domain's client; below it, the badges `init` and the shell give.
 pub const FIRST_DOMAIN_CLIENT: u16 = 0x100;
 
 /// A request to the store, as its rights see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation { Put, Get, Has, Stat, Publish, Resolve, Collect, Unpublish, History, Pin, Unpin, Pins, Usage, Commit, Snapshot, Names, DomainCreate, DomainClient, DomainForget, Domains, Scrub, Scrubbed }
+pub enum Operation { Put, Get, Has, Stat, Publish, Resolve, Collect, Unpublish, History, Pin, Unpin, Pins, Usage, Commit, Snapshot, Names, DomainCreate, DomainClient, DomainForget, Domains, Scrub, Scrubbed,
+    RecoveryNew, RecoveryKeep, RecoveryForget, Recoveries, Recover }
 
 /// Whether a client whose capability carries `badge` may make `operation`; bits of later rights are ignored.
 pub fn allowed(badge: u16, operation: Operation) -> bool {
@@ -32,6 +37,10 @@ pub fn allowed(badge: u16, operation: Operation) -> bool {
             | Operation::DomainCreate | Operation::DomainForget => badge & BADGE_PUBLISH != 0,
         // A domain's client carries the rights of the client that asked for it.
         Operation::Stat | Operation::Pins | Operation::Usage | Operation::DomainClient | Operation::Domains | Operation::Scrubbed => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH) != 0,
+        // A recovery key opens the medium anywhere: only its own right makes, keeps, forgets or uses one (308-STO-0028).
+        Operation::RecoveryNew | Operation::RecoveryKeep | Operation::RecoveryForget | Operation::Recover => badge & BADGE_RECOVER != 0,
+        // How many there are is any client's, and the recovering one's.
+        Operation::Recoveries => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH | BADGE_RECOVER) != 0,
     }
 }
 

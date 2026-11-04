@@ -10,18 +10,22 @@
 /// The records are sealed on the medium, and a volume key that does not open the superblock's check is refused (308-STO-0021, 2.1).
 /// Memory domains, each with a key of its own, worked in through a client of their own and forgotten by destroying the key
 /// (308-STO-0023, 2.2). A scrub reads and checks every record, in idle steps and whole on request (309-STO-0025, 2.3).
-package mind:blockstore@2.3.0;
+/// A volume key kept off the medium is also sealed under recovery keys its owner holds, which open the medium on another
+/// machine; they are made, kept, forgotten and used only through a client of their own (308-STO-0028, 2.4).
+package mind:blockstore@2.4.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
     /// (`mind::blockstore`: put, collect and scrub need BADGE_PUT; get, has, resolve, history, snapshot and names
-    /// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any).
+    /// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any;
+    /// recovery-new, recovery-keep, recovery-forget and recover BADGE_RECOVER, never through a domain's client;
+    /// recoveries any or BADGE_RECOVER).
     /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
     /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
     /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
     /// owner would retain more than its quota; nothing is published or pinned (1.2). `key`: the store is not mounted,
-    /// since its volume key does not open the superblock's check or comes from a source this build does not know; every
-    /// request gets it (2.1). `no-random`: no random source for a domain's key, which must not be derivable from anything
+    /// since its volume key does not open the superblock's check, comes from a source this build does not know, or is
+    /// kept by no keeper of this machine; every request but `recover` gets it (2.1, 2.4). `no-random`: no random source for a domain's key, which must not be derivable from anything
     /// kept, or it could not be destroyed (2.2).
     enum error { not-found, corrupt, full, too-large, read-only, device, unsupported, rights, invalid, conflict, incomplete, quota, key, no-random }
 
@@ -156,4 +160,26 @@ interface blockstore {
     scrub: func() -> result<scrubbed, error>;
     /// What the last whole scrub found, by itself or asked for (2.3).
     scrubbed: func() -> result<scrubbed, error>;
+
+    /// The first of two steps of a new recovery key for a volume key kept off the medium (308-STO-0028): a record that
+    /// keeps the volume key sealed under 16 random bytes is written and flushed, and they are returned in the form the
+    /// owner writes down (`mind::blockstore::recovery_text`), kept nowhere and logged nowhere. The older keys open the
+    /// medium until the owner types the new one back (`recovery-keep`). Errors: invalid (the key is in the superblock: a
+    /// RAM disk, or no keeper), no-random, full, read-only, device (2.4).
+    recovery-new: func() -> result<string<39>, error>;
+    /// The second step: `key`, typed back, is kept, and every recovery record it does not open is erased; returns how
+    /// many. Errors: invalid (a typo, told by its check before any record is tried; the key in the superblock), key (it
+    /// opens no record; nothing is erased), read-only, device (2.4).
+    recovery-keep: func(key: string<39>) -> result<u32, error>;
+    /// Erases every recovery record, and returns how many: no recovery key opens the medium after it. Errors:
+    /// read-only, device (2.4).
+    recovery-forget: func() -> result<u32, error>;
+    /// The recovery records on the medium: more than one between `recovery-new` and `recovery-keep` (2.4).
+    recoveries: func() -> result<u32, error>;
+    /// On a medium not mounted because no keeper of this machine keeps its volume key: the first recovery record `key`
+    /// opens gives the volume key to this machine's `keystore`, under the medium's id, and the store mounts; from then
+    /// on the medium mounts as this machine's own. Nothing is written to the medium. Errors: invalid (a typo; a store
+    /// mounted already; a key in the superblock), key (it opens no record, or no keeper kept the key: nothing is kept),
+    /// device, and what the mount answers (2.4).
+    recover: func(key: string<39>) -> result<_, error>;
 }

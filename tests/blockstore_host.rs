@@ -506,7 +506,7 @@ fn random_puts_gets_and_remounts_match_a_model() {
 
 #[test]
 fn rights_come_from_the_badge() {
-    use rights::{allowed, Operation::*, BADGE_GET, BADGE_PUBLISH, BADGE_PUT};
+    use rights::{allowed, Operation::*, BADGE_GET, BADGE_PUBLISH, BADGE_PUT, BADGE_RECOVER};
     // (badge, put, get, has, stat, publish, resolve)
     for (badge, put, get, has, stat, publish, resolve) in [
         (0, false, false, false, false, false, false),
@@ -515,9 +515,12 @@ fn rights_come_from_the_badge() {
         (BADGE_PUBLISH, false, false, false, true, true, false),
         (BADGE_GET | BADGE_PUT, true, true, true, true, false, true),
         (BADGE_GET | BADGE_PUT | BADGE_PUBLISH, true, true, true, true, true, true),
+        // The recovery right grants nothing else (308-STO-0028).
+        (BADGE_RECOVER, false, false, false, false, false, false),
+        (BADGE_GET | BADGE_PUT | BADGE_PUBLISH | BADGE_RECOVER, true, true, true, true, true, true),
         // Bits of rights this version does not know grant nothing.
-        (8, false, false, false, false, false, false),
-        (0xfff8, false, false, false, false, false, false),
+        (16, false, false, false, false, false, false),
+        (0xfff0, false, false, false, false, false, false),
         (0xffff, true, true, true, true, true, true),
     ] {
         let got = [allowed(badge, Put), allowed(badge, Get), allowed(badge, Has), allowed(badge, Stat), allowed(badge, Publish), allowed(badge, Resolve)];
@@ -530,6 +533,11 @@ fn rights_come_from_the_badge() {
         assert_eq!([allowed(badge, Unpublish), allowed(badge, Pin), allowed(badge, Unpin), allowed(badge, Commit)], [publish; 4], "badge {badge:#x}");
         assert_eq!([allowed(badge, History), allowed(badge, Snapshot), allowed(badge, Names)], [get; 3], "badge {badge:#x}");
         assert_eq!([allowed(badge, Pins), allowed(badge, Usage)], [stat; 2], "badge {badge:#x}");
+        // A recovery key opens the medium on any machine: only the recovery right makes, keeps, forgets or uses one, and
+        // no other right gives it; how many there are is any client's (308-STO-0028).
+        let recover = badge & BADGE_RECOVER != 0;
+        assert_eq!([allowed(badge, RecoveryNew), allowed(badge, RecoveryKeep), allowed(badge, RecoveryForget), allowed(badge, Recover)], [recover; 4], "badge {badge:#x}");
+        assert_eq!(allowed(badge, Recoveries), stat || recover, "badge {badge:#x}");
     }
 }
 
