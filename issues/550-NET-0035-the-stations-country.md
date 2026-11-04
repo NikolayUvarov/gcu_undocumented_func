@@ -164,7 +164,10 @@ Stage B made, on the maintainer's decision of 2026-11-04 (above), on the branch 
   - `wifi countries` lists 181, and `wifi channels uz` gives 13;
   - the user's `US` went to the radio and was kept by `keystore` across a restart of `wlan`, and MIND-TEST was joined under it.
 - **QEMU, x86 only:** `world_country_check` with the `no-country` radio. `00` is applied and the network on channel 6 is joined.
-  The x86 and aarch64 runs of b7f2aea7 were still going when this was written; their result, and the gate's, go in the next record.
+- **The runs on x32-128 (KVM):**
+  - `aarch64: network, TLS and Effector` passed at b7f2aea7 (954 s);
+  - `x86: network, TLS and Effector` passed at 7549f1e5 (1034 s), with `slow_radio_check` waiting for the applied country and `world_country_check`.
+  - Three runs before failed on the checks, not on the station: a join after the first decision found no network, fixed by `relax`; the stage A expectations; and `wifi channels 00` after a restart under the US.
 
 **Not done, or not right yet:**
 - **A radio's channels after a restart under a country.** `wlanhw.wit`'s `info` gives the channels the radio's last limits left. A station restarted under the US then plans over 11 channels, and a later UZ would keep to those 11 until the radio restarts. The radio should report its own channels apart from the limits: a `wlanhw` question to settle with `DRV`.
