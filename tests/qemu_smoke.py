@@ -1513,6 +1513,7 @@ def shell_suite(vm):
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
     storefs_check(vm)
+    vfs_restart_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
     # machine off without stopping the services: QEMU ends. The suite's last step.
     for name in ("poweroff", "shutdown"):
@@ -2541,6 +2542,25 @@ def vfs_check(vm):
     require(vm.command("ls data"), "n.txt")
     print("PASS: files: RAM disk with Cyrillic names and text, mkdir with parents, move, remove; boot files and the disk outside data/ are not writable, .. is refused", flush=True)
     search_check(vm)
+
+
+def vfs_restart_check(vm):
+    """311-KRN-0207: after vfs_server restarts, the shell's kept root of the boot volume is an earlier instance's; mind::fs
+    opens it again once, so ls, write, cat and rm in data/ answer with no restart of the shell. Late in the shell suite:
+    the services' open files on the old instance are not reopened."""
+    require(vm.command("ls data"), "sum.msh")
+    old = vm.services()["vfs_server"]
+    require(vm.command("svc restart vfs_server", timeout=60), "vfs_server restarted: PID")
+    for _ in range(50):
+        if vm.services().get("vfs_server", old) != old:
+            break
+        time.sleep(.2)
+    require(vm.service_logs("vfs_server", "[VFS] THE BOOT VOLUME:"), "[VFS] THE BOOT VOLUME:")
+    require(vm.command("ls data"), "sum.msh")
+    require(vm.command("write data/after.txt after the restart"), "WROTE 17 BYTES")
+    require(vm.command("cat data/after.txt"), "after the restart")
+    require(vm.command("rm data/after.txt"), "OK")
+    print("PASS: vfs_server restarted: the shell's ls, write, cat and rm in data/ answer again with no restart of the shell (311-KRN-0207)", flush=True)
 
 
 def storefs_check(vm):
