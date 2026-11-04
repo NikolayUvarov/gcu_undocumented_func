@@ -43,6 +43,9 @@ const UDP_PACKETS: usize = 8;
 const UDP_BUFFER: usize = 8192;
 const POLL_MS: u32 = 10;
 const FALLBACK_MS: u64 = 3000; // without a DHCP lease by then: QEMU user networking's static setup
+// QEMU's own MAC prefix (52:54:00), its default for a card: that setup is for such a card alone, never a real one on a real
+// network (000-NET-0054: the Ryzen's RTL8168 showed 10.0.2.15 for 11 s before its lease).
+const QEMU_OUI: u64 = 0x52_54_00;
 const ICMP_IDENT: u16 = 0x4D49;
 const PINGS: usize = 16; // echo requests waiting for their replies, all clients together
 const ECHO_MAX: u16 = 1472; // an echo's data bytes: one frame on a 1500-byte MTU (socket.wit 2.6)
@@ -314,8 +317,9 @@ impl Link {
         match event {
             Some(Some((address, router, dns))) => self.configure(address, router, dns, true),
             Some(None) => { self.address = None; self.leased = false; }
-            // QEMU user networking's static setup, for the first card only (another card's network is unknown).
-            None => if self.card.index == 0 && self.up && self.address.is_none() && now_ms() - self.started > FALLBACK_MS {
+            // QEMU user networking's static setup, for the first card only (another card's network is unknown), if QEMU's.
+            None => if self.card.index == 0 && (self.mac >> 24) & 0xFF_FFFF == QEMU_OUI && self.up && self.address.is_none()
+                && now_ms() - self.started > FALLBACK_MS {
                 self.configure(Ipv4Cidr::new(Ipv4Address::new(10, 0, 2, 15), 24), Some(Ipv4Address::new(10, 0, 2, 2)), Some(Ipv4Address::new(10, 0, 2, 3)), false);
             },
         }

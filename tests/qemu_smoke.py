@@ -9420,6 +9420,7 @@ def net_suite(args, disk):
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-net-cards-{mode.split()[0].lower()}-{args.cpus}cpu.log").write_text(vm.log)
+    static_setup_check(args, disk)
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
@@ -9448,6 +9449,32 @@ def net_suite(args, disk):
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+def static_setup_check(args, disk):
+    """000-NET-0054: QEMU user networking's static setup (10.0.2.15) is for a card with QEMU's own MAC prefix alone. A card
+    on a hub port with nothing else on it hears no DHCP: with QEMU's default MAC the stack takes the static setup, with
+    another MAC it stays without an address, as a real card on a real network waits for its lease."""
+    waited = None
+    for mac in (None, "02:00:00:4d:43:01"):
+        device = "virtio-net-pci,netdev=n0" + (f",mac={mac}" if mac else "")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "hubport,id=n0,hubid=7", "-device", device])
+        try:
+            require(vm.service_logs("netstack", "WAITING FOR DHCP"), "[NETSTACK] CARD 0")
+            start = time.monotonic()
+            if mac is None:
+                require(vm.service_logs("netstack", "[NETSTACK] STATIC"), "[NETSTACK] STATIC 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 ON CARD 0")
+                waited = time.monotonic() - start
+            else:
+                # Three times as long as QEMU's MAC needed, and at least 8 s: still no address.
+                time.sleep(max(8, 3 * waited))
+                log = vm.command("dmesg -s netstack", raw=True)
+                assert "[NETSTACK] STATIC" not in log and "10.0.2.15" not in log, log[-2000:]
+                require(vm.command("ip"), "IP: NoNetwork")
+        finally:
+            vm.close()
+    print(f"PASS: QEMU's static setup (000-NET-0054): 10.0.2.15 without DHCP on QEMU's MAC in {waited:.1f} s, none on "
+          f"another MAC in {max(8, 3 * waited):.0f} s", flush=True)
 
 
 def browse_check(args):
