@@ -1,6 +1,6 @@
 # 550-NET-0035 — The station's country: chosen from the whole regulatory catalogue, kept, applied by the radio
 
-**Type:** network (service and interfaces) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open (stage A built) · **Blocked by:** stage B: the catalogue as a crate of its own ([requests-DRV.md](requests-DRV.md); `DRV` agreed, 2026-10-20) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, MC-12.4, MC-12.7
+**Type:** network (service and interfaces) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open (stage A built) · **Blocked by:** — (stage B's catalogue, DRV's `regdb`, is in `main` since round 79) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, MC-12.4, MC-12.7
 
 From the request "Wi-Fi country selection from the complete verified regulatory catalog" in requests-NET.md (ASTRA auditor-fixer, 2026-10-16, at the maintainer's request). `APP`'s side is [550-APP-0082](550-APP-0082-wifi-country-selector.md), the RTL8852BE catalogue 213-DRV-0032 (ASTRA).
 
@@ -126,6 +126,54 @@ Numbered 0035, after [351-NET-0034](../issues-done/351-NET-0034-the-download-che
   - a read-only client is refused;
   - after a change of country the old scan is gone and the link was left.
 - **Not claimed:** that a real radio applied a country, or that the channels are right for a machine. That is DRV's on each radio and machine (MC-12.1).
+
+## Progress (2026-11-04, stage B)
+
+Stage B made, on the maintainer's decision of 2026-11-04 (above), on the branch from 84349a2e to b7f2aea7.
+
+**In `dot11`:**
+- **The beacons' country.** `scan::describe` reads the Country element. `List::announced` gives the code most access points heard name, with the counts, or none at a tie.
+- **`dot11::catalogue`** (on `regdb`):
+  - `decide`: the user's choice, else the announced country, else `00`;
+  - `moves`: an announcement moves only a country the user did not choose, only to another code, and never back to `00`;
+  - `plan`: each of the radio's channels under a country, and the limits for the radio.
+- **`Station::relax`** for the first country after a scan that only listened: the networks heard stay.
+
+**In `wlan`:**
+- At the radio's first answer it reads `keystore`'s choice.
+- With none, the first scan only listens, and its end decides.
+- The radio is given each country's limits (`set-country`).
+- The log says what is applied and why, for example: `[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS`.
+
+**The interfaces:**
+- **`wifi.wit` 1.2.** The country calls are answered from the catalogue: 181 countries, `00` left out. `country-origin` is new: none, chosen, detected (with the counts) or world.
+- **`wlanhw.wit` 1.3.** `set-country` takes `00` too.
+
+**`wlansim`:**
+- its access point announces `UZ`;
+- with the test-only feature `no-country` it announces none;
+- it logs a probe request that comes before any country's limits.
+
+**Tests:**
+- **Host:** `dot11/tests/catalogue.rs` (7), `country_announced.rs` (4), two more in `station.rs`, and the IDL fuzzer with `wifi.wit` 1.2's types.
+  - Every catalogued country can be chosen.
+  - UZ and RU send on 1 to 13, the US on 1 to 11, and `00` sends on 1 to 11 and listens on 12 and 13.
+- **QEMU on x32-128,** both network groups, x86 and aarch64 (`wifi_join_check`):
+  - the first scan sent no probe request;
+  - the access point's `UZ` was applied and `wifi country` names it;
+  - `wifi countries` lists 181, and `wifi channels uz` gives 13;
+  - the user's `US` went to the radio and was kept by `keystore` across a restart of `wlan`, and MIND-TEST was joined under it.
+- **QEMU, x86 only:** `world_country_check` with the `no-country` radio. `00` is applied and the network on channel 6 is joined.
+- **The runs on x32-128 (KVM):**
+  - `aarch64: network, TLS and Effector` passed at b7f2aea7 (954 s);
+  - `x86: network, TLS and Effector` passed at 7549f1e5 (1034 s), with `slow_radio_check` waiting for the applied country and `world_country_check`.
+  - Three runs before failed on the checks, not on the station: a join after the first decision found no network, fixed by `relax`; the stage A expectations; and `wifi channels 00` after a restart under the US.
+
+**Not done, or not right yet:**
+- **A radio's channels after a restart under a country.** `wlanhw.wit`'s `info` gives the channels the radio's last limits left. A station restarted under the US then plans over 11 channels, and a later UZ would keep to those 11 until the radio restarts. The radio should report its own channels apart from the limits: a `wlanhw` question to settle with `DRV`.
+- **`world_country_check` on aarch64:** the `no-country` radio is built for x86 only, as the `slow` one is.
+- **APP's screen.** `wifi` shows `APPLIED, none ASKED` for a detected country. `country-origin` is there for APP to show why (`APP/2026-11-04T1003Z-NET-…`).
+- **Real radios:** none applies a country yet. `bcm_wifi` answers `failed` and `rtw89_wifi` has no `wlanhw` endpoint (213-KRN-0123). That is DRV's, a radio and a machine at a time (MC-12.1).
 
 ## Related
 

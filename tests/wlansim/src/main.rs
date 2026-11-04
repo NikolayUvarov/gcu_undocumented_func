@@ -7,7 +7,8 @@
 // 2.4 GHz (550-NET-0028): it refuses a frame at an OFDM rate, and the access point logs the rates the station offers.
 // It takes a country's limits (wlanhw.wit 1.2, 550-NET-0035): then it tunes only to their channels and refuses a probe
 // request where the station may only listen. Until limits are first set it keeps 1.1's ways, as the station of stage A
-// sets none. With the test-only feature `slow` (550-NET-0030) it answers nothing for its first LATE_MS, and for
+// sets none. Its access point announces the country UZ in its beacons and probe responses; with the test-only feature
+// `no-country` it announces none (550-NET-0035). With the test-only feature `slow` (550-NET-0030) it answers nothing for its first LATE_MS, and for
 // SILENT_MS after the station asks (ARP) for SILENT_ADDRESS. When the station asks for GONE_ADDRESS the access point
 // goes away (550-NET-0041): a deauthentication, then GONE_MS with no beacon and no answer, while the radio answers its
 // calls. A test service: in no image but the tests'.
@@ -75,6 +76,8 @@ struct Sim {
     refused: bool,
     // The country's limits (1.2): each channel and whether the station may only listen there; None before any.
     limits: Option<Vec<(u8, bool)>>,
+    // Whether a probe request came before any limits (logged once).
+    early_probe: bool,
     // Until when (uptime, ms) the radio answers nothing: set only with the feature `slow`.
     silent_until: Option<u64>,
     // Until when (uptime, ms) the access point is away: no beacon, no answer to the station.
@@ -96,9 +99,13 @@ impl Sim {
     }
 
     // Whether the country's limits let `f` go out on the channel now: a probe request only where the station may send.
-    fn may_send(&self, f: &[u8]) -> bool {
-        let Some(limits) = &self.limits else { return true };
+    fn may_send(&mut self, f: &[u8]) -> bool {
         let probe = f.first().is_some_and(|&b| b == frame::PROBE_REQUEST << 4);
+        // A station with the catalogue sends nothing before it applies a country (550-NET-0035): logged once if it did.
+        if self.limits.is_none() && probe && !core::mem::replace(&mut self.early_probe, true) {
+            mind::println!("[WLANSIM] A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS");
+        }
+        let Some(limits) = &self.limits else { return true };
         limits.iter().any(|&(c, listen)| c == self.channel && !(listen && probe))
     }
 
@@ -134,6 +141,9 @@ impl Sim {
         f.extend_from_slice(&[0, SSID.len() as u8]);
         f.extend_from_slice(SSID);
         f.extend_from_slice(&[1, 8, 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24, 3, 1, CHANNEL]);
+        // Its country (802.11d, 550-NET-0035): UZ, channels 1 to 13 at 20 dBm; with `no-country`, none.
+        #[cfg(not(feature = "no-country"))]
+        f.extend_from_slice(&[frame::COUNTRY, 6, b'U', b'Z', b' ', 1, 13, 20]);
         f.extend_from_slice(&dot11::scan::own_rsne());
         f.extend_from_slice(&[50, 4, 0x30, 0x48, 0x60, 0x6C]);
         f
@@ -399,7 +409,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut sim = Sim { channel: 0, filter: wlanhw::Filter::default(), queue: Vec::new(), waiters: Vec::new(), beacon_at: 0, sequence: 0,
                         associated: false, authenticator: None, expect: Expect::Nothing, tries: 0, tk: None, replay: Replay::default(), pn: 0,
-                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None, silent_until: None, gone_until: None };
+                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None, early_probe: false, silent_until: None, gone_until: None };
     mind::println!("[WLANSIM] READY: {} ON CHANNEL {}", core::str::from_utf8(SSID).unwrap_or("?"), CHANNEL);
     #[cfg(feature = "slow")]
     {
@@ -460,7 +470,8 @@ fn main(_info: &'static BootInfo) {
             wlanhw::Request::SetCountry { code, limits, .. } => {
                 let list = limits.as_slice();
                 let twice = list.iter().enumerate().any(|(i, l)| list[..i].iter().any(|m| m.channel == l.channel));
-                let named = code.as_str().len() == 2 && code.as_str().bytes().all(|b| b.is_ascii_uppercase());
+                // Two capital letters, or `00`, the world domain's (wlanhw.wit 1.3).
+                let named = code.as_str() == "00" || (code.as_str().len() == 2 && code.as_str().bytes().all(|b| b.is_ascii_uppercase()));
                 if twice || !named || list.iter().any(|l| !(1..=13).contains(&l.channel)) { wlanhw::reply_set_country(call, Err(wlanhw::Error::Invalid)) } else {
                     sim.limits = Some(list.iter().map(|l| (l.channel, l.listen)).collect());
                     mind::println!("[WLANSIM] COUNTRY {}: {} CHANNELS, {} TO LISTEN ON ONLY", code.as_str(), list.len(), list.iter().filter(|l| l.listen).count());

@@ -1094,6 +1094,8 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
+    # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked.
+    assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
     if vm.arch != "aarch64":
         # 550-KRN-0061, 213-KRN-0114: QEMU has no Broadcom or Realtek card, so init starts none of their drivers.
         for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
@@ -9198,14 +9200,15 @@ def wifi_join_check(vm):
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
-    # 550-APP-0082: wlan answers wifi.wit 1.1's country calls; built without a catalogue (550-NET-0035 stage A), it says so.
-    run("wifi country", 30, "[WIFI] COUNTRY: NO CATALOGUE IN THIS STATION")
-    run("wifi country uz", 30, "[WIFI] COUNTRY UZ NOT SET: NO CATALOGUE IN THIS STATION")
-    run("wifi countries", 30, "[WIFI] COUNTRIES: NO CATALOGUE IN THIS STATION")
+    # 550-APP-0082 over 550-NET-0035 stage B: with none chosen the station runs under the country wlansim's access point
+    # announces; the whole catalogue is listed but 00, and a country's channels are shown.
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, none ASKED")
+    run("wifi countries", 30, " OF 181 COUNTRIES")
+    run("wifi channels uz", 30, "[WIFI] 13 CHANNELS UNDER UZ (Uzbekistan)")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
-          "station's reason, MIND-TEST joined, wifi status, wifi scan (MIND-TEST marked joined) and wifi leave; wifi country: no "
-          "catalogue in this station", flush=True)
+          "station's reason, MIND-TEST joined, wifi status, wifi scan (MIND-TEST marked joined) and wifi leave; wifi country: UZ "
+          "from the access point, 181 countries listed, UZ's 13 channels", flush=True)
     # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
     sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
     offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))
@@ -9282,6 +9285,33 @@ def wifi_join_check(vm):
     print("PASS: after keystore and wlan restarted the station joined MIND-TEST by itself (550-NET-0041), the gateway "
           f"answering through the link; the access point away 25 s, the station joined it again by itself after {len(failed)} "
           "logged tries; after wifi leave no join by itself; forgotten through wifi's screen, then refused without a passphrase", flush=True)
+    # 550-NET-0035, stage B (the maintainer's decision of 2026-11-04): with no country chosen the first scan sent nothing,
+    # and the station ran under the country wlansim's access point announces (UZ, every channel to send on). Then the
+    # user's US, kept by keystore across a restart of the station, under which it joins again on channel 6.
+    log = vm.command("dmesg -s wlan", raw=True)
+    require_all(log, "[WLAN] NO COUNTRY CHOSEN: THE FIRST SCAN SENDS NOTHING",
+                "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
+    radio = vm.command("dmesg -s wlansim", raw=True)
+    require(radio, "[WLANSIM] COUNTRY UZ: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, "the first scan sent a probe request"
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")
+    run("wifi country US", 30, "[WIFI] COUNTRY US (United States) APPLIED")
+    require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 30), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE): 11 CHANNELS TO SEND ON")
+    require(vm.service_logs("wlansim", "COUNTRY US"), "[WLANSIM] COUNTRY US: 11 CHANNELS")
+    # A restart reads it back from keystore, and nothing announced moves a chosen country.
+    pid = vm.services()["wlan"]
+    require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+    for _ in range(50):
+        if vm.services().get("wlan", pid) != pid:
+            break
+        time.sleep(.2)
+    require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 60), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE)")
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # Under US the radio reports the 11 channels its limits leave (wlanhw.wit 1.2), and the restarted station took those.
+    channels = run("wifi channels 00", 30, "[WIFI] 11 CHANNELS UNDER 00 (the world domain)")
+    assert re.search(r"CHANNEL +11 2\.4 GHZ SEND", channels) and "CHANNEL  12" not in channels, channels[-1500:]
+    print("PASS: the station's country (550-NET-0035): with none chosen the first scan sent nothing and the access point's UZ "
+          "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -9627,6 +9657,7 @@ def net_suite(args, disk):
         vm.close()
     late_attach_check(args)
     slow_radio_check(args)
+    world_country_check(args)
     browse_check(args)
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
@@ -9947,6 +9978,37 @@ def late_attach_check(args):
     print("PASS: a late answer to attach: the stack kept the ring lent, the driver took it without a fault and the network works", flush=True)
 
 
+def world_country_check(args):
+    """550-NET-0035, stage B (the maintainer's decision of 2026-11-04): an access point that announces no country, with
+    none chosen. The station runs under 00, the rules every country allows: it sends on channels 1 to 11, listens on 12
+    and 13, gives the radio those limits, says why, and joins the network on channel 6."""
+    if not args.world_radio_elf or not raw_tools():
+        print("SKIP: the world country check needs wlansim built with `no-country` (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-world-country-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"wlansim.elf": args.world_radio_elf}, extra={"data/wifijoin.txt": b"MIND-TEST\nmind test passphrase\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-cpu", "qemu64,+rdrand", "-nic", "none"])
+        try:
+            log = vm.service_logs("wlan", "[WLAN] COUNTRY 00")
+            require_all(log, "[WLAN] NO COUNTRY CHOSEN: THE FIRST SCAN SENDS NOTHING",
+                        "[WLAN] COUNTRY 00 (NONE CHOSEN, NONE ANNOUNCED: THE RULES EVERY COUNTRY ALLOWS): 11 CHANNELS TO SEND ON, 2 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
+            radio = vm.service_logs("wlansim", "COUNTRY 00")
+            require(radio, "[WLANSIM] COUNTRY 00: 13 CHANNELS, 2 TO LISTEN ON ONLY")
+            assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, radio
+            out = vm.command("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", timeout=90)
+            for _ in range(20):
+                if "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6" in out:
+                    break
+                out += vm.command("dmesg -s wifi", raw=True)
+                time.sleep(.5)
+            require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED")
+        finally:
+            vm.close()
+    print("PASS: the station's country with none chosen and none announced (550-NET-0035): 00 applied, 11 channels to send "
+          "on and 2 to listen on given to the radio, the first scan sending nothing, and MIND-TEST joined on channel 6", flush=True)
+
+
 def slow_radio_check(args):
     """550-NET-0030: wlansim built with `slow` answers nothing for its first 60 s, and for 20 s after the station asks
     (ARP) for 10.0.4.99. While the radio is silent the wired card's network works at once: each ping answered within 2 s,
@@ -9993,15 +10055,17 @@ def slow_radio_check(args):
             else:
                 raise AssertionError(("the radio never answered", radio))
             require(vm.service_logs("wlan", "[WLAN] RADIO "), "[WLAN] RADIO 02:00:00:57:4C:01")
-            # The station's last scan was made while the radio was silent, as on the MacBook Pro at a boot's start: the join
-            # scans once by itself, then joins (550-APP-0098; before it, wifi's window scanned first).
+            # 550-NET-0035 stage B: once the radio answers, the station's first scan listens for the country, and a join
+            # meanwhile is refused as busy; so the check waits for the country the access point announces.
+            require(vm.service_logs("wlan", "[WLAN] COUNTRY "), "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS")
+            # Where the station's last scan missed the network, the join scans once by itself, then joins (550-APP-0098).
             join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
             vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
             joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
             require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
                              joined + vm.command("dmesg -s wifi", raw=True))
-            assert scan and scan.group(1) == "IT AMONG THEM", joined
+            assert scan is None or scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
             vm.command("ping 10.0.4.99")
@@ -10013,7 +10077,7 @@ def slow_radio_check(args):
             vm.close()
             web.shutdown()
     print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms and a page fetched while it was "
-          f"silent, the station joined once it answered, scanning by itself first; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
+          f"silent, the station joined once it answered and its first scan had found the country; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
 def _roots_with_test_ca(certificates, disk):
@@ -13565,6 +13629,8 @@ def main():
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
     args.slow_radio_elf = args.slow_radio_elf or (str(slow) if args.arch == "x86_64" and slow.exists() else None)
+    world = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-nocountry-target/x86_64-unknown-none/release/wlansim"
+    args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:
