@@ -67,6 +67,44 @@ pub const fn public(address: u32) -> bool {
     true
 }
 
+/// Whether `address` is in the network of `prefix` bits of `network` (0 bits: every address; over 32: none).
+pub const fn in_network(address: u32, network: u32, prefix: u8) -> bool {
+    match prefix { 0 => true, 1..=32 => address >> (32 - prefix as u32) == network >> (32 - prefix as u32), _ => false }
+}
+
+/// The networks a listening grant's port may name at most (110-NET-0052).
+pub const LISTEN_NETWORKS: usize = 4;
+
+/// A listening grant's line of the network policy (110-NET-0052): `listen <program> tcp <port> from
+/// <a.b.c.d>/<bits>[,<a.b.c.d>/<bits>...] [<seconds> [<bytes>]]`, at most LISTEN_NETWORKS networks, port not 0, each
+/// network's host bits 0. Its program, port, networks (address, bits), how many, term and volume, or None.
+pub fn listen_line(line: &str) -> Option<(&str, u16, [(u32, u8); LISTEN_NETWORKS], usize, Option<u32>, Option<u64>)> {
+    let mut words = line.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("listen") { return None; }
+    let program = words.next().filter(|p| (1..=16).contains(&p.len()))?;
+    if !words.next()?.eq_ignore_ascii_case("tcp") { return None; }
+    let port = words.next()?.parse::<u16>().ok().filter(|&p| p != 0)?;
+    if !words.next()?.eq_ignore_ascii_case("from") { return None; }
+    let (mut networks, mut count) = ([(0u32, 0u8); LISTEN_NETWORKS], 0);
+    for network in words.next()?.split(',') {
+        let (address, bits) = network.split_once('/')?;
+        let mut octets = [0u8; 4];
+        let mut parts = address.split('.');
+        for octet in octets.iter_mut() { *octet = parts.next()?.parse().ok()?; }
+        if parts.next().is_some() { return None; }
+        let (address, bits) = (u32::from_be_bytes(octets), bits.parse::<u8>().ok().filter(|&b| b <= 32)?);
+        // The host bits stay 0, so that a line says exactly which network it means.
+        if bits < 32 && address & (u32::MAX >> bits) != 0 { return None; }
+        if count == LISTEN_NETWORKS || networks[..count].contains(&(address, bits)) { return None; }
+        networks[count] = (address, bits);
+        count += 1;
+    }
+    let seconds = match words.next() { Some(s) => Some(s.parse().ok()?), None => None };
+    let bytes = match words.next() { Some(b) => Some(b.parse().ok()?), None => None };
+    if words.next().is_some() { return None; }
+    Some((program, port, networks, count, seconds, bytes))
+}
+
 /// The ports a browsing grant may use at most.
 pub const BROWSE_PORTS: usize = 4;
 

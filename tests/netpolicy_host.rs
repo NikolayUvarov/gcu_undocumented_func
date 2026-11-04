@@ -42,3 +42,37 @@ fn browsing_lines() {
         assert!(browse_line(refused).is_none(), "{}", refused);
     }
 }
+
+#[test]
+fn a_listening_line_is_read_or_refused() {
+    // 110-NET-0052: `listen <program> tcp <port> from <networks> [<seconds> [<bytes>]]`.
+    use network::{listen_line, LISTEN_NETWORKS};
+    let ip = |a: u8, b: u8, c: u8, d: u8| u32::from_be_bytes([a, b, c, d]);
+    let (program, port, networks, count, seconds, bytes) = listen_line("listen httpd tcp 8080 from 10.0.2.0/24,192.168.0.0/16 3600 1000000").unwrap();
+    assert_eq!((program, port, count, seconds, bytes), ("httpd", 8080, 2, Some(3600), Some(1_000_000)));
+    assert_eq!(networks[..count], [(ip(10, 0, 2, 0), 24), (ip(192, 168, 0, 0), 16)]);
+    let (_, _, networks, count, seconds, bytes) = listen_line("LISTEN sshd TCP 22 FROM 0.0.0.0/0").unwrap();
+    assert_eq!((networks[..count].to_vec(), seconds, bytes), (vec![(0, 0)], None, None));
+    assert_eq!(listen_line("listen h tcp 80 from 10.0.2.15/32").unwrap().2[0], (ip(10, 0, 2, 15), 32));
+    let five = "listen h tcp 80 from 10.0.0.0/8,11.0.0.0/8,12.0.0.0/8,13.0.0.0/8,14.0.0.0/8";
+    assert_eq!(LISTEN_NETWORKS, 4);
+    for bad in ["listen h udp 80 from 10.0.0.0/8", "listen h tcp 0 from 10.0.0.0/8", "listen h tcp 80 10.0.0.0/8", "listen h tcp 80 from 10.0.0.0",
+                "listen h tcp 80 from 10.0.2.15/24", "listen h tcp 80 from 10.0.0.0/33", "listen h tcp 80 from 10.0.0/8", "listen h tcp 80 from 10.0.0.0/8,10.0.0.0/8",
+                five, "listen h tcp 80 from 10.0.0.0/8 x", "listen h tcp 80 from 10.0.0.0/8 1 2 3", "listen averyveryverylongname tcp 80 from 10.0.0.0/8",
+                "listen", "listen h tcp 70000 from 10.0.0.0/8", "browse h public tcp 80"] {
+        assert!(listen_line(bad).is_none(), "{bad}");
+    }
+}
+
+#[test]
+fn which_addresses_a_network_holds() {
+    use network::in_network;
+    let ip = |a: u8, b: u8, c: u8, d: u8| u32::from_be_bytes([a, b, c, d]);
+    assert!(in_network(ip(10, 0, 2, 2), ip(10, 0, 2, 0), 24));
+    assert!(in_network(ip(10, 0, 2, 255), ip(10, 0, 2, 0), 24));
+    assert!(!in_network(ip(10, 0, 3, 1), ip(10, 0, 2, 0), 24));
+    assert!(in_network(ip(10, 0, 2, 15), ip(10, 0, 2, 15), 32) && !in_network(ip(10, 0, 2, 16), ip(10, 0, 2, 15), 32));
+    assert!(in_network(ip(203, 0, 113, 9), 0, 0));
+    assert!(in_network(ip(128, 0, 0, 1), ip(128, 0, 0, 0), 1) && !in_network(ip(127, 0, 0, 1), ip(128, 0, 0, 0), 1));
+    assert!(!in_network(ip(10, 0, 2, 2), ip(10, 0, 2, 0), 33));
+}
