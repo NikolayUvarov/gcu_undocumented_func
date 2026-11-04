@@ -1094,6 +1094,8 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
+    # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked.
+    assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
     if vm.arch != "aarch64":
         # 550-KRN-0061, 213-KRN-0114: QEMU has no Broadcom or Realtek card, so init starts none of their drivers.
         for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):

@@ -147,7 +147,9 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // A safe start, after an unfinished run or asked at the bootloader: link gets no input (800-KRN-0191).
               safe: bool,
               // The held `stop-notice` call of each service that asked, answered when init decides to stop it (750-KRN-0194).
-              notices: [Option<wire::Call>; UNITS] }
+              notices: [Option<wire::Call>; UNITS],
+              // The ACPI tables' transmit power policy for a WLAN radio, read once at boot (213-KRN-0122).
+              power: mind::platform_power::Policy }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -1826,9 +1828,15 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS] };
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
+                         power: hardware::power_policy() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
+    // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122).
+    match init.power {
+        mind::platform_power::Policy::Absent { tables } => mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: ABSENT ({} AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG)", tables),
+        policy => { let mut word = [0u8; 48]; let n = policy.word(&mut word); mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN ({}): A RADIO SENDS NOTHING", core::str::from_utf8(&word[17.min(n)..n]).unwrap_or("?")); }
+    }
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
     {
         let (launch, slot) = (&info.launch, &info.boot_slot);
