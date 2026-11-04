@@ -22,7 +22,7 @@ One copy on one medium: a damaged block is found when it is read (300-STO-0005) 
 
 - [309-STO-0025](../issues-done/309-STO-0025-scrub.done): the scrub, which needs no second medium and does not wait for 307. Done 2026-10-29.
 - [309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done): a copy of named roots in a file (CAR v1), imported back and repairing damaged blocks; needs no second medium. Done 2026-10-30.
-- [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.md): copies of chosen names on a second medium, `copied` reached, and a damaged block repaired from the other medium. Its QEMU part waits for `init`'s second store disk (`requests-KRN.md`).
+- [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.md): copies of chosen names on a second medium, `copied` reached, and a damaged block repaired from the other medium. Built, host-tested and run in QEMU on x86 and aarch64 on the track's branch, with `init`'s second store disk ([309-KRN-0209](../issues-done/309-KRN-0209-a-second-store-disk-for-the-block-stores-copy.done)); waits to land.
 - **Later:** a store that cannot be mounted, rebuilt from its copy, with a tool that says what it lost.
 
 ## Acceptance criteria

@@ -1,6 +1,6 @@
 # 309-STO-0040 — Copies of chosen names on a second medium, and a damaged block repaired from the other
 
-**Type:** storage (`blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** for the QEMU criteria, 309-KRN-0209 (`init` grants `blockstore` the copy's disk in slot 4; built on the kernel track's branch, not in `main` yet) · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-5.1
+**Type:** storage (`blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open (built and tested on the branch; waits to land) · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-5.1
 
 Split from [309](309-copies-scrub-and-repair.md) (2026-11-04), its plan's "Copies". The scrub ([309-STO-0025](../issues-done/309-STO-0025-scrub.done)) and a copy in a file ([309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)) are done. A store that cannot be mounted, rebuilt from its copy, is left to a later task of 309.
 
@@ -80,6 +80,24 @@ Everything here is plan, not a guarantee (MC-12.3).
   - a block damaged on one disk by the suite repaired from the other, on a read and by a scrub;
   - the next scrub clean.
 - **Docs:** docs/storage, `blockstore.wit` 2.5 and docs/idl, and the profile's Article 4 rows.
+
+## Progress
+
+**2026-11-04: built and tested on `claude/relaxed-meitner-5bmhpz`.** The commits are cbc0407d9 (the copies), 90b7a57f1 (the stack), 3571c4c63 (the mount's fault) and b5c76a455 (the QEMU check). The branch is merged with `main` 89b0fc97 (round 81), which brought 309-KRN-0209 ([done](../issues-done/309-KRN-0209-a-second-store-disk-for-the-block-stores-copy.done)). It waits for the landing queue. Tests are not proofs (MC-12.2).
+
+- **Host:** `tests/blockstore_host.rs` 85 passed, among them 11 copy tests and `random_changes_copies_damage_and_remounts_match_a_model_of_both_media`; the whole `scripts/host_tests.sh` passed. Of 22 deliberate changes of `copies.rs`, each tried alone on a copy of the file outside git, every one was caught by at least one test.
+- **QEMU `store` suite, x86 (28 PASS) and aarch64 (29 PASS),** with `store_copy_disk_check` on two blank VirtIO disks written in place. It checks:
+  - `COPIED` replies;
+  - one chunk damaged on each disk while running, each repaired by a scrub from the other, the damaged records collected and the next scrub clean;
+  - one chunk damaged on each before a reboot: after it, both disks found as the store's, the copy's block put back by its catch-up and the store's read back from the copy;
+  - `FLUSHED` once the copy is off.
+- **A fault of the store found by the random model** and fixed with a regression test (3571c4c63): a mount could bring back a version older than a removal, from a later commit record that another name's kept version retained. No version older than a kept removal is kept now.
+- **Decisions made in building it** (docs/storage, Copies on a second medium):
+  - **The store's change comes first,** then the copy's blocks and then its name. The store checks the version, the object's completeness and the quota before anything is written on the copy; a copy that fails leaves the store's change standing at `flushed`, and the name behind.
+  - **The work follows the change by `has` on the copy,** not by `tree::diff`: only the blocks the copy lacks are read from the store and put. The store's own walk of the root stays whole, twice per change of a copied name.
+  - **A domain's `copy` is refused with `rights`** through a domain's client, as the domain calls a domain cannot make are; the copies' own logic, reached in a domain, refuses it with `invalid`, as planned.
+  - **`blockstore` asks for a 256 KiB stack:** mounting the copy beside the store overflowed the 64 KiB a task has without asking.
+  - The names behind: a list of 64, one catch-up per idle step, 10 s before a refused one is tried again, all compared again after the list overflowed.
 
 ## Related
 
