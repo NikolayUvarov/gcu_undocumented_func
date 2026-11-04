@@ -17,7 +17,7 @@ cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
 cargo test --quiet --manifest-path passlock/Cargo.toml --target-dir "$OUT/wpa-target" # the device key under a passphrase, Argon2id against RFC 9106 (308-NET-0055)
 cargo test --quiet --manifest-path nnpkg/Cargo.toml --target-dir "$OUT/nnpkg-target" # nnd's package checks and clients on NRL's pinned model (262-APP-0112)
-cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target"
+cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target" # the deadlines (550-NET-0031) and a listening port's backlog (110-NET-0052, tests/listen_host.rs)
 cargo test --quiet --manifest-path apppkg/Cargo.toml --target-dir "$OUT/wpa-target" # signed application packages (750-UPD-0019)
 cargo test --quiet --manifest-path linkproto/Cargo.toml --target-dir "$OUT/linkproto-target" # the link protocol (800-LNK-0001)
 cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/linkproto-target" # its Linux end and effector485, over a pty and TCP (800-LNK-0004, 0011)
