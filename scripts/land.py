@@ -325,7 +325,7 @@ SECONDS = {
     "x86: Secure Boot with our keys": 23, "x86: reproducible build": 743,
     "aarch64: boot and fault containment": 205, "aarch64: programs, shell and four CPUs": 432,
     "aarch64: files and the block store": 380, "aarch64: network, TLS and Effector": 789, "aarch64: the updater and the modes": 572,
-    "aarch64: an update through the link": 899, "aarch64: RAM, ACPI and PCI above 4 GiB": 844, "aarch64: network above 4 GiB": 550,
+    "aarch64: an update through the link": 899, "aarch64: the link": 225, "aarch64: RAM, ACPI and PCI above 4 GiB": 844, "aarch64: network above 4 GiB": 550,
     "aarch64: GICv2 with GICv2m": 804, "aarch64: NVMe boot disk": 164, "aarch64: 16 CPUs": 212,
 }
 

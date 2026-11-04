@@ -5756,6 +5756,9 @@ def link_suite(args):
             require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
             time.sleep(.1); vm.collect(); vm.output = ""
             require(vm.command("dmesg -s link", raw=True), 'INPUT REFUSED: link.conf HAS NO "dev"')
+            # 800-KRN-0191: without `dev` link holds no input privilege at all.
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert "KIND=6 " not in caps, caps
             # Another address and a frame with none go unanswered: bounded by the tries.
             for other in (("--address", "6"), ()):
                 r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
@@ -5764,6 +5767,25 @@ def link_suite(args):
             require(link(port, "--address", "5", "hello"), '"MIND Core link"')
         finally:
             vm.close()
+    # 800-KRN-0191: in a safe start with `dev`, link gets its developer grants but not the input privilege, as whoever asked
+    # for the safe start is at the machine. A reset within the minute after READY leaves the run's mark (000-KRN-0076).
+    with tempfile.TemporaryDirectory(prefix="smoke-link-safe-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            require(vm.command(f"stat caps {vm.services()['link']}", raw=True), "KIND=6 ")  # the normal start: input held
+            vm.qmp("system_reset")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
+            require(log, "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; NO INPUT IN A SAFE START; ")
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert "KIND=6 " not in caps, caps
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-link-safe-{args.cpus}cpu.log").write_text(vm.log)
     # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
     # (800-APP-0108), its line logged whole; `mode` stays refused.
     with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
@@ -9466,6 +9488,7 @@ def net_suite(args, disk):
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-net-cards-{mode.split()[0].lower()}-{args.cpus}cpu.log").write_text(vm.log)
+    static_setup_check(args, disk)
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
@@ -9494,6 +9517,32 @@ def net_suite(args, disk):
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+def static_setup_check(args, disk):
+    """000-NET-0054: QEMU user networking's static setup (10.0.2.15) is for a card with QEMU's own MAC prefix alone. A card
+    on a hub port with nothing else on it hears no DHCP: with QEMU's default MAC the stack takes the static setup, with
+    another MAC it stays without an address, as a real card on a real network waits for its lease."""
+    waited = None
+    for mac in (None, "02:00:00:4d:43:01"):
+        device = "virtio-net-pci,netdev=n0" + (f",mac={mac}" if mac else "")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "hubport,id=n0,hubid=7", "-device", device])
+        try:
+            require(vm.service_logs("netstack", "WAITING FOR DHCP"), "[NETSTACK] CARD 0")
+            start = time.monotonic()
+            if mac is None:
+                require(vm.service_logs("netstack", "[NETSTACK] STATIC"), "[NETSTACK] STATIC 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 ON CARD 0")
+                waited = time.monotonic() - start
+            else:
+                # Three times as long as QEMU's MAC needed, and at least 8 s: still no address.
+                time.sleep(max(8, 3 * waited))
+                log = vm.command("dmesg -s netstack", raw=True)
+                assert "[NETSTACK] STATIC" not in log and "10.0.2.15" not in log, log[-2000:]
+                require(vm.command("ip"), "IP: NoNetwork")
+        finally:
+            vm.close()
+    print(f"PASS: QEMU's static setup (000-NET-0054): 10.0.2.15 without DHCP on QEMU's MAC in {waited:.1f} s, none on "
+          f"another MAC in {max(8, 3 * waited):.0f} s", flush=True)
 
 
 def browse_check(args):

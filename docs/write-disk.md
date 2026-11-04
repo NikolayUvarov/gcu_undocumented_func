@@ -239,6 +239,10 @@ sudo scripts/boot_switch.py logs ~/mind-runs         # the MIND LOG volume copie
 
 `once` sets `BootNext` to the stick's entry. If the stick has no entry, `once` makes one first with `efibootmgr --create-only`, labelled `MIND Core`. Nothing in the image or the bootloader changes.
 
+**Fast Boot off.** With the firmware's Fast Boot on, the Ryzen 9 5900HX ignored `BootNext` to the stick and started Ubuntu (2026-11-03); with it off, the switch ran with nobody at the machine. `once` says so each time.
+
+**`--reboot`** asks systemd to restart in 5 s (`systemd-run`), so the restart outlives the command that ran the script, an Effector exec among them.
+
 **What the script refuses**, saying why:
 - Linux's entry (`BootCurrent`) is not first in `BootOrder`: a restart would not come back. Put it first in the firmware's setup.
 - Linux was not started by UEFI.

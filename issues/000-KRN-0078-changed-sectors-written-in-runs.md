@@ -1,6 +1,6 @@
 # 000-KRN-0078 — Changed sectors written in runs, not one by one
 
-**Type:** kernel (`vfs_server`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (`ram:`'s cost found and fixed on `claude/youthful-mendel-mf1soy`; landing and the MacBook Pro left) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-12.3
+**Type:** kernel (`vfs_server`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main`; the MacBook Pro's `bench files` left) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-12.3
 
 ## Problem
 
