@@ -9522,8 +9522,7 @@ def listen_check(args, disk):
                     break
                 got += chunk
         assert got == b"ECHO hello mind\n", got
-        require(vm.expect("NETCHECK listen:7000:30 OK", timeout=20), "NETCHECK RECEIVED hello mind")
-        vm.expect("MIND> ")
+        require(vm.expect("MIND> ", timeout=20, after="NETCHECK listen:7000:30 OK"), "NETCHECK RECEIVED hello mind")
         stack = vm.service_logs("netstack", "ENDED")
         require(stack, "[NETSTACK] PORT 7000 LISTENS FOR PID")
         assert re.search(r"\[NETSTACK\] PORT 7000 ACCEPTED 10\.0\.2\.2:\d+ FOR PID \d+ \(BADGE (\d+)\)", stack), stack[-2000:]
@@ -9542,8 +9541,7 @@ def listen_check(args, disk):
         except OSError:
             reply = b""
         assert reply == b"", reply
-        require(vm.expect("NETCHECK listen:7002:8 Again", timeout=30), "NETCHECK LISTENING ON 7002")
-        vm.expect("MIND> ")
+        vm.expect("MIND> ", timeout=30, after="NETCHECK listen:7002:8 Again")
         require(vm.service_logs("netstack", "REFUSED"), "[NETSTACK] PORT 7002 REFUSED 10.0.2.2:")
     finally:
         vm.close()
