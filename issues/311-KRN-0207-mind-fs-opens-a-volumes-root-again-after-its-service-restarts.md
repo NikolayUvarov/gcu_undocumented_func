@@ -42,6 +42,12 @@
 - `vfs_server`'s roots: whether `vfs_server` restarts at all, which is not tried yet;
 - `check`, whose visit runs once, so it is not asked again.
 
+2026-11-04 (cd29f81d, the branch with `main` at 7ea919e9, on x32-128 through Effector, KVM):
+- `x86: keys, shell, tools` and `aarch64: programs, shell and four CPUs` passed.
+- On both, `storefs_check` printed "ls and cat again after storefs restarted (311-KRN-0207)".
+
+**Left:** `vfs_server`'s roots and `check`, as above. `vfs_server`'s roots go through the same `again`, but no run restarted `vfs_server`, so that is not tested.
+
 ## Related
 
 STO's 311-STO-0032; [311-KRN-0203](../issues-done/311-KRN-0203-a-lent-files-client-and-a-held-storefs-client.done) (the routing).
