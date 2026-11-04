@@ -2555,6 +2555,13 @@ def storefs_check(vm):
     listing = vm.command("ls notes:docs")
     require(listing, "a.txt")
     require(listing, "1 FILES, 15 BYTES")
+    # 311-KRN-0207 (STO's request): after storefs restarts, the shell's kept root of notes: is an earlier instance's;
+    # mind::fs opens it again once, so ls and cat answer with no restart of the shell.
+    require(vm.command("svc restart storefs", timeout=30), "storefs restarted: PID")
+    require(vm.service_logs("storefs", "READY VOLUMES"), "[STOREFS] READY VOLUMES")
+    require(vm.command("ls notes:docs"), "1 FILES, 15 BYTES")
+    require(vm.command("cat notes:docs/a.txt"), "from the store")
+    require(vm.command("ls notes:"), "docs")
     # find is a console program: the shell lends it no storefs client yet (APP's part), so mind::fs asks nobody.
     require(vm.command("find notes:"), "FIND: notes:: NOTFOUND")
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
@@ -2583,7 +2590,7 @@ def storefs_check(vm):
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
-          "vfs_server's volumes as before; a program without storefs's client gets NotFound; edit on a store volume wrote "
+          "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); a program without storefs's client gets NotFound; edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 
