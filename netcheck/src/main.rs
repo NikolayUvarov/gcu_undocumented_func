@@ -14,7 +14,9 @@
 // A console program; without a grant every network check reports NO GRANT.
 // Its own secrets in keystore (REQUEST_SECRETS, 000-NET-0045): secret-put:NAME:FILE keeps the file's bytes as secret
 // NAME, secret-get:NAME prints its length and SHA-256 (never the value), secret-delete:NAME, secrets lists the names;
-// NO SECRETS CLIENT when the loader gave it none (a run by a path).
+// NO SECRETS CLIENT when the loader gave it none (a run by a path). On the same client (keystore.wit 1.6, 308-NET-0055):
+// key-state prints whether keystore holds the device key; unlock and passphrase-set try the passphrase's calls with a
+// fixed word of their own, never one from the command line, which a client without the passphrase's badge is refused.
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NET, SLOT_NETWORK, SLOT_SECRETS};
 use mind::idl::{keystore, net, socket};
 use mind::ipc::Endpoint;
@@ -205,7 +207,7 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
 // One check of the program's own secrets: true when `word` is one.
 fn secret(word: &str) -> bool {
     let (kind, rest) = word.split_once(':').unwrap_or((word, ""));
-    if !matches!(kind, "secret-put" | "secret-get" | "secret-delete" | "secrets") { return false; }
+    if !matches!(kind, "secret-put" | "secret-get" | "secret-delete" | "secrets" | "key-state" | "unlock" | "passphrase-set") { return false; }
     let keys = mind::ipc::Endpoint(SLOT_SECRETS);
     if mind::dev::cap_info(SLOT_SECRETS).0 != CAP_KIND_ENDPOINT { mind::println!("NETCHECK {} NO SECRETS CLIENT", word); return true; }
     let shown = |result: mind::sys::Result<Result<FixedBuf<96>, keystore::Error>>| match result {
@@ -233,6 +235,9 @@ fn secret(word: &str) -> bool {
             wipe(value.as_mut_slice());
         }
         "secret-delete" => shown(keystore::secret_delete(keys, rest).map(|r| r.map(|gone| { let mut t = FixedBuf::new(); let _ = write!(t, " {}", gone); t }))),
+        "key-state" => shown(keystore::key_state(keys).map(|r| r.map(|state| { let mut t = FixedBuf::new(); let _ = write!(t, " {:?}", state); t }))),
+        "unlock" => shown(keystore::unlock(keys, NOT_THE_PASSPHRASE).map(|r| r.map(|()| FixedBuf::new()))),
+        "passphrase-set" => shown(keystore::passphrase_set(keys, "", NOT_THE_PASSPHRASE).map(|r| r.map(|()| FixedBuf::new()))),
         _ => shown(keystore::secret_list(keys).map(|r| r.map(|names| {
             let mut text = FixedBuf::new();
             for (i, name) in names.as_slice().iter().enumerate() { let _ = write!(text, "{}{}", if i == 0 { " " } else { "," }, name.as_str()); }
@@ -244,11 +249,12 @@ fn secret(word: &str) -> bool {
 }
 
 const VALUE_MAX: usize = 16384; // keystore.wit's longest secret
+const NOT_THE_PASSPHRASE: &str = "netcheck-is-not-the-owner"; // the word unlock and passphrase-set try
 
 fn wipe(bytes: &mut [u8]) { for byte in bytes.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) }; } }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX  ask:HOST:PORT:SECONDS\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets");
+    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX  ask:HOST:PORT:SECONDS\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets\nThe device key's state and the passphrase's calls, with a fixed word: key-state  unlock  passphrase-set");
     for word in mind::process::args_str().split_whitespace() { if !secret(word) { report(word, check(word)); } }
 }
