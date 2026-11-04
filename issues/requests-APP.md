@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered, 2026-10-31) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered, 2026-11-04) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -69,4 +69,8 @@ Numbered on 2026-10-31 as [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-
 
 ## The shell puts a running program's question about a flow to the user (for 000-NET-0049)
 
-Numbered on 2026-10-31 as [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.md).
+Numbered on 2026-10-31 as [000-APP-0120](../issues-done/000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done).
+
+## A recovery key shown once and typed back, and a store opened with one (for 308-STO-0028)
+
+Numbered on 2026-11-04 as [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md): a program with a window of its own, `recovery`, and `--key-file` for the tests.

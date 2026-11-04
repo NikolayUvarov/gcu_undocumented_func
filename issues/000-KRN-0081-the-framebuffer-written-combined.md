@@ -1,6 +1,6 @@
 # 000-KRN-0081 — The framebuffer written combined: PAT write-combining, and the compositor's copy by rows
 
-**Type:** kernel (`PRT` lines in `kernel/src/arch/x86_64/`, the generic mapping, `compositor`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; the tests and the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** track H (main task [174](174-full-use-of-pc-hardware.md), step 6) · **Constitution:** MC-12.3
+**Type:** kernel (`PRT` lines in `kernel/src/arch/x86_64/`, the generic mapping, `compositor`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main`; the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** track H (main task [174](174-full-use-of-pc-hardware.md), step 6) · **Constitution:** MC-12.3
 
 ## Problem
 
