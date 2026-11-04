@@ -58,7 +58,7 @@ A program such as `get` reaches a host the user names only when it runs. Today a
 
 ## Related
 
-[000-NET-0049](../issues/000-NET-0049-a-flow-grant-asked-at-run-time.md), [351-KRN-0027](351-KRN-0027-uefi-variables.done) (a question the shell already asks while a program waits).
+[000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.done), [351-KRN-0027](351-KRN-0027-uefi-variables.done) (a question the shell already asks while a program waits).
 
 ## Resolution
 
