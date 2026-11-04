@@ -1,7 +1,8 @@
 //! Directories as objects (issue 311-STO-0027; MC-4.2, 4.5, 4.13): a directory is one DAG-CBOR block of the form
 //! `{"v": 1, "entries": [[name, kind, size, link], ...]}`, its entries sorted by the names' bytes, each naming a file (an
 //! object of `dag`) or another directory by its CID. A walk goes through every block under a root, checking each
-//! directory against its CID and the schema and each entry against the object it names. No heap and no system calls:
+//! directory against its CID and the schema and each entry against the object it names. Two roots are compared by the
+//! paths where they differ, a subtree of one CID on both sides never read (311-STO-0039). No heap and no system calls:
 //! tests/tree_host.rs.
 use crate::cid::{Cid, Codec};
 use crate::dag::{self, fetch, Blocks, Error, In, Out, Same, Sink, CHUNK, LINK};
@@ -16,6 +17,8 @@ const ENTRY_MIN: usize = 1 + 2 + 1 + 1 + LINK;
 const ENTRIES: usize = CHUNK / ENTRY_MIN;
 /// Directories on a path down from a root at most, the root's included.
 pub const DEPTH: usize = 32;
+/// Bytes of a path below a root at most: DEPTH names and the `/` between them.
+pub const PATH_MAX: usize = DEPTH * (NAME_MAX + 1);
 
 /// What an entry names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +47,18 @@ pub fn valid_name(name: &[u8]) -> bool {
 impl Entry<'_> {
     // A valid name; a directory linked as `dag-cbor`.
     fn valid(&self) -> bool { valid_name(self.name) && (self.kind == Kind::File || self.cid.codec() == Codec::DagCbor) }
+    /// What the entry names, without its name.
+    pub fn side(&self) -> Side { Side { kind: self.kind, size: self.size, cid: self.cid } }
 }
+
+/// One side of a change: what an entry names, its size and its CID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Side { pub kind: Kind, pub size: u64, pub cid: Cid }
+
+/// A path where two trees differ: an entry only in the second, only in the first, or in both naming another object,
+/// size or kind (first, then second).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change { Added(Side), Removed(Side), Changed(Side, Side) }
 
 // Counts the bytes of an encoding, so a directory over a block is refused before anything is written.
 struct Count(usize);
@@ -231,4 +245,89 @@ fn tour<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], whole: 
         }
     }
     Ok(total)
+}
+
+// The empty directory's encoding: the root of the empty tree.
+const EMPTY: [u8; 13] = *b"\xa2\x61v\x01\x67entries\x80";
+
+// A directory being compared: its CID on each side (none, the empty tree), the entries its parent says it has (none at
+// the root), the next entry of each side, and the length of its path.
+#[derive(Clone, Copy)]
+struct Pair { cid: [Option<Cid>; 2], count: [Option<u64>; 2], next: [usize; 2], path: usize }
+
+// The directory `cid` names, read into `buffer` and checked against its CID, the schema and `count`; the empty tree for
+// none. A read is a step.
+fn side<'b, B: Blocks>(blocks: &mut B, cid: Option<&Cid>, count: Option<u64>, buffer: &'b mut [u8; CHUNK], left: &mut u64) -> Result<Dir<'b>, Error> {
+    let Some(cid) = cid else { return decode(&EMPTY) };
+    *left = left.checked_sub(1).ok_or(Error::TooLarge)?;
+    if cid.codec() != Codec::DagCbor { return Err(Error::Shape); }
+    let len = fetch(blocks, cid, buffer)?;
+    let dir = match decode(&buffer[..len]) {
+        // A file's node where a directory belongs.
+        Err(Error::Format) if dag::decode(&buffer[..len]).is_ok() => return Err(Error::Shape),
+        dir => dir?,
+    };
+    if count.is_some_and(|count| count != dir.len() as u64) { return Err(Error::Shape); }
+    Ok(dir)
+}
+
+/// Compares the trees under `a` and `b`, each a directory or none (the empty tree), and visits each path where they
+/// differ, below the roots, in the order of the names' bytes, depth first. An entry the same on both sides (kind, size
+/// and CID) is not read; a directory on one side only is one change, its entries not listed; a directory on both sides
+/// whose entries differ is gone into. Each node read is checked against its CID, the schema and its parent's entry.
+/// `path` holds the path visited (PATH_MAX bytes hold every path): a longer one, or more than `left` steps (an entry
+/// compared, a node read), is TooLarge; `left` is left at the steps not taken. Returns the changes visited; a visit's
+/// error ends it.
+pub fn diff<B: Blocks>(blocks: &mut B, a: Option<&Cid>, b: Option<&Cid>, buffers: [&mut [u8; CHUNK]; 2], path: &mut [u8], left: &mut u64, mut visit: impl FnMut(&[u8], Change) -> Result<(), Error>) -> Result<u64, Error> {
+    if a == b { return Ok(0); }
+    let mut stack = [Pair { cid: [a.copied(), b.copied()], count: [None, None], next: [0, 0], path: 0 }; DEPTH];
+    let (mut depth, mut changes) = (1, 0u64);
+    let [first, second] = buffers;
+    while depth > 0 {
+        let pair = stack[depth - 1];
+        // Read again after each directory gone into, as `walk` reads its own: the buffers hold one pair at a time.
+        let one = side(blocks, pair.cid[0].as_ref(), pair.count[0], first, left)?;
+        let two = side(blocks, pair.cid[1].as_ref(), pair.count[1], second, left)?;
+        let [mut i, mut j] = pair.next;
+        let mut down = None;
+        while down.is_none() && (i < one.len() || j < two.len()) {
+            *left = left.checked_sub(1).ok_or(Error::TooLarge)?;
+            let x = (i < one.len()).then(|| one.entry(i));
+            let y = (j < two.len()).then(|| two.entry(j));
+            let (name, change) = match (x, y) {
+                (Some(x), Some(y)) if x.name == y.name => {
+                    (i, j) = (i + 1, j + 1);
+                    if x.side() == y.side() { continue; }
+                    // Two directories: gone into, so an entry of one CID but another count is read and refused.
+                    if x.kind == Kind::Directory && y.kind == Kind::Directory {
+                        down = Some([x, y]);
+                        (x.name, None)
+                    } else {
+                        (x.name, Some(Change::Changed(x.side(), y.side())))
+                    }
+                }
+                (Some(x), Some(y)) if y.name < x.name => { j += 1; (y.name, Some(Change::Added(y.side()))) }
+                (Some(x), _) => { i += 1; (x.name, Some(Change::Removed(x.side()))) }
+                (None, Some(y)) => { j += 1; (y.name, Some(Change::Added(y.side()))) }
+                (None, None) => unreachable!(),
+            };
+            // The path: the directory's own, a `/` below the root, and the name.
+            let at = pair.path + usize::from(pair.path > 0);
+            let end = at + name.len();
+            if end > path.len() { return Err(Error::TooLarge); }
+            if pair.path > 0 { path[pair.path] = b'/'; }
+            path[at..end].copy_from_slice(name);
+            match (change, down) {
+                (Some(change), _) => { visit(&path[..end], change)?; changes += 1; }
+                (None, Some([x, y])) => {
+                    if depth == DEPTH { return Err(Error::Shape); }
+                    stack[depth - 1].next = [i, j];
+                    stack[depth] = Pair { cid: [Some(x.cid), Some(y.cid)], count: [Some(x.size), Some(y.size)], next: [0, 0], path: end };
+                }
+                (None, None) => unreachable!(),
+            }
+        }
+        if down.is_some() { depth += 1; } else { depth -= 1; }
+    }
+    Ok(changes)
 }

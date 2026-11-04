@@ -185,6 +185,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [309](309-copies-scrub-and-repair.md) | Copies, scrub and repair | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
 | [311](311-storefs-a-file-face.md) | A file face: trees as objects, and `storefs`, a VFS view of a named root | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
+| [311-STO-0039](311-STO-0039-two-roots-compared.md) | Two roots of a tree compared (`tree::diff`, `blocks tree diff`), and a name's kept versions read as `<name>@<version>` | `STO` | P3 | — | track B |
 | [312](312-the-minds-memory.md) | The Mind's memory: a journal, assertions and derived indexes | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (no personal data before it) | track B |
 | [313](313-persistent-actors.md) | Persistent actors: checkpoints of services with queues | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (for actors that hold personal data) | track B |
 | [314](314-models-mapped-from-the-store.md) | Models and large objects mapped from the store | main task, `STO` | P3 | [307](307-the-stores-own-partition.md) | track B |

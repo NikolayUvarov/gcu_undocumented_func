@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.27 (2026-11-04): the recovery key's calls on the wire, `blockstore.wit` 2.4, answered only through a client badged `BADGE_RECOVER`, which no program holds yet (308-STO-0028); 0.26 (2026-11-04): `storefs`'s two writers, a writer cut and its scopes run on the platform through `fsstep` (311-STO-0032, 0037); 0.25 (2026-10-31): assertions about objects, kept in a journal, `blocks assert` (312-STO-0038); 0.24 (2026-10-31): a scope of a store volume, `storefs`'s `scope` and `adopt`, host-tested (311-STO-0037); 0.23 (2026-10-31): a text index derived from a journal, `blocks index` (312-STO-0035); 0.22 (2026-10-30): a journal checked from its head, `blocks journal` (312-STO-0034); 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.28 (2026-11-04): two roots of a tree compared, `blocks tree diff`, and a name's kept versions read (311-STO-0039); 0.27 (2026-11-04): the recovery key's calls on the wire, `blockstore.wit` 2.4, answered only through a client badged `BADGE_RECOVER`, which no program holds yet (308-STO-0028); 0.26 (2026-11-04): `storefs`'s two writers, a writer cut and its scopes run on the platform through `fsstep` (311-STO-0032, 0037); 0.25 (2026-10-31): assertions about objects, kept in a journal, `blocks assert` (312-STO-0038); 0.24 (2026-10-31): a scope of a store volume, `storefs`'s `scope` and `adopt`, host-tested (311-STO-0037); 0.23 (2026-10-31): a text index derived from a journal, `blocks index` (312-STO-0035); 0.22 (2026-10-30): a journal checked from its head, `blocks journal` (312-STO-0034); 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -137,6 +137,50 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - a change read at an older version is refused as a conflict, and the name is unchanged;
   - once the leases have ended, a collection frees the refused tree's root, and every file is still read;
   - a move and two removals are published, and a directory with entries is not removed.
+
+## Two roots compared — host-tested (311-STO-0039)
+
+A name keeps its last 4 versions, each a whole tree (History, below). **`tree::diff`** (`libmind/src/tree.rs`) says where two of them differ, so a reader sees what a writer changed without reading both trees.
+
+- **What it is given:** two roots, each a directory or none (the empty tree), two buffers of a block, a buffer for the path and a number of steps.
+- **What it visits:** each path below the roots where the trees differ, in the order of the names' bytes, depth first:
+  - **added:** an entry only in the second tree;
+  - **removed:** an entry only in the first;
+  - **changed:** an entry in both that names another object, or has another size or kind (a file become a directory among them). Each side's kind, size (a file's bytes, a directory's entries) and CID are given.
+- **What it reads:**
+  - **an entry the same on both sides** (kind, size and CID) is not read: one CID is one tree (MC-4.2), so the work follows the changes, not the size of the trees;
+  - **a directory on one side only** is one change, its entries not listed;
+  - **a directory on both sides whose entries differ** is gone into. Each node read is checked against its CID, the schema, and the entry count its parent's entry gives, as `walk` checks them. An entry of one CID with two counts is so read and refused (`shape`);
+  - a node missing is `not-found`, a damaged one `corrupt`, a file's node where a directory belongs `shape`.
+- **Bounds:**
+  - a step is an entry compared or a node read, and past its steps it is `too-large`;
+  - more than 32 directories down is `shape`, as for `walk`;
+  - a path longer than its buffer is `too-large`. `PATH_MAX`, 32 names of 255 bytes and the `/` between them, holds every path.
+- **No heap and no system calls.** Each pair of directories is read again when the comparison comes back up to it, as `walk` reads its own, so it holds two blocks at a time.
+- **`blocks tree`:**
+  - `diff <name>[@<version>] <name>[@<version>]` prints a line for each change, then `<n> CHANGES FROM <name> VERSION <v> TO <name> VERSION <w>`:
+    - `ADDED <kind> <size> <cid> <path>`;
+    - `REMOVED <kind> <size> <cid> <path>`;
+    - `CHANGED <kind> <size> <cid> TO <kind> <size> <cid> <path>`.
+
+    Its steps are twice the store's bound on a walk, one bound for each tree;
+  - `ls` and `cat` read a version the name keeps as `<name>@<version>`, and `@0` is the empty tree. Store names never hold `@`, so the form cannot be mistaken for a name. A version no longer kept is refused: `blocks: tree <name>: no version <v> kept`;
+  - two different names can be compared too.
+- **What it does not give:**
+  - **no merge:** a comparison only reports changes. Nothing applies one tree's changes to another, and a conflict stays a conflict (MC-4.9);
+  - **no moves:** a moved entry is reported as removed at one path and added at another, since a tree keeps no identity of a path;
+  - **only kept versions:** a version older than the last 4 is gone, with whatever it alone retained.
+
+Evidence: host tests of the code, not a proof (MC-12.2). `tests/tree_host.rs`:
+- each kind of change, at the root and two levels down, and against a comparison of the trees' models;
+- the trees compared the other way round, each change turned over;
+- the empty tree against a tree, and a root against itself, with nothing read;
+- 300 pairs of random trees against their models: random edits at random depths, files and directories of the same names;
+- a subtree of 200 directories left unread beside one changed file: 10 blocks read, as many as beside a subtree of one;
+- refused: a missing node, a changed node, a file or a file's node as a root or as a directory, and an entry whose count disagrees with its node;
+- the steps counted to the last one, the depth to 32 directories, the path buffer to its last byte, and a full `PATH_MAX` path;
+- a visit's error ends the comparison and is its answer;
+- each of 12 changes of the logic made a test fail. A 13th, a resumed pair started again from its first entry, made the tests run without end rather than fail.
 
 ## Files over the store: `storefs` — host-tested, at boot since 311-KRN-0190; two writers, a writer cut and its scopes run in QEMU (311-STO-0032, 0037)
 

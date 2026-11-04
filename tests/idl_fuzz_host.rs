@@ -426,7 +426,7 @@ types! {
     gpio: Kind Pull Error Controller Pin;
     init: Error Service Boot Mode ModeState Planned Configuration StopReason;
     keyboard: Layout SwitchKey State;
-    keystore: Error Purpose Usage WifiNetwork;
+    keystore: Error Purpose Usage WifiNetwork KeyState;
     loader: Error Program Needs HelperKind;
     log: Error Entry State;
     net: Error Info Counters;
