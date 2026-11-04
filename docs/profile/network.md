@@ -540,3 +540,12 @@ It got there with five changes, each following the pinned `pci.c`/`mac.c`:
 - the halt interrupt the firmware enables is masked again.
 
 Evidence: that machine and build only (MC-12.1), plus every `rtw89` host test. Channel calibration, the WLAN endpoint, association and traffic are not reached by this diagnostic, so no network guarantee follows.
+
+**The first frames heard on the Ryzen (2026-11-04).** `rtw89_wifi` now ends with a receive-only listen. After the initial PHY it tunes one channel under a passive policy: the world power group, the lowest limits and no calibration authority. It opens the beacon filter as mac80211 does for a scan, and decodes beacons and probe responses. Every poll re-checks that the scheduler is zero and data DMA is stopped. On channel 1, in 20 s, it took:
+- 860 frames, none rejected;
+- 333 beacons and 2 probe responses from 4 access points;
+- then the same clean shutdown.
+
+Three register readbacks the chip does not give were dropped or narrowed to the bits it keeps, each written unread in Linux's `rtw8852b_rfk.c`.
+
+Evidence: that machine and build only (MC-12.1), plus every `rtw89` host test. Transmission, calibration, association and RF performance are not reached. They wait for the platform power policy (213-KRN-0122) and a country configuration (213-KRN-0123).

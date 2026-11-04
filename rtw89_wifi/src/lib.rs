@@ -48,6 +48,7 @@ pub(crate) mod report_tail;
 pub mod rxdck;
 
 pub mod btc_session;
+pub use btc_session::listen;
 
 pub mod btc_context;
 pub mod initial_phy;

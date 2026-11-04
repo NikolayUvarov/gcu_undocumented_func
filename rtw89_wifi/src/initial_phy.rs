@@ -98,12 +98,14 @@ pub fn diagnose<B: DeviceIo>(bus: &mut B, queue: &mut Queue<'_>, rings: &mut rx:
         })?.observations
     };
     // The consumed Ready and ended command engine cannot be recreated; only the final register tail and shutdown follow.
-    let reports = report_tail::configure(bus, queue, rings, receiving, None).map_err(|error| {
-        use report_tail::Stage;
-        let stage = match error.stage { Stage::Guard => "guard", Stage::Ppdu => "ppdu", Stage::Forward => "forward", Stage::Rts => "rts", Stage::Verify => "verify" };
-        fail(Cause::Reports { stage, cause: error.cause, report_stop: error.report_stop,
-            receive_stop: error.receive_stop, radio_stop: error.radio_stop, command_stop: error.command_stop })
-    })?;
+    let reports = report_tail::configure(bus, queue, rings, receiving, None).map_err(|error| fail(reports_cause(error)))?;
     observed.encoded_rts = reports.encoded_rts;
     Ok(observed)
+}
+
+pub(crate) fn reports_cause(error: report_tail::Failure) -> Cause {
+    use report_tail::Stage;
+    let stage = match error.stage { Stage::Guard => "guard", Stage::Ppdu => "ppdu", Stage::Forward => "forward", Stage::Rts => "rts", Stage::Verify => "verify" };
+    Cause::Reports { stage, cause: error.cause, report_stop: error.report_stop,
+        receive_stop: error.receive_stop, radio_stop: error.radio_stop, command_stop: error.command_stop }
 }
