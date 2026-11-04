@@ -1,6 +1,6 @@
 # 308-STO-0028 — A recovery key and a passphrase for the store's volume key
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** what `APP` and `KRN` agree to for the owner's input (below) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** the requests in [requests-KRN.md](requests-KRN.md) ("A store client that may recover the volume key") and [requests-APP.md](requests-APP.md) ("A recovery key shown once and typed back"), recorded 2026-11-04 after the proposals of 2026-10-30 went unanswered · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
 Split from [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done) (2026-10-30): the part that needs the owner, once the volume key is off the medium.
 
