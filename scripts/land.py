@@ -38,6 +38,17 @@ REQUEST = re.compile(r"^\*\*Ready:\*\*\s+`?([^`\s]+)`?\s+([0-9a-f]{7,40})\b", re
 ANSWER = re.compile(r"^\*\*(Landed|Returned|Superseded):\*\*\s+`?([^`\s]+\.md)`?", re.M)
 WITHDRAWN = re.compile(r"\*\*Withdraws:\*\*\s+`?(?:LANDING/)?([^`\s]+\.md)`?")
 SUMMARY = re.compile(r"^(PASS|FAIL)\s+(\d+)s\s+(.+?)\s*$", re.M)
+GROUP_LIMIT = 3300  # a group's own limit, inside Effector's 3500 s, so that one that hangs still leaves its logs (000-KRN-0210)
+
+
+def bounded(command, limit, group, mark):
+    """Shell text that runs `command` in a session of its own and ends every process in it after `limit` seconds. A
+    group ended so prints a FAIL row of its own; `mark` is the file that says it was ended."""
+    return (f"rm -f \"{mark}\"\nsetsid {command} & pid=$!\n"
+            f"setsid sh -c 'sleep {limit}; touch \"$1\"; /bin/kill -s TERM -- -\"$2\"; sleep 10; /bin/kill -s KILL -- -\"$2\"'"
+            f" limit \"{mark}\" $pid >/dev/null 2>&1 & dog=$!\n"
+            f"wait $pid\n/bin/kill -s KILL -- -$dog 2>/dev/null\n"
+            f"[ -e \"{mark}\" ] && echo \"FAIL   {limit}s    {group}\"\n")
 
 
 def git(*args, cwd=None, check=True):
@@ -594,10 +605,12 @@ class Gate:
             + (f"[ -x \"${{MIND_SSHD:-/usr/sbin/sshd}}\" ] || export MIND_SSHD=/bin/true\n" if part == "host" and group != "host tests" else "")
             # A build runs below the suites' priority: on a machine with two lanes it would starve the other's QEMU (2026-10-30, i9).
             + ("nice -n 10 " if group in {b for names in BUILDS.values() for b in names} else "")
-            + f"scripts/ci_local.sh --only {part} --group \"{'=' if self.exact else ''}{group}\" > \"$TMPDIR/land-group.out\" 2>&1\n"
-            f"grep -E '^(PASS|FAIL) +[0-9]+s ' \"$TMPDIR/land-group.out\"\n"
-            f"mkdir -p {logs}; cp \"$TMPDIR/land-group.out\" \"$TMPDIR\"/mind-ci-local/*.log {logs}/ 2>/dev/null\n"
-            f"if grep -q '^FAIL ' \"$TMPDIR/land-group.out\"; then f=$(ls \"$TMPDIR\"/mind-ci-local/01-*.log 2>/dev/null | head -1);"
+            + bounded(f"scripts/ci_local.sh --only {part} --group \"{'=' if self.exact else ''}{group}\" > \"$TMPDIR/land-group.out\" 2>&1",
+                      GROUP_LIMIT, group, "$TMPDIR/land-group.limit")
+            + f"grep -E '^(PASS|FAIL) +[0-9]+s ' \"$TMPDIR/land-group.out\"\n"
+            # The suites' own logs too: ci_local.sh copies them only when it reaches its end (000-KRN-0210).
+            f"mkdir -p {logs}; cp \"$TMPDIR/land-group.out\" \"$TMPDIR\"/mind-ci-local/*.log \"$TMPDIR\"/mind-core-*.log {logs}/ 2>/dev/null\n"
+            f"if grep -q '^FAIL ' \"$TMPDIR/land-group.out\" || [ -e \"$TMPDIR/land-group.limit\" ]; then f=$(ls \"$TMPDIR\"/mind-ci-local/01-*.log 2>/dev/null | head -1);"
             f" echo \"--- {logs}\"; tail -n 20 \"$f\" 2>/dev/null | cut -c1-300; fi\ntrue\n")
         key = f"land-{self.tag}-{name}-{n:02d}-" + hashlib.sha256(command.encode()).hexdigest()[:12]  # a changed command is a new operation
         status, code, output = self.submit(machine, command, 3500, f"{TRACK} landing gate {self.tag}: {group} on {name}", key)
