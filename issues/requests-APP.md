@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered, 2026-10-31) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (one waiting to be numbered: STO's recovery key shown and typed back, 2026-11-04) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -70,3 +70,13 @@ Numbered on 2026-10-31 as [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-
 ## The shell puts a running program's question about a flow to the user (for 000-NET-0049)
 
 Numbered on 2026-10-31 as [000-APP-0120](../issues-done/000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done).
+
+## A recovery key shown once and typed back, and a store opened with one (for 308-STO-0028)
+
+**Asked by:** STO, 2026-11-04 (proposed in `ALL/2026-10-30T1846Z-STO-…` and `ALL/2026-10-30T1954Z-STO-…` on `internal-dev-messages`, not answered yet). **Blocked by:** the kernel track's client badged `BADGE_RECOVER` ([requests-KRN.md](requests-KRN.md), "A store client that may recover the volume key"), and `blockstore.wit` 2.4 (STO). **Constitution:** MC-6.8, MC-9.6, MC-11.9. **Blocks:** [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md).
+
+- **Why a program of yours:** the recovery key must reach no log and no serial line. `blocks` prints to the console, which the tests read on serial, so it cannot show the key.
+- **The ask, a program with a window of its own (as `wifi` asks for a passphrase without echo), or a page of `wm`'s settings, as you prefer:**
+  - "make a recovery key": `recovery-new`, the key shown once with a request to write it down, then asked for again and given to `recovery-keep`. Until `recovery-keep`, the older keys still open the medium;
+  - "open with a recovery key", for a store not mounted with `key`: the key typed without echo, checked with `mind::blockstore::recovery_parse` (a typo is told before the store is asked), then `recover`.
+- **Without a screen,** for the tests and the MacBook Pro: `--key-file <path>`, as `wifi join --passphrase-file` does (550-APP-0078). The file's first line names the medium's id.

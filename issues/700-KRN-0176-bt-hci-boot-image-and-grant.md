@@ -1,6 +1,6 @@
 # 700-KRN-0176 — The boot image `bt_hci` and init's grant for a USB Bluetooth controller (ABI 25, handoff 25)
 
-**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (2026-10-30: back in the branch with ABI 25, together with 262-KRN-0178) · **Blocked by:** — (DRV's fix is [700-DRV-0044](../issues-done/700-DRV-0044-usb-hosts-buffer-table-sized-by-the-highest-badge.done), in `main`) · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
+**Type:** kernel (ABI, `init`, the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (in `main` since round 50; the DEXP's run, BLT's, left) · **Blocked by:** — (DRV's fix is [700-DRV-0044](../issues-done/700-DRV-0044-usb-hosts-buffer-table-sized-by-the-highest-badge.done), in `main`) · **Main task:** [700](700-bluetooth.md) · **Roadmap:** track A (drivers) · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.1, MC-12.4
 
 **Asked by:** the Bluetooth track (`BLT`) on 2026-10-28, for [700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), in `KRN/2026-10-28T0329Z-BLT-the-boot-image-bt-hci-and-its-grant.md` on `internal-dev-messages`. The maintainer's order for the DEXP: Wi-Fi, Ethernet, the screen, then Bluetooth "to connect devices".
 

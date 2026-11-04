@@ -54,7 +54,11 @@ A program that reaches a host the user names only when it runs (`get URL`, a mai
 
   A name is looked up when the answer comes, as for a line.
 - **A question no one answers in 60 s is refused** (`NO ANSWER IN 60 S, REFUSED`), and one whose program ended leaves the list (`ITS PROGRAM ENDED`).
-- **Not done:** the shell putting the question to the user and giving the answer (000-APP-0120). Until it does, every question ends in one of those two ways.
+- **The shell puts the question to the user** (000-APP-0120). It asks the broker for questions every 500 ms and shows the oldest of a running program on the console that program was started from, or in the shell's window beside a window manager it started.
+  - `N`, Esc or Enter refuse; `O` allows once, `S` for the session, `A` always.
+  - Any other key is held back while the question shows, and a key in its first 500 ms does not answer it.
+  - The reason is shown with every control character as `?`.
+  - A question whose program ended, or that is refused at 60 s, is taken down with a line saying so.
 
 ### Term and volume
 
@@ -111,12 +115,18 @@ In the same suite (750-NET-0014), on x86 and aarch64:
 
 A connection held past the default term (an hour) is not run.
 
-In the `net` suite's browsing check (000-NET-0049), on x86 and aarch64:
+In the `net` suite's browsing check (000-NET-0049), on x86 and aarch64, before the shell asked:
 - `netcheck` asked for a port its grant does not name; the broker logged the question with the program and its PID;
 - it ended without an answer, and the question left the broker's list;
 - asked again and left unanswered, it was refused at 60 s.
 
-The answers `once`, `session` and `always` wait for the shell's part (000-APP-0120). Until then they are only in the code and its host tests.
+With the shell's part (000-APP-0120, `main` 9a620b0e, round 73), the same check now answers it every way, on x86 and aarch64:
+- the question is shown on the program's console, and taken down at the program's end;
+- `N` refuses it;
+- `O` allows one connection, and the next of the same run is `Denied`;
+- `S` allows the rest of the run;
+- no answer is refused at 60 s;
+- `A` writes `netcheck 11.0.2.80 tcp 81` to the policy, and a new run reaches the host with no question.
 
 In the `tls` suite's raw-image check, a change is still there after a reboot.
 
