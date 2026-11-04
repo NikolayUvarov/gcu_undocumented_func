@@ -11,6 +11,7 @@ ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"
 wpa = { path = "../wpa" } # the remembered Wi-Fi networks' file and each handshake's keys (550-NET-0024)
 ssh = { path = "../ssh", default-features = false } # what an SSH login signs, checked before signing (351-NET-0027)
 chacha20poly1305 = { version = "0.10", default-features = false } # programs' secrets sealed in their files (000-NET-0045)
+passlock = { path = "../passlock" } # the device key sealed under the owner's passphrase where no TPM seals it (308-NET-0055)
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] } # used by ed25519-dalek; no SHA-NI: the target has no SSE in its ABI
 
 [profile.release]
