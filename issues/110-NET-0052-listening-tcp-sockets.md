@@ -71,6 +71,24 @@
 
 **Landed (2026-11-04).** Round 78's gate (candidate 6fc5b253, `main` e28cfe4d) passed `listen_check` in both network groups, x86 on x32-2 and aarch64 on pcu, and the IDL fuzzer with `socket.wit` 2.9's types. The host tests of the backlog and the half-open limit are still to come, so the issue stays open.
 
+2026-11-04, the host tests of the backlog and the half-open limit:
+- **`netstack/src/listen.rs`** holds a listening port's sockets, taken out of `main.rs` as they were, so that a host test runs the same code:
+  - `Listener::new`, `turn` and `handle`;
+  - `admit`: the port, the backlog and `LISTENING_MAX`.
+- **`tests/listen_host.rs`** (5 tests, a `[[test]]` of `tests/network_budget`) runs it on smoltcp's own TCP. The wire is a loopback that can lose a client's acknowledgements. It checks that:
+  - a backlog of two holds two connections, a third peer is reset, and one accepted leaves room for one more;
+  - a peer outside the networks is reset, never ready, and the backlog is filled again;
+  - two connections left half open hold the backlog, a third peer is reset, and they go between 9.5 and 10.5 s, after which the port listens again;
+  - the bounds hold: port 0, a backlog of 0 or 17, a port taken, and the 32 listening sockets of every port together;
+  - a listener that cannot listen leaves nothing in the set.
+- **Each test fails when its rule is broken.** Three changes to `listen.rs` were tried, and each one failed one test:
+  - no reset of a peer outside the networks;
+  - no timeout of a half-open connection;
+  - the ready connections not counted in the backlog.
+- **Docs:** `docs/network/policy.md`, what is tested.
+
+Every acceptance criterion is met once this lands; the "not done" points above stay as limits of the design.
+
 ## Related
 
 [110](110-our-own-web-server.md), [112](112-our-own-ssh-server.md), [101](../issues-done/101-network-stack.done), [102](../issues-done/102-network-policy-broker.done).

@@ -54,6 +54,14 @@ A server on MIND Core (a web server, an SSH server) listens through such a grant
 - **The audit:**
   - the broker logs each port a grant may listen on: `[NETPOLICY] GRANT n TO program: LISTENS ON TCP p FROM A.B.C.D/BITS`;
   - the stack logs each listening socket (`PORT p LISTENS FOR PID …`) and each connection it accepts (`PORT p ACCEPTED A.B.C.D:PORT FOR PID …`).
+- **Tested:**
+  - **in QEMU** (the `net` suite's `listen_check`, x86 and aarch64): a connection through QEMU's forwarded port accepted and charged, a port no line names denied, a peer outside the networks reset;
+  - **on the host** (`tests/listen_host.rs`, smoltcp's own TCP over a loopback wire that can lose a client's acknowledgements):
+    - a backlog of two holds two connections and a third peer is reset;
+    - a peer outside the networks is reset and never ready;
+    - two connections left half open hold the backlog until they go after 10 s;
+    - the bounds on the port, the backlog and the listening sockets.
+  - Not on a machine (MC-12.1).
 
 ### The time servers
 
