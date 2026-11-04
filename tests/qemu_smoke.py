@@ -2553,8 +2553,13 @@ def storefs_check(vm):
     listing = vm.command("ls notes:docs")
     require(listing, "a.txt")
     require(listing, "1 FILES, 15 BYTES")
-    # find is a console program: the shell lends it no storefs client yet (APP's part), so mind::fs asks nobody.
-    require(vm.command("find notes:"), "FIND: notes:: NOTFOUND")
+    # 311-APP-0121: a program whose arguments name a store volume (find, grep: no request for files) gets a read-only
+    # scope of that volume from the shell, and reads it through mind::fs as before; another store volume it does not reach.
+    found = vm.command("find notes:")
+    require_all(found, "notes:docs/", "notes:docs/a.txt")
+    require_all(vm.command("grep -r store notes:"), "notes:docs/a.txt", "from the store")
+    require(vm.command("find other:"), "FIND: other:: NOTFOUND")  # none named that storefs has: no scope, nobody asked
+    assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
     # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
     # scope ends with the program.
@@ -2575,13 +2580,14 @@ def storefs_check(vm):
     require(vm.expect("EXITED. SHELL RESUMED."), "[EDIT] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     scopes = vm.service_logs("storefs", "ENDED")
-    made = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes)
-    assert len(made) == 2 and f"[STOREFS] SCOPE {made[0]} ENDED" in scopes, scopes[-1500:]
+    made = list(re.finditer(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes))
+    assert len(made) == 2 and f"[STOREFS] SCOPE {made[0][1]} ENDED" in scopes[made[0].end():], scopes[-1500:]  # after it was made
     require(vm.command("rm notes:docs/b.txt"), "OK")
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
-          "vfs_server's volumes as before; a program without storefs's client gets NotFound; edit on a store volume wrote "
+          "vfs_server's volumes as before; find and grep read the store volume their arguments name through a read-only scope, "
+          "and one storefs has not they do not find; edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 

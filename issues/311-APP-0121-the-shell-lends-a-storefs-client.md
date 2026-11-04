@@ -1,6 +1,6 @@
 # 311-APP-0121 — The shell lends programs a `storefs` client that does not write, and a scope for `REQUEST_FILE`
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`REQUEST_FILE`'s scope checked; the other two parts wait for KRN) · **Blocked by:** for a program that only reads, and for `REQUEST_FILES`, KRN's answer to `KRN/2026-11-03T…-APP-storefs-for-programs-…`: the loader's plain `storefs` client, and `mind::fs`'s routing (311-KRN-0190's) · **Main task:** [311](311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-3.1, MC-3.4
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`REQUEST_FILE`'s scope and the read-only scope of a named volume written; `REQUEST_FILES` waits for KRN's routing) · **Blocked by:** for `REQUEST_FILES`, `mind::fs::volumes::route` sending store volumes to `SLOT_STOREFS` (KRN, `APP/2026-11-04T0340Z-KRN-…`: KRN makes it) · **Main task:** [311](311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-3.1, MC-3.4
 
 **Recorded by:** the tools track, 2026-10-31, from KRN's request in `issues/requests-APP.md` (2026-10-30, for the storage track's 311-STO-0032).
 
@@ -15,7 +15,7 @@
 ## Plan
 
 Once the storage track's part is there:
-- **A client that does not write,** in the program's `SLOT_STOREFS`, for every program that reads files, as `vfs_server`'s plain client reaches every program.
+- **A client that does not write,** in the program's `SLOT_STOREFS`, for every program that reads files. Changed with KRN (2026-11-04): a read-only scope of the store volume the program's arguments name, not a client of every volume.
 - **For `REQUEST_FILE` on a path on a store volume,** a scope of that directory in `SLOT_FILE`, writable where the user may write, as for a FAT volume.
 - **The script word:** `file` and `files` cover them, as for the other volumes.
 
@@ -29,6 +29,25 @@ Once the storage track's part is there:
 - **The other two parts meet 311-KRN-0190's code, so they are asked of KRN:**
   - a plain, read-only client for every program, from the loader as for `vfs_server`. The shell's `BADGE_USER` client has no `CAP_BADGE` and cannot mint one;
   - for `REQUEST_FILES`, a copy of the shell's client, with `mind::fs::volumes::route` sending store volumes to `SLOT_STOREFS` and not to the lent client.
+
+## Progress (2026-11-04): KRN's answer and the shell's two lends
+
+**KRN's answer** (`APP/2026-11-04T0340Z-KRN-storefs-for-programs-part-2-is-mine-part-1-another-way.md`):
+- **No plain `storefs` client for every program.** The loader starts the programs of services and of the Effector agent too, and a store volume holds the user's own documents (MC-3.1, MC-3.3, MC-3.9). KRN puts the trade-off to the maintainer as well.
+- **Instead,** the shell lends a read-only scope of what the user named.
+- **KRN makes `route`'s change** for a lent client.
+
+**Written in the shell** (`shell/src/named.rs`, `main.rs`):
+- **For a program without a request for files** whose arguments name a path on a store volume (`find notes:`, `grep -r word notes:`): a read-only scope of that volume's root, lent in `SLOT_STOREFS`.
+  - Its paths stay as they are: `mind::fs` already sends a store volume to `SLOT_STOREFS`, and the scope's root is the volume's root.
+  - A URL is not taken for a path. A volume `storefs` does not have (`ask:…`) gets no scope, unsaid.
+  - In a script, only with `file` or `files` declared.
+- **For `REQUEST_FILES`:** a copy of the shell's `BADGE_USER` client in `SLOT_STOREFS`. It reaches the store once KRN's `route` change is in; until then such a program finds no store volume, as before.
+- **Bounds:** `storefs` keeps 8 scopes a client at once. A scope of an ended program ends when the shell next makes one, so this bounds the programs running at once with a scope.
+
+**Tests:**
+- a host test of the volume named;
+- the `shell` suite's `storefs_check`: `find notes:` lists the volume's files, `grep -r store notes:` finds the line, `find other:` (no such volume) finds nothing, and `storefs` logs the scope `READ-ONLY`.
 
 ## Acceptance criteria
 
