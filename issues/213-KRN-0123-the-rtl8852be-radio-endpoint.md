@@ -10,13 +10,17 @@
 
 1. **A server endpoint** in `SLOT_SERVICE` for the selected RTL8852BE, and its client lent to `wlan` only, as for `bcm_wifi`. The MacBook Pro's BCM4331 and QEMU's `wlansim` keep their selection and authority; a running radio is not replaced because a second PCI device exists.
 2. **The driver's slots 9 and 10** stay empty for its deferred requests, or the drivers track changes the contract first. The log, BAR, DMA and `vfs` grants stay as 0114 has them.
-3. **A bounded country and channel configuration** for the radio, apart from 0122's platform policy: missing or invalid input is an unavailable radio, never a default country. Its interface follows the network track's country selection (`requests-NET.md`) and the tools track's selector (`requests-APP.md`); this task carries it to the driver, it does not define the catalogue.
+3. **The country comes from the station, not from `init`** (the maintainer, 2026-11-04: "different countries, not only one").
+   - Any country of the regulatory catalogue (wireless-regdb, 181 and `00`), as 550-NET-0035 plans: the user chooses it (`wifi country XX`, `wm`'s Settings, 550-APP-0082), `keystore` keeps it, and `wlan` sends the radio its limits with `wlanhw.wit` 1.2 `set-country`.
+   - No country is a default: until one is applied the radio sends nothing. `UZ` is set once on the maintainer's machines, not in the code.
+   - This task gives `rtw89_wifi` the `wlanhw` endpoint that call reaches. The driver answers `set-country` (DRV's part). `init` carries no country.
+   - Only 213-KRN-0122's platform result reaches the driver from `init`.
 4. **Only when admitted.** The endpoint is given when the driver says its datapath is admitted; a running diagnostic is not readiness. At first one admitted 2.4 GHz / 20 MHz channel, other channels refused.
 5. **Restart** keeps retained DMA and the verified non-mastering restart of 0114; no grant here carries platform authority.
 
 ## Acceptance criteria
 
-- [ ] Fixtures or QEMU cases: no Realtek device; a missing or invalid configuration; the driver refusing to start; exactly one `wlanhw` client, held by `wlan`; the BCM4331 and `wlansim` routes unchanged.
+- [ ] Fixtures or QEMU cases: no Realtek device; no country applied (nothing sent); the driver refusing to start; exactly one `wlanhw` client, held by `wlan`; the BCM4331 and `wlansim` routes unchanged.
 - [ ] On the Intel MacBook Pro and the Ryzen, each separately: association, DHCP and ping under test load, recorded per machine, before a physical claim is made.
 
 ## Related
