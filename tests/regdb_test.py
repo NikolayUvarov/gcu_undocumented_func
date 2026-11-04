@@ -8,7 +8,7 @@ import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("regdb", ROOT / "scripts/rtw89_regdb.py")
+SPEC = importlib.util.spec_from_file_location("regdb", ROOT / "scripts/regdb.py")
 regdb = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = regdb
 SPEC.loader.exec_module(regdb)
