@@ -5,16 +5,56 @@
 //! store and checked against its CID; then the copy's name is moved to the root by its own compare-and-swap. A name
 //! whose copy did not take a step is behind, and is brought in step between requests. A block one medium finds damaged
 //! is repaired from the other, on a read and by the scrub. Only the volume's names are copied: a memory domain's records
-//! are sealed under the domain's key, which the copy does not hold. Nothing here depends on the kernel: the host tests
+//! are sealed under the domain's key, which the copy does not hold. A name only the copy holds is listed with how each
+//! stands, and brought back into the store from it, its blocks checked against their CIDs; beside a store that did not
+//! mount, the copy is read and nothing of it written (309-STO-0041). Nothing here depends on the kernel: the host tests
 //! build it with store.rs.
 use crate::cid::Cid;
 use crate::dag;
 use crate::store::{valid_name, Device, Error, Scrubbed, Store, Update, BLOCK_MAX, COMMIT_MAX, NAME_MAX, VOLUME};
 
+/// The copy's medium, written only while it is open: shut beside a store that did not mount, so that the copy's mount
+/// and every request leave it as it is (309-STO-0041).
+pub struct Gate<C> { medium: C, open: bool }
+impl<C: Device> Gate<C> {
+    /// `medium`, open to writes or shut.
+    pub fn new(medium: C, open: bool) -> Self { Gate { medium, open } }
+}
+impl<C: Device> Device for Gate<C> {
+    fn sectors(&self) -> u64 { self.medium.sectors() }
+    fn writable(&self) -> bool { self.open && self.medium.writable() }
+    fn read(&mut self, lba: u64, out: &mut [u8]) -> bool { self.medium.read(lba, out) }
+    fn write(&mut self, lba: u64, data: &[u8]) -> bool { self.open && self.medium.write(lba, data) }
+    fn flush(&mut self) -> bool { self.open && self.medium.flush() }
+}
+// The tests reach the simulated medium through the gate.
+#[cfg(test)]
+impl<C> core::ops::Deref for Gate<C> { type Target = C; fn deref(&self) -> &C { &self.medium } }
+#[cfg(test)]
+impl<C> core::ops::DerefMut for Gate<C> { fn deref_mut(&mut self) -> &mut C { &mut self.medium } }
+
+/// How a name the copy holds with a root stands against the store (309-STO-0041): the store's current version has the
+/// same root; another root, or a removal; the store does not hold the name at all; or the store is not mounted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Standing { InStep, Behind, OnlyOnCopy, Unknown }
+
+/// A name the copy holds with a root: its version and root there, and how it stands against the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Held { pub version: u64, pub root: Cid, pub standing: Standing }
+
+/// What a rebuild found or did (309-STO-0041): the copy's root it walked; the name's version in the store (0: nothing
+/// published); the blocks the walk visited, those the store lacked when visited, and those put there; the block the walk
+/// stopped at and why (Incomplete: the copy lacks it; Corrupt: it holds it damaged); and whether both media hold every
+/// block of the name once it is published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rebuilt { pub root: Cid, pub version: u64, pub visited: u32, pub lacked: u32, pub put: u32, pub stopped: Option<(Cid, Error)>, pub copied: bool }
+
 /// Names the list of those behind holds; past them, every name of the copy is compared again once the list is empty.
 pub const BEHIND: usize = 64;
 /// Damaged blocks one scrub step repairs at most; the next pass finds the others again.
 pub const REPAIRS: usize = 32;
+/// The copy's names one page lists at most (309-STO-0041).
+pub const PAGE: usize = 16;
 
 /// The store's own medium, or its copy's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +87,10 @@ pub enum Event<'n> {
     NotRepaired { cid: Cid, on: Medium, error: Error },
     /// The collection after repairs on `on`: the blocks it freed, or why it did not run.
     Collected { on: Medium, freed: Result<u32, Error> },
+    /// A name only the copy held, brought back into the store: its version and root there, and the blocks put there.
+    Rebuilt { name: &'n [u8], version: u64, root: Cid, put: u32 },
+    /// A name not brought back: why, and the block the walk stopped at, when it stopped at one.
+    NotRebuilt { name: &'n [u8], error: Error, at: Option<Cid> },
 }
 
 /// What the copy holds: its medium's sectors and those used, its blocks, the names it holds a root of, the names behind
@@ -89,7 +133,7 @@ enum Followed { InStep, Copied { version: u64, blocks: u32 }, Removed { version:
 
 /// The copy on the second medium, beside the store it copies.
 pub struct Copies<'a, C: Device> {
-    copy: Store<'a, C>,
+    copy: Store<'a, Gate<C>>,
     // A block on its way from one medium to the other.
     block: &'a mut [u8; BLOCK_MAX],
     behind: Behind,
@@ -113,17 +157,26 @@ fn in_volume<'s, D: Device, T>(main: &mut Store<'s, D>, f: impl FnOnce(&mut Stor
 }
 
 impl<'a, C: Device> Copies<'a, C> {
-    /// The copy mounted on its medium, beside `main`: each name it holds with a root is compared with the store's. The
-    /// same root is in step; another root, or a removal in the store, is behind; a name the store does not hold at all
-    /// is left as it is, and logged, so a store that came back blank never empties its copy. If the copy's mount found
-    /// records corrupt, every name is behind, so its blocks are looked at again, and the copy's next pass ends with a
-    /// collection that frees the damaged records.
-    pub fn new<D: Device>(copy: Store<'a, C>, block: &'a mut [u8; BLOCK_MAX], main: &mut Store<D>, log: Log) -> Self {
+    /// The copy mounted on its medium, through a gate open beside a store that mounted (`main`) and shut beside one that
+    /// did not (none). Beside `main`, each name it holds with a root is compared with the store's. The same root is in
+    /// step; another root, or a removal in the store, is behind; a name the store does not hold at all is left as it is,
+    /// and logged, so a store that came back blank never empties its copy. If the copy's mount found records corrupt,
+    /// every name is behind, so its blocks are looked at again, and the copy's next pass ends with a collection that
+    /// frees the damaged records. Beside none, its gate is shut whatever it was: the copy is read until `attach`.
+    pub fn new<D: Device>(mut copy: Store<'a, Gate<C>>, block: &'a mut [u8; BLOCK_MAX], main: Option<&mut Store<D>>, log: Log) -> Self {
+        if main.is_none() { copy.device().open = false; }
         let behind = Behind { names: [Name { bytes: [0; NAME_MAX], len: 0 }; BEHIND], count: 0, rescan: false };
         let suspect = copy.stats().corrupt > 0;
         let mut copies = Copies { copy, block, behind, repaired: [0; 2], collect: [false, suspect], scrubbing: Medium::Store };
-        in_volume(main, |main| copies.compare(main, &mut *log));
+        if let Some(main) = main { in_volume(main, |main| copies.compare(main, &mut *log)); }
         copies
+    }
+
+    /// The store mounted after all, by a recovery (309-STO-0041): the copy's gate opens, and its names are compared with
+    /// the store's as a mount compares them, so the copy is kept in step from then on.
+    pub fn attach<D: Device>(&mut self, main: &mut Store<D>, log: Log) {
+        self.copy.device().open = true;
+        in_volume(main, |main| self.compare(main, &mut *log));
     }
 
     // Compares every name the copy holds with a root with the store's (main in the volume's domain).
@@ -157,7 +210,88 @@ impl<'a, C: Device> Copies<'a, C> {
 
     /// The copy's own store: what it holds, and its medium.
     #[cfg(test)]
-    pub fn copy_store(&mut self) -> &mut Store<'a, C> { &mut self.copy }
+    pub fn copy_store(&mut self) -> &mut Store<'a, Gate<C>> { &mut self.copy }
+
+    /// A page of the copy's names: PAGE at most after `after` (empty: from the first), in byte order, each with its
+    /// version and root there and how it stands against the store (`main` in the volume's domain), unknown beside a store
+    /// that did not mount (309-STO-0041). Error: invalid (`after` holds a byte no name has; `main` in a memory domain).
+    pub fn names<'s, D: Device>(&'s self, main: Option<&'s Store<D>>, after: &[u8]) -> Result<impl Iterator<Item = (&'s [u8], Held)> + 's, Error> {
+        if main.is_some_and(|m| m.domain() != VOLUME) { return Err(Error::Invalid); }
+        let copy = &self.copy;
+        Ok(copy.names(b"", after)?.take(PAGE).map(move |(name, version, root)| (name, Held { version, root, standing: main.map_or(Standing::Unknown, |m| standing(copy, m, name)) })))
+    }
+
+    /// Brings a name only the copy holds back into the store, at the copy's current version (309-STO-0041). The copy's
+    /// root is walked over the copy, within its walk's steps; each block the store lacks is read from the copy, checked
+    /// against its CID, and put in the store. Then the store's name is published at that root by compare-and-swap from
+    /// version 0, charged to the owner the copy's version records: in step with its copy, so nothing more is written
+    /// there, unless the copy lacks a block the store held already, which puts the name behind. With `check` nothing is
+    /// put or published, and the reply counts what a rebuild would visit and put. A walk that meets a block the copy
+    /// lacks, or holds damaged, stops there and publishes nothing; the blocks it put are retained by nothing, so a
+    /// collection frees them once their lease ends. Beside a store that did not mount (`main` none), only a check is
+    /// answered, the store lacking every block. A rebuild, not a check, is logged. Errors: invalid (a name no store
+    /// takes; `main` in a memory domain), not-found (the copy holds no root of it), conflict (the store holds the name,
+    /// or a removal of it), device (no store to rebuild into), and what the store's put or publication answers.
+    pub fn rebuild<D: Device>(&mut self, main: Option<&mut Store<D>>, name: &[u8], check: bool, log: Log) -> Result<Rebuilt, Error> {
+        let done = self.rebuilding(main, name, check);
+        if check { return done; }
+        match done {
+            Ok(Rebuilt { stopped: Some((at, error)), .. }) => log(Event::NotRebuilt { name, error, at: Some(at) }),
+            Ok(r) => log(Event::Rebuilt { name, version: r.version, root: r.root, put: r.put }),
+            Err(error) => log(Event::NotRebuilt { name, error, at: None }),
+        }
+        done
+    }
+
+    fn rebuilding<D: Device>(&mut self, mut main: Option<&mut Store<D>>, name: &[u8], check: bool) -> Result<Rebuilt, Error> {
+        if !valid_name(name) { return Err(Error::Invalid); }
+        let root = self.copy.snapshot(name)?.1.ok_or(Error::NotFound)?;
+        match main.as_deref() {
+            Some(m) if m.domain() != VOLUME => return Err(Error::Invalid),
+            // A name the store holds is never overwritten, and a removal never undone.
+            Some(m) if standing(&self.copy, m, name) != Standing::OnlyOnCopy => return Err(Error::Conflict),
+            None if !check => return Err(Error::Device),
+            _ => {}
+        }
+        let mut done = Rebuilt { root, version: 0, visited: 0, lacked: 0, put: 0, stopped: None, copied: false };
+        let (copy, block) = (&mut self.copy, &mut *self.block);
+        let (mut failed, mut lacks) = (None, false);
+        let walked = copy.walk(&root, |copy, cid| {
+            done.visited += 1;
+            if main.as_deref().is_some_and(|m| m.has(cid)) {
+                if !copy.has(cid) { lacks = true; }
+                return Ok(());
+            }
+            done.lacked += 1;
+            let len = match copy.get(cid, &mut block[..]) {
+                Ok(len) => len,
+                Err(e @ (Error::NotFound | Error::Corrupt)) => {
+                    done.stopped = Some((*cid, if e == Error::NotFound { Error::Incomplete } else { Error::Corrupt }));
+                    return Err(dag::Error::Store);
+                }
+                Err(e) => { failed = Some(e); return Err(dag::Error::Store); }
+            };
+            let Some(m) = main.as_deref_mut().filter(|_| !check) else { return Ok(()) };
+            match m.put(cid.codec(), &block[..len]) {
+                Ok(_) => { done.put += 1; Ok(()) }
+                Err(e) => { failed = Some(e); Err(dag::Error::Store) }
+            }
+        });
+        if let Some(e) = failed { return Err(e); }
+        match walked {
+            _ if done.stopped.is_some() => {}
+            Ok(_) => {}
+            // The walk's own read of a node: where it stopped is the copy's to say.
+            Err(e @ (Error::Incomplete | Error::Corrupt)) => done.stopped = Some((self.copy.unread().ok_or(e)?, e)),
+            Err(e) => return Err(e),
+        }
+        let Some(main) = main.filter(|_| !check && done.stopped.is_none()) else { return Ok(done) };
+        let owner = self.copy.history(name).ok().and_then(|v| v.first()).map_or(0, |v| v.owner);
+        done.version = main.publish(name, 0, &root, owner)?;
+        if lacks { self.behind.push(name) } else { self.behind.remove(name) }
+        done.copied = !lacks;
+        Ok(done)
+    }
 
     // Whether a change of `name` in main's domain is followed on the copy.
     fn follows<D: Device>(&self, main: &Store<D>, name: &[u8]) -> bool { main.domain() == VOLUME && self.holds(name) }
@@ -407,6 +541,15 @@ fn need<C: Device, D: Device>(copy: &Store<C>, main: &Store<D>, name: &[u8]) -> 
         (None, Some(_)) => Need::Remove { held },
         (Some(root), at) => Need::Copy { root, held, at },
     })
+}
+
+// How a name the copy holds with a root stands against the store (main in the volume's domain), as a mount compares it.
+fn standing<C: Device, D: Device>(copy: &Store<C>, main: &Store<D>, name: &[u8]) -> Standing {
+    match need(copy, main, name) {
+        Ok(Need::OnlyOnCopy { .. }) => Standing::OnlyOnCopy,
+        Ok(Need::Copy { root, at: Some(at), .. }) if root == at => Standing::InStep,
+        _ => Standing::Behind,
+    }
 }
 
 // The badge the store's latest version of `name` was written by: the copy's version is charged to the same owner.

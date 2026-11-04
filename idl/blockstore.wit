@@ -13,15 +13,17 @@
 /// A volume key kept off the medium is also sealed under recovery keys its owner holds, which open the medium on another
 /// machine; they are made, kept, forgotten and used only through a client of their own (308-STO-0028, 2.4).
 /// Chosen names have a copy on a second medium, a store of its own that each of their changes reaches after the store,
-/// and a block one medium finds damaged is repaired from the other (309-STO-0040, 2.5).
-package mind:blockstore@2.5.0;
+/// and a block one medium finds damaged is repaired from the other (309-STO-0040, 2.5). The copy's names are listed with how
+/// each stands against the store, and a name only the copy holds is brought back into the store from it (309-STO-0041, 2.6).
+package mind:blockstore@2.6.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
     /// (`mind::blockstore`: put, collect and scrub need BADGE_PUT; get, has, resolve, history, snapshot and names
     /// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any;
     /// recovery-new, recovery-keep, recovery-forget and recover BADGE_RECOVER, never through a domain's client;
-    /// recoveries any or BADGE_RECOVER; copy BADGE_PUBLISH, never through a domain's client, and copy-stat any (2.5)).
+    /// recoveries any or BADGE_RECOVER; copy BADGE_PUBLISH, never through a domain's client, and copy-stat any (2.5);
+    /// copy-names BADGE_GET and rebuild BADGE_PUBLISH, neither through a domain's client (2.6)).
     /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
     /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
     /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
@@ -91,6 +93,25 @@ interface blockstore {
     /// it holds a root of, the names behind on it, and the blocks repaired since the mount: of the store from the copy
     /// (`from-copy`) and of the copy from the store (`from-store`).
     record copy-stats { sectors: u64, used: u64, blocks: u32, names: u32, behind: u32, from-copy: u32, from-store: u32 }
+
+    /// How a name the copy holds with a root stands against the store (2.6): `in-step`, the store's current version has the
+    /// same root; `behind`, another root or a removal there; `only-on-copy`, the store does not hold the name at all;
+    /// `unknown`, the store is not mounted.
+    enum standing { in-step, behind, only-on-copy, unknown }
+
+    /// A name the copy holds with a root: the copy's version of it and its root (36 bytes), and how it stands (2.6).
+    record copy-name { name: string<64>, version: u64, root: list<u8, 36>, standing: standing }
+
+    /// How a rebuild's walk of the copy's root ended (2.6): every block it needed read whole (`whole`), or stopped at a
+    /// block the copy lacks (`incomplete`) or holds damaged (`corrupt`).
+    enum walked { whole, incomplete, corrupt }
+
+    /// A rebuild (2.6): the name's version in the store (0: nothing was published, with `check` or a walk that stopped);
+    /// the blocks the walk of the copy's root visited (a block the object holds twice, twice), those the store lacked when
+    /// visited, and those put there (none with `check`); how far the publication reached (`copied` when both media hold
+    /// every block of the name; else, and with `check`, the store's own class); how the walk ended, and the CID it stopped
+    /// at (36 bytes; empty when whole).
+    record rebuilt { version: u64, visited: u32, lacked: u32, put: u32, durability: durability, walked: walked, at: list<u8, 36> }
 
     /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
     /// stored is not written again. How far it reached is the medium's, in `stat`: a put is retained only by its lease
@@ -207,6 +228,31 @@ interface blockstore {
     /// store does not take; and through a domain's client, rights: a domain's records are sealed under its key, which the
     /// copy does not hold), not-found (on: no live version in the store; off: none on the copy), full, quota, device.
     copy: func(name: string<64>, on: bool) -> result<durability, error>;
-    /// What the copy holds (2.5). Error: no-copy.
+    /// What the copy holds (2.5), also while it is read beside a store not mounted (2.6). Error: no-copy (or the store's
+    /// own error, unmounted, without a copy).
     copy-stat: func() -> result<copy-stats, error>;
+
+    /// Up to 16 of the names the copy holds with a root, in byte order, each after `after` (empty: from the first), with
+    /// the copy's version and root and how each stands against the store (309-STO-0041, 2.6); asked for page by page as
+    /// `names` is. Beside a store that is not mounted the copy is mounted all the same, read-only, and every name is
+    /// `unknown`. Errors: no-copy (or the store's own error, unmounted, without a copy), invalid; rights through a
+    /// domain's client.
+    copy-names: func(after: string<64>) -> result<list<copy-name, 16>, error>;
+    /// Brings `name` back into the store from the copy (309-STO-0041, 2.6), at the copy's current version, only if the
+    /// store does not hold it at all (`only-on-copy`): any other name is refused with `conflict`, so a name the store holds
+    /// is never overwritten and a removal never undone. The copy's root is walked over the copy, within the walk's own
+    /// steps; each block the store lacks is read from the copy, checked against its CID, and put in the store; then the
+    /// store's name is published at that root by compare-and-swap from version 0, charged to the owner the copy's version
+    /// records. The name is then in step with its copy, which is not written, and the reply is `copied`; a block the
+    /// copy lacks that the store held already leaves it behind, brought in step between requests, and the reply is the
+    /// store's class. With `check` nothing is put or published, and the reply counts what a rebuild would visit and put.
+    /// A walk that meets a block the copy lacks, or holds damaged, stops there: the reply says `incomplete` or `corrupt`
+    /// at its CID, nothing is published, and the blocks put before it are retained by nothing, so a collection frees them
+    /// once their lease ends. A block a read found damaged leaves the copy's index, as with `get`, so the next walk says
+    /// `incomplete` at it. Beside a store that is not mounted only `check` is answered, the store lacking every block;
+    /// without it, `device`. Logged: `REBUILT <name> VERSION <v> ROOT <cid> FROM THE COPY, <n> BLOCKS PUT`, or
+    /// `NOT REBUILT <name>: <error>` and ` AT <cid>` where the walk stopped; a check is not logged. Errors: no-copy,
+    /// invalid, not-found (the copy holds no root of it), conflict, device, full, quota, read-only, and rights through a
+    /// domain's client.
+    rebuild: func(name: string<64>, check: bool) -> result<rebuilt, error>;
 }

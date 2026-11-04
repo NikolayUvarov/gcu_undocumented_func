@@ -14,7 +14,8 @@
 //! A volume key kept off the medium is also sealed under recovery keys its owner holds, which open the medium on another
 //! machine; they are made, kept, forgotten and used only through a client of their own (308-STO-0028, 2.4).
 //! Chosen names have a copy on a second medium, a store of its own that each of their changes reaches after the store,
-//! and a block one medium finds damaged is repaired from the other (309-STO-0040, 2.5).
+//! and a block one medium finds damaged is repaired from the other (309-STO-0040, 2.5). The copy's names are listed with how
+//! each stands against the store, and a name only the copy holds is brought back into the store from it (309-STO-0041, 2.6).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -24,14 +25,15 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:blockstore";
-pub const VERSION: (u8, u8, u8) = (2, 5, 0);
+pub const VERSION: (u8, u8, u8) = (2, 6, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
 /// (`mind::blockstore`: put, collect and scrub need BADGE_PUT; get, has, resolve, history, snapshot and names
 /// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any;
 /// recovery-new, recovery-keep, recovery-forget and recover BADGE_RECOVER, never through a domain's client;
-/// recoveries any or BADGE_RECOVER; copy BADGE_PUBLISH, never through a domain's client, and copy-stat any (2.5)).
+/// recoveries any or BADGE_RECOVER; copy BADGE_PUBLISH, never through a domain's client, and copy-stat any (2.5);
+/// copy-names BADGE_GET and rebuild BADGE_PUBLISH, neither through a domain's client (2.6)).
 /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
 /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
 /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
@@ -217,6 +219,59 @@ impl Wire for CopyStats {
     const MAX: usize = <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.sectors.encode(w)?; self.used.encode(w)?; self.blocks.encode(w)?; self.names.encode(w)?; self.behind.encode(w)?; self.from_copy.encode(w)?; self.from_store.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { sectors: Wire::decode(r)?, used: Wire::decode(r)?, blocks: Wire::decode(r)?, names: Wire::decode(r)?, behind: Wire::decode(r)?, from_copy: Wire::decode(r)?, from_store: Wire::decode(r)? }) }
+}
+
+/// How a name the copy holds with a root stands against the store (2.6): `in-step`, the store's current version has the
+/// same root; `behind`, another root or a removal there; `only-on-copy`, the store does not hold the name at all;
+/// `unknown`, the store is not mounted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Standing { #[default] InStep = 0, Behind = 1, OnlyOnCopy = 2, Unknown = 3 }
+impl Standing {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::InStep), 1 => Some(Self::Behind), 2 => Some(Self::OnlyOnCopy), 3 => Some(Self::Unknown), _ => None } }
+}
+impl Wire for Standing {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// A name the copy holds with a root: the copy's version of it and its root (36 bytes), and how it stands (2.6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CopyName { pub name: Text<64>, pub version: u64, pub root: List<u8, 36>, pub standing: Standing }
+impl Wire for CopyName {
+    const MAX: usize = <Text<64> as Wire>::MAX + <u64 as Wire>::MAX + <List<u8, 36> as Wire>::MAX + <Standing as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.version.encode(w)?; self.root.encode(w)?; self.standing.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, version: Wire::decode(r)?, root: Wire::decode(r)?, standing: Wire::decode(r)? }) }
+}
+
+/// How a rebuild's walk of the copy's root ended (2.6): every block it needed read whole (`whole`), or stopped at a
+/// block the copy lacks (`incomplete`) or holds damaged (`corrupt`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Walked { #[default] Whole = 0, Incomplete = 1, Corrupt = 2 }
+impl Walked {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Whole), 1 => Some(Self::Incomplete), 2 => Some(Self::Corrupt), _ => None } }
+}
+impl Wire for Walked {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// A rebuild (2.6): the name's version in the store (0: nothing was published, with `check` or a walk that stopped);
+/// the blocks the walk of the copy's root visited (a block the object holds twice, twice), those the store lacked when
+/// visited, and those put there (none with `check`); how far the publication reached (`copied` when both media hold
+/// every block of the name; else, and with `check`, the store's own class); how the walk ended, and the CID it stopped
+/// at (36 bytes; empty when whole).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rebuilt { pub version: u64, pub visited: u32, pub lacked: u32, pub put: u32, pub durability: Durability, pub walked: Walked, pub at: List<u8, 36> }
+impl Wire for Rebuilt {
+    const MAX: usize = <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <Durability as Wire>::MAX + <Walked as Wire>::MAX + <List<u8, 36> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.visited.encode(w)?; self.lacked.encode(w)?; self.put.encode(w)?; self.durability.encode(w)?; self.walked.encode(w)?; self.at.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, visited: Wire::decode(r)?, lacked: Wire::decode(r)?, put: Wire::decode(r)?, durability: Wire::decode(r)?, walked: Wire::decode(r)?, at: Wire::decode(r)? }) }
 }
 
 /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
@@ -657,7 +712,8 @@ pub fn copy(endpoint: Endpoint, name: &str, on: bool) -> Result<core::result::Re
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Durability as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-/// What the copy holds (2.5). Error: no-copy.
+/// What the copy holds (2.5), also while it is read beside a store not mounted (2.6). Error: no-copy (or the store's
+/// own error, unmounted, without a copy).
 pub fn copy_stat(endpoint: Endpoint) -> Result<core::result::Result<CopyStats, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
@@ -669,6 +725,56 @@ pub fn copy_stat(endpoint: Endpoint) -> Result<core::result::Result<CopyStats, E
     let length = wire::buffer_reply(&reply, 36, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <CopyStats as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Up to 16 of the names the copy holds with a root, in byte order, each after `after` (empty: from the first), with
+/// the copy's version and root and how each stands against the store (309-STO-0041, 2.6); asked for page by page as
+/// `names` is. Beside a store that is not mounted the copy is mounted all the same, read-only, and every name is
+/// `unknown`. Errors: no-copy (or the store's own error, unmounted, without a copy), invalid; rights through a
+/// domain's client.
+pub fn copy_names(endpoint: Endpoint, after: &str) -> Result<core::result::Result<List<CopyName, 16>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<64>(after, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 30 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1810, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<CopyName, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Brings `name` back into the store from the copy (309-STO-0041, 2.6), at the copy's current version, only if the
+/// store does not hold it at all (`only-on-copy`): any other name is refused with `conflict`, so a name the store holds
+/// is never overwritten and a removal never undone. The copy's root is walked over the copy, within the walk's own
+/// steps; each block the store lacks is read from the copy, checked against its CID, and put in the store; then the
+/// store's name is published at that root by compare-and-swap from version 0, charged to the owner the copy's version
+/// records. The name is then in step with its copy, which is not written, and the reply is `copied`; a block the
+/// copy lacks that the store held already leaves it behind, brought in step between requests, and the reply is the
+/// store's class. With `check` nothing is put or published, and the reply counts what a rebuild would visit and put.
+/// A walk that meets a block the copy lacks, or holds damaged, stops there: the reply says `incomplete` or `corrupt`
+/// at its CID, nothing is published, and the blocks put before it are retained by nothing, so a collection frees them
+/// once their lease ends. A block a read found damaged leaves the copy's index, as with `get`, so the next walk says
+/// `incomplete` at it. Beside a store that is not mounted only `check` is answered, the store lacking every block;
+/// without it, `device`. Logged: `REBUILT <name> VERSION <v> ROOT <cid> FROM THE COPY, <n> BLOCKS PUT`, or
+/// `NOT REBUILT <name>: <error>` and ` AT <cid>` where the walk stopped; a check is not logged. Errors: no-copy,
+/// invalid, not-found (the copy holds no root of it), conflict, device, full, quota, read-only, and rights through a
+/// domain's client.
+pub fn rebuild(endpoint: Endpoint, name: &str, check: bool) -> Result<core::result::Result<Rebuilt, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
+        check.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 31 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 60, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Rebuilt as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
@@ -706,6 +812,8 @@ pub enum Request<'a> {
     Recover { key: Text<39> },
     Copy { name: Text<64>, on: bool },
     CopyStat,
+    CopyNames { after: Text<64> },
+    Rebuild { name: Text<64>, check: bool },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -921,6 +1029,23 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::CopyStat, call))
         }
+        30 => {
+            let (call, length) = wire::take_buffer(request, cap, 1810, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let after = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::CopyNames { after }, call))
+        }
+        31 => {
+            let (call, length) = wire::take_buffer(request, cap, 60, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let check = <bool as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Rebuild { name, check }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -1039,6 +1164,14 @@ pub fn reply_copy(call: Call, value: core::result::Result<Durability, Error>) ->
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_copy_stat(call: Call, value: core::result::Result<&CopyStats, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_copy_names(call: Call, value: core::result::Result<&[CopyName], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<CopyName, 16>(value, w))
+}
+pub fn reply_rebuild(call: Call, value: core::result::Result<&Rebuilt, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

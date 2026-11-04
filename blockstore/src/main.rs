@@ -15,6 +15,9 @@
 // A block client of a second medium in slot 4, when init grants one beside a disk of the store's own, holds the copy of
 // chosen names, a store of its own that each of their changes reaches after the store; a block one medium finds damaged
 // is repaired from the other, and the names behind on the copy are brought in step between requests (309-STO-0040).
+// The copy's names are listed with how each stands, and a name only the copy holds is brought back into the store from
+// it; beside a store that does not mount, the copy is mounted read-only, so that it says what it would bring back
+// (309-STO-0041).
 mod copies;
 mod store;
 
@@ -28,8 +31,8 @@ use cid::Cid;
 use mind::abi::{BootInfo, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_SERVICE};
 use mind::block::Device as Client;
 use mind::blockstore::{allowed, recovery_parse, recovery_text, Operation, FIRST_DOMAIN_CLIENT};
-use copies::{Copies, Event, Medium as Side, Step};
-use mind::idl::blockstore::{self, Collected, Committed, CopyStats, Durability, Error, Head as Current, Kept, Named, PinTaken, Pinned, Published, Request, Stats, Usage};
+use copies::{Copies, Event, Gate, Medium as Side, Standing, Step};
+use mind::idl::blockstore::{self, Collected, Committed, CopyName, CopyStats, Durability, Error, Head as Current, Kept, Named, PinTaken, Pinned, Published, Request, Stats, Usage, Walked};
 use mind::idl::codec::{List, Text};
 use mind::idl::wire;
 use mind::ipc::{self, Endpoint};
@@ -243,7 +246,15 @@ fn told(e: Event) {
         Event::NotRepaired { cid, on, error } => mind::println!("[BLOCKSTORE] NOT REPAIRED {} ON {}: {:?}", cid, medium(on), error),
         Event::Collected { on, freed: Ok(n) } => mind::println!("[BLOCKSTORE] COLLECTED {} BLOCKS ON {} AFTER REPAIRS: THE DAMAGED RECORDS FREED", n, medium(on)),
         Event::Collected { on, freed: Err(e) } => mind::println!("[BLOCKSTORE] NO COLLECTION ON {} AFTER REPAIRS: {:?}; ASKED FOR AFTER ITS NEXT PASS", medium(on), e),
+        Event::Rebuilt { name, version, root, put } => mind::println!("[BLOCKSTORE] REBUILT {} VERSION {} ROOT {} FROM THE COPY, {} BLOCKS PUT", text(name), version, root, put),
+        Event::NotRebuilt { name, error, at: Some(at) } => mind::println!("[BLOCKSTORE] NOT REBUILT {}: {:?} AT {}", text(name), error, at),
+        Event::NotRebuilt { name, error, at: None } => mind::println!("[BLOCKSTORE] NOT REBUILT {}: {:?}", text(name), error),
     }
+}
+
+// How a name on the copy stands against the store, on the wire (309-STO-0041).
+fn stands(s: Standing) -> blockstore::Standing {
+    match s { Standing::InStep => blockstore::Standing::InStep, Standing::Behind => blockstore::Standing::Behind, Standing::OnlyOnCopy => blockstore::Standing::OnlyOnCopy, Standing::Unknown => blockstore::Standing::Unknown }
 }
 
 // A record a scrub of either medium found that does not open or is not whole.
@@ -264,10 +275,12 @@ fn copy_scrubbed(found: store::Scrubbed, pid: Option<u64>) {
     }
 }
 
-// Mounts the copy on the medium init lends in slot COPY, beside the mounted store (309-STO-0040): a whole store of its
-// own, its volume key kept by keystore as the store's is. None beside a RAM disk, whose writes outlive no reset, nor on
-// one. Called at most once, which holds the statics.
-fn mount_copy(main: &mut Store<'static, Medium>, ram: bool, secrets: &mut Secrets, lent: bool) -> Option<Copies<'static, Medium>> {
+// Mounts the copy on the medium init lends in slot COPY (309-STO-0040): a whole store of its own, its volume key kept by
+// keystore as the store's is. Beside the mounted store `main`; beside one that did not mount, through a shut gate, so
+// that it is read and nothing of it is written until the store mounts (309-STO-0041). None beside a RAM disk, whose
+// writes outlive no reset, nor on one. Called only while no copy is mounted, which holds the statics; its index is made
+// once.
+fn mount_copy(main: Option<&mut Store<'static, Medium>>, ram: bool, secrets: &mut Secrets, lent: bool, index: &mut Option<*mut [Entry]>) -> Option<Copies<'static, Medium>> {
     if mind::dev::cap_info(COPY).0 != CAP_KIND_ENDPOINT { return None; }
     if ram { mind::println!("[BLOCKSTORE] NO COPY: THE STORE IS ON A RAM DISK, WHICH OUTLIVES NO RESET"); return None; }
     let client = match Client::open(Endpoint(COPY)) {
@@ -275,14 +288,21 @@ fn mount_copy(main: &mut Store<'static, Medium>, ram: bool, secrets: &mut Secret
         Err(e) => { mind::println!("[BLOCKSTORE] NO COPY: ITS MEDIUM DOES NOT ANSWER: {:?}", e); return None; }
     };
     if client.kind() == mind::block::KIND_RAM { mind::println!("[BLOCKSTORE] NO COPY: ITS MEDIUM IS A RAM DISK"); return None; }
-    let index = index_for(client.sectors(), true);
-    if index.is_empty() { mind::println!("[BLOCKSTORE] NO COPY: NO MEMORY FOR ITS INDEX"); return None; }
-    let (heads, pinned, runs, record, walk, block) = unsafe {
-        (&mut *core::ptr::addr_of_mut!(COPY_HEADS), &mut *core::ptr::addr_of_mut!(COPY_PINNED), &mut *core::ptr::addr_of_mut!(COPY_RUNS),
-         &mut *core::ptr::addr_of_mut!(COPY_RECORD), &mut *core::ptr::addr_of_mut!(COPY_WALK), &mut *core::ptr::addr_of_mut!(COPY_BLOCK))
+    let slots = match *index {
+        Some(slots) => slots,
+        None => {
+            let slots = index_for(client.sectors(), true);
+            if slots.is_empty() { mind::println!("[BLOCKSTORE] NO COPY: NO MEMORY FOR ITS INDEX"); return None; }
+            *index.insert(slots as *mut [Entry])
+        }
     };
+    let (heads, pinned, runs, record, walk, block, index) = unsafe {
+        (&mut *core::ptr::addr_of_mut!(COPY_HEADS), &mut *core::ptr::addr_of_mut!(COPY_PINNED), &mut *core::ptr::addr_of_mut!(COPY_RUNS),
+         &mut *core::ptr::addr_of_mut!(COPY_RECORD), &mut *core::ptr::addr_of_mut!(COPY_WALK), &mut *core::ptr::addr_of_mut!(COPY_BLOCK), &mut *slots)
+    };
+    let beside = main.is_some();
     let keeper = lent.then_some(secrets as &mut dyn Keeper);
-    match Store::mount(Medium(client), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()) {
+    match Store::mount(Gate::new(Medium(client), beside), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()) {
         Ok(mut copy) => {
             copy.renew(mind::time::monotonic_ns());
             let kept = copy.key_source() == KEY_KEPT;
@@ -295,9 +315,12 @@ fn mount_copy(main: &mut Store<'static, Medium>, ram: bool, secrets: &mut Secret
             mind::println!("[BLOCKSTORE] COPY READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={} SEALED, {}",
                 s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged, if kept { "KEY KEPT BY KEYSTORE" } else { "KEY IN THE CLEAR" });
             let copies = Copies::new(copy, block, main, &mut told);
-            mind::println!("[BLOCKSTORE] COPY MOUNTED: {} NAMES WITH A COPY, {} BEHIND", copies.stats().names, copies.behind());
+            if beside { mind::println!("[BLOCKSTORE] COPY MOUNTED: {} NAMES WITH A COPY, {} BEHIND", copies.stats().names, copies.behind()); }
+            else { mind::println!("[BLOCKSTORE] COPY READ BESIDE A STORE NOT MOUNTED: {} NAMES ON IT, NOTHING WRITTEN THERE UNTIL THE STORE MOUNTS", copies.stats().names); }
             Some(copies)
         }
+        // A blank medium, or one without a key yet, is formatted only beside a store that mounted.
+        Err(store::Error::ReadOnly) if !beside => { mind::println!("[BLOCKSTORE] NO COPY YET: ITS MEDIUM HOLDS NO STORE TO READ, AND NONE IS MADE BESIDE A STORE NOT MOUNTED"); None }
         Err(store::Error::Kept(id)) => { mind::println!("[BLOCKSTORE] NO COPY: NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {}, WHICH KEEPS NONE UNDER IT", secret_name(&id)); None }
         Err(store::Error::Layout(found)) => { mind::println!("[BLOCKSTORE] NO COPY: NOT MOUNTED: A STORE OF LAYOUT {}; THIS BUILD READS LAYOUT {}", found, LAYOUT); None }
         Err(e) => { mind::println!("[BLOCKSTORE] NO COPY: NOT MOUNTED: {:?}", e); None }
@@ -400,12 +423,9 @@ fn main(_info: &'static BootInfo) {
     let durability = if ram { Durability::Volatile } else { Durability::Flushed };
     // Without a medium every request is answered with the reason, so clients are not left waiting.
     let mut store = ready(mounted, ram, lent);
-    // The copy of chosen names on a second medium, beside a store that mounted (309-STO-0040).
-    let mut copies = match store.as_mut() {
-        Ok(s) => mount_copy(s, ram, &mut secrets, lent),
-        Err(_) if mind::dev::cap_info(COPY).0 == CAP_KIND_ENDPOINT => { mind::println!("[BLOCKSTORE] NO COPY YET: THE STORE IS NOT MOUNTED"); None }
-        Err(_) => None,
-    };
+    // The copy of chosen names on a second medium (309-STO-0040): read-only beside a store that did not mount (309-STO-0041).
+    let mut copy_index = None;
+    let mut copies = mount_copy(store.as_mut().ok(), ram, &mut secrets, lent, &mut copy_index);
     // When the next catch-up of a name behind on the copy may run.
     let mut retry = 0u64;
     let mut clients = DomainClients([None; DOMAIN_CLIENTS]);
@@ -513,6 +533,9 @@ fn main(_info: &'static BootInfo) {
             // The copy holds the volume's names alone: a domain's records are sealed under its key (309-STO-0040).
             Ok((Request::Copy { .. }, call)) if refused(Operation::Copy) || through_domain(Operation::Copy) => blockstore::reply_copy(call, Err(Error::Rights)),
             Ok((Request::CopyStat, call)) if refused(Operation::CopyStat) => blockstore::reply_copy_stat(call, Err(Error::Rights)),
+            // The copy's names and a name brought back from it are the volume's too (309-STO-0041).
+            Ok((Request::CopyNames { .. }, call)) if refused(Operation::CopyNames) || through_domain(Operation::CopyNames) => blockstore::reply_copy_names(call, Err(Error::Rights)),
+            Ok((Request::Rebuild { .. }, call)) if refused(Operation::Rebuild) || through_domain(Operation::Rebuild) => blockstore::reply_rebuild(call, Err(Error::Rights)),
             Ok((Request::Put { codec, data }, call)) => {
                 let codec = match codec { blockstore::Codec::Raw => cid::Codec::Raw, blockstore::Codec::DagCbor => cid::Codec::DagCbor };
                 let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(codec, data).map_err(error)).map(|c| c.to_bytes());
@@ -779,8 +802,16 @@ fn main(_info: &'static BootInfo) {
                                 Err(e) => mind::println!("[BLOCKSTORE] RECOVERED BY PID {}: THE VOLUME KEY KEPT BY KEYSTORE, BUT NOT MOUNTED: {:?}", pid, e),
                             }
                             store = mounted;
-                            // A medium recovered keeps its key off it, so it is no RAM disk; the copy was not mounted beside none.
-                            if let Ok(s) = store.as_mut() { copies = mount_copy(s, false, &mut secrets, lent); }
+                            // A medium recovered keeps its key off it, so it is no RAM disk. A copy read beside none is
+                            // kept in step from now on, its names compared as a mount compares them (309-STO-0041).
+                            match (store.as_mut(), copies.as_mut()) {
+                                (Ok(s), Some(c)) => {
+                                    c.attach(s, &mut told);
+                                    mind::println!("[BLOCKSTORE] COPY MOUNTED: {} NAMES WITH A COPY, {} BEHIND", c.stats().names, c.behind());
+                                }
+                                (Ok(s), None) => copies = mount_copy(Some(s), false, &mut secrets, lent, &mut copy_index),
+                                (Err(_), _) => {}
+                            }
                             answer
                         }
                         Err(e) => { mind::println!("[BLOCKSTORE] NOT RECOVERED FOR PID {}: {:?}", pid, e); Err(e) }
@@ -801,11 +832,42 @@ fn main(_info: &'static BootInfo) {
                 blockstore::reply_copy(call, done)
             }
             Ok((Request::CopyStat, call)) => {
-                let stats = store.as_ref().map_err(|e| *e).and_then(|_| copies.as_ref().ok_or(Error::NoCopy)).map(|c| {
+                // A copy read beside a store not mounted answers too; without one, an unmounted store says why (309-STO-0041).
+                let stats = copies.as_ref().ok_or_else(|| store.as_ref().err().copied().unwrap_or(Error::NoCopy)).map(|c| {
                     let s = c.stats();
                     CopyStats { sectors: s.sectors, used: s.used, blocks: s.blocks, names: s.names, behind: s.behind, from_copy: s.from_copy, from_store: s.from_store }
                 });
                 blockstore::reply_copy_stat(call, stats.as_ref().map_err(|e| *e))
+            }
+            Ok((Request::CopyNames { after }, call)) => {
+                let mut page = [CopyName::default(); copies::PAGE];
+                let n = match copies.as_ref() {
+                    // Unmounted and without a copy, the store says why, as to every request.
+                    None => Err(store.as_ref().err().copied().unwrap_or(Error::NoCopy)),
+                    Some(c) => c.names(store.as_ref().ok(), after.as_str().as_bytes()).map_err(error).map(|names| {
+                        let mut n = 0;
+                        for (slot, (name, held)) in page.iter_mut().zip(names) {
+                            let root = List::from_slice(&held.root.to_bytes()).unwrap_or_default();
+                            *slot = CopyName { name: Text::new(text(name)).unwrap_or_default(), version: held.version, root, standing: stands(held.standing) };
+                            n += 1;
+                        }
+                        n
+                    }),
+                };
+                blockstore::reply_copy_names(call, n.map(|n| &page[..n]))
+            }
+            Ok((Request::Rebuild { name, check }, call)) => {
+                let done = match copies.as_mut() {
+                    None => Err(store.as_ref().err().copied().unwrap_or(Error::NoCopy)),
+                    Some(c) => c.rebuild(store.as_mut().ok(), name.as_str().as_bytes(), check, &mut told).map_err(error).map(|r| {
+                        let (walked, at) = match r.stopped {
+                            None => (Walked::Whole, List::default()),
+                            Some((at, e)) => (if e == store::Error::Corrupt { Walked::Corrupt } else { Walked::Incomplete }, List::from_slice(&at.to_bytes()).unwrap_or_default()),
+                        };
+                        blockstore::Rebuilt { version: r.version, visited: r.visited, lacked: r.lacked, put: r.put, durability: reach(r.copied), walked, at }
+                    }),
+                };
+                blockstore::reply_rebuild(call, done.as_ref().map_err(|e| *e))
             }
         };
         if secret { wipe(scratch); }
