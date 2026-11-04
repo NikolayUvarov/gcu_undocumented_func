@@ -7,6 +7,7 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 [dependencies]
 libmind = { path = "../libmind" }
+regdb = { path = "../regdb" }
 
 [profile.release]
 panic = "abort"

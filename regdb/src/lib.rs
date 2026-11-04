@@ -1,6 +1,7 @@
-//! Pinned frequency restrictions; selection never grants device or calibration transmission.
+#![cfg_attr(not(test), no_std)]
+//! Pinned wireless-regdb catalogue for the station and the radios; selection never grants device or calibration transmission.
 
-#[path = "regulatory_tables.rs"]
+#[path = "tables.rs"]
 mod tables;
 
 pub const SOURCE_COMMIT: &str = "389b9b702cf9018e9a9078ccc4fa8eaae2e054e3";
