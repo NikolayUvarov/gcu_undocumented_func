@@ -436,7 +436,7 @@ types! {
     rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters KeyboardLayout LayoutSwitch Keymap;
-    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo QuestionState Question Ruling;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo QuestionState Question Ruling ListenRule Accepted;
     ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;
