@@ -9,12 +9,14 @@ pub(super) struct Device {
     lte: [u32; 2], lte_pending: Option<u32>, pub(super) bt: u32, pub(super) drck: bool, pub(super) addck: [bool; 2],
     msbk: [[bool; 2]; 2], dadck: [[bool; 2]; 2], pub(super) nctl_stuck: bool, pub(super) rck_stuck: bool,
     pub(super) drck_stuck: bool, pub(super) fail_write: Option<usize>,
+    // RXQ Wi-Fi payloads (MPDU and FCS) delivered when the beacon check at 0xce20 is opened.
+    pub(super) on_scan: Vec<Vec<u8>>,
 }
 impl Device {
     pub(super) fn new(inner: model::Device) -> Self {
         Self { channel: None, inner, rf: [[0; 256]; 2], rf_read: None, lte: [0; 2], lte_pending: None, bt: 0,
             drck: false, addck: [false; 2], msbk: [[false; 2]; 2], dadck: [[false; 2]; 2],
-            nctl_stuck: false, rck_stuck: false, drck_stuck: false, fail_write: None }
+            nctl_stuck: false, rck_stuck: false, drck_stuck: false, fail_write: None, on_scan: Vec::new() }
     }
     fn write(&mut self, at: usize, width: usize, value: u32) -> io::Result<()> {
         self.inner.now += 1;
@@ -26,6 +28,8 @@ impl Device {
             let reg = ((value >> 20) & 255) as usize;
             let mask = if value >> 31 != 0 { self.inner.get(0x10374, 4) & 0xfffff } else { 0xfffff };
             self.rf[path][reg] = (self.rf[path][reg] & !mask) | (value & mask); self.rf_read = None;
+            // RR_LCKST's bin is a trigger: the Ryzen's RTL8852BE reads it back as 0 (2026-11-04).
+            if reg == 0xcf { self.rf[path][reg] &= !1; }
             if reg == 0x1b && value & 0xfffff == 0x240 && !self.rck_stuck {
                 self.rf[path][0x1c] |= 8; self.rf[path][0x1b] = (7 + path as u32 * 4) << 10;
             }
@@ -41,6 +45,9 @@ impl Device {
             }
         }
         if let Some(channel) = &mut self.channel { channel.write(&mut self.inner, &mut self.rf, at, previous, value); }
+        if at == 0xce20 && previous & 0x80 != 0 && value & 0x80 == 0 {
+            for frame in std::mem::take(&mut self.on_scan) { self.inner.inject_packet(0, 0, &frame); }
+        }
         if self.fail_write == Some(at) { self.fail_write = None; return Err(io::Fault::new(io::FaultKind::Access, at, value)); }
         Ok(())
     }
@@ -60,6 +67,10 @@ impl RegisterIo for Device {
     fn read32(&mut self, at: usize) -> io::Result<u32> {
         self.inner.now += 1;
         if let Some(channel) = &self.channel { if let Some(result) = channel.read(&self.inner, at) { return result; } }
+        // RF18's direct copies read back only their CH field on the Ryzen's RTL8852BE (2026-11-04).
+        if matches!(at, 0x1e060 | 0x1f060) { return Ok(self.inner.get(at, 4) & 0xff); }
+        // Its MAC power tables keep seven bits of each byte.
+        if (0xd2c0..0xd36c).contains(&at) { return Ok(self.inner.get(at, 4) & 0x7f7f_7f7f); }
         if at == 0xac { return Ok(self.bt); }
         if at == 0xdaf8 { let command = self.lte_pending.unwrap(); assert_eq!(command >> 30, 2); return Ok(self.lte[usize::from(command & 255 == 0x3c)]); }
         if at == 0x1174c { return Ok(self.rf_read.map_or(0, |(path, reg)| 1 << 26 | self.rf[path][reg])); }

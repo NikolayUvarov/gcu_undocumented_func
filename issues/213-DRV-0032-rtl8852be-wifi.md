@@ -1059,3 +1059,45 @@ All `rtw89` host tests pass, with new ones for `quiesce`, `mask_host`, `HCI_FUNC
 - KRN's WLAN endpoint ([213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md)), which waits for that loop.
 
 **Also seen, not explained:** one reboot from Linux with BootNext to the stick (2026-11-03 18:56 UTC, after trial 7) left a dark screen until the maintainer's restart. That boot wrote no MIND log: the newest before it is `boot0008.log`, at 18:53, and `boot_switch.py logs` said "MIND Core did not boot". The stick's `boot0001.log` reads "20:35:41 by the machine's clock", but it is that stick's first boot, older than `boot0002.log` (17:55 UTC). Its clock was not UTC then, so it is no boot inside that gap.
+
+## The first frames heard on the Ryzen: a receive-only listen (2026-11-04)
+
+Calibration and packet TX need the platform's power policy ([213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md)) and a country configuration ([213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), item 3). `Resolved::resolve` refuses an unknown platform, and the driver must not assume `CheckedAbsent`. So the next step that needs neither is receive-only.
+
+**What was added:**
+- `btc_session::listen` (`rtw89_wifi/src/listen.rs`), the last stage of the native driver:
+  - the initial PHY, as in the diagnostic;
+  - one channel under `Policy::passive`: `PassiveOnly`, the world group, every limit at -64 half-dBm and version 0, so no calibration transmit token can match it;
+  - the report tail;
+  - the scan filter of mac80211's `FIF_BCN_PRBRESP_PROMISC`;
+  - a bounded listen that logs each BSSID once, with its SSID and DS channel. Every poll re-checks the startup permit: scheduler zero, data DMA stopped.
+- `Session::observe_events` takes the BTC events a listen without commands would otherwise leave queued.
+- Channel 1 (2412 MHz), 20 s: Linux's scan on the Ryzen listed five access points on channel 1, more than on any other 2.4 GHz channel.
+
+**Three readbacks the chip does not give** (Linux reads none of them back; details in [the hardware notes](../hwdocs/rtl8852be.md)):
+
+| Where | What the chip did | Linux | The change |
+|---|---|---|---|
+| channel `radio` stage, RF `0xcf` bit 0 | the trigger, written 0 then 1, reads 0 | `rtw8852b_rfk.c:4098–4099`, written unread | written without readback |
+| channel `radio` stage, RF18's direct copy `0x10018` | written `0x1c01`, reads `0x00001`: only the CH field | `_ch_setting`/`_bw_setting` (`rtw8852b_rfk.c:3978`, `4096`), written unread | its CH field checked, here and in data mode's register check; the indirect copy keeps the full check |
+| channel `power` stage, MAC power tables `0xd2c0`–`0xd36b` | `0xc0c0c0c0` reads `0x40404040`: seven bits a byte | MAC power values in -64..63 | seven bits compared |
+
+The host fixture now models all three, so the earlier checks fail there.
+
+**The result** (build `a098ef06…`, put in over the link on `fast-test` 13253dc8, slot A, a fresh boot, 2026-11-04 06:56 UTC):
+- 20 000 ms on channel 1, receive only;
+- 860 frames passed the descriptor and FCS checks, none rejected:
+  - 333 beacons and 2 probe responses from 4 BSSIDs, each with DS channel 1;
+  - 525 other frames;
+- 869 PPDU reports and 9 BTC events;
+- then stop, registers, power-off and quiesce, each `Ok`.
+
+All `rtw89` host tests pass, with three new listen cases: frames heard, a frequency outside channels 1–13 refused before any command, and a passive tune with no calibration authority.
+
+**Not explained:** 333 beacons from 4 access points in 20 s is about four per access point per second. A 102.4 ms beacon interval gives about ten. Polling gaps, coexistence slots and weak signals were not measured apart.
+
+**What this shows:** that machine and that build only (MC-12.1). Transmission, calibration (IQK, TSSI, DPK), association and RF performance are not reached.
+
+**Next:**
+- calibration, the station and the data path, once 213-KRN-0122's result and 213-KRN-0123's country configuration exist;
+- until then, receive-only work, such as listening on more channels.
