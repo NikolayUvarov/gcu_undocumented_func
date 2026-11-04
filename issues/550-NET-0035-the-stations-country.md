@@ -179,6 +179,24 @@ Stage B made, on the maintainer's decision of 2026-11-04 (above), on the branch 
 - a read-only client refused a change of country;
 - after a change of country, the link left and the old scan gone.
 
+**The last two criteria (2026-11-04, 1d0b4977 and 2bd97ca5):**
+- **A change of country while joined** (`wifi_join_check`). `wifi country RU` while joined to MIND-TEST under the US:
+  - `wlansim` logs `[WLANSIM] THE STATION LEFT THE ACCESS POINT`, from the station's deauthentication;
+  - `wlan` logs RU chosen by the user and goes `Off`;
+  - the station joins MIND-TEST again under RU.
+
+  Both network groups passed with it on x32-128 (KVM) at 2bd97ca5, x86 and aarch64 beside each other; x86 passed at 1d0b4977 too.
+- **The old scan gone:** checked in `dot11`'s host tests (`a_change_of_country_leaves_the_network_and_drops_the_scan`). In QEMU it is not seen, because no `wifi.wit` call reads the list without scanning again.
+- **A read-only client refused:** not testable yet, because no program holds one.
+  - `init` lends `wlan` only with `BADGE_WIFI_CHANGE`, to the shell and to `link`.
+  - The shell lends that same client to a program that asks for Wi-Fi, and it cannot make a narrower copy: its slot has no right to badge.
+  - `wlan` refuses a change without `BADGE_WIFI_CHANGE` (`may_change`), but nothing calls it so.
+
+  Split into [550-NET-0058](550-NET-0058-a-read-only-wifi-client.md).
+- **A radio's channels after its limits** (the first point of "not done" above): split into [550-NET-0059](550-NET-0059-a-radios-own-channels-apart-from-its-limits.md), which waits on `DRV`'s answer about `wlanhw`.
+
+**Left here:** `world_country_check` on aarch64, APP's screen, and real radios, as above. The first is a test radio's build; the other two belong to `APP` and `DRV`. The issue closes once this lands.
+
 ## Related
 
 [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), [550-NET-0028](../issues-done/550-NET-0028-rates-the-radio-has.done), [550-APP-0082](550-APP-0082-wifi-country-selector.md), 213-DRV-0032, [requests-DRV.md](requests-DRV.md).
