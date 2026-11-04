@@ -1,6 +1,6 @@
 # 308-APP-0122 — A recovery key shown once and typed back, and a store opened with one
 
-**Type:** tools · **Owner:** `APP` track · **Priority:** P2 · **Status:** open · **Blocked by:** the kernel track's store client badged `BADGE_RECOVER` ([requests-KRN.md](requests-KRN.md), "A store client that may recover the volume key"), and `blockstore.wit` 2.4 (STO, [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md)) · **Main task:** [308](308-encryption-at-rest.md) · **Roadmap:** track B · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** tools · **Owner:** `APP` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md) (the store client badged `BADGE_RECOVER`, which `init` grants to the shell alone, and `REQUEST_RECOVER`, agreed with KRN on 2026-11-04), and `blockstore.wit` 2.4 (STO, [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md)) · **Main task:** [308](308-encryption-at-rest.md) · **Roadmap:** track B · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
 STO's request of 2026-11-04 in [requests-APP.md](requests-APP.md), numbered here.
 
@@ -14,7 +14,7 @@ The key must reach no log and no serial line. The console is copied to serial, w
 
 - **A program with a window of its own, `recovery`**, rather than a page of `wm`'s settings.
   - **Why a program.** It is the only one that asks for the recovery client: a request bit lent by the shell, asked of the user each time, as `REQUEST_FIRMWARE` is.
-  - **What that saves.** `wm` holds many clients already; it need not hold this one. So `init` lends the client to the shell alone. That is narrower than the request to KRN, which names the shell and `wm`, and KRN is told so.
+  - **What that saves.** `wm` holds many clients already; it need not hold this one. So `init` lends the client to the shell alone (KRN agreed, 2026-11-04: 308-KRN-0204, the bit `REQUEST_RECOVER`).
   - **The window.** The compositor draws it, and nothing of it goes to serial.
 - **"Make a recovery key":**
   1. `recovery-new`;
@@ -40,4 +40,4 @@ The key must reach no log and no serial line. The console is copied to serial, w
 
 ## Related
 
-[308](308-encryption-at-rest.md), [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md), [requests-KRN.md](requests-KRN.md), 550-APP-0078 (`--passphrase-file`).
+[308](308-encryption-at-rest.md), [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md), [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md), 550-APP-0078 (`--passphrase-file`).
