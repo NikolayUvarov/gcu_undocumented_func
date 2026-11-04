@@ -10602,10 +10602,12 @@ def tls_lending_check(vm, servers, tls, ssh):
     what the script declares."""
     services = {name: {ep for ep, server in servers.items() if server == pid} for name, pid in (("tls", tls), ("ssh", ssh))}
 
-    def lent(command):
+    def lent(command, alive=None):
         out = vm.command(command)
         pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
         caps = vm.command(f"stat caps {pid + BASE}", raw=True)
+        if alive:
+            alive()  # while the program runs: netpolicy drops its grant at a sweep after the exit
         require(vm.command(f"kill {pid}"), "KILLED")
         held = {}
         for slot, name in ((20, "tls"), (34, "ssh")):
@@ -10614,9 +10616,8 @@ def tls_lending_check(vm, servers, tls, ssh):
                 held[name] = int(found[1])
         return out, held
 
-    out, held = lent("run tlsclock &")
+    out, held = lent("run tlsclock &", alive=lambda: require(vm.command("netgrants"), "tlsclock RULES="))
     assert held == {"tls": 1, "ssh": 0}, (held, out)  # BADGE_TLS_NO_DEVICE; the SSH service's as it is
-    require(vm.command("netgrants"), "GRANT ")
     out, held = lent("run tlsnone &")
     require(out, "NETWORK FOR tlsnone: NoPolicy")
     assert not held, "no flow grant, no TLS or SSH client"
