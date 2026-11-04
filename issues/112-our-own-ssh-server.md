@@ -1,6 +1,6 @@
 # 112 — Our own SSH server, `sshd`: logins into a MIND machine and file copy (SFTP, `scp`)
 
-**Type:** network (main task: a server) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** open · **Blocked by:** [110-NET-0052](110-NET-0052-listening-tcp-sockets.md) (listening sockets and the listening grant) · **Roadmap:** track D (network) · **Constitution:** MC-3.1, MC-5.1, MC-5.2, MC-10.3, MC-11.4, MC-11.6, MC-11.9, MC-11.11, MC-12.3
+**Type:** network (main task: a server) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** open · **Blocked by:** [110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done) (listening sockets and the listening grant) · **Roadmap:** track D (network) · **Constitution:** MC-3.1, MC-5.1, MC-5.2, MC-10.3, MC-11.4, MC-11.6, MC-11.9, MC-11.11, MC-12.3
 
 **Recorded by:** the kernel session, 2026-10-31, at the maintainer's request: "check whether we have tasks for our own HTTP(S) server and our own SSH (scp) server; if not, create them." The HTTP(S) server is [110](110-our-own-web-server.md). This is the SSH one.
 
@@ -58,4 +58,4 @@
 
 ## Related
 
-[110](110-our-own-web-server.md), [110-NET-0052](110-NET-0052-listening-tcp-sockets.md), [351-NET-0004](351-NET-0004-ssh-client.md), [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done), [351-NET-0027](351-NET-0027-the-ssh-service.md), [800-KRN-0155](../issues-done/800-KRN-0155-the-links-console-mode.done), [000-ASR-0008](000-ASR-0008-test-only-openssh-path.md).
+[110](110-our-own-web-server.md), [110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done), [351-NET-0004](351-NET-0004-ssh-client.md), [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done), [351-NET-0027](351-NET-0027-the-ssh-service.md), [800-KRN-0155](../issues-done/800-KRN-0155-the-links-console-mode.done), [000-ASR-0008](000-ASR-0008-test-only-openssh-path.md).

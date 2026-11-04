@@ -154,6 +154,19 @@ pub fn split(path: &str) -> (&str, &str) {
     match path.find(':') { Some(i) if !path[..i].contains('/') => (&path[..i], path[i + 1..].trim_start_matches('/')), _ => ("", path.trim_start_matches('/')) }
 }
 
+// Drops `volume`'s kept root; whether one was kept (311-KRN-0207).
+fn forget(volume: &str) -> bool {
+    let Ok(c) = client() else { return false };
+    match c.roots.iter_mut().find(|r| r.as_ref().is_some_and(|r| r.name[..r.len].eq_ignore_ascii_case(volume.as_bytes()))) {
+        Some(slot) => { *slot = None; true }
+        None => false,
+    }
+}
+
+// `call` through `volume`'s kept root, asked once more with the root opened again when it answers `invalid`: its
+// service restarted since (311-KRN-0207, `volumes::again`).
+fn again<T>(volume: &str, call: impl FnMut() -> Result<T>) -> Result<T> { volumes::again(Error::Invalid, call, || forget(volume)) }
+
 // The root of `volume` and its server's slot, opened once.
 fn root(volume: &str) -> Result<(u32, usize)> {
     let c = client()?;
@@ -191,9 +204,15 @@ impl Dir {
     /// The root of a volume (`""`: the boot disk, `"ram"`, `"models"`: the model disk, read-only; another: storefs's).
     pub fn root(volume: &str) -> Result<Self> { let (handle, server) = root(volume)?; Ok(Self { handle, owned: false, server }) }
     /// A directory by path (`ram:docs`, `data/notes`).
-    pub fn open(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; Self::root(volume)?.dir(rest, false) }
+    pub fn open(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; again(volume, || Self::root(volume)?.below(rest, false)) }
     /// The same, made with its parents if missing.
-    pub fn create(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; Self::root(volume)?.dir(rest, true) }
+    pub fn create(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; again(volume, || Self::root(volume)?.below(rest, true)) }
+    // A directory below a volume's root by path; the root itself is checked with a `stat`, so that a root an earlier
+    // instance of its service opened is found out here, where it can be opened again (311-KRN-0207).
+    fn below(&self, path: &str, create: bool) -> Result<Self> {
+        if path.is_empty() { self.metadata()?; }
+        self.dir(path, create)
+    }
     /// A directory below this one.
     pub fn dir(&self, path: &str, create: bool) -> Result<Self> {
         if path.is_empty() { return Ok(Self { handle: self.handle, owned: false, server: self.server }); }
@@ -256,7 +275,7 @@ impl File {
     /// Creates a file (or empties an existing one) to write.
     pub fn create(path: &str) -> Result<Self> { Self::open_mode(path, MODE_WRITE | MODE_CREATE | MODE_TRUNCATE) }
     /// Opens with `MODE_*` bits.
-    pub fn open_mode(path: &str, mode: u8) -> Result<Self> { let (volume, rest) = locate(path)?; Dir::root(volume)?.file(rest, mode) }
+    pub fn open_mode(path: &str, mode: u8) -> Result<Self> { let (volume, rest) = locate(path)?; again(volume, || Dir::root(volume)?.file(rest, mode)) }
     pub fn size(&self) -> usize { self.size }
     pub fn position(&self) -> usize { self.position }
     pub fn seek(&mut self, position: usize) { self.position = position.min(self.size); }
@@ -324,14 +343,13 @@ pub fn list(path: &str, visit: impl FnMut(&DirEntry)) -> Result<usize> { Dir::op
 pub fn mkdir(path: &str) -> Result<()> { Dir::create(path).map(drop) }
 
 /// Removes a file or an empty directory.
-pub fn remove(path: &str) -> Result<()> { let (volume, rest) = locate(path)?; Dir::root(volume)?.remove(rest) }
+pub fn remove(path: &str) -> Result<()> { let (volume, rest) = locate(path)?; again(volume, || Dir::root(volume)?.remove(rest)) }
 
 /// Renames or moves within a volume.
 pub fn rename(from: &str, to: &str) -> Result<()> {
     let ((volume, from), (target, to)) = (locate(from)?, locate(to)?);
     if !volume.eq_ignore_ascii_case(target) { return Err(Error::Invalid); }
-    let root = Dir::root(volume)?;
-    root.rename(from, &root, to)
+    again(volume, || { let root = Dir::root(volume)?; root.rename(from, &root, to) })
 }
 
 /// Size, time and attributes of a file or directory.
@@ -341,7 +359,7 @@ pub fn metadata(path: &str) -> Result<Metadata> {
 }
 
 /// The volume `name` (`""`, `"ram"`, `"log"`, `"models"` or a store volume).
-pub fn volume(name: &str) -> Result<VolumeInfo> { Dir::root(name)?.volume() }
+pub fn volume(name: &str) -> Result<VolumeInfo> { again(name, || Dir::root(name)?.volume()) }
 
 /// Checks volume `name` (`""`, `"ram"`, `"log"`, `"models"` or a store volume) without changing it.
 pub fn check<T>(name: &str, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> { Dir::root(name)?.check(visit) }
