@@ -37,6 +37,32 @@ Nothing sets the calendar clock but the user (111's problem). This task makes 11
   - a script's `sleep(25000)` across the step lasting 25 s.
 - **The profile** (`docs/profile/clocks.md`) says what the network time is trusted for, and its bounds.
 
+## Progress
+
+2026-11-04, the network track (f9615a3c to 6794d921):
+
+- **Everything in the plan is made.**
+  - `mind::sntp`, `socket.wit` 2.10 `grant-rules`, and `timed`.
+  - `MIND_SOURCE_TIME` from `02_build.sh`.
+  - The floor's write logged: `[TIMED] THE FLOOR IS NOW …, STORED IN system/timed/floor`.
+- **Host tests:** `tests/sntp_host.rs`, 11 tests, among them 200 000 fuzzed answers and 20 000 fuzzed choices. All of `scripts/host_tests.sh` passes on the branch.
+- **QEMU** (this session's container, TCG, 4 CPUs), `timed_check` alone:
+  - x86 (two runs): the clock set from 2024-01-01 to within 0.1 and 0.2 s of the host's time;
+  - aarch64 (one run): within 0.1 s.
+  
+  In each run:
+  - the server an hour ahead was left out, and two of three agreed;
+  - the floor was stored;
+  - the script's `sleep(25000)` across the step lasted 25 001 to 25 020 ms by the guest's clock and about 24 s by the host's;
+  - two servers agreeing on 2020 were refused below the floor;
+  - with no time line, `timed` was not started.
+- **The profile:** `docs/profile/clocks.md`, the section "Network time".
+
+**Not done:**
+- The floor read back at the next boot: the suite boots on a snapshot.
+- A machine (MC-12.1).
+- The gate's run of the whole `net` suite with the check.
+
 ## Related
 
 [111](111-network-time.md), [111-KRN-0206](111-KRN-0206-timed-among-the-boot-services.md), [211-KRN-0051](211-KRN-0051-setting-the-clock.md).

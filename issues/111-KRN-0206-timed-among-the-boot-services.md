@@ -27,6 +27,14 @@
   - it is started with a time line and sets the clock;
   - with none, the line above and no `timed` running.
 
+## Progress
+
+2026-11-04 (5e089b91, 2fb15e15):
+- **Handoff 29.** `timed` is after `netpolicy`; init's three grants and its `HOLDS` row; `BADGE_TIMED` and `system/timed` in `vfs_server`'s zone; `data/services.txt` may turn it off.
+- **The bootstrap profile** has its row.
+- **Host tests:** `boot_abi`, `vfs_zone` and `services` pass, and all of `scripts/host_tests.sh` on the branch.
+- **QEMU:** `timed_check` on x86 and aarch64 (111-NET-0057's progress). It was started with a time line and set the clock; without one, init logged `[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER` and no `timed` ran.
+
 ## Related
 
 [111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.md), [111](111-network-time.md).
