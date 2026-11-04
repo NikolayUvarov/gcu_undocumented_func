@@ -3004,9 +3004,115 @@ def nn_clients_check(vm):
 
 
 def nnd_suite(vm):
-    """The model service: KRN's boot service (262-KRN-0178), then the shell's clients of it (262-APP-0112)."""
+    """The model service: KRN's boot service (262-KRN-0178), then the shell's clients of it and NRL's pinned model run
+    through it (262-APP-0112)."""
     nnd_check(vm)
     nn_clients_check(vm)
+    nn_model_check(vm)
+
+
+NN_FIXTURE = ROOT / "nrl/tests/fixtures/native-conformance-v0"
+
+
+def nn_model_id(manifest):
+    """nrl.model/0's model ID: SHA-256 of the manifest's canonical JSON (sorted keys, no spaces); the pinned manifest
+    has no floats and no characters past ASCII, so Python's encoder gives it."""
+    return hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+def nn_packages():
+    """NRL's pinned package (900-NRL-0025) and four made from it for nnd's refusals: name -> (files, model ID).
+    `changed`: one byte of an object changed, its entry not (digest); `compact`: an object written without its writer's
+    spaces, its entry and the ID made anew (malformed: nnd takes the writer's bytes alone); `overlay`: the kind changed
+    (unsupported)."""
+    model = NN_FIXTURE / "model"
+    base = {p.name: p.read_bytes() for p in sorted(model.iterdir())}
+    manifest = json.loads(base["manifest.json"])
+    assert nn_model_id(manifest) == "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee"
+    packages = {"conformance": (base, nn_model_id(manifest))}
+    head = base["object-0006.json"]
+    assert b"0.3," in head
+    packages["changed"] = ({**base, "object-0006.json": head.replace(b"0.3,", b"0.4,", 1)}, nn_model_id(manifest))
+    compact = json.dumps(json.loads(head), separators=(",", ":")).encode()
+    m = json.loads(base["manifest.json"])
+    m["objects"]["head"].update(sha256=hashlib.sha256(compact).hexdigest(), bytes=len(compact))
+    packages["compact"] = ({**base, "object-0006.json": compact, "manifest.json": json.dumps(m, indent=2).encode()}, nn_model_id(m))
+    m = json.loads(base["manifest.json"])
+    m["kind"] = "overlay"
+    packages["overlay"] = ({**base, "manifest.json": json.dumps(m, indent=2).encode()}, nn_model_id(m))
+    return packages
+
+
+def nn_model_check(vm):
+    """262-APP-0112, docs/nn/runtime.md section 8, NRL's native acceptance (nrl/specs/native-conformance-v0.md): with
+    nnd's line in data/memory.conf (its workers), NRL's pinned model from data/models/ loaded through the shell's
+    badged client and run by nncheck. Refused: a wrong ID and a changed byte (digest), an object not in its writer's
+    bytes (malformed), an overlay (unsupported), a missing package and a path that climbs (not-found). Run: the
+    reference outputs within NRL's tolerance and their charges, the budget's refusals, a cancellation and a deadline
+    partway, a numeric failure and a new session, nnd's memory back after the unload. Two clients: the other's calls on
+    a session and a job it does not own refused (owner); once the first has ended and its badge is retired, the badge
+    taken again reaches none of them (not-found)."""
+    packages = nn_packages()
+    ident = packages["conformance"][1]
+
+    def retired():
+        return [int(b) for b in re.findall(r"\[NND\] BADGE (\d+) RETIRED", vm.command("dmesg -s nnd", raw=True))]
+
+    require(vm.command("write data/memory.conf nnd 64"), "WROTE 7 BYTES")
+    require(vm.command("svc restart nnd"), "nnd restarted: PID")
+    for _ in range(60):
+        if re.search(rf"\[NND\] READY: QUOTA 64 MIB, {vm.cpus} WORKERS AT MOST", vm.command("dmesg -s nnd", raw=True)):
+            break
+        time.sleep(1)
+    else:
+        raise AssertionError(vm.command("dmesg -s nnd", raw=True)[-1500:])
+    out = vm.command(f"nncheck load data/models/conformance {ident}", raw=True, timeout=90)
+    require_all(out, "NNCHECK LOAD data/models/conformance Ok IN=3 OUT=2 ROWS=256 BYTES=", "NNCHECK UNLOAD Ok(())", "NNCHECK DONE")
+    wrong = ident[:-1] + ("0" if ident[-1] != "0" else "1")
+    for path, ident_, error in (("conformance", wrong, "Digest"), ("changed", ident, "Digest"), ("compact", packages["compact"][1], "Malformed"),
+                                ("overlay", packages["overlay"][1], "Unsupported"), ("missing", ident, "NotFound"), ("../models/conformance", ident, "NotFound")):
+        require(vm.command(f"nncheck load data/models/{path} {ident_}", raw=True, timeout=90), f"NNCHECK LOAD data/models/{path} Err({error})")
+    log = vm.command("dmesg -s nnd", raw=True)
+    for path, reason in (("conformance", "THE MODEL ID IS NOT THE ONE GIVEN"), ("changed", "AN OBJECT FILE'S LENGTH OR SHA-256 IS NOT ITS ENTRY'S"), ("overlay", "AN OVERLAY")):
+        assert re.search(rf"\[NND\] LOAD data/models/{path} REFUSED FOR BADGE \d+: {reason}", log), (path, log[-2000:])
+    out = vm.command(f"nncheck run data/models/conformance {ident}", raw=True, timeout=300)
+    assert "WRONG" not in out and "NNCHECK DONE" in out, out
+    for line in ("OUTPUTS 3 ROWS WITHIN", "CHARGED 3/1893/1 OK", "NONFINITE INPUT REFUSED", "257 ROWS REFUSED", "OUTPUTS 256 ROWS WITHIN",
+                 "WORK BUDGET 1892: 3 ROWS REFUSED", "ROW BUDGET 3:", "JOB BUDGET 2:", "MEMORY ONE BYTE SHORT", "CANCEL PARTWAY:",
+                 "DEADLINE PARTWAY:", "DEADLINE PASSED BEFORE", "NUMERIC: CHARGED 1/39/1", "A NEW SESSION AFTER THE FAILURE", "MEMORY BACK TO BEFORE THE LOAD OK"):
+        require(out, line)
+    print(f"nnd model run: {' | '.join(l.strip() for l in out.splitlines() if 'TOOK' in l or ' TRY ' in l or 'NUMERIC:' in l)}", flush=True)
+    # Two clients, then the first one's badge taken again.
+    started = vm.command(f"run nncheck share data/models/conformance {ident} 120 &", raw=True)
+    holder = int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", started)[1])
+    logged = vm.program_logs(holder, " HELD")
+    shared = re.search(r"NNCHECK SHARE SESSION=(\d+) JOB=(\d+) HELD", logged)
+    assert shared, logged
+    session, job = shared[1], shared[2]
+    out = vm.command(f"nncheck other {session} {job} {ident}", raw=True, timeout=60)
+    require_all(out, "NNCHECK CLIENT BADGE=2 ", "NNCHECK OTHER USAGE Err(Owner)", "NNCHECK OTHER SUBMIT Err(Owner)", "NNCHECK OTHER WAIT Err(Owner)",
+                "NNCHECK OTHER CANCEL Err(Owner)", "NNCHECK OTHER CLOSE Err(Owner)", "NNCHECK OTHER UNLOAD Err(NotFound)", "NNCHECK OTHER OPEN Ok(true)",
+                "NNCHECK OTHER OWN JOB Ok(48) WITHIN THE TOLERANCE")
+    before = len(retired())
+    require(vm.command(f"kill {holder}"), f"KILLED PID={holder}")  # the harness's number, translated
+    for _ in range(100):
+        if 1 in retired()[before:]:
+            break
+        time.sleep(.1)
+    else:
+        raise AssertionError(vm.command("dmesg -s nnd", raw=True)[-1500:])
+    out = vm.command(f"nncheck other {session} {job} {ident}", raw=True, timeout=60)
+    require_all(out, "NNCHECK CLIENT BADGE=1 ", "NNCHECK OTHER USAGE Err(NotFound)", "NNCHECK OTHER SUBMIT Err(NotFound)", "NNCHECK OTHER WAIT Err(NotFound)",
+                "NNCHECK OTHER CANCEL Err(NotFound)", "NNCHECK OTHER CLOSE Err(NotFound)", "NNCHECK OTHER UNLOAD Err(NotFound)", "NNCHECK OTHER OPEN Err(NotFound)")
+    require(vm.command("nn models", raw=True), "NO MODEL LOADED")
+    require(vm.command("rm data/memory.conf"), "OK")
+    accel = "KVM" if "kvm" in (getattr(vm.args, "machine", None) or "") else "TCG"
+    print(f"PASS: nnd runs NRL's pinned model on QEMU {vm.arch}, {vm.cpus} CPUs, {accel} (262-APP-0112): loaded from data/models/ through the shell's badged client; a wrong ID, "
+          "a changed byte, an object not in its writer's bytes, an overlay, a missing package and a climbing path refused; "
+          "the reference outputs of 3 and 256 rows within NRL's tolerance, charged 3/1893/1; the work, row, job and memory "
+          "budgets' refusals; a cancellation and a deadline partway, a numeric failure and a new session; nnd's memory back "
+          "after the unload; another client refused a session and a job it does not own, its own session's job run; a retired "
+          "badge taken again reaching none of them", flush=True)
 
 
 def held_check(vm, cpus):
@@ -13302,6 +13408,12 @@ def main():
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
                 # 156 KiB of text for `<` and `|` (000-APP-0074).
                 (disk / "docs/pipe.txt").write_text(PIPE_TEXT)
+            if suite == "nnd":
+                # NRL's pinned model and four packages made from it that nnd must refuse (262-APP-0112).
+                for name, (files, _) in nn_packages().items():
+                    (disk / "data/models" / name).mkdir(parents=True)
+                    for file, data in files.items():
+                        (disk / "data/models" / name / file).write_bytes(data)
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite == "isolation":

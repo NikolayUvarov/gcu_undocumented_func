@@ -493,8 +493,12 @@ The design is [docs/nn/runtime.md](../nn/runtime.md) 1.0; the interface is `idl/
   - with no badge free, the start is refused (`EVERY CLIENT OF THE MODEL SERVICE IS IN USE`);
   - at its start the shell retires every badge an earlier shell lent, and lends none before `nnd` has answered.
 - **`nn [status]`, `nn models`** in the shell: `nnd`'s memory, workers, models, sessions and badges, then each badge the shell lent and to which PID.
-- **`nncheck [hold SECONDS]`**, the test program: its client's badge and rights, `nnd`'s status, and its `retire` and `retire-all` refused (`owner`).
-- **No model is claimed to run in the system yet** (MC-12.3): loading and running `NRL`'s model natively is the `nnd` suite's next part.
+- **`nncheck`**, the test program, with `NRL`'s inputs and references built in (docs/nn/runtime.md section 8):
+  - `nncheck [hold SECONDS]`: its client's badge and rights, `nnd`'s status, and its `retire` and `retire-all` refused (`owner`);
+  - `nncheck load PATH ID`: one load and its answer;
+  - `nncheck run PATH ID`: the pinned model's outputs within `NRL`'s tolerance and their charges, the budget's refusals, a cancellation and a deadline partway, a numeric failure and a new session, `nnd`'s memory back after the unload;
+  - `nncheck share PATH ID SECONDS` and `nncheck other SESSION JOB ID`: a session and a job held by one client, and another client's calls on them.
+- **Where a model runs:** the `nnd` suite runs `NRL`'s pinned model from `data/models/` on the configurations its PASS line names. That is evidence for those configurations only (MC-12.1, MC-12.2). Another model, machine or configuration is not covered by it.
 
 ## 5. Phases
 
