@@ -1,6 +1,6 @@
 # 262-APP-0112 — The model service `nnd` and `idl/nn.wit` 1.0: stage 0 of 262, for NRL's native integration
 
-**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed on 2026-10-29 with `NRL` and `KRN`; `idl/nn.wit`, `nnd`, its checks and the shell's badged clients are written; `NRL`'s model runs through `nnd` in the `nnd` suite on x86 QEMU (2026-11-04); aarch64 is left) · **Blocked by:** nothing for the native part: `nnd` as a boot service with its grants and the shell's slot ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)) are in `main` since landing round 50 (2026-10-30); later, a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.1 (2026-11-04, sections 5 and 8 as made; 1.0 agreed on 2026-10-29 with `NRL` and `KRN`); `idl/nn.wit`, `nnd`, its checks and the shell's badged clients are written; `NRL`'s model runs through `nnd` in the `nnd` suite on x86 and aarch64 QEMU (2026-11-04); the shell's `nn load | run | bench` is left) · **Blocked by:** nothing for the native part: `nnd` as a boot service with its grants and the shell's slot ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)) are in `main` since landing round 50 (2026-10-30); later, a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-28, from NRL's request `issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11` on `codex/NRL-lab` (41633c21) and its messages `APP/2026-10-26T1740Z-NRL-native-nnd-interface-and-smoke-harness.md` and `APP/2026-10-26T1828Z-NRL-runtime-v0-ready-native-integration-pending.md` on `internal-dev-messages`.
 
@@ -117,8 +117,8 @@
   - a second client is refused the first one's session and job (`owner`), its `unload` of a model it does not hold is `not-found`, and its own session runs;
   - after the first ended and its badge 1 was retired, badge 1 taken again reaches none of them (`not-found`), and the model it alone held is gone.
 - **Measured, not bounded:** under TCG a job's worker took about 30 to 550 ms to start, and 256 rows about 70 ms. So a cancellation landed partway within 1 to 3 tries (of 16), and a deadline within 1 to 12 (of 64), in these runs and four earlier ones of the same tries. The check prints each try.
+- **On aarch64** (QEMU `virt`, 4 CPUs, TCG, `-cpu max`), the same day: the whole suite once and the check alone twice more, every step as on x86. From its submit to its end, a 3-row job took 93 to 108 ms, most of it the worker's start, and a 256-row one 73 to 225 ms. A cancellation landed partway within 1 to 4 tries, a deadline within 2 to 11.
 - **Left:**
-  - the aarch64 run;
   - `nn load | run | bench` in the shell;
   - the model disk `models:` on a machine that has one;
   - KVM and a real machine.
@@ -131,7 +131,7 @@
   - every bound of the profile;
   - the badge-to-session rule, with every call naming another client's session or job refused;
   - budget charging as `nrl-runtime` defines it.
-- **The `nnd` suite, on a named configuration** (QEMU x86 with 4 CPUs; aarch64), steps 1–8 of the design's section 8:
+- [x] **The `nnd` suite, on a named configuration** (QEMU x86 with 4 CPUs; aarch64), steps 1–8 of the design's section 8 (2026-11-04, both, TCG; 1.1's steps 1–9):
   - loading and its refusals;
   - outputs equal to the reference within `NRL`'s tolerance;
   - the budget, cancellation and the deadline;
