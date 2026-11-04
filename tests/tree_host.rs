@@ -418,12 +418,12 @@ fn model_diff(blocks: &mut Memory, a: &BTreeMap<String, M>, b: &BTreeMap<String,
     }
 }
 
-/// `diff` of two roots with every step allowed: the paths and changes it visited, its count checked.
+/// `diff` of two roots within a million steps, more than any tree here needs, so one that never ends fails: what it visited, its count checked.
 fn compared(blocks: &mut Memory, a: Option<&Cid>, b: Option<&Cid>) -> Result<Vec<(String, Change)>, Error> {
     let (mut one, mut two) = (Box::new([0u8; CHUNK]), Box::new([0u8; CHUNK]));
     let mut path = vec![0u8; PATH_MAX];
     let mut seen = Vec::new();
-    let mut left = u64::MAX;
+    let mut left = 1 << 20;
     let n = diff(blocks, a, b, [&mut one, &mut two], &mut path, &mut left, |p, c| { seen.push((String::from_utf8(p.to_vec()).unwrap(), c)); Ok(()) })?;
     assert_eq!(n as usize, seen.len());
     Ok(seen)
