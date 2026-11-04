@@ -27,6 +27,8 @@ pub const PROTECTED: u8 = 0x40;
 pub const SSID: u8 = 0;
 pub const RATES: u8 = 1;
 pub const DS_PARAMETER: u8 = 3;
+/// The Country element (802.11d, 9.4.2.8): the access point's country, as its first two letters.
+pub const COUNTRY: u8 = 7;
 pub const RSN: u8 = 48;
 pub const EXTENDED_RATES: u8 = 50;
 

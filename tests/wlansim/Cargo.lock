@@ -112,6 +112,7 @@ dependencies = [
 name = "dot11"
 version = "0.1.0"
 dependencies = [
+ "regdb",
  "wpa",
 ]
 
@@ -162,6 +163,10 @@ dependencies = [
  "digest",
  "hmac",
 ]
+
+[[package]]
+name = "regdb"
+version = "0.1.0"
 
 [[package]]
 name = "sha1"

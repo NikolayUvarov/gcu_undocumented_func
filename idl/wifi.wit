@@ -11,12 +11,17 @@
 ///
 /// 1.1 (550-NET-0035, for 550-APP-0082): the country the station runs under, from the regulatory catalogue built into
 /// it (wireless-regdb at a pinned commit, named by `catalogue`). A country is asked for by its two-letter code and kept
-/// by `keystore` (keystore.wit 1.3), never assumed: with none applied the station probes nowhere and `join` answers
-/// `unsupported`. The radio applies the country's limits under its own (wlanhw.wit 1.2). Asking for a
+/// by `keystore` (keystore.wit 1.3). Since 1.2, with none chosen the station runs under the country the access points
+/// announce, or `00` (below). The radio applies the country's limits under its own (wlanhw.wit 1.2). Asking for a
 /// country leaves the network and drops the last scan, so nothing chosen under the old rules is used under the new
 /// ones. A station built without a catalogue answers the country calls `unsupported` and keeps 1.0's behaviour
 /// (550-NET-0035, stage A).
-package mind:wifi@1.1.0;
+///
+/// 1.2 (550-NET-0035, stage B; the maintainer's decision of 2026-11-04): with no country chosen the station still
+/// works. Its first scan sends nothing; then it runs under the country the access points it heard announce (their
+/// Country element), or with none announced under `00`, the rules every country allows. `country-source` says which
+/// and why. A chosen country always comes first, and `00` is still never a chosen one.
+package mind:wifi@1.2.0;
 
 interface wifi {
     /// How a network is protected: `wpa2` is RSN with PSK and CCMP, which the station joins, as it joins `open`;
@@ -91,4 +96,12 @@ interface wifi {
     /// capital letters, or `00`; `not-found`: not in the catalogue; `no-device`: no radio yet; `unsupported`: no
     /// catalogue in this station. A radio that refuses the limits is not an error: the status says `failed`.
     set-country: func(code: string<2>) -> result<country-status, error>;
+
+    /// Why the station runs under the country `country` names as applied (1.2): `none`, none yet (the radio has not
+    /// answered, or the first scan has not ended); `chosen`, the user's, kept by `keystore`; `detected`, announced by
+    /// `announced` of the `heard` access points that named a country; `world`, `00`, as none was chosen or announced.
+    enum origin { none, chosen, detected, world }
+    record country-origin { origin: origin, announced: u8, heard: u8 }
+    /// Where the applied country came from (1.2).
+    country-origin: func() -> country-origin;
 }

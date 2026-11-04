@@ -23,6 +23,8 @@
 //! 1.1's ways, so a station without the country catalogue (550-NET-0035, stage A) still joins; a station with one sets
 //! limits before it sends anything. A 1.1 radio rejects the call: the station then keeps to the channels alone and says
 //! the radio did not confirm.
+//! 1.3 (550-NET-0035, stage B): `00`, the world domain's code, is a code `set-country` takes too. The station gives it
+//! when no country is chosen and none is announced (the maintainer's decision of 2026-11-04).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -32,7 +34,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:wlanhw";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `no-device`: the radio is not up; `busy`: the transmit queue is full; `empty`: no
@@ -192,7 +194,7 @@ pub fn kick(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
 /// Applies country `code`'s limits (1.2): `dfs` is the catalogue's DFS region (0 unset, 1 FCC, 2 ETSI, 3 JP), `limits`
 /// every channel the station may use, at most once each. Answers the radio's info after; its `channels` are those
 /// left by the radio's own limits. `invalid`: a channel twice or not the radio's, or a code that is not two capital
-/// letters; `failed`: the radio could not apply them, and it sends nothing until limits it can apply are set.
+/// letters nor `00` (1.3); `failed`: the radio could not apply them, and it sends nothing until limits it can apply are set.
 pub fn set_country(endpoint: Endpoint, code: &str, dfs: u8, limits: &[Limit]) -> Result<core::result::Result<Info, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {

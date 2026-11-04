@@ -445,7 +445,7 @@ types! {
     vfs: Error Entry Volume Report;
     video: Error Camera Frame;
     voice: Action Order;
-    wifi: Security Error State Reason Network Status Standing Channel Country Countries CountryState CountryStatus;
+    wifi: Security Error State Reason Network Status Standing Channel Country Countries CountryState CountryStatus Origin CountryOrigin;
     window: Error Kind Placement Info;
     wlanhw: Error Info Filter Sent Limit;
 }

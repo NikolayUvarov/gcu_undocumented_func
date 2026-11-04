@@ -58,6 +58,7 @@ pub mod tpm;
 pub mod netring;
 pub mod output;
 pub mod platform;
+pub mod platform_power;
 pub mod process;
 mod arch;
 pub mod random;
