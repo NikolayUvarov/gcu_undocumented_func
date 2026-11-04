@@ -1,0 +1,17 @@
+[package]
+name = "passlock"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# The device key sealed under the owner's passphrase where no TPM seals it (308-NET-0055): no libmind, no allocation, so
+# `cargo test` runs it on the host.
+[dependencies]
+argon2 = { version = "0.5", default-features = false, features = ["zeroize"] } # without its password-hash string format
+chacha20poly1305 = { version = "0.10", default-features = false } # as keystore's programs' secrets (000-NET-0045)
+zeroize = { version = "1", default-features = false }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
