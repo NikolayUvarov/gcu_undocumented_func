@@ -40,14 +40,14 @@ Once the storage track's part is there:
 **Written in the shell** (`shell/src/named.rs`, `main.rs`):
 - **For a program without a request for files** whose arguments name a path on a store volume (`find notes:`, `grep -r word notes:`): a read-only scope of that volume's root, lent in `SLOT_STOREFS`.
   - Its paths stay as they are: `mind::fs` already sends a store volume to `SLOT_STOREFS`, and the scope's root is the volume's root.
-  - A URL is not taken for a path. A volume `storefs` does not have (`ask:…`) gets no scope, unsaid.
+  - The first word that names an existing path on a store volume gives it; a word that names none (`ask:…`, `tcp:…`, a URL) spends no scope.
   - In a script, only with `file` or `files` declared.
 - **For `REQUEST_FILES`:** a copy of the shell's `BADGE_USER` client in `SLOT_STOREFS`. It reaches the store once KRN's `route` change is in; until then such a program finds no store volume, as before.
 - **Bounds:** `storefs` keeps 8 scopes a client at once. A scope of an ended program ends when the shell next makes one, so this bounds the programs running at once with a scope.
 
 **Tests:**
 - a host test of the volume named;
-- the `shell` suite's `storefs_check`: `find notes:` lists the volume's files, `grep -r store notes:` finds the line, `find other:` (no such volume) finds nothing, and `storefs` logs the scope `READ-ONLY`.
+- the `shell` suite's `storefs_check`: `find notes:` lists the volume's files, `grep -r store notes:` finds the line, `find other: notes:` reads `other:` alone through its scope, and `storefs` logs the scope `READ-ONLY`.
 
 ## Acceptance criteria
 
