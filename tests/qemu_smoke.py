@@ -46,7 +46,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -2568,6 +2568,13 @@ def storefs_check(vm):
     require(vm.command("rm other:x/c.txt"), "OK")
     require(vm.command("rm other:x"), "OK")
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
+    # 311-KRN-0207 (STO's request): after storefs restarts, the shell's kept root of notes: is an earlier instance's;
+    # mind::fs opens it again once, so ls and cat answer with no restart of the shell.
+    require(vm.command("svc restart storefs", timeout=30), "storefs restarted: PID")
+    require(vm.service_logs("storefs", "READY VOLUMES"), "[STOREFS] READY VOLUMES")
+    require(vm.command("ls notes:docs"), "1 FILES, 15 BYTES")
+    require(vm.command("cat notes:docs/a.txt"), "from the store")
+    require(vm.command("ls notes:"), "docs")
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
     # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
     # scope ends with the program.
@@ -2594,7 +2601,7 @@ def storefs_check(vm):
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
-          "vfs_server's volumes as before; find and grep read the store volume their arguments name through a read-only scope, "
+          "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); find and grep read the store volume their arguments name through a read-only scope, "
           "and no other store volume; edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
@@ -9447,11 +9454,21 @@ def wifi_join_check(vm):
         time.sleep(.2)
     require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 60), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE)")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # A change of country while joined leaves the network under the old rules and drops the scan (dot11's host tests
+    # check the scan); the station joins again under the new one.
+    vm.command("logs " + str(vm.services()["wlansim"]), raw=True)
+    run("wifi country RU", 30, "[WIFI] COUNTRY RU (Russia) APPLIED")
+    require(vm.service_logs("wlansim", "THE STATION LEFT"), "[WLANSIM] THE STATION LEFT THE ACCESS POINT")
+    after = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30).partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
+    if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
+        after += wlan_until("[WLAN] Off", 30)
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # Under US the radio reports the 11 channels its limits leave (wlanhw.wit 1.2), and the restarted station took those.
     channels = run("wifi channels 00", 30, "[WIFI] 11 CHANNELS UNDER 00 (the world domain)")
     assert re.search(r"CHANNEL +11 2\.4 GHZ SEND", channels) and "CHANNEL  12" not in channels, channels[-1500:]
     print("PASS: the station's country (550-NET-0035): with none chosen the first scan sent nothing and the access point's UZ "
-          "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it", flush=True)
+          "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it; a change to RU "
+          "while joined left the access point, and the station joined again under RU", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -13256,6 +13273,64 @@ def no_serial_check(args, disk):
     print("PASS: without COM1 (no 16550 at 3F8) the shell still draws: init lends it no serial line", flush=True)
 
 
+def held_clients(vm, name):
+    """The endpoint clients service `name` holds, by slot: (badge, the service that serves it)."""
+    pids = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    named = {pid: n for n, pid in pids.items()}
+    caps = vm.command(f"stat caps {pids[name]}", raw=True)
+    return {int(slot): (int(badge), named.get(servers.get(int(ep)), "?")) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
+
+
+def store_copy_disk_check(args, disk):
+    """309-KRN-0209: beside the boot disk, two blank VirtIO disks: the first is the block store's own, the next its copy's.
+    blockstore holds a write client of each (slots 2 and 4), vfs_server neither, and after a reboot both are found again."""
+    with tempfile.TemporaryDirectory(prefix="mind-store-copy-") as temp:
+        images = [Path(temp) / name for name in ("store.img", "copy.img")]
+        extra = []
+        for n, image in enumerate(images):
+            with image.open("wb") as f:
+                f.truncate(8 << 20)  # the store formats its own at start: about 10 s on aarch64 under TCG
+            extra += ["-drive", f"format=raw,file={image},if=none,id=store{n}", "-device", f"virtio-blk-pci,drive=store{n}"]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+
+        def found():
+            log = vm.command("dmesg -s init", raw=True)
+            own = re.search(r"\[INIT\] THE BLOCK STORE'S DISK: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
+            copy = re.search(r"\[INIT\] THE BLOCK STORE'S COPY: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
+            assert own and copy and own[1] != copy[1], log
+            for _ in range(60):
+                if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
+                    break
+                time.sleep(2)
+            require(vm.command("dmesg -s blockstore", raw=True), "[BLOCKSTORE] READY")
+            store = held_clients(vm, "blockstore")
+            assert store.get(2) == (1, own[1]) and store.get(4) == (1, copy[1]), (own[0], copy[0], store)
+            files = {server for _, server in held_clients(vm, "vfs_server").values()}
+            assert own[1] not in files and copy[1] not in files, files
+            return own, copy
+        try:
+            own, copy = found()
+            assert own[2] == copy[2] == "BLANK", (own[0], copy[0])
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.output
+            require(vm.command(f"blocks publish disk {put[1]}", raw=True), "PUBLISHED disk VERSION 1 (FLUSHED)")
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND>", timeout=60)
+            time.sleep(1); vm.collect(); vm.output = ""
+            again, copied = found()
+            assert (again[1], again[2]) == (own[1], "THE STORE'S") and copied[1] == copy[1], (again[0], copied[0])
+            require(vm.command("blocks resolve disk", raw=True), f"disk VERSION 1 ROOT {put[1]}")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-store-copy-{args.cpus}cpu.log").write_text(vm.log)
+    # The copy stays blank until blockstore writes it (309-STO-0040).
+    print(f"PASS: store copy: two blank VirtIO disks beside the boot disk, the block store's ({own[1]}) and its copy's ({copy[1]}); "
+          f"blockstore holds a write client of each in slots 2 and 4, vfs_server neither; after a reboot the store's is found as "
+          f"THE STORE'S with its name, the copy's again as {copied[2]} (309-KRN-0209)", flush=True)
+
+
 def store_disk_check(args, disk):
     """300-KRN-0025: a blank VirtIO disk is the block store's own: the store formats it, vfs_server never gets it,
     and an object put there is found after a reboot (the snapshot overlay outlives the guest's reboot)."""
@@ -13965,6 +14040,8 @@ def main():
                 continue
             if suite == "tools":  # its own raw disk, booted twice (173-APP-0092)
                 svc_boot_check(args)
+            if suite == "store":  # its own machine with two store disks, booted twice (309-KRN-0209)
+                store_copy_disk_check(args, disk)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at

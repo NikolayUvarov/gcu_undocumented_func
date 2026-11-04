@@ -1,8 +1,8 @@
-# 311-STO-0039 — Two roots of a tree compared, and a name's older versions read
+# 311-STO-0039 — Two roots of a tree compared, and a name's older versions read — done
 
-**Type:** storage (`libmind` `tree`, `blocks`) · **Owner:** `STO` track · **Priority:** P3 · **Status:** open · **Blocked by:** none · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.2, MC-4.9, MC-4.13
+**Type:** storage (`libmind` `tree`, `blocks`) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-11-04) · **Blocked by:** none · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.2, MC-4.9, MC-4.13
 
-Split from [311](311-storefs-a-file-face.md) (2026-11-04), its plan's "History: old roots are snapshots; a directory's history and two roots can be compared". The other steps of 311 are done ([311-STO-0032](../issues-done/311-STO-0032-storefs-a-vfs-view-of-a-named-root.done), [311-STO-0037](../issues-done/311-STO-0037-a-scope-of-a-store-volume.done)).
+Split from [311](../issues/311-storefs-a-file-face.md) (2026-11-04), its plan's "History: old roots are snapshots; a directory's history and two roots can be compared". The other steps of 311 are done ([311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.done), [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.done)).
 
 ## Problem
 
@@ -46,8 +46,24 @@ A name keeps its last versions (`blocks history`), and each is a whole tree. But
 - QEMU: the `store` suite on x86 and aarch64, `store_tree_check`'s comparisons and an older version read back;
 - docs/storage 0.28, the profile's Article 4 row and the evidence of both platforms.
 
-The criteria are met on the branch; the issue closes once it lands in `main`.
+## Resolution
+
+Landed in `main` 4130cff6 (landing round 80, 2026-11-04, with 308-NET-0055's `keystore` side), from `claude/relaxed-meitner-5bmhpz` 2e74d4959.
+
+- **`mind::tree::diff`** (`libmind/src/tree.rs`): two roots compared, with no heap and no system calls.
+  - An entry the same on both sides is not read; every node it reads is checked as `walk` checks it.
+  - It is bounded by its steps, by 32 directories and by a path buffer.
+- **`blocks tree`:** `diff <name>[@<version>] <name>[@<version>]`, and `ls` and `cat` at `<name>@<version>`, `@0` being the empty tree. A version no longer kept is refused, naming it.
+- **Host:** 15 tests in `tests/tree_host.rs`. Each comparison there is bounded at a million steps, so one that never ends fails. Each of 15 changes of the logic made a test fail.
+- **QEMU,** `store_tree_check` in the `store` suite, x86 and aarch64, on b5109fcc8 (35 and 36 `PASS`):
+  - between versions of `home`: a move and two removals; a removal; a version against the empty tree; the current version against itself, equal;
+  - an older version listed and a file of it read back by SHA-256;
+  - a version no longer kept refused.
+- **Docs:** docs/storage 0.28; the profile's Article 4 row and the evidence of x86 and aarch64.
+- **Not run on the platform** (host-tested only): a comparison past its steps, its depth or its path buffer, and a node missing or damaged in a comparison.
+
+These are tests of the configurations named, not a proof (MC-12.2).
 
 ## Related
 
-[311](311-storefs-a-file-face.md), [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
+[311](../issues/311-storefs-a-file-face.md), [311-STO-0027](311-STO-0027-directories-as-objects.done), [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
