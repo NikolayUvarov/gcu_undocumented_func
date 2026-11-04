@@ -712,7 +712,8 @@ pub fn copy(endpoint: Endpoint, name: &str, on: bool) -> Result<core::result::Re
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Durability as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-/// What the copy holds (2.5). Error: no-copy.
+/// What the copy holds (2.5), also while it is read beside a store not mounted (2.6). Error: no-copy (or the store's
+/// own error, unmounted, without a copy).
 pub fn copy_stat(endpoint: Endpoint) -> Result<core::result::Result<CopyStats, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {

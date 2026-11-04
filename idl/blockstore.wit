@@ -228,7 +228,8 @@ interface blockstore {
     /// store does not take; and through a domain's client, rights: a domain's records are sealed under its key, which the
     /// copy does not hold), not-found (on: no live version in the store; off: none on the copy), full, quota, device.
     copy: func(name: string<64>, on: bool) -> result<durability, error>;
-    /// What the copy holds (2.5). Error: no-copy.
+    /// What the copy holds (2.5), also while it is read beside a store not mounted (2.6). Error: no-copy (or the store's
+    /// own error, unmounted, without a copy).
     copy-stat: func() -> result<copy-stats, error>;
 
     /// Up to 16 of the names the copy holds with a root, in byte order, each after `after` (empty: from the first), with

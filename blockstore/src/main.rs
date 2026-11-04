@@ -832,7 +832,8 @@ fn main(_info: &'static BootInfo) {
                 blockstore::reply_copy(call, done)
             }
             Ok((Request::CopyStat, call)) => {
-                let stats = store.as_ref().map_err(|e| *e).and_then(|_| copies.as_ref().ok_or(Error::NoCopy)).map(|c| {
+                // A copy read beside a store not mounted answers too; without one, an unmounted store says why (309-STO-0041).
+                let stats = copies.as_ref().ok_or_else(|| store.as_ref().err().copied().unwrap_or(Error::NoCopy)).map(|c| {
                     let s = c.stats();
                     CopyStats { sectors: s.sectors, used: s.used, blocks: s.blocks, names: s.names, behind: s.behind, from_copy: s.from_copy, from_store: s.from_store }
                 });
