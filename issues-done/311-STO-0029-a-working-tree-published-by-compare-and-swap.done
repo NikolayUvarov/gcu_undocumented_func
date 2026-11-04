@@ -80,7 +80,7 @@ Done 2026-10-30, landed in round 54 (`main` 3fbdd30e, from `claude/relaxed-meitn
   - `tests/worktree_host.rs`;
   - QEMU `store` suite on x86 and aarch64: a tree made, listed, read back by SHA-256, its history, a conflict refused with the name unchanged, every file read after a collection, a move and two removals.
 - **Recorded in** docs/storage ("A working tree") and the profile.
-- **Next:** [311-STO-0032](../issues/311-STO-0032-storefs-a-vfs-view-of-a-named-root.md), `storefs`.
+- **Next:** [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.done), `storefs`.
 
 ## Related
 

@@ -1,0 +1,58 @@
+# 550-DRV-0049 — The regulatory catalogue as a crate of its own, `regdb`, for the station and the radios — done
+
+**Type:** driver (library) · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-6.1, MC-12.4
+
+## Problem
+
+NET's request of 2026-10-20 (it was in `requests-DRV.md`, for [550-NET-0035](../issues/550-NET-0035-the-stations-country.md)):
+- **The station chooses the country.** So it needs the whole catalogue, to list every country, and each country's rules, for its channels.
+- **The catalogue sat inside `rtw89_wifi`** (`src/regulatory.rs` and `src/regulatory_tables.rs`). The station could not use it without taking in the driver.
+- **One copy only.** A second copy in the station could drift from the radios' copy.
+
+DRV agreed on 2026-10-20 but did not do it. Stage B of 550-NET-0035 waited for it all that time, while DRV's RTL8852BE work waited for a country from the station.
+
+## Plan
+
+1. A crate `regdb/`, `no_std` and with no dependency, holding the catalogue as it is: the interface in `src/lib.rs`, the generated `src/tables.rs` and the pinned `db.txt`.
+2. The generator and its test follow it; the licence entry names the new paths.
+3. `rtw89_wifi` depends on it and re-exports it as `rtw89_wifi::regulatory`.
+
+## Acceptance criteria
+
+- [x] `regdb` builds alone, with no dependency.
+- [x] `rtw89_wifi` builds on it.
+- [x] The catalogue's host tests pass at the new paths, and the generator's check matches the committed tables.
+- [x] What NET asked to read from outside the crate is public:
+  - each rule's frequency range, widest channel, EIRP and flags (`Country::source_rules`, `Rule`'s fields, `Flags::contains`);
+  - the database's SHA-256 (`PROVENANCE.db_sha256`).
+
+## Resolution
+
+Done on `claude/ASR-DRV`, landing through the queue:
+- `git mv` keeps each file's history:
+  - `rtw89_wifi/src/regulatory.rs` → `regdb/src/lib.rs`, now `#![cfg_attr(not(test), no_std)]`;
+  - `rtw89_wifi/src/regulatory_tables.rs` → `regdb/src/tables.rs`;
+  - `rtw89_wifi/regdb/{db.txt,README.md}` → `regdb/`;
+  - `scripts/rtw89_regdb.py` → `scripts/regdb.py`;
+  - `tests/rtw89_regdb_test.py` → `tests/regdb_test.py`;
+  - `tests/rtw89_regulatory_host.rs` → `tests/regdb_host.rs`.
+- The tables differ only in their first line, which names the generator.
+- `rtw89_wifi/Cargo.toml` depends on `regdb`, and `rtw89_wifi/src/lib.rs` has `pub use regdb as regulatory;`. Nothing else in the driver used the module.
+- `scripts/host_tests.sh`, `THIRD_PARTY.md`, `regdb/README.md` and `hwdocs/rtl8852be-regulatory.md` name the new paths.
+
+**Tested on LEG9:**
+- `scripts/regdb.py --check`: exit 0;
+- `tests/regdb_test.py`: 11 passed;
+- `tests/regdb_host.rs`: 9 passed;
+- `cargo build --release` of `regdb` and of `rtw89_wifi`;
+- the full `scripts/host_tests.sh`.
+
+**The rest of NET's request, `wlanhw.wit` 1.2's `set-country`, is already on `main`:**
+- `bcm_wifi` applies a country's limits;
+- `rtw89_wifi`'s service answers `failed` until 213-DRV-0032 applies limits, as the request allows. The station then sends nothing on that radio.
+
+The request is taken from `requests-DRV.md`. `wlan`'s dependency on `regdb` is stage B of 550-NET-0035, NET's.
+
+## Related
+
+[550-NET-0035](../issues/550-NET-0035-the-stations-country.md), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](../issues/213-KRN-0123-the-rtl8852be-radio-endpoint.md), [hwdocs/rtl8852be-regulatory.md](../hwdocs/rtl8852be-regulatory.md).

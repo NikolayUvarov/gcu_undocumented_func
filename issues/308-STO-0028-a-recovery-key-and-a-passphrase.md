@@ -61,6 +61,7 @@ Since 308-STO-0022 a medium's volume key is kept by `keystore`, under a key deri
   - host: `tests/blockstore_host.rs` (73 passed, `rights_come_from_the_badge` with the recovery right; two changes of the badge rule made it fail), `tests/idl_host.rs`, `tests/idl_fuzz_host.rs`, `tests/storefs_host.rs`, `tests/idl_test.py`, `mind_idl.py --check`;
   - QEMU, the `store` suite's `store_recovery_check` (x86 and aarch64): through the shell's client (badge 7) and the read-only one (badge 1), each call refused (`rights`) and logged with its badge, nothing written; `blocks recovery` 0 records on the RAM disk.
 - **Not run on the platform:** making, keeping, forgetting and recovering with a key. No program holds a client badged `BADGE_RECOVER` until 308-KRN-0204, and none shows a key until 308-APP-0122.
+- **In `main`** e28cfe4d (the landing round of candidate 6fc5b253): `blockstore.wit` 2.4 and its checks, so 308-KRN-0204 and 308-APP-0122 build on `main`.
 
 ## Related
 

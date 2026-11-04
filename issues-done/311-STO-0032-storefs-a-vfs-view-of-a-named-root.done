@@ -1,8 +1,8 @@
-# 311-STO-0032 — `storefs`: files and directories of a named root, through `vfs.wit`
+# 311-STO-0032 — `storefs`: files and directories of a named root, through `vfs.wit` — done
 
-**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open (its QEMU checks pass, 2026-11-04; it closes when they land) · **Blocked by:** none ([311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md)'s lending of a scope for `REQUEST_FILE`, [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md)'s scope, [311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done) and [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done) are in `main`) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
+**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** none ([311-APP-0121](../issues/311-APP-0121-the-shell-lends-a-storefs-client.md)'s lending of a scope for `REQUEST_FILE`, [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.done)'s scope, [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.done) and [311-KRN-0189](311-KRN-0189-a-conflict-error-in-vfs-wit.done) are in `main`) · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
 
-Split from [311](311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
+Split from [311](../issues/311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
 
 ## Problem
 
@@ -65,7 +65,7 @@ A tree in the store is read and changed only through `blocks tree`, one command 
 
 - **At boot:** 311-KRN-0190 (round 62, `main` 74cf7265) starts `storefs` after `blockstore` on x86 and aarch64, and gives the shell a client badged `mind::fs::BADGE_USER` in `SLOT_STOREFS` (42).
 - **The first QEMU criterion** is the `shell` suite's `storefs_check` (the kernel track's): `mkdir`, `write`, `cat`, `ls` and `rm` of the shell on the store volume `notes:`, through `mind::fs`.
-- **The other two wait** for a program that holds a client of `storefs`: two writers need one that keeps a file open while the shell writes, and a cut needs a writer stopped in its publication. A program holds none until `storefs` makes a narrower client than the shell's ([311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.md)) and the shell lends it (APP).
+- **The other two wait** for a program that holds a client of `storefs`: two writers need one that keeps a file open while the shell writes, and a cut needs a writer stopped in its publication. A program holds none until `storefs` makes a narrower client than the shell's ([311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.done)) and the shell lends it (APP).
 
 ## Progress (2026-11-04)
 
@@ -97,6 +97,19 @@ A tree in the store is read and changed only through `blocks tree`, one command 
   - two writers, one told of the conflict.
 - docs/storage, the profile, and `vfs.wit`'s change agreed with `KRN`.
 
+## Resolution
+
+- **Done** in `main` e28cfe4d: the landing round of candidate 6fc5b253 landed the storage branch's request of 08:05 (`claude/relaxed-meitner-5bmhpz` 66dbb3ee), after the integrator's gate of that candidate.
+- **What it gives:**
+  - `storefs` (`storefs/src/fs.rs`, the logic; `storefs/src/main.rs`, the service) serves `vfs.wit` 2.6 over the store's names `fs/<volume>`, each flush or close a publication by compare-and-swap, a conflict told as `conflict`; at boot since 311-KRN-0190, reached through `mind::fs` for any volume `vfs_server` does not hold;
+  - host tests: `tests/storefs_host.rs` (19), among them a flush cut at each of its writes to the medium;
+  - QEMU, x86 and aarch64: the `shell` suite's `storefs_check` (the shell's file commands on `notes:`), and the `store` suite's `storefs_writers_check` with `fsstep` (two writers, one told of the conflict; a writer cut while its data is held, the name left at its old version);
+  - docs/storage and the profile's `storefs` rows (docs/profile/README.md, evidence.md and their aarch64 pages).
+- **What it does not give,** as docs/storage says:
+  - a cut inside a flush's writes to the medium runs in the host tests only;
+  - a restart of `storefs` leaves the shell without its store volumes until the shell is restarted, since `mind::fs` keeps the root handles of the old instance;
+  - `modified` stamps, and `check`, `format` and `fill` of a store volume.
+
 ## Related
 
-[311](311-storefs-a-file-face.md), [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done), `vfs_server` (the kernel session's), 000-KRN-0170 (the programs' data directories).
+[311](../issues/311-storefs-a-file-face.md), [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done), `vfs_server` (the kernel session's), 000-KRN-0170 (the programs' data directories).
