@@ -83,6 +83,7 @@ USER_CRATES=(
     "blockstore:blockstore:blockstore.elf"
     "blocks:blocks:blocks.elf"
     "tally:tally:tally.elf"
+    "fsstep:fsstep:fsstep.elf"
     "storefs:storefs:storefs.elf"
     "gpio:gpio:gpio.elf"
     "battery:battery:battery.elf"
