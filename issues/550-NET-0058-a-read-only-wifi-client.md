@@ -2,7 +2,7 @@
 
 **Type:** network (`wlan`), with `init`'s grant and the shell's lending · **Owner:** `NET` · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-6.1, MC-12.2
 
-**Split from:** [550-NET-0035](550-NET-0035-the-stations-country.md), whose criterion "a read-only client is refused" could not be tested.
+**Split from:** [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done), whose criterion "a read-only client is refused" could not be tested.
 
 ## Problem
 
@@ -25,4 +25,4 @@
 
 ## Related
 
-[550-NET-0035](550-NET-0035-the-stations-country.md), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done) (the station in the boot services), 000-NET-0015 (the shell's read-only copies of other clients).
+[550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done) (the station in the boot services), 000-NET-0015 (the shell's read-only copies of other clients).

@@ -2,7 +2,7 @@
 
 **Type:** interface (`idl/wlanhw.wit`) and network (`wlan`) · **Owner:** `NET` · **Priority:** P2 · **Status:** open · **Blocked by:** `DRV`'s answer (`DRV/2026-11-04T1335Z-NET-wlanhw-1-3-takes-00-and-a-question-on-a-radios-channels.md` on `internal-dev-messages`) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-12.4, MC-12.7
 
-**Split from:** [550-NET-0035](550-NET-0035-the-stations-country.md), its first point of "not done".
+**Split from:** [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done), its first point of "not done".
 
 ## Problem
 
@@ -29,4 +29,4 @@
 
 ## Related
 
-[550-NET-0035](550-NET-0035-the-stations-country.md); [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md) (`rtw89_wifi`'s `wlanhw` endpoint).
+[550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done); [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md) (`rtw89_wifi`'s `wlanhw` endpoint).
