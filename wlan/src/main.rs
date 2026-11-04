@@ -163,14 +163,20 @@ impl Wlan {
         let announced = self.station.networks().announced();
         if core::mem::replace(&mut self.first, false) {
             let (code, source) = catalogue::decide(None, announced);
-            self.run_under(code, source);
+            self.run_under_first(code, source);
         } else if let Some((code, source)) = self.running.and_then(|r| catalogue::moves(r, announced)) {
             if !matches!(self.station.state(), State::Joining | State::Joined) { self.run_under(code, source); }
         }
     }
 
+    // The first country, after the scan that only listened: the networks it heard stay (`relax`), so a network listed
+    // then is joined with no new scan.
+    fn run_under_first(&mut self, code: [u8; 2], source: Source) { self.run_country(code, source, true) }
+
     // Runs the station under country `code`: its channels restricted, the radio given the limits, and the log says why.
-    fn run_under(&mut self, code: [u8; 2], source: Source) {
+    fn run_under(&mut self, code: [u8; 2], source: Source) { self.run_country(code, source, false) }
+
+    fn run_country(&mut self, code: [u8; 2], source: Source, first: bool) {
         let Some(country) = catalogue::entry(code) else { return };
         let plan = catalogue::plan(country, self.radio_channels());
         let mut limits = List::<wlanhw::Limit, 64>::default();
@@ -181,9 +187,11 @@ impl Wlan {
         (self.confirmed, self.refused) = match answer { Ok(Ok(_)) => (true, false), Ok(Err(wlanhw::Error::Failed)) => (false, true), _ => (false, false) };
         // A radio that refuses the limits sends nothing: the station only listens, and does not fall back.
         let allowed = if self.refused { catalogue::listening(self.radio_channels()) } else { plan };
-        let mut out = Out::default();
-        self.station.restrict(allowed.allowed(), &mut out, &mut self.tx);
-        self.apply(out);
+        if first { self.station.relax(allowed.allowed()); } else {
+            let mut out = Out::default();
+            self.station.restrict(allowed.allowed(), &mut out, &mut self.tx);
+            self.apply(out);
+        }
         self.running = Some((code, source));
         let (send, listen) = plan.counts();
         let why = match source {
