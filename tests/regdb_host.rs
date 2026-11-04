@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#[path = "../rtw89_wifi/src/regulatory.rs"]
+#[path = "../regdb/src/lib.rs"]
 mod regulatory;
 
 use regulatory::{Assessment, DfsRegion, Environment, Error, Flags, Restriction};
