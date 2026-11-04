@@ -215,7 +215,7 @@ const OWNER: u16 = 7;
 
 fn block(seed: usize, len: usize) -> Vec<u8> { (0..len).map(|i| (i * 31 + seed * 7 + 1) as u8).collect() }
 
-fn get(store: &mut Store<&mut Memory>, cid: &Cid) -> Result<Vec<u8>, Error> {
+fn get<D: Device>(store: &mut Store<D>, cid: &Cid) -> Result<Vec<u8>, Error> {
     let mut out = vec![0u8; BLOCK_MAX];
     let len = store.get(cid, &mut out)?;
     out.truncate(len);
@@ -537,6 +537,8 @@ fn rights_come_from_the_badge() {
         assert_eq!([allowed(badge, Pins), allowed(badge, Usage)], [stat; 2], "badge {badge:#x}");
         // A name's copy on a second medium is retention; what the copy holds is any client's (309-STO-0040).
         assert_eq!([allowed(badge, Copy), allowed(badge, CopyStat)], [publish, stat], "badge {badge:#x}");
+        // The copy's names are reading; a name brought back from it is a publication (309-STO-0041).
+        assert_eq!([allowed(badge, CopyNames), allowed(badge, Rebuild)], [get, publish], "badge {badge:#x}");
         // A recovery key opens the medium on any machine: only the recovery right makes, keeps, forgets or uses one, and
         // no other right gives it; how many there are is any client's (308-STO-0028).
         let recover = badge & BADGE_RECOVER != 0;
@@ -792,7 +794,7 @@ fn object(store: &mut Store<&mut Memory>, seed: usize, len: usize) -> Cid {
     builder.finish(store).unwrap().0
 }
 
-fn read_object(store: &mut Store<&mut Memory>, root: &Cid) -> Vec<u8> {
+fn read_object<D: Device>(store: &mut Store<D>, root: &Cid) -> Vec<u8> {
     let mut buffer = Box::new([0u8; dag::CHUNK]);
     let size = dag::size(store, root, &mut buffer).unwrap() as usize;
     let mut out = vec![0u8; size];
@@ -2546,7 +2548,7 @@ fn recovery_records_past_those_a_mount_remembers_are_found_and_erased() {
 // Copies of chosen names on a second medium (309-STO-0040): a store and its copy, each a whole store on a medium of
 // its own.
 
-use copies::{Copies, Event, Medium as Side, Step};
+use copies::{Copies, Event, Gate, Held, Medium as Side, Rebuilt, Standing, Step};
 use std::collections::HashSet;
 
 /// What the copy told the log, a line each.
@@ -2567,14 +2569,22 @@ fn said(e: &Event) -> String {
         Event::Repaired { cid, into } => format!("repaired {cid} {into:?}"),
         Event::NotRepaired { cid, on, error } => format!("not repaired {cid} {on:?} {error:?}"),
         Event::Collected { on, freed } => format!("collected {on:?} {freed:?}"),
+        Event::Rebuilt { name, version, root, put } => format!("rebuilt {} {version} {root} {put}", text(name)),
+        Event::NotRebuilt { name, error, at: Some(at) } => format!("not rebuilt {} {error:?} {at}", text(name)),
+        Event::NotRebuilt { name, error, at: None } => format!("not rebuilt {} {error:?}", text(name)),
     }
 }
 const NOTHING: Vec<String> = Vec::new();
 
 /// The copy on `medium`, mounted beside `main`.
 fn copy_of<'a>(medium: &'a mut Memory, room: &'a mut Room, block: &'a mut [u8; BLOCK_MAX], main: &mut Store<&mut Memory>, heard: &Heard) -> Copies<'a, &'a mut Memory> {
-    let copy = mount(medium, room).unwrap();
-    Copies::new(copy, block, main, &mut heard.log())
+    let copy = mount_gated(medium, room, true).unwrap();
+    Copies::new(copy, block, Some(main), &mut heard.log())
+}
+
+/// The copy's store on `medium`, mounted through its gate, open or shut.
+fn mount_gated<'a>(medium: &'a mut Memory, room: &'a mut Room, open: bool) -> Result<Store<'a, Gate<&'a mut Memory>>, Error> {
+    Store::mount(Gate::new(medium, open), &SEALER, None, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, room.now)
 }
 
 /// Bytes no two seeds share: SHA-256 of the seed and the place, 32 at a time.
@@ -3073,9 +3083,416 @@ fn the_blocks_read_and_put_for_a_copy_follow_the_change() {
     assert_eq!(copies.copy_store().stats().blocks as usize, held.len());
 }
 
+// A store rebuilt from its copy (309-STO-0041): the copy's names listed with how each stands, a name only the copy holds
+// brought back into the store, and the copy read beside a store that does not mount.
+
+/// The copy's names after `after`, as `names` lists them beside `main`, or beside none.
+fn copy_names(copies: &Copies<&mut Memory>, main: Option<&Store<&mut Memory>>, after: &[u8]) -> Result<Vec<(String, Held)>, Error> {
+    Ok(copies.names(main, after)?.map(|(n, h)| (String::from_utf8(n.to_vec()).unwrap(), h)).collect())
+}
+
+/// No store beside the copy: one that did not mount.
+fn no_store<'s, 'm>() -> Option<&'s mut Store<'m, &'m mut Memory>> { None }
+
+fn held(name: &str, version: u64, root: Cid, standing: Standing) -> (String, Held) { (name.to_string(), Held { version, root, standing }) }
+
+fn whole(root: Cid, version: u64, visited: u32, lacked: u32, put: u32, copied: bool) -> Rebuilt { Rebuilt { root, version, visited, lacked, put, stopped: None, copied } }
+
+/// A journal entry of `seq` whose content is `content`, after `prev`, put in `store`.
+fn journal_entry(store: &mut Store<&mut Memory>, seq: u64, content: Cid, prev: Option<Cid>) -> Cid {
+    let time = journal::Time { boot: 1, monotonic: seq, calendar: 0, clock: journal::Clock::None };
+    let label = |s: &str| journal::Label::new(s).unwrap();
+    let mut out = vec![0u8; 512];
+    let len = journal::Entry { seq, time, source: label("test"), kind: label("note"), content, prev }.encode(&mut out).unwrap();
+    store.put(Codec::DagCbor, &out[..len]).unwrap()
+}
+
+#[test]
+fn a_store_whose_medium_is_replaced_by_a_blank_one_is_rebuilt_from_its_copy_and_found_again_after_a_remount_of_both() {
+    use tree::Kind::File;
+    let (mut a, mut b) = (Memory::new(2048), Memory::new(2048));
+    let data = [noise(100, 40_000), noise(101, 3000), noise(102, 5000), noise(103, 2000)];
+    let (object, dir, x, y, first);
+    let mut blocks = Vec::new();
+    {
+        let (mut ra, mut rb, mut block) = (Room::new(256), Room::new(256), Box::new([0u8; BLOCK_MAX]));
+        let heard = Heard::default();
+        let mut main = mount(&mut a, &mut ra).unwrap();
+        let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+        // An object of a node and three chunks, moved to once copied; a directory of two files; one of its files alone.
+        first = object_of(&mut main, &data[3]);
+        object = object_of(&mut main, &data[0]);
+        (x, y) = (main.put(Codec::Raw, &data[1]).unwrap(), main.put(Codec::Raw, &data[2]).unwrap());
+        dir = directory(&mut main, &[entry("x", File, 3000, x), entry("y", File, 5000, y)]);
+        for (name, root) in [(&b"obj"[..], first), (b"dir", dir), (b"one", x)] {
+            copies.publish(&mut main, name, 0, &root, OWNER, &mut heard.log()).unwrap();
+            assert_eq!(copies.copy(&mut main, name, true, OWNER, &mut heard.log()), Ok(true));
+        }
+        assert_eq!(copies.publish(&mut main, b"obj", 1, &object, OWNER, &mut heard.log()), Ok((2, true)));
+        // A name without a copy.
+        copies.publish(&mut main, b"plain", 0, &y, OWNER, &mut heard.log()).unwrap();
+        for root in [object, dir, x] { blocks.push(under(&mut main, &root)); }
+    }
+    assert_eq!(blocks.iter().map(|b| b.len()).collect::<Vec<_>>(), [4, 3, 1]);
+    // The store's medium replaced by a blank one: it mounts empty, and the copy's names are left as they are.
+    a = Memory::new(2048);
+    {
+        let (mut ra, mut rb, mut block) = (Room::new(256), Room::new(256), Box::new([0u8; BLOCK_MAX]));
+        let heard = Heard::default();
+        let mut main = mount(&mut a, &mut ra).unwrap();
+        let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+        assert_eq!(heard.take(), [format!("only on copy dir 1 {dir}"), format!("only on copy obj 2 {object}"), format!("only on copy one 1 {x}")]);
+        assert_eq!(copy_names(&copies, Some(&main), b""), Ok(vec![held("dir", 1, dir, Standing::OnlyOnCopy), held("obj", 2, object, Standing::OnlyOnCopy), held("one", 1, x, Standing::OnlyOnCopy)]));
+        let written = copies.copy_store().device().written;
+        // Each brought back, its blocks the store lacks put, at version 1; the file both names hold is put once.
+        assert_eq!(copies.rebuild(Some(&mut main), b"obj", false, &mut heard.log()), Ok(whole(object, 1, 4, 4, 4, true)));
+        assert_eq!(copies.rebuild(Some(&mut main), b"dir", false, &mut heard.log()), Ok(whole(dir, 1, 3, 3, 3, true)));
+        assert_eq!(copies.rebuild(Some(&mut main), b"one", false, &mut heard.log()), Ok(whole(x, 1, 1, 0, 0, true)));
+        assert_eq!(heard.take(), [format!("rebuilt obj 1 {object} 4"), format!("rebuilt dir 1 {dir} 3"), format!("rebuilt one 1 {x} 0")]);
+        assert_eq!(copies.copy_store().device().written, written, "nothing written on the copy");
+        // Names and roots, charged to the copy's owner; every block whole in the store; the older version is not.
+        for (name, root, under) in [(&b"obj"[..], object, &blocks[0]), (b"dir", dir, &blocks[1]), (b"one", x, &blocks[2])] {
+            assert_eq!((main.resolve(name), main.history(name).unwrap().len(), main.history(name).unwrap()[0].owner), (Ok((1, root)), 1, OWNER));
+            for c in under { assert_eq!(get(&mut main, c), get(copies.copy_store(), c)); }
+        }
+        assert_eq!((read_object(&mut main, &object), main.stats().blocks), (data[0].clone(), 7));
+        assert!(!main.has(&first) && copies.copy_store().has(&first));
+        assert_eq!(main.resolve(b"plain"), Err(Error::NotFound));
+        assert_eq!(copy_names(&copies, Some(&main), b"").unwrap().iter().map(|n| n.1.standing).collect::<Vec<_>>(), [Standing::InStep; 3]);
+        assert_eq!(copies.behind(), 0);
+        // A rebuilt name has its copy: its next publication reaches the copy, at the copy's next version.
+        let z = object_of(&mut main, &noise(104, 1000));
+        assert_eq!(copies.publish(&mut main, b"obj", 1, &z, OWNER, &mut heard.log()), Ok((2, true)));
+        assert_eq!(copies.copy_store().resolve(b"obj"), Ok((3, z)));
+        assert_eq!(copies.publish(&mut main, b"obj", 2, &object, OWNER, &mut heard.log()), Ok((3, true)));
+    }
+    // Both found again after a remount: in step, nothing behind or logged, every block whole on both.
+    let (mut ra, mut rb, mut block) = (Room::new(256), Room::new(256), Box::new([0u8; BLOCK_MAX]));
+    let heard = Heard::default();
+    let mut main = mount(&mut a, &mut ra).unwrap();
+    let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+    assert_eq!((copies.behind(), heard.take()), (0, NOTHING));
+    for (name, root) in [(&b"obj"[..], object), (b"dir", dir), (b"one", x)] {
+        assert_eq!(main.resolve(name).map(|r| r.1), Ok(root));
+        assert_eq!(copies.copy_store().resolve(name).map(|r| r.1), Ok(root));
+    }
+    assert_eq!((read_object(&mut main, &object), read_object(copies.copy_store(), &object)), (data[0].clone(), data[0].clone()));
+    for c in blocks.iter().flatten() { assert_eq!(get(&mut main, c), get(copies.copy_store(), c)); }
+}
+
+#[test]
+fn a_check_puts_nothing_and_counts_what_the_rebuild_then_puts() {
+    use tree::Kind::File;
+    let (mut a, mut b) = (Memory::new(1024), Memory::new(1024));
+    let data = noise(110, 60_000);
+    let (root, twice);
+    {
+        let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+        let heard = Heard::default();
+        let mut main = mount(&mut a, &mut ra).unwrap();
+        let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+        root = object_of(&mut main, &data);
+        // A directory that holds the same file twice.
+        let f = main.put(Codec::Raw, &noise(111, 700)).unwrap();
+        twice = directory(&mut main, &[entry("a", File, 700, f), entry("b", File, 700, f)]);
+        for (name, r) in [(&b"big"[..], root), (b"twice", twice)] {
+            copies.publish(&mut main, name, 0, &r, OWNER, &mut heard.log()).unwrap();
+            copies.copy(&mut main, name, true, OWNER, &mut heard.log()).unwrap();
+        }
+    }
+    let mut blank = Memory::new(1024);
+    let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+    let heard = Heard::default();
+    let mut main = mount(&mut blank, &mut ra).unwrap();
+    let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+    heard.take();
+    // One chunk is in the store already, put by another writer.
+    main.put(Codec::Raw, &data[dag::CHUNK..2 * dag::CHUNK]).unwrap();
+    let before = (main.stats(), main.device().written, copies.copy_store().device().written);
+    // The node and four chunks visited, four of them lacking; nothing put, published, written or logged, twice.
+    for _ in 0..2 {
+        assert_eq!(copies.rebuild(Some(&mut main), b"big", true, &mut heard.log()), Ok(whole(root, 0, 5, 4, 0, false)));
+        assert_eq!((main.stats(), main.device().written, copies.copy_store().device().written), before);
+        assert_eq!((main.snapshot(b"big"), heard.take()), (Ok((0, None)), NOTHING));
+    }
+    // The rebuild puts the four the check counted.
+    assert_eq!(copies.rebuild(Some(&mut main), b"big", false, &mut heard.log()), Ok(whole(root, 1, 5, 4, 4, true)));
+    assert_eq!(main.stats().blocks, before.0.blocks + 4);
+    assert_eq!(read_object(&mut main, &root), data);
+    // A block the object holds twice: a check counts each visit; the rebuild puts it once.
+    assert_eq!(copies.rebuild(Some(&mut main), b"twice", true, &mut heard.log()), Ok(whole(twice, 0, 3, 3, 0, false)));
+    assert_eq!(copies.rebuild(Some(&mut main), b"twice", false, &mut heard.log()), Ok(whole(twice, 1, 3, 2, 2, true)));
+    // Now in step: neither is checked again.
+    assert_eq!(copies.rebuild(Some(&mut main), b"big", true, &mut heard.log()), Err(Error::Conflict));
+}
+
+#[test]
+fn a_name_the_copy_holds_incomplete_or_damaged_is_reported_with_its_cid_and_not_published_and_its_blocks_are_freed_by_the_next_collection() {
+    let (mut a, mut b) = (Memory::new(2048), Memory::new(2048));
+    let data = noise(120, 60_000);
+    let chunks: Vec<Cid> = data.chunks(dag::CHUNK).map(Cid::raw).collect();
+    let (big, node, older, newer, content, solo);
+    {
+        let (mut ra, mut rb, mut block) = (Room::new(256), Room::new(256), Box::new([0u8; BLOCK_MAX]));
+        let heard = Heard::default();
+        let mut main = mount(&mut a, &mut ra).unwrap();
+        let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+        big = object_of(&mut main, &data);
+        // A journal of two entries, and a directory of one file.
+        let first = main.put(Codec::Raw, &noise(121, 900)).unwrap();
+        content = main.put(Codec::Raw, &noise(122, 900)).unwrap();
+        older = journal_entry(&mut main, 1, first, None);
+        newer = journal_entry(&mut main, 2, content, Some(older));
+        solo = main.put(Codec::Raw, &noise(123, 600)).unwrap();
+        node = directory(&mut main, &[entry("f", tree::Kind::File, 600, solo)]);
+        for (name, root) in [(&b"big"[..], big), (b"log", newer), (b"dir", node)] {
+            copies.publish(&mut main, name, 0, &root, OWNER, &mut heard.log()).unwrap();
+            copies.copy(&mut main, name, true, OWNER, &mut heard.log()).unwrap();
+        }
+    }
+    // A chunk of `big` damaged on the copy before its mount, which leaves it out of its index; the store's medium lost.
+    let lba = block_record(&b, &chunks[2]);
+    b.flip(lba + 1, 7);
+    let mut blank = Memory::new(2048);
+    let (mut ra, mut rb, mut block) = (Room::new(256), Room::new(256), Box::new([0u8; BLOCK_MAX]));
+    let heard = Heard::default();
+    let mut main = mount(&mut blank, &mut ra).unwrap();
+    let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+    assert_eq!((copies.copy_store().stats().corrupt, copies.behind()), (1, 0));
+    heard.take();
+    let stopped = |at: Cid, why: Error, version: u64, visited: u32, lacked: u32, put: u32, root: Cid| Rebuilt { root, version, visited, lacked, put, stopped: Some((at, why)), copied: false };
+    // The walk visits the node and three chunks and stops at the one the copy lacks: nothing put by the check.
+    assert_eq!(copies.rebuild(Some(&mut main), b"big", true, &mut heard.log()), Ok(stopped(chunks[2], Error::Incomplete, 0, 4, 4, 0, big)));
+    assert_eq!((main.stats().blocks, heard.take()), (0, NOTHING));
+    // The rebuild puts the node and two chunks, stops there, and publishes nothing.
+    assert_eq!(copies.rebuild(Some(&mut main), b"big", false, &mut heard.log()), Ok(stopped(chunks[2], Error::Incomplete, 0, 4, 4, 3, big)));
+    assert_eq!(heard.take(), [format!("not rebuilt big Incomplete {}", chunks[2])]);
+    assert_eq!((main.snapshot(b"big"), main.stats().blocks), (Ok((0, None)), 3));
+    // Damaged on the copy while it is mounted: the journal's older entry, read by the walk before it visits it, and the
+    // directory's root, read before anything. Found corrupt at first; the read takes it out of the copy's index, so the
+    // next walk finds it lacking.
+    for (name, root, at, visited) in [(&b"log"[..], newer, older, 2), (b"dir", node, node, 0)] {
+        let lba = block_record(copies.copy_store().device(), &at);
+        copies.copy_store().device().flip(lba, 300);
+        assert_eq!(copies.rebuild(Some(&mut main), name, true, &mut heard.log()), Ok(stopped(at, Error::Corrupt, 0, visited, visited, 0, root)));
+        assert_eq!(copies.rebuild(Some(&mut main), name, false, &mut heard.log()), Ok(stopped(at, Error::Incomplete, 0, visited, visited, visited, root)));
+        assert_eq!(heard.take(), [format!("not rebuilt {} Incomplete {at}", String::from_utf8(name.to_vec()).unwrap())]);
+        assert_eq!(main.snapshot(name), Ok((0, None)));
+    }
+    assert_eq!(main.stats().blocks, 3 + 2);
+    // Each name stays on the copy as it was.
+    assert_eq!(copy_names(&copies, Some(&main), b"").unwrap(), [held("big", 1, big, Standing::OnlyOnCopy), held("dir", 1, node, Standing::OnlyOnCopy), held("log", 1, newer, Standing::OnlyOnCopy)]);
+    // What the walks put is retained by nothing: kept for its lease, then freed by the next collection.
+    assert_eq!(main.collect().map(|c| c.blocks), Ok(0));
+    main.set_time(LEASE_NS);
+    assert_eq!(main.collect().map(|c| c.blocks), Ok(5));
+    assert_eq!(main.stats().blocks, 0);
+}
+
+#[test]
+fn a_block_the_copy_lacks_that_the_store_holds_leaves_the_rebuilt_name_behind_until_caught_up() {
+    let (mut a, mut b) = (Memory::new(1024), Memory::new(1024));
+    let data = noise(125, 40_000);
+    let chunks: Vec<Cid> = data.chunks(dag::CHUNK).map(Cid::raw).collect();
+    let root;
+    {
+        let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+        let heard = Heard::default();
+        let mut main = mount(&mut a, &mut ra).unwrap();
+        let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+        root = object_of(&mut main, &data);
+        copies.publish(&mut main, b"obj", 0, &root, OWNER, &mut heard.log()).unwrap();
+        copies.copy(&mut main, b"obj", true, OWNER, &mut heard.log()).unwrap();
+    }
+    let lba = block_record(&b, &chunks[0]);
+    b.flip(lba, 300);
+    let mut blank = Memory::new(1024);
+    let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+    let heard = Heard::default();
+    let mut main = mount(&mut blank, &mut ra).unwrap();
+    let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+    heard.take();
+    // The store holds the chunk the copy lacks, put by another writer: the name is brought back whole into the store,
+    // and is behind, so the copy is not said to hold it whole.
+    main.put(Codec::Raw, &data[..dag::CHUNK]).unwrap();
+    assert_eq!(copies.rebuild(Some(&mut main), b"obj", false, &mut heard.log()), Ok(whole(root, 1, 4, 3, 3, false)));
+    assert_eq!(heard.take(), [format!("rebuilt obj 1 {root} 3")]);
+    assert_eq!((read_object(&mut main, &root), copies.behind()), (data.clone(), 1));
+    // In step by its root; the catch-up puts the chunk on the copy.
+    assert_eq!(copy_names(&copies, Some(&main), b"").unwrap(), [held("obj", 1, root, Standing::InStep)]);
+    assert_eq!(copies.catch_up(&mut main, &mut heard.log()), Some(true));
+    assert_eq!((heard.take(), copies.behind()), (vec!["copied obj 1 1".to_string()], 0));
+    assert_eq!(read_object(copies.copy_store(), &root), data);
+}
+
+#[test]
+fn a_name_in_step_behind_or_held_by_the_store_is_refused_with_conflict_and_nothing_is_written() {
+    let (mut a, mut b) = (Memory::new(1024), Memory::new(1024));
+    let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+    let heard = Heard::default();
+    let mut main = mount(&mut a, &mut ra).unwrap();
+    let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+    let (x, y) = (object_of(&mut main, &noise(115, 20_000)), object_of(&mut main, &noise(116, 3000)));
+    for name in [&b"same"[..], b"moved", b"gone"] {
+        copies.publish(&mut main, name, 0, &x, OWNER, &mut heard.log()).unwrap();
+        copies.copy(&mut main, name, true, OWNER, &mut heard.log()).unwrap();
+    }
+    copies.publish(&mut main, b"plain", 0, &y, OWNER, &mut heard.log()).unwrap();
+    // Another root, and a removal, in the store while the copy refused them: both behind.
+    copies.copy_store().device().fail_write = true;
+    copies.publish(&mut main, b"moved", 1, &y, OWNER, &mut heard.log()).unwrap();
+    copies.unpublish(&mut main, b"gone", 1, OWNER, &mut heard.log()).unwrap();
+    copies.copy_store().device().fail_write = false;
+    heard.take();
+    assert_eq!(copy_names(&copies, Some(&main), b"").unwrap(), [held("gone", 1, x, Standing::Behind), held("moved", 1, x, Standing::Behind), held("same", 1, x, Standing::InStep)]);
+    let written = (main.device().written, copies.copy_store().device().written);
+    // A name the store holds is never overwritten, and a removal never undone: a conflict, checked or not. A name the
+    // copy holds no root of is not found; one no store takes is invalid.
+    for (name, error) in [("same", Error::Conflict), ("moved", Error::Conflict), ("gone", Error::Conflict), ("plain", Error::NotFound), ("never", Error::NotFound), ("no space", Error::Invalid)] {
+        assert_eq!(copies.rebuild(Some(&mut main), name.as_bytes(), true, &mut heard.log()), Err(error), "{name}");
+        assert_eq!(heard.take(), NOTHING, "a check is not logged");
+        assert_eq!(copies.rebuild(Some(&mut main), name.as_bytes(), false, &mut heard.log()), Err(error), "{name}");
+        assert_eq!(heard.take(), [format!("not rebuilt {name} {error:?}")]);
+    }
+    assert_eq!((main.device().written, copies.copy_store().device().written), written);
+    assert_eq!((main.resolve(b"moved"), main.snapshot(b"gone")), (Ok((2, y)), Ok((2, None))));
+}
+
+#[test]
+fn a_memory_domain_gets_neither_the_copys_names_nor_a_rebuild() {
+    let (mut a, mut b) = (Memory::new(1024), Memory::new(1024));
+    let mut blank = Memory::new(1024);
+    {
+        let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+        let heard = Heard::default();
+        let mut main = mount(&mut a, &mut ra).unwrap();
+        let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+        let x = object_of(&mut main, &noise(117, 3000));
+        copies.publish(&mut main, b"a", 0, &x, OWNER, &mut heard.log()).unwrap();
+        copies.copy(&mut main, b"a", true, OWNER, &mut heard.log()).unwrap();
+    }
+    let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+    let heard = Heard::default();
+    let mut main = mount(&mut blank, &mut ra).unwrap();
+    let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+    heard.take();
+    // The copy holds the volume's names alone: in a domain, its names and its rebuild are invalid, as `copy` is.
+    let d = main.domain_create(OWNER).unwrap();
+    main.set_domain(d).unwrap();
+    assert_eq!(copy_names(&copies, Some(&main), b""), Err(Error::Invalid));
+    for check in [true, false] { assert_eq!(copies.rebuild(Some(&mut main), b"a", check, &mut heard.log()), Err(Error::Invalid)); }
+    assert_eq!((main.snapshot(b"a"), main.stats().names), (Ok((0, None)), 0));
+    main.set_domain(VOLUME).unwrap();
+    assert_eq!(copies.rebuild(Some(&mut main), b"a", false, &mut heard.log()).map(|r| r.version), Ok(1));
+}
+
+#[test]
+fn beside_a_store_that_cannot_be_mounted_the_copy_is_read_its_names_listed_a_check_answered_and_a_rebuild_refused_with_device() {
+    let (mut a, mut b) = (Memory::new(1024), Memory::new(1024));
+    let mut vault = Vault::default();
+    let data = [noise(130, 20_000), noise(131, 3000)];
+    let (one, two);
+    {
+        let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+        let heard = Heard::default();
+        let mut main = mount_kept(&mut a, &mut ra, &SEALER, Some(&mut vault)).unwrap();
+        assert_eq!(main.key_source(), KEY_KEPT);
+        let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+        (one, two) = (object_of(&mut main, &data[0]), object_of(&mut main, &data[1]));
+        for (name, root) in [(&b"one"[..], one), (b"two", two)] {
+            copies.publish(&mut main, name, 0, &root, OWNER, &mut heard.log()).unwrap();
+            copies.copy(&mut main, name, true, OWNER, &mut heard.log()).unwrap();
+        }
+        // A change the copy did not take: behind once the store mounts again.
+        copies.copy_store().device().fail_write = true;
+        assert_eq!(copies.publish(&mut main, b"two", 1, &one, OWNER, &mut heard.log()), Ok((2, false)));
+        copies.copy_store().device().fail_write = false;
+    }
+    // Keystore lost the store's key: the store is not mounted, and its medium is never formatted.
+    let (mut ra, mut rb, mut block) = (Room::new(128), Room::new(128), Box::new([0u8; BLOCK_MAX]));
+    let heard = Heard::default();
+    let store_image = a.data.clone();
+    assert!(matches!(mount_kept(&mut a, &mut ra, &SEALER, Some(&mut Vault::default())), Err(Error::Kept(_))));
+    assert_eq!(a.data, store_image);
+    // The copy beside it is read through its gate, shut beside no store even if it was left open: compared with nothing,
+    // nothing behind.
+    let copy_image = (b.data.clone(), b.written, b.flushes);
+    let copy = mount_gated(&mut b, &mut rb, true).unwrap();
+    let mut copies = Copies::new(copy, &mut block, no_store(), &mut heard.log());
+    assert_eq!((heard.take(), copies.behind()), (NOTHING, 0));
+    // Its names listed, each unknown against a store not mounted.
+    assert_eq!(copy_names(&copies, None, b""), Ok(vec![held("one", 1, one, Standing::Unknown), held("two", 1, two, Standing::Unknown)]));
+    assert_eq!(copy_names(&copies, None, b"one"), Ok(vec![held("two", 1, two, Standing::Unknown)]));
+    // A check answered, the store lacking every block: a node and two chunks; a block alone.
+    assert_eq!(copies.rebuild(no_store(), b"one", true, &mut heard.log()), Ok(whole(one, 0, 3, 3, 0, false)));
+    assert_eq!(copies.rebuild(no_store(), b"two", true, &mut heard.log()), Ok(whole(two, 0, 1, 1, 0, false)));
+    assert_eq!(copies.rebuild(no_store(), b"never", true, &mut heard.log()), Err(Error::NotFound));
+    // The rebuild waits for a store that mounts.
+    assert_eq!(copies.rebuild(no_store(), b"one", false, &mut heard.log()), Err(Error::Device));
+    assert_eq!(heard.take(), ["not rebuilt one Device"]);
+    // Nothing is written on the copy: its own collection, puts and publications are refused as on a read-only medium.
+    assert_eq!(copies.copy_store().collect(), Err(Error::ReadOnly));
+    assert_eq!(copies.copy_store().put(Codec::Raw, b"new"), Err(Error::ReadOnly));
+    assert_eq!(copies.copy_store().publish(b"three", 0, &one, OWNER), Err(Error::ReadOnly));
+    let medium = copies.copy_store().device();
+    assert_eq!((&medium.data, medium.written, medium.flushes), (&copy_image.0, copy_image.1, copy_image.2));
+    // A blank medium beside it is no copy to read, and is not formatted.
+    let mut empty = Memory::new(64);
+    assert!(matches!(mount_gated(&mut empty, &mut Room::new(16), false), Err(Error::ReadOnly)));
+    assert!(empty.written == 0 && empty.data.iter().all(|&x| x == 0));
+    // The store made mountable, its key given back to keystore: the copy is kept in step from now on, its names compared
+    // as a mount compares them: the change it did not take is behind, and caught up.
+    let mut rc = Room::new(128);
+    let mut main = mount_kept(&mut a, &mut rc, &SEALER, Some(&mut vault)).unwrap();
+    copies.attach(&mut main, &mut heard.log());
+    assert_eq!((copies.behind(), heard.take()), (1, NOTHING));
+    assert_eq!(copy_names(&copies, Some(&main), b""), Ok(vec![held("one", 1, one, Standing::InStep), held("two", 1, two, Standing::Behind)]));
+    assert_eq!(copies.catch_up(&mut main, &mut heard.log()), Some(true));
+    assert_eq!((heard.take(), copies.copy_store().resolve(b"two")), (vec!["copied two 2 0".to_string()], Ok((2, one))));
+    let three = object_of(&mut main, &noise(132, 5000));
+    assert_eq!(copies.publish(&mut main, b"one", 1, &three, OWNER, &mut heard.log()), Ok((2, true)));
+    assert_eq!(read_object(copies.copy_store(), &three), noise(132, 5000));
+}
+
+#[test]
+fn the_copys_names_are_listed_16_at_a_time_each_page_after_the_last_name_of_the_one_before() {
+    let (mut a, mut b) = (Memory::new(4096), Memory::new(4096));
+    let (mut ra, mut rb, mut block) = (Room::with_names(256, 64), Room::with_names(256, 64), Box::new([0u8; BLOCK_MAX]));
+    let heard = Heard::default();
+    let mut main = mount(&mut a, &mut ra).unwrap();
+    let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
+    let (x, y) = (main.put(Codec::Raw, &noise(140, 100)).unwrap(), main.put(Codec::Raw, &noise(141, 100)).unwrap());
+    let names: Vec<String> = (0..40).map(|k| format!("n{k:02}")).collect();
+    for name in &names {
+        copies.publish(&mut main, name.as_bytes(), 0, &x, OWNER, &mut heard.log()).unwrap();
+        copies.copy(&mut main, name.as_bytes(), true, OWNER, &mut heard.log()).unwrap();
+    }
+    // Three moved while the copy refused, and three the copy alone holds.
+    copies.copy_store().device().fail_write = true;
+    for k in [3, 17, 33] { copies.publish(&mut main, names[k].as_bytes(), 1, &y, OWNER, &mut heard.log()).unwrap(); }
+    copies.copy_store().device().fail_write = false;
+    for k in 0..3 { copies.copy_store().publish(format!("only{k}").as_bytes(), 0, &x, OWNER).unwrap(); }
+    let (mut listed, mut pages, mut after) = (Vec::new(), Vec::new(), String::new());
+    loop {
+        let page = copy_names(&copies, Some(&main), after.as_bytes()).unwrap();
+        pages.push(page.len());
+        listed.extend(page.iter().cloned());
+        match page.last() { Some(last) if page.len() == 16 => after = last.0.clone(), _ => break }
+    }
+    assert_eq!(pages, [16, 16, 11]);
+    let mut expected: Vec<(String, Held)> = names.iter().enumerate().map(|(k, n)| held(n, 1, x, if [3, 17, 33].contains(&k) { Standing::Behind } else { Standing::InStep })).collect();
+    expected.extend((0..3).map(|k| held(&format!("only{k}"), 1, x, Standing::OnlyOnCopy)));
+    assert_eq!(listed, expected);
+    // After a name the copy does not hold: from the next one; past the last: none; a byte no name has: invalid.
+    assert_eq!(copy_names(&copies, Some(&main), b"n05x").unwrap()[0].0, "n06");
+    assert_eq!(copy_names(&copies, Some(&main), b"only2"), Ok(vec![]));
+    assert_eq!(copy_names(&copies, Some(&main), b"n 1"), Err(Error::Invalid));
+}
+
 // What the random model holds of the two media: the store's names (version, root; none: removed), the copy's root of
 // each name it holds one of, the names behind in order, the blocks the copy lacks since its mount found them damaged;
-// and every object made, the blocks under its root, and every block's bytes.
+// and every object made, the blocks under its root as its walk visits them, and every block's bytes. A name the copy
+// holds that the store does not hold at all (after its medium was lost, 309-STO-0041) is only on the copy.
 #[derive(Default)]
 struct Model { names: HashMap<Vec<u8>, (u64, Option<Cid>)>, copied: HashMap<Vec<u8>, Cid>, behind: Vec<Vec<u8>>, lacks: HashSet<Cid>, objects: HashMap<Cid, Vec<Cid>>, data: HashMap<Cid, Vec<u8>> }
 impl Model {
@@ -3099,9 +3516,17 @@ impl Model {
     }
     // The names the copy holds in step, in the order of their bytes.
     fn in_step(&self) -> Vec<Vec<u8>> {
-        let mut n: Vec<Vec<u8>> = self.copied.iter().filter(|(n, r)| self.names[*n].1 == Some(**r) && !self.behind.contains(n)).map(|(n, _)| n.clone()).collect();
+        let mut n: Vec<Vec<u8>> = self.copied.iter().filter(|(n, r)| self.names.get(*n).is_some_and(|v| v.1 == Some(**r)) && !self.behind.contains(n)).map(|(n, _)| n.clone()).collect();
         n.sort();
         n
+    }
+    // How a name the copy holds stands against the store, by their roots.
+    fn standing(&self, name: &[u8]) -> Standing {
+        match self.names.get(name) {
+            None => Standing::OnlyOnCopy,
+            Some(v) if v.1 == self.copied.get(name).copied() => Standing::InStep,
+            Some(_) => Standing::Behind,
+        }
     }
 }
 
@@ -3115,14 +3540,45 @@ fn matches(main: &mut Store<&mut Memory>, copies: &mut Copies<&mut Memory>, m: &
         assert_eq!(copies.holds(&name), m.copied.contains_key(&name[..]), "{at}");
     }
     assert_eq!(copies.behind(), m.behind.len(), "{at}");
-    // A name not behind is in step.
-    for (n, r) in &m.copied { if !m.behind.contains(n) { assert_eq!(m.names[n].1, Some(*r), "{at}"); } }
+    // A name not behind is in step, or only on the copy.
+    for (n, r) in &m.copied { if !m.behind.contains(n) { assert!(m.names.get(n).is_none_or(|v| v.1 == Some(*r)), "{at}"); } }
+    // The copy's names listed, in the order of their bytes, each standing as its roots say (309-STO-0041).
+    let listed: Vec<(String, Cid, Standing)> = copy_names(copies, Some(main), b"").unwrap().into_iter().map(|(n, h)| (n, h.root, h.standing)).collect();
+    let mut expected: Vec<(String, Cid, Standing)> = m.copied.iter().map(|(n, r)| (String::from_utf8(n.clone()).unwrap(), *r, m.standing(n))).collect();
+    expected.sort_by(|x, y| x.0.cmp(&y.0));
+    assert_eq!(listed, expected, "{at}");
     for root in m.names.values().filter_map(|v| v.1) {
         for c in &m.objects[&root] { assert_eq!(get(main, c).as_ref(), Ok(&m.data[c]), "{at}"); }
     }
     for root in m.copied.values() {
         for c in m.objects[root].iter().filter(|c| !m.lacks.contains(c)) { assert_eq!(get(copies.copy_store(), c).as_ref(), Ok(&m.data[c]), "{at}"); }
     }
+}
+
+// A rebuild of `name`, or a check, against the model: refused unless only the copy holds it; else the walk of the copy's
+// root visits each block of it, those the store lacks counted at each visit by a check and once by a rebuild, which puts
+// them; the model then holds the name brought back, at version 1. No room in the store publishes nothing.
+fn rebuild_against(main: &mut Store<&mut Memory>, copies: &mut Copies<&mut Memory>, m: &mut Model, name: &[u8], check: bool, heard: &Heard, at: &str) -> Result<Rebuilt, Error> {
+    let expected = match (m.copied.get(name).copied(), m.names.contains_key(name)) {
+        (None, _) => Err(Error::NotFound),
+        (Some(_), true) => Err(Error::Conflict),
+        (Some(root), false) => {
+            let visits = &m.objects[&root];
+            let mut lacking: Vec<Cid> = visits.iter().copied().filter(|c| !main.has(c)).collect();
+            let each = lacking.len() as u32;
+            lacking.sort_by_key(|c| c.to_bytes());
+            lacking.dedup();
+            let (n, distinct) = (visits.len() as u32, lacking.len() as u32);
+            Ok(if check { whole(root, 0, n, each, 0, false) } else { whole(root, 1, n, distinct, distinct, !visits.iter().any(|c| m.lacks.contains(c))) })
+        }
+    };
+    let got = copies.rebuild(Some(main), name, check, &mut heard.log());
+    match got {
+        Err(Error::Full) if expected.is_ok() => assert_eq!(main.snapshot(name).unwrap().0, 0, "{at}"),
+        _ => assert_eq!(got, expected, "{at}"),
+    }
+    if let (Ok(r), false) = (got, check) { m.names.insert(name.to_vec(), (1, Some(r.root))); }
+    got
 }
 
 #[test]
@@ -3135,18 +3591,22 @@ fn random_changes_copies_damage_and_remounts_match_a_model_of_both_media() {
     let mut now = 0u64;
     // What the rounds did, so that the model is known to have gone through each case.
     let (mut copied, mut refused, mut caught, mut repaired, mut at_mount) = (0, 0, 0, 0, 0);
-    // A block damaged before the next mount, and on which medium.
+    // The store's medium lost, names brought back from the copy, checks of them, and rebuilds refused (309-STO-0041).
+    let (mut lost, mut rebuilt, mut checked, mut conflicts) = (0, 0, 0, 0);
+    // A block damaged before the next mount, and on which medium; whether the store's medium was lost before it.
     let mut pending: Option<(Side, Cid)> = None;
-    for round in 0..16 {
+    let mut blank = false;
+    for round in 0..32 {
         let (mut ra, mut rb, mut block) = (Room::with_names(256, 16).at(now), Room::with_names(256, 16).at(now), Box::new([0u8; BLOCK_MAX]));
         let heard = Heard::default();
         let mut main = mount(&mut a, &mut ra).unwrap();
         let mut copies = copy_of(&mut b, &mut rb, &mut block, &mut main, &heard);
-        // The mount's comparison, in the order of the names' bytes; all of them if the copy's mount found damage.
+        // The mount's comparison, in the order of the names' bytes; all of them if the copy's mount found damage. A name
+        // only the copy holds is left as it is.
         let suspect = matches!(pending, Some((Side::Copy, _)));
         let mut held: Vec<Vec<u8>> = m.copied.keys().cloned().collect();
         held.sort();
-        m.behind = held.into_iter().filter(|n| suspect || m.names[n].1 != Some(m.copied[n])).collect();
+        m.behind = held.into_iter().filter(|n| m.names.contains_key(n) && (suspect || m.names[n].1 != Some(m.copied[n]))).collect();
         assert_eq!(copies.behind(), m.behind.len(), "round {round}");
         match pending.take() {
             // The store's mount left the block out of its index: a read takes it from the copy.
@@ -3174,6 +3634,19 @@ fn random_changes_copies_damage_and_remounts_match_a_model_of_both_media() {
         }
         matches(&mut main, &mut copies, &m, &format!("round {round} mounted"));
         heard.take();
+        // After a loss, most of the names only the copy holds are checked, or not, and brought back; the others later.
+        if std::mem::take(&mut blank) {
+            let mut only: Vec<Vec<u8>> = m.copied.keys().filter(|n| !m.names.contains_key(*n)).cloned().collect();
+            only.sort();
+            for name in &only {
+                if next(4) == 0 { continue; }
+                let at = format!("round {round} rebuilt {:?}", String::from_utf8_lossy(name));
+                if next(2) == 0 && rebuild_against(&mut main, &mut copies, &mut m, name, true, &heard, &at).is_ok() { checked += 1; }
+                if rebuild_against(&mut main, &mut copies, &mut m, name, false, &heard, &at).is_ok() { rebuilt += 1; }
+                matches(&mut main, &mut copies, &m, &at);
+            }
+            heard.take();
+        }
         for step in 0..100 {
             let at = format!("round {round} step {step}");
             now += next(LEASE_NS / 6);
@@ -3186,7 +3659,7 @@ fn random_changes_copies_damage_and_remounts_match_a_model_of_both_media() {
             pool.sort_by_key(|c| c.to_bytes());
             copies.copy_store().device().fail_write = fail;
             let mut repairing = false;
-            match next(10) {
+            match next(11) {
                 // An object: a block of its own, or a directory of two files that other objects may share.
                 0 | 1 => {
                     let mut file = || { let (s, len) = (next(24) as usize, [10, 700, 3000][next(3) as usize]); (noise(s, len), len) };
@@ -3322,6 +3795,19 @@ fn random_changes_copies_damage_and_remounts_match_a_model_of_both_media() {
                     let (mine, theirs, found) = scrub_both(&mut copies, &mut main, 1 + next(500), &heard);
                     assert_eq!((findings(mine), findings(theirs), found), ((0, 0), (0, 0), vec![]), "{at}: {:?}", heard.0.borrow());
                 }
+                // A name brought back from the copy, or checked: one only the copy holds half the time, else any.
+                9 => {
+                    let check = next(3) == 0;
+                    let mut only: Vec<Vec<u8>> = m.copied.keys().filter(|n| !m.names.contains_key(*n)).cloned().collect();
+                    only.sort();
+                    let target = if !only.is_empty() && next(2) == 0 { only[next(only.len() as u64) as usize].clone() } else { name.clone() };
+                    match rebuild_against(&mut main, &mut copies, &mut m, &target, check, &heard, &at) {
+                        Ok(_) if check => checked += 1,
+                        Ok(_) => rebuilt += 1,
+                        Err(Error::Conflict) => conflicts += 1,
+                        Err(_) => {}
+                    }
+                }
                 // A read of any object's block the store holds, through the copies.
                 _ => if let Some(&root) = pool.get(next(pool.len().max(1) as u64) as usize) {
                     let mut out = vec![0u8; BLOCK_MAX];
@@ -3338,9 +3824,15 @@ fn random_changes_copies_damage_and_remounts_match_a_model_of_both_media() {
         scrub_both(&mut copies, &mut main, 64, &heard);
         let (mine, theirs, _) = scrub_both(&mut copies, &mut main, 64, &heard);
         assert_eq!((findings(mine), findings(theirs)), ((0, 0), (0, 0)), "round {round}");
-        // Sometimes a block of a name in step damaged before it, on either medium.
+        // The store's medium lost before the next mount every fourth round, replaced by a blank
+        // one: its names go, and the copy keeps its own (309-STO-0041). Else sometimes a block of a name in step damaged
+        // before it, on either medium.
         let names = m.in_step();
-        if !names.is_empty() && next(2) == 0 {
+        if round % 4 == 2 {
+            a = Memory::new(1536);
+            m.names.clear();
+            (lost, blank) = (lost + 1, true);
+        } else if !names.is_empty() && next(2) == 0 {
             let blocks = &m.objects[&m.copied[&names[next(names.len() as u64) as usize]]];
             let c = blocks[next(blocks.len() as u64) as usize];
             if next(2) == 0 {
@@ -3357,4 +3849,5 @@ fn random_changes_copies_damage_and_remounts_match_a_model_of_both_media() {
         now += next(2 * LEASE_NS);
     }
     assert!(copied > 15 && refused > 20 && caught > 4 && repaired > 50 && at_mount > 3, "{copied} {refused} {caught} {repaired} {at_mount}");
+    assert!(lost >= 2 && rebuilt >= 4 && checked >= 2 && conflicts >= 10, "{lost} {rebuilt} {checked} {conflicts}");
 }

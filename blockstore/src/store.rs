@@ -566,6 +566,8 @@ pub struct Store<'a, D: Device> {
     // Where the scrub goes on from (0: no pass under way), and what this pass found so far.
     scrub_at: u64,
     scrubbing: Scrubbed,
+    // The block the last walk could not read, lacking or damaged (309-STO-0041).
+    unread: Option<Cid>,
 }
 
 // Records of domains not yet met a mount keeps for later.
@@ -760,7 +762,7 @@ impl<'a, D: Device> Store<'a, D> {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
             scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made, kept,
             recoveries: [0; RECOVERIES], remembered: 0, recovered: 0, domain: VOLUME, domains: [None; DOMAINS],
-            deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0, scrubbing: Scrubbed::default(),
+            deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0, scrubbing: Scrubbed::default(), unread: None,
         };
         store.mount_pass()?;
         store.size_retained();
@@ -1238,6 +1240,7 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn walk(&mut self, root: &Cid, visit: impl FnMut(&mut Self, &Cid) -> Result<(), dag::Error>) -> Result<u64, Error> {
         let scratch = self.scratch.take().ok_or(Error::Device)?;
         let steps = self.steps();
+        self.unread = None;
         let walked = journal::walk(self, root, scratch, steps, visit);
         self.scratch = Some(scratch);
         walked.map_err(|e| match e {
@@ -1247,6 +1250,10 @@ impl<'a, D: Device> Store<'a, D> {
             _ => Error::Invalid,
         })
     }
+
+    /// The block the last walk stopped at, one the store lacks or holds damaged, read by the walk itself: where a rebuild
+    /// from the copy says it stopped (309-STO-0041). A block `visit` reads is its own to tell.
+    pub fn unread(&self) -> Option<Cid> { self.unread }
 
     // Steps a walk may take: four for each block the index can hold. A tree that needs more is refused as out of shape,
     // so no root keeps the store at it longer than its medium's worth.
@@ -1742,7 +1749,7 @@ impl<'a, D: Device> Store<'a, D> {
         Ok((one && (parse_name(sector).is_some() || parse_pin(sector).is_some()), n))
     }
 
-    #[cfg(test)]
+    /// The medium itself: the copy's gate opens through it (309-STO-0041), and the tests reach their simulated media.
     pub fn device(&mut self) -> &mut D { &mut self.dev }
 }
 
@@ -1756,8 +1763,8 @@ impl<D: Device> dag::Blocks for Store<'_, D> {
     }
     fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
         Store::get(self, cid, out).map_err(|e| match e {
-            Error::NotFound => dag::Error::NotFound,
-            Error::Corrupt => dag::Error::Corrupt,
+            Error::NotFound => { self.unread = Some(*cid); dag::Error::NotFound }
+            Error::Corrupt => { self.unread = Some(*cid); dag::Error::Corrupt }
             _ => dag::Error::Store,
         })
     }

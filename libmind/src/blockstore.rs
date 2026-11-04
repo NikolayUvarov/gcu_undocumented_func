@@ -3,7 +3,8 @@
 //! tests/blockstore_host.rs. Badges from `FIRST_DOMAIN_CLIENT` up are the clients `blockstore` mints for memory domains
 //! (308-STO-0023), each with the rights of the client that asked for it. A store's recovery key in the form its owner
 //! writes down and types back, and the right to make, keep, forget and use one (308-STO-0028). A name's copy on a second
-//! medium is retention, as a publication is (309-STO-0040).
+//! medium is retention, as a publication is (309-STO-0040); listing the copy's names is reading, and bringing one back
+//! into the store is a publication (309-STO-0041).
 use crate::sha256;
 
 /// May read blocks and names (`get`, `has`, `resolve`, `history`, `snapshot`, `names`). Knowing a CID grants nothing: reading needs this right (MC-4.7).
@@ -23,7 +24,7 @@ pub const FIRST_DOMAIN_CLIENT: u16 = 0x100;
 /// A request to the store, as its rights see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation { Put, Get, Has, Stat, Publish, Resolve, Collect, Unpublish, History, Pin, Unpin, Pins, Usage, Commit, Snapshot, Names, DomainCreate, DomainClient, DomainForget, Domains, Scrub, Scrubbed,
-    RecoveryNew, RecoveryKeep, RecoveryForget, Recoveries, Recover, Copy, CopyStat }
+    RecoveryNew, RecoveryKeep, RecoveryForget, Recoveries, Recover, Copy, CopyStat, CopyNames, Rebuild }
 
 /// Whether a client whose capability carries `badge` may make `operation`; bits of later rights are ignored.
 pub fn allowed(badge: u16, operation: Operation) -> bool {
@@ -31,12 +32,14 @@ pub fn allowed(badge: u16, operation: Operation) -> bool {
         // A collection frees only what nothing retains, as a put that finds no room does. A whole scrub on request reads
         // the medium on the caller's behalf, as a collection does (309-STO-0025).
         Operation::Put | Operation::Collect | Operation::Scrub => badge & BADGE_PUT != 0,
-        Operation::Get | Operation::Has | Operation::Resolve | Operation::History | Operation::Snapshot | Operation::Names => badge & BADGE_GET != 0,
+        // The copy's names are names: knowing one grants nothing (309-STO-0041).
+        Operation::Get | Operation::Has | Operation::Resolve | Operation::History | Operation::Snapshot | Operation::Names
+            | Operation::CopyNames => badge & BADGE_GET != 0,
         // Names and pins retain objects: retention is its own right, apart from reading and storing (MC-4.11).
         // Making and forgetting a memory domain is retention too (308-STO-0023), and so is a name's copy on a second
-        // medium (309-STO-0040).
+        // medium (309-STO-0040), and a name brought back from it, which publishes it (309-STO-0041).
         Operation::Publish | Operation::Unpublish | Operation::Commit | Operation::Pin | Operation::Unpin
-            | Operation::DomainCreate | Operation::DomainForget | Operation::Copy => badge & BADGE_PUBLISH != 0,
+            | Operation::DomainCreate | Operation::DomainForget | Operation::Copy | Operation::Rebuild => badge & BADGE_PUBLISH != 0,
         // A domain's client carries the rights of the client that asked for it.
         Operation::Stat | Operation::Pins | Operation::Usage | Operation::DomainClient | Operation::Domains | Operation::Scrubbed
             | Operation::CopyStat => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH) != 0,
