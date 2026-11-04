@@ -1,6 +1,6 @@
 # 211-KRN-0095 — `record` on a Retina screen: the compositor's quota holds the copies of the screen
 
-**Type:** `init` (the compositor's memory quota) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-3.13, MC-12.1
+**Type:** `init` (the compositor's memory quota) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main`; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-3.13, MC-12.1
 
 ## Problem
 

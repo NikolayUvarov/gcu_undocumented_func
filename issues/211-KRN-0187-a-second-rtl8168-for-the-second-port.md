@@ -1,6 +1,6 @@
 # 211-KRN-0187 — A second `rtl8168` for the DEXP's second wired port
 
-**Type:** `init`, `common/abi.rs` (`SERVICE_INSTANCES`) · **Owner:** `KRN` · **Priority:** P1 (the maintainer's order for the DEXP, 2026-10-27) · **Status:** in progress (2026-10-30: made; the DEXP's run is DRV's) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-2.3, MC-3.1, MC-6.3
+**Type:** `init`, `common/abi.rs` (`SERVICE_INSTANCES`) · **Owner:** `KRN` · **Priority:** P1 (the maintainer's order for the DEXP, 2026-10-27) · **Status:** in progress (in `main` since round 50; the DEXP's run, DRV's, left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-2.3, MC-3.1, MC-6.3
 
 **Asked by:** the drivers track (`DRV`) for [211-DRV-0041](211-DRV-0041-the-dexps-rtl8168h.md), in `KRN/2026-10-27T1530Z-DRV-a-second-rtl8168-and-the-dexps-wi-fi.md` on `internal-dev-messages`, point 1. The kernel track left it unanswered until 2026-10-30.
 

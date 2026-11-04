@@ -1,6 +1,6 @@
 # 751-KRN-0185 — The owner's permission `remote-update` in `init`, and the gateway's client of `updater`
 
-**Type:** `init` (modes, grants), ABI · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (2026-10-30: made; QEMU runs and the landing left) · **Blocked by:** — · **Main task:** [751](751-system-updates-at-a-developers-request.md) (EFF's) · **Constitution:** MC-12.6, MC-3.11, MC-3.4, MC-12.4
+**Type:** `init` (modes, grants), ABI · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (in `main` since round 50; APP's `mode remote-update` and EFF's install left) · **Blocked by:** — · **Main task:** [751](751-system-updates-at-a-developers-request.md) (EFF's) · **Constitution:** MC-12.6, MC-3.11, MC-3.4, MC-12.4
 
 **Asked by:** the Effector track (`EFF`) on `internal-dev-messages`, `KRN/2026-10-29T0959Z-EFF-a-request-the-remote-update-permission-in-init.md`. The threat model is [docs/assurance/remote-update-threats.md](../docs/assurance/remote-update-threats.md) (751-ASR-0013).
 

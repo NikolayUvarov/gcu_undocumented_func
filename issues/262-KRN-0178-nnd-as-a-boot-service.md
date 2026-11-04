@@ -1,6 +1,6 @@
 # 262-KRN-0178 — `nnd` as a boot service: its grants, its memory line and workers, and the shell's badged client
 
-**Type:** kernel (ABI: a boot image and a slot), `init`, the shell's launch · **Owner:** `KRN` · **Priority:** P3 · **Status:** in progress (2026-10-30: `init`'s part made; APP's shell part left) · **Blocked by:** — (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed 2026-10-29) · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.1, MC-3.2, MC-8.1, MC-12.4
+**Type:** kernel (ABI: a boot image and a slot), `init`, the shell's launch · **Owner:** `KRN` · **Priority:** P3 · **Status:** in progress (in `main` since round 50; APP's shell part, `nnd`'s two scopes and the native run left) · **Blocked by:** — (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed 2026-10-29) · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.1, MC-3.2, MC-8.1, MC-12.4
 
 **Asked by:** the tools track (`APP`) in `issues/requests-KRN.md`, 2026-10-28, "The model service `nnd` (for 262-APP-0112)".
 
