@@ -1,6 +1,6 @@
 # 311-STO-0037 — A scope of a store volume: a subtree as a capability, read-only or writable, from `storefs`
 
-**Type:** storage (`storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md) (the shell lending a scope), for the QEMU criteria · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-3.1, MC-3.4, MC-4.7
+**Type:** storage (`storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open (its QEMU checks run since 2026-11-04, for the storage session's review) · **Blocked by:** none ([311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md) lends a scope for `REQUEST_FILE` since 2026-11-03) · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-3.1, MC-3.4, MC-4.7
 
 Split from [311](311-storefs-a-file-face.md) (2026-10-31): "rights: a mount is a capability for a subtree (MC-4.7)". It is what APP's request "The shell lends a `storefs` client to programs" in [requests-APP.md](requests-APP.md) waits for: "`storefs` minting a client that does not write, or serving `scope`". Until a program holds a client of `storefs`, [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md)'s QEMU checks of two writers and of a cut publication cannot run.
 
@@ -53,6 +53,20 @@ Split from [311](311-storefs-a-file-face.md) (2026-10-31): "rights: a mount is a
 
 - **Landed** in `main` f7f1d0fe (round fbda1685) as 855121e4, with `storefs` 19 host tests and the `store` and `shell` suites on x86 and aarch64 (`un-rizen_2a8b108d5593`, QEMU TCG) on that commit, as the landing request of 06:29 says.
 - **Open for its QEMU criteria:** a scope reaches a program only once the shell lends one, the tools track's [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md). APP is told on `internal-dev-messages`.
+
+## Progress (2026-11-04)
+
+- **A program with a scope:** the shell lends a writable scope of the file's directory to a program it starts with a file (`REQUEST_FILE`) on a store volume (311-APP-0121, 2026-11-03). `fsstep` (new, `fsstep/`, in both images; [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.md)'s Progress of today and docs/storage 0.26 give its usage and lines) takes it with `mind::fs::use_scope` and keeps full paths:
+  - `fsstep <file> --read-only` makes, from the scope it was lent, a scope of the same directory that does not write (`Dir::scope(false, 13)`, slot 13 as `wm`'s), switches to it, lists the directory, reads the file (size and SHA-256), then opens the file to write and creates a new file, and prints each refusal by its `mind::fs` name;
+  - `fsstep <file> --bounds` writes the file, then asks the lent client itself, as `mind::fs` refuses a path outside its scope before asking: the name of its own volume's root (the directory), a file through `../` and the directory `..`, and the roots of `ram` (`vfs_server`'s) and `notes` (another store volume).
+- **The `store` suite's `storefs_writers_check`,** after its two writers and its cut (311-STO-0032), on the volume `w:`, the scopes being of `w:/a`:
+  - **read-only:** `fsstep w:a/x.bin --read-only` lists both files of `a` with their sizes, reads `x.bin`'s 40000 bytes with the SHA-256 the suite computes, and is told `Denied` for the write and for the new file; the name `fs/w` is at the same version after it;
+  - **writable, there and nowhere else:** `fsstep w:a/inside.txt --bounds` writes 17 bytes there, which the shell's `cat` reads; its root of `w` is `a`; `../fsstep.out` and `..` are `Invalid`; the roots of `ram` and `notes` are `Denied`; `blocks tree ls fs/w` finds the volume's root holding only `a` and the shell's `b.txt`, and `a` only its three files;
+  - **the log:** `storefs` logs each scope made, `[STOREFS] SCOPE 0x100 FOR w:/a (WRITABLE)` to `0x106`, `0x105` `(READ-ONLY)` (the one `fsstep` made), and `[STOREFS] SCOPE … ENDED` for each but the last, the scopes of ended tasks ending when the shell made the next one.
+- **The lazy end** (APP's note of 2026-11-03): `storefs`'s behaviour is left as it is. A scope of an ended task, or one nobody took up within a minute, ends at the first of these: the next `scope` made, an `adopt`, a request with a scope's badge, or a `root`, `open-dir` or `open` while the table of handles, trees or open files is full. Until then it holds its capability, handles, tree and chunks, unpublished, and no other task can use them, as a scope's first task is its only user. docs/storage says so in the scope's "its end".
+- **Not run on the platform:** `adopt`, a copy of a scope used by a second task, the end of a scope nobody took up, and the tables' bounds; they stay host-tested.
+- **Ran:** as 311-STO-0032's Progress of today says (x86: `store` and `shell` 37 `PASS` lines, `wm` and `tools` 27; aarch64: `store` and `shell` 38; `scripts/host_tests.sh` whole passed).
+- **Acceptance criteria:** the two QEMU ones are met on x86 and aarch64, as said; docs/storage (0.26) and the profile's rows on rights (docs/profile/README.md, evidence.md and their aarch64 pages) say what ran. The issue is left open for the storage session to review and close.
 
 ## Acceptance criteria
 
