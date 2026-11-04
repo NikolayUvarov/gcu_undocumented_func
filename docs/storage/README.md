@@ -138,7 +138,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - once the leases have ended, a collection frees the refused tree's root, and every file is still read;
   - a move and two removals are published, and a directory with entries is not removed.
 
-## Two roots compared — host-tested (311-STO-0039)
+## Two roots compared — host-tested, run in QEMU (311-STO-0039)
 
 A name keeps its last 4 versions, each a whole tree (History, below). **`tree::diff`** (`libmind/src/tree.rs`) says where two of them differ, so a reader sees what a writer changed without reading both trees.
 
@@ -180,7 +180,17 @@ Evidence: host tests of the code, not a proof (MC-12.2). `tests/tree_host.rs`:
 - refused: a missing node, a changed node, a file or a file's node as a root or as a directory, and an entry whose count disagrees with its node;
 - the steps counted to the last one, the depth to 32 directories, the path buffer to its last byte, and a full `PATH_MAX` path;
 - a visit's error ends the comparison and is its answer;
-- each of 12 changes of the logic made a test fail. A 13th, a resumed pair started again from its first entry, made the tests run without end rather than fail.
+- each of 15 changes of the logic made a test fail, among them a resumed pair started again from its first entry, which the tests' bound of a million steps ends.
+
+On the platform, the QEMU `store` suite on x86 and aarch64 (`store_tree_check`), over the versions 5 to 8 that `home` keeps:
+- from version 5 to the current one, the move and the removals: `c.bin` removed and `docs/c.bin` added, both naming the CID the suite put, and the directory `docs/deep` removed as one change;
+- from version 6 to 7, a file removed two directories down, with its CID;
+- from the empty tree (`@0`) to version 5, the root's file and directory added, each as one change;
+- the current version against itself, no change;
+- version 5 listed and its `c.bin` read back at its old path, and version 6's `docs/deep/b.txt`, removed since, read back, each by SHA-256;
+- version 4, no longer kept, refused.
+
+Not run on the platform: a comparison past its steps, its depth or its path buffer, and a node missing or damaged in a comparison (host-tested).
 
 ## Files over the store: `storefs` — host-tested, at boot since 311-KRN-0190; two writers, a writer cut and its scopes run in QEMU (311-STO-0032, 0037)
 

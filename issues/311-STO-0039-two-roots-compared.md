@@ -38,6 +38,16 @@ A name keeps its last versions (`blocks history`), and each is a whole tree. But
 - QEMU (x86, aarch64): `store_tree_check`'s comparisons and the older version read back.
 - docs/storage and the profile's rows.
 
+## Progress
+
+2026-11-04, on the branch `claude/relaxed-meitner-5bmhpz`:
+- `mind::tree::diff` in `libmind/src/tree.rs`; `blocks tree diff`, and `ls` and `cat` at `<name>@<version>`;
+- host: 15 tests in `tests/tree_host.rs`, and each of 15 changes of the logic made a test fail;
+- QEMU: the `store` suite on x86 and aarch64, `store_tree_check`'s comparisons and an older version read back;
+- docs/storage 0.28, the profile's Article 4 row and the evidence of both platforms.
+
+The criteria are met on the branch; the issue closes once it lands in `main`.
+
 ## Related
 
 [311](311-storefs-a-file-face.md), [311-STO-0027](../issues-done/311-STO-0027-directories-as-objects.done), [311-STO-0029](../issues-done/311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
