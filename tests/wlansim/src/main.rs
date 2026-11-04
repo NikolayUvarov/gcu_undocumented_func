@@ -218,7 +218,11 @@ impl Sim {
                     mind::println!("[WLANSIM] ASSOCIATED");
                     self.message_1();
                 }
-                frame::DEAUTHENTICATION | frame::DISASSOCIATION => { self.associated = false; self.tk = None; self.expect = Expect::Nothing; }
+                frame::DEAUTHENTICATION | frame::DISASSOCIATION => {
+                    // The station's own goodbye: a change of country leaves the network so (550-NET-0035).
+                    if self.associated { mind::println!("[WLANSIM] THE STATION LEFT THE ACCESS POINT"); }
+                    self.associated = false; self.tk = None; self.expect = Expect::Nothing;
+                }
                 _ => {}
             }
             return h.a1 == BSSID;

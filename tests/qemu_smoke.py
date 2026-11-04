@@ -9314,11 +9314,21 @@ def wifi_join_check(vm):
         time.sleep(.2)
     require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 60), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE)")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # A change of country while joined leaves the network under the old rules and drops the scan (dot11's host tests
+    # check the scan); the station joins again under the new one.
+    vm.command("logs " + str(vm.services()["wlansim"]), raw=True)
+    run("wifi country RU", 30, "[WIFI] COUNTRY RU (Russia) APPLIED")
+    require(vm.service_logs("wlansim", "THE STATION LEFT"), "[WLANSIM] THE STATION LEFT THE ACCESS POINT")
+    after = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30).partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
+    if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
+        after += wlan_until("[WLAN] Off", 30)
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # Under US the radio reports the 11 channels its limits leave (wlanhw.wit 1.2), and the restarted station took those.
     channels = run("wifi channels 00", 30, "[WIFI] 11 CHANNELS UNDER 00 (the world domain)")
     assert re.search(r"CHANNEL +11 2\.4 GHZ SEND", channels) and "CHANNEL  12" not in channels, channels[-1500:]
     print("PASS: the station's country (550-NET-0035): with none chosen the first scan sent nothing and the access point's UZ "
-          "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it", flush=True)
+          "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it; a change to RU "
+          "while joined left the access point, and the station joined again under RU", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
