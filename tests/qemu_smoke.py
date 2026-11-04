@@ -2557,7 +2557,7 @@ def vfs_restart_check(vm):
         time.sleep(.2)
     require(vm.service_logs("vfs_server", "[VFS] THE BOOT VOLUME:"), "[VFS] THE BOOT VOLUME:")
     require(vm.command("ls data"), "sum.msh")
-    require(vm.command("write data/after.txt after the restart"), "WROTE 17 BYTES")
+    require(vm.command("write data/after.txt after the restart"), "WROTE 18 BYTES TO data/after.txt")
     require(vm.command("cat data/after.txt"), "after the restart")
     require(vm.command("rm data/after.txt"), "OK")
     print("PASS: vfs_server restarted: the shell's ls, write, cat and rm in data/ answer again with no restart of the shell (311-KRN-0207)", flush=True)
