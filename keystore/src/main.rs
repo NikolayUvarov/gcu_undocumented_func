@@ -87,7 +87,7 @@ impl Keys {
         let mut seed = self.lock.unlock(pid, passphrase)?;
         self.hold(&seed);
         stored::wipe(&mut seed);
-        if stored::remove_plain() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
+        if stored::remove_plain().is_ok() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
         Ok(())
     }
 
@@ -177,7 +177,7 @@ impl Keys {
                 seed.copy_from_slice(&unsealed);
                 stored::wipe(&mut unsealed);
                 mind::println!("[KEYSTORE] DEVICE KEY FROM {} (SEALED BY THE TPM)", stored::SEALED);
-                if stored::remove_plain() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
+                if stored::remove_plain().is_ok() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
                 true
             }
             stored::Unsealed::Missing => match stored::load() {
@@ -187,7 +187,7 @@ impl Keys {
                     stored::wipe(&mut plain);
                     match stored::seal(seed) {
                         Ok(()) => {
-                            let removed = stored::remove_plain();
+                            let removed = stored::remove_plain().is_ok();
                             mind::println!("[KEYSTORE] DEVICE KEY FROM {} SEALED BY THE TPM IN {}{}", stored::FILE, stored::SEALED, if removed { "; THE UNENCRYPTED COPY REMOVED" } else { "; THE UNENCRYPTED COPY NOT REMOVED" });
                         }
                         Err(why) => mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK, NOT SEALED: {})", stored::FILE, why),

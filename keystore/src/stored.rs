@@ -91,9 +91,11 @@ pub fn seal(seed: &[u8; 32]) -> Result<(), &'static str> {
 /// Flushes the boot volume: vfs_server keeps a removal or a rename in its cache until then.
 pub fn flush() -> bool { fs::Dir::open(DIR).and_then(|dir| dir.flush()).is_ok() }
 
-/// Removes the unencrypted copy, once the key is sealed, then flushes the volume.
-pub fn remove_plain() -> bool {
-    let removed = fs::remove(FILE).is_ok();
-    if removed { flush(); }
-    removed
+/// Removes the unencrypted copy, once the key is sealed: zeroed and flushed first, so its clusters do not keep the seed
+/// (a flash medium's own remapping may still), then removed and the volume flushed. NotFound when there is none.
+pub fn remove_plain() -> Result<(), fs::Error> {
+    if let Ok(mut file) = File::open_mode(FILE, fs::MODE_WRITE) { let _ = file.write_at(0, &[0u8; LEN]).and_then(|_| file.flush()); }
+    fs::remove(FILE)?;
+    flush();
+    Ok(())
 }

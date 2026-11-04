@@ -121,6 +121,8 @@ Made while building it:
 - **With a TPM, a `device.locked` on the disk is logged and left as it is;** the TPM's flow runs as before (decision 14).
 - **`argon2` 0.5.3's future-incompatibility warning** (decision 19).
 - **What a passphrase does not give,** as in the shape: offline guessing on a copy of the disk at Argon2id's cost alone, a changed boot image recording the passphrase, and a forgotten passphrase losing the key.
+- **The count of wrong tries is kept in memory:** a restart of `keystore` or of the machine starts it again.
+- **The unencrypted copy** (`device.key`) is zeroed and flushed before it is removed (the storage session's review, 2026-11-04, in all three places that remove it). A flash medium may still keep the old bytes in blocks it remapped, and a copy of the disk made before the passphrase was set holds the key. The zeroing is not tested on the platform: the suite reads the file's absence, not the freed clusters.
 
 ## Related
 

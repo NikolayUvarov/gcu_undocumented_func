@@ -152,8 +152,8 @@ impl Lock {
         mind::println!("[KEYSTORE] PASSPHRASE {} FOR PID {}: THE DEVICE KEY SEALED UNDER IT IN {} (ARGON2ID {} KIB, {} PASSES, {} LANE{}; {} MS)",
                        if changed { "CHANGED" } else { "SET" }, pid, passlock::FILE, params.memory_kib, params.passes, params.lanes, if params.lanes == 1 { "" } else { "S" }, ms);
         if let Some(why) = unfinished { mind::println!("[KEYSTORE] {}: {}", NEW, why); }
-        match fs::remove(stored::FILE) {
-            Ok(()) => { stored::flush(); mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE) }
+        match stored::remove_plain() {
+            Ok(()) => mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE),
             Err(fs::Error::NotFound) => {}
             Err(error) => mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} NOT REMOVED: {:?} (REMOVED AT THE NEXT UNLOCK)", stored::FILE, error),
         }
