@@ -1,6 +1,6 @@
-# 110-NET-0052 — Listening TCP sockets for programs, and a listening grant
+# 110-NET-0052 — Listening TCP sockets for programs, and a listening grant — done
 
-**Type:** network (`netstack`, `netpolicy`, `idl/socket.wit`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) (its stage 2), for [112](112-our-own-ssh-server.md) too · **Roadmap:** track D (network) · **Constitution:** MC-5.1, MC-5.2, MC-10.3, MC-11.4, MC-11.6, MC-12.4
+**Type:** network (`netstack`, `netpolicy`, `idl/socket.wit`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [110](../issues/110-our-own-web-server.md) (its stage 2), for [112](../issues/112-our-own-ssh-server.md) too · **Roadmap:** track D (network) · **Constitution:** MC-5.1, MC-5.2, MC-10.3, MC-11.4, MC-11.6, MC-12.4
 
 **Recorded by:** the kernel session, 2026-10-31, as the first step both servers need: the web server of 110's stage 2 and the SSH server of 112.
 
@@ -89,6 +89,22 @@
 
 Every acceptance criterion is met once this lands; the "not done" points above stay as limits of the design.
 
+## Resolution
+
+- **`socket.wit` 2.9:** `tcp-listen`, `tcp-accept`, and the broker's `policy-listen`. **`netpolicy`** reads `listen` lines.
+- **`netstack`'s listener** (`netstack/src/listen.rs` since round 81):
+  - a backlog of at most 16 connections a port, and 32 listening sockets in all;
+  - half-open connections dropped after 10 s;
+  - a peer outside the grant's networks reset and logged;
+  - accepted sockets charged to the grant.
+- **QEMU:** `listen_check` in the `net` suite, on x86 and aarch64. Landed in round 78 (`main` e28cfe4d).
+- **Host tests** of the backlog and the half-open limit, on smoltcp's own TCP: `tests/listen_host.rs`, round 81 (`main` e860d0bc).
+- **Docs:** `docs/network/policy.md`, `docs/idl`.
+- **Not done** (limits of the design, not criteria):
+  - a separate limit of the accepted connections a grant holds;
+  - a half-open limit over all ports beyond the 32 listening sockets;
+  - a UDP server.
+
 ## Related
 
-[110](110-our-own-web-server.md), [112](112-our-own-ssh-server.md), [101](../issues-done/101-network-stack.done), [102](../issues-done/102-network-policy-broker.done).
+[110](../issues/110-our-own-web-server.md), [112](../issues/112-our-own-ssh-server.md), [101](101-network-stack.done), [102](102-network-policy-broker.done).

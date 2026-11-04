@@ -1,8 +1,8 @@
-# 309-KRN-0209 — A second store disk for the block store's copy
+# 309-KRN-0209 — A second store disk for the block store's copy — done
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, Appendix B.3, B.6
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [309](../issues/309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, Appendix B.3, B.6
 
-**Asked by:** STO, 2026-11-04 (`requests-KRN.md`, taken out of it with this issue), for [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.md).
+**Asked by:** STO, 2026-11-04 (`requests-KRN.md`, taken out of it with this issue), for [309-STO-0040](../issues/309-STO-0040-copies-of-chosen-names-on-a-second-medium.md).
 
 ## Problem
 
@@ -19,7 +19,7 @@
 2. **`blockstore` gets it in slot 4,** a block client with `BADGE_WRITE`, as slot 2 holds the store's own. Without a second disk, slot 4 stays empty and the store runs as now.
 3. **`vfs_server` never gets it,** as it never gets the store's disk (Appendix B.6).
 4. **`init` logs it:** `[INIT] THE BLOCK STORE'S COPY: <driver> (BLANK|THE STORE'S)`, as it logs the store's disk.
-5. **On real machines no copy is given** until [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md)'s partitions. That is for a later request.
+5. **On real machines no copy is given** until [307-KRN-0177](../issues/307-KRN-0177-the-stores-own-partition-classified-and-granted.md)'s partitions. That is for a later request.
 
 `blockstore`'s side (the copy mounted from slot 4, names copied, repair) is the storage track's, in 309-STO-0040. No ABI change: slot 4 is between `init` and `blockstore`, as slots 2 and 3 are.
 
@@ -51,6 +51,14 @@
 
 **Left:** after a reboot the copy's disk is found as `THE STORE'S` once `blockstore` writes it, which is 309-STO-0040's.
 
+## Resolution
+
+- **`init`** finds the store's disk and its copy's in one pass, and logs both (`[INIT] THE BLOCK STORE'S COPY: …`).
+- **`blockstore`** gets a write client of the copy's disk in slot 4, only beside a disk of its own. **`vfs_server`** gets neither disk.
+- **QEMU:** `store_copy_disk_check` in the `store` suite, on x86 and aarch64. Landed in round 81 (`main` e860d0bc).
+- **Docs:** `docs/profile/bootstrap.md` and `evidence.md`.
+- **What is STO's:** using the copy's disk, after which it is found as `THE STORE'S` at a reboot (309-STO-0040).
+
 ## Related
 
-STO's [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.md); [300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done) (the store's own disk); [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md) (partitions on machines).
+STO's [309-STO-0040](../issues/309-STO-0040-copies-of-chosen-names-on-a-second-medium.md); [300-KRN-0025](300-KRN-0025-a-disk-for-the-block-store.done) (the store's own disk); [307-KRN-0177](../issues/307-KRN-0177-the-stores-own-partition-classified-and-granted.md) (partitions on machines).
