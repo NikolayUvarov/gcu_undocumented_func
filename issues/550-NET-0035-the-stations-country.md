@@ -16,8 +16,16 @@ Numbered 0035, after [351-NET-0034](../issues-done/351-NET-0034-the-download-che
   - It probes on channels 1 to 11 ("which every domain allows") and listens elsewhere.
   - It joins an access point on any channel the radio has.
   - `idl/wifi.wit` 1.0 has no country.
-- **What must hold** (the request):
-  - no default: a missing, unknown or unapplied country is never DE, US, the world domain or permission to send;
+- **The maintainer's decision of 2026-11-04** replaces the first rule below ("no default"): "if there is no country, go through UZ, US, RU and the other countries. Everything must work, not go quiet." With no country chosen, the station works as follows:
+  1. **It listens first.** On every channel, without sending, it reads the Country element of the access points' beacons (802.11d). A code that is in the catalogue is applied as **detected**, shown apart from a chosen one.
+  2. **If none is announced,** it applies `00`, the catalogue's rules common to every country (UZ, US, RU and the rest):
+     - it probes and joins on channels 1 to 11;
+     - elsewhere it listens, and joins an access point it heard. So a network on any channel can still be joined.
+  3. **It is never silent.** `wifi` and the log say what is applied and why: chosen, detected from access points (with how many announced it), or `00` because none was chosen or announced.
+  4. **A chosen country** always comes first. A detected one never replaces it.
+- **Not done this way:** applying UZ, US, RU and the others one after another and sending under each in turn. Sending under another country's rules may be unlawful where the machine is. `00` is the subset every country allows, and with the beacons' country it reaches the same networks.
+- **What must hold** (the request), the first rule replaced as above:
+  - ~~no default: a missing, unknown or unapplied country is never DE, US, the world domain or permission to send~~ (replaced 2026-11-04);
   - a two-letter code is kept, never a row index;
   - a change of country leaves nothing chosen under the old rules: scan, join or the radio's limits;
   - what was asked for and what the radio applied are shown apart;
@@ -62,7 +70,7 @@ Numbered 0035, after [351-NET-0034](../issues-done/351-NET-0034-the-download-che
   - `denied`: a read-only client;
   - `no-device`: no radio yet;
   - `unsupported`: no catalogue in this build.
-- **With no country applied** the station scans without probing and `join` answers `unsupported`. `country()` says why.
+- **With no country chosen** the station follows the maintainer's decision of 2026-11-04 above: the beacons' country, else `00`. `country()` names which, and why. `join` is never refused for want of a country.
 - **If the radio refuses the limits:** the state is `failed` and nothing is applied, so the station only listens. It does not fall back to the country it had: the user may have moved.
 
 ### `idl/wlanhw.wit` 1.2 (agreed with `DRV`, 2026-10-20)
@@ -98,7 +106,7 @@ Numbered 0035, after [351-NET-0034](../issues-done/351-NET-0034-the-download-che
 - **Stage B, once `regdb` and `DRV`'s word on 1.2 are in:**
   - each radio's real answer to `set-country` (`DRV`, ASTRA);
   - `wlan` uses the catalogue;
-  - with none applied it probes nowhere, and `join` answers `unsupported`;
+  - with none chosen: the beacons' country, else `00`, each shown with its reason;
   - the country is read back from `keystore` at start;
   - the QEMU checks run, with `wlansim`;
   - the `net` suite's station checks set a country first.
@@ -107,7 +115,7 @@ Numbered 0035, after [351-NET-0034](../issues-done/351-NET-0034-the-download-che
 ## Acceptance criteria
 
 - **Host tests (`dot11`):**
-  - with no country the station sends no probe and joins nothing;
+  - with no country chosen: its first scan sends nothing; then it applies the country the beacons announce, or `00` when none does, says which, and joins under it;
   - a country's `send`, `listen`, `barred` and `radio` channels give probes, passive dwell, a refused join and a refused join;
   - a change of country leaves the network, drops the scan and keeps nothing chosen before it;
   - a refused application leaves nothing applied.
