@@ -1,6 +1,6 @@
-# 213-KRN-0099 — `init` grants every xHCI controller to `usb_host`
+# 213-KRN-0099 — `init` grants every xHCI controller to `usb_host` — done
 
-**Type:** `init`, with the drivers track's `usb_host` (213-DRV-0048) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` c7cef477; the Ryzen machine's report is left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3
+**Type:** `init`, with the drivers track's `usb_host` (213-DRV-0048) · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-2.3
 
 ## Problem
 
@@ -8,7 +8,7 @@
 
 ## Plan
 
-**One `usb_host` for every controller,** as it drives the EHCI ones: the drivers track's shape ([213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done)), taken instead of this issue's first plan of `usb_host#1` instances, so a Bluetooth adapter, a serial converter or a camera works on either controller too.
+**One `usb_host` for every controller,** as it drives the EHCI ones: the drivers track's shape ([213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.done)), taken instead of this issue's first plan of `usb_host#1` instances, so a Bluetooth adapter, a serial converter or a camera works on either controller too.
 
 1. **`init`:** after the first controller, each further xHCI controller in PCI order gets its BAR0 and its own DMA region in `mind::usb::XHCI`'s slots, as the EHCI controllers get theirs.
 2. **A driver's restart:** the second controller is stopped and resumed with the first.
@@ -33,6 +33,17 @@
 - **Landed in `main` c7cef477** (round 67), with DRV's 213-DRV-0048. The first criterion is met: in the gate, the `usb` suite's keyboard on a second `qemu-xhci` typed, also after `usb_hid` and `usb_host` restarted, on x86 ("x86: keys, shell, tools", `acc-2`) and on aarch64 ("aarch64: programs, shell and four CPUs", `acc-2`). That is evidence for QEMU only (MC-12.1).
 - **Left:** the second criterion. On the Ryzen machine, both controllers (05:00.3 and 05:00.4) must show "(granted to a driver)" in the hardware report of a release with c7cef477.
 
+## Resolution
+
+**`init` grants `usb_host` the further xHCI controllers** in `mind::usb::XHCI`'s slots: each its BAR0 (which turns its bus mastering on) and 512 KiB of DMA. The second is stopped and resumed with the first. In `main` c7cef477 (round 67), with DRV's [213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.done).
+
+**QEMU:** the `usb` suite's keyboard on a second `qemu-xhci` typed in the gate on x86 and aarch64, also after the drivers restarted.
+
+**The Ryzen 9 5900HX** (DRV's report, `ALL/2026-11-03T1817Z-DRV-…`; `fast-test` 13253dc8, which holds c7cef477; two boots):
+- `usb_host` logged `XHCI 1: 1022:1639, 6 PORTS, 16 SLOTS`, then `XHCI 1: 046D:C534 ON PORT 2 (FULL SPEED)`, and `usb_hid` took the receiver as a keyboard and a mouse; the maintainer typed and used the mouse in `wm` through it.
+- **What that shows about the grant.** `usb_host` reaches a controller's registers only through the BAR that `init` mints for it, and the kernel marks a device "granted to a driver" at that very mint. So the criterion's grant holds for both controllers.
+- **What it does not show.** The report's two lines were not quoted. This is evidence for that machine and that build only (MC-12.1).
+
 ## Related
 
-[213](213-amd-ryzen-pc.md), [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done), 164 (`usb_host`), [requests-DRV.md](requests-DRV.md).
+[213](../issues/213-amd-ryzen-pc.md), [213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.done), 164 (`usb_host`), [requests-DRV.md](../issues/requests-DRV.md).
