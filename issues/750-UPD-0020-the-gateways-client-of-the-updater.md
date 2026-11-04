@@ -1,6 +1,6 @@
 # 750-UPD-0020 — The Effector gateway's client of `updater`
 
-**Type:** service interface · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress (2026-10-30: the badge and its gate made with 751-KRN-0185) · **Blocked by:** — (`init`'s part is [751-KRN-0185](751-KRN-0185-the-remote-update-permission-in-init.md)) · **Main task:** [750](750-effector-agent.md) · **Roadmap:** stage V, track C · **Constitution:** MC-7.5, MC-8.5, MC-9.3, MC-9.4
+**Type:** service interface · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress (in `main` since round 50; the `update` suite's run of a gateway-badged client and EFF's install left) · **Blocked by:** — (`init`'s part is [751-KRN-0185](751-KRN-0185-the-remote-update-permission-in-init.md)) · **Main task:** [750](750-effector-agent.md) · **Roadmap:** stage V, track C · **Constitution:** MC-7.5, MC-8.5, MC-9.3, MC-9.4
 
 From the request "A client of `updater` for the Effector gateway (750)" in requests-UPD.md (recorded by the Effector agent track, 2026-10-09).
 
