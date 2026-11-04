@@ -1,6 +1,6 @@
 # 800-KRN-0191 — With `dev`, `link` holds the input capability, so that keys and the pointer go over the cable
 
-**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (in `main` 3fbdd30e; the safe-start and no-`dev` checks made, x86 passed; aarch64 and LNK's check left) · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's), for 800-LNK-0032 and [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) · **Roadmap:** track C · **Constitution:** MC-3.1, MC-3.11, MC-10.2, MC-12.3
+**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (in `main` 3fbdd30e; the safe-start and no-`dev` checks made, x86 and aarch64 passed here; the gate and LNK's check left) · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's), for 800-LNK-0032 and [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) · **Roadmap:** track C · **Constitution:** MC-3.1, MC-3.11, MC-10.2, MC-12.3
 
 **Asked by:** the link track (`LNK`) on 2026-10-30, for 800-LNK-0032, in `KRN/2026-10-30T1222Z-LNK-a-request-the-input-capability-for-link-in-dev.md` on `internal-dev-messages`. The maintainer wants key presses over the cable (2026-10-30). 000-KRN-0108's rig stays for the firmware's menus, the boot and a hung machine.
 
@@ -50,7 +50,9 @@
   - then a reset within the minute after `READY`, so the next boot is a safe start (000-KRN-0076);
   - there `init` logs `NO INPUT IN A SAFE START` and `stat caps` of `link` shows no `KIND=6`.
 
-**Passed on x86** in the kernel session's container (QEMU 8.2.2, TCG, 4 CPUs), the whole suite in 4 minutes. The aarch64 run is next.
+**Passed** in the kernel session's container (QEMU 8.2.2, TCG, 4 CPUs): the whole suite on x86 in 4 minutes, and on aarch64 in 3 minutes 43 s.
+
+**A gate group for aarch64,** `aarch64: the link` (`--suites link`), in `scripts/ci_local.sh` and `ci.yml`, as no aarch64 group ran the suite. Its estimate in `land.py` is 225 s.
 
 ## Related
 
