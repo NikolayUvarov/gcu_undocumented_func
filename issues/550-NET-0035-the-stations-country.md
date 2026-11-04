@@ -175,6 +175,10 @@ Stage B made, on the maintainer's decision of 2026-11-04 (above), on the branch 
 - **APP's screen.** `wifi` shows `APPLIED, none ASKED` for a detected country. `country-origin` is there for APP to show why (`APP/2026-11-04T1003Z-NET-…`).
 - **Real radios:** none applies a country yet. `bcm_wifi` answers `failed` and `rtw89_wifi` has no `wlanhw` endpoint (213-KRN-0123). That is DRV's, a radio and a machine at a time (MC-12.1).
 
+**Landed (2026-11-04).** Stage B landed in round 80 (`main` 4130cff6). Its gate passed both network groups (x86 and aarch64) with the country checks. Two of the QEMU criteria are not checked yet, so the issue stays open:
+- a read-only client refused a change of country;
+- after a change of country, the link left and the old scan gone.
+
 ## Related
 
 [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), [550-NET-0028](../issues-done/550-NET-0028-rates-the-radio-has.done), [550-APP-0082](550-APP-0082-wifi-country-selector.md), 213-DRV-0032, [requests-DRV.md](requests-DRV.md).
