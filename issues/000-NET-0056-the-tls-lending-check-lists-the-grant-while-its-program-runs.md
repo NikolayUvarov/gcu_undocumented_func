@@ -1,0 +1,39 @@
+# 000-NET-0056 — The TLS lending check lists the grant while its program runs; the run-time question read across the prompt
+
+**Type:** test · **Owner:** kernel session (network track) · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+
+## Problem
+
+**What failed.** Round 74's gate on x32-128 (candidate 7fd66f5d, 2026-11-04) failed in `x86: network, TLS and Effector`. The TLS suite's `tls_lending_check` read `netgrants` and got `NO NETWORK GRANTS`.
+
+**Why.** The check ran `netgrants` after it had killed `tlsclock`. `netpolicy` drops the grant of a process that ended at its next sweep (`expire`). So the check passed only when the sweep came after `netgrants`'s answer.
+
+**The second failure.** The group ran again alone, and failed in the net suite's `browse_check`, at the question asked at run time (000-NET-0049, 000-APP-0120).
+- `asked()` read the start of the question (`NETWORK: netcheck (PID `) in the output of `run … &`, whose prompt came first.
+- The question's end (`ALWAYS? `) came after that output.
+- `expect("ALWAYS? ", after=question)` then looked for the question's start in the new output, where it no longer was, and timed out on ` FOR THIS RUN  A: ALWAYS? `.
+
+**The candidate is not the cause** of either. None of its changes touch grants, their sweep or the shell's questions.
+- Both are races in the tests, which x32-128 hit and the slower machines had not. The group passed on x32-2 in round 73, beside other groups.
+- The repeat, alone on x32, was faster still (576 s against 722 s and 897 s).
+
+## Plan
+
+1. **`lent()`** takes a check to run while the program is still alive: after `stat caps`, before the kill.
+2. **The grant check** runs there and names the program: `tlsclock RULES=`, where it was any `GRANT `.
+3. **`asked()`** waits for the question's end with no `after` when its start was already read in the command's output.
+
+## Acceptance criteria
+
+The group `x86: network, TLS and Effector` passes on x32-128, alone and in a gate.
+
+## Progress
+
+2026-11-04 (fa6d3758, 4469f706): both fixes made.
+- In this session's container (QEMU TCG, 4 CPUs), the group passed in full with the first.
+- On x32-128 at 4469f706, beside the aarch64 network group: `x86: network, TLS and Effector` passed (949 s).
+- The run alone on x32-128 and the gate are still to come.
+
+## Related
+
+000-APP-0115 and 351-APP-0083, where the check came from; round 74's gate log.

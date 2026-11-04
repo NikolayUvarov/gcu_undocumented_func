@@ -9607,6 +9607,7 @@ def net_suite(args, disk):
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-net-cards-{mode.split()[0].lower()}-{args.cpus}cpu.log").write_text(vm.log)
     static_setup_check(args, disk)
+    listen_check(args, disk)
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
@@ -9635,6 +9636,62 @@ def net_suite(args, disk):
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+def listen_check(args, disk):
+    """110-NET-0052: a program listens (socket.wit 2.9) on a port its policy names, through QEMU's forwarded port.
+    `listen netcheck tcp 7000 from 10.0.2.0/24 60 20`: netcheck takes the host's connection (QEMU's 10.0.2.2), reads a
+    line and sends it back, and the 27 bytes pass the grant's 20, so the stack ends the grant: the accepted connection is
+    charged to it. A port without a line is denied; a peer outside 7002's 192.168.0.0/16 is reset and logged."""
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    policy.write_text((before or "") + "listen netcheck tcp 7000 from 10.0.2.0/24 60 20\nlisten netcheck tcp 7002 from 192.168.0.0/16\n")
+    allowed, outside = free_port(), free_port()
+    network = f"user,id=n0,hostfwd=tcp:127.0.0.1:{allowed}-:7000,hostfwd=tcp:127.0.0.1:{outside}-:7002"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", network, "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+        vm.send("netcheck listen:7000:30\n")
+        vm.expect("NETCHECK LISTENING ON 7000", timeout=20)
+        with socket.create_connection(("127.0.0.1", allowed), timeout=20) as peer:
+            peer.sendall(b"hello mind\n")
+            got = b""
+            while not got.endswith(b"\n"):
+                chunk = peer.recv(256)
+                if not chunk:
+                    break
+                got += chunk
+        assert got == b"ECHO hello mind\n", got
+        require(vm.expect("MIND> ", timeout=20, after="NETCHECK listen:7000:30 OK"), "NETCHECK RECEIVED hello mind")
+        stack = vm.service_logs("netstack", "ENDED")
+        require(stack, "[NETSTACK] PORT 7000 LISTENS FOR PID")
+        assert re.search(r"\[NETSTACK\] PORT 7000 ACCEPTED 10\.0\.2\.2:\d+ FOR PID \d+ \(BADGE (\d+)\)", stack), stack[-2000:]
+        badge = re.search(r"PORT 7000 ACCEPTED .*\(BADGE (\d+)\)", stack)[1]
+        require(stack, f"[NETSTACK] GRANT {badge} ENDED")  # 27 bytes through the accepted connection against its 20
+        require(vm.service_logs("netpolicy", "LISTENS ON TCP 7000"), "LISTENS ON TCP 7000 FROM 10.0.2.0/24")
+        # A port no line names.
+        require(vm.command("netcheck listen:7001:2", timeout=20), "NETCHECK listen:7001:2 Denied")
+        # A peer outside the port's networks: reset as soon as the stack sees it, and logged.
+        vm.send("netcheck listen:7002:8\n")
+        vm.expect("NETCHECK LISTENING ON 7002", timeout=20)
+        try:
+            with socket.create_connection(("127.0.0.1", outside), timeout=10) as peer:
+                peer.sendall(b"let me in\n")
+                reply = peer.recv(256)
+        except OSError:
+            reply = b""
+        assert reply == b"", reply
+        vm.expect("MIND> ", timeout=30, after="NETCHECK listen:7002:8 Again")
+        require(vm.service_logs("netstack", "REFUSED"), "[NETSTACK] PORT 7002 REFUSED 10.0.2.2:")
+    finally:
+        vm.close()
+        if before is None:
+            policy.unlink()
+        else:
+            policy.write_text(before)
+    print("PASS: a listening grant (110-NET-0052): netcheck took the host's connection on 7000 and echoed its line, the "
+          "connection charged to the grant until its volume ended it; 7001 denied without a line; a peer outside 7002's "
+          "network reset and logged", flush=True)
 
 
 def static_setup_check(args, disk):
@@ -9701,8 +9758,11 @@ def browse_check(args):
             def asked(seconds, then=""):  # netcheck asks from the background; the shell shows the question at the prompt
                 out = vm.command(f"run netcheck ask:11.0.2.80:81:{seconds}{then} &")
                 pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", out)[1]
-                if "ALWAYS? " not in out.partition(question)[2]:  # it may show before the prompt or after it
+                # It may show before the prompt, after it, or begin before it and end after it.
+                if question not in out:
                     vm.expect("ALWAYS? ", timeout=20, after=question)
+                elif "ALWAYS? " not in out.partition(question)[2]:
+                    vm.expect("ALWAYS? ", timeout=20)
                 return pid
 
             # No, typed once the question shows: refused at once.
@@ -10742,10 +10802,12 @@ def tls_lending_check(vm, servers, tls, ssh):
     what the script declares."""
     services = {name: {ep for ep, server in servers.items() if server == pid} for name, pid in (("tls", tls), ("ssh", ssh))}
 
-    def lent(command):
+    def lent(command, alive=None):
         out = vm.command(command)
         pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
         caps = vm.command(f"stat caps {pid + BASE}", raw=True)
+        if alive:
+            alive()  # while the program runs: netpolicy drops its grant at a sweep after the exit
         require(vm.command(f"kill {pid}"), "KILLED")
         held = {}
         for slot, name in ((20, "tls"), (34, "ssh")):
@@ -10754,9 +10816,8 @@ def tls_lending_check(vm, servers, tls, ssh):
                 held[name] = int(found[1])
         return out, held
 
-    out, held = lent("run tlsclock &")
+    out, held = lent("run tlsclock &", alive=lambda: require(vm.command("netgrants"), "tlsclock RULES="))
     assert held == {"tls": 1, "ssh": 0}, (held, out)  # BADGE_TLS_NO_DEVICE; the SSH service's as it is
-    require(vm.command("netgrants"), "GRANT ")
     out, held = lent("run tlsnone &")
     require(out, "NETWORK FOR tlsnone: NoPolicy")
     assert not held, "no flow grant, no TLS or SSH client"

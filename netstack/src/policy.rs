@@ -2,14 +2,16 @@
 //! by the policy broker; the stack checks every request with a grant's badge against them. A rule of address 0, TCP
 //! only, reaches any public address on its port: a browsing grant (socket.wit 2.7, 000-NET-0049), whose every new host
 //! is logged. A rule the user gave in answer to a grant's question is added to it (socket.wit 2.8); one given once ends
-//! with the grant's first connection through it.
+//! with the grant's first connection through it. A grant may listen on the TCP ports its listening rules name, and take
+//! connections from the networks they name (socket.wit 2.9, 110-NET-0052).
 use alloc::vec::Vec;
-use mind::idl::socket::{self, Error, Protocol, Rule};
+use mind::idl::socket::{self, Error, ListenRule, Protocol, Rule};
 use mind::network::{BADGE_GRANT_LAST, BADGE_OPERATOR, BADGE_POLICY};
 
 pub const GRANTS: usize = 64;
 
-pub struct Grant { pub badge: u16, rules: Vec<Rule>, expires: u64, budget: u64, pub sent: u64, pub received: u64, pub ended: bool, hosts: Vec<u32>, once: Vec<Rule> }
+pub struct Grant { pub badge: u16, rules: Vec<Rule>, expires: u64, budget: u64, pub sent: u64, pub received: u64, pub ended: bool, hosts: Vec<u32>, once: Vec<Rule>,
+                  listen: Vec<ListenRule> }
 
 // The public hosts a browsing grant has reached that the audit remembers; past them each new one is logged again.
 const HOSTS: usize = 256;
@@ -28,7 +30,8 @@ impl Policy {
         if !(1..=BADGE_GRANT_LAST).contains(&badge) || rules.iter().any(|r| r.address == 0 && (r.protocol != Protocol::Tcp || r.port == 0)) { return Err(Error::Invalid); }
         self.grants.retain(|g| g.badge != badge);
         if self.grants.len() >= GRANTS { return Err(Error::Limit); }
-        self.grants.push(Grant { badge, rules: rules.to_vec(), expires: now + seconds as u64 * 1000, budget: bytes, sent: 0, received: 0, ended: false, hosts: Vec::new(), once: Vec::new() });
+        self.grants.push(Grant { badge, rules: rules.to_vec(), expires: now + seconds as u64 * 1000, budget: bytes, sent: 0, received: 0, ended: false, hosts: Vec::new(), once: Vec::new(),
+                                 listen: Vec::new() });
         Ok(())
     }
     pub fn drop(&mut self, badge: u16) -> bool { let before = self.grants.len(); self.grants.retain(|g| g.badge != badge); before != self.grants.len() }
@@ -80,6 +83,26 @@ impl Policy {
         grant.rules.retain(|r| *r != rule);
         let [a, b, c, d] = address.to_be_bytes();
         mind::println!("[NETSTACK] GRANT {}: THE RULE GIVEN ONCE FOR {}.{}.{}.{}:{} ENDS WITH THIS CONNECTION", badge, a, b, c, d, port);
+    }
+    /// Who may connect to grant `badge`'s listening sockets (socket.wit 2.9), replacing what it had: a port and a network
+    /// each, at most LISTEN_NETWORKS networks a port.
+    pub fn set_listen(&mut self, badge: u16, rules: &[ListenRule]) -> Result<(), Error> {
+        let bad = |r: &ListenRule| r.port == 0 || r.prefix > 32
+            || rules.iter().filter(|o| o.port == r.port).count() > mind::network::LISTEN_NETWORKS;
+        if rules.iter().any(bad) { return Err(Error::Invalid); }
+        let grant = self.grants.iter_mut().find(|g| g.badge == badge).ok_or(Error::NotFound)?;
+        grant.listen = rules.to_vec();
+        Ok(())
+    }
+    /// Whether grant `badge` may listen on TCP `port` (socket.wit 2.9).
+    pub fn may_listen(&self, badge: u16, port: u16, now: u64) -> Result<(), Error> {
+        let grant = self.live(badge, now)?;
+        if grant.listen.iter().any(|r| r.port == port) { Ok(()) } else { Err(Error::Denied) }
+    }
+    /// Whether a peer at `address` may connect to grant `badge`'s listening socket on `port`: a live grant whose rule for
+    /// the port names a network that holds it (socket.wit 2.9).
+    pub fn admits(&self, badge: u16, port: u16, address: u32, now: u64) -> bool {
+        self.live(badge, now).is_ok_and(|g| g.listen.iter().any(|r| r.port == port && mind::network::in_network(address, r.network, r.prefix)))
     }
     /// Any request of a live grant (sockets it already holds).
     pub fn alive(&self, badge: u16, now: u64) -> Result<(), Error> { self.live(badge, now).map(drop) }
