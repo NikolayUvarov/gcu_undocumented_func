@@ -140,7 +140,11 @@ class System:
         subprocess.run(["umount", directory], check=True)
 
     def reboot(self):
-        subprocess.run(["systemctl", "reboot"], check=True)
+        # In 5 s, from systemd: the restart outlives the caller's process group, as an Effector exec's (000-KRN-0124).
+        if shutil.which("systemd-run"):
+            subprocess.run(["systemd-run", "--on-active=5", "/bin/systemctl", "reboot"], check=True, capture_output=True)
+        else:
+            subprocess.run(["systemctl", "reboot"], check=True)
 
 
 def read_log_volume(system, device, visit):
@@ -207,8 +211,10 @@ def once(system, requested=None, reboot=False, out=print):
     out(f"the next boot starts Boot{number} ({disk['path']}) once; every boot after it starts Boot{boot['order'][0]}")
     if system.secure_boot():
         out("Secure Boot is on: if the firmware refuses MIND Core's bootloader, it starts Linux instead")
+    out("With the firmware's Fast Boot on, a firmware may skip the stick and BootNext and start Linux (the Ryzen did): "
+        "turn Fast Boot off in its setup")
     if reboot:
-        out("restarting")
+        out("restarting in 5 s")
         system.reboot()
     return number
 

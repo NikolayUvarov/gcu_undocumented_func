@@ -1,6 +1,6 @@
 # 000-KRN-0124 — Switching a machine between Linux and MIND Core: one boot of MIND Core by `BootNext`, and back to Linux by any restart
 
-**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` at 1b1436a; the Ryzen's run left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1, MC-12.9
+**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (the Ryzen's switch ran; `logs` there left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1, MC-12.9
 
 ## Problem
 
@@ -101,6 +101,23 @@ With `BootNext`, every way a run of MIND Core can end returns to Linux: `reboot`
 - **Left:** the run on the Ryzen with the maintainer.
 
 **The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. The host tests ran in it.
+
+## Progress (2026-11-03, on the Ryzen)
+
+**DRV's report** (`ALL/2026-11-03T1817Z-DRV-…`):
+- **With the firmware's Fast Boot on,** the Ryzen ignored `BootNext` to the stick and started Ubuntu. Choosing the stick in the firmware's menu worked.
+- **The maintainer turned Fast Boot off.** One full cycle then ran with nobody at the machine, in about two minutes:
+  - MIND's `reboot` came back to Ubuntu (`BootCurrent: 0002`);
+  - `once` (`BootNext: 0003`) and a reboot started MIND Core, which answered the link at 18:00:40.
+- **The reboot outlived the Effector exec** only as `systemd-run --on-active=5 /bin/systemctl reboot`; a background `&` was killed with the exec.
+
+**The script now:**
+- `once` says that Fast Boot may skip the stick and `BootNext`;
+- `--reboot` asks systemd to restart in 5 s (`systemd-run`), so the restart outlives the command that ran the script.
+
+**`docs/write-disk.md`** (EN, RU) says both.
+
+**Left of the criterion:** on the Ryzen, `logs` after such a boot, copying its log and saying it booted.
 
 ## Related
 
