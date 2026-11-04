@@ -47,7 +47,7 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 - **Tests:**
   - host tests in `tests/platform_power_host.rs` (6), with tables made in the test: an absence; each name in an SSDT; a cut table; a short header; a bad checksum; an unmapped table; no DSDT; too many tables;
   - QEMU: the `normal` suite requires `ABSENT`. Seen once on x86 in this session's container (QEMU's one DSDT).
-- **Not given to the driver yet.** `rtw89_wifi` reads its arguments as one number, its PCI device index. \`init\` will add `platform=absent` or `platform=unknown:<reason>` after the index once DRV's parser takes the word. The form is in `DRV/2026-11-04T1003Z-KRN-…`.
+- **Not given to the driver yet.** `rtw89_wifi` reads its arguments as one number, its PCI device index. `init` will add `platform=absent` or `platform=unknown:<reason>` after the index once DRV's parser takes the word. The form is in `DRV/2026-11-04T1003Z-KRN-…`.
 
 **Left:**
 - the word in the driver's arguments, after DRV;
