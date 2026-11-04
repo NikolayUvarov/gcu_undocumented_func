@@ -119,6 +119,20 @@ With `BootNext`, every way a run of MIND Core can end returns to Linux: `reboot`
 
 **Left of the criterion:** on the Ryzen, `logs` after such a boot, copying its log and saying it booted.
 
+## Progress (2026-11-04, on the Ryzen)
+
+**DRV's report** (`KRN/2026-11-04T0509Z-DRV-boot-switch-logs-on-un-rizen.md`). The runs used the script as it was in `main` before this branch's change, run as root through Effector, with the stick's partitions unmounted first.
+- **Fourteen `BootNext` cycles**, about two minutes each. Thirteen started MIND Core from the stick, and its `reboot` came back to Ubuntu.
+- **`logs` after a MIND Core boot** (05:07 UTC): `copied /dev/sda2 into …` and `MIND Core booted: boot0013.log; autorun in the last: none`, exit 0.
+- **`logs` after the one cycle that did not reach MIND Core** (the 2026-11-03 18:56 reboot, a dark screen until the maintainer restarted the machine): `MIND Core did not boot: no new boot log…`, exit 1. Fast Boot was already off, and six cycles before it had booted the stick. The cause is not known.
+- **The logs' own clock.** `boot0001.log` reads a later time than `boot0002.log`: the RTC was not UTC at the first boot (the machine also has Windows). `logs` orders the logs by number, not by their clock.
+
+So the three steps of the criterion were seen on that machine with the earlier script: `once --reboot` started MIND Core, its `reboot` came back, and `logs` copied the boot's log and said whether it booted. They are recorded for that machine and its firmware only (MC-12.1).
+
+**Left:**
+- the same cycle with this branch's script, whose `--reboot` goes through `systemd-run`, once it is in `main`;
+- the cycle that did not boot: its cause, if it comes back.
+
 ## Related
 
 [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done) (`efivar`, `BootNext` from MIND Core), [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done) (each slot's own loader, which the one at `EFI/BOOT/` starts), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (the watchdog), [213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md), [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) (the rig), [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) (`write_usb_linux.py`), [docs/write-disk.md](../docs/write-disk.md), [docs/effector.md](../docs/effector.md).
