@@ -43,4 +43,4 @@ MIND Core has no name for the machine:
 
 ## Related
 
-[750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), [000-APP-0099](000-APP-0099-clocks-in-a-time-zone.md) (`data/clock.conf`, set the same way).
+[750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), [000-APP-0099](000-APP-0099-clocks-show-the-time-zone.md) (`data/clock.conf`, set the same way).
