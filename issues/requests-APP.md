@@ -81,20 +81,4 @@ Asked on 2026-10-28 in `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` (EFF with
 
 ## The shell lends the station's reading client (for 550-NET-0058), once `KRN` gives the request bit
 
-**Recorded by:** the network track (`NET`, worked by the storage session), 2026-11-05.
-
-### Problem
-
-- **A program that only shows the Wi-Fi link** (a status line, a widget) can get the station's client only for `REQUEST_WIFI`, which is the changing one (`BADGE_WIFI_CHANGE`): it may join, leave, forget and set the country (MC-6.1).
-- **`wifi.wit` 1.3 (550-NET-0058)** adds `reader`: whoever holds a client of the station asks it for one that only reads (`BADGE_WIFI`), minted by the station. Its changing calls answer `denied`.
-
-### Plan (a proposal; the tools track decides)
-
-- **For the request bit `KRN` gives** (proposed in `requests-KRN.md`: `REQUEST_WIFI_READ`), the shell asks `wifi::reader(Endpoint(SLOT_WIFI), <a slot it holds nothing in>)` and lends what comes into the program's `SLOT_WIFI`, then drops its copy. The reading client lets no one change anything, so starting the program is enough, as for `REQUEST_BATTERY`.
-- **A program that asks for both** gets the changing one, as now.
-- **`unsupported`** (a station without the badge right) or no station: the program runs without, as without a radio.
-- `link`'s lending for `REQUEST_WIFI` may do the same; that is `LNK`'s.
-
-### Acceptance criteria
-
-- A program with the bit alone holds a client whose `status` answers and whose `join` answers `denied`; a script must declare `wifi` for it, as now.
+Asked by NET on 2026-11-05. Numbered the same day as [550-APP-0124](550-APP-0124-the-shell-lends-a-reading-wifi-client.md), its plan taken from this request; blocked by KRN's bit.
