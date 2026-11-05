@@ -51,7 +51,14 @@ fn mac64(m: &[u8; 6]) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
 fn mac(v: u64) -> [u8; 6] { core::array::from_fn(|i| (v >> (40 - 8 * i)) as u8) }
 
 fn info<R: Regs>(radio: &Radio<R>, country: Option<Country>) -> wlanhw::Info {
-    wlanhw::Info { mac: mac64(&radio.mac), bands: BAND_2GHZ | BAND_2GHZ_OFDM, channels: Country::list(country), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+    wlanhw::Info { mac: mac64(&radio.mac), bands: BAND_2GHZ | BAND_2GHZ_OFDM, channels: Country::list(country), supported: supported(), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+}
+
+// The radio's own channels, whatever the limits (wlanhw.wit 2.0, 550-NET-0059).
+fn supported() -> List<u8, 64> {
+    let mut channels = List::default();
+    for ch in CHANNELS { channels.push(ch); }
+    channels
 }
 
 pub fn run<R: Regs>(radio: &mut Radio<R>) -> ! {

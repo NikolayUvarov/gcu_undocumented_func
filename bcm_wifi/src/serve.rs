@@ -266,7 +266,14 @@ pub fn run(radio: &mut Radio) -> ! {
 }
 
 fn info(radio: &Radio, country: Option<Country>) -> wlanhw::Info {
-    wlanhw::Info { mac: mac64(&radio.mac), bands: bands(), channels: Country::list(country), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+    wlanhw::Info { mac: mac64(&radio.mac), bands: bands(), channels: Country::list(country), supported: supported(), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+}
+
+// The radio's own channels, whatever the limits (wlanhw.wit 2.0, 550-NET-0059).
+fn supported() -> List<u8, 64> {
+    let mut channels = List::default();
+    for ch in CHANNELS { channels.push(ch); }
+    channels
 }
 
 // No radio to serve (it did not come up): every request answered no-device, `wait` with none, so the station is not
@@ -322,9 +329,7 @@ fn busy(request: &mind::ipc::Received, scratch: &mut [u8; wlanhw::REQUEST_MAX]) 
     let busy = wlanhw::Error::Busy;
     let _ = match request {
         wlanhw::Request::Info => {
-            let mut channels = List::default();
-            for c in 1..=13 { channels.push(c); }
-            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: bands(), channels, frame_max: FRAME_MAX as u16, channel: 0 }))
+            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: bands(), channels: supported(), supported: supported(), frame_max: FRAME_MAX as u16, channel: 0 }))
         }
         wlanhw::Request::SetChannel { .. } => wlanhw::reply_set_channel(call, Err(busy)),
         wlanhw::Request::SetFilter { .. } => wlanhw::reply_set_filter(call, Err(busy)),

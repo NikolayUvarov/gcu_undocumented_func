@@ -25,6 +25,9 @@
 //! the radio did not confirm.
 //! 1.3 (550-NET-0035, stage B): `00`, the world domain's code, is a code `set-country` takes too. The station gives it
 //! when no country is chosen and none is announced (the maintainer's decision of 2026-11-04).
+//! 2.0 (550-NET-0059): `info` names the radio's own channels (`supported`) apart from those its limits leave
+//! (`channels`), so a station restarted under one country plans the next over all of them. The field changes `info`'s
+//! layout, so the major version: a 1.x radio refuses every 2.0 request, and a 2.0 radio every 1.x one.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -34,8 +37,8 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:wlanhw";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
-const MAJOR: usize = 1;
+pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+const MAJOR: usize = 2;
 
 /// Why a request failed. `no-device`: the radio is not up; `busy`: the transmit queue is full; `empty`: no
 /// received frame is waiting; `invalid`: a frame too short or too long, or a channel or rate the radio does not
@@ -55,13 +58,14 @@ impl Wire for Error {
 
 /// The radio: its MAC address (low 48 bits, first byte in bits 40-47), its bands (bit 0: 2.4 GHz, bit 1: 5 GHz, which
 /// is OFDM alone; bit 2: OFDM on 2.4 GHz too, 6 to 54 Mb/s, and without it DSSS and CCK alone there, 1 to 11 Mb/s),
-/// the channels it can use (20 MHz each), the longest frame it sends or receives, the channel now set (0: none).
+/// the channels it can use now (20 MHz each; once limits are set, those they leave), its own channels whatever the
+/// limits (2.0), the longest frame it sends or receives, the channel now set (0: none).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Info { pub mac: u64, pub bands: u8, pub channels: List<u8, 64>, pub frame_max: u16, pub channel: u8 }
+pub struct Info { pub mac: u64, pub bands: u8, pub channels: List<u8, 64>, pub supported: List<u8, 64>, pub frame_max: u16, pub channel: u8 }
 impl Wire for Info {
-    const MAX: usize = <u64 as Wire>::MAX + <u8 as Wire>::MAX + <List<u8, 64> as Wire>::MAX + <u16 as Wire>::MAX + <u8 as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.mac.encode(w)?; self.bands.encode(w)?; self.channels.encode(w)?; self.frame_max.encode(w)?; self.channel.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { mac: Wire::decode(r)?, bands: Wire::decode(r)?, channels: Wire::decode(r)?, frame_max: Wire::decode(r)?, channel: Wire::decode(r)? }) }
+    const MAX: usize = <u64 as Wire>::MAX + <u8 as Wire>::MAX + <List<u8, 64> as Wire>::MAX + <List<u8, 64> as Wire>::MAX + <u16 as Wire>::MAX + <u8 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.mac.encode(w)?; self.bands.encode(w)?; self.channels.encode(w)?; self.supported.encode(w)?; self.frame_max.encode(w)?; self.channel.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { mac: Wire::decode(r)?, bands: Wire::decode(r)?, channels: Wire::decode(r)?, supported: Wire::decode(r)?, frame_max: Wire::decode(r)?, channel: Wire::decode(r)? }) }
 }
 
 /// What passes the receive filter: with `all-beacons`, every beacon and probe response on the channel (a scan);
@@ -103,7 +107,7 @@ pub fn info(endpoint: Endpoint) -> Result<core::result::Result<Info, Error>> {
     };
     let reply = wire::call_buffer(endpoint, 1 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 78, false, false)?;
+    let length = wire::buffer_reply(&reply, 144, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Info as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -193,7 +197,7 @@ pub fn kick(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
 
 /// Applies country `code`'s limits (1.2): `dfs` is the catalogue's DFS region (0 unset, 1 FCC, 2 ETSI, 3 JP), `limits`
 /// every channel the station may use, at most once each. Answers the radio's info after; its `channels` are those
-/// left by the radio's own limits. `invalid`: a channel twice or not the radio's, or a code that is not two capital
+/// left by the radio's own limits, its `supported` unchanged. `invalid`: a channel twice or not the radio's, or a code that is not two capital
 /// letters nor `00` (1.3); `failed`: the radio could not apply them, and it sends nothing until limits it can apply are set.
 pub fn set_country(endpoint: Endpoint, code: &str, dfs: u8, limits: &[Limit]) -> Result<core::result::Result<Info, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
@@ -206,7 +210,7 @@ pub fn set_country(endpoint: Endpoint, code: &str, dfs: u8, limits: &[Limit]) ->
     };
     let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 78, false, false)?;
+    let length = wire::buffer_reply(&reply, 144, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Info as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -237,7 +241,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
     wire::header(request, cap, MAJOR)?;
     match words[0] & 0xFF {
         1 => {
-            let (call, length) = wire::take_buffer(request, cap, 78, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 144, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
@@ -285,7 +289,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Kick, Call::words(request, cap)))
         }
         9 => {
-            let (call, length) = wire::take_buffer(request, cap, 78, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 144, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let code = <Text<2> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;

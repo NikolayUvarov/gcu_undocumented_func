@@ -118,14 +118,14 @@ struct Wlan {
 }
 
 impl Wlan {
-    // The radio answered: the station gets its address, channels and rates.
+    // The radio answered: its address, rates and own channels, over which each country is planned (550-NET-0059).
     fn radio_up(&mut self, info: &wlanhw::Info) {
         let own = mac(info.mac);
-        let channels = info.channels.as_slice();
+        let channels = info.supported.as_slice();
         // Without OFDM on 2.4 GHz (a 1.0 radio says nothing of it) the station keeps to 802.11b's rates there (550-NET-0028).
         let ofdm = info.bands & mind::network::BAND_2GHZ_OFDM != 0;
-        mind::println!("[WLAN] RADIO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, {} CHANNELS, 2.4 GHZ {}", own[0], own[1], own[2], own[3], own[4], own[5],
-                       channels.len(), if ofdm { "802.11G" } else { "802.11B" });
+        mind::println!("[WLAN] RADIO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, {} CHANNELS OF ITS OWN, {} UNDER ITS LIMITS NOW, 2.4 GHZ {}", own[0], own[1], own[2], own[3], own[4], own[5],
+                       channels.len(), info.channels.as_slice().len(), if ofdm { "802.11G" } else { "802.11B" });
         self.station = Station::new(own, channels, ofdm);
         self.own = own;
         self.radio = true;
@@ -634,8 +634,8 @@ fn main(_info: &'static BootInfo) {
                 Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => if !core::mem::replace(&mut waited, true) {
                     mind::println!("[WLAN] THE RADIO HAS NOT ANSWERED IN {} S: SERVING WITHOUT IT, ASKING AGAIN", RADIO_MS / 1000);
                 },
-                // A radio that answers it has no device, or a client that fails: nothing to drive.
-                _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) }
+                // No device, another major version of wlanhw.wit, or a client that fails: nothing to drive.
+                _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE (NO DEVICE, OR NOT A WLANHW {}.X RADIO)", wlanhw::VERSION.0); mind::process::exit_with(1) }
             }
         }
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);

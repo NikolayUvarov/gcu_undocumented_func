@@ -95,7 +95,10 @@ impl Sim {
     }
 
     fn info(&self) -> wlanhw::Info {
-        wlanhw::Info { mac: mac64(&OWN), bands: mind::network::BAND_2GHZ, channels: self.channels(), frame_max: FRAME_MAX as u16, channel: self.channel }
+        // Its own 13 channels whatever the limits (wlanhw.wit 2.0, 550-NET-0059).
+        let mut supported = List::default();
+        for c in 1..=13 { supported.push(c); }
+        wlanhw::Info { mac: mac64(&OWN), bands: mind::network::BAND_2GHZ, channels: self.channels(), supported, frame_max: FRAME_MAX as u16, channel: self.channel }
     }
 
     // Whether the country's limits let `f` go out on the channel now: a probe request only where the station may send.
