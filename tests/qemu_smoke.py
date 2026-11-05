@@ -7607,6 +7607,26 @@ def update_releases(temp, arch, changed=None, minimum6=None, gateway=None):
     return volume, newer, server, kept, good, forged, manifest6, boot_files, channel
 
 
+def trial_confirmed(vm, since, timeout):
+    """The console from position `since` of its log, once init's confirmation of the trial boot follows `BOOT: SLOT B
+    LOADED ON TRIAL` there. Read from the log, not from what expect() left: a command whose prompt the new boot answered
+    took those lines with it (000-KRN-0210)."""
+    deadline, clean = time.monotonic() + timeout, ""
+    while time.monotonic() < deadline:
+        vm.collect()
+        if vm.log.find("THE TRIAL BOOT IS CONFIRMED", since) >= 0 or "KERNEL EXCEPTION" in vm.output or "KERNEL PANIC" in vm.output:
+            clean = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+            if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
+                raise AssertionError(clean[-3000:])
+            if "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED" in clean.partition("BOOT: SLOT B LOADED ON TRIAL")[2]:
+                vm.output = ""
+                return clean
+        if vm.process.poll() is not None:
+            raise AssertionError(f"QEMU exited {vm.process.returncode}: {vm.log[-3000:]}")
+        time.sleep(.05)
+    raise AssertionError(f"Timeout waiting for the trial boot's confirmation: {(clean or vm.log[since:])[-3000:]}")
+
+
 def update_suite(args):
     """The updater (351-UPD-0007): a raw image with release 5 in slot A, confirmed, the channel it came with kept there,
     and update.txt naming the test release server over HTTPS, trusted by its pinned key, with `automatic apply` every
@@ -7696,17 +7716,21 @@ def update_suite(args):
         cut = (newer / largest[0]).stat().st_size // 2
         https.cuts[f"/blobs/{largest[1]}"] = cut
         vm.collect(); vm.output = ""
+        since = len(vm.log)
         # How long each boot file took, as the updater logs it (351-UPD-0018): evidence for a slow machine, not a check.
-        # Its log goes with the restart, so it is read while the fetch runs, until the version is staged; a read the
-        # restart cuts short ends the reading, and the restart's lines stay in the output.
+        # Its log goes with the restart, so it is read while the fetch runs, until the version is staged. A read the
+        # restart cuts short ends the reading, and so does one whose prompt the new boot answered (000-KRN-0210).
         log = ""
         for _ in range(900):
             try:
-                log = vm.command("dmesg -s updater", raw=True)
+                read = vm.command("dmesg -s updater", raw=True)
             except AssertionError as error:
                 if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
                     raise
                 break
+            if "MIND CORE KERNEL: REBOOT VIA" in read:
+                break
+            log = read
             if "[UPDATER] FETCH: VERSION 6 STAGED" in log or "[UPDATER] APPLY:" in log:
                 break
             time.sleep(1)
@@ -7715,7 +7739,7 @@ def update_suite(args):
         # init's confirmation is a kernel line that can land inside the shell's first prompt (M…IND>): the suite waits for
         # the line, whole, then for a fresh prompt (000-KRN-0136).
         try:
-            out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+            out = trial_confirmed(vm, since, 1500)
         except AssertionError:
             # What the updater did after staging: its lines are in the log service, not on the serial line.
             try:
@@ -7737,9 +7761,10 @@ def update_suite(args):
         assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
         # init confirms the trial within seconds (000-KRN-0102); the updater asks it every second and records it at once,
         # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
-        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
+        # The floor is raised after the confirmation is recorded, so its line is the one waited for (000-KRN-0210).
+        log = logged("[UPDATER] VERSION FLOOR 1 RAISED TO 6", 90)  # 351-UPD-0024
+        require(log, "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT")
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
-        require(log, "[UPDATER] VERSION FLOOR 1 RAISED TO 6")  # 351-UPD-0024
         # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
         assert "PARSER: THE SHARED SERVICE" not in log, log
         # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
@@ -7922,8 +7947,9 @@ def install_suite(args, stub_elf):
             require(log, line)
         assert "REFUSED TO THE EFFECTOR GATEWAY" not in log, log[-3000:]
         vm.collect(); vm.output = ""
+        since = len(vm.log)
         require(vm.command("mkdir data/apply"), "OK")
-        out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
+        out = trial_confirmed(vm, since, 900)
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
         require(out, f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}")
