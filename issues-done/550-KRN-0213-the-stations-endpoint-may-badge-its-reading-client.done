@@ -1,6 +1,6 @@
-# 550-KRN-0213 — The station's endpoint may badge its reading client, and a request bit for it
+# 550-KRN-0213 — The station's endpoint may badge its reading client, and a request bit for it — done
 
-**Type:** `init`, `libmind` (`mind::process`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.1, MC-3.4
+**Type:** `init`, `libmind` (`mind::process`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-05) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Constitution:** MC-3.1, MC-3.4
 
 From NET's request of 2026-11-05 for 550-NET-0058 (`issues/requests-KRN.md`, and `KRN/2026-11-05T1545Z-NET-…` on `internal-dev-messages`).
 
@@ -25,7 +25,7 @@ From NET's request of 2026-11-05 for 550-NET-0058 (`issues/requests-KRN.md`, and
 ## Acceptance criteria
 
 - [x] Builds on x86 and aarch64; the `net` suite passes with the grant.
-- [ ] NET's check passes once 550-NET-0058 lands: in the `net` suite over `wlansim`, `wificheck wifi` takes the reading client, reads through it, and is denied the changes.
+- [x] NET's check passes once 550-NET-0058 lands: in the `net` suite over `wlansim`, `wificheck wifi` takes the reading client, reads through it, and is denied the changes.
 
 ## Progress
 
@@ -37,6 +37,12 @@ From NET's request of 2026-11-05 for 550-NET-0058 (`issues/requests-KRN.md`, and
 
 **Left:** the second criterion, NET's check, which lands with 550-NET-0058.
 
+## Resolution
+
+- `init` gives `wlan` its endpoint in `SLOT_SERVICE` with `ALL | CAP_BADGE`; `mind::process` has `REQUEST_WIFI_READ` (`1 << 28`); `docs/profile/bootstrap.md`'s `wlan` row says so. Landed in round 87 (`main` 7f260e43).
+- **NET's check** came with 550-NET-0058 in the same round: in the `net` suite over `wlansim`, `wificheck wifi` takes the reading client, reads through it and is denied the changes. The gate `land-7f260e43` passed it in `x86: network, TLS and Effector` and `aarch64: network, TLS and Effector`.
+- The shell's lending is APP's (550-APP-0124).
+
 ## Related
 
-550-NET-0058, 550-APP-0124, [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done), 308-KRN-0184.
+550-NET-0058, 550-APP-0124, [550-KRN-0097](550-KRN-0097-the-wifi-station-in-the-boot-services.done), 308-KRN-0184.
