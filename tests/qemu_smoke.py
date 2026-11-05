@@ -6804,7 +6804,18 @@ def vfs_suite(args):
             require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048 (DEVICE WRITABLE)")
             require(mounted, "[VFS] MOUNTED FAT16 FROM RAM AS RAM: (")
             for command, answer in [("mkdir data/sub", "OK"), ("write data/notes.txt line one", "WROTE 9 BYTES"), ("write data/sub/a.txt alpha", "WROTE 6 BYTES"),
-                                    ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
+                                    ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK")]:
+                require(vm.command(command), answer)
+
+            # 000-KRN-0212: a rename, a removal and a new directory are on the disk at once, with no sync or close since.
+            def names(path):
+                listing = subprocess.run(["mdir", "-b", "-i", part, f"::/{path}"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
+                return {line.rstrip("/").rpartition("/")[2].lower() for line in listing.splitlines() if line.strip()}
+            data = names("data")
+            assert "b.txt" in data and "sub" not in data, data
+            require(vm.command("mkdir data/made"), "OK")
+            assert "made" in names("data"), names("data")
+            for command, answer in [("rm data/made", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
                 require(vm.command(command), answer)
             # screenshot (issue 086): the screen in front (the shell's) as a BMP in data/, and under a free name on ram:.
             def slow(command):  # 3 MB written through the block driver take a while under emulation
