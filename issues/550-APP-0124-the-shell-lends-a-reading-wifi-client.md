@@ -2,7 +2,7 @@
 
 **Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** `KRN`'s request bit (proposed `REQUEST_WIFI_READ`, in [requests-KRN.md](requests-KRN.md), for 550-NET-0058) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.1, MC-6.1
 
-**Asked by:** NET (worked by the storage session), 2026-11-05, in [requests-APP.md](requests-APP.md), for [550-NET-0058](550-NET-0058-a-read-only-wifi-client.md). Numbered the same day.
+**Asked by:** NET (worked by the storage session), 2026-11-05, in [requests-APP.md](requests-APP.md), for [550-NET-0058](../issues-done/550-NET-0058-a-read-only-wifi-client.done). Numbered the same day.
 
 ## Problem
 
@@ -26,4 +26,4 @@ NET's proposal, taken:
 
 ## Related
 
-[550-NET-0058](550-NET-0058-a-read-only-wifi-client.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`), [requests-KRN.md](requests-KRN.md).
+[550-NET-0058](../issues-done/550-NET-0058-a-read-only-wifi-client.done), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`), [requests-KRN.md](requests-KRN.md).
