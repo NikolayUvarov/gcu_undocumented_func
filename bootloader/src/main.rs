@@ -12,7 +12,7 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod edid; mod elf_reloc; mod slots; mod verify;
+use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod edid; mod elf_reloc; mod mark; mod slots; mod verify;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -371,6 +371,26 @@ fn write_record(root: &mut uefi::proto::media::file::Directory, name: &str, data
 
 const RECORD_FILES: [&str; 2] = ["MIND\\BOOT0", "MIND\\BOOT1"];
 
+// The mark of how far this boot got (000-KRN-0211), on a volume with slots only. A write that fails is said on the
+// serial line and never stops the boot.
+fn mark(services: &BootServices, image: Handle, stage: mark::Stage) {
+    let written = (|| {
+        let mut sfs = own_file_system(services, image).ok_or("no file system")?;
+        let mut root = sfs.open_volume().map_err(|_| "cannot open the volume")?;
+        let mut name = [0u16; 64];
+        if root.open(path16("", mark::DIR, &mut name)?, FileMode::Read, FileAttribute::empty()).is_err() { return Ok(None); }
+        let mut old = [0u8; mark::LEN + 1];
+        let last = read_file(&mut root, "", mark::FILE, &mut old).ok().and_then(mark::count);
+        let count = if stage == mark::Stage::Started { mark::next(last) } else { last.unwrap_or(0) };
+        write_record(&mut root, mark::FILE, &mark::encode(count, stage)).map(|()| Some(count))
+    })();
+    match written {
+        Ok(Some(count)) => { let _ = writeln!(Serial, "BOOT: MARK {} {}\r", count, stage.name()); }
+        Ok(None) => {}
+        Err(e) => { let _ = writeln!(Serial, "BOOT: NO MARK {} ({})\r", stage.name(), e); }
+    }
+}
+
 // A slot whose signed manifest names a version below the floor is not booted (351-UPD-0024).
 fn at_or_above(root: &mut uefi::proto::media::file::Directory, dir: &str, floor: u64, manifest_buf: &mut [u8]) -> Result<(), (&'static str, &'static str)> {
     if floor == 0 { return Ok(()); }
@@ -614,7 +634,10 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // and the safe start's key.
     let chained = chained(system_table.boot_services(), image);
     match chained {
-        None => say(&system_table, format_args!("STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME")),
+        None => {
+            say(&system_table, format_args!("STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME"));
+            mark(system_table.boot_services(), image, mark::Stage::Started);
+        }
         Some(c) => {
             let _ = writeln!(Serial, "\r\nBOOT: SLOT {}'S OWN LOADER, STARTED BY THE LOADER AT EFI/BOOT/{}\r", c.slot as char, if c.trial { ", ON TRIAL" } else { "" });
             say(&system_table, format_args!("SLOT {}'S OWN LOADER STARTED; READING ITS KERNEL AND SERVICES", c.slot as char));
@@ -661,6 +684,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         (Err((file, reason)), Some(c)) => return back(&system_table, c, file, reason),
         (Err((file, reason)), None) => fail(&mut system_table, file, reason),
     };
+    mark(system_table.boot_services(), image, mark::Stage::Read);
     // Where the system came from and which copy runs, for the kernel and vfs_server (211-KRN-0012, 351-KRN-0014).
     let boot_volume = boot_volume(system_table.boot_services(), image);
     let boot_slot = BootSlot { slot: match slot { Some((b'A', _)) => BOOT_SLOT_A, Some(_) => BOOT_SLOT_B, None => BOOT_SLOT_ROOT },
@@ -703,6 +727,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         say(&system_table, format_args!("{} CPUS; A PAUSE OF {} S FOR A PHOTO OF THESE LINES", cpu_count, pause_s));
         system_table.boot_services().stall(pause_s as usize * 1_000_000);
     }
+    mark(system_table.boot_services(), image, mark::Stage::Handover);
     say(&system_table, format_args!("{} CPUS; EXITING BOOT SERVICES", cpu_count));
     BOOT_TABLE.store(core::ptr::null_mut(), Relaxed);
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);

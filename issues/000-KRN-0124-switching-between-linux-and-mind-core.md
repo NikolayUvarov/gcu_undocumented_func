@@ -139,6 +139,18 @@ Round 78's gate (candidate 6fc5b253, `main` e28cfe4d): the host tests of `boot_s
 
 **Left:** the cycle on the Ryzen with this version.
 
+## Progress (2026-11-05): a second boot that left no log
+
+**DRV's report** (`KRN/2026-11-05T0546Z-DRV-…`):
+- MIND Core ran about 22 h (`boot0017.log`, to 05:17 UTC). DRV rebooted it into Linux over the link. Linux set `BootNext` (`once`) and restarted at 05:18.
+- That boot kept a dark screen until the maintainer's restart at 05:36. `logs` said `MIND Core did not boot`, and the newest log stayed `boot0017.log`. The retry right after booted.
+
+That makes two of about twenty-five such boots, with the same signs as 2026-11-03 18:56. The cause is not known (MC-12.2).
+
+**Where it could have stopped.** Anywhere before `vfs_server`'s first write to the log volume: the firmware, the loader, the kernel, `init`, or the USB drivers.
+- The watchdog (213-KRN-0125) restarts a kernel whose tick stops, but it is armed only with that tick. So 18 minutes dark would put the hang before it, if `boot0017.log` shows the watchdog armed. DRV is asked to check.
+- **The mark of how far a boot got** is [000-KRN-0211](000-KRN-0211-the-loaders-mark-of-how-far-a-boot-got.md). The loader writes `MIND/REACHED` at three points of each boot, and `logs` reads it, so the next hang is split by stage with nobody at the screen.
+
 ## Related
 
 [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done) (`efivar`, `BootNext` from MIND Core), [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done) (each slot's own loader, which the one at `EFI/BOOT/` starts), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (the watchdog), [213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md), [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) (the rig), [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) (`write_usb_linux.py`), [docs/write-disk.md](../docs/write-disk.md), [docs/effector.md](../docs/effector.md).

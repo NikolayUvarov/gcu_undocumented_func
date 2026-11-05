@@ -46,6 +46,8 @@ class Firmware:
         self.order, self.current, self.next = list(order), current, None
         self.disks = tree if tree is not None else [system_disk(), stick()]
         self.logs, self.calls, self.rebooted, self.mounted = list(logs), [], False, []
+        # The loader's mark on the boot volume (000-KRN-0211): (count, stage), or None for a loader without one.
+        self.mark = (5, "HANDOVER")
         self.create_changes_order = False
 
     def efibootmgr(self, *args):
@@ -82,6 +84,11 @@ class Firmware:
 
     def mount(self, device, directory):
         self.mounted.append(device)
+        if device.endswith("1"):
+            if self.mark:
+                Path(directory, "MIND").mkdir()
+                Path(directory, "MIND", "REACHED").write_bytes(f"MIND-REACHED 1 {self.mark[0]} {self.mark[1]}".ljust(47).encode() + b"\n")
+            return
         for n in self.logs:
             Path(directory, f"boot{n:04d}.log").write_text("[SHELL] AUTORUN /autorun.msh\n[SHELL] AUTORUN ENDED OK\n")
         Path(directory, "hw0001.txt").write_text("kernel\n")
@@ -133,7 +140,8 @@ class Switching(unittest.TestCase):
         create = self.written(firmware)[0]
         self.assertEqual(create[:5], ("--create-only", "--disk", "/dev/sdb", "--part", "1"))
         self.assertEqual(json.loads(self.state.read_text())["newest_log"], 2)
-        self.assertEqual(firmware.mounted, ["/dev/sdb2"])
+        self.assertEqual(json.loads(self.state.read_text())["mark"], 5)
+        self.assertEqual(firmware.mounted, ["/dev/sdb2", "/dev/sdb1"])
 
     def test_an_existing_entry_is_used_and_activated(self):
         firmware = Firmware()
@@ -179,10 +187,32 @@ class Switching(unittest.TestCase):
         destination = boot_switch.logs(firmware, self.directory.name, out=said.append)
         self.assertTrue((destination / "boot0003.log").exists())
         self.assertIn("MIND Core booted: boot0003.log; autorun in the last: ended", said)
+        self.assertIn("the loader's mark: boot 5, HANDOVER", said)
         firmware.logs = [1, 2]
         said.clear()
         boot_switch.logs(firmware, self.directory.name + "/again", out=said.append)
         self.assertTrue(any(s.startswith("MIND Core did not boot") for s in said))
+
+    def test_the_marks_stage_says_where_a_boot_without_a_log_stopped(self):
+        firmware = Firmware(logs=(1, 2))
+        boot_switch.once(firmware, out=lambda *_: None)
+        cases = {(5, "HANDOVER"): "the loader did not start", (6, "STARTED"): "boot 6: the loader started and stopped before",
+                 (6, "READ"): "boot 6: the loader read and checked", (6, "HANDOVER"): "boot 6: the loader handed over to the kernel",
+                 (8, "HANDOVER"): "(3 boots since the switch", (2, "READ"): "went back from boot 5 to 2",
+                 None: "the loader left no mark"}
+        for n, (mark, expected) in enumerate(cases.items()):
+            firmware.mark, said = mark, []
+            boot_switch.logs(firmware, f"{self.directory.name}/{n}", out=said.append)
+            line = next(s for s in said if s.startswith("MIND Core did not boot"))
+            self.assertIn(expected, line, mark)
+
+    def test_a_mark_of_another_shape_is_not_read(self):
+        good = b"MIND-REACHED 1 7 READ".ljust(47) + b"\n"
+        self.assertEqual(boot_switch.parse_mark(good), (7, "READ"))
+        self.assertEqual(boot_switch.parse_mark(good + b"junk\n"), (7, "READ"))
+        for bad in (b"", b"MIND-REACHED 2 7 READ\n", b"MIND-REACHED 1 +7 READ\n", b"MIND-REACHED 1 7 BOOTED\n",
+                    b"MIND-REACHED 1 7 READ more\n", b"MIND-REACHED 1 4294967296 READ\n", bytes(48)):
+            self.assertIsNone(boot_switch.parse_mark(bad), bad)
 
     def test_status_changes_nothing(self):
         firmware = Firmware()
