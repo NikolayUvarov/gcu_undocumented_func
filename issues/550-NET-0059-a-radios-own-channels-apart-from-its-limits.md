@@ -1,6 +1,6 @@
 # 550-NET-0059 — A radio's own channels, apart from the limits a country left it
 
-**Type:** interface (`idl/wlanhw.wit`) and network (`wlan`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (built on the branch; tests running) · **Blocked by:** — (`DRV` answered, `NET/2026-11-05T0545Z-DRV-…`; it lands after `DRV`'s `claude/ASR-DRV`, which changes the same line of `bcm_wifi`) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-12.4, MC-12.7
+**Type:** interface (`idl/wlanhw.wit`) and network (`wlan`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (tested; in the landing queue) · **Blocked by:** — (`DRV` answered, `NET/2026-11-05T0545Z-DRV-…`; `DRV`'s `claude/ASR-DRV` landed in round 83) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-12.4, MC-12.7
 
 **Split from:** [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done), its first point of "not done".
 
@@ -44,7 +44,15 @@
 
   Before, the last read 11 with no channel 12. The check changes to RU while joined, as it did before; UZ is not chosen again there.
 - **Host tests:** the generated `wlanhw` types are in the IDL fuzzer already (`wlanhw: Error Info Filter Sent Limit`).
-- **Waiting:** the run of the `net` suite on x86 and aarch64 and the host tests; then `DRV`'s request to land, `main` merged, and a landing request.
+- **Waiting:** the landing round.
+
+**2026-11-05: tested with `main` merged.**
+- **`DRV`'s `bcm_wifi` change landed** in round 83 (3460771e). Merged into the branch at 23edc0475: `info` keeps both, its `channel_list(country)` and `supported: supported()`.
+- **This session's container (QEMU TCG, 4 CPUs), with `wlansim` built by `scripts/x86_fixtures.sh` and `--fixtures`:**
+  - at eca4ea156: host tests whole (`scripts/host_tests.sh`, exit 0, `rtw89_wifi`'s service cases among them); the `net` suite passed on aarch64, and on x86 up to `browse_check`, which timed out in its own reading of the shell's question (000-NET-0060, a race in the test);
+  - at 045e59f5e, with 000-NET-0060's fix: the `net` suite passed on x86 (34 checks) and on aarch64 (31; the three x86-only `wlansim` builds skipped). On both, `the station's country` check ended with `After the restart the radio named its own 13 channels apart from US's 11, and RU and the world domain were planned over all 13 (550-NET-0059)`.
+- **The criterion's UZ is checked as RU,** which allows the same 13 channels: the check changes the country while joined, as before, and RU is the change it makes.
+- **Not run on real radios** (MC-12.1).
 
 ## Related
 
