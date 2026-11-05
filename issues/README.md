@@ -91,7 +91,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [173](173-boot-services-configuration.md) | Which boot services start and in what order: `data/services.txt` read by init, a safe start, `svc boot/enable/disable/after` (plan) | main task, `KRN` with `APP` | P2 | — | track A |
 | [211](211-intel-pc-from-a-sata-ssd.md) | An Intel PC booted from a SATA SSD (the maintainer's Samsung 860 PRO): the first real x86 machine | main task, `PRT` | P1 | — | track H |
 | [213](213-amd-ryzen-pc.md) | An AMD Ryzen PC (the maintainer's Ryzen 9 5900HX, Radeon iGPU): the first run booted every service; the screen, sound, Ethernet, the second xHCI and NVMe remain | main task, `PRT` | P1 | — | track H |
-| [311-KRN-0207](311-KRN-0207-mind-fs-opens-a-volumes-root-again-after-its-service-restarts.md) | `mind::fs` opens a volume's root again after its service restarts (STO's request: the shell's store volumes after `svc restart storefs`) | `KRN` | P2 | — | track C |
 | [000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) | A `run` right after forty `kill`s waited past 8 s for the shell (round 79's gate, seen once) | `KRN` | P2 | — | gate |
 | [000-KRN-0210](000-KRN-0210-the-updater-group-ran-past-its-limit-once.md) | The x86 updater group ran past Effector's limit once (round 81's gate), its logs lost; a group's own limit that keeps them | `KRN` | P2 | — | gate |
 | [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md) | A store client that may recover the volume key, held by the shell alone (STO's request, for 308-STO-0028) | `KRN` | P2 | STO's `blockstore.wit` 2.4 | track C |
@@ -324,6 +323,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [311-KRN-0207](../issues-done/311-KRN-0207-mind-fs-opens-a-volumes-root-again-after-its-service-restarts.done) | `mind::fs` opens a volume's root again after its service restarts | a kept root that answers `invalid` opened again once; the shell's store volumes and `data/` answer after `storefs` or `vfs_server` restarts, on x86 and aarch64 (rounds 81, 82) |
 | [309-KRN-0209](../issues-done/309-KRN-0209-a-second-store-disk-for-the-block-stores-copy.done) | A second store disk for the block store's copy | `init` gives `blockstore` the next blank or store VirtIO disk in slot 4, `vfs_server` neither; checked on x86 and aarch64 (round 81) |
 | [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done) | The station's country: chosen from the whole regulatory catalogue, kept, applied by the radio | chosen, announced, else `00`, from DRV's `regdb`; the radio given each country's limits; a change while joined leaves the link (x86 and aarch64, rounds 80, 81); 0058 and 0059 split off |
 | [110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done) | Listening TCP sockets for programs, and a listening grant | the listening grant, the backlog and the half-open limit; `listen_check` on x86 and aarch64, host tests on smoltcp's TCP (rounds 78, 81) |
