@@ -3,7 +3,7 @@
 //! asked); the link's state at the top; c the country, from the station's catalogue (550-APP-0082). Only the drawing
 //! and the keys: the program gives it a `Station`, the host test the stand-in (tests/wifi_host.rs).
 use crate::keys::{Code, Key};
-use crate::station::{check, mac, rate, shown, Country, CountryState, CountryStatus, Link, Network, Refusal, Security, Station};
+use crate::station::{check, mac, rate, shown, Country, CountryState, CountryStatus, Link, Network, Origin, Refusal, Security, Station};
 use crate::tui::widgets::{Edit, InputLine, LINE_MAX};
 use crate::tui::{Grid, Line, Theme};
 use alloc::format;
@@ -58,6 +58,22 @@ const PAGES: u16 = 16;
 fn found<'a>(all: &'a [Country], find: &str) -> Vec<&'a Country> {
     let find = find.to_ascii_lowercase();
     all.iter().filter(|c| find.is_empty() || c.code.to_ascii_lowercase().contains(&find) || crate::countries::name(&c.code).is_some_and(|n| n.to_ascii_lowercase().contains(&find))).collect()
+}
+
+/// The line that names the country and where it came from (wifi.wit 1.2), so that none reads as silence (the
+/// maintainer, 2026-11-04); it fits the 76 columns of an 80-column screen. `wifi country` gives the whole reason.
+pub fn country_shown(c: &CountryStatus) -> String {
+    let choose = " (c: choose one)";
+    match (c.state, c.origin) {
+        _ if c.catalogue.is_empty() => String::from("Country: no catalogue in this station"),
+        (CountryState::None, _) => format!("Country: none yet, listening for the access points' country{}", choose),
+        (CountryState::Failed, _) => format!("Country: {} asked, the radio refused its limits: none applied (c: another)", country_name(&c.asked)),
+        (_, Origin::Chosen) if !c.asked.is_empty() && c.asked != c.applied => format!("Country: {}, {} asked", country_name(&c.applied), country_name(&c.asked)),
+        (_, Origin::Chosen) => format!("Country: {}, chosen{}", country_name(&c.applied), if c.kept { ", kept" } else { ", not kept across restarts" }),
+        (_, Origin::Detected { announced, heard }) => format!("Country: {}, announced by {} of {} access points{}", country_name(&c.applied), announced, heard, choose),
+        (_, Origin::World) => format!("Country: 00, every country's rules: none chosen or announced{}", choose),
+        (_, Origin::None) => format!("Country: {}", country_name(&c.applied)),
+    }
 }
 
 /// The country as the screen names it: `UZ (Uzbekistan)`.
@@ -299,7 +315,10 @@ impl Wifi {
             Some(c) if !c.catalogue.is_empty() => String::from("NONE"),
             _ => String::from("-"),
         };
-        format!("MODE={} ROWS={} AT={} LINK={} COUNTRY={}", mode, self.rows.len(), at, link, country)
+        let origin = match self.country.as_ref().map(|c| c.origin) {
+            Some(Origin::Chosen) => "CHOSEN", Some(Origin::Detected { .. }) => "DETECTED", Some(Origin::World) => "WORLD", Some(Origin::None) => "NONE", None => "-",
+        };
+        format!("MODE={} ROWS={} AT={} LINK={} COUNTRY={} ORIGIN={}", mode, self.rows.len(), at, link, country, origin)
     }
 
     /// Draws the screen; returns where the text cursor is (in the passphrase's field).
@@ -383,14 +402,7 @@ impl Wifi {
             if list.is_empty() { grid.text_max(bx + 2, by + 2, "No country holds that", bw - 4, theme.dim); }
             grid.text_max(bx + 2, by + bh - 2, "Enter: ask for it (the network is left first) · Esc: back", bw - 4, theme.dialog);
         }
-        let country = match &self.country {
-            Some(c) if c.catalogue.is_empty() => String::from("Country: no catalogue in this station"),
-            Some(c) if c.state == CountryState::Applied && c.asked == c.applied => format!("Country: {}", country_name(&c.applied)),
-            Some(c) if c.state == CountryState::Applied => format!("Country: {}, {} asked", country_name(&c.applied), country_name(&c.asked)),
-            Some(c) if c.state == CountryState::Failed => format!("Country: {} asked, the radio refused its limits: none applied (c: another)", country_name(&c.asked)),
-            Some(_) => String::from("Country: none asked yet (c: choose one)"),
-            None => String::new(),
-        };
+        let country = self.country.as_ref().map_or(String::new(), country_shown);
         grid.text_max(2, rows.saturating_sub(4), &country, w, theme.dim);
         grid.text_max(2, rows.saturating_sub(3), &self.notice, w, theme.accent);
         let help = "↑↓: choose · Enter: join · r or F5: scan · d: leave · f: forget · c: country · q or Esc: quit";

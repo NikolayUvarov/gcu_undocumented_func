@@ -9338,16 +9338,29 @@ def wifi_join_check(vm):
     vm.send("wm\n")
     rate = vm.expect(", THE FIRST RATE)", timeout=180)  # a loaded machine (gate 25: PCU at a load of 11) is slow to start wm
     assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
+    # 550-APP-0082: Settings' network page names the station's country and why it applies, read through wm's client of
+    # the station (wifi.wit 1.2): wlansim's access point announces UZ, and none is chosen yet.
+    since = len(vm.log)
+    vm.hmp("sendkey alt-s")
+    time.sleep(.3)
+    for _ in range(3):  # to the network page (settings::NETWORK)
+        vm.hmp("sendkey down")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("[WM] NETWORK PAGE: Country: UZ, announced by 1 of 1 access points", since)
+    vm.hmp("sendkey esc")
+    time.sleep(.2)
     since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
     vm.logged("SHELL RESUMED.", since)
-    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7)", flush=True)
+    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7); Settings' network "
+          "page names the country the access point announced (550-APP-0082)", flush=True)
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
     # 550-APP-0082 over 550-NET-0035 stage B: with none chosen the station runs under the country wlansim's access point
-    # announces; the whole catalogue is listed but 00, and a country's channels are shown.
-    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, none ASKED")
+    # announces, and wifi says so (wifi.wit 1.2); the whole catalogue is listed but 00, and a country's channels are shown.
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY")
     run("wifi countries", 30, " OF 181 COUNTRIES")
     run("wifi channels uz", 30, "[WIFI] 13 CHANNELS UNDER UZ (Uzbekistan)")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
@@ -9440,7 +9453,7 @@ def wifi_join_check(vm):
     require(radio, "[WLANSIM] COUNTRY UZ: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, "the first scan sent a probe request"
     run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")
-    run("wifi country US", 30, "[WIFI] COUNTRY US (United States) APPLIED")
+    run("wifi country US", 30, "[WIFI] COUNTRY US (United States) APPLIED, THE RADIO CONFIRMED ITS LIMITS; CHOSEN BY THE USER, KEPT BY KEYSTORE")
     require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 30), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE): 11 CHANNELS TO SEND ON")
     require(vm.service_logs("wlansim", "COUNTRY US"), "[WLANSIM] COUNTRY US: 11 CHANNELS")
     # A restart reads it back from keystore, and nothing announced moves a chosen country.
@@ -10164,7 +10177,7 @@ def world_country_check(args):
                 out += vm.command("dmesg -s wifi", raw=True)
                 time.sleep(.5)
             require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED")
+            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS")
         finally:
             vm.close()
     print("PASS: the station's country with none chosen and none announced (550-NET-0035): 00 applied, 11 channels to send "
@@ -12408,6 +12421,7 @@ def wm_suite(vm):
         keys("ret", text="SETTINGS=Network:Wi-Fi")
         screen_has("console netpolicy")
         screen_has("wifi --countries")  # the country beside Wi-Fi (550-APP-0082)
+        screen_has("Country: no station to ask")  # and why none is named: QEMU's wm suite has no station
         keys("ret", text="[WM] STARTED wifi PID")
         pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
         while not any(m[1] == pid for m in windows_re.findall("".join(seen))):

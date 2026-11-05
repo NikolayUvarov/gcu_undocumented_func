@@ -1617,6 +1617,26 @@ fn every_page_and_row_of_settings_reacts() {
     assert_eq!(settings::NETWORK_ROWS[0].1, "wifi");
     // The country beside Wi-Fi (550-APP-0082): wifi opened at its country list.
     assert_eq!(settings::NETWORK_ROWS[1], ("Country", "wifi --countries", "the radio's country, its channels"));
+    // Below the rows, the station's country and why it applies (wifi.wit 1.2): none reads as silence.
+    use settings::{country_line, Origin, WifiCountry};
+    let country = |applied: &str, refused: &str, origin| WifiCountry { applied: applied.to_string(), refused: refused.to_string(), catalogue: true, origin };
+    for (c, line) in [
+        (None, "Country: no station to ask (wifi --demo shows the program)"),
+        (Some(country("", "", Origin::None)), "Country: none yet, listening for the access points' country"),
+        (Some(country("UZ", "", Origin::Detected { announced: 1, heard: 1 })), "Country: UZ, announced by 1 of 1 access points"),
+        (Some(country("00", "", Origin::World)), "Country: 00, every country's rules: none chosen or announced"),
+        (Some(country("US", "", Origin::Chosen)), "Country: US, chosen"),
+        (Some(country("", "XX", Origin::None)), "Country: XX refused by the radio, none applied"),
+        (Some(WifiCountry { catalogue: false, ..country("", "", Origin::None) }), "Country: none, as the station has no catalogue"),
+    ] {
+        assert_eq!(country_line(c.as_ref()), line);
+    }
+    let mut s = Settings::new(&config, (160, 50));
+    for _ in 0..settings::NETWORK { s.key(key(KEY_DOWN), &config); }
+    assert_eq!(s.page, settings::NETWORK);
+    s.country = Some(country("UZ", "", Origin::Detected { announced: 2, heard: 3 }));
+    let shown = screen(&s);
+    assert!(shown.contains("Country: UZ, announced by 2 of 3 access points") && shown.contains("a change asks in its window."), "{}", shown);
     // Each row of the background page: Enter changes it, or a line says why not.
     for row in 0..ROWS.len() {
         let mut s = Settings::new(&config, (160, 50));
