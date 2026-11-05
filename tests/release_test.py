@@ -178,6 +178,40 @@ class Releases(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_a_client_that_never_starts_its_handshake_holds_no_other(self):
+        # 000-KRN-0210: the server's handshake ran in accept, so one connection that never sent its hello held every
+        # other until it closed; a connection that abandons its handshake is closed alone.
+        import shutil
+        import socket
+        import ssl
+        import subprocess
+        import urllib.request
+        import serve_release
+        if not shutil.which("openssl"):
+            self.skipTest("openssl is not installed")
+        (self.dest / "file").write_bytes(b"served\n")
+        cert, key = self.dir / "cert.pem", self.dir / "key.pem"
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "1",
+                        "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", str(key), "-out", str(cert)],
+                       check=True, capture_output=True)
+        server = serve_release.serve(self.dest, cert, key)
+        url = f"https://127.0.0.1:{server.server_address[1]}/file"
+        context = ssl.create_default_context(cafile=str(cert))
+        try:
+            with socket.create_connection(("127.0.0.1", server.server_address[1])), \
+                 socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=10) as plain:
+                for _ in range(3):
+                    with urllib.request.urlopen(url, context=context, timeout=10) as reply:
+                        self.assertEqual(reply.read(), b"served\n")
+                # A request without TLS fails its handshake: that connection is closed, and the server still serves.
+                plain.sendall(b"GET /file HTTP/1.0\r\n\r\n")
+                while plain.recv(64):  # an alert, perhaps; then the end, within the timeout
+                    pass
+                with urllib.request.urlopen(url, context=context, timeout=10) as reply:
+                    self.assertEqual(reply.read(), b"served\n")
+        finally:
+            server.shutdown()
+
     def test_the_built_volumes(self):
         # The volumes the build signed, if they are built: staged, published and verified as a release.
         import shutil
