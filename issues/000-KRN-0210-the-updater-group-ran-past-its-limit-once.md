@@ -94,7 +94,7 @@ The thread stacks show the test release server idle in `select`, with no connect
 **The fix** (`tests/qemu_smoke.py`):
 - `update_suite`'s reading ends as well on a read that holds `MIND CORE KERNEL: REBOOT VIA`.
 - `trial_confirmed` waits for the confirmation after `BOOT: SLOT B LOADED ON TRIAL` in the console's log from a mark set before the reading, not in what `expect()` left. `install_suite` uses it too after `mkdir data/apply`, where the restart could take its prompt the same way.
-- **A second race of the same suite,** seen on aarch64 (acc-1's run of 750-KRN-0159 on `main` 281c13a1): after the trial, `logged()` returned the updater's log at `SLOT B CONFIRMED ON THE DISK`, 12 ms before `VERSION FLOOR 1 RAISED TO 6`, which the next line required. It now waits for the floor's line, the later of the two.
+- **A second race of the same suite,** seen on aarch64 (acc-2's run of 750-KRN-0159 on `main` 281c13a1): after the trial, `logged()` returned the updater's log at `SLOT B CONFIRMED ON THE DISK`, 12 ms before `VERSION FLOOR 1 RAISED TO 6`, which the next line required. It now waits for the floor's line, the later of the two.
 - **Its host test** is `tests/qemu_trial_test.py`: lines a command took from the output are read from the log; a confirmation from before the mark, or before the trial, is not taken; a panic ends the wait.
 
 ## Related
