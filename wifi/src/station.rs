@@ -1,5 +1,5 @@
 //! What `wifi` asks of the 802.11 station (550-APP-0033): the networks a scan found, joining one with a passphrase,
-//! the link's state and forgetting a network, and the country it runs under (1.1, 550-APP-0082). The calls follow
+//! the link's state and forgetting a network, and the country it runs under and why (1.1, 1.2, 550-APP-0082). The calls follow
 //! `idl/wifi.wit` as the network track agreed it (550-NET-0018): an SSID is the bytes the access point sends, the signal
 //! minus dBm, the address the network stack's.
 //! `Demo` serves the same interface without a radio. No system calls: tests/wifi_host.rs.
@@ -97,10 +97,23 @@ pub struct Country { pub code: String, pub send: u8, pub listen: u8 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CountryState { None, Applied, Failed }
 
+/// Why the station runs under the country it applied (wifi.wit 1.2): not known yet (no radio, or its first scan has not
+/// ended); the user's choice; announced by `announced` of the `heard` access points that named a country; or `00`, the
+/// rules every country allows, as none was chosen and the access points announced none the catalogue has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin { None, Chosen, Detected { announced: u8, heard: u8 }, World }
+
 /// The station's country: asked for and applied apart (empty: none), whether the radio confirmed its limits, whether
-/// `keystore` keeps the choice, and the catalogue's identity (empty: no catalogue).
+/// `keystore` keeps the choice, the catalogue's identity (empty: no catalogue), and where the country applied came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CountryStatus { pub asked: String, pub applied: String, pub state: CountryState, pub radio: bool, pub kept: bool, pub catalogue: String }
+pub struct CountryStatus { pub asked: String, pub applied: String, pub state: CountryState, pub radio: bool, pub kept: bool, pub catalogue: String, pub origin: Origin }
+
+impl CountryStatus {
+    /// No country asked for, applied or known: a station without a catalogue, or before it answered.
+    pub fn none(catalogue: &str) -> Self {
+        Self { asked: String::new(), applied: String::new(), state: CountryState::None, radio: false, kept: false, catalogue: String::from(catalogue), origin: Origin::None }
+    }
+}
 
 /// The station's configuration interface (idl/wifi.wit 1.1), as `wifi` uses it.
 pub trait Station {
@@ -118,9 +131,8 @@ pub trait Station {
     fn countries(&mut self, _from: u16) -> Result<(u16, Vec<Country>), Refusal> { Err(Refusal::Unsupported) }
     /// The radio's channels under country `code` (`00`: the world domain).
     fn channels(&mut self, _code: &str) -> Result<Vec<Channel>, Refusal> { Err(Refusal::Unsupported) }
-    fn country(&mut self) -> Result<CountryStatus, Refusal> {
-        Ok(CountryStatus { asked: String::new(), applied: String::new(), state: CountryState::None, radio: false, kept: false, catalogue: String::new() })
-    }
+    /// The country, and where the one applied came from (1.1 and 1.2).
+    fn country(&mut self) -> Result<CountryStatus, Refusal> { Ok(CountryStatus::none("")) }
     /// Leaves the network, drops the last scan and runs under `code`'s limits, kept by `keystore`; the status after.
     fn set_country(&mut self, _code: &str) -> Result<CountryStatus, Refusal> { Err(Refusal::Unsupported) }
 }
@@ -173,7 +185,9 @@ pub fn rate(units: u8) -> String { if units % 2 == 0 { format!("{}", units / 2) 
 /// access points: joining answers at the second `status` call; MIND-Lab's and Home's passphrase is `DEMO_PASSPHRASE`.
 /// `remembers` false answers `remember` as the station does until it keeps keys (unsupported).
 /// `catalogue` false answers the country calls as a station built without one does (unsupported).
-pub struct Demo { remembered: Vec<Vec<u8>>, link: Link, steps: u8, pending: Option<(bool, bool)>, pub remembers: bool, pub scans: usize, pub catalogue: bool, country: CountryStatus }
+/// With no country chosen, a scan applies the one its access points announce, as the station does (550-NET-0035
+/// stage B): UZ, by three of the four that name a country; `beacons` false, none, and `00` is applied.
+pub struct Demo { remembered: Vec<Vec<u8>>, link: Link, steps: u8, pending: Option<(bool, bool)>, pub remembers: bool, pub scans: usize, pub catalogue: bool, pub beacons: bool, country: CountryStatus }
 
 /// The stand-in's passphrase for its protected networks.
 pub const DEMO_PASSPHRASE: &str = "correct horse";
@@ -213,8 +227,8 @@ const NUMBERS: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 36, 52
 
 impl Demo {
     pub fn new() -> Self {
-        let country = CountryStatus { asked: String::new(), applied: String::new(), state: CountryState::None, radio: false, kept: false, catalogue: String::from("0123456789abcdef") };
-        Self { remembered: Vec::from([Vec::from(&b"Home"[..])]), link: Link::Off, steps: 0, pending: None, remembers: true, scans: 0, catalogue: true, country }
+        let country = CountryStatus::none("0123456789abcdef");
+        Self { remembered: Vec::from([Vec::from(&b"Home"[..])]), link: Link::Off, steps: 0, pending: None, remembers: true, scans: 0, catalogue: true, beacons: true, country }
     }
     fn rules(code: &str) -> Option<&'static [(Standing, u8); 16]> {
         if code == "00" { return Some(&WORLD); }
@@ -227,6 +241,12 @@ impl Default for Demo { fn default() -> Self { Self::new() } }
 impl Station for Demo {
     fn scan(&mut self) -> Result<Vec<Network>, Refusal> {
         self.scans += 1;
+        // None chosen: the country the access points announce, else the world's rules (the station's way); a refused
+        // choice stays refused, as the station falls back to no other country.
+        if self.catalogue && self.country.origin != Origin::Chosen && self.country.state != CountryState::Failed {
+            let (applied, origin) = if self.beacons { ("UZ", Origin::Detected { announced: 3, heard: 4 }) } else { ("00", Origin::World) };
+            self.country = CountryStatus { applied: String::from(applied), state: CountryState::Applied, radio: true, origin, ..CountryStatus::none(&self.country.catalogue) };
+        }
         Ok(HEARD.iter().map(|&(ssid, bssid, channel, weakness, security)| Network {
             ssid: Vec::from(ssid), bssid, channel, weakness, security, remembered: self.remembered.iter().any(|r| r == ssid),
         }).collect())
@@ -284,7 +304,8 @@ impl Station for Demo {
         // The radio takes every country's limits but XX's.
         let refused = code == "XX";
         self.country = CountryStatus { asked: String::from(code), applied: if refused { String::new() } else { String::from(code) },
-                                       state: if refused { CountryState::Failed } else { CountryState::Applied }, radio: !refused, kept: !refused, ..self.country.clone() };
+                                       state: if refused { CountryState::Failed } else { CountryState::Applied }, radio: !refused, kept: !refused,
+                                       origin: if refused { Origin::None } else { Origin::Chosen }, ..self.country.clone() };
         Ok(self.country.clone())
     }
 }

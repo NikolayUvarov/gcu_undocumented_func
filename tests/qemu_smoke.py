@@ -1512,6 +1512,7 @@ def shell_suite(vm):
     require(vm.command("cat ram:script.txt"), "ENTRIES, ")
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
+    hostname_check(vm)
     storefs_check(vm)
     vfs_restart_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
@@ -2561,6 +2562,29 @@ def vfs_restart_check(vm):
     require(vm.command("cat data/after.txt"), "after the restart")
     require(vm.command("rm data/after.txt"), "OK")
     print("PASS: vfs_server restarted: the shell's ls, write, cat and rm in data/ answer again with no restart of the shell (311-KRN-0207)", flush=True)
+
+
+def hostname_check(vm):
+    """000-APP-0123: the machine's name, one RFC 1123 label in data/machine/name, mindcore when none is set; `hostname`
+    says it and where from, `hostname <name>` sets it in small letters and logs the change once; a name that is no
+    label is refused, and the file stays as it was."""
+    require(vm.command("hostname"), "THE MACHINE'S NAME: mindcore (NONE SET: NO data/machine/name; HOSTNAME <NAME> SETS ONE)")
+    require(vm.command("hostname my_pc"), "ERROR: HOSTNAME: A CHARACTER OTHER THAN a-z 0-9 -: A NAME IS 1 TO 63 OF a-z 0-9 -, NEITHER FIRST NOR LAST A HYPHEN")
+    require(vm.command("hostname DEXP"), "THE MACHINE'S NAME: dexp, KEPT IN data/machine/name")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: dexp (data/machine/name)")
+    require(vm.command("cat data/machine/name"), "dexp")
+    require(vm.command("hostname dexp"), "THE MACHINE'S NAME IS dexp ALREADY")
+    require(vm.command("hostname -dexp"), "ERROR: HOSTNAME: A HYPHEN FIRST OR LAST")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: dexp (data/machine/name)")
+    log = vm.command("dmesg -s shell", raw=True)
+    assert log.count("[SHELL] THE MACHINE'S NAME: mindcore -> dexp") == 1 and "-> -dexp" not in log, log[-1500:]
+    require(vm.command("hostname mind-2"), "THE MACHINE'S NAME: mind-2, KEPT IN data/machine/name")
+    require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE MACHINE'S NAME: dexp -> mind-2")
+    require(vm.command("rm data/machine/name"), "OK")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: mindcore (NONE SET")
+    require(vm.command("rm data/machine"), "OK")
+    print("PASS: hostname (000-APP-0123): mindcore with none set; DEXP kept as dexp in data/machine/name and logged once; "
+          "the same name again changes nothing; my_pc and -dexp refused with the rule, the file as it was", flush=True)
 
 
 def storefs_check(vm):
@@ -9338,16 +9362,29 @@ def wifi_join_check(vm):
     vm.send("wm\n")
     rate = vm.expect(", THE FIRST RATE)", timeout=180)  # a loaded machine (gate 25: PCU at a load of 11) is slow to start wm
     assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
+    # 550-APP-0082: Settings' network page names the station's country and why it applies, read through wm's client of
+    # the station (wifi.wit 1.2): wlansim's access point announces UZ, and none is chosen yet.
+    since = len(vm.log)
+    vm.hmp("sendkey alt-s")
+    time.sleep(.3)
+    for _ in range(3):  # to the network page (settings::NETWORK)
+        vm.hmp("sendkey down")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("[WM] NETWORK PAGE: Country: UZ, announced by 1 of 1 access points", since)
+    vm.hmp("sendkey esc")
+    time.sleep(.2)
     since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
     vm.logged("SHELL RESUMED.", since)
-    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7)", flush=True)
+    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7); Settings' network "
+          "page names the country the access point announced (550-APP-0082)", flush=True)
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
     # 550-APP-0082 over 550-NET-0035 stage B: with none chosen the station runs under the country wlansim's access point
-    # announces; the whole catalogue is listed but 00, and a country's channels are shown.
-    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, none ASKED")
+    # announces, and wifi says so (wifi.wit 1.2); the whole catalogue is listed but 00, and a country's channels are shown.
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY")
     run("wifi countries", 30, " OF 181 COUNTRIES")
     run("wifi channels uz", 30, "[WIFI] 13 CHANNELS UNDER UZ (Uzbekistan)")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
@@ -9440,7 +9477,7 @@ def wifi_join_check(vm):
     require(radio, "[WLANSIM] COUNTRY UZ: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, "the first scan sent a probe request"
     run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")
-    run("wifi country US", 30, "[WIFI] COUNTRY US (United States) APPLIED")
+    run("wifi country US", 30, "[WIFI] COUNTRY US (United States) APPLIED, THE RADIO CONFIRMED ITS LIMITS; CHOSEN BY THE USER, KEPT BY KEYSTORE")
     require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 30), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE): 11 CHANNELS TO SEND ON")
     require(vm.service_logs("wlansim", "COUNTRY US"), "[WLANSIM] COUNTRY US: 11 CHANNELS")
     # A restart reads it back from keystore, and nothing announced moves a chosen country.
@@ -10164,7 +10201,7 @@ def world_country_check(args):
                 out += vm.command("dmesg -s wifi", raw=True)
                 time.sleep(.5)
             require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED")
+            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS")
         finally:
             vm.close()
     print("PASS: the station's country with none chosen and none announced (550-NET-0035): 00 applied, 11 channels to send "
@@ -12413,6 +12450,14 @@ def wm_suite(vm):
         keys("ret", text="SETTINGS=Network:Wi-Fi")
         screen_has("console netpolicy")
         screen_has("wifi --countries")  # the country beside Wi-Fi (550-APP-0082)
+        screen_has("Country: no station to ask")  # and why none is named: QEMU's wm suite has no station
+        # 000-APP-0123: the machine's name, the page's last row, set through the shell at once (shell.wit 1.11).
+        keys(*["down"] * 6, text="SETTINGS=Network:Name")
+        screen_has("now mindcore")
+        keys("d", "e", "x", "p")
+        keys("ret", text="[WM] SET HOSTNAME dexp: The machine's name is dexp now, kept in data/machine/name")
+        screen_has("now dexp")
+        keys(*["up"] * 6, text="SETTINGS=Network:Wi-Fi")
         keys("ret", text="[WM] STARTED wifi PID")
         pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
         while not any(m[1] == pid for m in windows_re.findall("".join(seen))):
