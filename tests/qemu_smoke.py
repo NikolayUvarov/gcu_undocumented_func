@@ -9339,7 +9339,7 @@ def wifi_join_check(vm):
     require_all(read, "NETCHECK wifi READER: Joined MIND-TEST CHANNEL 6, COUNTRY UZ Applied", "NETCHECK wifi JOIN DENIED", "NETCHECK wifi LEAVE DENIED",
                 "NETCHECK wifi FORGET DENIED", "NETCHECK wifi SET-COUNTRY DENIED", "NETCHECK wifi 4 OF 4 DENIED, THE STATION AS BEFORE", "NETCHECK wifi OK")
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, none ASKED")
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")  # the rest is APP's wording (550-APP-0082)
     print("PASS: the station's reading client (550-NET-0058): a program lent the changing one took it and dropped its own, "
           "read the link and the country through it, and was denied join, leave, forget and set-country; the station "
           "joined and under UZ as before", flush=True)
