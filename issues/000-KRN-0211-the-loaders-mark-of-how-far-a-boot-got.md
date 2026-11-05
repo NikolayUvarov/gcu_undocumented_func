@@ -54,7 +54,11 @@ DRV has no screen or serial console there. The loader writes nothing on a confir
   - a slot's own loader keeping the count, and a reset in its pause left at `READ`.
 
   The file system was consistent after (`fsck.fat`).
-- **Left:** the gate, and the cycles on un-rizen with a stick written from `main` once it lands.
+- **Left:** the cycles on un-rizen with a stick written from `main` once it lands.
+
+**Landed (2026-11-05).** Round 84 (`main` f6abfbf0): the gate was green on every group, on acc-1, acc-2, PCU and x32-128.
+
+**Left:** the cycles on un-rizen with a stick written from `main` f6abfbf0 or later.
 
 **Not claimed:** the cause of the two hangs (MC-12.2). The mark only narrows where a hang is; QEMU's runs say nothing of the Ryzen's firmware (MC-12.1).
 
