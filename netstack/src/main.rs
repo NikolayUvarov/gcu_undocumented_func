@@ -10,6 +10,7 @@ extern crate alloc;
 
 mod dns;
 mod listen;
+mod name;
 mod policy;
 mod poll;
 mod questions;
@@ -269,6 +270,8 @@ struct Stack {
     preferred: Option<usize>,
     // The listening sockets, by their slot's index (socket.wit 2.9).
     listeners: [Option<Listener>; SOCKETS],
+    // The machine's name, sent in DHCP (000-NET-0050).
+    name: name::Name,
 }
 
 fn now_ms() -> u64 { mind::time::monotonic_ns() / 1_000_000 }
@@ -278,7 +281,7 @@ fn text(address: Ipv4Address) -> [u8; 4] { address.octets() }
 
 impl Link {
     // The interface of card `index`, or None while its driver does not answer.
-    fn new(index: usize, deadline: Deadline) -> Option<Self> {
+    fn new(index: usize, deadline: Deadline, options: &'static [smoltcp::wire::DhcpOption<'static>]) -> Option<Self> {
         let endpoint = Endpoint(DRIVERS[index]);
         let info = match deadline.call(|| net::info(endpoint)) { Ok(Ok(info)) => info, _ => return None };
         let bytes = info.mac.to_be_bytes();
@@ -289,7 +292,9 @@ impl Link {
         config.random_seed = mind::time::rdtsc();
         let iface = Interface::new(config, &mut card, instant());
         let mut sockets = SocketSet::new(Vec::new());
-        let dhcp = sockets.add(dhcpv4::Socket::new());
+        let mut client = dhcpv4::Socket::new();
+        client.set_outgoing_options(options);
+        let dhcp = sockets.add(client);
         let ring = match card.ring.as_ref() { Some(shared) if shared.answered => " (FRAME RING)", Some(_) => " (FRAME RING LENT, NO ANSWER YET)", None => "" };
         mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, ring, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
         Some(Self { card, iface, sockets, dhcp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms(),
@@ -340,7 +345,7 @@ impl Link {
 impl Stack {
     fn new() -> Self {
         Self { links: [const { None }; CARDS], tried: [0; CARDS], turn: turn::Turn::new(), slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
-               sequence: 0, next_port: EPHEMERAL, default: None, preferred: None, listeners: [const { None }; SOCKETS] }
+               sequence: 0, next_port: EPHEMERAL, default: None, preferred: None, listeners: [const { None }; SOCKETS], name: name::Name::new() }
     }
 
     fn link(&mut self, index: usize) -> &mut Link { self.links[index].as_mut().expect("sockets live only on present links") }
@@ -400,6 +405,8 @@ impl Stack {
             mind::println!("[NETSTACK] CARD {} LINK UP, WAITING FOR DHCP", index);
             link.sockets.get_mut::<dhcpv4::Socket>(link.dhcp).reset();
             link.started = now;
+            // A name changed since the last read goes out with the new lease (000-NET-0050).
+            if self.name.refresh(now) { self.apply_name(); }
             return;
         }
         link.address = None;
@@ -415,16 +422,26 @@ impl Stack {
         mind::println!("[NETSTACK] CARD {} LINK DOWN: ADDRESS DROPPED, {} CONNECTIONS ABORTED", index, aborted);
     }
 
+    // The name's option into every card's DHCP client: the next DISCOVER, REQUEST or renewal carries it.
+    fn apply_name(&mut self) {
+        let options = self.name.options();
+        for link in self.links.iter_mut().flatten() { link.sockets.get_mut::<dhcpv4::Socket>(link.dhcp).set_outgoing_options(options); }
+    }
+
     fn port(&mut self) -> u16 { let port = self.next_port; self.next_port = if port == u16::MAX { EPHEMERAL } else { port + 1 }; port }
 
     // Asks absent drivers again (every second), runs the interfaces, finishes waiting calls and frees closed sockets.
     fn poll(&mut self) {
+        let now = now_ms();
+        if self.name.read == 0 || now.saturating_sub(self.name.read) >= name::EVERY_MS {
+            if self.name.refresh(now) { self.apply_name(); }
+        }
         self.turn.begin(now_ms());
         while let Some(visit) = self.turn.next(now_ms()) {
             let (index, now) = (visit.index, visit.started_ms);
             let deadline = Deadline::after(now, visit.remaining_ms);
             if self.links[index].is_none() && now.saturating_sub(self.tried[index]) >= 1000 {
-                self.tried[index] = now; self.links[index] = Link::new(index, deadline);
+                self.tried[index] = now; self.links[index] = Link::new(index, deadline, self.name.options());
             }
             if let Some(link) = self.links[index].as_mut() { link.card.deadline = deadline; }
             // Check link state before a busy receive queue can consume the remaining turn.
