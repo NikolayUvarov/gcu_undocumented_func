@@ -42,7 +42,17 @@
   - `stat caps` shows one files client in slot 7, the scope's.
 - **Docs:** `docs/profile/bootstrap.md` (`netstack`), `docs/profile/evidence.md`, `README.md`.
 
-**Left:** QEMU on x86 and aarch64; the DEXP's router (the second criterion), on the maintainer's word.
+**Tested,** through Effector, `network, TLS and Effector`:
+- **x32-128, x86,** on 782c2830: passed (1087 s). `dhcp_name_check`: two messages at boot carried `dexp`; after `lab-2` was written and the link came back, two more carried `lab-2`.
+- **acc-1, aarch64,** on f4810b61: passed (936 s). The later commits merge 000-KRN-0180's test and text changes only.
+- **Two runs before them failed, and are not counted:**
+  - on a16b3502, the suite's wait for the lease ended on the name's own line: hence `NAME FOR DHCP`;
+  - on f4810b61 (x86), after `dhcp_name_check` had passed, `wifi_join_check`'s `wifi channels 00` printed no line on the console, though `wifi`'s log held `13 CHANNELS UNDER 00`. The same group passed on the next run. That check is 550-NET-0059's; seen once, and not explained.
+- **Host:** `sysmon`, `idl` and `services` pass.
+
+The first criterion is met on those runs.
+
+**Left:** the DEXP's router (the second criterion), on the maintainer's word.
 
 ## Related
 
