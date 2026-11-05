@@ -7378,6 +7378,7 @@ def disk_check(vm):
     keys(alt_f2, "DIALOG=VOLUME")
     keys(b"\x1b[B", "DIALOG=VOLUME")
     keys(b"\r", "RIGHT=/ram: BRIEF")
+    keys(b"\x1b[B", "CURRENT=machine ")  # init's, for sysmon's scope where data/ is (000-KRN-0180)
     keys(b"\x1b[B", "CURRENT=tree ")
     keys(f5, "DIALOG=TARGET")
     vm.send_bytes(b"\r")

@@ -66,6 +66,7 @@ APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): 
 
   `init` now makes the directory only below a `data/` that is there (`Make::InParent`). A volume without `data/` gives `sysmon` no scope, and `init` logs `NO FILES IN data/machine`. Its name is then read from `sysmon`'s next start. The `vfs` and `edit` suites count `data/machine/` in `data/`.
 - **The `vfs` suite's image has no `data/` at boot,** so the run again (16e43f5e) found no scope, and its first `write data/machine/name` answered `NOT FOUND`. `sysmon_name_check` now starts there: `init`'s `NO FILES IN data/machine`, `mindcore` not read, then `mkdir data/machine` and `svc restart sysmon`, after which the name is read. The `edit` suite's image has `data/`, and its listing holds `machine`. The `shell` suite with APP's `hostname_check`, and `kbench_check`, passed on x86 (`keys, shell, tools`) and aarch64 (`programs, shell and four CPUs`).
+- **The `disk` suite's `disk_check`** (fm, issue 048, now APP's) went down from `..` onto `tree` in `data/`; `machine` now comes first. Its one positional step takes one key more, a change of its expectation only, told to APP. On dfb513f1 the `vfs`, `disks` and `edit` suites passed on x86 (x32-128).
 - **One rule, two copies:** `shell/src/hostname.rs` (APP's) and `mind::hostname` say the same rule word for word. Whether the shell uses `mind::hostname` once this lands is APP's choice.
 
 ## Related
