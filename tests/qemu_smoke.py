@@ -8000,6 +8000,18 @@ def linkupdate_suite(args):
             link.put(server / path, path)
         print(f"TIME: {len(files)} files, {sum((server / p).stat().st_size for p in files)} bytes, put through the link in "
               f"{time.monotonic() - started:.0f} s", flush=True)
+        # 000-KRN-0212: link's put ends in a rename, and its mkdir, mv and rm flush nothing of their own: the disk holds
+        # each as soon as it is answered, with nothing flushed since.
+        last, small = files[-1], min(files, key=lambda p: (server / p).stat().st_size)
+        assert image.read(f"data/link/{link_update.DIR}/{last}") == (server / last).read_bytes(), last
+        link.run("mkdir", "made")
+        link.put(server / small, "copy")
+        link.run("mv", f"{link_update.DIR}/copy", "made/moved")
+        assert image.read("data/link/made/moved") == (server / small).read_bytes() and image.read(f"data/link/{link_update.DIR}/copy") is None, small
+        link.run("rm", "made/moved")
+        link.run("rmdir", "made")
+        listing = subprocess.run(["mdir", "-b", "-i", image.drive, "::/data/link"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
+        assert "made" not in {line.rstrip("/").rpartition("/")[2] for line in listing.splitlines()}, listing
         # The script's follower stops at a refusal, as it would on a real machine: an expired channel (351-UPD-0025), then
         # one whose signature was changed.
         for bad, refusal in ((channel(6, 5, "2020-01-01T00:00:00Z"), "Expired"), (forged, "Signature")):
