@@ -69,6 +69,33 @@
 
 The second criterion is not met: a run hung within the first ten.
 
+2026-11-05, runs 13–19 with lane `KRN-2` busy beside them:
+- **Runs 13, 14, 16, 18 and 19 passed,** 601–627 s each.
+- **Runs 15 and 17 reached their limit,** each in `update_suite`, past its parser check, with the update VM alive more than 1000 s. A group takes about 600 s.
+  - Run 15's `SIGINT` was ignored. A non-interactive shell starts a background command with `SIGINT` ignored, so Python set no handler.
+  - From run 17 on, each run starts with `SIGINT` at its default and `faulthandler` on `SIGUSR1`. At the limit it records every thread's stack, its sockets, then the traceback, and the serial logs its `finally` blocks wrote.
+
+**The cause, from run 17's record** (`/tmp/mind-KRN/repro-updater/17/` on x32-128): a race in `update_suite` itself, not in the updater.
+1. The suite reads `dmesg -s updater` once a second until it shows `[UPDATER] FETCH: VERSION 6 STAGED` or `[UPDATER] APPLY:`. It ends that reading on a read that times out, which a restart is taken to cause.
+2. The last read before the restart showed `FETCH: 104 OF 106`. The next read's echo was on the console when init restarted the machine: `MIND> dmesg -s updater`, then `MIND CORE KERNEL: REBOOT VIA PORT 0xCF9`.
+3. The new boot's prompt answered that read, so it did not time out. The new boot's `dmesg -s updater` holds neither line, so the reading went on: 900 reads of `CHECK: REFUSED: Older`, `RUNNING 6`.
+4. Each read's `expect()` emptied `vm.output`, and with it `BOOT: SLOT B LOADED ON TRIAL` and `THE TRIAL BOOT IS CONFIRMED`. The trial had been confirmed at once.
+5. The suite then waited 1500 s for those lines in the output. The 900 reads and that wait together pass Effector's 3500 s.
+
+The thread stacks show the test release server idle in `select`, with no connection open.
+
+**Not shown:** that round 81's and run 7's hangs were this one. Their logs were lost; they match it in the group, the suite's place and the time.
+
+**A defect found on the way, not the cause:**
+- The test release server's TLS handshake ran in `accept`, in its one serving thread with no timeout.
+- So a client that connected and never finished its handshake held every other connection.
+- It is fixed in `scripts/serve_release.py`, with `tests/release_test.py`'s new test, which fails without the fix.
+
+**The fix** (`tests/qemu_smoke.py`):
+- `update_suite`'s reading ends as well on a read that holds `MIND CORE KERNEL: REBOOT VIA`.
+- `trial_confirmed` waits for the confirmation after `BOOT: SLOT B LOADED ON TRIAL` in the console's log from a mark set before the reading, not in what `expect()` left. `install_suite` uses it too after `mkdir data/apply`, where the restart could take its prompt the same way.
+- **Its host test** is `tests/qemu_trial_test.py`: lines a command took from the output are read from the log; a confirmation from before the mark, or before the trial, is not taken; a panic ends the wait.
+
 ## Related
 
 [000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another wait seen once in a gate); `docs/effector.md`, section 1 (a failed group runs once more, alone).
