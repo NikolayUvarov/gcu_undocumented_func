@@ -1,14 +1,12 @@
 //! The server's `performance_measure` (750-EFF-0016): the Effector agents' fixed benchmarks, so a MIND machine's
 //! numbers compare with the others' (Effector's agent/linux/performance_benchmark.go): `effector_bogomips_v1` on one
-//! thread, `effector_memcpy_v1` and `effector_seqio_v1` writes and reads. The session runs it a slice at a time between
-//! its heartbeats, so the agent stays online for its minute; each phase's rate counts the time its slices ran.
-//! What a task's 16 MiB of memory (`HEAP_MAX_BYTES`) does not hold is changed or left out, and said so:
-//! - the copy moves 4 MiB between two buffers, not 8 MiB (still beyond this kind of processor's last cache);
-//! - the pointer chase (`effector_pointer_chase_v1`, which the server takes only over exactly 16 MiB) is left out;
-//! - so is the parallel CPU phase, which needs threads the session has not.
+//! thread, `effector_memcpy_v1` over two 8 MiB buffers, `effector_pointer_chase_v1` over 16 MiB and `effector_seqio_v1`
+//! writes and reads. The session runs it a slice at a time between its heartbeats, so the agent stays online for its
+//! minute; each phase's rate counts the time its slices ran. The buffers need the session's 48 MiB quota (750-KRN-0158):
+//! a phase whose memory cannot be had is left out of the result, not failed. The parallel CPU phase needs workers the
+//! session may not start yet, so it is left out too.
 //! No system calls: the clock and the disk come from the caller; host-tested in tests/effector_bench_host.rs.
 use crate::json::Writer;
-use alloc::vec;
 use alloc::vec::Vec;
 
 pub const CPU: &str = "effector_bogomips_v1";
@@ -16,7 +14,11 @@ pub const MEMORY: &str = "effector_memcpy_v1";
 pub const DISK: &str = "effector_seqio_v1";
 const BATCH: u64 = 4096;
 const SEED: u64 = 0x6a09_e667_f3bc_c909;
-const COPY_BYTES: usize = 4 << 20; // 8 MiB in the Linux agent: two such buffers and the rest would pass the task's 16 MiB
+const COPY_BYTES: usize = 8 << 20; // the Linux agent's: two buffers of it
+pub const CHASE: &str = "effector_pointer_chase_v1";
+pub const CHASE_COUNT: u32 = 4 << 20; // 16 MiB of u32 indices: the only working set the server takes
+pub const CHASE_SEED: u32 = 0x1234_5678;
+const CHASE_PART: u32 = 65_536; // permutation steps between looks at the clock
 const DISK_PIECE: usize = 64 << 10; // 1 MiB a write on Linux; a slow disk would hold a 1 MiB write past a heartbeat
 const DISK_WRAP: u64 = 16 << 20; // the file starts again at 16 MiB, as the Linux agent's
 
@@ -78,13 +80,30 @@ pub trait Disk {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Phase { Cpu, Memory, Write, Read, Done }
+enum Phase { Cpu, Memory, Latency, Write, Read, Done }
+
+/// Steps `from..to` of the Linux agent's single-cycle permutation (`runMemoryLatency`), from 1 and `CHASE_SEED`.
+pub fn chase_part(chase: &mut [u32], random: &mut u32, from: u32, to: u32) {
+    for i in from..to {
+        *random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let j = (*random % i) as usize;
+        chase[i as usize] = chase[j];
+        chase[j] = i;
+    }
+}
+
+// A buffer of `n` elements' room, or None when the memory is not there (no abort, as `Vec::with_capacity` would).
+fn reserved<T>(n: usize) -> Option<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).ok()?;
+    Some(v)
+}
 
 /// The benchmark, run a slice at a time. Times are the caller's milliseconds.
 pub struct Bench {
     phase: Phase,
-    /// Each phase's length in ms: CPU duration/3, memory /12, disk /12 each, as the Linux agent's.
-    lengths: [u64; 4],
+    /// Each phase's length in ms: CPU duration/3, copying /12, the chase /15, disk /12 each, as the Linux agent's.
+    lengths: [u64; 5],
     ran_ms: u64,
     started_ms: Option<u64>,
     finished_ms: u64,
@@ -94,6 +113,12 @@ pub struct Bench {
     copy: Option<(Vec<u8>, Vec<u8>)>,
     pub copied: u64,
     pub copy_ms: u64,
+    chase: Vec<u32>,
+    built: u32,
+    random: u32,
+    index: u32,
+    pub accesses: u64,
+    pub chase_ms: u64,
     piece: Vec<u8>,
     pub written: u64,
     pub write_ms: u64,
@@ -107,8 +132,10 @@ impl Bench {
     pub fn new(duration_s: u64) -> Self {
         let d = duration_s.clamp(1, 300) * 1000;
         Self {
-            phase: Phase::Cpu, lengths: [d / 3, d / 12, d / 12, d / 12], ran_ms: 0, started_ms: None, finished_ms: 0,
-            state: SEED, iterations: 0, cpu_ms: 0, copy: None, copied: 0, copy_ms: 0, piece: Vec::new(), written: 0, write_ms: 0, read: 0, read_ms: 0, disk_failed: false,
+            phase: Phase::Cpu, lengths: [d / 3, d / 12, d / 15, d / 12, d / 12], ran_ms: 0, started_ms: None, finished_ms: 0,
+            state: SEED, iterations: 0, cpu_ms: 0, copy: None, copied: 0, copy_ms: 0,
+            chase: Vec::new(), built: 1, random: CHASE_SEED, index: 0, accesses: 0, chase_ms: 0,
+            piece: Vec::new(), written: 0, write_ms: 0, read: 0, read_ms: 0, disk_failed: false,
         }
     }
 
@@ -116,7 +143,7 @@ impl Bench {
 
     fn next(&mut self) {
         self.ran_ms = 0;
-        self.phase = match self.phase { Phase::Cpu => Phase::Memory, Phase::Memory => Phase::Write, Phase::Write => Phase::Read, _ => Phase::Done };
+        self.phase = match self.phase { Phase::Cpu => Phase::Memory, Phase::Memory => Phase::Latency, Phase::Latency => Phase::Write, Phase::Write => Phase::Read, _ => Phase::Done };
         if self.phase == Phase::Read && self.disk_failed { self.phase = Phase::Done; }
     }
 
@@ -129,27 +156,53 @@ impl Bench {
             let length = self.lengths[self.phase as usize];
             let left = length.saturating_sub(self.ran_ms);
             if left == 0 { self.leave(disk); self.next(); continue; }
-            self.prepare();
+            if !self.prepare(now, until) {
+                // No memory for the phase: it is left out. Or the chase's permutation is not built yet: on next slice.
+                if self.phase == Phase::Latency && !self.chase.is_empty() { break; }
+                self.leave(disk); self.next(); continue;
+            }
             let end = until.min(now() + left);
             let began = now();
             self.work(now, end, disk);
             let spent = now().saturating_sub(began).max(1);
             self.ran_ms += spent;
-            match self.phase { Phase::Cpu => self.cpu_ms += spent, Phase::Memory => self.copy_ms += spent, Phase::Write => self.write_ms += spent, Phase::Read => self.read_ms += spent, Phase::Done => {} }
+            match self.phase { Phase::Cpu => self.cpu_ms += spent, Phase::Memory => self.copy_ms += spent, Phase::Latency => self.chase_ms += spent, Phase::Write => self.write_ms += spent, Phase::Read => self.read_ms += spent, Phase::Done => {} }
             if now() >= until { break; }
         }
         if self.phase == Phase::Done && self.finished_ms == 0 { self.finished_ms = now().max(1); }
         self.done()
     }
 
-    // A phase's buffers, made before its time is counted, as the Linux agent's are.
-    fn prepare(&mut self) {
+    // A phase's buffers, made before its time is counted, as the Linux agent's are; false while it cannot run: no memory
+    // for it, or the chase's permutation not built by `until`.
+    fn prepare(&mut self, now: &mut dyn FnMut() -> u64, until: u64) -> bool {
         match self.phase {
             Phase::Cpu if self.iterations == 0 => { let _ = core::hint::black_box(batch(SEED)); } // warms the loop
-            Phase::Memory if self.copy.is_none() => self.copy = Some(((0..COPY_BYTES).map(|i| (i * 31 + 17) as u8).collect(), vec![0u8; COPY_BYTES])),
+            Phase::Memory if self.copy.is_none() && self.copied == 0 => {
+                let (Some(mut a), Some(mut b)) = (reserved::<u8>(COPY_BYTES), reserved::<u8>(COPY_BYTES)) else { return false };
+                a.extend((0..COPY_BYTES).map(|i| (i * 31 + 17) as u8));
+                b.resize(COPY_BYTES, 0);
+                self.copy = Some((a, b));
+            }
+            Phase::Memory if self.copy.is_none() => return false,
+            Phase::Latency if self.built < CHASE_COUNT => {
+                if self.chase.is_empty() {
+                    let Some(mut chase) = reserved::<u32>(CHASE_COUNT as usize) else { return false };
+                    chase.resize(CHASE_COUNT as usize, 0);
+                    self.chase = chase;
+                }
+                // The Linux agent's single-cycle permutation, a part at a time so no slice outlasts a heartbeat.
+                while self.built < CHASE_COUNT {
+                    let end = (self.built + CHASE_PART).min(CHASE_COUNT);
+                    chase_part(&mut self.chase, &mut self.random, self.built, end);
+                    self.built = end;
+                    if self.built < CHASE_COUNT && now() >= until { return false; }
+                }
+            }
             Phase::Write | Phase::Read if self.piece.is_empty() => self.piece = (0..DISK_PIECE).map(|i| (i * 13 + 29) as u8).collect(),
             _ => {}
         }
+        true
     }
 
     // The phase's work until `end`, in units small enough to see the clock often.
@@ -161,6 +214,10 @@ impl Bench {
                 while now() < end { b.copy_from_slice(&a); self.copied += COPY_BYTES as u64; core::mem::swap(&mut a, &mut b); }
                 self.copy = Some((a, b));
             }
+            Phase::Latency => while now() < end {
+                for _ in 0..4096 { self.index = self.chase[self.index as usize]; }
+                self.accesses += 4096;
+            },
             Phase::Write => {
                 while now() < end && !self.disk_failed {
                     if !disk.write_at(self.written % DISK_WRAP, &self.piece) { self.disk_failed = true; }
@@ -183,6 +240,7 @@ impl Bench {
     fn leave(&mut self, disk: &mut dyn Disk) {
         match self.phase {
             Phase::Memory => self.copy = None,
+            Phase::Latency => self.chase = Vec::new(),
             Phase::Write => if self.disk_failed || self.written == 0 || !disk.flush() { self.disk_failed = true; },
             Phase::Read => self.piece = Vec::new(),
             _ => {}
@@ -217,6 +275,17 @@ impl Bench {
         if self.copied > 0 {
             w.field_str("memory_benchmark", MEMORY)?;
             w.field_decimal("memory_mib_per_second", (per_s(self.copied as u128, self.copy_ms) >> 20).max(1))?;
+        }
+        if self.accesses > 0 {
+            w.key("memory_latency")?;
+            w.object()?;
+            w.field_str("benchmark", CHASE)?;
+            w.field_u64("working_set_bytes", CHASE_COUNT as u64 * 4)?;
+            w.field_u64("accesses", self.accesses)?;
+            // Thousandths of a ns: the chase's ms over its accesses; never 0, which the server refuses.
+            w.field_decimal("nanoseconds_per_access", ((self.chase_ms as u128 * 1_000_000_000 / self.accesses as u128) as u64).max(1))?;
+            w.field_u64("checksum", self.index as u64)?;
+            w.end()?;
         }
         if let Some(c) = conditions {
             // One slot, the measurement's own: no other queue ran beside it.

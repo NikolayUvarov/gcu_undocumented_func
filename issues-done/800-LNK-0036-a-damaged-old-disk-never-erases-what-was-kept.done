@@ -1,0 +1,46 @@
+# 800-LNK-0036 — A damaged old disk never erases what `build_and_write.sh` kept — done
+
+**Type:** tools · **Owner:** `LNK` · **Priority:** P1 · **Status:** done (2026-11-05) · **Blocked by:** — · **Main task:** [800](../issues/800-mind-link.md) · **Constitution:** MC-12.1
+
+## Problem
+
+`--keep-effector`, `--keep-settings` and `--keep-wifi` ([800-LNK-0023](../issues/800-LNK-0023-keep-the-effector-agent-across-a-write.md), [800-LNK-0024](../issues/800-LNK-0024-keep-the-owners-settings-across-a-write.md)) save what the old disk holds before the write, and put it back after. They trusted the old disk completely:
+- `keep_effector_from` and `keep_settings_from` replaced the whole saved copy (`rm -rf` and `mv`) with whatever the disk had, even when a part was missing;
+- `save_keystore` copied a file even when it was empty.
+
+**What happened on 2026-11-05.**
+1. The Ryzen's boot volume was damaged: a FAT cross-link, which DRV's `fsck -a` then made much worse. The volume lost `data/` and truncated `system/keystore/device.key`.
+2. The maintainer wrote a new disk with the keep options. `keep_effector_from` saved the damaged disk's `system/effector`, found no `data/effector`, and replaced `~/.config/mind/effector`.
+3. So the owner's agent configuration (`effector.conf`, `policy`) was gone from the disk and from LEG9 alike.
+
+## Plan
+
+One rule for all three, stated in the script: a part or file of the old disk that is missing or empty keeps the one saved before. A saved copy that is replaced stays beside it as `<dir>.prev`, or as `<file>.prev` for the keystore's files.
+
+## Acceptance criteria
+
+- [x] A disk without `data/effector` keeps the saved configuration and takes the disk's `system/effector`.
+- [x] An empty file on the disk keeps the saved file; the disk's files with content are taken.
+- [x] A first save takes the disk's files whole, mode 600 in directories of mode 700, and leaves no `.prev`.
+- [x] A disk without `data/` keeps the saved settings and takes its `system/`; the keystore stays out of the settings.
+- [x] An empty `device.key` is not taken. One with content is taken, and the old one is kept as `.prev`.
+
+## Resolution
+
+In `scripts/build_and_write.sh`:
+- **helpers:** `has_content`, `rotate_kept`, `keep_file` and `refill_empty`;
+- **`keep_effector_from`:** works part by part. A part with content is taken and its empty files refilled from the saved copy; a missing or empty part keeps the saved one, and says so on stderr;
+- **`keep_settings_from`:** a part with none of the settings keeps the saved part;
+- **`save_keystore`:** uses `keep_file`;
+- **replacement:** all of them replace through `rotate_kept`, so the copy replaced stays as `.prev`;
+- **text:** `--keep-effector`'s help states the rule.
+
+The functions stay inside the script: it runs from its own copy while it changes branches, so a separate file could come from another branch.
+
+**Tests:** `tests/build_and_write_keep_test.sh` takes the functions from the script by name and runs them on plain directories, with no disk or mount: 16 checks, all passing. `scripts/host_tests.sh` runs it.
+
+**The lost configuration, put back by hand on 2026-11-05.** Taken from the MacBook's disk copy (`mindlink/eff-mac/disk/data/effector`): the same server and `token none`, with `hostname mind-ryzen`, and the same policy. It was written to `~/.config/mind/effector/data` and onto the new disk, and read back. The disk's `system/effector`, the agent's identity, matches what was kept. Nothing of these files was printed.
+
+## Related
+
+[800-LNK-0023](../issues/800-LNK-0023-keep-the-effector-agent-across-a-write.md), [800-LNK-0024](../issues/800-LNK-0024-keep-the-owners-settings-across-a-write.md), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).

@@ -9415,6 +9415,16 @@ def wifi_join_check(vm):
     assert re.search(r"^CARD 2 MAC \S+ IP 10\.0\.4\.15/24 .* WI-FI", shown, re.M), shown  # 550-APP-0085
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
+    # 550-NET-0058: a program lent the station's client takes the reading one the station mints (wifi.wit 1.3) and drops
+    # its own; through it the link and the country are read, and each change is denied, the station as it was.
+    read = vm.command("wificheck wifi", timeout=30)
+    require_all(read, "NETCHECK wifi READER: Joined MIND-TEST CHANNEL 6, COUNTRY UZ Applied", "NETCHECK wifi JOIN DENIED", "NETCHECK wifi LEAVE DENIED",
+                "NETCHECK wifi FORGET DENIED", "NETCHECK wifi SET-COUNTRY DENIED", "NETCHECK wifi 4 OF 4 DENIED, THE STATION AS BEFORE", "NETCHECK wifi OK")
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")  # the rest is APP's wording (550-APP-0082)
+    print("PASS: the station's reading client (550-NET-0058): a program lent the changing one took it and dropped its own, "
+          "read the link and the country through it, and was denied join, leave, forget and set-country; the station "
+          "joined and under UZ as before", flush=True)
     # wm's network line over Wi-Fi alone (000-APP-0096): no wired card, so no card client for the shell to lend; the
     # shell gives the station's frames as the stack counts them (data/wm.conf says `show = net`, from net_suite).
     vm.send("wm\n")
@@ -9600,6 +9610,10 @@ def net_suite(args, disk):
     note = elf.index(b"MINDREQ1") + 8
     elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 0x800000).to_bytes(4, "little")
     (disk / "cardcheck.elf").write_bytes(elf)
+    # 550-NET-0058: another that also asks for the station's client (REQUEST_WIFI, in SLOT_WIFI), to take its reading one.
+    elf = bytearray((disk / "netcheck.elf").read_bytes())
+    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 0x400000).to_bytes(4, "little")
+    (disk / "wificheck.elf").write_bytes(elf)
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
@@ -10888,7 +10902,11 @@ def effector_actions_check(vm, server, agent, until, beats):
     assert r["bogomips"] > 0 and 0 < r["duration_seconds"] <= 300 and r["iterations"] > 0 and r["worker_threads"] == 1 and r["logical_processors"] >= 1, r
     assert r["memory_benchmark"] == "effector_memcpy_v1" and r["memory_mib_per_second"] > 0, r
     assert r["disk_benchmark"] == "effector_seqio_v1" and r["disk_read_mib_per_second"] > 0 and r["disk_write_mib_per_second"] > 0, r
-    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r and "memory_latency" not in r, r
+    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r, r
+    # The chase over exactly 16 MiB, in the session's 48 MiB quota (750-KRN-0158), as the server's check wants it.
+    m = r["memory_latency"]
+    assert m["benchmark"] == "effector_pointer_chase_v1" and m["working_set_bytes"] == 16 << 20 and m["accesses"] > 0, m
+    assert 0 < m["nanoseconds_per_access"] and 0 <= m["checksum"] < 4 << 20, m
     load = r["load"]  # the conditions: a baseline second before, samples each second, the agent's own share apart
     assert load["samples"] >= 3 and load["occupied_queues_start"] == 1 and load["other_queues_max"] == 0, load
     assert 0 <= load["cpu_before_percent"] <= 100 and 0 <= load["background_cpu_average_percent"] <= load["cpu_average_percent"] <= 100, load
@@ -10897,6 +10915,7 @@ def effector_actions_check(vm, server, agent, until, beats):
     window = [t for t in beats if t >= begun]
     assert len(window) > 3 and max(b - a for a, b in zip(window, window[1:])) < 5.0, "heartbeats went on during the benchmark"
     print(f"PASS: performance_measure: {r['bogomips']} million iterations/s on one thread, {r['memory_mib_per_second']} MiB/s copied, "
+          f"{m['nanoseconds_per_access']} ns an access over 16 MiB, "
           f"disk {r['disk_write_mib_per_second']}/{r['disk_read_mib_per_second']} MiB/s written/read; heartbeats under 5 s apart while it "
           "ran, the agent busy with it", flush=True)
     # Telemetry: schema 1 every 30 s, as the server checks it; rates from the second sample on.

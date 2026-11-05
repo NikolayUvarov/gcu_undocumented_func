@@ -229,6 +229,7 @@ pub const REQUEST_SSH: u32 = 16777216; // the SSH service's client in SLOT_SSH, 
 pub const REQUEST_OWN: u32 = 33554432; // its own directory, system/own/<name>/, in SLOT_OWN: from the loader itself, by its name (000-KRN-0170)
 pub const REQUEST_SECRETS: u32 = 67108864; // its own secrets' client of keystore in SLOT_SECRETS: from the loader itself, by its name (000-KRN-0182)
 pub const REQUEST_NN: u32 = 134217728; // the model service's client in SLOT_NN, badged for this start by the shell (262-KRN-0178, for 262-APP-0112)
+pub const REQUEST_WIFI_READ: u32 = 268435456; // the Wi-Fi station's reading client (BADGE_WIFI, which wlan mints) in SLOT_WIFI (550-KRN-0213, for 550-NET-0058)
 /// The badge of the updater's client init gives the Effector gateway (update.wit 1.2, 751-KRN-0185): `fetch`, `apply`
 /// and `rollback` only while init's `remote-update` counts, which the updater asks at each.
 pub const BADGE_UPDATE_GATEWAY: u16 = 1;
