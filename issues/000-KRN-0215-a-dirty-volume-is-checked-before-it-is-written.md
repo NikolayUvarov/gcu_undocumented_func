@@ -1,6 +1,6 @@
 # 000-KRN-0215 — A FAT volume left dirty is checked at its mount, and one found damaged is not written
 
-**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-4.8, MC-12.3
+**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-4.8, MC-12.3
 
 From DRV's report of 2026-11-05 (`KRN/2026-11-05T1852Z-DRV-the-ryzens-boot-volume-had-a-fat-cross-link.md` on `internal-dev-messages`).
 
@@ -44,8 +44,21 @@ From DRV's report of 2026-11-05 (`KRN/2026-11-05T1852Z-DRV-the-ryzens-boot-volum
 ## Acceptance criteria
 
 - A dirty FAT16 or FAT32 volume is checked at its mount and the result logged. One with a cross-link or a chain into a free cluster accepts no write, and its clusters are never given out. Shown by host tests that fail without the change.
-- The `vfs` suite's damaged boot disk, on x86 and aarch64, logs the check, refuses the write, and passes `fsck.fat -n` unchanged after the boot. Every other suite passes as before (the gate).
+- The `vfs` suite's damaged boot disk, on x86 and aarch64, logs the check, refuses the write, and is the same byte for byte after the boot. Every other suite passes as before (the gate).
 - The threat model and the evidence rows say so.
+
+## Progress
+
+2026-11-05, on `claude/000-KRN-0215-dirty-volume-check`:
+- **`vfs_server/src/fat.rs`:**
+  - `left_dirty` reads FAT[1]'s clean bit (FAT16 bit 15, FAT32 bit 27) on a writable device before any change of ours;
+  - `check_at_mount` runs `check` and holds the volume when `Report::spreads` (cross-links, bad chains, bad entries) or the check could not finish;
+  - `writable()` is false while held, so every write path answers `read-only`.
+- **`vfs_server/src/main.rs`:** the boot volume and the log partition are checked after the medium's identity is recorded (000-KRN-0079), with three log lines: `WAS LEFT DIRTY: CHECKING`, the counts with the first problem, then `IS HELD READ-ONLY…` or `NO DAMAGE A WRITE COULD SPREAD, WRITABLE`.
+- **Host tests** (`tests/fat_host.rs`, FAT16 by `format`, FAT32 by `mkfs.fat`): three new tests, all 21 pass. With `writable()` ignoring the hold, `a_volume_left_dirty_with_a_chain_into_free_clusters_is_held` fails. The same test shows, without the check, the next new file given the cut entry's first cluster and a cross-link.
+- **QEMU:** `dirty_volume_check` in the `vfs` suite. Its runs on x86 and aarch64 are next.
+- **Docs:** the threat model's power-loss row and an evidence row.
+- **The shell** names the error `READ-ONLY DEVICE`, which is APP's text; the log says why.
 
 ## Related
 

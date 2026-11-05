@@ -7125,10 +7125,114 @@ def vfs_suite(args):
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
         fsck_volume(image, start, fs_sectors)
         disks_check(args, image, Path(temp))
+        dirty_volume_check(args, Path(temp))
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
           f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it, into data/media/ without a file, a second later with -d 1, "
           f"and with Ctrl+Alt+F6 of clock in front; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames), half the size with -s 2; reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
           f"{'power off' if args.arch == 'aarch64' else 'power off refused'}", flush=True)
+
+
+def fat16_layout(f, start):
+    """The FAT16 volume at sector `start` of the open image `f`: (FAT copies' first sectors, the root directory's first
+    sector and bytes, the data area's first sector, sectors a cluster)."""
+    f.seek(start * 512)
+    boot = f.read(512)
+    reserved, spc, fats, root_entries, fat_size = struct.unpack_from("<H", boot, 14)[0], boot[13], boot[16], struct.unpack_from("<H", boot, 17)[0], struct.unpack_from("<H", boot, 22)[0]
+    root = start + reserved + fats * fat_size
+    return [start + reserved + copy * fat_size for copy in range(fats)], root, root_entries * 32, root + root_entries * 32 // 512, spc
+
+
+def fat16_root_file(f, start, name):
+    """Root file `name` (8.3, upper case) of the FAT16 volume at `start`: (its entry's byte offset in the image, its
+    chain by the first FAT copy), or None."""
+    fats, root, root_bytes, _, _ = fat16_layout(f, start)
+    f.seek(root * 512)
+    entries = f.read(root_bytes)
+    base, _, extension = name.partition(".")
+    short = base.ljust(8).encode() + extension.ljust(3).encode()
+    at = next((i for i in range(0, len(entries), 32) if entries[i:i + 11] == short), None)
+    if at is None:
+        return None
+    chain, cluster = [], struct.unpack_from("<H", entries, at + 26)[0]
+    while 2 <= cluster < 0xFFF0 and cluster not in chain:
+        chain.append(cluster)
+        f.seek(fats[0] * 512 + cluster * 2)
+        cluster = struct.unpack("<H", f.read(2))[0]
+    return root * 512 + at, chain
+
+
+def fat16_cut_remove(image, start, name):
+    """What a remove cut short between its FAT sectors and its directory sector leaves on the FAT16 volume at `start`:
+    root file `name`'s entry kept, every cluster of its chain free in every FAT copy, and the volume dirty (FAT[1]'s
+    clean bit clear). Gives the entry's chain."""
+    with image.open("r+b") as f:
+        fats = fat16_layout(f, start)[0]
+        _, chain = fat16_root_file(f, start, name)
+        for fat in fats:
+            for cluster in chain:
+                f.seek(fat * 512 + cluster * 2); f.write(b"\0\0")
+            f.seek(fat * 512 + 2); f.write(struct.pack("<H", 0x7FFF))
+    assert len(chain) > 1, chain
+    return chain
+
+
+def firmware_sectors(image, start):
+    """The sectors of the volume at `start` OVMF's variable file NvVars holds on x86, where QEMU gives it no flash
+    store: its entry's, its chain's in every FAT copy, and its clusters'."""
+    with image.open("rb") as f:
+        fats, _, _, data, spc = fat16_layout(f, start)
+        found = fat16_root_file(f, start, "NVVARS")
+    if found is None:
+        return set()
+    entry, chain = found
+    sectors = {entry // 512, (entry - 32) // 512} | {fat + cluster * 2 // 512 for fat in fats for cluster in chain}  # its long name's entry before it
+    return sectors | {data + (cluster - 2) * spc + s for cluster in chain for s in range(spc)}
+
+
+def dirty_volume_check(args, temp):
+    """000-KRN-0215: a boot volume its last writer left dirty, with an entry whose clusters are free in the FAT (a remove
+    cut short), is checked at the mount and held: the log says so, files read, every write is refused, and nothing on
+    the volume changes but what OVMF itself writes on x86 (NvVars, into the free clusters of gap.bin, which lie before
+    cut.bin's). Without the check the next new file would be given cut.bin's clusters."""
+    temp = temp / "dirty"
+    temp.mkdir()
+    image, start, fs_sectors = raw_fat_image(temp, extra={"data/keep.txt": b"kept\n"})
+    part = f"{image}@@{start * 512}"
+    for name, data in (("gap.bin", bytes(256 << 10)), ("cut.bin", bytes(range(256)) * 64)):
+        (temp / name).write_bytes(data)
+        subprocess.run(["mcopy", "-i", part, str(temp / name), "::/" + name], check=True, env=MTOOLS_ENV, capture_output=True)
+    subprocess.run(["mdel", "-i", part, "::/gap.bin"], check=True, env=MTOOLS_ENV, capture_output=True)
+    chain = fat16_cut_remove(image, start, "CUT.BIN")
+    sectors = lambda data: [data[at:at + 512] for at in range(start * 512, (start + fs_sectors) * 512, 512)]
+    before = sectors(image.read_bytes())
+    vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+    try:
+        mounted = vm.service_logs("vfs_server", "AS RAM:")
+        require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048 (DEVICE WRITABLE)")
+        require(mounted, "[VFS] FAT16 AT LBA 2048 WAS LEFT DIRTY: CHECKING")
+        require(mounted, "0 CROSS-LINKED, 1 BAD CHAINS")
+        require(mounted, "FIRST: cut.bin: the cluster chain runs into a free or invalid cluster")
+        require(mounted, "[VFS] FAT16 AT LBA 2048 IS HELD READ-ONLY: A WRITE COULD SPREAD THE DAMAGE; REPAIR IT FROM ANOTHER SYSTEM")
+        require(vm.command("cat data/keep.txt"), "kept")
+        for command in ("write data/new.txt fresh", "mkdir data/sub", "rm data/keep.txt", "rm cut.bin"):
+            assert re.search(r"ERROR: .*READ-ONLY DEVICE", vm.command(command)), (command, vm.log[-2000:])
+        require(vm.command("fsck"), "first: cut.bin: the cluster chain runs into a free or invalid cluster")
+        require(vm.command("write ram:scratch.txt ram"), "WROTE 4 BYTES")  # the RAM disk is not held
+        require(vm.command("sync"), "OK")
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-vfs-dirty-{args.cpus}cpu.log").write_text(vm.log)
+    after = sectors(image.read_bytes())
+    firmware = firmware_sectors(image, start)
+    changed = {start + i for i, (a, b) in enumerate(zip(before, after)) if a != b}
+    assert changed <= firmware, ("a held volume is not written", sorted(changed - firmware)[:20])
+    with image.open("rb") as f:
+        for fat in fat16_layout(f, start)[0]:
+            for cluster in chain:
+                f.seek(fat * 512 + cluster * 2)
+                assert f.read(2) == b"\0\0", ("cut.bin's clusters given to no other file", cluster)
+    print(f"PASS: a boot volume left dirty with a chain into free clusters is checked at the mount and held read-only: "
+          f"the log names the damage, files read, writes are refused, no sector changed but the firmware's ({len(changed)})", flush=True)
 
 
 def disks_check(args, boot, temp):
