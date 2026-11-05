@@ -10853,7 +10853,12 @@ def effector_actions_check(vm, server, agent, until, beats):
     server.inject("/api/commands/ack", "ack_500")
     late_id = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 3}, program="mind")
     until(f"EFFECTOR: ACK {late_id} completed LATE, WITHOUT ring.log")
-    late = server.operation(late_id)["result"]
+    # The refused try logs that line too: the fixture's record comes with the accepted retry, 5 s or more later.
+    deadline = time.monotonic() + 60
+    while (record := server.operation(late_id)) is None:
+        assert time.monotonic() < deadline, ("the late ACK never reached the fixture", vm.command("dmesg -s effector", raw=True)[-3000:])
+        time.sleep(1)
+    late = record["result"]
     assert late["status"] == "completed" and "artifact" not in late, late.keys()
     assert re.fullmatch(r"not sent: the server had ended the command; ring\.log \d+ [0-9a-f]{64}", late["stdout"]), late["stdout"]
     after_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
