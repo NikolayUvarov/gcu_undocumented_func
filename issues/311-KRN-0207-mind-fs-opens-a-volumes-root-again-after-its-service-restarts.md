@@ -58,6 +58,10 @@
 
 **Left:** aarch64 for `vfs_restart_check`; `check`, as above.
 
+2026-11-05 (43bcf218, x32-128 through Effector, KVM, the two lanes beside each other): `x86: keys, shell, tools` (398 s) and `aarch64: programs, shell and four CPUs` (391 s) passed, each with `storefs_check`'s restart and `vfs_restart_check`.
+
+**Every acceptance criterion is met.** `check` is not asked again: its visit runs once. That is a limit of this change, not a criterion. The issue closes once this lands.
+
 ## Related
 
 STO's 311-STO-0032; [311-KRN-0203](../issues-done/311-KRN-0203-a-lent-files-client-and-a-held-storefs-client.done) (the routing).
