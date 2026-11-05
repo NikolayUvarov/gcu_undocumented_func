@@ -346,7 +346,7 @@ Not tested on the platform: the scrub between requests, whose first pass starts 
 
 ## Copies in a file — host-tested, run in QEMU on x86 and aarch64 (309-STO-0031)
 
-A copy of named roots in a file (`libmind/src/car.rs`, the second step of [309](../../issues/309-copies-scrub-and-repair.md)) brings back names a store lost, and repairs blocks a scrub or a read found damaged. It needs no second medium lent to the store: it is made and used by hand, with `blocks`.
+A copy of named roots in a file (`libmind/src/car.rs`, the second step of [309](../../issues-done/309-copies-scrub-and-repair.done)) brings back names a store lost, and repairs blocks a scrub or a read found damaged. It needs no second medium lent to the store: it is made and used by hand, with `blocks`.
 
 - **The format is CAR v1**, the IPLD content archive, so other tools read it:
   - a header: a varint length, then DAG-CBOR `{"roots": [link], "version": 1}`. Its one root is the names node;
@@ -397,7 +397,7 @@ Not run on aarch64 yet.
 
 ## Copies on a second medium — host-tested, run in QEMU on x86 and aarch64 (309-STO-0040)
 
-Chosen names have a copy on a second medium, which the store itself keeps in step, and a block one medium finds damaged is repaired from the other (`blockstore/src/copies.rs`, the third step of [309](../../issues/309-copies-scrub-and-repair.md)). `init` lends the second medium in QEMU (309-KRN-0209): the next VirtIO disk after the store's that is blank or the store's, beside a store disk of its own. On real machines it waits for 307's partitions.
+Chosen names have a copy on a second medium, which the store itself keeps in step, and a block one medium finds damaged is repaired from the other (`blockstore/src/copies.rs`, the third step of [309](../../issues-done/309-copies-scrub-and-repair.done)). `init` lends the second medium in QEMU (309-KRN-0209): the next VirtIO disk after the store's that is blank or the store's, beside a store disk of its own. On real machines it waits for 307's partitions.
 
 - **The copy is a whole store of its own** on the block client `init` lends `blockstore` in slot 4:
   - its own superblock, volume key, index, names, pins and buffers, as described above for the store. A blank medium is formatted as the store's is. Its volume key is random where the processor gives random numbers and kept by `keystore` under its own id (`volume-<id>`) where the secrets client is lent, as the store's;
@@ -471,7 +471,7 @@ The damage is made by the test, to one bit of a record's sealed bytes between wr
 
 ## A store rebuilt from its copy — host-tested, run in QEMU on x86 and aarch64 (309-STO-0041)
 
-A store whose medium was lost gets back, from its copy on the second medium, the names that had a copy (`blockstore/src/copies.rs`, the fourth step of [309](../../issues/309-copies-scrub-and-repair.md)). A tool says first what the copy would bring back and what it lost. The store's layout stays 4; `blockstore.wit` goes to 2.6, a minor version that adds and changes nothing.
+A store whose medium was lost gets back, from its copy on the second medium, the names that had a copy (`blockstore/src/copies.rs`, the fourth step of [309](../../issues-done/309-copies-scrub-and-repair.done)). A tool says first what the copy would bring back and what it lost. The store's layout stays 4; `blockstore.wit` goes to 2.6, a minor version that adds and changes nothing.
 
 - **The copy's names listed:** `copy-names(after)` (2.6), with the read right (`BADGE_GET`), never through a domain's client (`rights`, logged), as `copy` is. Up to 16 of the names the copy holds with a root, in byte order, each after `after`, asked for page by page as `names` is. Each comes with the copy's version, its root, and how it stands against the store:
 
@@ -1072,7 +1072,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 |---|---|---|
 | [307](../../issues/307-the-stores-own-partition.md) | A partition of the store's own on real machines; durability classes `volatile`, `flushed`, `copied` (`blockstore.wit` 2.0) | first: until then nothing survives a reset on a real machine |
 | [308](../../issues/308-encryption-at-rest.md) | Sealed records, a key per memory domain, the volume key from the TPM or a passphrase | before any personal data |
-| [309](../../issues/309-copies-scrub-and-repair.md) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), copies in a file with repair from them ([309-STO-0031](../../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)), and copies of chosen names on a second medium with repair from either, host-tested and run in QEMU on x86 and aarch64 (309-STO-0040, above); on real machines after 307 |
+| [309](../../issues-done/309-copies-scrub-and-repair.done) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), copies in a file with repair from them ([309-STO-0031](../../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)), and copies of chosen names on a second medium with repair from either, host-tested and run in QEMU on x86 and aarch64 (309-STO-0040, above); on real machines after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues/311-storefs-a-file-face.md) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
 | [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | the journal built ([312-STO-0034](../../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), above), a text index derived from it ([312-STO-0035](../../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done), above), and assertions about objects kept in a journal ([312-STO-0038](../../issues-done/312-STO-0038-assertions-about-objects.done), above); no personal data before 308 |

@@ -1,8 +1,8 @@
 # 309-STO-0025 — Scrub: every record read and checked within a budget — done
 
-**Type:** storage (`blockstore`, `idl/blockstore.wit`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [309](../issues/309-copies-scrub-and-repair.md) · **Constitution:** MC-4.8, MC-5.1, MC-12.4
+**Type:** storage (`blockstore`, `idl/blockstore.wit`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.done) · **Constitution:** MC-4.8, MC-5.1, MC-12.4
 
-Split from [309](../issues/309-copies-scrub-and-repair.md) (2026-10-29). The scrub needs no second medium, so it does not wait for [307](../issues/307-the-stores-own-partition.md).
+Split from [309](309-copies-scrub-and-repair.done) (2026-10-29). The scrub needs no second medium, so it does not wait for [307](../issues/307-the-stores-own-partition.md).
 
 ## Problem
 
@@ -26,7 +26,7 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
   - each whole pass logs what it found;
   - `scrubbed` returns the last whole pass's findings.
 - **Interface:** `blockstore.wit` 2.3, a minor version: `scrub` and `scrubbed`, and the record `scrubbed`. `blocks scrub` asks for a pass, `blocks scrubbed` shows the last one.
-- **Not here:** repair. One copy cannot be repaired from itself: [309](../issues/309-copies-scrub-and-repair.md)'s copies do that.
+- **Not here:** repair. One copy cannot be repaired from itself: [309](309-copies-scrub-and-repair.done)'s copies do that.
 
 ## Acceptance criteria
 
@@ -52,7 +52,7 @@ A damaged record is found only when it is read, or when the store mounts (300-ST
 
 ## Related
 
-[300-STO-0005](300-STO-0005-corruption-on-the-platform.done), [309](../issues/309-copies-scrub-and-repair.md), [docs/storage](../docs/storage/README.md).
+[300-STO-0005](300-STO-0005-corruption-on-the-platform.done), [309](309-copies-scrub-and-repair.done), [docs/storage](../docs/storage/README.md).
 
 ## Resolution
 
@@ -66,4 +66,4 @@ Done in `main` 3e07edb8 (landing round 43, 2026-10-29), from `claude/relaxed-mei
   - `tests/blockstore_host.rs`: the four host criteria;
   - QEMU `storefaults` on x86 and aarch64: a damaged chunk found by `blocks scrub` before any read and logged with its CID;
   - run by the round's gate on every group.
-- **Not tested on the platform:** the scrub between requests, whose first pass starts a day after the mount. Repair is [309](../issues/309-copies-scrub-and-repair.md)'s copies.
+- **Not tested on the platform:** the scrub between requests, whose first pass starts a day after the mount. Repair is [309](309-copies-scrub-and-repair.done)'s copies.

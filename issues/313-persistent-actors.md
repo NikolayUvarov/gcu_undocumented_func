@@ -12,7 +12,7 @@ From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-
 
 - **`mind::checkpoint` extended:** inbox and outbox offsets and operation IDs; an effect journal (the intent before an effect, the result after); an indeterminate outcome reconciled, never blindly repeated; fencing by epoch; rebinding by the description of needs.
 - **First users:** the agent module's sessions (260, `AGT`) and the messenger client's last event (950, `COM`). `tally` stays the pilot.
-- **Identity:** an actor's identity apart from its instance's generation and place (MC-6.12); "who is active" held as a name with compare-and-swap, so two instances never both take commands; a move to another machine through a copy of its store ([309](309-copies-scrub-and-repair.md)) and a rebind.
+- **Identity:** an actor's identity apart from its instance's generation and place (MC-6.12); "who is active" held as a name with compare-and-swap, so two instances never both take commands; a move to another machine through a copy of its store ([309](../issues-done/309-copies-scrub-and-repair.done)) and a rebind.
 
 ## Tasks
 
@@ -28,4 +28,4 @@ From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-
 
 ## Related
 
-[306](../issues-done/306-checkpoints-and-rebinding.done), [309](309-copies-scrub-and-repair.md), [312](312-the-minds-memory.md), 260, 950.
+[306](../issues-done/306-checkpoints-and-rebinding.done), [309](../issues-done/309-copies-scrub-and-repair.done), [312](312-the-minds-memory.md), 260, 950.

@@ -24,7 +24,10 @@
 /// the radio did not confirm.
 /// 1.3 (550-NET-0035, stage B): `00`, the world domain's code, is a code `set-country` takes too. The station gives it
 /// when no country is chosen and none is announced (the maintainer's decision of 2026-11-04).
-package mind:wlanhw@1.3.0;
+/// 2.0 (550-NET-0059): `info` names the radio's own channels (`supported`) apart from those its limits leave
+/// (`channels`), so a station restarted under one country plans the next over all of them. The field changes `info`'s
+/// layout, so the major version: a 1.x radio refuses every 2.0 request, and a 2.0 radio every 1.x one.
+package mind:wlanhw@2.0.0;
 
 interface wlanhw {
     /// Why a request failed. `no-device`: the radio is not up; `busy`: the transmit queue is full; `empty`: no
@@ -34,8 +37,9 @@ interface wlanhw {
 
     /// The radio: its MAC address (low 48 bits, first byte in bits 40-47), its bands (bit 0: 2.4 GHz, bit 1: 5 GHz, which
     /// is OFDM alone; bit 2: OFDM on 2.4 GHz too, 6 to 54 Mb/s, and without it DSSS and CCK alone there, 1 to 11 Mb/s),
-    /// the channels it can use (20 MHz each), the longest frame it sends or receives, the channel now set (0: none).
-    record info { mac: u64, bands: u8, channels: list<u8, 64>, frame-max: u16, channel: u8 }
+    /// the channels it can use now (20 MHz each; once limits are set, those they leave), its own channels whatever the
+    /// limits (2.0), the longest frame it sends or receives, the channel now set (0: none).
+    record info { mac: u64, bands: u8, channels: list<u8, 64>, supported: list<u8, 64>, frame-max: u16, channel: u8 }
 
     /// What passes the receive filter: with `all-beacons`, every beacon and probe response on the channel (a scan);
     /// the frames of the network `bssid` (0: none), and those addressed to `own` (0: the radio's MAC), broadcast or
@@ -69,7 +73,7 @@ interface wlanhw {
     record limit { channel: u8, eirp: u8, listen: bool }
     /// Applies country `code`'s limits (1.2): `dfs` is the catalogue's DFS region (0 unset, 1 FCC, 2 ETSI, 3 JP), `limits`
     /// every channel the station may use, at most once each. Answers the radio's info after; its `channels` are those
-    /// left by the radio's own limits. `invalid`: a channel twice or not the radio's, or a code that is not two capital
+    /// left by the radio's own limits, its `supported` unchanged. `invalid`: a channel twice or not the radio's, or a code that is not two capital
     /// letters nor `00` (1.3); `failed`: the radio could not apply them, and it sends nothing until limits it can apply are set.
     set-country: func(code: string<2>, dfs: u8, limits: list<limit, 64>) -> result<info, error>;
 }

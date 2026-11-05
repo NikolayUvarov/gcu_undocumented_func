@@ -1,8 +1,8 @@
 # 309-STO-0031 — A copy of named roots in a file: export, import, and repair from it — done
 
-**Type:** storage (`libmind` `car`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [309](../issues/309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-6.8
+**Type:** storage (`libmind` `car`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.done) · **Constitution:** MC-4.4, MC-4.8, MC-6.8
 
-Split from [309](../issues/309-copies-scrub-and-repair.md) (2026-10-30), its second step, after the scrub. Unlike 309's live second store, it needs no second medium lent to the store, so it waits for no other track.
+Split from [309](309-copies-scrub-and-repair.done) (2026-10-30), its second step, after the scrub. Unlike 309's live second store, it needs no second medium lent to the store, so it waits for no other track.
 
 ## Problem
 
@@ -84,4 +84,4 @@ Done 2026-10-30, landed in round 54 (`main` 3fbdd30e, from `claude/relaxed-meitn
 
 ## Related
 
-[309](../issues/309-copies-scrub-and-repair.md), [309-STO-0025](309-STO-0025-scrub.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [313](../issues/313-persistent-actors.md) (a move through a copy of its store).
+[309](309-copies-scrub-and-repair.done), [309-STO-0025](309-STO-0025-scrub.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [313](../issues/313-persistent-actors.md) (a move through a copy of its store).
