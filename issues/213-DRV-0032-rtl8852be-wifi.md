@@ -1101,3 +1101,14 @@ All `rtw89` host tests pass, with three new listen cases: frames heard, a freque
 **Next:**
 - calibration, the station and the data path, once 213-KRN-0122's result and 213-KRN-0123's country configuration exist;
 - until then, receive-only work, such as listening on more channels.
+
+## The start arguments take 213-KRN-0122's platform word (2026-11-05)
+
+KRN asked (`DRV/2026-11-04T1040Z`) that `rtw89_wifi` read a word after its index before `init` adds one. Until then, any added word would stop the driver with `NO PCI DEVICE INDEX`.
+- **`rtw89_wifi/src/args.rs`:**
+  - the first word is the decimal index;
+  - a later `platform=absent`, `platform=limits:<ntx0>,<ntx1>,<path0>,<path1>` (half-dBm, -64..63) or `platform=unknown:<reason>` (printable ASCII, at most 48 bytes) is read;
+  - a missing, malformed or repeated `platform=` word is `Unknown`, never `Absent`;
+  - other words are left alone.
+- **The driver logs it** as `PLATFORM POWER POLICY FROM INIT: …`. This receive-only build only reports it; `Unknown` will forbid transmission once calibration consumes it.
+- **Tests:** `tests/rtw89_args_host.rs`, four cases, in `scripts/host_tests.sh`.
