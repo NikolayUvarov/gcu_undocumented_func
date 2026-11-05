@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered, 2026-11-04) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (1 request waiting to be numbered: NET's reading client of the station, 2026-11-05) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -74,3 +74,27 @@ Numbered on 2026-10-31 as [000-APP-0120](../issues-done/000-APP-0120-the-shell-a
 ## A recovery key shown once and typed back, and a store opened with one (for 308-STO-0028)
 
 Numbered on 2026-11-04 as [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md): a program with a window of its own, `recovery`, and `--key-file` for the tests.
+
+## The machine's name as one system setting, and `hostname` (for 750-EFF-0018 and 000-KRN-0180)
+
+Asked on 2026-10-28 in `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` (EFF with LNK) and not recorded here then. Numbered on 2026-11-05 as [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md), at P1 by the maintainer's word: the file is `data/machine/name`.
+
+## The shell lends the station's reading client (for 550-NET-0058), once `KRN` gives the request bit
+
+**Recorded by:** the network track (`NET`, worked by the storage session), 2026-11-05.
+
+### Problem
+
+- **A program that only shows the Wi-Fi link** (a status line, a widget) can get the station's client only for `REQUEST_WIFI`, which is the changing one (`BADGE_WIFI_CHANGE`): it may join, leave, forget and set the country (MC-6.1).
+- **`wifi.wit` 1.3 (550-NET-0058)** adds `reader`: whoever holds a client of the station asks it for one that only reads (`BADGE_WIFI`), minted by the station. Its changing calls answer `denied`.
+
+### Plan (a proposal; the tools track decides)
+
+- **For the request bit `KRN` gives** (proposed in `requests-KRN.md`: `REQUEST_WIFI_READ`), the shell asks `wifi::reader(Endpoint(SLOT_WIFI), <a slot it holds nothing in>)` and lends what comes into the program's `SLOT_WIFI`, then drops its copy. The reading client lets no one change anything, so starting the program is enough, as for `REQUEST_BATTERY`.
+- **A program that asks for both** gets the changing one, as now.
+- **`unsupported`** (a station without the badge right) or no station: the program runs without, as without a radio.
+- `link`'s lending for `REQUEST_WIFI` may do the same; that is `LNK`'s.
+
+### Acceptance criteria
+
+- A program with the bit alone holds a client whose `status` answers and whose `join` answers `denied`; a script must declare `wifi` for it, as now.
