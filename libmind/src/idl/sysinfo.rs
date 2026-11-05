@@ -5,7 +5,7 @@
 //! `authority`, and who holds what needs the authority badge (issue 081); 4.0: `tasks`, `endpoints` and `caps` from a
 //! position on, since the kernel has no fixed count of them, `cpus` too, and a sample with the busy share of every CPU in
 //! its mean and maximum (171-APP-0002, 171-APP-0007); 4.1: `pool`, the machine's memory the kernel gives programs
-//! (211-APP-0057).
+//! (211-APP-0057); 4.2: `hostname`, the machine's name (000-KRN-0180).
 //!
 //! Who holds what is the authority graph (MC-3.4–3.6): `authority` and `holders` answer only a client whose capability
 //! carries the authority badge (`mind::stat::BADGE_AUTHORITY`, the shell's SLOT_AUTHORITY client, lent to programs
@@ -20,7 +20,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:sysinfo";
-pub const VERSION: (u8, u8, u8) = (4, 1, 0);
+pub const VERSION: (u8, u8, u8) = (4, 2, 0);
 const MAJOR: usize = 4;
 
 /// Why a request failed.
@@ -378,6 +378,21 @@ pub fn pool(endpoint: Endpoint) -> Result<core::result::Result<Pool, Error>> {
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Pool as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The machine's name (4.2, 000-KRN-0180): the RFC 1123 label in `data/machine/name`, read at each call, or
+/// `mindcore` when the file is missing or holds no label (`sysmon` logs why). For any client.
+pub fn hostname(endpoint: Endpoint) -> Result<core::result::Result<Text<63>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 15 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 65, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Text<63> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `sysinfo` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -395,6 +410,7 @@ pub enum Request {
     Holders { index: u32 },
     Authority { start: u32 },
     Pool,
+    Hostname,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -513,6 +529,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Pool, call))
         }
+        15 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 65, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Hostname, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -572,4 +595,8 @@ pub fn reply_authority(call: Call, value: core::result::Result<&[AuthorityEntry]
 pub fn reply_pool(call: Call, value: core::result::Result<&Pool, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_hostname(call: Call, value: core::result::Result<&str, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_str::<63>(value, w))
 }

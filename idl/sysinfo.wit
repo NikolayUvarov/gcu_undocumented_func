@@ -4,13 +4,13 @@
 /// `authority`, and who holds what needs the authority badge (issue 081); 4.0: `tasks`, `endpoints` and `caps` from a
 /// position on, since the kernel has no fixed count of them, `cpus` too, and a sample with the busy share of every CPU in
 /// its mean and maximum (171-APP-0002, 171-APP-0007); 4.1: `pool`, the machine's memory the kernel gives programs
-/// (211-APP-0057).
+/// (211-APP-0057); 4.2: `hostname`, the machine's name (000-KRN-0180).
 ///
 /// Who holds what is the authority graph (MC-3.4–3.6): `authority` and `holders` answer only a client whose capability
 /// carries the authority badge (`mind::stat::BADGE_AUTHORITY`, the shell's SLOT_AUTHORITY client, lent to programs
 /// that ask for `REQUEST_AUTHORITY`); other clients get `denied`, and `caps` gives them no derivation links (`node`
 /// and `parent` are 0).
-package mind:sysinfo@4.1.0;
+package mind:sysinfo@4.2.0;
 
 interface sysinfo {
     /// Why a request failed.
@@ -90,4 +90,7 @@ interface sysinfo {
     authority: func(start: u32) -> result<list<authority-entry, 128>, error>;
     /// The frame pool (4.1).
     pool: func() -> result<pool, error>;
+    /// The machine's name (4.2, 000-KRN-0180): the RFC 1123 label in `data/machine/name`, read at each call, or
+    /// `mindcore` when the file is missing or holds no label (`sysmon` logs why). For any client.
+    hostname: func() -> result<string<63>, error>;
 }
