@@ -45,6 +45,8 @@ sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
 from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
+# 000-KRN-0214: a wait of at least this many seconds that runs out records the CPUs' state, at most twice a VM.
+STUCK_AFTER, STUCK_RECORDS = 5, 2
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
@@ -233,7 +235,23 @@ class VM:
             if self.process.poll() is not None:
                 raise AssertionError(f"QEMU exited {self.process.returncode}: {clean[-3000:]}")
             time.sleep(.01)
+        if timeout >= STUCK_AFTER:
+            self.stuck(text, clean)
         raise AssertionError(f"Timeout waiting for {text!r}: {clean[-3000:]}")
+
+    def stuck(self, text, clean):
+        """000-KRN-0214: what the CPUs were doing when a wait ran out, kept beside the suites' logs (the gate copies
+        mind-core-*.log): every CPU's registers through QEMU's monitor, and the console's end. At most STUCK_RECORDS a VM."""
+        self.stuck_records = getattr(self, "stuck_records", 0) + 1
+        if self.stuck_records > STUCK_RECORDS:
+            return
+        try:
+            cpus = self.hmp("info registers -a")
+        except Exception as error:  # QEMU gone, or its monitor not answering: the record says so
+            cpus = f"no answer from the monitor: {error!r}"
+        path = Path(tempfile.gettempdir()) / f"mind-core-stuck-{os.getpid()}-{self.stuck_records}.log"
+        path.write_text(f"{time.strftime('%H:%M:%S')} waiting for {text!r}\n--- the CPUs\n{cpus}\n--- the console's end\n{clean[-3000:]}\n")
+        print(f"NOTE: a wait for {text!r} ran out; the CPUs' state is in {path}", flush=True)
 
     def send(self, text, raw=False):
         if not raw:
