@@ -10058,13 +10058,12 @@ def browse_check(args):
             require_all(log, "netcheck (PID ", ") ASKS FOR 11.0.2.80:81 TCP: \"netcheck's check of a question at run time\"", "OF netcheck: ITS PROGRAM ENDED")
 
             def asked(seconds, then=""):  # netcheck asks from the background; the shell shows the question at the prompt
+                vm.collect()
+                since = len(vm.log)
                 out = vm.command(f"run netcheck ask:11.0.2.80:81:{seconds}{then} &")
                 pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", out)[1]
-                # It may show before the prompt, after it, or begin before it and end after it.
-                if question not in out:
-                    vm.expect("ALWAYS? ", timeout=20, after=question)
-                elif "ALWAYS? " not in out.partition(question)[2]:
-                    vm.expect("ALWAYS? ", timeout=20)
+                # Before the prompt, after it, or cut by it anywhere, its first words too: read from the log (000-NET-0060).
+                vm.logged("ALWAYS? ", since, timeout=20)
                 return pid
 
             # No, typed once the question shows: refused at once.
