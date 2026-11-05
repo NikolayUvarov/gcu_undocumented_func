@@ -1,6 +1,6 @@
-# 000-NET-0060 — The run-time question read whole from the log, wherever the prompt cut it
+# 000-NET-0060 — The run-time question read whole from the log, wherever the prompt cut it — done
 
-**Type:** test · **Owner:** `NET` · **Priority:** P1 · **Status:** in progress (fixed on the branch; tests running) · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** test · **Owner:** `NET` · **Priority:** P1 · **Status:** done (2026-11-05) · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -21,8 +21,12 @@
 
 The `net` suite passes `browse_check` on x86 and aarch64 with the change.
 
+## Resolution
+
+`asked()` in `tests/qemu_smoke.py`'s `browse_check` waits for `ALWAYS? ` in the log from before its command (`vm.logged`), wherever the output was cut (e6f198b6e). With it, the `net` suite passed on x86 (34 checks) and aarch64 (31) in this session's container (045e59f5e), then in the landing gate. Landed in `main` 46b693442 (round 0ec94b12de79, 2026-11-05), with 550-NET-0059.
+
 ## Related
 
-- [000-NET-0056](../issues-done/000-NET-0056-the-tls-lending-check-lists-the-grant-while-its-program-runs.done): the cut after the question's start.
-- [000-NET-0049](../issues-done/000-NET-0049-a-flow-grant-asked-at-run-time.done), [000-APP-0120](../issues-done/000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done): the question and its check.
-- [550-NET-0059](550-NET-0059-a-radios-own-channels-apart-from-its-limits.md): the run that showed it.
+- [000-NET-0056](000-NET-0056-the-tls-lending-check-lists-the-grant-while-its-program-runs.done): the cut after the question's start.
+- [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.done), [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done): the question and its check.
+- [550-NET-0059](550-NET-0059-a-radios-own-channels-apart-from-its-limits.done): the run that showed it.

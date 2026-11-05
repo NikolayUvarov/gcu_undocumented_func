@@ -68,6 +68,34 @@ pub struct Settings {
     pub keymap: Option<(usize, usize)>, pub key_row: usize,
     /// The picture's file chosen by browsing (000-APP-0072), and how a directory is read: its entries (name, directory).
     pub browser: Option<Browser>, pub lister: Lister,
+    /// On the network page: the Wi-Fi station's country as `wm` last read it through its client (550-APP-0082); None:
+    /// not read, or no station.
+    pub country: Option<WifiCountry>,
+}
+
+/// Where the station's country came from (wifi.wit 1.2): not known yet; the user's choice; announced by `announced` of
+/// the `heard` access points that named a country; `00`, as none was chosen and none the catalogue has was announced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin { None, Chosen, Detected { announced: u8, heard: u8 }, World }
+
+/// The station's country as the network page shows it: the code applied (empty: none), the one asked for whose limits
+/// the radio refused (empty: none), whether the station has a catalogue, and where the country applied came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WifiCountry { pub applied: String, pub refused: String, pub catalogue: bool, pub origin: Origin }
+
+/// The network page's line on the country: what applies and why, so that none reads as silence (the maintainer,
+/// 2026-11-04); `wifi country` says it in full.
+pub fn country_line(country: Option<&WifiCountry>) -> String {
+    let Some(c) = country else { return String::from("Country: no station to ask (wifi --demo shows the program)") };
+    match c.origin {
+        _ if !c.catalogue => String::from("Country: none, as the station has no catalogue"),
+        _ if !c.refused.is_empty() => format!("Country: {} refused by the radio, none applied", c.refused),
+        Origin::Chosen => format!("Country: {}, chosen", c.applied),
+        Origin::Detected { announced, heard } => format!("Country: {}, announced by {} of {} access points", c.applied, announced, heard),
+        Origin::World => String::from("Country: 00, every country's rules: none chosen or announced"),
+        Origin::None if c.applied.is_empty() => String::from("Country: none yet, listening for the access points' country"),
+        Origin::None => format!("Country: {}", c.applied),
+    }
 }
 
 /// Reads a directory: its entries' names and whether each is a directory, or why not.
@@ -148,7 +176,7 @@ impl Settings {
         let mut file = InputLine::new();
         if let Some(name) = config.picture.file() { for ch in name.chars() { file.insert(ch); } }
         Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, zone: 0, message: None, shell: false,
-               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, browser: None, lister: no_files }
+               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, browser: None, lister: no_files, country: None }
     }
 
     /// The grid became `screen` cells at `scale` (000-APP-0061): the window is centred on it anew.
@@ -655,11 +683,12 @@ impl Settings {
                 let chosen = !self.on_pages && self.net_row == i;
                 grid.text_padded(x, inner.y + 1 + i, &format!("{:<11} {:<17} {}", name, command, what), w, if chosen { theme.selected } else { theme.dialog });
             }
+            grid.text_max(x, inner.y + 2 + NETWORK_ROWS.len(), &country_line(self.country.as_ref()), w, theme.dialog);
             let lines = ["Wi-Fi goes through the 802.11 station of the network track",
                          "(task 550). Until it runs, wifi says so; wifi --demo shows",
                          "the program with a stand-in station. console passes the",
                          "shell's commands to the shell; a change asks in its window."];
-            let below = inner.y + 2 + NETWORK_ROWS.len();
+            let below = inner.y + 4 + NETWORK_ROWS.len();
             for (i, line) in lines.iter().enumerate() { grid.text_max(x, below + i, line, w, theme.dialog); }
             if let Some(message) = &self.message { grid.text_max(x, below + lines.len() + 1, message, w, theme.accent); }
         } else if self.page == DATE {

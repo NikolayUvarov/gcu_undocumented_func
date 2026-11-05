@@ -1,6 +1,6 @@
 # 550-APP-0082 — The Wi-Fi country and its channels in `wifi` and `wm`'s Settings
 
-**Type:** tools (`wifi`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: the commands without a screen and the screen's list, on the tools branch (2026-10-22) · **Blocked by:** — (`idl/wifi.wit` 1.1 is in `main`; the station's catalogue, 550-NET-0035 stage B, for the real answers) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** tracks G, H · **Constitution:** MC-2.3, MC-11.5, MC-12.3, MC-12.4
+**Type:** tools (`wifi`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: the commands, the screen's list and the country's origin done (2026-11-05); the MacBook Pro left · **Blocked by:** — (`idl/wifi.wit` 1.2 and the station's catalogue, 550-NET-0035 stage B, are in `main`) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** tracks G, H · **Constitution:** MC-2.3, MC-11.5, MC-12.3, MC-12.4
 
 **Recorded by:** ASTRA auditor-fixer, 2026-10-16, in `requests-APP.md`, at the maintainer's request. Numbered by the tools track on 2026-10-20. The radio's catalogue is 213-DRV-0032's; the station's interface is the network track's.
 
@@ -69,6 +69,35 @@ Against the agreed interface, and its stand-in in the tools suite:
   - `wifi --countries` alone, or with `--demo`; with a command it is a usage error.
   - Tested by host tests (`tests/wm_host.rs`: the row and what Enter and a click start; `tests/wifi_host.rs`: the option and the list at start).
 - **Left:** the real catalogue (stage B) and the MacBook Pro.
+
+## Progress (2026-11-05): where the country applied came from, in `wifi` and in `wm`
+
+**What asked for it:** the maintainer's decision of 2026-11-04 (NET, `APP/2026-11-04T1003Z-NET-…` and `…1335Z-NET-…`): "Everything must work, not go quiet."
+- With no country chosen, the station applies the one the access points announce, else `00`, and always says which and why.
+- `wifi.wit` 1.2's `country-origin` (NET, in `main`) gives the reason: `none`, `chosen`, `detected` (with how many of the access points that named a country named this one), `world`.
+
+**Made:**
+- **`wifi`'s `Station`** carries the origin in `CountryStatus`. The service asks `country-origin` after `country` and after `set-country`.
+- **The stand-in** does as the station does:
+  - before its first scan, none;
+  - then UZ, announced by 3 of its 4 access points that name a country;
+  - with `beacons` off, `00`;
+  - a chosen country is not moved by a scan, and a refused one is not replaced.
+- **`wifi country`** gives the reason in the station's own words (its log's): `NONE CHOSEN, ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY`, `NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS: THE RULES EVERY COUNTRY ALLOWS`, `CHOSEN BY THE USER, KEPT BY KEYSTORE`, and before the first scan `NONE YET`.
+  - The `00` line covers both of the station's cases: none announced, and one announced that the catalogue does not have.
+  - The old `NONE ASKED: THE STATION PROBES NOWHERE AND JOINS NOTHING` is gone, as the station no longer waits.
+- **The screen's line** says the same within 76 columns (`Country: UZ (Uzbekistan), announced by 3 of 4 access points (c: choose one)`), and its status line adds `ORIGIN=`.
+- **`wm`'s Settings, Network** shows the station's country and why below its rows.
+  - It reads `country` and `country-origin` through `wm`'s copy of the shell's client every 2 s while the page shows, bounded to 500 ms. It only reads.
+  - It logs a change on serial: `[WM] NETWORK PAGE: …`.
+  - Without a station it says `no station to ask`.
+
+**Tests:**
+- **Host:** `tests/wifi_host.rs` (20), the lines of every origin, the stand-in's way and the screen's widths; `tests/wm_host.rs` (47), the page's line for each case.
+- **QEMU:**
+  - the `net` suite's `wifi country` checks, on the station's three cases: detected UZ, chosen US and `00`;
+  - `wm` over `wlansim`, Settings' network page naming UZ as announced by 1 of 1 access points;
+  - the `wm` suite's page without a station.
 
 ## Related
 

@@ -193,7 +193,7 @@ Stage B made, on the maintainer's decision of 2026-11-04 (above), on the branch 
   - `wlan` refuses a change without `BADGE_WIFI_CHANGE` (`may_change`), but nothing calls it so.
 
   Split into [550-NET-0058](../issues/550-NET-0058-a-read-only-wifi-client.md).
-- **A radio's channels after its limits** (the first point of "not done" above): split into [550-NET-0059](../issues/550-NET-0059-a-radios-own-channels-apart-from-its-limits.md), which waits on `DRV`'s answer about `wlanhw`.
+- **A radio's channels after its limits** (the first point of "not done" above): split into [550-NET-0059](550-NET-0059-a-radios-own-channels-apart-from-its-limits.done), which waits on `DRV`'s answer about `wlanhw`.
 
 **Left here:** `world_country_check` on aarch64, APP's screen, and real radios, as above. The first is a test radio's build; the other two belong to `APP` and `DRV`. The issue closes once this lands.
 
@@ -209,7 +209,7 @@ Stage B made, on the maintainer's decision of 2026-11-04 (above), on the branch 
 - **The last QEMU criteria** came in round 81 (`main` e860d0bc): a change of country while joined leaves the access point, on x86 and aarch64. The dropped scan is checked by `dot11`'s host tests.
 - **Split off:**
   - a read-only client's refusal: [550-NET-0058](../issues/550-NET-0058-a-read-only-wifi-client.md);
-  - a radio's own channels apart from its limits: [550-NET-0059](../issues/550-NET-0059-a-radios-own-channels-apart-from-its-limits.md).
+  - a radio's own channels apart from its limits: [550-NET-0059](550-NET-0059-a-radios-own-channels-apart-from-its-limits.done).
 - **Not done:**
   - `world_country_check` on aarch64: the `no-country` test radio is built for x86 only;
   - APP's screen of the country's origin (550-APP-0082);
