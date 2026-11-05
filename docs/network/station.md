@@ -39,8 +39,8 @@ Each try ends in one line:
 
 - **A client badged `BADGE_WIFI_CHANGE`** may join, leave, forget and set the country. `init` gives one to the shell (`SLOT_WIFI`), and to `link` in developer mode. The shell lends a copy for `REQUEST_WIFI`: to `wifi`, and to `wm`, which passes it to `wifi` from Settings.
 - **A client badged `BADGE_WIFI` alone only reads:** `scan`, `status`, the countries, the country and where it came from. Its `join`, `leave`, `forget` and `set-country` answer `denied`, and nothing changes.
-- **The station mints that reading client itself** (`wifi.wit` 1.3, `reader`), from its own endpoint, once at its start. Any client of the station may ask for one, since narrowing a client needs nobody's leave. Without the badge right on its endpoint `reader` answers `unsupported`, and the log says `[WLAN] NO READING CLIENT`.
-- **Not done yet:** a launcher lending the reading client to a program that asks only to look. That needs a request bit (`KRN`) and the shell's lending (`APP`). Until then a program gets it only by asking through the changing client it was lent, and dropping that one.
+- **The station mints that reading client itself** (`wifi.wit` 1.3, `reader`), from its own endpoint, once at its start. Any client of the station may ask for one, since narrowing a client needs nobody's leave. `init` grants its endpoint with the badge right for that (550-KRN-0213). Without that right `reader` answers `unsupported`, and the log says `[WLAN] NO READING CLIENT`.
+- **Not done yet:** a launcher lending the reading client to a program that asks only to look. The request bit is there (`REQUEST_WIFI_READ`, 550-KRN-0213); the shell's lending for it is 550-APP-0124. Until then a program gets it only by asking through the changing client it was lent, and dropping that one.
 
 ## How it is checked
 
