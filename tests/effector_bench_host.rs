@@ -42,12 +42,13 @@ fn a_run_in_slices_gives_a_result_the_server_takes() {
     // A clock that moves 1 ms each time it is read: every phase advances and ends.
     let mut t = 0u64;
     let mut now = || { t += 1; t };
-    let mut b = Bench::new(3); // 1000 ms of CPU, 250 of copying, 250 each of writing and reading
+    let mut b = Bench::new(3); // 1000 ms of CPU, 250 of copying, 200 of the chase, 250 each of writing and reading
     let mut disk = File::default();
     let mut slices = 0;
     while !b.step(&mut now, 50, &mut disk) { slices += 1; assert!(slices < 10_000); }
     assert!(slices > 20, "run in slices, the heartbeat between them");
-    assert!(b.iterations > 0 && b.copied > 0 && b.written > 0 && b.read > 0 && disk.flushed);
+    assert!(b.iterations > 0 && b.copied > 0 && b.accesses > 0 && b.written > 0 && b.read > 0 && disk.flushed);
+    assert!(b.copied % (8 << 20) == 0, "8 MiB a copy: {}", b.copied);
     assert!(b.cpu_ms >= 1000 && b.cpu_ms < 1100, "{}", b.cpu_ms);
     let mut buf = vec![0u8; 4096];
     let mut c = Conditions::default();
@@ -64,7 +65,11 @@ fn a_run_in_slices_gives_a_result_the_server_takes() {
     }
     let checksum = body.split(r#""checksum":""#).nth(1).unwrap();
     assert!(checksum[..16].bytes().all(|c| c.is_ascii_hexdigit()) && checksum.as_bytes()[16] == b'"', "16 hex digits: {body}");
-    assert!(!body.contains("cpu_parallel") && !body.contains("memory_latency"), "left out: no threads, no 16 MiB to spare");
+    assert!(body.contains(r#""memory_latency":{"benchmark":"effector_pointer_chase_v1","working_set_bytes":16777216,"accesses":"#), "{body}");
+    let checksum: u64 = body.split(r#""working_set_bytes":16777216"#).nth(1).unwrap().split(r#""checksum":"#).nth(1).unwrap()
+        .split('}').next().unwrap().parse().unwrap();
+    assert!(checksum < 4 << 20, "an index of the 16 MiB set: {checksum}");
+    assert!(!body.contains("cpu_parallel"), "left out: no workers yet");
 }
 
 #[test]
@@ -77,4 +82,20 @@ fn a_disk_that_fails_leaves_the_disk_numbers_out() {
     let mut buf = vec![0u8; 4096];
     let body = String::from_utf8(b.result(&mut buf, 1, "", "arm64", "0.1.0", None).unwrap().to_vec()).unwrap();
     assert!(!body.contains("disk_benchmark") && body.contains("memory_benchmark"), "{body}");
+}
+
+#[test]
+fn the_pointer_chase_is_the_linux_agents() {
+    // Values from the Linux agent's own runMemoryLatency code, run in Go 1.23 without its clock.
+    let mut chase = vec![0u32; CHASE_COUNT as usize];
+    let mut random = CHASE_SEED;
+    chase_part(&mut chase, &mut random, 1, 65_536);
+    chase_part(&mut chase, &mut random, 65_536, CHASE_COUNT); // in parts, as the session builds it between slices
+    assert_eq!(&chase[..4], &[2824452, 335, 3267913, 1294223]);
+    let mut index = 0u32;
+    for round in 1..=10 {
+        for _ in 0..4096 { index = chase[index as usize]; }
+        if round == 1 { assert_eq!(index, 2314532); }
+    }
+    assert_eq!(index, 3744278);
 }

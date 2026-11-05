@@ -115,6 +115,8 @@ struct Wlan {
     confirmed: bool,
     refused: bool,
     first: bool,
+    // A client that only reads (BADGE_WIFI alone), minted once from the station's endpoint for `reader` (550-NET-0058).
+    reader: Option<usize>,
 }
 
 impl Wlan {
@@ -404,6 +406,7 @@ impl Wlan {
             }
             wifi::Request::Country => wifi::reply_country(call, &self.country_status()),
             wifi::Request::CountryOrigin => wifi::reply_country_origin(call, &self.country_origin()),
+            wifi::Request::Reader => wifi::reply_reader(call, self.reader.ok_or(wifi::Error::Unsupported)),
             _ if !may_change => match request {
                 wifi::Request::Forget { .. } => wifi::reply_forget(call, Err(wifi::Error::Denied)),
                 wifi::Request::Leave => wifi::reply_leave(call, Err(wifi::Error::Denied)),
@@ -619,7 +622,9 @@ fn main(_info: &'static BootInfo) {
                           radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
                           waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0),
-                          channels: ([0; catalogue::CHANNELS], 0), chosen: None, kept: false, running: None, confirmed: false, refused: false, first: false };
+                          channels: ([0; catalogue::CHANNELS], 0), chosen: None, kept: false, running: None, confirmed: false, refused: false, first: false,
+                          reader: mind::ipc::mint_badged(Endpoint::SERVICE.0, mind::abi::CAP_WRITE | mind::abi::CAP_GRANT, BADGE_WIFI).ok() };
+    if wlan.reader.is_none() { mind::println!("[WLAN] NO READING CLIENT: THE STATION'S ENDPOINT HAS NO RIGHT TO BADGE (wifi.wit's reader answers unsupported)"); }
     let mut scratch = [0u8; net::REQUEST_MAX];
     let mut last = State::Off;
     let (mut asked, mut waited) = (0u64, false);
