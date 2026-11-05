@@ -10793,7 +10793,11 @@ def effector_actions_check(vm, server, agent, until, beats):
     assert r["bogomips"] > 0 and 0 < r["duration_seconds"] <= 300 and r["iterations"] > 0 and r["worker_threads"] == 1 and r["logical_processors"] >= 1, r
     assert r["memory_benchmark"] == "effector_memcpy_v1" and r["memory_mib_per_second"] > 0, r
     assert r["disk_benchmark"] == "effector_seqio_v1" and r["disk_read_mib_per_second"] > 0 and r["disk_write_mib_per_second"] > 0, r
-    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r and "memory_latency" not in r, r
+    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r, r
+    # The chase over exactly 16 MiB, in the session's 48 MiB quota (750-KRN-0158), as the server's check wants it.
+    m = r["memory_latency"]
+    assert m["benchmark"] == "effector_pointer_chase_v1" and m["working_set_bytes"] == 16 << 20 and m["accesses"] > 0, m
+    assert 0 < m["nanoseconds_per_access"] and 0 <= m["checksum"] < 4 << 20, m
     load = r["load"]  # the conditions: a baseline second before, samples each second, the agent's own share apart
     assert load["samples"] >= 3 and load["occupied_queues_start"] == 1 and load["other_queues_max"] == 0, load
     assert 0 <= load["cpu_before_percent"] <= 100 and 0 <= load["background_cpu_average_percent"] <= load["cpu_average_percent"] <= 100, load
@@ -10802,6 +10806,7 @@ def effector_actions_check(vm, server, agent, until, beats):
     window = [t for t in beats if t >= begun]
     assert len(window) > 3 and max(b - a for a, b in zip(window, window[1:])) < 5.0, "heartbeats went on during the benchmark"
     print(f"PASS: performance_measure: {r['bogomips']} million iterations/s on one thread, {r['memory_mib_per_second']} MiB/s copied, "
+          f"{m['nanoseconds_per_access']} ns an access over 16 MiB, "
           f"disk {r['disk_write_mib_per_second']}/{r['disk_read_mib_per_second']} MiB/s written/read; heartbeats under 5 s apart while it "
           "ran, the agent busy with it", flush=True)
     # Telemetry: schema 1 every 30 s, as the server checks it; rates from the second sample on.

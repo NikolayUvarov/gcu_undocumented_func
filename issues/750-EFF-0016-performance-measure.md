@@ -44,3 +44,15 @@
   - not under load.
 - **The numbers:** 202.4 million iterations/s, 1758 MiB/s copied, 2.9/33.4 MiB/s written/read.
 - **Still empty:** "CPU · all threads" and "RAM · latency". They wait on KRN (memory and parallel workers, `KRN/…-EFF-a-request-memory-and-workers…`).
+
+## Progress (2026-11-05): the memory as on Linux; all cores still left out
+
+- **What the maintainer saw.** The Ryzen's measurement through hesere today: `worker_threads` 1 of `logical_processors` 16, no `cpu_parallel`, no `memory_latency`.
+- **The memory, now as the Linux agent's.** The session has had 48 MiB since KRN's 750-KRN-0158.
+  - The copy moves two 8 MiB buffers.
+  - A new phase chases `effector_pointer_chase_v1` over exactly 16 MiB, for duration/15, after the copy and before the disk, as on Linux. Its result is `memory_latency`: `working_set_bytes` 16777216, the accesses, ns per access, and the last index as its checksum.
+  - The permutation is the Linux agent's, built 65 536 steps at a time between slices, so no slice outlasts a heartbeat.
+  - The buffers are reserved without aborting: a phase whose memory cannot be had is left out of the result.
+- **Checked on the host** (`tests/effector_bench_host.rs`). The permutation's first entries, and the index after 4 096 and after 40 960 steps, equal what the Linux agent's own code gives (run in Go 1.23 without its clock). A sliced run gives `memory_latency` as the server's `validPerformanceExtras` wants it.
+- **The `effector` QEMU suite** checks the field. Not run yet.
+- **`cpu_parallel` (all cores) waits for KRN.** `init` starts `effector` without `SPAWN_WORKERS`; asked on internal-dev-messages, 2026-11-05.
