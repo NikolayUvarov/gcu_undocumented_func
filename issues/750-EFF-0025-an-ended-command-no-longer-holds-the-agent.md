@@ -51,3 +51,8 @@ Why it took an hour is not yet read from the Mac's log. What the code and the co
 - **Plan item 2 (the Mac's log of 06:29–07:28) is not read yet.** The change does not depend on it.
 - **`docs/effector/protocol.md`** states the rule, and `docs/effector/README.md` the header's new field.
 - **The `effector` QEMU suite** gained a check. The first ACK of a `collect_logs` `ring` with `timeout_seconds` 3 is refused once (an injected 500). Its retry, 5 s or more later, must answer `completed LATE` without the artifact, and the next command must be taken at once. It passes in `x86: network, TLS and Effector` and `aarch64: network, TLS and Effector` (LEG9, `scripts/ci_local.sh`, 2026-10-30): `ACK cmd-8 completed LATE, WITHOUT ring.log (13214 BYTES) ACCEPTED`, 5 s after the refused try.
+
+## Progress (2026-11-05): the check's race
+
+- **The fault (KRN, rounds 77 and 78, aarch64).** The check waited for the agent's line `ACK … completed LATE, WITHOUT ring.log`. The refused try logs that line too. The check then read the fixture's record before the accepted retry, 5 s or more later, had brought it, and found nothing.
+- **The fix.** After that line, the check waits up to 60 s for the fixture's record.
