@@ -69,6 +69,14 @@ APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): 
 - **The `disk` suite's `disk_check`** (fm, issue 048, now APP's) went down from `..` onto `tree` in `data/`; `machine` now comes first. Its one positional step takes one key more, a change of its expectation only, told to APP. On dfb513f1 the `vfs`, `disks` and `edit` suites passed on x86 (x32-128).
 - **One rule, two copies:** `shell/src/hostname.rs` (APP's) and `mind::hostname` say the same rule word for word. Whether the shell uses `mind::hostname` once this lands is APP's choice.
 
+**Tested,** through Effector:
+- **x32-128, x86:** `files and block writes` passed on 776e6b24 (828 s); `keys, shell, tools` on 16e43f5e (419 s).
+- **acc-2, aarch64:** `files and the block store` passed on dfb513f1 (786 s); `programs, shell and four CPUs` on 16e43f5e (427 s).
+- The commits after 16e43f5e change only the `vfs` suite's check and `disk_check`.
+- **Host:** `tests/hostname_host.rs` (4), and `sysmon`, `idl`, `idl_fuzz`, `shell`, `bench`, `services` and `fs_routing`, all passed. `scripts/mind_idl.py` regenerates nothing new.
+
+All four criteria are met on those runs. The task closes once it lands.
+
 ## Related
 
 [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md) (the setting and `hostname`).
