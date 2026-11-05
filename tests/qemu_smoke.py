@@ -9748,6 +9748,63 @@ def shell_badge_rights_check(vm):
     print("PASS: the shell's network card and TLS clients carry the right to badge, for the read-only and no-device copies", flush=True)
 
 
+def dhcp_sent(pcap):
+    """The client's DHCP messages in a QEMU filter-dump capture (000-NET-0050): (type, host name or None) for each
+    BOOTREQUEST from port 68 to 67, in order; type 1 is DISCOVER, 3 REQUEST (RFC 2132 options 53 and 12)."""
+    data, sent, at = Path(pcap).read_bytes(), [], 24
+    while at + 16 <= len(data):
+        length = struct.unpack_from("<I", data, at + 8)[0]
+        frame, at = data[at + 16:at + 16 + length], at + 16 + length
+        if len(frame) < 14 + 20 + 8 + 240 or frame[12:14] != b"\x08\x00" or frame[14 + 9] != 17:
+            continue
+        udp = 14 + (frame[14] & 15) * 4
+        if struct.unpack_from(">HH", frame, udp) != (68, 67):
+            continue
+        boot = frame[udp + 8:]
+        if boot[0] != 1 or boot[236:240] != b"\x63\x82\x53\x63":
+            continue
+        options, i = {}, 240
+        while i < len(boot) and boot[i] != 255:
+            if boot[i] == 0:
+                i += 1
+                continue
+            options[boot[i]] = boot[i + 2:i + 2 + boot[i + 1]]
+            i += 2 + boot[i + 1]
+        sent.append((options.get(53, b"\0")[0], options.get(12)))
+    return sent
+
+
+def dhcp_name_check(vm, pcap):
+    """000-NET-0050: netstack sends the machine's name as option 12 in each DISCOVER and REQUEST, read from
+    data/machine/name through init's read-only scope; a name changed later goes out with the next lease."""
+    require(vm.command("dmesg -s netstack", raw=True), "[NETSTACK] NAME FOR DHCP: dexp (data/machine/name)")
+    sent = dhcp_sent(pcap)
+    assert {kind for kind, _ in sent} >= {1, 3} and all(name == b"dexp" for _, name in sent), sent
+    # A new name, then the link down and up: the stack reads the file again before its new DISCOVER.
+    require(vm.command("write data/machine/name lab-2"), "WROTE 6 BYTES")
+    before = len(sent)
+    vm.hmp("set_link n0 off")
+    require(vm.service_logs("netstack", "LINK DOWN"), "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
+    vm.hmp("set_link n0 on")
+    log = vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15/24")
+    require(log, "[NETSTACK] NAME FOR DHCP: lab-2 (data/machine/name)")
+    deadline = time.monotonic() + 30
+    while {kind for kind, _ in dhcp_sent(pcap)[before:]} < {1, 3}:
+        assert time.monotonic() < deadline, dhcp_sent(pcap)
+        time.sleep(.5)
+    after = dhcp_sent(pcap)[before:]
+    assert all(name == b"lab-2" for _, name in after), after
+    # netstack's one files client is vfs_server's in SLOT_FILE, the read-only scope of data/machine/.
+    caps = vm.command(f"stat caps {vm.services()['netstack']}", raw=True)
+    scopes = {int(b, 16) for b in re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/machine \(READ-ONLY\)", vm.command("dmesg -s vfs_server", raw=True))}
+    badges = [int(b) for b in re.findall(r"^SLOT=7 GEN=\d+ KIND=1 .*BADGE=(\d+) ", caps, re.M)]
+    assert len(badges) == 1 and badges[0] in scopes, (badges, scopes, caps[-1500:])
+    require(vm.command("write data/machine/name dexp"), "WROTE 5 BYTES")
+    print(f"PASS: DHCP's host name (000-NET-0050): {len(sent)} messages at boot (DISCOVER and REQUEST) carried dexp from "
+          f"data/machine/name; written lab-2, the lease after the link came back carried it ({len(after)} messages); read "
+          "through a read-only scope of data/machine/ in SLOT_FILE", flush=True)
+
+
 def net_suite(args, disk):
     # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
     # raw frames from the driver, restart of the driver after device quiesce and of the stack.
@@ -9783,7 +9840,13 @@ def net_suite(args, disk):
     # 000-APP-0049: wm's background shows the card's traffic.
     (disk / "data").mkdir(exist_ok=True)
     (disk / "data/wm.conf").write_text("show = net\n")
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    # 000-NET-0050: the machine's name, which DHCP sends; QEMU dumps the card's traffic to a capture.
+    (disk / "data/machine").mkdir(exist_ok=True)
+    (disk / "data/machine/name").write_text("dexp\n")
+    pcap = Path(tempfile.gettempdir()) / f"mind-core-net-dhcp-{args.cpus}cpu.pcap"
+    pcap.unlink(missing_ok=True)
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
+                                                            "-object", f"filter-dump,id=d0,netdev=n0,file={pcap}"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
         require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP QUEUES=256/256 MODERN MSI-X")
@@ -9795,6 +9858,8 @@ def net_suite(args, disk):
                 require(report, line)
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
+        require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
+        dhcp_name_check(vm, pcap)
         require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
         shell_badge_rights_check(vm)
         if args.wlansim_elf:

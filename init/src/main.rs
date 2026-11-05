@@ -1758,6 +1758,8 @@ fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
         // The machine's name alone (000-KRN-0180), never made: a boot writes nothing, and written images hold the
         // directory (scripts/make_usb_image.py), so a name set later is read without a restart.
         "sysmon" => &[(SLOT_VFS, mind::fs::BADGE_USER, mind::hostname::DIR, false, false)],
+        // The same directory for DHCP's option 12 (000-NET-0050), in SLOT_FILE: netstack's slot 3 is its second card.
+        "netstack" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::hostname::DIR, false, false)],
         "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false, true)],
         // The models nnd reads, and nothing else of the volumes (262-KRN-0178): each scope's root is its directory. Neither
         // is made: a boot writes nothing to the boot volume for nnd, whose scope waits for the owner's data/models/.
