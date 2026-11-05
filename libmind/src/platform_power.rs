@@ -104,9 +104,10 @@ impl Policy {
     }
 }
 
+// The word is printable ASCII without a space, whatever bytes a table's signature holds: the driver reads no other.
 struct Writer<'a> { out: &'a mut [u8; 48], n: usize }
 impl Writer<'_> {
     fn put(&mut self, bytes: &[u8]) {
-        for &b in bytes { if self.n < self.out.len() { self.out[self.n] = b; self.n += 1; } }
+        for &b in bytes { if self.n < self.out.len() { self.out[self.n] = if b.is_ascii_graphic() { b } else { b'?' }; self.n += 1; } }
     }
 }

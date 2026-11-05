@@ -56,6 +56,16 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 
 **Landed (2026-11-04).** The policy and `init`'s line landed in round 80 (`main` 4130cff6), and the gate's `normal` suite required `ABSENT` under QEMU on both architectures. The word in `rtw89_wifi`'s arguments still waits on DRV.
 
+2026-11-05, the word in the driver's arguments:
+- **DRV's parser** (`rtw89_wifi/src/args.rs`, ab665df1) reads the index, then the `platform=` word. It is in DRV's landing request `LANDING/2026-11-05T0545Z-DRV-…` (444790b9) and in `fast-test`.
+- **`init`** now starts `rtw89_wifi` with `<index> platform=absent` or `<index> platform=unknown:<reason>`, from the policy it read at boot.
+- **`Policy::word`** gives only printable ASCII without a space, whatever bytes a signature holds. A new host test found that a raw byte would have made `init` drop the word.
+- **Host tests** (`tests/platform_power_host.rs`, 7): every word is one the parser reads: `platform=absent`, or a reason of 1 to 48 printable bytes.
+- **Not tested in QEMU:** it has no RTL8852BE, so `rtw89_wifi` does not start there.
+- **Land it with DRV's parser or after it, never before.** An earlier driver stops on a second word with `NO PCI DEVICE INDEX`.
+
+**Left:** the result on the Ryzen with its log, once both are in a build; a service refused another device's result.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), 174-KRN-0038 (the hardware report), [213](213-amd-ryzen-pc.md).
