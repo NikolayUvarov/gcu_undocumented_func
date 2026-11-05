@@ -227,6 +227,8 @@ impl<S: Sectors> Volume<S> {
     pub fn cluster_bytes(&self) -> u32 { self.spc * SECTOR as u32 }
     pub fn total_bytes(&self) -> u64 { self.clusters as u64 * self.cluster_bytes() as u64 }
     pub fn writable(&self) -> bool { self.disk.writable() }
+    /// Whether a change waits for the next flush.
+    pub fn changed(&self) -> bool { self.changed }
     pub fn label(&self) -> String { String::from_utf8_lossy(&self.label).trim_end().into() }
     pub fn root(&self) -> Node { Node { cluster: if self.bits == 32 { self.root_cluster } else { 0 }, size: 0, attributes: ATTR_DIRECTORY, modified: 0, entry: None } }
 

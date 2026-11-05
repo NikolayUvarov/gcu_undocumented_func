@@ -1,7 +1,7 @@
 //! `wifi join`, `wifi status`, `wifi leave` and `wifi scan` without a screen (550-APP-0078, 550-APP-0117), for scripts and the hardware tests of
 //! 550-ASR-0007; `wifi country`, `countries` and `channels`, the country the station runs under (550-APP-0082). The passphrase comes from a file whose first line names the network, never from the command line, and
 //! no line made here holds it. No system calls: tests/wifi_host.rs.
-use crate::station::{mac, rate, shown, CountryState, CountryStatus, Link, Reason, Refusal, Station};
+use crate::station::{mac, rate, shown, CountryState, CountryStatus, Link, Origin, Reason, Refusal, Station};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -228,19 +228,29 @@ fn country_refused(what: &str, refusal: Refusal) -> (u32, String) {
     }
 }
 
-/// The country's state as one line: asked for and applied apart, whether the radio confirmed its limits and `keystore`
-/// keeps it, the catalogue.
+/// The country's state as one line: asked for and applied apart, whether the radio confirmed its limits, where the
+/// country applied came from (wifi.wit 1.2, in the station's own words), whether `keystore` keeps it, the catalogue.
+/// No country is left unexplained (the maintainer, 2026-11-04).
 pub fn country_line(status: &CountryStatus) -> String {
     if status.catalogue.is_empty() { return String::from("[WIFI] COUNTRY: NO CATALOGUE IN THIS STATION (IT RUNS AS WIFI.WIT 1.0 DID)"); }
+    let choose = " (WIFI COUNTRY <CODE> CHOOSES ONE)";
     let state = match status.state {
-        CountryState::None => String::from("NONE ASKED: THE STATION PROBES NOWHERE AND JOINS NOTHING UNTIL ONE IS (WIFI COUNTRY <CODE>)"),
-        CountryState::Applied if status.asked == status.applied => format!("{} APPLIED", named(&status.applied)),
+        CountryState::None => format!("NONE YET: THE STATION LISTENS FOR THE COUNTRY THE ACCESS POINTS ANNOUNCE, ELSE IT RUNS UNDER 00{}", choose),
+        CountryState::Applied if status.asked.is_empty() || status.asked == status.applied => format!("{} APPLIED", named(&status.applied)),
         CountryState::Applied => format!("{} APPLIED, {} ASKED", named(&status.applied), named(&status.asked)),
         CountryState::Failed => format!("{} ASKED, FAILED: THE RADIO REFUSED ITS LIMITS, NONE APPLIED", named(&status.asked)),
     };
     let radio = if status.state != CountryState::Applied { "" } else if status.radio { ", THE RADIO CONFIRMED ITS LIMITS" } else { ", THE STATION ALONE KEEPS TO THE CHANNELS" };
-    let kept = if status.state == CountryState::None { "" } else if status.kept { ", KEPT" } else { ", NOT KEPT ACROSS RESTARTS" };
-    format!("[WIFI] COUNTRY {}{}{}; CATALOGUE {}", state, radio, kept, status.catalogue)
+    let kept = if status.kept { "KEPT BY KEYSTORE" } else { "NOT KEPT ACROSS RESTARTS" };
+    let why = match (status.state, status.origin) {
+        (CountryState::None, _) => String::new(),
+        (CountryState::Failed, _) => format!(", {}", kept),
+        (_, Origin::Chosen) => format!("; CHOSEN BY THE USER, {}", kept),
+        (_, Origin::Detected { announced, heard }) => format!("; NONE CHOSEN, ANNOUNCED BY {} OF THE {} ACCESS POINTS THAT NAMED A COUNTRY{}", announced, heard, choose),
+        (_, Origin::World) => format!("; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS: THE RULES EVERY COUNTRY ALLOWS{}", choose),
+        (_, Origin::None) => String::from("; THE STATION HAS NOT SAID WHY YET"),
+    };
+    format!("[WIFI] COUNTRY {}{}{}; CATALOGUE {}", state, radio, why, status.catalogue)
 }
 
 /// `wifi country [<code>]`: the country, or a change to `code` (the station leaves the network first).

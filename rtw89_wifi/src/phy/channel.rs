@@ -19,6 +19,14 @@ pub(crate) enum Access{Disabled,PassiveOnly,InitiateRadiation}
 pub(crate) struct Rule{pub country:[u8;2],pub version:u64,pub center_mhz:u16,pub access:Access,
     pub eirp_half_dbm:i8,pub conducted_half_dbm:i8}
 pub(crate) enum Platform{Unknown,Resolved(Constraints)}
+impl Rule{
+    /// One channel of the station's `set-country`, as `country::Limits` applied it. With no antenna-gain table on the
+    /// platform the conducted limit is the EIRP, as Linux's rtw89 without RTAG; this assumes 0 dBi, it does not measure it.
+    pub(crate) fn station(code:[u8;2],version:u64,channel:u8,eirp_half_dbm:i8,listen:bool)->Self{
+        Self{country:code,version,center_mhz:2407+5*u16::from(channel),
+            access:if listen{Access::PassiveOnly}else{Access::InitiateRadiation},eirp_half_dbm,conducted_half_dbm:eirp_half_dbm}
+    }
+}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct Policy{country:[u8;2],selected_country:[u8;2],plan:u8,version:u64,channel:u8,access:Access,eirp_half_dbm:i8,conducted_half_dbm:i8,group:defaults::Group,limits:Constraints}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -27,8 +35,10 @@ pub(crate) enum PolicyError{Board,Country,Frequency,Disabled,UnknownPlatform,Pow
 impl Policy{
     pub(crate) fn resolve(board:&Board,rule:Rule,platform:Platform)->Result<Self,PolicyError>{
         let hint=defaults::board_country(board).map_err(|_|PolicyError::Board)?;
-        let selected=defaults::country_default(rule.country).ok_or(PolicyError::Country)?;
-        if rule.version==0||rule.country==*b"00"{return Err(PolicyError::Country);}
+        // `00`, the world, is a country the station may give (wlanhw.wit 1.3); its power group is WORLDWIDE.
+        let group=if rule.country==*b"00"{defaults::Group::WORLDWIDE}
+            else{defaults::country_default(rule.country).ok_or(PolicyError::Country)?.groups[0]};
+        if rule.version==0{return Err(PolicyError::Country);}
         if let defaults::Hint::Programmed(programmed)=hint.hint{
             if programmed.alpha2!=rule.country{return Err(PolicyError::Country);}
         }
@@ -44,7 +54,7 @@ impl Policy{
         for value in &mut limits.per_ntx{*value=(*value).min(rule.conducted_half_dbm);}
         // Per-path values are source SAR reference differences, already resolved for this platform and frequency.
         Ok(Self{country:hint.raw,selected_country:rule.country,plan:hint.raw_channel_plan,version:rule.version,channel:(delta/5)as u8,
-            access:rule.access,eirp_half_dbm:rule.eirp_half_dbm,conducted_half_dbm:rule.conducted_half_dbm,group:selected.groups[0],limits})
+            access:rule.access,eirp_half_dbm:rule.eirp_half_dbm,conducted_half_dbm:rule.conducted_half_dbm,group,limits})
     }
     /// Receive-only tuning: world group, lowest limits, version zero; PassiveOnly never admits calibration or packet TX.
     pub(crate) fn passive(board:&Board,center_mhz:u16)->Result<Self,PolicyError>{
