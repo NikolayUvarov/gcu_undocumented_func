@@ -77,6 +77,24 @@ const INPUT_MAX: usize = 1 << 20;
 // What a client gets back of a command's output: its end.
 const ANSWER_MAX: usize = 7000;
 
+// The machine's name in use and where it came from (000-APP-0123).
+fn machine_name_now() -> (String, hostname::Source) {
+    match machine_name() { Ok(content) => hostname::read(content.as_deref()), Err(why) => (String::from(hostname::DEFAULT), hostname::Source::Unread(why)) }
+}
+
+// The machine's name set to `new`, a label already, after `old` from `source`: kept in data/machine/name through the
+// shell's own client (data/machine/ made first, flushed) and logged once; the line that says so, or why not.
+fn set_machine_name(old: &str, source: hostname::Source, new: &str) -> Result<String, String> {
+    if new == old && source == hostname::Source::File { return Ok(alloc::format!("THE MACHINE'S NAME IS {} ALREADY", new)); }
+    let kept = mind::fs::Dir::create(hostname::DIR)
+        .and_then(|_| mind::fs::File::create(hostname::FILE))
+        .and_then(|mut file| { file.write(hostname::text(new).as_bytes())?; file.flush() });
+    match kept {
+        Ok(()) => { mind::println!("{}", hostname::changed(old, new)); Ok(alloc::format!("THE MACHINE'S NAME: {}, KEPT IN {}", new, hostname::FILE)) }
+        Err(error) => Err(alloc::format!("HOSTNAME: NOT KEPT IN {}: {}", hostname::FILE, files::text(error))),
+    }
+}
+
 // data/machine/name's bytes, None when there is no such file (000-APP-0123); at most 256 bytes, more than a label.
 fn machine_name() -> Result<Option<alloc::vec::Vec<u8>>, &'static str> {
     let file = match mind::fs::File::open(hostname::FILE) { Ok(file) => file, Err(mind::fs::Error::NotFound) => return Ok(None), Err(e) => return Err(files::text(e)) };
@@ -366,6 +384,28 @@ impl Shell {
                     self.note(format_args!("FOR PID {} THE SHELL {} THE KEYBOARD: {:?}, {:?}{}", message.sender, verdict, wanted.layout, wanted.switch, if manager { " AT ONCE: ITS WINDOW MANAGER'S SETTINGS" } else { "" }));
                     let _ = commands::reply_set_keymap(call, result.map(drop));
                 }
+                commands::Request::Hostname => {
+                    // The machine's name, for any client: it only reads (shell.wit 1.11, 000-APP-0123).
+                    let (name, _) = machine_name_now();
+                    let _ = commands::reply_hostname(call, Ok(name.as_str()));
+                }
+                commands::Request::SetHostname { name } => {
+                    // At once for the window manager the shell started, as the clock: its Settings are the user's choice;
+                    // for any other client `hostname <name>` asked in the shell's window (shell.wit 1.11, 000-APP-0123).
+                    let manager = self.managers.contains(&message.sender);
+                    let line = alloc::format!("hostname {}", name.as_str());
+                    let result = match hostname::label(name.as_str()) {
+                        Err(_) => Err(commands::Error::Invalid),
+                        Ok(new) if manager => { let (old, source) = machine_name_now(); set_machine_name(&old, source, &new).map(drop).map_err(|_| commands::Error::Unavailable) }
+                        Ok(_) => self.client_line(&line, message.sender).and_then(|out| {
+                            let out = core::str::from_utf8(&out).unwrap_or("");
+                            if out.contains("KEPT IN") || out.contains("ALREADY") { Ok(()) } else { Err(commands::Error::Unavailable) }
+                        }),
+                    };
+                    let verdict = match &result { Ok(()) => "RAN", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
+                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"{}", message.sender, verdict, line, if manager { " AT ONCE: ITS WINDOW MANAGER'S SETTINGS" } else { "" }));
+                    let _ = commands::reply_set_hostname(call, result);
+                }
                 commands::Request::Battery => {
                     // A copy of the shell's battery client (shell.wit 1.4, 211-APP-0070): the service only reads, and
                     // answers any client; for a window manager whose launch had no room for it.
@@ -595,20 +635,10 @@ impl Shell {
     // own client of data/, logged; who may ask is `clients.rs`'s.
     fn hostname(&mut self, args: &[u8]) {
         let text = core::str::from_utf8(args).unwrap_or("\u{fffd}").trim();
-        let (old, source) = match machine_name() { Ok(content) => hostname::read(content.as_deref()), Err(why) => (String::from(hostname::DEFAULT), hostname::Source::Unread(why)) };
+        let (old, source) = machine_name_now();
         if text.is_empty() { let _ = writeln!(self.term, "{}", hostname::shown(&old, source)); return; }
         let new = match hostname::label(text) { Ok(name) => name, Err(why) => return self.report(&alloc::format!("HOSTNAME: {}: {}", why, hostname::RULE)) };
-        if new == old && source == hostname::Source::File { let _ = writeln!(self.term, "THE MACHINE'S NAME IS {} ALREADY", new); return; }
-        let kept = mind::fs::Dir::create(hostname::DIR)
-            .and_then(|_| mind::fs::File::create(hostname::FILE))
-            .and_then(|mut file| { file.write(hostname::text(&new).as_bytes())?; file.flush() });
-        match kept {
-            Ok(()) => {
-                mind::println!("{}", hostname::changed(&old, &new));
-                let _ = writeln!(self.term, "THE MACHINE'S NAME: {}, KEPT IN {}", new, hostname::FILE);
-            }
-            Err(error) => self.report(&alloc::format!("HOSTNAME: NOT KEPT IN {}: {}", hostname::FILE, files::text(error))),
-        }
+        match set_machine_name(&old, source, &new) { Ok(line) => { let _ = writeln!(self.term, "{}", line); } Err(why) => self.report(&why) }
     }
     // A screenshot taken outside a command line (a key, `-d`): its line goes to the system log, and to the screen when
     // the shell is in front; a program in front keeps its screen as it is (000-APP-0089).

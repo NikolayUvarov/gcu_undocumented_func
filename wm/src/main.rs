@@ -532,6 +532,12 @@ fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colou
 
 mind::entry!(main);
 
+// The machine's name as the shell says it (shell.wit 1.11, 000-APP-0123); None without its commands or an answer.
+fn machine_name() -> Option<String> {
+    if !holds(SLOT_SHELL) { return None; }
+    mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::hostname(Endpoint(SLOT_SHELL))).ok()?.ok().map(|name| String::from(name.as_str()))
+}
+
 // The network page's country, read through wm's client of the station (wifi.wit 1.1 and 1.2, 550-APP-0082): it only
 // reads. None without a station or an answer within STATION_MS.
 fn wifi_country() -> Option<wm::settings::WifiCountry> {
@@ -747,6 +753,24 @@ fn main(info: &'static BootInfo) {
                     }
                     manager.wm.notice = Some(text);
                 }
+                Action::SetHostname(name) => {
+                    // The machine's name through the shell, at once as the clock (shell.wit 1.11, 000-APP-0123); the shell
+                    // checks it is a name and keeps it in data/machine/name.
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the name needs the shell's commands, which wm does not hold") } else {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_hostname(Endpoint(SLOT_SHELL), &name)) {
+                            Ok(Ok(())) => format!("The machine's name is {} now, kept in data/machine/name", name.to_ascii_lowercase()),
+                            Ok(Err(mind::idl::shell::Error::Invalid)) => format!("{} is not a name: 1 to 63 of a-z 0-9 -, neither first nor last a hyphen", name),
+                            Ok(Err(error)) => format!("The name is not set ({:?})", error),
+                            Err(error) => shell_failed("The name is not set", "set-hostname", "1.11", SETTING_MS, error),
+                        }
+                    };
+                    mind::println!("[WM] SET HOSTNAME {}: {}", name, text);
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        settings.machine = machine_name();
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                }
                 Action::SetZone { west, minutes } => {
                     // The zone through the shell, at once as the clock (shell.wit 1.9, 000-APP-0099); every clock shows it
                     // from its next reading of the RTC, this page and the background at once.
@@ -856,6 +880,7 @@ fn main(info: &'static BootInfo) {
             // The network page names the station's country and why it applies (550-APP-0082), read every 2 s.
             if settings.page == wm::settings::NETWORK && now >= next_country {
                 next_country = now + COUNTRY_MS;
+                if settings.machine.is_none() { settings.machine = machine_name(); relayout = true; }
                 let read = wifi_country();
                 if read != settings.country {
                     mind::println!("[WM] NETWORK PAGE: {}", wm::settings::country_line(read.as_ref()));
