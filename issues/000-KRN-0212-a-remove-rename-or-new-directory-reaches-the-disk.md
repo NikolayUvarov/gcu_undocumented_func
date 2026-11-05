@@ -27,8 +27,8 @@ From LNK's request of 2026-10-24 (`KRN/2026-10-24T1215Z-LNK-a-rename-or-remove-s
 
 ## Acceptance criteria
 
-- [ ] QEMU, x86 and aarch64 (`linkupdate` suite): through a client that flushes nothing of its own, `link`, the host reads a put's rename, a `mkdir`, an `mv` and an `rm` from the image while the machine runs, and the check fails without the fix.
-- [ ] The docs say what a pulled disk may lose.
+- [x] QEMU, x86 and aarch64 (`linkupdate` suite): through a client that flushes nothing of its own, `link`, the host reads a put's rename, a `mkdir`, an `mv` and an `rm` from the image while the machine runs, and the check fails without the fix.
+- [x] The docs say what a pulled disk may lose.
 
 ## Progress
 
@@ -42,6 +42,10 @@ From LNK's request of 2026-10-24 (`KRN/2026-10-24T1215Z-LNK-a-rename-or-remove-s
 - **The check** goes through `link` instead, in the `linkupdate` suite, and is run without the fix on `claude/000-KRN-0212-check-alone`.
 - **Docs:** `docs/profile/threat-model.md` (power loss), `docs/profile/evidence.md`, `docs/write-disk.md` 1.7 and `docs/write-disk_RU.md` 1.7.
 - **Host:** `tests/fat_host.rs` (18) and `tests/vfs_zone_host.rs` (7) pass.
+- **QEMU, through Effector:**
+  - **without the fix** (`claude/000-KRN-0212-check-alone` ea4790c4, acc-1, x86): `the updater and an update through the link` failed at the first check. The put's last file, `releases/6/x86_64/MANIFEST.SIG`, was not on the disk under its name;
+  - **with it** (6b86e4cf): `x86: the updater and an update through the link` passed on acc-1, and `aarch64: an update through the link` on acc-2;
+  - **on ad906c8b, the fix with the shell's check:** `x86: files and block writes` (acc-1) and `aarch64: files and the block store` (acc-2) passed.
 
 ## Related
 
