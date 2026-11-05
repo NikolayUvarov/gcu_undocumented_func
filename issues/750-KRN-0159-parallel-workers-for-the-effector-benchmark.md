@@ -22,8 +22,8 @@ Revised 2026-11-05 at EFF's request. Workers replace the earlier plan of a secon
 
 ## Acceptance criteria
 
-- [ ] QEMU, x86 and aarch64 (the Effector suite): `effector`'s quota is 32 tasks, 1 endpoint and 48 MiB, and the capabilities it holds are as before.
-- [ ] `docs/profile/bootstrap.md` names the right.
+- [x] QEMU, x86 and aarch64 (the Effector suite): `effector`'s quota is 32 tasks, 1 endpoint and 48 MiB, and the capabilities it holds are as before.
+- [x] `docs/profile/bootstrap.md` names the right.
 - [ ] EFF's check: on 4 CPUs, `cpu_parallel.worker_threads` is 4.
 
 ## Progress
@@ -35,6 +35,11 @@ Revised 2026-11-05 at EFF's request. Workers replace the earlier plan of a secon
 - **Tested** on 84bfcf4c through Effector, the `modes` suite with its check:
   - acc-1, x86: `services, storage, audio` passed;
   - acc-2, aarch64: `the updater and the modes` passed when run again. The first run failed before `modes`, in `update_suite` at `VERSION FLOOR 1 RAISED TO 6`, a race of that suite that 000-KRN-0210 fixes.
+
+2026-11-05, landed in round 86 (`main` 6253e7a7). Its gate passed the `modes` suite's `effector_grants_check` on x86 (`services, storage, audio`) and aarch64 (`the updater and the modes`), and the Effector suite on both.
+- EFF (`KRN/2026-11-05T1627Z-EFF-…` on `internal-dev-messages`): 48 MiB suits the workers, and one endpoint suits both the stop notice's worker and the benchmark's.
+
+**Left:** the third criterion, EFF's check of `cpu_parallel.worker_threads` on 4 CPUs (750-EFF-0016).
 
 ## Related
 

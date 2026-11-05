@@ -1,6 +1,6 @@
-# 000-KRN-0212 — A remove, a rename or a new directory reaches the disk at once
+# 000-KRN-0212 — A remove, a rename or a new directory reaches the disk at once — done
 
-**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-6.3, MC-12.3
+**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-11-05) · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-6.3, MC-12.3
 
 From LNK's request of 2026-10-24 (`KRN/2026-10-24T1215Z-LNK-a-rename-or-remove-stays-in-vfs-servers-cache.md` on `internal-dev-messages`) and EFF's of the same day and of 2026-11-05 (`KRN/2026-11-05T1400Z-EFF-…`). It went unanswered for 12 days.
 
@@ -46,6 +46,13 @@ From LNK's request of 2026-10-24 (`KRN/2026-10-24T1215Z-LNK-a-rename-or-remove-s
   - **without the fix** (`claude/000-KRN-0212-check-alone` ea4790c4, acc-1, x86): `the updater and an update through the link` failed at the first check. The put's last file, `releases/6/x86_64/MANIFEST.SIG`, was not on the disk under its name;
   - **with it** (6b86e4cf): `x86: the updater and an update through the link` passed on acc-1, and `aarch64: an update through the link` on acc-2;
   - **on ad906c8b, the fix with the shell's check:** `x86: files and block writes` (acc-1) and `aarch64: files and the block store` (acc-2) passed.
+
+## Resolution
+
+- **`vfs_server`** flushes the volume at the end of each `Remove` and `Rename`, and of an `OpenDir` that made a directory (`Volume::changed`).
+- **The check** is in the `linkupdate` suite, through `link`, which flushes nothing of its own: the host reads a put's rename, a `mkdir`, an `mv` and an `rm` from the image while the machine runs. It failed without the fix and passed with it, on x86 and aarch64.
+- **Docs:** `docs/profile/threat-model.md`, `docs/profile/evidence.md`, `docs/write-disk.md` and `docs/write-disk_RU.md` 1.7.
+- Landed in round 86 (`main` 6253e7a7), its gate green on both architectures.
 
 ## Related
 
