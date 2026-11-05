@@ -38,6 +38,24 @@ DRV has no screen or serial console there. The loader writes nothing on a confir
 - [ ] Docs: `docs/update/slots.md` and `docs/write-disk.md`, in English and Russian.
 - [ ] On un-rizen, with DRV: the stage of the next boot that leaves no log, or that many cycles without one, recorded in 000-KRN-0124.
 
+## Progress
+
+2026-11-05, on `claude/youthful-mendel-mf1soy` eb5879e0:
+- **The loader** (`bootloader/src/mark.rs`, `mark` in `main.rs`) writes the three marks and names each on the serial line.
+- **`boot_switch.py`:** `once` records the count; `logs` names the stage of a boot without a new log, and the mark of one with a log.
+- **Host tests,** in this session's container and on x32-128 (`host tests`, 752 s): `tests/boot_mark_host.rs` (4); `tests/boot_switch_test.py` (11, two of them new).
+- **QEMU, through Effector:**
+  - acc-1, x86: `boot, display, shell, memory, clock`, `USB image`, `Secure Boot with our keys`, `NVMe boot disk`;
+  - x32-128, x86: `the updater and an update through the link`, `a developer's release through the Effector agent`;
+  - acc-2, aarch64: `boot and fault containment`, `the updater and the modes`, `a developer's release through the Effector agent`, `an update through the link`, `NVMe boot disk`.
+
+  All passed. Both architectures printed the two new lines of `boot_slots_check.py`:
+  - three marks per boot, and `HANDOVER` one count more on the disk, on a trial and a confirmed slot;
+  - a slot's own loader keeping the count, and a reset in its pause left at `READ`.
+
+  The file system was consistent after (`fsck.fat`).
+- **Left:** the gate, and the cycles on un-rizen with a stick written from `main` once it lands.
+
 **Not claimed:** the cause of the two hangs (MC-12.2). The mark only narrows where a hang is; QEMU's runs say nothing of the Ryzen's firmware (MC-12.1).
 
 ## Related
