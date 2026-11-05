@@ -77,6 +77,25 @@ def test_summary_and_verdict():
 
 
 
+def test_a_group_past_its_limit_ends_with_its_processes_and_a_fail_row():
+    import subprocess, tempfile, time
+    with tempfile.TemporaryDirectory() as temp:
+        mark, pids = f"{temp}/limit", f"{temp}/pids"
+        # A group that hangs with a child of its own, as a QEMU under a suite would (000-KRN-0210).
+        hung = f"sh -c 'sleep 600 & echo $! > {pids}; echo $$ >> {pids}; wait'"
+        started = time.monotonic()
+        out = subprocess.run(["sh", "-c", land.bounded(hung, 2, "x86: a group", mark)], capture_output=True, text=True, timeout=60).stdout
+        assert time.monotonic() - started < 20
+        assert land.parse_summary(out) == [("FAIL", 2, "x86: a group")], out
+        time.sleep(.5)
+        for pid in open(pids).read().split():
+            assert not os.path.exists(f"/proc/{pid}") or "zombie" in open(f"/proc/{pid}/status").read(), pid
+        # One that ends in time: no row, and its watchdog goes at once.
+        started = time.monotonic()
+        out = subprocess.run(["sh", "-c", land.bounded("true", 30, "x86: a group", mark)], capture_output=True, text=True, timeout=60).stdout
+        assert out == "" and time.monotonic() - started < 10 and not os.path.exists(mark), out
+
+
 def test_a_failed_build_stops_its_lane():
     class Effector:
         def __init__(self): self.commands = []

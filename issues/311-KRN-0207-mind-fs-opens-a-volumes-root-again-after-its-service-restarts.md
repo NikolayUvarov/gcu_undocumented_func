@@ -48,6 +48,20 @@
 
 **Left:** `vfs_server`'s roots and `check`, as above. `vfs_server`'s roots go through the same `again`, but no run restarted `vfs_server`, so that is not tested.
 
+2026-11-04 (59213868), `vfs_server`'s roots:
+- **`vfs_server` does restart.** `init` keeps only itself and the shell from a restart (`kept`), so `svc restart vfs_server` stops it with its flush and starts it again.
+- **`vfs_restart_check`** runs late in the shell suite, after `storefs_check`.
+  - It restarts `vfs_server` and waits for the new instance's `[VFS] THE BOOT VOLUME:`.
+  - Then `ls data`, `write`, `cat` and `rm` of `data/after.txt` answer, with no restart of the shell.
+  - It comes late because the services' open files on the old instance are not reopened.
+- **Run:** passed in QEMU x86 in this session's container (TCG), the shell suite in full. aarch64 is not run yet.
+
+**Left:** aarch64 for `vfs_restart_check`; `check`, as above.
+
+2026-11-05 (43bcf218, x32-128 through Effector, KVM, the two lanes beside each other): `x86: keys, shell, tools` (398 s) and `aarch64: programs, shell and four CPUs` (391 s) passed, each with `storefs_check`'s restart and `vfs_restart_check`.
+
+**Every acceptance criterion is met.** `check` is not asked again: its visit runs once. That is a limit of this change, not a criterion. The issue closes once this lands.
+
 ## Related
 
 STO's 311-STO-0032; [311-KRN-0203](../issues-done/311-KRN-0203-a-lent-files-client-and-a-held-storefs-client.done) (the routing).
