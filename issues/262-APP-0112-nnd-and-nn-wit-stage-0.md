@@ -1,6 +1,6 @@
 # 262-APP-0112 — The model service `nnd` and `idl/nn.wit` 1.0: stage 0 of 262, for NRL's native integration
 
-**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.0, agreed on 2026-10-29 with `NRL` and `KRN`; `idl/nn.wit`, `nnd`, its checks and the shell's badged clients are written; the native model suite is left) · **Blocked by:** nothing for the native part: `nnd` as a boot service with its grants and the shell's slot ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)) are in `main` since landing round 50 (2026-10-30); later, a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.1 (2026-11-04, sections 5 and 8 as made; 1.0 agreed on 2026-10-29 with `NRL` and `KRN`); `idl/nn.wit`, `nnd`, its checks and the shell's badged clients are written; `NRL`'s model runs through `nnd` in the `nnd` suite on x86 and aarch64 QEMU (2026-11-04); the shell's `nn load | run | bench` is left) · **Blocked by:** nothing for the native part: `nnd` as a boot service with its grants and the shell's slot ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)) are in `main` since landing round 50 (2026-10-30); later, a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-28, from NRL's request `issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11` on `codex/NRL-lab` (41633c21) and its messages `APP/2026-10-26T1740Z-NRL-native-nnd-interface-and-smoke-harness.md` and `APP/2026-10-26T1828Z-NRL-runtime-v0-ready-native-integration-pending.md` on `internal-dev-messages`.
 
@@ -99,6 +99,30 @@
   - on aarch64 QEMU (`virt`, 4 CPUs, TCG) the `nnd` suite passed too, on the branch's 70e0220b.
 - **Left:** `nn load | run | bench`; `nncheck`'s native steps (section 8, steps 1–9) with `NRL`'s model on the image; `nnd`'s two scopes; the profile entry after the native run.
 
+**Progress (2026-11-04): `NRL`'s pinned model run through `nnd` (item 5), on x86.**
+- **`nnd`'s two scopes:** a package under `data/models/` is read through `init`'s read-only scope of that directory in `SLOT_VFS`, one under `models:` through the model disk's in slot 2, each with `mind::fs::use_scope` (`nnd/src/main.rs`, `files_for`); a scope `init` did not give is `not-found`.
+- **`nncheck`'s modes,** with `NRL`'s inputs and references built in: `load PATH ID`, `run PATH ID`, `share PATH ID SECONDS` and `other SESSION JOB ID` (docs/tools, section on `nnd`).
+- **The check `nn_model_check`** in the `nnd` suite. The suite's image holds the pinned `model/` in `data/models/conformance/`, and three packages made from it by the suite for the refusals: `changed`, `compact` and `overlay`.
+- **The design is at 1.1** (docs/nn/runtime.md), and the interface is unchanged:
+  - a worker writes its charges when its job ends, not as it runs (section 5);
+  - so the cancellation and the deadline are timed and repeated, not keyed to a row in `usage` (section 8).
+- **Its runs:** passed on QEMU x86, 4 CPUs, TCG, 2026-11-04, in the check's final form: the whole suite once and the check alone three times more. They show, on that configuration only, steps 1–9 of section 8:
+  - the right ID loads (16 804 bytes held); a wrong ID and a changed byte are refused `digest`, the compact object `malformed`, the overlay `unsupported`, a missing package and `data/models/../models/conformance` `not-found`, each with `nnd`'s reason in its log;
+  - 3 rows, and 256 rows, within `NRL`'s tolerance, charged 3 / 1893 / 1; a row with a NaN refused `malformed` and nothing charged; 257 rows refused `too-large`;
+  - a work budget of 1892 refuses the 3 rows and runs 1; 3 rows run in 2, 1 and are refused past that (3 / 1893 / 2); a third job past 2 refused; memory one byte short of the workspace and a row refused, and exactly that runs 1 row;
+  - a cancellation partway (for example 211 of 256 rows charged) and a deadline partway (174 of 256), each ending the session (`poisoned` after);
+  - a deadline passed before the job started charges no row;
+  - the overflowing row is `numeric` (1 / 39 / 1), and a new session runs 3 rows;
+  - nnd's memory is 0 before the load and after the unload;
+  - a second client is refused the first one's session and job (`owner`), its `unload` of a model it does not hold is `not-found`, and its own session runs;
+  - after the first ended and its badge 1 was retired, badge 1 taken again reaches none of them (`not-found`), and the model it alone held is gone.
+- **Measured, not bounded:** under TCG a job's worker took about 30 to 550 ms to start, and 256 rows about 70 ms. So a cancellation landed partway within 1 to 3 tries (of 16), and a deadline within 1 to 12 (of 64), in these runs and four earlier ones of the same tries. The check prints each try.
+- **On aarch64** (QEMU `virt`, 4 CPUs, TCG, `-cpu max`), the same day: the whole suite once and the check alone twice more, every step as on x86. From its submit to its end, a 3-row job took 93 to 108 ms, most of it the worker's start, and a 256-row one 73 to 225 ms. A cancellation landed partway within 1 to 4 tries, a deadline within 2 to 11.
+- **Left:**
+  - `nn load | run | bench` in the shell;
+  - the model disk `models:` on a machine that has one;
+  - KVM and a real machine.
+
 ## Acceptance criteria
 
 - [x] **The design is agreed:** `NRL` and `KRN` answer its questions in messages, and the page is at 1.0 (2026-10-29).
@@ -107,7 +131,7 @@
   - every bound of the profile;
   - the badge-to-session rule, with every call naming another client's session or job refused;
   - budget charging as `nrl-runtime` defines it.
-- **The `nnd` suite, on a named configuration** (QEMU x86 with 4 CPUs; aarch64), steps 1–8 of the design's section 8:
+- [x] **The `nnd` suite, on a named configuration** (QEMU x86 with 4 CPUs; aarch64), steps 1–8 of the design's section 8 (2026-11-04, both, TCG; 1.1's steps 1–9):
   - loading and its refusals;
   - outputs equal to the reference within `NRL`'s tolerance;
   - the budget, cancellation and the deadline;
