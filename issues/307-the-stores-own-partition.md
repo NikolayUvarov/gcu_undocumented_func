@@ -19,7 +19,11 @@ On a real machine the store lives on a RAM disk. `init` gives `blockstore` a dis
   - `blockstore` gets a client bounded to its partition's sectors, and `vfs_server` gets none.
   - These are requests to `KRN` (the grants) and `DRV` (a client bounded to a range), not this track's code.
 - **What a flush reaches, per driver:** NVMe FLUSH, ATA FLUSH CACHE EXT, SCSI SYNCHRONIZE CACHE. A device that reports no write cache, or ignores a flush, is named as such (MC-12.1). This is `DRV`'s to state.
-- **Durability classes (MC-4.4, B.3).** Each write says what it reached: `volatile` (a RAM disk), `flushed` (one device's flush), `copied` (two media, [309](309-copies-scrub-and-repair.md)). `publish`, `unpublish`, `commit` and `pin` reply with it, and `stat` gives the medium's; a `put` is retained only by its lease until a name or a pin retains its object (MC-4.11), so its class is the medium's ([307-STO-0019](../issues-done/307-STO-0019-how-far-a-write-reached.done)). This changes the interface: `blockstore.wit` 2.0, with 1.x refused. Before the first release a new layout or interface replaces the old one, which is refused by name; no conversion code (AGENTS.md section 3, the maintainer's decision of 2026-10-25).
+- **The copy's medium on real machines** (moved here from [309](../issues-done/309-copies-scrub-and-repair.done), 2026-11-05).
+  - `blockstore` holds its copy of chosen names on a second medium in slot 4 (309-STO-0040), which `init` lends in QEMU only (309-KRN-0209).
+  - On a real machine it is a partition of another disk than the store's: two partitions of one disk are not independent copies (MC-4.8).
+  - It is granted as the store's own partition is, and the store says when its copy shares a disk with it.
+- **Durability classes (MC-4.4, B.3).** Each write says what it reached: `volatile` (a RAM disk), `flushed` (one device's flush), `copied` (two media, [309](../issues-done/309-copies-scrub-and-repair.done)). `publish`, `unpublish`, `commit` and `pin` reply with it, and `stat` gives the medium's; a `put` is retained only by its lease until a name or a pin retains its object (MC-4.11), so its class is the medium's ([307-STO-0019](../issues-done/307-STO-0019-how-far-a-write-reached.done)). This changes the interface: `blockstore.wit` 2.0, with 1.x refused. Before the first release a new layout or interface replaces the old one, which is refused by name; no conversion code (AGENTS.md section 3, the maintainer's decision of 2026-10-25).
 
 ## Acceptance criteria
 
@@ -46,4 +50,4 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 
 ## Related
 
-[300](../issues-done/300-checksummed-block-store.done), 300-KRN-0025, [308](308-encryption-at-rest.md), [309](309-copies-scrub-and-repair.md), `requests-KRN.md`, `requests-DRV.md`.
+[300](../issues-done/300-checksummed-block-store.done), 300-KRN-0025, [308](308-encryption-at-rest.md), [309](../issues-done/309-copies-scrub-and-repair.done), `requests-KRN.md`, `requests-DRV.md`.

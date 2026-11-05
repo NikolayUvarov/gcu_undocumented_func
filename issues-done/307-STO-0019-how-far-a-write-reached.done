@@ -11,7 +11,7 @@ Every write of the store is followed by its medium's flush, but nothing tells a 
 - **`blockstore.wit` 2.0** adds `enum durability { volatile, flushed, copied }`:
   - `volatile`: the store's medium is a RAM disk (`KIND_RAM`);
   - `flushed`: the medium's driver acknowledged a flush after the write. What a flush reaches is the driver's to state (`requests-DRV.md`, for 307);
-  - `copied`: two media flushed ([309](../issues/309-copies-scrub-and-repair.md)), not reached yet.
+  - `copied`: two media flushed ([309](309-copies-scrub-and-repair.done)), not reached yet.
 - **Who reports it:**
   - `publish`, `unpublish`, `commit` and `pin` reply with it (`published`, `committed`, `pin-taken`);
   - `stat` gives the medium's class;
@@ -27,7 +27,7 @@ Every write of the store is followed by its medium's flush, but nothing tells a 
 
 ## Related
 
-[307](../issues/307-the-stores-own-partition.md), [309](../issues/309-copies-scrub-and-repair.md), `idl/blockstore.wit`, docs/storage.
+[307](../issues/307-the-stores-own-partition.md), [309](309-copies-scrub-and-repair.done), `idl/blockstore.wit`, docs/storage.
 
 ## Resolution
 
