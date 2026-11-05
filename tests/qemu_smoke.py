@@ -6680,9 +6680,11 @@ def effector_grants_check(vm):
         return {int(s): (int(b), named.get(servers.get(int(ep)), "?")) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
                 if servers.get(int(ep)) != pids[name]}
     gw, session = held("effector_gw"), held("effector")
-    # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap.
-    quota = re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
-    assert quota and int(quota[1]) == 48 << 20, quota and quota[0]
+    # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap; 750-KRN-0159: the right to start
+    # workers for it, a ceiling of 32 tasks (the kernel allows one per online CPU), and one endpoint they answer on.
+    quota = re.search(r"QUOTA TASKS=\d+/(\d+) ENDPOINTS=\d+/(\d+) MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
+    assert quota and (int(quota[1]), int(quota[2]), int(quota[3])) == (32, 1, 48 << 20), quota and quota[0]
+    require(vm.command("dmesg -s init", raw=True), "[INIT] effector: 48 MIB, 1 ENDPOINT AND WORKERS, AT MOST ONE PER CPU")
     assert set(gw) == {3, 5, 7, 10, 11, 12, 15, 35, 38} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
     assert gw[35] == (1, "updater"), gw  # BADGE_UPDATE_GATEWAY: the updater's client, gated by remote-update (751-KRN-0185)
     assert gw[38][1] == "vfs_server" and gw[38][0] > 7, gw  # SLOT_APPS: a writable scope of data/apps/ (750-KRN-0169)
