@@ -7735,9 +7735,10 @@ def update_suite(args):
         assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
         # init confirms the trial within seconds (000-KRN-0102); the updater asks it every second and records it at once,
         # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
-        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
+        # The floor is raised after the confirmation is recorded, so its line is the one waited for (000-KRN-0210).
+        log = logged("[UPDATER] VERSION FLOOR 1 RAISED TO 6", 90)  # 351-UPD-0024
+        require(log, "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT")
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
-        require(log, "[UPDATER] VERSION FLOOR 1 RAISED TO 6")  # 351-UPD-0024
         # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
         assert "PARSER: THE SHARED SERVICE" not in log, log
         # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
