@@ -1903,6 +1903,7 @@ def kbench_check(vm):
     vm.send("kbench --quick\n")
     output = vm.expect("MIND> ", timeout=600, after="kbench --quick\n")
     assert "kbench — the kernel's performance" in output and re.search(r"[1-9]\d* of \d+ processors online", output), output[:2000]
+    assert re.search(r"MIND Core on [a-z0-9-]+, (?:x86_64|aarch64), ABI", output), output[:2000]  # sysmon's name (000-KRN-0180)
     rows = bench_rows(output, [name for names in KBENCH_ROWS.values() for name in names])
     count = sum(map(len, KBENCH_ROWS.values()))
     require(output, f"kbench: {count} measurements, 0 failed")
@@ -6832,6 +6833,58 @@ def camera_files(mtype, frame, video):
     print("PASS: camera files: the still is the test pattern's frame pixel for pixel, the video 30 Motion JPEG frames that ffprobe reads", flush=True)
 
 
+def sysmon_name_check(vm):
+    """000-KRN-0180: sysmon answers the machine's name from data/machine/name through a read-only scope of that directory
+    alone, which init made, and reads it at each call; kbench's head shows the answer. Set, written with capitals (no
+    name: the shell writes small letters), set again, removed; no data/machine/ at boot gives no scope (init never makes
+    it), and the directory removed ends it, each until sysmon starts again. The check leaves data/ as it found it."""
+    def shown():
+        out = vm.command("kbench ipc --quick", timeout=120)
+        found = re.search(r"MIND Core on (\S+), (?:x86_64|aarch64), ABI \d+", out)
+        assert found, out[-2000:]
+        return found[1]
+    # This image had no data/machine/ at boot, and init made none: sysmon has no scope and answers mindcore until its next
+    # start, after the directory is made.
+    require(vm.command("dmesg -s init", raw=True), "[INIT] sysmon: NO FILES IN data/machine")
+    assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
+    require(vm.command("dmesg -s sysmon", raw=True), "[SYSMON] THE MACHINE'S NAME: mindcore (data/machine/name NOT READ: ")
+    require(vm.command("mkdir data/machine"), "OK")
+    require(vm.command("svc restart sysmon", timeout=30), "sysmon restarted: PID")
+    require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY")
+    assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
+    for text, name in (("dexp", "dexp"), ("Lab-2", "mindcore"), ("lab-2", "lab-2")):
+        require(vm.command(f"write data/machine/name {text}"), f"WROTE {len(text) + 1} BYTES")
+        assert shown() == name, (text, vm.command("dmesg -s sysmon", raw=True)[-1500:])
+    require(vm.command("rm data/machine/name"), "OK")
+    assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
+    log = vm.command("dmesg -s sysmon", raw=True)
+    for line in ("[SYSMON] THE MACHINE'S NAME: mindcore (NO data/machine/name)", "[SYSMON] THE MACHINE'S NAME: dexp (data/machine/name)",
+                 "[SYSMON] THE MACHINE'S NAME: mindcore (data/machine/name HOLDS NO NAME: CAPITAL LETTERS)", "[SYSMON] THE MACHINE'S NAME: lab-2 (data/machine/name)"):
+        require(log, line)
+    # vfs_server ends a scope of a removed directory: sysmon answers mindcore, the file not read, until it starts again.
+    require(vm.command("rm data/machine"), "OK")
+    assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
+    log = vm.command("dmesg -s sysmon", raw=True)
+    assert log.count("[SYSMON] THE MACHINE'S NAME: mindcore (data/machine/name NOT READ: ") == 2, log[-1500:]  # at boot, and now
+    require(vm.command("mkdir data/machine"), "OK")
+    require(vm.command("svc restart sysmon", timeout=30), "sysmon restarted: PID")
+    require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY")
+    require(vm.command("write data/machine/name lab-3"), "WROTE 6 BYTES")
+    assert shown() == "lab-3", vm.command("dmesg -s sysmon", raw=True)[-1500:]
+    # Its one files client is vfs_server's in SLOT_VFS, badged as the read-only scope of data/machine/ is.
+    pids = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    caps = vm.command(f"stat caps {pids['sysmon']}", raw=True)
+    files = [(int(s), int(b)) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M) if servers.get(int(ep)) == pids["vfs_server"]]
+    scopes = {int(b, 16) for b in re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/machine \(READ-ONLY\)", vm.command("dmesg -s vfs_server", raw=True))}
+    assert len(files) == 1 and files[0][0] == 3 and files[0][1] in scopes, (files, scopes, caps[-1500:])
+    require(vm.command("rm data/machine/name"), "OK")
+    require(vm.command("rm data/machine"), "OK")
+    print("PASS: sysmon's name: data/machine/name's label, read at each call through a read-only scope of data/machine/ "
+          "alone (kbench's head names the machine); none, capitals or a removed file answer mindcore, each logged once; "
+          "the directory removed ends the scope until sysmon starts again with a new one", flush=True)
+
+
 def vfs_suite(args):
     """Writing a raw FAT disk through vfs_server: the shell changes files in data/, syncs, the host checks the image
     (fsck.fat, mtools), and after a reboot the files are there while the RAM disk is empty again."""
@@ -6850,6 +6903,7 @@ def vfs_suite(args):
             for command, answer in [("mkdir data/sub", "OK"), ("write data/notes.txt line one", "WROTE 9 BYTES"), ("write data/sub/a.txt alpha", "WROTE 6 BYTES"),
                                     ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
                 require(vm.command(command), answer)
+            sysmon_name_check(vm)
             # screenshot (issue 086): the screen in front (the shell's) as a BMP in data/, and under a free name on ram:.
             def slow(command):  # 3 MB written through the block driver take a while under emulation
                 vm.send(command + "\n")

@@ -1755,6 +1755,9 @@ fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == nam
 fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
     match name {
         "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true, true)],
+        // The machine's name alone (000-KRN-0180), never made: a boot writes nothing, and written images hold the
+        // directory (scripts/make_usb_image.py), so a name set later is read without a restart.
+        "sysmon" => &[(SLOT_VFS, mind::fs::BADGE_USER, mind::hostname::DIR, false, false)],
         "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false, true)],
         // The models nnd reads, and nothing else of the volumes (262-KRN-0178): each scope's root is its directory. Neither
         // is made: a boot writes nothing to the boot volume for nnd, whose scope waits for the owner's data/models/.

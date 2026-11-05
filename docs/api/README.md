@@ -188,6 +188,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | `pattern` (feature `alloc`) | name masks (`matches`, `glob`) and simple regular expressions (`Pattern`: `.`, `*`, classes, anchors, case folding) |
 | `voice` (feature `alloc`) | voice front end: `Source` (`Microphone`, `Wav`), `Stream` (16 kHz mono), `Resampler`, `Detector` → `Utterance { start_ms, samples, level }`; recognition: `features` (integer log-mel), `model` (`voice/model.bin`, int8 phone scores), `grammar` (`voice/commands.txt`, Viterbi against a phone-loop filler), `recognizer::Recognizer` ([docs/voice](../voice/README.md)) |
 | `heap` (feature `alloc`) | the program heap behind `alloc` (`Vec`, `String`, `Box`): size classes in arenas taken with `ALLOC`, large blocks directly |
+| `hostname` | the machine's name (000-KRN-0180, with 000-APP-0123's rule): `DIR` `data/machine`, `FILE`, `DEFAULT` `mindcore`; with `alloc`, `label` (an RFC 1123 label, capitals taken as small letters) and `read` (the file's bytes to the name and its `Source`). `sysmon` answers it to any client as `sysinfo.wit` 4.2 `hostname()`, read at each call through a read-only scope of `data/machine/` alone |
 | `idl` | generated MIND IDL bindings (`idl::vfs`, `idl::audio`, ...) and their codec |
 
 ## Stability

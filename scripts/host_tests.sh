@@ -81,3 +81,5 @@ rustc --edition=2021 --test tests/rtw89_station_filter_host.rs -o "$OUT/rtw89-st
 "$OUT/rtw89-station-filter-tests"
 rustc --edition=2021 --cfg rtw89_service --test tests/rtw89_service_host.rs -o "$OUT/rtw89-service-tests"
 "$OUT/rtw89-service-tests"
+rustc --edition=2021 --cfg 'feature="alloc"' --test tests/hostname_host.rs -o "$OUT/hostname-tests" # the machine's name (000-KRN-0180)
+"$OUT/hostname-tests"

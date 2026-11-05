@@ -82,14 +82,19 @@ fn write(path: &str, data: &[u8]) -> Result<(), mind::fs::Error> {
     file.flush()
 }
 
-/// The machine, for the head of the screen and the log: the architecture, the processors and the kernel arena (from
-/// sysmon, REQUEST_SYSINFO), the clock, the date.
+/// The machine, for the head of the screen and the log: its name, the architecture, the processors and the kernel arena
+/// (from sysmon, REQUEST_SYSINFO), the clock, the date.
 pub fn machine(info: &mind::BootInfo) -> Vec<String> {
     let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86_64" };
     let sysmon = mind::ipc::Endpoint::SYSINFO;
     let cpus = match sysinfo::cpus(sysmon, 0) {
         Ok(Ok(list)) => format!("{} of {} processors online", list.as_slice().iter().filter(|c| c.online).count(), list.len()),
         _ => String::from("processors unknown (no sysmon client)"),
+    };
+    // The machine's name, as sysmon reads it from data/machine/name (000-KRN-0180).
+    let name = match sysinfo::hostname(sysmon) {
+        Ok(Ok(name)) => String::from(name.as_str()),
+        _ => String::from("an unnamed machine (no sysmon client)"),
     };
     let arena = match sysinfo::memory(sysmon) {
         Ok(Ok(m)) => format!("kernel arena {} of {} used, {} tasks, {} endpoints", report::bytes(m.used), report::bytes(m.arena), m.tasks, m.endpoints),
@@ -103,7 +108,7 @@ pub fn machine(info: &mind::BootInfo) -> Vec<String> {
         _ => String::from("date unknown"),
     };
     alloc::vec![
-        format!("MIND Core, {}, ABI {}, {}, screen {}x{}", arch, info.abi_version, cpus, info.width, info.height),
+        format!("MIND Core on {}, {}, ABI {}, {}, screen {}x{}", name, arch, info.abi_version, cpus, info.width, info.height),
         format!("{}; clock: {}", arena, clock),
         format!("{}, up {}", date, report::duration(now)),
     ]

@@ -35,6 +35,7 @@ pub mod firmware;
 pub mod gfx;
 pub mod gpio;
 pub mod heap;
+pub mod hostname;
 pub mod hid;
 pub mod http;
 pub mod multipart;
