@@ -1,6 +1,6 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.5 (2026-10-28): the store's partition, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.6 (2026-11-05): `logs` reads the loader's mark (000-KRN-0211); 1.5 (2026-10-28): the store's partition, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
@@ -230,7 +230,7 @@ On a PC that runs Linux from its own disk, MIND Core can be started once from th
 sudo scripts/boot_switch.py status                   # the boot entries, Linux's first, and the MIND Core disk
 sudo scripts/boot_switch.py once --reboot            # the next boot starts the stick, once
 # … the run in MIND Core; its reboot, a panic, the watchdog or a power cut brings Linux back …
-sudo scripts/boot_switch.py logs ~/mind-runs         # the MIND LOG volume copied, read-only
+sudo scripts/boot_switch.py logs ~/mind-runs         # the MIND LOG volume copied, read-only, and the loader's mark read
 ```
 
 **How it works.** The firmware has two variables:
@@ -254,6 +254,14 @@ The script never writes `BootOrder`.
 **`logs`** copies the whole `MIND LOG` volume into a new directory, then says one of:
 - MIND Core booted since `once`, which new `BOOTNNNN.LOG` files it wrote, and whether `autorun.msh` ended;
 - it did not boot. The firmware may skip USB disks with Fast Boot on, or ignore `BootNext`; Secure Boot with Microsoft's keys refuses the bootloader (section 6).
+
+**How far a boot without a log got.** A boot log is written only once the stick's storage is up in MIND Core (`usb_host`, `usb_storage`, `vfs_server`), so a boot that stops before that leaves none. The loader leaves a mark on the `MIND CORE` volume, `MIND/REACHED`, at three points of each boot ([docs/update/slots.md](update/slots.md), 000-KRN-0211). `once` records its boot count, and `logs` says which of these a boot without a new log was:
+- **the mark is unchanged:** the loader did not start. The firmware skipped the stick, ignored `BootNext`, or stopped before it;
+- **`STARTED`:** the loader stopped before it had read and checked the kernel and the services;
+- **`READ`:** it stopped after that, before boot services ended: choosing the display, or starting the processors;
+- **`HANDOVER`:** it handed over to the kernel. The boot stopped in the kernel, `init` or the services before the log's first write. The watchdog restarts a kernel whose tick stops, but not a service that waits.
+
+A stick written before the mark has none, and `logs` says so.
 
 **An unattended run.** Put an `autorun.msh` at the stick's root after writing it. The shell runs it once at start ([docs/msh.md](msh.md)), and it can end with `reboot`. For example, `check` writes its full log to `log:`:
 
