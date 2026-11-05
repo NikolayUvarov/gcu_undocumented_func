@@ -774,7 +774,8 @@ impl Init {
                 // A radio a safe start prepared serves the station once `svc start` starts it (000-KRN-0131).
                 let radio = RADIOS.into_iter().find(|&r| self.running(service_index(r)))
                     .or_else(|| RADIOS.into_iter().find(|&r| self.prepared(service_index(r)))).ok_or(Error::NotFound)?;
-                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+                // With the badge right: it mints the reading client, BADGE_WIFI, of its own endpoint (550-KRN-0213).
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL | CAP_BADGE);
                 self.lend(&mut grants, WIFI_RADIO, radio)?;
                 if self.present("keystore") { grants.add(WIFI_KEYS, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_STATION)?, CLIENT); }
             }
