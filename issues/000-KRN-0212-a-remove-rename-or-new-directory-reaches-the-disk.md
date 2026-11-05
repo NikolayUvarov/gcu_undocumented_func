@@ -1,6 +1,6 @@
 # 000-KRN-0212 — A remove, a rename or a new directory reaches the disk at once
 
-**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-6.3, MC-12.3
+**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-6.3, MC-12.3
 
 From LNK's request of 2026-10-24 (`KRN/2026-10-24T1215Z-LNK-a-rename-or-remove-stays-in-vfs-servers-cache.md` on `internal-dev-messages`) and EFF's of the same day and of 2026-11-05 (`KRN/2026-11-05T1400Z-EFF-…`). It went unanswered for 12 days.
 
@@ -29,6 +29,14 @@ From LNK's request of 2026-10-24 (`KRN/2026-10-24T1215Z-LNK-a-rename-or-remove-s
 
 - [ ] QEMU, x86 and aarch64 (`vfs` suite): after `mkdir`, `mv` and `rm` on the boot volume, with no `sync` and no file closed since, the host reads them from the image while the machine runs.
 - [ ] The docs say what a pulled disk may lose.
+
+## Progress
+
+2026-11-05, on `claude/000-KRN-0212-vfs-flush`:
+- **`vfs_server`:** `Remove` and `Rename` end with a flush of their volume, and `OpenDir` with one when it made a directory (`Volume::changed`).
+- **The check** in the `vfs` suite comes first, in a commit of its own, so that it can be run without the fix.
+- **Docs:** `docs/profile/threat-model.md` (power loss), `docs/profile/evidence.md`, `docs/write-disk.md` 1.7 and `docs/write-disk_RU.md` 1.7.
+- **Host:** `tests/fat_host.rs` (18) and `tests/vfs_zone_host.rs` (7) pass.
 
 ## Related
 
