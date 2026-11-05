@@ -137,3 +137,34 @@ and the saved service harness compiled before raw publication
 299 cases in 1.27 s, with the one inherited private-firmware case ignored.
 This is evidence for that own source revision, not the later H2C changes in
 the aggregate candidate or native endpoint/radio behavior.
+
+## Receive-only service before calibration (213-KRN-0123's gate, 2026-11-05)
+
+The country reaches the radio through `set-country` on its own endpoint, so the endpoint comes before any calibration. KRN and DRV agreed on two lines:
+- `[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED`, the gate for `init`;
+- `[RTW89] DATAPATH ADMITTED ON CHANNEL n`, after a country, a platform word that is not `unknown`, and that channel's calibration.
+
+`receive_service::serve` is the first. It runs when `init` lends an endpoint in `SLOT_SERVICE`; without one, the driver keeps its bounded listen. It does the listen's setup:
+- `listen::open`, then `listen::prepare_receive` on the caller's live PHY: the initial PHY, one passive channel, the report tail and the scan filter.
+
+It then serves `wlanhw` 2.0 on that channel:
+
+| Request | Answer |
+|---|---|
+| `info` | `channels` the tuned channel, `supported` 1–13 |
+| `set-channel` | that channel only; others `invalid` |
+| `set-filter` | the station filter applied in software over the scan filter |
+| `receive`, `wait` | the frames that filter accepts, with the 8-byte header; four held, more dropped and counted |
+| `send` | `failed`: no calibrated channel, nothing is sent |
+| `attach`, `kick` | `invalid`; a ring capability is dropped |
+| `set-country` | checked by `country::Limits`: `invalid` when malformed. Otherwise logged as taken and answered `failed`, 1.2's "could not apply them", so the station sends nothing. Its limits are kept for the calibration step |
+
+After a stop it answers `no-device` for as long as the process lives (`absent_forever`).
+
+**Its limits:**
+- one channel, because the channel stage is still single-shot. Retuning, and a scan over the country's channels, come with the calibration step;
+- nothing is transmitted: every poll re-checks the startup permit, with the scheduler zero and data DMA stopped.
+
+**Host tests:** `tests/rtw89_receive_service_cases.rs` in `rtw89_service_host.rs` runs the real setup over the initial-PHY fixture and the IPC seam. It covers `info` and `set-channel`, `send` failing, a country taken and answered `failed` (UZ and `00`, and three malformed ones refused), and a beacon delivered while another station's data is filtered out. The fixture's scheduler and DMA stay stopped throughout.
+
+**Not run on hardware:** today's `init` lends no endpoint, so the Ryzen takes the listen path.
