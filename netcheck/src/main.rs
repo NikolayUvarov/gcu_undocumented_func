@@ -11,15 +11,17 @@
 // echo:A.B.C.D:SIZE:HEX (an echo of SIZE data bytes of the pattern HEX, its reply's size and data checked, socket.wit 2.6),
 // ask:HOST:PORT:SECONDS (asks for a TCP flow its grant does not name and waits that long for the user's answer, then
 // connects if allowed, socket.wit 2.8), listen:PORT:SECONDS (listens on PORT for up to SECONDS, accepts one connection,
-// reads a line and sends it back after `ECHO `, socket.wit 2.9).
+// reads a line and sends it back after `ECHO `, socket.wit 2.9), wifi (the station's client in SLOT_WIFI, which a
+// launcher lends for REQUEST_WIFI: the reading client it mints taken and the lent one dropped, the status and the
+// country read through it, join, leave, forget and set-country each refused, and both as before, 550-NET-0058).
 // A console program; without a grant every network check reports NO GRANT.
 // Its own secrets in keystore (REQUEST_SECRETS, 000-NET-0045): secret-put:NAME:FILE keeps the file's bytes as secret
 // NAME, secret-get:NAME prints its length and SHA-256 (never the value), secret-delete:NAME, secrets lists the names;
 // NO SECRETS CLIENT when the loader gave it none (a run by a path). On the same client (keystore.wit 1.6, 308-NET-0055):
 // key-state prints whether keystore holds the device key; unlock and passphrase-set try the passphrase's calls with a
 // fixed word of their own, never one from the command line, which a client without the passphrase's badge is refused.
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NET, SLOT_NETWORK, SLOT_SECRETS};
-use mind::idl::{keystore, net, socket};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NET, SLOT_NETWORK, SLOT_SECRETS, SLOT_WIFI};
+use mind::idl::{keystore, net, socket, wifi};
 use mind::ipc::Endpoint;
 use mind::http::Parser as _;
 use mind::mem::Pages;
@@ -30,6 +32,8 @@ use core::fmt::Write;
 mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_SECRETS);
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
+// Where the station's reading client arrives: a fixed slot netcheck holds nothing in (21, the shell's broker client).
+const READER: usize = 21;
 
 fn ipv4(text: &str) -> Option<u32> {
     let mut address = [0u8; 4]; let mut parts = text.split('.');
@@ -178,6 +182,29 @@ fn card() -> mind::sys::Result<Result<(), socket::Error>> {
     Ok(Ok(()))
 }
 
+// The station's reading client (wifi.wit 1.3), taken from the one in SLOT_WIFI, which is dropped: it reads, every change
+// is refused, and the station is as it was (550-NET-0058).
+fn wifi_reader() -> mind::sys::Result<Result<(), socket::Error>> {
+    if mind::dev::cap_info(SLOT_WIFI).0 != CAP_KIND_ENDPOINT { mind::println!("NETCHECK wifi NO STATION CLIENT"); return Ok(Err(socket::Error::Invalid)); }
+    if let Err(error) = wifi::reader(Endpoint(SLOT_WIFI), READER)? { mind::println!("NETCHECK wifi READER {:?}", error); return Ok(Err(socket::Error::Invalid)); }
+    let _ = mind::ipc::drop_cap(SLOT_WIFI);
+    let station = Endpoint(READER);
+    let (status, country) = (wifi::status(station)?, wifi::country(station)?);
+    let ssid = status.ssid.as_slice();
+    mind::println!("NETCHECK wifi READER: {:?} {} CHANNEL {}, COUNTRY {} {:?}", status.state, core::str::from_utf8(ssid).unwrap_or("?"), status.channel,
+                   country.applied.as_str(), country.state);
+    let shown = |what: &str, denied: Result<(), wifi::Error>| match denied {
+        Err(wifi::Error::Denied) => { mind::println!("NETCHECK wifi {} DENIED", what); 1 }
+        other => { mind::println!("NETCHECK wifi {} {:?}", what, other); 0 }
+    };
+    let denied = shown("JOIN", wifi::join(station, ssid, "", false)?) + shown("LEAVE", wifi::leave(station)?)
+        + shown("FORGET", wifi::forget(station, ssid)?.map(drop)) + shown("SET-COUNTRY", wifi::set_country(station, "US")?.map(drop));
+    let same = wifi::status(station)? == status && wifi::country(station)? == country;
+    mind::println!("NETCHECK wifi {} OF 4 DENIED, THE STATION {}", denied, if same { "AS BEFORE" } else { "CHANGED" });
+    let _ = mind::ipc::drop_cap(READER);
+    Ok(if denied == 4 && same { Ok(()) } else { Err(socket::Error::Invalid) })
+}
+
 fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
     let mut parts = text.split(':');
     let (kind, a, b, c) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
@@ -198,6 +225,7 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
         "sockets" => return sockets(),
         "cards" => return cards(),
         "card" => return card(),
+        "wifi" => return wifi_reader(),
         "sessions" => return sessions(),
         "echo" => return echo(address, b.parse().unwrap_or(u16::MAX), c),
         "ask" => return ask(a, port, c.parse().unwrap_or(5)),
@@ -299,6 +327,6 @@ fn wipe(bytes: &mut [u8]) { for byte in bytes.iter_mut() { unsafe { core::ptr::w
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX  ask:HOST:PORT:SECONDS  listen:PORT:SECONDS\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets\nThe device key's state and the passphrase's calls, with a fixed word: key-state  unlock  passphrase-set");
+    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX  ask:HOST:PORT:SECONDS  listen:PORT:SECONDS  wifi\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets\nThe device key's state and the passphrase's calls, with a fixed word: key-state  unlock  passphrase-set");
     for word in mind::process::args_str().split_whitespace() { if !secret(word) { report(word, check(word)); } }
 }

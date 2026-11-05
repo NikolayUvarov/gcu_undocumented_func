@@ -21,7 +21,11 @@
 /// works. Its first scan sends nothing; then it runs under the country the access points it heard announce (their
 /// Country element), or with none announced under `00`, the rules every country allows. `country-source` says which
 /// and why. A chosen country always comes first, and `00` is still never a chosen one.
-package mind:wifi@1.2.0;
+///
+/// 1.3 (550-NET-0058): `reader`, a client of the station that only reads (`BADGE_WIFI` without the change bit), for
+/// a program that only shows the station, such as a status line. The station mints it from its own endpoint, so
+/// whoever holds a client of this interface may narrow it, and nobody widens one.
+package mind:wifi@1.3.0;
 
 interface wifi {
     /// How a network is protected: `wpa2` is RSN with PSK and CCMP, which the station joins, as it joins `open`;
@@ -104,4 +108,9 @@ interface wifi {
     record country-origin { origin: origin, announced: u8, heard: u8 }
     /// Where the applied country came from (1.2).
     country-origin: func() -> country-origin;
+
+    /// A client of the station that only reads (1.3): `scan`, `status` and the country calls answer, the calls that
+    /// change answer `denied`. Any client of this interface may ask. `unsupported`: the station cannot make one (its
+    /// endpoint lacks the right to badge). A word call, so it can carry the capability.
+    reader: func() -> result<borrow<endpoint>, error>;
 }
