@@ -1,14 +1,14 @@
-# 309-STO-0040 — Copies of chosen names on a second medium, and a damaged block repaired from the other
+# 309-STO-0040 — Copies of chosen names on a second medium, and a damaged block repaired from the other — done
 
-**Type:** storage (`blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open (built and tested on the branch; waits to land) · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-5.1
+**Type:** storage (`blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-05) · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.done) · **Constitution:** MC-4.4, MC-4.8, MC-5.1
 
-Split from [309](309-copies-scrub-and-repair.md) (2026-11-04), its plan's "Copies". The scrub ([309-STO-0025](../issues-done/309-STO-0025-scrub.done)) and a copy in a file ([309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)) are done. A store that cannot be mounted, rebuilt from its copy, is left to a later task of 309.
+Split from [309](309-copies-scrub-and-repair.done) (2026-11-04), its plan's "Copies". The scrub ([309-STO-0025](309-STO-0025-scrub.done)) and a copy in a file ([309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.done)) are done. A store that cannot be mounted, rebuilt from its copy, is left to a later task of 309.
 
 Everything here is plan, not a guarantee (MC-12.3).
 
 ## Problem
 
-- **One copy on one medium.** The store keeps every block once. The scrub finds a damaged block, but nothing repairs it unless the owner exported a copy to a file before ([309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)) and imports it by hand.
+- **One copy on one medium.** The store keeps every block once. The scrub finds a damaged block, but nothing repairs it unless the owner exported a copy to a file before ([309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.done)) and imports it by hand.
 - **A lost medium loses the store.**
 - **`copied` is never reached.** `blockstore.wit` has had the class since 2.0 (307-STO-0019), "not reached yet" (MC-4.4, Appendix B.3).
 
@@ -43,7 +43,7 @@ Everything here is plan, not a guarantee (MC-12.3).
 - **`copy-stat()`** (2.5): whether a copy is mounted, its medium's size and use, its blocks and names, the names behind, and the blocks repaired from each medium since the mount.
 - **Independence stated** (MC-4.8):
   - two VirtIO disks are two devices to the system, but QEMU may hold both as files on one host disk, which the guest cannot tell;
-  - two partitions of one disk are not independent copies ([307](307-the-stores-own-partition.md)), and the store will say so when it is given one.
+  - two partitions of one disk are not independent copies ([307](../issues/307-the-stores-own-partition.md)), and the store will say so when it is given one.
 - **`blocks`:**
   - `copies <name> on|off`;
   - `copy stat`;
@@ -55,7 +55,7 @@ Everything here is plan, not a guarantee (MC-12.3).
 - in QEMU, the next VirtIO disk after the store's that is blank or starts with the store's superblock;
 - granted to `blockstore` in slot 4, with the write badge, and never to `vfs_server`;
 - logged as the store's disk is;
-- on real machines it waits for [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md)'s partitions.
+- on real machines it waits for [307-KRN-0177](../issues/307-KRN-0177-the-stores-own-partition-classified-and-granted.md)'s partitions.
 
 ## What it does not give
 
@@ -83,7 +83,7 @@ Everything here is plan, not a guarantee (MC-12.3).
 
 ## Progress
 
-**2026-11-04: built and tested on `claude/relaxed-meitner-5bmhpz`.** The commits are cbc0407d9 (the copies), 90b7a57f1 (the stack), 3571c4c63 (the mount's fault) and b5c76a455 (the QEMU check). The branch is merged with `main` 89b0fc97 (round 81), which brought 309-KRN-0209 ([done](../issues-done/309-KRN-0209-a-second-store-disk-for-the-block-stores-copy.done)). It waits for the landing queue. Tests are not proofs (MC-12.2).
+**2026-11-04: built and tested on `claude/relaxed-meitner-5bmhpz`.** The commits are cbc0407d9 (the copies), 90b7a57f1 (the stack), 3571c4c63 (the mount's fault) and b5c76a455 (the QEMU check). The branch is merged with `main` 89b0fc97 (round 81), which brought 309-KRN-0209 ([done](309-KRN-0209-a-second-store-disk-for-the-block-stores-copy.done)). It waits for the landing queue. Tests are not proofs (MC-12.2).
 
 - **Host:** `tests/blockstore_host.rs` 85 passed, among them 11 copy tests and `random_changes_copies_damage_and_remounts_match_a_model_of_both_media`; the whole `scripts/host_tests.sh` passed. Of 22 deliberate changes of `copies.rs`, each tried alone on a copy of the file outside git, every one was caught by at least one test.
 - **QEMU `store` suite, x86 (28 PASS) and aarch64 (29 PASS),** with `store_copy_disk_check` on two blank VirtIO disks written in place. It checks:
@@ -99,6 +99,23 @@ Everything here is plan, not a guarantee (MC-12.3).
   - **`blockstore` asks for a 256 KiB stack:** mounting the copy beside the store overflowed the 64 KiB a task has without asking.
   - The names behind: a list of 64, one catch-up per idle step, 10 s before a refused one is tried again, all compared again after the list overflowed.
 
+## Resolution
+
+Landed in `main` 4e5a72be (round da47d940, 2026-11-05), from `claude/relaxed-meitner-5bmhpz` 5c3988b0e, with 309-STO-0041.
+
+- **What is built:**
+  - the copies (`blockstore/src/copies.rs`): a whole store of its own on the disk `init` lends in slot 4 (309-KRN-0209), which each change of a copied name reaches after the store;
+  - `copied` reached;
+  - a damaged block repaired from the other medium, on a read and by the scrub;
+  - `blockstore.wit` 2.5 (`copy`, `copy-stat`); `blocks copies` and `copy stat`;
+  - the fix of the store's mount (`Head::keep`), found by the random model;
+  - `blockstore`'s 256 KiB stack.
+- **Where it is described:** docs/storage, "Copies on a second medium"; the profile's Article 4 rows and evidence (x86 and aarch64).
+- **Evidence, which is not proof (MC-12.2):**
+  - `tests/blockstore_host.rs`, and 22 deliberate changes of `copies.rs`, each caught;
+  - the QEMU `store` suite's `store_copy_disk_check` on x86 and aarch64, run on this track's container and in the round's gate.
+- **Not given:** a copy on real machines, which waits for a second partition from 307; a pairing check; copied pins. All are in docs/storage.
+
 ## Related
 
-[309](309-copies-scrub-and-repair.md), [309-STO-0025](../issues-done/309-STO-0025-scrub.done), [309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done), [307](307-the-stores-own-partition.md), [307-STO-0019](../issues-done/307-STO-0019-how-far-a-write-reached.done), [311-STO-0039](../issues-done/311-STO-0039-two-roots-compared.done).
+[309](309-copies-scrub-and-repair.done), [309-STO-0025](309-STO-0025-scrub.done), [309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.done), [307](../issues/307-the-stores-own-partition.md), [307-STO-0019](307-STO-0019-how-far-a-write-reached.done), [311-STO-0039](311-STO-0039-two-roots-compared.done).

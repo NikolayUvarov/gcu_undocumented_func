@@ -1,8 +1,8 @@
 # 309-KRN-0209 — A second store disk for the block store's copy — done
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [309](../issues/309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, Appendix B.3, B.6
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [309](309-copies-scrub-and-repair.done) · **Constitution:** MC-4.4, Appendix B.3, B.6
 
-**Asked by:** STO, 2026-11-04 (`requests-KRN.md`, taken out of it with this issue), for [309-STO-0040](../issues/309-STO-0040-copies-of-chosen-names-on-a-second-medium.md).
+**Asked by:** STO, 2026-11-04 (`requests-KRN.md`, taken out of it with this issue), for [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.done).
 
 ## Problem
 
@@ -61,4 +61,4 @@
 
 ## Related
 
-STO's [309-STO-0040](../issues/309-STO-0040-copies-of-chosen-names-on-a-second-medium.md); [300-KRN-0025](300-KRN-0025-a-disk-for-the-block-store.done) (the store's own disk); [307-KRN-0177](../issues/307-KRN-0177-the-stores-own-partition-classified-and-granted.md) (partitions on machines).
+STO's [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.done); [300-KRN-0025](300-KRN-0025-a-disk-for-the-block-store.done) (the store's own disk); [307-KRN-0177](../issues/307-KRN-0177-the-stores-own-partition-classified-and-granted.md) (partitions on machines).
