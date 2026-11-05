@@ -35,6 +35,7 @@ mod ring;
 mod safe;
 mod screenshot;
 mod start;
+mod storescope;
 mod tpm;
 mod updatectl;
 mod updates;
@@ -775,13 +776,13 @@ impl Shell {
         // The model service's client (262-APP-0112): a copy badged for this start alone, minted last, before the commit.
         let nn = requests & mind::process::REQUEST_NN != 0 && nnctl::present() && granted("nn") && !help;
         // A store volume (311-APP-0121): the user's files reach it through a copy of the shell's own client of storefs,
-        // as they reach vfs_server's volumes; another program, through a read-only scope of the store volume its
+        // as they reach vfs_server's volumes; another program, through a read-only scope of the written store volume its
         // arguments name, so it reads what the user named and nothing beside it (KRN, 2026-11-04). A program that asks
         // for its file has its directory's scope already.
         let storefs = mind::dev::cap_info(SLOT_STOREFS).0 != 0;
         let store_files = storefs && needs.files;
         let store_named = (storefs && !needs.files && !(needs.file && !needs.files) && (granted("file") || granted("files")))
-            .then(|| named::store_paths(args, &mind::fs::on_vfs).find(|(path, _)| mind::fs::metadata(path).is_ok()).map(|(_, volume)| String::from(volume))).flatten();
+            .then(|| storescope::named(args)).flatten();
         let firmware_granted = granted("firmware") && !help;
         // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
         // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
@@ -815,8 +816,7 @@ impl Shell {
         if store_files {
             if let Ok(copy) = mind::ipc::mint(SLOT_STOREFS, CAP_WRITE | CAP_GRANT, 0, 0) { let _ = lend(SLOT_STOREFS, copy); let _ = mind::ipc::drop_cap(copy); }
         } else if let Some(volume) = &store_named {
-            // A word that names no path there (`ask:…`, `tcp:…`) gives none: no scope is spent on it.
-            if mind::fs::Dir::root(volume).and_then(|root| root.scope(false, SCOPE_RECEIVE)).is_ok() {
+            if storescope::make(volume, SCOPE_RECEIVE) {
                 let _ = lend(SLOT_STOREFS, SCOPE_RECEIVE);
                 let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); // the loader holds its copy
             }

@@ -1,6 +1,6 @@
 # 311-APP-0121 — The shell lends programs a `storefs` client that does not write, and a scope for `REQUEST_FILE`
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`REQUEST_FILE`'s scope and the read-only scope of a named volume written; `REQUEST_FILES` waits for KRN's routing) · **Blocked by:** for `REQUEST_FILES`, `mind::fs::volumes::route` sending store volumes to `SLOT_STOREFS` (KRN, `APP/2026-11-04T0340Z-KRN-…`: KRN makes it) · **Main task:** [311](311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-3.1, MC-3.4
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`REQUEST_FILE`'s scope and the read-only scope of a named volume written; returned from round 56dc414c for a hang on aarch64, fixed 2026-11-05; KRN's routing is in `main`, 311-KRN-0203) · **Blocked by:** nothing · **Main task:** [311](311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-3.1, MC-3.4
 
 **Recorded by:** the tools track, 2026-10-31, from KRN's request in `issues/requests-APP.md` (2026-10-30, for the storage track's 311-STO-0032).
 
@@ -48,6 +48,23 @@ Once the storage track's part is there:
 **Tests:**
 - a host test of the volume named;
 - the `shell` suite's `storefs_check`: `find notes:` lists the volume's files, `grep -r store notes:` finds the line, `find other: notes:` reads `other:` alone through its scope, and `storefs` logs the scope `READ-ONLY`.
+
+## Progress (2026-11-05): the hang that returned the landing request, fixed
+
+**What round 56dc414c found** (`LANDING/2026-11-04T0718Z-KRN-round-56dc414c.md`): on aarch64 the TLS suite's `netcheck secret-put:token:secret.txt` and `netcheck secret-get:token` did not start within 8 s, on two machines.
+- **Why** (STO's note, `APP/2026-11-04T0719Z-STO-…`): the shell took each word for a path on a store volume, and asked `mind::fs::metadata` of it before the start. `storefs` asks `blockstore` for the name `fs/<volume>`, and `blockstore` answers nothing while it mounts. Under TCG on aarch64, early in a boot, that took longer than 8 s.
+- **A second fault, found in the fix:**
+  - `storefs` gives a client two trees, and each `root` takes one, an empty tree for a volume never written;
+  - `mind::fs` keeps a root it opened for the process's life;
+  - so each such word took one of the shell's own two roots of store volumes, and after two of them the shell's own `ls notes:` would have been refused (`handles`).
+
+**The fix** (`shell/src/named.rs`, `shell/src/storescope.rs`):
+- **Fewer words count as paths:** a volume name as `storefs` takes it (`A-Z a-z 0-9 . _ -`, 1 to 16 bytes), and no second colon after it. So `secret-put:token:secret.txt` and `ask:11.0.2.80:81:3` are no paths.
+- **Whether the volume was ever written** is asked of the block store, through the shell's read-only client, by `resolve` of `fs/<volume>`:
+  - `resolve` makes nothing, and a reply after the timeout is dropped;
+  - the start waits 500 ms at most;
+  - after one unanswered ask, no other word is asked, and the serial line says so.
+- **`storefs` is asked only for a written volume.** The scope is made from a root of its own, closed after, so the shell keeps no tree for it. When `storefs` has no tree left for the shell, the scope comes from the shell's own root of that volume, if its commands opened one.
 
 ## Acceptance criteria
 
