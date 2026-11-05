@@ -47,7 +47,9 @@ impl ShellHost<'_> {
     // Runs a command line; its output, captured (returned) or shown; err when it printed an ERROR line.
     fn run(&mut self, line: &str, keep: bool) -> Result<String, String> {
         let word = line.split_whitespace().next().unwrap_or("");
-        if let Some(need) = needs(word) {
+        // `hostname <name>` writes data/machine/name (000-APP-0123); `hostname` alone only reads.
+        let sets_name = word.eq_ignore_ascii_case("hostname") && line.split_whitespace().nth(1).is_some();
+        if let Some(need) = needs(word).or(sets_name.then_some("files")) {
             if !self.allowed(need) { return Err(alloc::format!("{} needs `requires: {}` in the script", word, need)); }
         }
         // `>` and `>>` write a file (000-APP-0074).
