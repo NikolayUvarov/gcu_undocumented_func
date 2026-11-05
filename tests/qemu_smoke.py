@@ -2575,6 +2575,13 @@ def storefs_check(vm):
     listing = vm.command("ls notes:docs")
     require(listing, "a.txt")
     require(listing, "1 FILES, 15 BYTES")
+    # 311-KRN-0207 (STO's request): after storefs restarts, the shell's kept root of notes: is an earlier instance's;
+    # mind::fs opens it again once, so ls and cat answer with no restart of the shell.
+    require(vm.command("svc restart storefs", timeout=30), "storefs restarted: PID")
+    require(vm.service_logs("storefs", "READY VOLUMES"), "[STOREFS] READY VOLUMES")
+    require(vm.command("ls notes:docs"), "1 FILES, 15 BYTES")
+    require(vm.command("cat notes:docs/a.txt"), "from the store")
+    require(vm.command("ls notes:"), "docs")
     # 311-APP-0121: a program whose arguments name a store volume (find, grep: no request for files) gets a read-only
     # scope of that volume from the shell, and reads it through mind::fs as before; another store volume it does not reach.
     found = vm.command("find notes:")
@@ -2588,13 +2595,6 @@ def storefs_check(vm):
     require(vm.command("rm other:x/c.txt"), "OK")
     require(vm.command("rm other:x"), "OK")
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
-    # 311-KRN-0207 (STO's request): after storefs restarts, the shell's kept root of notes: is an earlier instance's;
-    # mind::fs opens it again once, so ls and cat answer with no restart of the shell.
-    require(vm.command("svc restart storefs", timeout=30), "storefs restarted: PID")
-    require(vm.service_logs("storefs", "READY VOLUMES"), "[STOREFS] READY VOLUMES")
-    require(vm.command("ls notes:docs"), "1 FILES, 15 BYTES")
-    require(vm.command("cat notes:docs/a.txt"), "from the store")
-    require(vm.command("ls notes:"), "docs")
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
     # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
     # scope ends with the program.
@@ -2621,8 +2621,8 @@ def storefs_check(vm):
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
-          "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); find and grep read the store volume their arguments name through a read-only scope, "
-          "and no other store volume; edit on a store volume wrote "
+          "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); find and grep read the store "
+          "volume their arguments name through a read-only scope, and no other store volume; edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 

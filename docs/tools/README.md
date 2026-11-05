@@ -324,8 +324,10 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 
 **Store volumes** (311-KRN-0190, 311-APP-0121): `storefs`'s volumes, such as `notes:`, stand beside `vfs_server`'s (the boot disk, `ram:`, `log:`, `models:`). The shell's own commands reach them through its client. A program reaches one only so:
 - **One that asks for its file** (`edit notes:docs/a.txt`) gets a writable scope of the file's directory, as on a FAT volume.
-- **One that asks for the user's files** (`fm`) gets a copy of the shell's client, as of `vfs_server`'s. It reaches the store volumes once `mind::fs` sends them to that client rather than to the lent one: KRN's part, not in `main` yet.
+- **One that asks for the user's files** (`fm`) gets a copy of the shell's client, as of `vfs_server`'s; `mind::fs` sends the store volumes to it (311-KRN-0203).
 - **Any other program** gets a read-only scope of the store volume its arguments name (`find notes:`, `grep -r word notes:`). It reads that volume and no other. One that names none reaches none: KRN's answer of 2026-11-04, as a store volume holds the user's own documents.
+  - **Which word names one:** a store volume's name (1 to 16 of `A-Z a-z 0-9 . _ -`), a colon, and no other colon (`secret-put:token:file` is a program's own word). The first such volume that has been written gets the scope.
+  - **How the shell tells:** it asks the block store for the volume's name (`fs/notes`), which makes nothing, and asks `storefs` nothing for a volume never written. While the store mounts at boot it waits 500 ms at most, and the program starts without the scope.
 
 **A running program's question about a flow** (000-APP-0120, `netpolicy.wit` 1.3, for 000-NET-0049): a program that reaches a host the user names only as it runs asks through its grant, and only the user answers.
 - **Where it shows:** the shell asks the broker every 500 ms and shows the oldest question on the console its program was started from. For a program the shell did not start, it shows in the shell's window when a window manager the shell started runs, else on the console shown. The serial line names the console when it is not the first.
