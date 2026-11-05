@@ -9312,9 +9312,10 @@ def wifi_join_check(vm):
         if vm.services().get("wlan", pid) != pid:
             break
         time.sleep(.2)
-    require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 60), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE)")
+    restarted = wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 60)
+    require(restarted, "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE)")
     # 550-NET-0059: the radio still holds US's limits, and names its own 13 channels apart from them (wlanhw.wit 2.0).
-    require(vm.service_logs("wlan", "[WLAN] RADIO "), "[WLAN] RADIO 02:00:00:57:4C:01, 13 CHANNELS OF ITS OWN, 11 UNDER ITS LIMITS NOW")
+    require(restarted, "[WLAN] RADIO 02:00:00:57:4C:01, 13 CHANNELS OF ITS OWN, 11 UNDER ITS LIMITS NOW")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # A change of country while joined leaves the network under the old rules and drops the scan (dot11's host tests
     # check the scan); the station joins again under the new one.
@@ -9324,7 +9325,7 @@ def wifi_join_check(vm):
     ru = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30)
     # Planned over the radio's own channels, not the 11 US left it: RU, as UZ, sends on all 13 (550-NET-0059).
     require(ru, "[WLAN] COUNTRY RU (CHOSEN BY THE USER, KEPT BY KEYSTORE): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
-    require(vm.service_logs("wlansim", "COUNTRY RU"), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    require(vm.command("dmesg -s wlansim", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     after = ru.partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
     if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
         after += wlan_until("[WLAN] Off", 30)
