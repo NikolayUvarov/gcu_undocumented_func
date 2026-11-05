@@ -34,7 +34,7 @@
   - each change logs `[NETSTACK] NAME FOR DHCP: <name> (<source>)`. The plan's `[NETSTACK] DHCP AS` began as the lease's line does, which the suites wait for: the first x86 run's wait for the lease ended on it;
   - **without a name,** `mindcore` is sent.
 - **Memory:** smoltcp keeps the option by reference for the socket's life, so each new name's few bytes stay allocated.
-- **`init`:** `scopes_of("netstack")`, made only below a `data/` that is there, as `sysmon`'s is (000-KRN-0180).
+- **`init`:** `scopes_of("netstack")`, given as `sysmon`'s is and never made (000-KRN-0180): written images hold `data/machine/`, and a disk without it gives no scope, so `mindcore` is sent.
 - **The check** is `dhcp_name_check` in the `net` suite:
   - QEMU's `filter-dump` records the card's traffic, and `dhcp_sent` reads the client's DHCP messages from it;
   - with `dexp` on the disk, every DISCOVER and REQUEST at boot carries it;
@@ -51,6 +51,11 @@
 - **Host:** `sysmon`, `idl` and `services` pass.
 
 The first criterion is met on those runs.
+
+**Returned in round 87** with 000-KRN-0180, on which it is built. 0180's `init` made `data/machine/` where `data/` was, and two suites failed for it. Neither failure was in this task's code.
+- **Now:** `init` makes neither scope's directory.
+- **Its own check is unchanged:** the `net` suite's disk holds `data/machine/name`.
+- **To run again:** `network, TLS and Effector` on both architectures, on the merged tree.
 
 **Left:** the DEXP's router (the second criterion), on the maintainer's word.
 

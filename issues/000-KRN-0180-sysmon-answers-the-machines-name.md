@@ -77,6 +77,16 @@ APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): 
 
 All four criteria are met on those runs. The task closes once it lands.
 
+**Returned in round 87** (candidate 0e04398e), for two failures from `init` making `data/machine/` where `data/` is:
+- **`x86: the window manager`:** wm's Settings browsed a background in `data/` and found `data:machine` first, not `data:sky.bmp`;
+- **`aarch64: boot and fault containment`:** `fsck` found the boot volume's dirty bit after a reset during a slot's own loader. A boot that wrote nothing before now made the directory, and the reset left the volume unclean.
+
+**The change after it:**
+- `init` never makes the directory (`make` false, as for `nnd`): a boot writes nothing for it again.
+- `scripts/make_usb_image.py` puts `data/machine/` on every image it writes, so a written disk gives `sysmon` its scope and a name `hostname` sets later is read without a restart.
+- A disk without the directory, the tests' images among them, gives no scope until `sysmon`'s next start after it is made.
+- The `Make` modes are gone. The `vfs`, `edit` and `disk` suites' expectations are `main`'s again: `disk_check`'s extra key, told to APP, is taken back. `sysmon_name_check` makes the directory, and removes it at its end.
+
 ## Related
 
 [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md) (the setting and `hostname`).
