@@ -4,6 +4,8 @@ use std::{cell::RefCell,collections::{HashMap,VecDeque}};
 
 pub mod ipc{
     use super::*;
+    // The major version each request carries: wlanhw.wit's own (2.0 since 550-NET-0059).
+    pub const MAJOR:usize=crate::wlanhw::VERSION.0 as usize;
     #[derive(Clone,Copy,Debug)]pub struct Message{pub data:[usize;2],pub cap:usize}
     impl Message{
         pub fn new(a:usize,b:usize)->Self{Self{data:[a,b],cap:0}}
@@ -31,8 +33,8 @@ pub mod ipc{
         let mut bytes=Box::new([0;4096]);bytes[..body.len()].copy_from_slice(body);s.buffers.insert(id,bytes);
         s.queue.push_back(Request{id,words,kind,is_call});id
     })}
-    pub fn words(method:usize,field:usize)->usize{enqueue([method|1<<8|field<<16,0],abi::CAP_KIND_NONE,&[],true)}
-    pub fn buffer(method:usize,body:&[u8])->usize{enqueue([method|1<<8|body.len()<<16,0],abi::CAP_KIND_MEMORY,body,true)}
+    pub fn words(method:usize,field:usize)->usize{enqueue([method|MAJOR<<8|field<<16,0],abi::CAP_KIND_NONE,&[],true)}
+    pub fn buffer(method:usize,body:&[u8])->usize{enqueue([method|MAJOR<<8|body.len()<<16,0],abi::CAP_KIND_MEMORY,body,true)}
     pub fn response(id:usize)->Option<([usize;2],Vec<u8>)>{STATE.with(|s|{let s=s.borrow();
         s.replies.get(&id).map(|w|(*w,s.buffers[&id].to_vec()))})}
     pub fn dropped(id:usize)->usize{STATE.with(|s|s.borrow().drops.get(&id).copied().unwrap_or(0))}

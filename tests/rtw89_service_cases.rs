@@ -90,13 +90,13 @@ fn service_missing_save_reply_capacity_does_not_start_tx_or_leak_calls(){run(0,t
 
 #[test]
 fn service_unsupported_ring_and_malformed_requests_drop_caps_exactly_once(){run(0,true,true,|data,_|{
-    ipc::reset();let mut service=Service::new(data).unwrap();let ring=ipc::enqueue([7|1<<8,0],abi::CAP_KIND_MEMORY,&[],true);
+    ipc::reset();let mut service=Service::new(data).unwrap();let ring=ipc::enqueue([7|ipc::MAJOR<<8,0],abi::CAP_KIND_MEMORY,&[],true);
     assert!(service.step());error(ring,wlanhw::Error::Invalid);assert_eq!(ipc::dropped(ring),1);
     let kick=ipc::words(8,0);assert!(service.step());error(kick,wlanhw::Error::Invalid);
-    for words in[[1|2<<8,0],[99|1<<8,0],[2|1<<8|6<<16,0]]{
+    for words in[[1|(ipc::MAJOR+1)<<8,0],[1|(ipc::MAJOR-1)<<8,0],[99|ipc::MAJOR<<8,0],[2|ipc::MAJOR<<8|6<<16,0]]{
         let id=ipc::enqueue(words,abi::CAP_KIND_MEMORY,&[],true);assert!(service.step());assert!(self::words(id)[0]>=wire::STATUS_INVALID);assert_eq!(ipc::dropped(id),1);
     }
-    let noncall=ipc::enqueue([7|1<<8,0],abi::CAP_KIND_MEMORY,&[],false);assert!(service.step());assert!(ipc::response(noncall).is_none());assert_eq!(ipc::dropped(noncall),1);
+    let noncall=ipc::enqueue([7|ipc::MAJOR<<8,0],abi::CAP_KIND_MEMORY,&[],false);assert!(service.step());assert!(ipc::response(noncall).is_none());assert_eq!(ipc::dropped(noncall),1);
     drop(service);clean();
 });}
 
