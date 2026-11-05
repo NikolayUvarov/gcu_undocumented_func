@@ -596,6 +596,10 @@ impl Init {
                     if let Ok(irq) = minted.mint(PLATFORM_DEVICE_MSI, device, 0) { grants.add(SLOT_IRQ, irq, 0); }
                     grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL | CAP_BADGE);
                 } else {
+                    // The tables' transmit power policy as a word after the index (213-KRN-0122; rtw89_wifi's args.rs).
+                    let mut word = [0u8; 48];
+                    let n = self.power.word(&mut word);
+                    if let Ok(text) = core::str::from_utf8(&word[..n]) { let _ = core::fmt::Write::write_fmt(&mut args, format_args!(" {}", text)); }
                     grants.copy(SLOT_MEM, self.dma(index, RTL8852BE_DMA_BYTES)?, 0);
                     if self.running(service_index("vfs_server")) {
                         grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
