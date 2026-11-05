@@ -1,0 +1,68 @@
+# 550-NET-0059 — A radio's own channels, apart from the limits a country left it — done
+
+**Type:** interface (`idl/wlanhw.wit`) and network (`wlan`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-05) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Constitution:** MC-3.3, MC-12.4, MC-12.7
+
+**Split from:** [550-NET-0035](550-NET-0035-the-stations-country.done), its first point of "not done".
+
+## Problem
+
+- **`info` answers the limits' channels.** `wlanhw.wit` 1.2's `info` gives the channels the radio's last limits left.
+- **So a restart narrows the station.** A station restarted while a country holds plans over those channels only.
+  - `wlansim` shows it: after the US, 11 channels.
+  - A later choice of UZ then keeps to those 11 until the radio itself restarts, though UZ allows 13.
+- **Which channels a country allows is the station's to decide** (`wlanhw.wit` 1.0). The radio's own channels are what it decides over.
+
+## Plan
+
+1. **`wlanhw.wit` 1.4,** agreed with `DRV`:
+   - `info` names the radio's own channels apart from the limits, for example a field `supported`;
+   - `channels` keeps its meaning;
+   - a new version and an explicit transition (MC-12.4), and `bcm_wifi` and `rtw89_wifi` answer it in the same landing, since they match over every request.
+2. **`wlan`** plans each country over `supported`.
+3. **`wlansim`** answers its 13 channels whatever the limits.
+
+## Acceptance criteria
+
+- **QEMU (`net` suite with `wlansim`):** after US and a restart of `wlan`, a change to UZ gives 13 channels to send on.
+- **Host tests:** the generated `wlanhw` types in the IDL fuzzer.
+- **Not claimed:** any real radio's channels (MC-12.1). That is `DRV`'s, a radio and a machine at a time.
+
+## Progress
+
+**2026-11-05: built on `claude/relaxed-meitner-5bmhpz`** (dc0ae742c). `DRV` agreed to `info.supported`, and to the edit of its radios by `NET` (`NET/2026-11-05T0545Z-DRV-…` on `internal-dev-messages`).
+
+- **`wlanhw.wit` 2.0, not 1.4.** A field in `info` changes an existing reply's layout, which `docs/idl` gives the major version; only a function added at the end is a minor one. A 1.x radio and a 2.0 station refuse each other's requests by the major version in word 0, the explicit transition (MC-12.4). `wlan` then logs `NO RADIO: NOTHING TO DRIVE (NO DEVICE, OR NOT A WLANHW 2.X RADIO)`. `DRV` is told (`DRV/2026-11-05T0625Z-NET-…`).
+- **`supported` in each radio:**
+  - `bcm_wifi` and `rtw88_wifi`: their `CHANNELS`, 1 to 13. `rtw88_wifi` serves `wlanhw` too, so it is changed though `DRV`'s answer did not name it;
+  - `rtw89_wifi`: 1 to 13 on 2.4 GHz at 20 MHz, its library's scope;
+  - `wlansim`: its 13, whatever the limits.
+- **`wlan` plans each country over `supported`.** Its radio line names both: `13 CHANNELS OF ITS OWN, 11 UNDER ITS LIMITS NOW`.
+- **The `net` suite's country check, after US and a restart of `wlan`:**
+  - the radio's line above;
+  - RU, which allows the same 13 as UZ, planned with 13 channels to send on;
+  - the world domain's 13 (11 to send, 12 and 13 to listen).
+
+  Before, the last read 11 with no channel 12. The check changes to RU while joined, as it did before; UZ is not chosen again there.
+- **Host tests:** the generated `wlanhw` types are in the IDL fuzzer already (`wlanhw: Error Info Filter Sent Limit`).
+
+**2026-11-05: tested with `main` merged.**
+- **`DRV`'s `bcm_wifi` change landed** in round 83 (3460771e). Merged into the branch at 23edc0475: `info` keeps both, its `channel_list(country)` and `supported: supported()`.
+- **This session's container (QEMU TCG, 4 CPUs), with `wlansim` built by `scripts/x86_fixtures.sh` and `--fixtures`:**
+  - at eca4ea156: host tests whole (`scripts/host_tests.sh`, exit 0, `rtw89_wifi`'s service cases among them); the `net` suite passed on aarch64, and on x86 up to `browse_check`, which timed out in its own reading of the shell's question (000-NET-0060, a race in the test);
+  - at 045e59f5e, with 000-NET-0060's fix: the `net` suite passed on x86 (34 checks) and on aarch64 (31; the three x86-only `wlansim` builds skipped). On both, `the station's country` check ended with `After the restart the radio named its own 13 channels apart from US's 11, and RU and the world domain were planned over all 13 (550-NET-0059)`.
+- **The criterion's UZ is checked as RU,** which allows the same 13 channels: the check changes the country while joined, as before, and RU is the change it makes.
+- **Not run on real radios** (MC-12.1).
+
+## Resolution
+
+`idl/wlanhw.wit` 2.0 gives a radio's own channels in `info.supported`, apart from `channels`, which the limits left. A field in an existing reply is a major version: a 1.x radio and a 2.0 station refuse each other by word 0's major (MC-12.4), and `wlan` says so (`NOT A WLANHW 2.X RADIO`).
+- **Radios:** `bcm_wifi`, `rtw88_wifi` and `rtw89_wifi` answer 2.0, by `DRV`'s agreement; `wlansim` answers its 13 whatever the limits.
+- **`wlan`** plans each country over `supported`.
+- **Tests:** the `net` suite's country check (after US and a restart of `wlan`: the radio's own 13 apart from US's 11, RU and the world domain over all 13) and `rtw89_wifi`'s service cases, on x86 and aarch64 in this session's container; then the landing gate.
+- **The criterion's UZ was checked as RU,** which allows the same 13 channels.
+
+Landed in `main` 46b693442 (round 0ec94b12de79, 2026-11-05), with [000-NET-0060](000-NET-0060-the-run-time-question-read-whole-from-the-log.done). Nothing is claimed about a real radio's channels (MC-12.1): that is `DRV`'s, a radio and a machine at a time.
+
+## Related
+
+[550-NET-0035](550-NET-0035-the-stations-country.done); [213-KRN-0123](../issues/213-KRN-0123-the-rtl8852be-radio-endpoint.md) (`rtw89_wifi`'s `wlanhw` endpoint).

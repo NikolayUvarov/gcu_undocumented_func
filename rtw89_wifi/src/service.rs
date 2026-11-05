@@ -1,4 +1,4 @@
-//! Bounded wlanhw 1.1 adapter for one actually admitted channel; native construction remains separate.
+//! Bounded wlanhw 2.0 adapter for one actually admitted channel; native construction remains separate.
 
 use crate::{btc_session::{DeviceIo,data_mode::{self,DataSession}},frames,rx,rxdesc,tx};
 use mind::{dev,idl::{codec::List,wire,wlanhw},ipc::Endpoint,sys,time};
@@ -111,8 +111,10 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         match request{
             wlanhw::Request::Info=>{
                 let mut channels=List::default();channels.push(self.data().channel());
+                // Its own channels: 1 to 13 on 2.4 GHz at 20 MHz, its library's scope (wlanhw.wit 2.0, 550-NET-0059).
+                let mut supported=List::default();for ch in 1..=13{supported.push(ch);}
                 let info=wlanhw::Info{mac:packed(self.data().mac()),bands:mind::network::BAND_2GHZ|mind::network::BAND_2GHZ_OFDM,
-                    channels,frame_max:frames::FRAME_MAX as u16,channel:self.data().channel()};
+                    channels,supported,frame_max:frames::FRAME_MAX as u16,channel:self.data().channel()};
                 let _=wlanhw::reply_info(call,Ok(&info));
             },
             wlanhw::Request::SetChannel{channel}=>{

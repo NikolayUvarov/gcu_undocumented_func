@@ -37,6 +37,7 @@ const DEFAULT_MIB: u64 = 16; // without `--memory`
 const WORKER_MIB: u64 = 4; // what a live worker may take of the quota: its image, stack and heap
 const PARSE_MS: u32 = 60_000; // a parser's longest run
 const PAGE: usize = 4096;
+const MODEL_DISK: usize = 2; // init's read-only scope of the model disk, `models:` (262-KRN-0178)
 
 // The job memory's words: the answer and the cancel flag first, then what the worker runs, the input, the output.
 const END: usize = 0; // the worker's last write: 1 once the answer is whole
@@ -295,6 +296,7 @@ impl Nnd {
         let allowed = path.starts_with("models:") || path.starts_with("data/models/");
         if !allowed || path.split('/').any(|part| part == ".." || part == ".") { return Err(Error::NotFound); }
         let fail = |r: Refusal| { mind::println!("[NND] LOAD {} REFUSED FOR BADGE {}: {}", path, badge, r.reason()); refused(r) };
+        files_for(path)?;
         let mut name = alloc::string::String::from(path);
         name.push_str("/manifest.json");
         let (manifest_pages, manifest_len) = read_file(&name, nnpkg::check::MAX_MANIFEST_BYTES)?;
@@ -438,6 +440,16 @@ fn model_record(p: &Package, service: &Service) -> nn::Model {
         sessions: service.model(&p.id).map_or(0, |m| m.sessions),
         licence: Text::new(cut(licence, 32)).unwrap_or_default(),
     }
+}
+
+// The scope the package at `path` is read through: init's of `data/models/` in SLOT_VFS, or of the model disk in
+// MODEL_DISK, each read-only and standing for its directory (262-KRN-0178); paths stay full. One init did not give, as
+// `data/models/` before the owner makes it, is NotFound.
+fn files_for(path: &str) -> Result<(), Error> {
+    let (slot, base) = if path.starts_with("models:") { (MODEL_DISK, "models:") } else { (mind::abi::SLOT_VFS, "data/models") };
+    if mind::dev::cap_info(slot).0 != mind::abi::CAP_KIND_ENDPOINT { return Err(Error::NotFound); }
+    mind::fs::use_scope(Endpoint(slot), base);
+    Ok(())
 }
 
 // A file of at most `limit` bytes in pages of its own.

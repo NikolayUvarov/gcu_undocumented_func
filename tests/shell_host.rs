@@ -34,6 +34,8 @@ mod updates;
 mod nnclients;
 #[path = "../shell/src/flowask.rs"]
 mod flowask;
+#[path = "../shell/src/named.rs"]
+mod named;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -542,4 +544,27 @@ fn a_flow_question_takes_four_keys_and_shows_the_programs_words_safely() {
     let text = question("get", 42, "example.org", 443, "the page you named\u{7}");
     assert_eq!(text, "NETWORK: get (PID 42) ASKS TO REACH example.org:443\n  ITS REASON, IN ITS OWN WORDS: \"the page you named?\"\n  N: NO (THE DEFAULT)  O: ONCE  S: FOR THIS RUN  A: ALWAYS? ");
     assert!(!question("get", 42, "example.org", 443, "").contains("ITS REASON"), "no reason given: no line for it");
+}
+
+// 311-APP-0121: the words that may name a path on a store volume, for the program's read-only scope; vfs_server's
+// volumes, a URL and a word without a volume name none.
+#[test]
+fn the_store_paths_a_programs_arguments_may_name() {
+    use named::store_paths;
+    let vfs = |v: &str| ["", "ram", "log", "models"].iter().any(|n| n.eq_ignore_ascii_case(v));
+    let paths = |args| store_paths(args, &vfs).collect::<Vec<_>>();
+    assert_eq!(paths("notes:"), [("notes:", "notes")]);
+    assert_eq!(paths("-name *.txt notes:docs"), [("notes:docs", "notes")]);
+    assert_eq!(paths("ram:a.txt photos:2026/a.jpg notes:b"), [("photos:2026/a.jpg", "photos"), ("notes:b", "notes")], "in order");
+    assert_eq!(paths("ask:11.0.2.80:81:3 notes:"), [("notes:", "notes")], "a second colon: a program's word, not a path");
+    // The TLS suite's words (LANDING 2026-11-04T0718Z): the first is no path; the second may be, and the block store says.
+    assert!(paths("secret-put:token:secret.txt").is_empty());
+    assert_eq!(paths("secret-get:token"), [("secret-get:token", "secret-get")]);
+    assert_eq!(paths("my.notes_2-a:x"), [("my.notes_2-a:x", "my.notes_2-a")], "storefs's characters");
+    assert!(paths("ram:a.txt RAM:b log:c models:d").is_empty(), "vfs_server's, in any case");
+    assert!(paths("https://example.org/a:b http://x").is_empty(), "a URL is not a path");
+    assert!(paths("docs/a:b :x 12345678901234567:y").is_empty(), "a slash before the colon, no name, too long a name");
+    assert!(paths("a+b:c заметки:d a=b:c").is_empty(), "a name storefs does not take");
+    assert!(paths("kernel.elf").is_empty());
+    assert_eq!(named::store_name("Notes"), "fs/notes", "storefs ignores the case and writes it lower");
 }

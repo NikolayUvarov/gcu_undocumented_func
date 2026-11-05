@@ -1,10 +1,14 @@
 # The model service `nnd` and `idl/nn.wit` — stage 0 of 262
 
-**Version:** 1.0 (2026-10-29), agreed:
+**Version:** 1.1 (2026-11-04): sections 5 and 8 as `nnd` and the suite make them. The interface stays `mind:nn@1.0.0`.
+- **What changed.** A worker writes its charges when its job ends, not as it runs, so `usage` shows a running job's charges only after its end (section 5). The suite's cancellation therefore waits a part of the time a whole job took, not for a row in `usage` (section 8, step 4).
+- **Why.** `nrl-runtime`'s checkpoint gives the worker the clock and the cancel flag, not the rows done. A later version may add progress, with `NRL`.
+
+**Version 1.0** (2026-10-29), agreed:
 - `NRL` agreed to text object files and f64 only (questions 1 and 2), and pinned the test model, its references and the encoding vector;
 - `KRN` answered questions 3 and 4, and gave how a badge is retired before its reuse (section 1).
 
-Nothing on this page exists yet: `idl/nn.wit` and `nnd` follow it. **Track:** `APP`, task [262-APP-0112](../../issues/262-APP-0112-nnd-and-nn-wit-stage-0.md) of [262](../../issues/262-model-runtime-on-the-machines-full-hardware.md). **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.3, MC-12.4.
+`idl/nn.wit` 1.0, `nnd`, the shell's badged clients and `nncheck` are made after this page; [262-APP-0112](../../issues/262-APP-0112-nnd-and-nn-wit-stage-0.md) says what is built and what was tested where. **Track:** `APP`, task [262-APP-0112](../../issues/262-APP-0112-nnd-and-nn-wit-stage-0.md) of [262](../../issues/262-model-runtime-on-the-machines-full-hardware.md). **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.3, MC-12.4.
 
 262's stage 0 asks for this page before any code. It states:
 - how the model service holds its authority;
@@ -233,7 +237,7 @@ The worker holds no endpoint and no file, and it cannot reach `nnd`'s clients.
 
 **The control page:**
 - `nnd` writes the cancel flag and the deadline;
-- the worker writes its progress (rows and work done) and its end (done, `numeric`, `deadline`, `cancelled`, `failed`);
+- the worker writes its end (done, `numeric`, `deadline`, `cancelled`, `failed`) and what the runtime charged (rows, work, requests) when its job ends; it writes no progress while it runs (1.1);
 - the worker's `Control` callback reads the flag and the monotonic clock at each checkpoint of `nrl-runtime`; the tick is the monotonic clock in nanoseconds.
 
 **The job's end.** `nnd` learns it from the worker's exit notice (`TASK_WATCH`), then reads the page and the output. A worker that ends without writing its end failed (`failed`); its session is poisoned and `nnd` runs on.
@@ -303,15 +307,16 @@ The shared `parse` service is not used: its JSON (`parse.wit` 1.4) is bounded to
 3. **The budget**, each refused with nothing charged and the session still usable:
    - three rows under a work budget of 1892;
    - under a budget of 3 rows and 1893 work: 2 rows run, 2 more are refused, 1 more runs (3 / 1893 / 2), and the next is refused.
-4. **Cancellation:** the 256 rows of `long-input.f64le` start. `nncheck` cancels once `usage` shows a row done; `wait` answers `cancelled`, the output is empty, and the session takes no more jobs.
-   - **The outcome is named:** cancelled midway (rows charged between 1 and 255), cancelled before it ran, or finished before the cancel. Only the first is evidence of a partial cancellation.
-5. **The deadline:** a session whose deadline passes ends its job (`deadline`). A session opened with deadline 0 runs, as no deadline.
-6. **Two clients:** a second `nncheck`, another badge, is refused the first one's session and job (`owner`) though their numbers are the same, and its own session runs.
+4. **Cancellation:** the 256 rows of `long-input.f64le` run once whole, and `nncheck` times them. Then, on a new session each try (16 at most), they start again, and `nncheck` waits and cancels: 40 ms first, then less after a job that finished first and more after one cancelled before its first row. `wait` answers `cancelled`, the output is empty, and the session takes no more jobs (`poisoned`).
+   - **The outcome is named:** cancelled partway (rows charged between 1 and 255), cancelled before its first row, or finished before the cancel. Only the first is evidence of a partial cancellation, and the step needs one.
+5. **The deadline:** a session whose deadline comes while the 256 rows run (64 tries at most, each on a new session: three quarters of their time first, then after the last try's end, as below) ends their job partway (`deadline`, rows charged between 1 and 255, the session poisoned). One whose deadline passed before its job started charges no row. A session opened with deadline 0 runs, as no deadline.
+   - **The deadline counts from `open`, and the job's worker starts after `submit`.** Under TCG on x86 with 4 CPUs that start took from about 30 to 550 ms, and the 256 rows about 70 ms, so a deadline landed partway in about one try of six (2026-11-04). A try that ended before its first row ended about when its rows would have begun, so the next deadline comes 20 ms after that; after one that finished first, 35 ms before its end. The suite prints each try and a short job's time (`3 ROWS TOOK`), most of which is the start.
+6. **Two clients:** a second `nncheck`, another badge, names the first one's session and job by their numbers (`nnd` numbers them across all clients) and is refused each call (`owner`); its own session on the same model runs.
 7. **A numeric failure and its input:**
    - a row that is not finite is refused before it runs (`malformed`, nothing charged, the session usable);
    - `numeric-input.f64le` overflows inside the model: `numeric` (1 / 39 / 1), the session poisoned;
    - a new session of the same model runs (3 / 1893 / 1).
-8. **A badge reused:** a `nncheck` with a session ends; the next program gets the same badge and is refused the old session (`not-found`). A copy of its client passed to a child is gone with it (262-KRN-0178).
+8. **A badge reused:** a `nncheck` with a session ends; the next program gets the same badge and is refused the old session and job (`not-found`), and the model it alone held is unloaded. A copy of its client passed to a child goes with it, as the shell's revocation takes every copy made from it (000-KRN-0104); the suite starts no child.
 9. **Memory:** after `close` and `unload`, `nnd`'s used memory is what it was before the load.
 
 **The PASS line names the configuration:** QEMU, the CPUs, TCG or KVM, and the architecture. A pass is evidence for that configuration only, and not a proof (MC-12.1, MC-12.2). The profile in `docs/profile` records the commit, the configuration and the log.

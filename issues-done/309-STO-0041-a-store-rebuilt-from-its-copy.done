@@ -1,8 +1,8 @@
-# 309-STO-0041 — A store rebuilt from its copy, and what it lost said
+# 309-STO-0041 — A store rebuilt from its copy, and what it lost said — done
 
-**Type:** storage (`blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open (built and tested on the branch; waits to land) · **Blocked by:** — (built on [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.md), on the track's branch; it lands after or with it) · **Main task:** [309](309-copies-scrub-and-repair.md) · **Constitution:** MC-4.4, MC-4.8, MC-5.1, MC-6.8
+**Type:** storage (`blockstore`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-05) · **Blocked by:** — (built on [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.done), on the track's branch; it lands after or with it) · **Main task:** [309](309-copies-scrub-and-repair.done) · **Constitution:** MC-4.4, MC-4.8, MC-5.1, MC-6.8
 
-Split from [309](309-copies-scrub-and-repair.md) (2026-11-04), its plan's "Damage beyond a block": a store that cannot be mounted, rebuilt from its copy, with a tool that checks and says what it lost. The copies themselves are [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.md).
+Split from [309](309-copies-scrub-and-repair.done) (2026-11-04), its plan's "Damage beyond a block": a store that cannot be mounted, rebuilt from its copy, with a tool that checks and says what it lost. The copies themselves are [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.done).
 
 Everything here is plan, not a guarantee (MC-12.3).
 
@@ -50,7 +50,7 @@ Everything here is plan, not a guarantee (MC-12.3).
   The tool cannot tell these from what never existed, and it says so in its output.
 - **No older version of the copy** is tried when its current one is incomplete.
 - **No erasing of a medium the store cannot mount.**
-- **No pairing check** ([309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.md)): a copy from another store would be rebuilt into this one.
+- **No pairing check** ([309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.done)): a copy from another store would be rebuilt into this one.
 
 ## Acceptance criteria
 
@@ -88,6 +88,21 @@ Everything here is plan, not a guarantee (MC-12.3).
   - **The QEMU check reboots the guest rather than starting QEMU again:** `keystore` keeps the copy's volume key on the boot volume, whose snapshot overlay outlives a reboot and not QEMU. The store's image is zeroed and the copy's damaged while the guest is idle.
 - **Not tested on the platform:** a store that cannot be mounted beside its copy, a name behind refused, and a block the copy lacks that the store holds. These are host-tested.
 
+## Resolution
+
+Landed in `main` 4e5a72be (round da47d940, 2026-11-05), with 309-STO-0040.
+
+- **What is built:**
+  - `blockstore.wit` 2.6, `copy-names` and `rebuild`: a name only the copy holds, brought back into the store, every block checked against its CID;
+  - a walk that stops reports the CID where it stopped;
+  - beside a store that does not mount, the copy is read through a shut gate and nothing is written on it;
+  - `blocks rebuild [--check]`, and `copy-stat` answered from a copy read beside a store not mounted.
+- **Where it is described:** docs/storage 0.30, "A store rebuilt from its copy"; the profile's Article 4 rows and evidence (x86 and aarch64).
+- **Evidence, which is not proof (MC-12.2):**
+  - `tests/blockstore_host.rs` (8 tests, and the random model losing the store's medium), and 18 deliberate changes of the rebuild code, each caught;
+  - the QEMU `store` suite's `store_rebuild_check` on x86 and aarch64.
+- **Not given:** what the copy never held; an older version of the copy when its current one is incomplete; the erasing of a medium the store cannot mount. All are in docs/storage.
+
 ## Related
 
-[309](309-copies-scrub-and-repair.md), [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.md), [309-STO-0031](../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done), [305](../issues-done/305-recovery-without-the-store.done), [307](307-the-stores-own-partition.md).
+[309](309-copies-scrub-and-repair.done), [309-STO-0040](309-STO-0040-copies-of-chosen-names-on-a-second-medium.done), [309-STO-0031](309-STO-0031-a-copy-of-named-roots-in-a-file.done), [305](305-recovery-without-the-store.done), [307](../issues/307-the-stores-own-partition.md).

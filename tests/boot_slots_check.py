@@ -17,6 +17,9 @@ On a raw disk image with both slots and the bootloader of the build:
   build's loader, the same file, and none is started;
 - `version_floor` (351-UPD-0024): a slot whose signed manifest names a version below the newer record's floor is not
   booted, the other slot boots instead; one at the floor boots on trial; records of format 1 are not read.
+- the loader's mark (000-KRN-0211): each boot leaves `MIND/REACHED` at `HANDOVER` with a count one more than the last;
+  a slot's own loader carries the count the loader at EFI/BOOT/ started, and a boot reset in its pause is left at
+  `READ`, as `scripts/boot_switch.py logs` reads it.
 
 `boot(image, until)` boots the image and returns the console output up to `until`; the volume has no keystore
 (`quiet_volume`). Init's confirmation is 351-KRN-0014: the host writes the confirmed record here, as the updater will.
@@ -30,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import boot_slots  # noqa: E402
+import boot_switch  # noqa: E402
 import sign_manifest  # noqa: E402
 
 STARTED = "MIND CORE KERNEL: INIT STARTED"
@@ -46,6 +50,20 @@ def fsck(image):
     check = subprocess.run(["fsck.fat", "-n", str(volume)], capture_output=True, text=True)
     volume.unlink()
     assert check.returncode == 0 and "Dirty bit" not in check.stdout + check.stderr, check.stdout + check.stderr
+
+
+def mark(image):
+    """The loader's mark on the image, as boot_switch.py reads it: (count, stage), or None."""
+    data = image.read("MIND/REACHED")
+    return boot_switch.parse_mark(data) if data else None
+
+
+def marked(out, count):
+    """The loader's three marks of one boot, in order, on the serial line."""
+    at = 0
+    for stage in ("STARTED", "READ", "HANDOVER"):
+        at = out.find(f"BOOT: MARK {count} {stage}\n", at)
+        assert at >= 0, (count, stage, out[-3000:])
 
 
 def quiet_volume(volume, out, updater=None):
@@ -83,13 +101,18 @@ def run(boot, temp, volume, label, updater=None):
 
     # A trial of B with one try: it runs on trial, its try counted on the other record first; confirmed, it stays.
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
-    booted("B", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", trial=True)
+    out = booted("B", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", trial=True)
     assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    marked(out, 1)
+    assert mark(image) == (1, "HANDOVER"), mark(image)
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
     zone = "[VFS] UPDATE ZONE: MIND/A AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE"
-    booted("B", "SLOT B, CONFIRMED", zone, until=zone)
+    marked(booted("B", "SLOT B, CONFIRMED", zone, until=zone), 2)
+    assert mark(image) == (2, "HANDOVER"), mark(image)
     print(f"PASS ({label}): slot B boots on trial, its try counted on the disk first, and as confirmed once confirmed; "
           "vfs_server's update zone is then slot A", flush=True)
+    print(f"PASS ({label}): each boot leaves the loader's mark at HANDOVER, one count more than the last, on a trial "
+          "and a confirmed slot", flush=True)
 
     # Staged again and never confirmed: the next boot falls back to A.
     boot_slots.write_next(image, slot="B", fallback="A", tries=1)
@@ -206,8 +229,8 @@ def own_loaders(boot, temp, volume, label):
 
     # On trial: its try counted once, by the loader at EFI/BOOT/, before the slot's own loader starts; confirmed, the same.
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
-    booted(f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", "BOOT: SLOT B: STARTING ITS OWN LOADER", started + ", ON TRIAL",
-           "BOOT: SLOT B LOADED ON TRIAL", STARTED)
+    booted("BOOT: MARK 1 STARTED", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", "BOOT: SLOT B: STARTING ITS OWN LOADER",
+           started + ", ON TRIAL", "BOOT: MARK 1 READ", "BOOT: SLOT B LOADED ON TRIAL", "BOOT: MARK 1 HANDOVER", STARTED)
     assert newer() == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
     booted("SLOT B, CONFIRMED", "BOOT: SLOT B: STARTING ITS OWN LOADER", started + "\n", "BOOT: SLOT B LOADED\n", STARTED)
@@ -217,11 +240,16 @@ def own_loaders(boot, temp, volume, label):
     # Reset while the slot's own loader waits (its pause for a photo): its try was spent, the next boot is slot A's.
     image.write("data/pause.txt", b"2\n")
     boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    count = mark(image)[0] + 1
     booted("BOOT: SLOT B: STARTING ITS OWN LOADER", started + ", ON TRIAL", "S FOR A PHOTO OF THESE LINES", until="S FOR A PHOTO OF THESE LINES")
+    assert mark(image) == (count, "READ"), mark(image)
     image.write("data/pause.txt", b"0\n")
     out = booted("BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED\n", STARTED)
     assert "OWN LOADER" not in out, out[-3000:]
+    marked(out, count + 1)
     print(f"PASS ({label}): a reset while slot B's own loader runs leaves its trial spent; the next boot is slot A's", flush=True)
+    print(f"PASS ({label}): slot B's own loader marks READ and HANDOVER with the count the loader at EFI/BOOT/ started; "
+          "a boot reset in its pause is left at READ", flush=True)
 
     # Its own loader cannot load its slot (a service damaged): it returns, and slot A boots at once, B with no tries.
     rtc = image.read("MIND/B/rtc.elf")

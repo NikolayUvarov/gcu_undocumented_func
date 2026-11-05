@@ -1,4 +1,4 @@
-// The radio as a service (550-DRV-0027): idl/wlanhw.wit 1.3 served on the service endpoint, which init lends to the
+// The radio as a service (550-DRV-0027): idl/wlanhw.wit 2.0 served on the service endpoint, which init lends to the
 // station `wlan` alone (MC-2.3). Received frames are polled from the ring every few milliseconds; `wait` answers when
 // one is queued. No shared ring yet: frames go by `receive`, as the station takes them.
 use crate::radio::{Counts, Error, Filter, Radio, Sent, FRAME_MAX, OFDM_RATES, RADIO_HEADER};
@@ -238,7 +238,14 @@ pub fn run(radio: &mut Radio) -> ! {
 }
 
 fn info(radio: &Radio, country: Option<Country>) -> wlanhw::Info {
-    wlanhw::Info { mac: mac64(&radio.mac), bands: bands(), channels: channel_list(country), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+    wlanhw::Info { mac: mac64(&radio.mac), bands: bands(), channels: channel_list(country), supported: supported(), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+}
+
+// The radio's own channels, whatever the limits (wlanhw.wit 2.0, 550-NET-0059).
+fn supported() -> List<u8, 64> {
+    let mut channels = List::default();
+    for ch in CHANNELS { channels.push(ch); }
+    channels
 }
 
 // No radio to serve (it did not come up): every request answered no-device, `wait` with none, so the station is not
@@ -294,9 +301,7 @@ fn busy(request: &mind::ipc::Received, scratch: &mut [u8; wlanhw::REQUEST_MAX]) 
     let busy = wlanhw::Error::Busy;
     let _ = match request {
         wlanhw::Request::Info => {
-            let mut channels = List::default();
-            for c in 1..=13 { channels.push(c); }
-            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: bands(), channels, frame_max: FRAME_MAX as u16, channel: 0 }))
+            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: bands(), channels: supported(), supported: supported(), frame_max: FRAME_MAX as u16, channel: 0 }))
         }
         wlanhw::Request::SetChannel { .. } => wlanhw::reply_set_channel(call, Err(busy)),
         wlanhw::Request::SetFilter { .. } => wlanhw::reply_set_filter(call, Err(busy)),

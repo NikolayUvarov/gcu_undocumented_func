@@ -1513,6 +1513,7 @@ def shell_suite(vm):
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
     storefs_check(vm)
+    vfs_restart_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
     # machine off without stopping the services: QEMU ends. The suite's last step.
     for name in ("poweroff", "shutdown"):
@@ -2543,6 +2544,25 @@ def vfs_check(vm):
     search_check(vm)
 
 
+def vfs_restart_check(vm):
+    """311-KRN-0207: after vfs_server restarts, the shell's kept root of the boot volume is an earlier instance's; mind::fs
+    opens it again once, so ls, write, cat and rm in data/ answer with no restart of the shell. Late in the shell suite:
+    the services' open files on the old instance are not reopened."""
+    require(vm.command("ls data"), "sum.msh")
+    old = vm.services()["vfs_server"]
+    require(vm.command("svc restart vfs_server", timeout=60), "vfs_server restarted: PID")
+    for _ in range(50):
+        if vm.services().get("vfs_server", old) != old:
+            break
+        time.sleep(.2)
+    require(vm.service_logs("vfs_server", "[VFS] THE BOOT VOLUME:"), "[VFS] THE BOOT VOLUME:")
+    require(vm.command("ls data"), "sum.msh")
+    require(vm.command("write data/after.txt after the restart"), "WROTE 18 BYTES TO data/after.txt")
+    require(vm.command("cat data/after.txt"), "after the restart")
+    require(vm.command("rm data/after.txt"), "OK")
+    print("PASS: vfs_server restarted: the shell's ls, write, cat and rm in data/ answer again with no restart of the shell (311-KRN-0207)", flush=True)
+
+
 def storefs_check(vm):
     """311-KRN-0190: storefs runs at boot with the block store's client, and the shell reaches a store volume through the
     same mind::fs calls as a FAT one; a program without storefs's client finds no store volume, and asks nobody."""
@@ -2562,8 +2582,19 @@ def storefs_check(vm):
     require(vm.command("ls notes:docs"), "1 FILES, 15 BYTES")
     require(vm.command("cat notes:docs/a.txt"), "from the store")
     require(vm.command("ls notes:"), "docs")
-    # find is a console program: the shell lends it no storefs client yet (APP's part), so mind::fs asks nobody.
-    require(vm.command("find notes:"), "FIND: notes:: NOTFOUND")
+    # 311-APP-0121: a program whose arguments name a store volume (find, grep: no request for files) gets a read-only
+    # scope of that volume from the shell, and reads it through mind::fs as before; another store volume it does not reach.
+    found = vm.command("find notes:")
+    require_all(found, "notes:docs/", "notes:docs/a.txt")
+    require_all(vm.command("grep -r store notes:"), "notes:docs/a.txt", "from the store")
+    # Its scope is of the first store volume it names, which it reads alone: through other:'s scope, notes: is not reached.
+    require(vm.command("mkdir other:x"), "OK")
+    require(vm.command("write other:x/c.txt a store too"), "WROTE 12 BYTES")
+    out = vm.command("grep -r store other: notes:")
+    assert "other:x/c.txt" in out and "notes:docs/a.txt" not in out, out
+    require(vm.command("rm other:x/c.txt"), "OK")
+    require(vm.command("rm other:x"), "OK")
+    assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
     # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
     # scope ends with the program.
@@ -2584,13 +2615,14 @@ def storefs_check(vm):
     require(vm.expect("EXITED. SHELL RESUMED."), "[EDIT] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     scopes = vm.service_logs("storefs", "ENDED")
-    made = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes)
-    assert len(made) == 2 and f"[STOREFS] SCOPE {made[0]} ENDED" in scopes, scopes[-1500:]
+    made = list(re.finditer(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes))
+    assert len(made) == 2 and f"[STOREFS] SCOPE {made[0][1]} ENDED" in scopes[made[0].end():], scopes[-1500:]  # after it was made
     require(vm.command("rm notes:docs/b.txt"), "OK")
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
-          "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); a program without storefs's client gets NotFound; edit on a store volume wrote "
+          "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); find and grep read the store "
+          "volume their arguments name through a read-only scope, and no other store volume; edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 
@@ -3001,9 +3033,115 @@ def nn_clients_check(vm):
 
 
 def nnd_suite(vm):
-    """The model service: KRN's boot service (262-KRN-0178), then the shell's clients of it (262-APP-0112)."""
+    """The model service: KRN's boot service (262-KRN-0178), then the shell's clients of it and NRL's pinned model run
+    through it (262-APP-0112)."""
     nnd_check(vm)
     nn_clients_check(vm)
+    nn_model_check(vm)
+
+
+NN_FIXTURE = ROOT / "nrl/tests/fixtures/native-conformance-v0"
+
+
+def nn_model_id(manifest):
+    """nrl.model/0's model ID: SHA-256 of the manifest's canonical JSON (sorted keys, no spaces); the pinned manifest
+    has no floats and no characters past ASCII, so Python's encoder gives it."""
+    return hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+def nn_packages():
+    """NRL's pinned package (900-NRL-0025) and four made from it for nnd's refusals: name -> (files, model ID).
+    `changed`: one byte of an object changed, its entry not (digest); `compact`: an object written without its writer's
+    spaces, its entry and the ID made anew (malformed: nnd takes the writer's bytes alone); `overlay`: the kind changed
+    (unsupported)."""
+    model = NN_FIXTURE / "model"
+    base = {p.name: p.read_bytes() for p in sorted(model.iterdir())}
+    manifest = json.loads(base["manifest.json"])
+    assert nn_model_id(manifest) == "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee"
+    packages = {"conformance": (base, nn_model_id(manifest))}
+    head = base["object-0006.json"]
+    assert b"0.3," in head
+    packages["changed"] = ({**base, "object-0006.json": head.replace(b"0.3,", b"0.4,", 1)}, nn_model_id(manifest))
+    compact = json.dumps(json.loads(head), separators=(",", ":")).encode()
+    m = json.loads(base["manifest.json"])
+    m["objects"]["head"].update(sha256=hashlib.sha256(compact).hexdigest(), bytes=len(compact))
+    packages["compact"] = ({**base, "object-0006.json": compact, "manifest.json": json.dumps(m, indent=2).encode()}, nn_model_id(m))
+    m = json.loads(base["manifest.json"])
+    m["kind"] = "overlay"
+    packages["overlay"] = ({**base, "manifest.json": json.dumps(m, indent=2).encode()}, nn_model_id(m))
+    return packages
+
+
+def nn_model_check(vm):
+    """262-APP-0112, docs/nn/runtime.md section 8, NRL's native acceptance (nrl/specs/native-conformance-v0.md): with
+    nnd's line in data/memory.conf (its workers), NRL's pinned model from data/models/ loaded through the shell's
+    badged client and run by nncheck. Refused: a wrong ID and a changed byte (digest), an object not in its writer's
+    bytes (malformed), an overlay (unsupported), a missing package and a path that climbs (not-found). Run: the
+    reference outputs within NRL's tolerance and their charges, the budget's refusals, a cancellation and a deadline
+    partway, a numeric failure and a new session, nnd's memory back after the unload. Two clients: the other's calls on
+    a session and a job it does not own refused (owner); once the first has ended and its badge is retired, the badge
+    taken again reaches none of them (not-found)."""
+    packages = nn_packages()
+    ident = packages["conformance"][1]
+
+    def retired():
+        return [int(b) for b in re.findall(r"\[NND\] BADGE (\d+) RETIRED", vm.command("dmesg -s nnd", raw=True))]
+
+    require(vm.command("write data/memory.conf nnd 64"), "WROTE 7 BYTES")
+    require(vm.command("svc restart nnd"), "nnd restarted: PID")
+    for _ in range(60):
+        if re.search(rf"\[NND\] READY: QUOTA 64 MIB, {vm.cpus} WORKERS AT MOST", vm.command("dmesg -s nnd", raw=True)):
+            break
+        time.sleep(1)
+    else:
+        raise AssertionError(vm.command("dmesg -s nnd", raw=True)[-1500:])
+    out = vm.command(f"nncheck load data/models/conformance {ident}", raw=True, timeout=90)
+    require_all(out, "NNCHECK LOAD data/models/conformance Ok IN=3 OUT=2 ROWS=256 BYTES=", "NNCHECK UNLOAD Ok(())", "NNCHECK DONE")
+    wrong = ident[:-1] + ("0" if ident[-1] != "0" else "1")
+    for path, ident_, error in (("conformance", wrong, "Digest"), ("changed", ident, "Digest"), ("compact", packages["compact"][1], "Malformed"),
+                                ("overlay", packages["overlay"][1], "Unsupported"), ("missing", ident, "NotFound"), ("../models/conformance", ident, "NotFound")):
+        require(vm.command(f"nncheck load data/models/{path} {ident_}", raw=True, timeout=90), f"NNCHECK LOAD data/models/{path} Err({error})")
+    log = vm.command("dmesg -s nnd", raw=True)
+    for path, reason in (("conformance", "THE MODEL ID IS NOT THE ONE GIVEN"), ("changed", "AN OBJECT FILE'S LENGTH OR SHA-256 IS NOT ITS ENTRY'S"), ("overlay", "AN OVERLAY")):
+        assert re.search(rf"\[NND\] LOAD data/models/{path} REFUSED FOR BADGE \d+: {reason}", log), (path, log[-2000:])
+    out = vm.command(f"nncheck run data/models/conformance {ident}", raw=True, timeout=300)
+    assert "WRONG" not in out and "NNCHECK DONE" in out, out
+    for line in ("OUTPUTS 3 ROWS WITHIN", "CHARGED 3/1893/1 OK", "NONFINITE INPUT REFUSED", "257 ROWS REFUSED", "OUTPUTS 256 ROWS WITHIN",
+                 "WORK BUDGET 1892: 3 ROWS REFUSED", "ROW BUDGET 3:", "JOB BUDGET 2:", "MEMORY ONE BYTE SHORT", "CANCEL PARTWAY:",
+                 "DEADLINE PARTWAY:", "DEADLINE PASSED BEFORE", "NUMERIC: CHARGED 1/39/1", "A NEW SESSION AFTER THE FAILURE", "MEMORY BACK TO BEFORE THE LOAD OK"):
+        require(out, line)
+    print(f"nnd model run: {' | '.join(l.strip() for l in out.splitlines() if 'TOOK' in l or ' TRY ' in l or 'NUMERIC:' in l)}", flush=True)
+    # Two clients, then the first one's badge taken again.
+    started = vm.command(f"run nncheck share data/models/conformance {ident} 120 &", raw=True)
+    holder = int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", started)[1])
+    logged = vm.program_logs(holder, " HELD")
+    shared = re.search(r"NNCHECK SHARE SESSION=(\d+) JOB=(\d+) HELD", logged)
+    assert shared, logged
+    session, job = shared[1], shared[2]
+    out = vm.command(f"nncheck other {session} {job} {ident}", raw=True, timeout=60)
+    require_all(out, "NNCHECK CLIENT BADGE=2 ", "NNCHECK OTHER USAGE Err(Owner)", "NNCHECK OTHER SUBMIT Err(Owner)", "NNCHECK OTHER WAIT Err(Owner)",
+                "NNCHECK OTHER CANCEL Err(Owner)", "NNCHECK OTHER CLOSE Err(Owner)", "NNCHECK OTHER UNLOAD Err(NotFound)", "NNCHECK OTHER OPEN Ok(true)",
+                "NNCHECK OTHER OWN JOB Ok(48) WITHIN THE TOLERANCE")
+    before = len(retired())
+    require(vm.command(f"kill {holder}"), f"KILLED PID={holder}")  # the harness's number, translated
+    for _ in range(100):
+        if 1 in retired()[before:]:
+            break
+        time.sleep(.1)
+    else:
+        raise AssertionError(vm.command("dmesg -s nnd", raw=True)[-1500:])
+    out = vm.command(f"nncheck other {session} {job} {ident}", raw=True, timeout=60)
+    require_all(out, "NNCHECK CLIENT BADGE=1 ", "NNCHECK OTHER USAGE Err(NotFound)", "NNCHECK OTHER SUBMIT Err(NotFound)", "NNCHECK OTHER WAIT Err(NotFound)",
+                "NNCHECK OTHER CANCEL Err(NotFound)", "NNCHECK OTHER CLOSE Err(NotFound)", "NNCHECK OTHER UNLOAD Err(NotFound)", "NNCHECK OTHER OPEN Err(NotFound)")
+    require(vm.command("nn models", raw=True), "NO MODEL LOADED")
+    require(vm.command("rm data/memory.conf"), "OK")
+    accel = "KVM" if "kvm" in (getattr(vm.args, "machine", None) or "") else "TCG"
+    print(f"PASS: nnd runs NRL's pinned model on QEMU {vm.arch}, {vm.cpus} CPUs, {accel} (262-APP-0112): loaded from data/models/ through the shell's badged client; a wrong ID, "
+          "a changed byte, an object not in its writer's bytes, an overlay, a missing package and a climbing path refused; "
+          "the reference outputs of 3 and 256 rows within NRL's tolerance, charged 3/1893/1; the work, row, job and memory "
+          "budgets' refusals; a cancellation and a deadline partway, a numeric failure and a new session; nnd's memory back "
+          "after the unload; another client refused a session and a job it does not own, its own session's job run; a retired "
+          "badge taken again reaching none of them", flush=True)
 
 
 def held_check(vm, cpus):
@@ -9312,23 +9450,31 @@ def wifi_join_check(vm):
         if vm.services().get("wlan", pid) != pid:
             break
         time.sleep(.2)
-    require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 60), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE)")
+    restarted = wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 60)
+    require(restarted, "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE)")
+    # 550-NET-0059: the radio still holds US's limits, and names its own 13 channels apart from them (wlanhw.wit 2.0).
+    require(restarted, "[WLAN] RADIO 02:00:00:57:4C:01, 13 CHANNELS OF ITS OWN, 11 UNDER ITS LIMITS NOW")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # A change of country while joined leaves the network under the old rules and drops the scan (dot11's host tests
     # check the scan); the station joins again under the new one.
     vm.command("logs " + str(vm.services()["wlansim"]), raw=True)
     run("wifi country RU", 30, "[WIFI] COUNTRY RU (Russia) APPLIED")
     require(vm.service_logs("wlansim", "THE STATION LEFT"), "[WLANSIM] THE STATION LEFT THE ACCESS POINT")
-    after = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30).partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
+    ru = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30)
+    # Planned over the radio's own channels, not the 11 US left it: RU, as UZ, sends on all 13 (550-NET-0059).
+    require(ru, "[WLAN] COUNTRY RU (CHOSEN BY THE USER, KEPT BY KEYSTORE): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
+    require(vm.command("dmesg -s wlansim", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    after = ru.partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
     if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
         after += wlan_until("[WLAN] Off", 30)
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-    # Under US the radio reports the 11 channels its limits leave (wlanhw.wit 1.2), and the restarted station took those.
-    channels = run("wifi channels 00", 30, "[WIFI] 11 CHANNELS UNDER 00 (the world domain)")
-    assert re.search(r"CHANNEL +11 2\.4 GHZ SEND", channels) and "CHANNEL  12" not in channels, channels[-1500:]
+    # The world domain over the radio's 13: 11 to send on, 12 and 13 to listen on (550-NET-0059).
+    channels = run("wifi channels 00", 30, "[WIFI] 13 CHANNELS UNDER 00 (the world domain)")
+    assert re.search(r"CHANNEL +11 2\.4 GHZ SEND", channels) and re.search(r"CHANNEL +13 2\.4 GHZ LISTEN", channels), channels[-1500:]
     print("PASS: the station's country (550-NET-0035): with none chosen the first scan sent nothing and the access point's UZ "
           "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it; a change to RU "
-          "while joined left the access point, and the station joined again under RU", flush=True)
+          "while joined left the access point, and the station joined again under RU. After the restart the radio named its own "
+          "13 channels apart from US's 11, and RU and the world domain were planned over all 13 (550-NET-0059)", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -9912,13 +10058,12 @@ def browse_check(args):
             require_all(log, "netcheck (PID ", ") ASKS FOR 11.0.2.80:81 TCP: \"netcheck's check of a question at run time\"", "OF netcheck: ITS PROGRAM ENDED")
 
             def asked(seconds, then=""):  # netcheck asks from the background; the shell shows the question at the prompt
+                vm.collect()
+                since = len(vm.log)
                 out = vm.command(f"run netcheck ask:11.0.2.80:81:{seconds}{then} &")
                 pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", out)[1]
-                # It may show before the prompt, after it, or begin before it and end after it.
-                if question not in out:
-                    vm.expect("ALWAYS? ", timeout=20, after=question)
-                elif "ALWAYS? " not in out.partition(question)[2]:
-                    vm.expect("ALWAYS? ", timeout=20)
+                # Before the prompt, after it, or cut by it anywhere, its first words too: read from the log (000-NET-0060).
+                vm.logged("ALWAYS? ", since, timeout=20)
                 return pid
 
             # No, typed once the question shows: refused at once.
@@ -13142,27 +13287,76 @@ def held_clients(vm, name):
     return {int(slot): (int(badge), named.get(servers.get(int(ep)), "?")) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
 
 
+def store_frames(image):
+    """The sealed records on a store's image (308-STO-0021): each frame's first sector and the sectors it covers, read
+    from the frame, which is in the clear."""
+    data = image.read_bytes()
+    found, lba = [], 1
+    while (lba + 1) * 512 <= len(data):
+        at = lba * 512
+        n = int.from_bytes(data[at + 12:at + 16], "little")
+        if data[at:at + 8] == b"MIND-SLD" and data[at + 8:at + 10] == (4).to_bytes(2, "little") and 1 <= n <= 33:
+            found.append((lba, n))
+            lba += n
+        else:
+            lba += 1
+    return found
+
+
+def damage_record(image, sectors, which=0):
+    """Flips one bit in the sealed part of the `which`th record of `sectors` sectors on a store's image, so its seal no
+    longer opens; returns its first sector."""
+    of = [lba for lba, n in store_frames(image) if n == sectors]
+    assert len(of) > which, (image.name, sectors, store_frames(image))
+    with image.open("r+b") as f:
+        f.seek((of[which] + 1) * 512 + 100)
+        byte = f.read(1)
+        f.seek(-1, 1)
+        f.write(bytes([byte[0] ^ 0x10]))
+    return of[which]
+
+
 def store_copy_disk_check(args, disk):
     """309-KRN-0209: beside the boot disk, two blank VirtIO disks: the first is the block store's own, the next its copy's.
-    blockstore holds a write client of each (slots 2 and 4), vfs_server neither, and after a reboot both are found again."""
+    blockstore holds a write client of each (slots 2 and 4), vfs_server neither, and after a reboot both are found again.
+    309-STO-0040: the copy holds the names chosen for it: a name's copy turned on replies COPIED, and so does its next
+    publication; a record damaged on either disk while the machine runs is repaired by a scrub from the other disk; one
+    damaged on each before a reboot is put back on the copy by its catch-up and read back whole from the copy into the
+    store; the next scrubs find nothing; turned off, a publication replies FLUSHED. The images are written in place
+    (snapshot=off), so damage made on the host reaches the guest's next read."""
     with tempfile.TemporaryDirectory(prefix="mind-store-copy-") as temp:
         images = [Path(temp) / name for name in ("store.img", "copy.img")]
         extra = []
         for n, image in enumerate(images):
             with image.open("wb") as f:
                 f.truncate(8 << 20)  # the store formats its own at start: about 10 s on aarch64 under TCG
-            extra += ["-drive", f"format=raw,file={image},if=none,id=store{n}", "-device", f"virtio-blk-pci,drive=store{n}"]
+            extra += ["-drive", f"format=raw,file={image},if=none,id=store{n},snapshot=off", "-device", f"virtio-blk-pci,drive=store{n}"]
+        # RDRAND on x86, so that both volume keys are random and kept by keystore, each under its own id.
+        if getattr(args, "arch", None) != "aarch64":
+            extra += ["-cpu", "qemu64,+rdrand"]
         vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+
+        def blocks(command, *expected, timeout=60):
+            out = vm.command(f"blocks {command}", raw=True, timeout=timeout)
+            for e in expected:
+                require(out, e)
+            return out
+
+        def store_log(until, tries=60):
+            log = ""
+            for _ in range(tries):
+                log = vm.command("dmesg -s blockstore", raw=True)
+                if until in log:
+                    return log
+                time.sleep(2)
+            raise AssertionError(f"{until!r} not in\n{log[-3000:]}")
 
         def found():
             log = vm.command("dmesg -s init", raw=True)
             own = re.search(r"\[INIT\] THE BLOCK STORE'S DISK: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
             copy = re.search(r"\[INIT\] THE BLOCK STORE'S COPY: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
             assert own and copy and own[1] != copy[1], log
-            for _ in range(60):
-                if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
-                    break
-                time.sleep(2)
+            store_log("[BLOCKSTORE] COPY MOUNTED")
             require(vm.command("dmesg -s blockstore", raw=True), "[BLOCKSTORE] READY")
             store = held_clients(vm, "blockstore")
             assert store.get(2) == (1, own[1]) and store.get(4) == (1, copy[1]), (own[0], copy[0], store)
@@ -13172,23 +13366,170 @@ def store_copy_disk_check(args, disk):
         try:
             own, copy = found()
             assert own[2] == copy[2] == "BLANK", (own[0], copy[0])
-            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            put = re.search(r"PUT (\S+) SIZE 5000", blocks("pattern 5000"))
             assert put, vm.output
-            require(vm.command(f"blocks publish disk {put[1]}", raw=True), "PUBLISHED disk VERSION 1 (FLUSHED)")
+            blocks(f"publish disk {put[1]}", "PUBLISHED disk VERSION 1 (FLUSHED)")
+            # 309-STO-0040: a name's copy turned on, then its next publication: both reach the copy.
+            first = re.search(r"PUT (\S+) SIZE 40000", blocks("pattern 40000"))[1]
+            blocks(f"publish obj {first}", "PUBLISHED obj VERSION 1 (FLUSHED)")
+            blocks("copies obj on", "COPY ON obj (COPIED)")
+            second = re.search(r"PUT (\S+) SIZE 30000", blocks("pattern 30000"))[1]
+            blocks(f"publish obj {second} 1", "PUBLISHED obj VERSION 2 (COPIED)")
+            blocks("copy stat", "NAMES=1", "BEHIND=0")
+            # A chunk damaged on each disk while the machine runs, two chunks apart: the scrub repairs each from the other.
+            damage_record(images[0], 33, 0)
+            damage_record(images[1], 33, 1)
+            blocks("scrub", "1 CORRUPT", timeout=180)
+            log = store_log("COPY SCRUBBED")
+            assert "FROM THE COPY" in log and "ON THE COPY FROM THE STORE" in log, log[-3000:]
+            require(log, "AFTER REPAIRS: THE DAMAGED RECORDS FREED")
+            blocks("scrub", "0 CORRUPT, 0 DAMAGED", timeout=180)
+            passes = re.findall(r"COPY SCRUBBED \d+ RECORDS: (\d+) CORRUPT, (\d+) DAMAGED SECTORS, ASKED BY PID", store_log("COPY SCRUBBED"))
+            assert passes and passes[-1] == ("0", "0"), passes
+            blocks(f"check {first} pattern", "CHECKED 40000 BYTES = PATTERN")
+            blocks(f"check {second} pattern", "CHECKED 30000 BYTES = PATTERN")
+            # Damaged between two boots: the first object's last chunk on the store's disk, the second's on the copy's.
+            damage_record(images[0], 15)
+            damage_record(images[1], 27)
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
             time.sleep(1); vm.collect(); vm.output = ""
             again, copied = found()
-            assert (again[1], again[2]) == (own[1], "THE STORE'S") and copied[1] == copy[1], (again[0], copied[0])
-            require(vm.command("blocks resolve disk", raw=True), f"disk VERSION 1 ROOT {put[1]}")
+            assert (again[1], again[2]) == (own[1], "THE STORE'S") and (copied[1], copied[2]) == (copy[1], "THE STORE'S"), (again[0], copied[0])
+            blocks("resolve disk", f"disk VERSION 1 ROOT {put[1]}")
+            # The copy's mount found its damage: the name is caught up between requests, its missing block put back.
+            store_log("COPIED obj VERSION 2 ON THE COPY, 1 BLOCKS PUT THERE")
+            # The store's mount found its own: the chunk is read back from the copy and put back in the store.
+            blocks(f"check {first} pattern", "CHECKED 40000 BYTES = PATTERN")
+            store_log("FROM THE COPY")
+            blocks("scrub", timeout=180)
+            blocks("scrub", "0 CORRUPT, 0 DAMAGED", timeout=180)
+            passes = re.findall(r"COPY SCRUBBED \d+ RECORDS: (\d+) CORRUPT, (\d+) DAMAGED SECTORS", store_log("COPY SCRUBBED"))
+            assert passes and passes[-1] == ("0", "0"), passes
+            blocks("copy stat", "NAMES=1", "BEHIND=0")
+            blocks("resolve obj", f"obj VERSION 2 ROOT {second}")
+            # Off: the copy no longer follows the name.
+            blocks("copies obj off", "COPY OFF obj (FLUSHED)")
+            blocks(f"publish obj {first} 2", "PUBLISHED obj VERSION 3 (FLUSHED)")
+            blocks("copy stat", "NAMES=0")
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-store-copy-{args.cpus}cpu.log").write_text(vm.log)
-    # The copy stays blank until blockstore writes it (309-STO-0040).
     print(f"PASS: store copy: two blank VirtIO disks beside the boot disk, the block store's ({own[1]}) and its copy's ({copy[1]}); "
-          f"blockstore holds a write client of each in slots 2 and 4, vfs_server neither; after a reboot the store's is found as "
-          f"THE STORE'S with its name, the copy's again as {copied[2]} (309-KRN-0209)", flush=True)
+          f"blockstore holds a write client of each in slots 2 and 4, vfs_server neither; after a reboot both are found as "
+          f"THE STORE'S (309-KRN-0209). A name's copy turned on and its next publication reply COPIED; a record damaged on "
+          f"either disk while running repaired by a scrub from the other, collected on both; one damaged on each before the "
+          f"reboot put back on the copy by its catch-up and read back from the copy into the store; the next scrubs clean; "
+          f"turned off, a publication replies FLUSHED (309-STO-0040)", flush=True)
+
+
+def store_rebuild_check(args, disk):
+    """309-STO-0041: a store rebuilt from its copy. Two blank VirtIO disks beside the boot disk, the store's and its
+    copy's, written in place: two names published with copies; then, the machine idle, a chunk only the second name holds
+    damaged on the copy's image and the store's image overwritten with zeros, a blank disk in its place, and a reboot. The
+    store formats its blank disk and leaves the copy's names as they are; `blocks rebuild --check` says one name whole and
+    one lost at the damaged chunk's CID, putting nothing; `blocks rebuild` brings the whole one back, `COPIED`, read
+    again by its pattern; after another reboot both disks are the store's and the name resolves at the same root. The
+    machine reboots rather than starting again: keystore keeps the copy's volume key on the boot volume, whose snapshot
+    overlay outlives a reboot and not QEMU."""
+    with tempfile.TemporaryDirectory(prefix="mind-store-rebuild-") as temp:
+        images = [Path(temp) / name for name in ("store.img", "copy.img")]
+        extra = []
+        for n, image in enumerate(images):
+            with image.open("wb") as f:
+                f.truncate(8 << 20)
+            extra += ["-drive", f"format=raw,file={image},if=none,id=store{n},snapshot=off", "-device", f"virtio-blk-pci,drive=store{n}"]
+        # RDRAND on x86, so that both volume keys are random and kept by keystore, each under its own id.
+        if getattr(args, "arch", None) != "aarch64":
+            extra += ["-cpu", "qemu64,+rdrand"]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+
+        def blocks(command, *expected, timeout=60):
+            out = vm.command(f"blocks {command}", raw=True, timeout=timeout)
+            for e in expected:
+                require(out, e)
+            return out
+
+        def store_log(until, tries=60):
+            log = ""
+            for _ in range(tries):
+                log = vm.command("dmesg -s blockstore", raw=True)
+                if until in log:
+                    return log
+                time.sleep(2)
+            raise AssertionError(f"{until!r} not in\n{log[-3000:]}")
+
+        def disks(own_was, copy_was):
+            log = vm.command("dmesg -s init", raw=True)
+            own = re.search(r"\[INIT\] THE BLOCK STORE'S DISK: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
+            copy = re.search(r"\[INIT\] THE BLOCK STORE'S COPY: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
+            assert own and copy and own[1] != copy[1] and (own[2], copy[2]) == (own_was, copy_was), log
+            store_log("[BLOCKSTORE] COPY MOUNTED")
+            return own[1], copy[1]
+
+        def reboot():
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND>", timeout=60)
+            time.sleep(1); vm.collect(); vm.output = ""
+        try:
+            own, copy = disks("BLANK", "BLANK")
+            # Two names with copies; chunks 0 and 1 of the pattern are the same blocks in both, chunk 2 only `gone`'s.
+            keep = re.search(r"PUT (\S+) SIZE 40000", blocks("pattern 40000"))[1]
+            gone = re.search(r"PUT (\S+) SIZE 50000", blocks("pattern 50000"))[1]
+            for name, root in (("keep", keep), ("gone", gone)):
+                blocks(f"publish {name} {root}", f"PUBLISHED {name} VERSION 1 (FLUSHED)")
+                blocks(f"copies {name} on", f"COPY ON {name} (COPIED)")
+            blocks("copy stat", "NAMES=2", "BEHIND=0")
+            blocks("rebuild --check", "IN STEP gone", "IN STEP keep", "CHECKED 2 NAMES ON THE COPY: 0 WHOLE, 0 LOST, 2 IN STEP, 0 BEHIND")
+            # The copy's full chunks in the order it was written: keep's two, then gone's third.
+            lost_chunk = cid_raw(bytes((i * 31 + 7) % 251 for i in range(32768, 49152)))
+            damage_record(images[1], 33, 2)
+            # The store's disk replaced by a blank one: its image overwritten with zeros while the store is idle.
+            with images[0].open("r+b") as f:
+                f.write(bytes(8 << 20))
+            reboot()
+            assert disks("BLANK", "THE STORE'S") == (own, copy)
+            log = store_log("ONLY ON THE COPY")
+            for name, root in (("gone", gone), ("keep", keep)):
+                require(log, f"[BLOCKSTORE] {name} ONLY ON THE COPY, VERSION 1 ROOT {root}: LEFT AS IT IS")
+            blocks("resolve keep", "blocks: resolve keep: NotFound")
+            held = re.search(r"BLOCKS=\d+ NAMES=\d+", blocks("stat"))[0]
+            # The check: the copy's mount found the chunk damaged and left it out of its index, so `gone` is incomplete
+            # there; `keep` is whole, its node and three chunks for the store to put. Nothing is put or published.
+            lost_line = f"LOST gone VERSION 1 ROOT {gone}: INCOMPLETE AT {lost_chunk}"
+            blocks("rebuild --check", lost_line, f"WHOLE keep VERSION 1 ROOT {keep}: 4 BLOCKS, 4 TO PUT",
+                   "CHECKED 2 NAMES ON THE COPY: 1 WHOLE, 1 LOST, 0 IN STEP, 0 BEHIND", "NOT ON THE COPY, SO NOT SAID HERE")
+            blocks("stat", held)
+            blocks("resolve keep", "blocks: resolve keep: NotFound")
+            # The rebuild brings `keep` back; `gone` stays on the copy as it is.
+            blocks("rebuild", lost_line, f"REBUILT keep VERSION 1 ROOT {keep} (COPIED): 4 BLOCKS PUT",
+                   "REBUILT 2 NAMES ON THE COPY: 1 WHOLE, 1 LOST, 0 IN STEP, 0 BEHIND")
+            require(store_log("REBUILT keep"), f"[BLOCKSTORE] REBUILT keep VERSION 1 ROOT {keep} FROM THE COPY, 4 BLOCKS PUT")
+            blocks(f"check {keep} pattern", "CHECKED 40000 BYTES = PATTERN")
+            blocks("resolve keep", f"keep VERSION 1 ROOT {keep}")
+            blocks("resolve gone", "blocks: resolve gone: NotFound")
+            blocks("rebuild --check", "IN STEP keep", lost_line, "CHECKED 2 NAMES ON THE COPY: 0 WHOLE, 1 LOST, 1 IN STEP, 0 BEHIND")
+            # Through a memory domain's client, where one can be made: refused.
+            made = re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))
+            if made:
+                blocks(f"-d {made[1]} rebuild --check", "blocks: rebuild: Rights")
+                require(store_log("THROUGH DOMAIN"), f"REFUSED CopyNames FOR PID")
+            # Found again after a reboot: both disks the store's, the name at the same root, its blocks whole.
+            reboot()
+            assert disks("THE STORE'S", "THE STORE'S") == (own, copy)
+            blocks("resolve keep", f"keep VERSION 1 ROOT {keep}")
+            blocks(f"check {keep} pattern", "CHECKED 40000 BYTES = PATTERN")
+            blocks("rebuild --check", "IN STEP keep", lost_line)
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-store-rebuild-{args.cpus}cpu.log").write_text(vm.log)
+    print(f"PASS: store rebuild: two names copied to the copy's disk ({copy}); a chunk only one holds damaged there, the "
+          f"store's disk ({own}) replaced by a blank image and the machine rebooted: the copy's names left as they are; "
+          f"`blocks rebuild --check` says one WHOLE and one LOST, INCOMPLETE at the damaged chunk's CID, putting nothing; "
+          f"`blocks rebuild` brings the whole one back (COPIED), read again by its pattern; after a reboot both disks are "
+          f"THE STORE'S and the name resolves at the same root (309-STO-0041)", flush=True)
 
 
 def store_disk_check(args, disk):
@@ -13847,6 +14188,12 @@ def main():
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
                 # 156 KiB of text for `<` and `|` (000-APP-0074).
                 (disk / "docs/pipe.txt").write_text(PIPE_TEXT)
+            if suite == "nnd":
+                # NRL's pinned model and four packages made from it that nnd must refuse (262-APP-0112).
+                for name, (files, _) in nn_packages().items():
+                    (disk / "data/models" / name).mkdir(parents=True)
+                    for file, data in files.items():
+                        (disk / "data/models" / name / file).write_bytes(data)
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite == "isolation":
@@ -13896,6 +14243,7 @@ def main():
                 svc_boot_check(args)
             if suite == "store":  # its own machine with two store disks, booted twice (309-KRN-0209)
                 store_copy_disk_check(args, disk)
+                store_rebuild_check(args, disk)  # another, the store's disk replaced by a blank one (309-STO-0041)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
