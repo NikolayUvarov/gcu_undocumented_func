@@ -1,6 +1,6 @@
-# 750-KRN-0158 — The Effector session's memory quota for its benchmark
+# 750-KRN-0158 — The Effector session's memory quota for its benchmark — done
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open (the quota in `main` 344aa298; EFF's benchmark left) · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.13
+**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** done (2026-11-05) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-3.13
 
 From EFF's request of 2026-10-23 (`KRN/2026-10-23T0609Z-EFF-a-request-memory-and-workers-for-the-agents-benchmark.md` on `internal-dev-messages`), for 750-EFF-0016.
 
@@ -20,7 +20,7 @@ From EFF's request of 2026-10-23 (`KRN/2026-10-23T0609Z-EFF-a-request-memory-and
 ## Acceptance criteria
 
 - [x] In the `modes` suite (x86 and aarch64), `effector` runs with a 48 MiB quota (`stat`), and every other suite passes as before (the gate).
-- [ ] EFF's benchmark allocates the 16 MiB chase and the copy buffers in a mode (750-EFF-0016).
+- [x] EFF's benchmark allocates the 16 MiB chase and the copy buffers in a mode (750-EFF-0016).
 
 ## Progress (2026-10-23)
 
@@ -28,6 +28,11 @@ From EFF's request of 2026-10-23 (`KRN/2026-10-23T0609Z-EFF-a-request-memory-and
 - **The gate `land-344aa298`** passed every group; the `modes` suite, in "x86: services, storage, audio" and "aarch64: files, network and TLS", reads the quota with `stat`.
 - **Left:** EFF's benchmark taking its buffers in a mode (750-EFF-0016), EFF's to show.
 
+## Resolution
+
+- `init` gives `effector` a 48 MiB quota (`main` 344aa298, round 18); the `modes` suite reads it with `stat`.
+- **EFF's benchmark takes its buffers in it** (750-EFF-0016, round 87, `main` 7f260e43): `performance_measure` copies two 8 MiB buffers and chases `effector_pointer_chase_v1` over exactly 16 MiB. `effector_actions_check` asserts `memory_latency` with `working_set_bytes` 16 MiB and accesses made; the gate `land-7f260e43` passed it on x86 and aarch64.
+
 ## Related
 
-[750-KRN-0159](750-KRN-0159-parallel-workers-for-the-effector-benchmark.md), [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done).
+[750-KRN-0159](../issues/750-KRN-0159-parallel-workers-for-the-effector-benchmark.md), [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.done).
