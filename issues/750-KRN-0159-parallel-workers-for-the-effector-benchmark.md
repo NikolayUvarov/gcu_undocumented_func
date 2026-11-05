@@ -32,6 +32,9 @@ Revised 2026-11-05 at EFF's request. Workers replace the earlier plan of a secon
 - `effector` starts with `SPAWN_WORKERS` and the quota of point 1 (`EFFECTOR_TASKS`). `init` logs `[INIT] effector: 48 MIB, 1 ENDPOINT AND WORKERS, AT MOST ONE PER CPU`.
 - The `modes` suite's `effector_grants_check` requires that quota and that line.
 - `docs/profile/bootstrap.md` names the right.
+- **Tested** on 84bfcf4c through Effector, the `modes` suite with its check:
+  - acc-1, x86: `services, storage, audio` passed;
+  - acc-2, aarch64: `the updater and the modes` passed when run again. The first run failed before `modes`, in `update_suite` at `VERSION FLOOR 1 RAISED TO 6`, a race of that suite that 000-KRN-0210 fixes.
 
 ## Related
 
