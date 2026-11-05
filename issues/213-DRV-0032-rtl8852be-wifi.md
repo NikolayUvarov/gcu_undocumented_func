@@ -1141,3 +1141,16 @@ The country comes from the station through `wlanhw.wit` 1.3 `set-country`, any c
 - a case in `rtw89_calibration_policy_cases.rs`: on an erased board like the Ryzen's, UZ, `00`, US and RU resolve under `CheckedAbsent`; a listen-only channel, version 0 and an `Unknown` platform do not.
 
 **Not yet:** the service answers `set-country` with `failed` until the persistent loop applies these limits to a calibrated channel.
+
+## The receive-only wlanhw service: the first of 0123's two lines (2026-11-05)
+
+KRN agreed (`DRV/2026-11-05T0800Z`) that the endpoint comes before admission, since the country arrives through it. `rtw89_wifi` now serves `wlanhw` 2.0 receive-only when `init` lends `SLOT_SERVICE`:
+- it logs `[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED`;
+- `send` is `failed`;
+- `set-country` is checked, taken and answered `failed` until a calibrated channel exists.
+
+Details and limits are in [the service notes](../hwdocs/rtl8852be-service.md#receive-only-service-before-calibration-213-krn-0123s-gate-2026-11-05). `listen.rs` now shares the setup (`open`, `prepare_receive`, `Session::poll_frames`) between the bounded listen and the service. The PHY stays the caller's, so that the calibration step can continue the same attempt.
+
+**Next, for the second line:**
+- the channel stage run again from a tuned channel (retune);
+- on an applied country: tune that channel actively, grant, calibrate (IQK, TSSI, DPK), prepare the station and data mode, then hand over to `service.rs`'s data service, logging `DATAPATH ADMITTED ON CHANNEL n`.
