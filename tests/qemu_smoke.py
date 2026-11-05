@@ -7031,10 +7031,69 @@ def vfs_suite(args):
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
         fsck_volume(image, start, fs_sectors)
         disks_check(args, image, Path(temp))
+        dirty_volume_check(args, Path(temp))
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
           f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it, into data/media/ without a file, a second later with -d 1, "
           f"and with Ctrl+Alt+F6 of clock in front; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames), half the size with -s 2; reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
           f"{'power off' if args.arch == 'aarch64' else 'power off refused'}", flush=True)
+
+
+def fat16_cut_remove(image, start, name):
+    """What a remove cut short between its FAT sectors and its directory sector leaves on the FAT16 volume at `start`:
+    root file `name`'s (8.3, upper case) entry kept, every cluster of its chain free in every FAT copy, and the volume
+    dirty (FAT[1]'s clean bit clear). Gives the entry's first cluster."""
+    with image.open("r+b") as f:
+        f.seek(start * 512)
+        boot = f.read(512)
+        reserved, fats, root_entries, fat_size = struct.unpack_from("<H", boot, 14)[0], boot[16], struct.unpack_from("<H", boot, 17)[0], struct.unpack_from("<H", boot, 22)[0]
+        f.seek((start + reserved + fats * fat_size) * 512)
+        root = f.read(root_entries * 32)
+        short = name.split(".")[0].ljust(8).encode() + name.split(".")[1].ljust(3).encode()
+        first = next(struct.unpack_from("<H", root, i + 26)[0] for i in range(0, len(root), 32) if root[i:i + 11] == short)
+        fat_at = lambda copy, cluster: (start + reserved + copy * fat_size) * 512 + cluster * 2
+        chain, cluster = [], first
+        while 2 <= cluster < 0xFFF0:
+            chain.append(cluster)
+            f.seek(fat_at(0, cluster))
+            cluster = struct.unpack("<H", f.read(2))[0]
+        for copy in range(fats):
+            for cluster in chain:
+                f.seek(fat_at(copy, cluster)); f.write(b"\0\0")
+            f.seek(fat_at(copy, 1)); f.write(struct.pack("<H", 0x7FFF))
+    assert len(chain) > 1, chain
+    return first
+
+
+def dirty_volume_check(args, temp):
+    """000-KRN-0215: a boot volume its last writer left dirty, with an entry whose clusters are free in the FAT (a remove
+    cut short), is checked at the mount and held: the log says so, files read, every write is refused, and the volume is
+    the same byte for byte after the boot. Without the check the next new file would be given cut.bin's clusters."""
+    temp = temp / "dirty"
+    temp.mkdir()
+    image, start, fs_sectors = raw_fat_image(temp, extra={"cut.bin": bytes(range(256)) * 64, "data/keep.txt": b"kept\n"})
+    fat16_cut_remove(image, start, "CUT.BIN")
+    volume = lambda: image.read_bytes()[start * 512:(start + fs_sectors) * 512]
+    before = hashlib.sha256(volume()).hexdigest()
+    vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+    try:
+        mounted = vm.service_logs("vfs_server", "AS RAM:")
+        require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048 (DEVICE WRITABLE)")
+        require(mounted, "[VFS] FAT16 AT LBA 2048 WAS LEFT DIRTY: CHECKING")
+        require(mounted, "1 BAD CHAINS")
+        require(mounted, "FIRST: cut.bin: the cluster chain runs into a free or invalid cluster")
+        require(mounted, "[VFS] FAT16 AT LBA 2048 IS HELD READ-ONLY: A WRITE COULD SPREAD THE DAMAGE; REPAIR IT FROM ANOTHER SYSTEM")
+        require(vm.command("cat data/keep.txt"), "kept")
+        for command in ("write data/new.txt fresh", "mkdir data/sub", "rm data/keep.txt", "rm cut.bin"):
+            assert re.search(r"ERROR: .*READ-ONLY DEVICE", vm.command(command)), (command, vm.log[-2000:])
+        require(vm.command("fsck"), "first: cut.bin: the cluster chain runs into a free or invalid cluster")
+        require(vm.command("write ram:scratch.txt ram"), "WROTE 4 BYTES")  # the RAM disk is not held
+        require(vm.command("sync"), "OK")
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-vfs-dirty-{args.cpus}cpu.log").write_text(vm.log)
+    assert hashlib.sha256(volume()).hexdigest() == before, "a held volume is not written"
+    print("PASS: a boot volume left dirty with a chain into free clusters is checked at the mount and held read-only: "
+          "the log names the damage, files read, writes are refused, the volume is unchanged after the boot", flush=True)
 
 
 def disks_check(args, boot, temp):

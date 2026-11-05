@@ -864,3 +864,98 @@ fn reads_in_runs_and_from_anywhere() {
     assert!(v.disk.sectors - sectors <= clusters + 2, "{} sector reads for {} clusters", v.disk.sectors - sectors, clusters);
     assert_eq!(v.disk.runs - runs, dc.len() / 16384);
 }
+
+// FAT[1] with its clean bit clear: the volume's last writer left it dirty.
+fn left_dirty(data: &mut [u8], bits: u32) { patch_fat(data, bits, 1, if bits == 16 { 0x7FFF } else { 0x07FF_FFFF }); }
+
+// What a remove cut short between its FAT sectors and its directory sector leaves: `a.bin`'s entry kept, its two
+// clusters free in the FAT, the volume dirty. Gives the image and the entry's first cluster.
+fn cut_remove(image: Vec<u8>, bits: u32) -> (Vec<u8>, u32) {
+    let mut v = Volume::mount(Image { data: image, writable: true, flushes: 0 }).ok().unwrap();
+    let root = v.root();
+    let per = v.cluster_bytes() as usize;
+    let mut a = v.create(&root, "a.bin", false, STAMP).unwrap();
+    v.write(&mut a, 0, &content(3, per * 2), STAMP).unwrap();
+    v.flush().unwrap();
+    let a = v.lookup(&root, "a.bin").unwrap();
+    let second = v.fat(a.cluster).unwrap();
+    let mut data = v.disk.data.clone();
+    patch_fat(&mut data, bits, a.cluster, 0);
+    patch_fat(&mut data, bits, second, 0);
+    left_dirty(&mut data, bits);
+    (data, a.cluster)
+}
+
+// FAT16 by `format`, and FAT32 by mkfs.fat when it is there.
+fn dirty_cases(name: &str) -> Vec<(u32, Vec<u8>)> {
+    let mut cases = vec![(16u32, formatted(4400))];
+    if tools() { let path = temp(name); cases.push((32, mkfs(&path, 32, 40).data)); std::fs::remove_dir_all(path.parent().unwrap()).ok(); }
+    cases
+}
+
+#[test]
+fn a_volume_left_dirty_with_a_chain_into_free_clusters_is_held() {
+    for (bits, image) in dirty_cases("held") {
+        let (data, first) = cut_remove(image, bits);
+        // Not checked, as before 000-KRN-0215: the next new file is given the cluster a.bin's entry points at.
+        let mut v = Volume::mount(Image { data: data.clone(), writable: true, flushes: 0 }).ok().unwrap();
+        let root = v.root();
+        let mut b = v.create(&root, "b.bin", false, STAMP).unwrap();
+        v.write(&mut b, 0, b"new", STAMP).unwrap();
+        v.flush().unwrap();
+        assert_eq!(v.lookup(&root, "b.bin").unwrap().cluster, first, "FAT{}", bits);
+        assert!(v.check().unwrap().cross_linked > 0, "FAT{}: the write made a cross-link", bits);
+        // Checked at the mount: held, every write refused, nothing written to the medium.
+        let mut v = Volume::mount(Image { data: data.clone(), writable: true, flushes: 0 }).ok().unwrap();
+        assert!(v.left_dirty(), "FAT{}", bits);
+        let report = v.check_at_mount().unwrap();
+        assert!(report.bad_chains == 1 && report.first.starts_with("a.bin: ") && report.spreads(), "FAT{}: {:?}", bits, report);
+        assert!(v.held() && !v.writable(), "FAT{}", bits);
+        let root = v.root();
+        assert_eq!(v.create(&root, "b.bin", false, STAMP).err(), Some(Error::ReadOnly), "FAT{}", bits);
+        let mut a = v.lookup(&root, "a.bin").unwrap();
+        assert_eq!(v.write(&mut a, 0, b"x", STAMP).err(), Some(Error::ReadOnly), "FAT{}", bits);
+        assert_eq!(v.remove(&root, "a.bin").err(), Some(Error::ReadOnly), "FAT{}", bits);
+        v.flush().unwrap();
+        assert!(v.disk.data == data, "FAT{}: a held volume is not written", bits);
+    }
+}
+
+#[test]
+fn a_volume_left_dirty_with_lost_clusters_only_is_written() {
+    for (bits, image) in dirty_cases("lost") {
+        let mut v = Volume::mount(Image { data: image, writable: true, flushes: 0 }).ok().unwrap();
+        let total = v.total_bytes() as u32 / v.cluster_bytes();
+        let free = (2..total + 2).rev().find(|&cl| v.fat(cl).unwrap() == 0).unwrap();
+        let mut data = v.disk.data.clone();
+        patch_fat(&mut data, bits, free, if bits == 16 { 0xFFFF } else { 0x0FFF_FFFF });
+        left_dirty(&mut data, bits);
+        let mut v = Volume::mount(Image { data, writable: true, flushes: 0 }).ok().unwrap();
+        assert!(v.left_dirty(), "FAT{}", bits);
+        let report = v.check_at_mount().unwrap();
+        assert!(report.lost == 1 && !report.spreads(), "FAT{}: {:?}", bits, report);
+        assert!(!v.held() && v.writable(), "FAT{}", bits);
+        let root = v.root();
+        let mut c = v.create(&root, "c.txt", false, STAMP).unwrap();
+        v.write(&mut c, 0, b"written", STAMP).unwrap();
+        v.flush().unwrap();
+        let report = v.check().unwrap();
+        assert!(report.lost == 1 && !report.spreads() && !report.dirty && report.files == 1, "FAT{}: {:?}", bits, report);
+        assert_ne!(v.lookup(&root, "c.txt").unwrap().cluster, free, "FAT{}: a lost cluster is not given out", bits);
+    }
+}
+
+#[test]
+fn a_clean_volume_a_read_only_device_and_our_own_change_are_not_left_dirty() {
+    let image = formatted(4400);
+    let mut v = Volume::mount(Image { data: image.clone(), writable: true, flushes: 0 }).ok().unwrap();
+    assert!(!v.left_dirty(), "a clean volume");
+    let mut data = image.clone();
+    left_dirty(&mut data, 16);
+    let mut v = Volume::mount(Image { data, writable: false, flushes: 0 }).ok().unwrap();
+    assert!(!v.left_dirty(), "a read-only device: nothing is written to it anyway");
+    let mut v = Volume::mount(Image { data: image, writable: true, flushes: 0 }).ok().unwrap();
+    let root = v.root();
+    v.create(&root, "d.txt", false, STAMP).unwrap();
+    assert!(!v.left_dirty(), "our own change, not a last writer's");
+}

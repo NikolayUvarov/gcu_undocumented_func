@@ -161,6 +161,8 @@ pub struct Volume<S: Sectors> {
     start: u32, bits: u8, spc: u32, fats: u32, fat_size: u32, fat_start: u32, root_start: u32, root_sectors: u32, data_start: u32,
     root_cluster: u32, clusters: u32, fsinfo: u32, label: [u8; 11],
     changed: bool, dirtied: bool, next_free: u32, free: Option<u32>,
+    /// Writes refused: a check at the mount found damage a write could spread (000-KRN-0215).
+    held: bool,
     /// Where the last read ended in a chain: its first cluster, a cluster's index in it and that cluster.
     cursor: Option<(u32, usize, u32)>,
     /// The chain written last: its first cluster, its length and its last cluster (000-KRN-0078).
@@ -191,7 +193,7 @@ impl<S: Sectors> Volume<S> {
         if boot[if bits == 32 { 66 } else { 38 }] == 0x29 { label.copy_from_slice(&boot[label_at..label_at + 11]); }
         let mut volume = Self { disk, start, bits, spc, fats, fat_size, fat_start: start + reserved, root_start: start + reserved + fats * fat_size, root_sectors,
                                 data_start: start + data, root_cluster: if bits == 32 { u32_at(&boot, 44) } else { 0 }, clusters,
-                                fsinfo: if bits == 32 { start + u16_at(&boot, 48) } else { 0 }, label, changed: false, dirtied: false, next_free: 2, free: None, cursor: None, tail: None };
+                                fsinfo: if bits == 32 { start + u16_at(&boot, 48) } else { 0 }, label, changed: false, dirtied: false, next_free: 2, free: None, held: false, cursor: None, tail: None };
         // The label entry in the root directory wins over the boot sector's copy.
         let root = volume.root();
         if let Ok(sectors) = volume.dir_sectors(&root) {
@@ -215,8 +217,8 @@ impl<S: Sectors> Volume<S> {
         format(&mut self.disk, label, stamp)?;
         if !self.disk.flush() { return Err(Error::Io); }
         let Ok(fresh) = Volume::mount(&mut self.disk) else { return Err(Error::Io) };
-        let Volume { disk: _, start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors, data_start, root_cluster, clusters, fsinfo, label, changed, dirtied, next_free, free, cursor: _, tail: _ } = fresh;
-        (self.cursor, self.tail) = (None, None);
+        let Volume { disk: _, start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors, data_start, root_cluster, clusters, fsinfo, label, changed, dirtied, next_free, free, held, cursor: _, tail: _ } = fresh;
+        (self.cursor, self.tail, self.held) = (None, None, held);
         (self.start, self.bits, self.spc, self.fats, self.fat_size, self.fat_start, self.root_start, self.root_sectors) = (start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors);
         (self.data_start, self.root_cluster, self.clusters, self.fsinfo, self.label, self.changed, self.dirtied, self.next_free, self.free) = (data_start, root_cluster, clusters, fsinfo, label, changed, dirtied, next_free, free);
         Ok(())
@@ -226,7 +228,10 @@ impl<S: Sectors> Volume<S> {
     pub fn start(&self) -> u32 { self.start }
     pub fn cluster_bytes(&self) -> u32 { self.spc * SECTOR as u32 }
     pub fn total_bytes(&self) -> u64 { self.clusters as u64 * self.cluster_bytes() as u64 }
-    pub fn writable(&self) -> bool { self.disk.writable() }
+    /// Whether changes are taken: the device is writable and no check held the volume (000-KRN-0215).
+    pub fn writable(&self) -> bool { self.disk.writable() && !self.held }
+    /// Whether a check at the mount found damage and refused every write since.
+    pub fn held(&self) -> bool { self.held }
     /// Whether a change waits for the next flush.
     pub fn changed(&self) -> bool { self.changed }
     pub fn label(&self) -> String { String::from_utf8_lossy(&self.label).trim_end().into() }
@@ -242,7 +247,7 @@ impl<S: Sectors> Volume<S> {
     }
     // Every write goes through here, so the first one after a flush marks the volume dirty.
     fn write_sector(&mut self, lba: u32, data: &[u8; SECTOR]) -> Result<()> {
-        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if !self.writable() { return Err(Error::ReadOnly); }
         self.changing()?;
         if self.disk.write(lba, data) { Ok(()) } else { Err(Error::Io) }
     }
@@ -305,7 +310,7 @@ impl<S: Sectors> Volume<S> {
     // next change tries again.
     fn changing(&mut self) -> Result<()> {
         if self.changed { return Ok(()); }
-        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if !self.writable() { return Err(Error::ReadOnly); }
         self.changed = true; // first: the writes below come back here
         self.dirtied = true; // a mark that failed half way is cleared by the next flush too
         let marked = self.mark_dirty();
@@ -320,6 +325,22 @@ impl<S: Sectors> Volume<S> {
         }
         if self.bits != 12 && !self.disk.flush() { return Err(Error::Io); }
         Ok(())
+    }
+
+    /// Whether the volume's last writer left it dirty: FAT16/32 on a writable device whose clean bit is clear, before
+    /// any change of ours (000-KRN-0215).
+    pub fn left_dirty(&mut self) -> bool {
+        let bit = match self.bits { 16 => 1u32 << 15, 32 => 1 << 27, _ => return false };
+        self.disk.writable() && !self.changed && self.fat(1).is_ok_and(|value| value & bit == 0)
+    }
+
+    /// Checks a volume left dirty before anything is written to it. Damage a write could spread (a cross-link, a chain
+    /// into a free or invalid cluster, an invalid entry), or a check that could not finish, holds it: every write is
+    /// refused until another system repairs it. Lost clusters alone are never given out, so they hold nothing.
+    pub fn check_at_mount(&mut self) -> Result<Report> {
+        let report = self.check();
+        self.held = report.as_ref().map_or(true, |r| r.spreads());
+        report
     }
 
     // The clean bit in FAT[1]: FAT16 bit 15, FAT32 bit 27 (FAT12 has none).
@@ -654,7 +675,7 @@ impl<S: Sectors> Volume<S> {
     /// that fails leaves the file as it was, its chain cut back (175-KRN-0047).
     pub fn write(&mut self, node: &mut Node, offset: u32, data: &[u8], stamp: u32) -> Result<usize> {
         if node.is_dir() { return Err(Error::IsDirectory); }
-        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if !self.writable() { return Err(Error::ReadOnly); }
         let end = offset.checked_add(data.len() as u32).ok_or(Error::NoSpace)?;
         let (before, length) = (*node, self.grows(node, end)?);
         let result = (|| {
@@ -676,7 +697,7 @@ impl<S: Sectors> Volume<S> {
     /// 351-UPD-0008). Bytes past its end are refused.
     pub fn overwrite(&mut self, node: &Node, offset: u32, data: &[u8]) -> Result<()> {
         if node.is_dir() { return Err(Error::IsDirectory); }
-        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if !self.writable() { return Err(Error::ReadOnly); }
         if offset.checked_add(data.len() as u32).is_none_or(|end| end > node.size) { return Err(Error::Invalid); }
         self.write_raw(&mut node.clone(), offset, data)
     }
@@ -684,7 +705,7 @@ impl<S: Sectors> Volume<S> {
     /// Sets the size of a file: clusters past it are freed, a longer file reads zeros.
     pub fn truncate(&mut self, node: &mut Node, size: u32, stamp: u32) -> Result<()> {
         if node.is_dir() { return Err(Error::IsDirectory); }
-        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if !self.writable() { return Err(Error::ReadOnly); }
         if size > node.size {
             // Growing: a failure leaves the file as it was (175-KRN-0047).
             let (before, length) = (*node, self.grows(node, size)?);
@@ -807,7 +828,7 @@ impl<S: Sectors> Volume<S> {
     pub fn create(&mut self, dir: &Node, name: &str, directory: bool, stamp: u32) -> Result<Node> {
         if !dir.is_dir() { return Err(Error::NotDirectory); }
         if !valid_name(name) { return Err(Error::Name); }
-        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if !self.writable() { return Err(Error::ReadOnly); }
         match self.find(dir, name) { Ok(_) => return Err(Error::Exists), Err(Error::NotFound) => {} Err(e) => return Err(e) }
         let mut node = Node { cluster: 0, size: 0, attributes: if directory { ATTR_DIRECTORY } else { ATTR_ARCHIVE }, modified: stamp, entry: None };
         if directory {
@@ -838,7 +859,7 @@ impl<S: Sectors> Volume<S> {
 
     /// Removes a file or an empty directory.
     pub fn remove(&mut self, dir: &Node, name: &str) -> Result<()> {
-        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if !self.writable() { return Err(Error::ReadOnly); }
         let entry = self.find(dir, name)?;
         if entry.node.is_dir() && !self.empty(&entry.node)? { return Err(Error::NotEmpty); }
         self.unlink(&entry)?;
@@ -851,7 +872,7 @@ impl<S: Sectors> Volume<S> {
     pub fn rename(&mut self, dir: &Node, name: &str, target: &Node, new_name: &str) -> Result<Node> {
         if !target.is_dir() { return Err(Error::NotDirectory); }
         if !valid_name(new_name) { return Err(Error::Name); }
-        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if !self.writable() { return Err(Error::ReadOnly); }
         let entry = self.find(dir, name)?;
         let same_place = dir.cluster == target.cluster;
         let case_change = match self.find(target, new_name) {
@@ -916,6 +937,8 @@ pub struct Report {
 impl Report {
     #[allow(dead_code)] // the host tests use it
     pub fn clean(&self) -> bool { self.lost + self.cross_linked + self.bad_chains + self.sizes + self.bad_entries == 0 }
+    /// Damage a write could spread: a new chain given a cluster a damaged one still holds, or a change in such a chain.
+    pub fn spreads(&self) -> bool { self.cross_linked + self.bad_chains + self.bad_entries != 0 }
     fn problem(&mut self, path: &str, what: &str) { if self.first.is_empty() { self.first = alloc::format!("{}: {}", if path.is_empty() { "/" } else { path }, what); } }
 }
 
