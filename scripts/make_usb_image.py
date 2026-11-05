@@ -410,6 +410,8 @@ def pack(payloads, output, qemu_img, arch, force=False):
             target.write_bytes(data)
         # The writable directory: files written there (`write data/…`) can be read on any computer afterwards.
         (source / "data").mkdir(exist_ok=True)
+        # The machine's name's own directory, which sysmon and netstack read through scopes init never makes (000-KRN-0180).
+        (source / "data" / "machine").mkdir(exist_ok=True)
         temporary = work / "disk.img"
         descriptor = {"driver": "raw", "file": {
             "driver": "vvfat", "dir": qemu_path(source, qemu_img),

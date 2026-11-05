@@ -6840,14 +6840,14 @@ def camera_files(mtype, frame, video):
 def sysmon_name_check(vm):
     """000-KRN-0180: sysmon answers the machine's name from data/machine/name through a read-only scope of that directory
     alone, which init made, and reads it at each call; kbench's head shows the answer. Set, written with capitals (no
-    name: the shell writes small letters), set again, removed; no data/ at boot gives no scope, and the directory removed
-    ends it, each until sysmon starts again."""
+    name: the shell writes small letters), set again, removed; no data/machine/ at boot gives no scope (init never makes
+    it), and the directory removed ends it, each until sysmon starts again. The check leaves data/ as it found it."""
     def shown():
         out = vm.command("kbench ipc --quick", timeout=120)
         found = re.search(r"MIND Core on (\S+), (?:x86_64|aarch64), ABI \d+", out)
         assert found, out[-2000:]
         return found[1]
-    # This image had no data/ at boot: init made none for sysmon, which has no scope and answers mindcore until its next
+    # This image had no data/machine/ at boot, and init made none: sysmon has no scope and answers mindcore until its next
     # start, after the directory is made.
     require(vm.command("dmesg -s init", raw=True), "[INIT] sysmon: NO FILES IN data/machine")
     assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
@@ -6870,6 +6870,7 @@ def sysmon_name_check(vm):
     assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
     log = vm.command("dmesg -s sysmon", raw=True)
     assert log.count("[SYSMON] THE MACHINE'S NAME: mindcore (data/machine/name NOT READ: ") == 2, log[-1500:]  # at boot, and now
+    require(vm.command("mkdir data/machine"), "OK")
     require(vm.command("svc restart sysmon", timeout=30), "sysmon restarted: PID")
     require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY")
     require(vm.command("write data/machine/name lab-3"), "WROTE 6 BYTES")
@@ -6882,6 +6883,7 @@ def sysmon_name_check(vm):
     scopes = {int(b, 16) for b in re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/machine \(READ-ONLY\)", vm.command("dmesg -s vfs_server", raw=True))}
     assert len(files) == 1 and files[0][0] == 3 and files[0][1] in scopes, (files, scopes, caps[-1500:])
     require(vm.command("rm data/machine/name"), "OK")
+    require(vm.command("rm data/machine"), "OK")
     print("PASS: sysmon's name: data/machine/name's label, read at each call through a read-only scope of data/machine/ "
           "alone (kbench's head names the machine); none, capitals or a removed file answer mindcore, each logged once; "
           "the directory removed ends the scope until sysmon starts again with a new one", flush=True)
@@ -7058,8 +7060,7 @@ def vfs_suite(args):
         try:
             require(vm.command("cat data/notes.txt"), "line one")
             # With the screenshot, the recording, and the camera's still and video.
-            # data/machine/ is init's, made for sysmon's scope where data/ is (000-KRN-0180).
-            require(vm.command("ls data"), f"9 ENTRIES, 7 FILES, {15 + size + len(avi_file) + len(half) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
+            require(vm.command("ls data"), f"8 ENTRIES, 7 FILES, {15 + size + len(avi_file) + len(half) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
             # Three screenshots and a recording, and PrintScreen's on x86.
             shots = 5 if args.arch == "x86_64" else 4
             require(vm.command("ls data/media"), f"{shots} ENTRIES, {shots} FILES, ")
@@ -7265,7 +7266,7 @@ def edit_check(vm):
     keys(b"\r", "[EDIT] NOT SAVED denied")
     leave(f10, "[EDIT] DONE")
     require(vm.command("ls ram:"), "1 ENTRIES, 1 FILES")
-    require(vm.command("ls data"), "3 ENTRIES, 2 FILES, 59 BYTES")  # and data/machine/ (000-KRN-0180)
+    require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
     # T4: a Rust file in its language's colours on the classic blue, pixel for pixel: keyword, plain text, comment.
     require(vm.command("write ram:colour.rs fn main() // note"), "WROTE 18 BYTES")  # no braces: msh would read them
     start("ram:colour.rs")
@@ -7322,8 +7323,7 @@ def edit_suite(args):
         assert mtools("mtype", "-i", part, "::/data/crlf.txt") == "один\r\ntwo\r\nтри\r\n4".encode()
         assert mtools("mtype", "-i", part, "::/readme.txt") == readme.read_bytes()
         names = mtools("mdir", "-b", "-i", part, "::/data").decode().split()
-        # data/machine/ is init's, made where data/ is for sysmon's scope (000-KRN-0180).
-        assert sorted(n.rstrip("/").rsplit("/", 1)[-1] for n in names) == ["crlf.txt", "edit.txt", "machine"], names
+        assert sorted(n.rsplit("/", 1)[-1] for n in names) == ["crlf.txt", "edit.txt"], names
     print("PASS: edit image: fsck.fat clean; mtools reads the saved files byte for byte; no temporary files left", flush=True)
 
 
@@ -7378,7 +7378,6 @@ def disk_check(vm):
     keys(alt_f2, "DIALOG=VOLUME")
     keys(b"\x1b[B", "DIALOG=VOLUME")
     keys(b"\r", "RIGHT=/ram: BRIEF")
-    keys(b"\x1b[B", "CURRENT=machine ")  # init's, for sysmon's scope where data/ is (000-KRN-0180)
     keys(b"\x1b[B", "CURRENT=tree ")
     keys(f5, "DIALOG=TARGET")
     vm.send_bytes(b"\r")

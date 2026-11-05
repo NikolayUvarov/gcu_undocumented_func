@@ -416,7 +416,7 @@ impl Init {
     // A client confined to `dir`, writable or not (750-KRN-0120, for 800-KRN-0128 and 750-KRN-0119), asked of vfs_server
     // through a client with `badge` that init drops at once; `make` makes the directory if it is missing. `dir` is on the
     // boot volume, or names a volume whose root it stands for (`models:`, 262-KRN-0178).
-    fn scope(&mut self, badge: u16, dir: &str, writable: bool, make: Make) -> Result<usize> {
+    fn scope(&mut self, badge: u16, dir: &str, writable: bool, make: bool) -> Result<usize> {
         let keeper = self.keeper("vfs_server")?;
         let client = ipc::mint_badged(keeper, CLIENT, badge)?;
         let files = Endpoint(client);
@@ -424,13 +424,7 @@ impl Init {
             let (volume, path) = mind::fs::split(dir);
             let root = vfs::root(files, volume)?.map_err(|_| Error::NotFound)?;
             let dir = if path.is_empty() { Ok(Ok(root)) } else {
-                let dir = match (make, path.rsplit_once('/')) {
-                    (Make::InParent, Some((parent, leaf))) => match vfs::open_dir(files, root, parent, false) {
-                        Ok(Ok(above)) => { let dir = vfs::open_dir(files, above, leaf, true); let _ = vfs::close(files, above); dir }
-                        other => other,
-                    },
-                    _ => vfs::open_dir(files, root, path, make != Make::No),
-                };
+                let dir = vfs::open_dir(files, root, path, make);
                 let _ = vfs::close(files, root);
                 dir
             };
@@ -1066,7 +1060,7 @@ impl Init {
         // In developer mode link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file
         // goes over the cable, not by writing the disk again (800-KRN-0173, for 800-LNK-0027). The user's badge writes there.
         if name == "link" && self.link_dev() && grants.count < SPAWN_GRANTS_MAX {
-            match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true, Make::Yes) {
+            match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true, true) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, FIRMWARE_DIR, error),
             }
@@ -1076,7 +1070,7 @@ impl Init {
         if let Some(policy) = (name == "effector_gw" && grants.count < SPAWN_GRANTS_MAX).then(|| self.effector_policy()).flatten() {
             if let Some(root) = policy.deliver() {
                 let dir = root.trim_end_matches('/');
-                match self.scope(mind::fs::BADGE_USER, dir, true, Make::Yes) {
+                match self.scope(mind::fs::BADGE_USER, dir, true, true) {
                     Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                     Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
                 }
@@ -1086,7 +1080,7 @@ impl Init {
         // (750-KRN-0169); the loader checks what it finds there before a run.
         if name == "effector_gw" && grants.count < SPAWN_GRANTS_MAX {
             if let Err(error) = self.make_dir(mind::fs::BADGE_USER, mind::effector::APPS_DIR) { mind::println!("[INIT] {}: {} NOT MADE ({:?})", name, mind::effector::APPS_DIR, error); }
-            match self.scope(mind::fs::BADGE_USER, mind::effector::APPS_DIR, true, Make::Yes) {
+            match self.scope(mind::fs::BADGE_USER, mind::effector::APPS_DIR, true, true) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_APPS, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, mind::effector::APPS_DIR, error),
             }
@@ -1758,25 +1752,21 @@ fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == nam
 
 // The directories a service gets confined clients of at each start (750-KRN-0120): its slot, the badge init asks with,
 // the directory, whether it may write there and whether init makes it if it is missing.
-fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, Make)] {
+fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
     match name {
-        "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true, Make::Yes)],
-        // The machine's name alone (000-KRN-0180): made where data/ is, so that a name set later is read without a
-        // restart; a volume without data/ gets no data/ for it.
-        "sysmon" => &[(SLOT_VFS, mind::fs::BADGE_USER, mind::hostname::DIR, false, Make::InParent)],
+        "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true, true)],
+        // The machine's name alone (000-KRN-0180), never made: a boot writes nothing, and written images hold the
+        // directory (scripts/make_usb_image.py), so a name set later is read without a restart.
+        "sysmon" => &[(SLOT_VFS, mind::fs::BADGE_USER, mind::hostname::DIR, false, false)],
         // The same directory for DHCP's option 12 (000-NET-0050), in SLOT_FILE: netstack's slot 3 is its second card.
-        "netstack" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::hostname::DIR, false, Make::InParent)],
-        "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false, Make::Yes)],
+        "netstack" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::hostname::DIR, false, false)],
+        "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false, true)],
         // The models nnd reads, and nothing else of the volumes (262-KRN-0178): each scope's root is its directory. Neither
         // is made: a boot writes nothing to the boot volume for nnd, whose scope waits for the owner's data/models/.
-        "nnd" => &[(SLOT_VFS, mind::fs::BADGE_USER, NN_MODELS_DIR, false, Make::No), (NND_MODELS, mind::fs::BADGE_USER, "models:", false, Make::No)],
+        "nnd" => &[(SLOT_VFS, mind::fs::BADGE_USER, NN_MODELS_DIR, false, false), (NND_MODELS, mind::fs::BADGE_USER, "models:", false, false)],
         _ => &[],
     }
 }
-
-// Whether a scope's directory is made when missing: not, with its parents, or only below a parent that is there.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Make { No, Yes, InParent }
 
 // A service's private directory in the boot volume's `system/` and the badge that alone opens it (351-NET-0005): its
 // SLOT_VFS client carries the badge; init makes the directory before each start, as the service does not.

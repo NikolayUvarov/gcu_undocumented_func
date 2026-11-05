@@ -34,7 +34,7 @@
   - each change logs `[NETSTACK] NAME FOR DHCP: <name> (<source>)`. The plan's `[NETSTACK] DHCP AS` began as the lease's line does, which the suites wait for: the first x86 run's wait for the lease ended on it;
   - **without a name,** `mindcore` is sent.
 - **Memory:** smoltcp keeps the option by reference for the socket's life, so each new name's few bytes stay allocated.
-- **`init`:** `scopes_of("netstack")`, made only below a `data/` that is there, as `sysmon`'s is (000-KRN-0180).
+- **`init`:** `scopes_of("netstack")`, given as `sysmon`'s is and never made (000-KRN-0180): written images hold `data/machine/`, and a disk without it gives no scope, so `mindcore` is sent.
 - **The check** is `dhcp_name_check` in the `net` suite:
   - QEMU's `filter-dump` records the card's traffic, and `dhcp_sent` reads the client's DHCP messages from it;
   - with `dexp` on the disk, every DISCOVER and REQUEST at boot carries it;
@@ -42,7 +42,22 @@
   - `stat caps` shows one files client in slot 7, the scope's.
 - **Docs:** `docs/profile/bootstrap.md` (`netstack`), `docs/profile/evidence.md`, `README.md`.
 
-**Left:** QEMU on x86 and aarch64; the DEXP's router (the second criterion), on the maintainer's word.
+**Tested,** through Effector, `network, TLS and Effector`:
+- **x32-128, x86,** on 782c2830: passed (1087 s). `dhcp_name_check`: two messages at boot carried `dexp`; after `lab-2` was written and the link came back, two more carried `lab-2`.
+- **acc-1, aarch64,** on f4810b61: passed (936 s). The later commits merge 000-KRN-0180's test and text changes only.
+- **Two runs before them failed, and are not counted:**
+  - on a16b3502, the suite's wait for the lease ended on the name's own line: hence `NAME FOR DHCP`;
+  - on f4810b61 (x86), after `dhcp_name_check` had passed, `wifi_join_check`'s `wifi channels 00` printed no line on the console, though `wifi`'s log held `13 CHANNELS UNDER 00`. The same group passed on the next run. That check is 550-NET-0059's; seen once, and not explained.
+- **Host:** `sysmon`, `idl` and `services` pass.
+
+The first criterion is met on those runs.
+
+**Returned in round 87** with 000-KRN-0180, on which it is built. 0180's `init` made `data/machine/` where `data/` was, and two suites failed for it. Neither failure was in this task's code.
+- **Now:** `init` makes neither scope's directory.
+- **Its own check is unchanged:** the `net` suite's disk holds `data/machine/name`.
+- **To run again:** `network, TLS and Effector` on both architectures, on the merged tree.
+
+**Left:** the DEXP's router (the second criterion), on the maintainer's word.
 
 ## Related
 

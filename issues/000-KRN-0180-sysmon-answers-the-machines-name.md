@@ -69,6 +69,24 @@ APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): 
 - **The `disk` suite's `disk_check`** (fm, issue 048, now APP's) went down from `..` onto `tree` in `data/`; `machine` now comes first. Its one positional step takes one key more, a change of its expectation only, told to APP. On dfb513f1 the `vfs`, `disks` and `edit` suites passed on x86 (x32-128).
 - **One rule, two copies:** `shell/src/hostname.rs` (APP's) and `mind::hostname` say the same rule word for word. Whether the shell uses `mind::hostname` once this lands is APP's choice.
 
+**Tested,** through Effector:
+- **x32-128, x86:** `files and block writes` passed on 776e6b24 (828 s); `keys, shell, tools` on 16e43f5e (419 s).
+- **acc-2, aarch64:** `files and the block store` passed on dfb513f1 (786 s); `programs, shell and four CPUs` on 16e43f5e (427 s).
+- The commits after 16e43f5e change only the `vfs` suite's check and `disk_check`.
+- **Host:** `tests/hostname_host.rs` (4), and `sysmon`, `idl`, `idl_fuzz`, `shell`, `bench`, `services` and `fs_routing`, all passed. `scripts/mind_idl.py` regenerates nothing new.
+
+All four criteria are met on those runs. The task closes once it lands.
+
+**Returned in round 87** (candidate 0e04398e), for two failures from `init` making `data/machine/` where `data/` is:
+- **`x86: the window manager`:** wm's Settings browsed a background in `data/` and found `data:machine` first, not `data:sky.bmp`;
+- **`aarch64: boot and fault containment`:** `fsck` found the boot volume's dirty bit after a reset during a slot's own loader. A boot that wrote nothing before now made the directory, and the reset left the volume unclean.
+
+**The change after it:**
+- `init` never makes the directory (`make` false, as for `nnd`): a boot writes nothing for it again.
+- `scripts/make_usb_image.py` puts `data/machine/` on every image it writes, so a written disk gives `sysmon` its scope and a name `hostname` sets later is read without a restart.
+- A disk without the directory, the tests' images among them, gives no scope until `sysmon`'s next start after it is made.
+- The `Make` modes are gone. The `vfs`, `edit` and `disk` suites' expectations are `main`'s again: `disk_check`'s extra key, told to APP, is taken back. `sysmon_name_check` makes the directory, and removes it at its end.
+
 ## Related
 
 [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md) (the setting and `hostname`).
