@@ -2,10 +2,10 @@
 #![no_main]
 
 use core::mem::ManuallyDrop;
-use mind::abi::{BootInfo, CAP_KIND_DMA, CAP_KIND_ENDPOINT, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM, SLOT_VFS};
+use mind::abi::{BootInfo, CAP_KIND_DMA, CAP_KIND_ENDPOINT, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM, SLOT_SERVICE, SLOT_VFS};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 use mind::mem::Pages;
-use rtw89_wifi::{args, board, btc_session, download, fwcmd, listen, mac, native_dma, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
+use rtw89_wifi::{args, board, btc_session, download, fwcmd, listen, mac, receive_service, native_dma, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
 mod startup;
 
 const FIRMWARE_PATH: &str = "data/firmware/rtw89/rtw8852b_fw-1.bin";
@@ -43,7 +43,7 @@ enum Error {
     Grant, Length, State, System(mind::sys::Error), File(mind::fs::Error), Verify(download::VerifyError),
     Io(Fault), Mac(mac::Failure), Pcie(pcie::Failure), Queue(fwcmd::Error), Download(download::Failure),
     PhyCap(phycap::Failure), Runtime(runtime_mac::Failure), Receive(rx::Error), PostMac(post_mac::Failure), Stop(Stopped),
-    Listen(listen::Failure), NativeDma(native_dma::Error),
+    Listen(listen::Failure), Served(receive_service::Stop), NativeDma(native_dma::Error),
 }
 
 #[derive(Debug)]
@@ -57,7 +57,7 @@ impl core::fmt::Debug for Error {
             Self::Io(e) => ("Io", Some(e)), Self::Mac(e) => ("Mac", Some(e)), Self::Pcie(e) => ("Pcie", Some(e)),
             Self::Queue(e) => ("Queue", Some(e)), Self::Download(e) => ("Download", Some(e)), Self::Stop(e) => ("Stop", Some(e)),
             Self::PhyCap(e) => ("PhyCap", Some(e)),
-            Self::Listen(e) => ("Listen", Some(e)), Self::NativeDma(e) => ("NativeDma", Some(e)),
+            Self::Listen(e) => ("Listen", Some(e)), Self::Served(e) => ("Served", Some(e)), Self::NativeDma(e) => ("NativeDma", Some(e)),
             Self::Runtime(e) => ("Runtime", Some(e)), Self::Receive(e) => ("Receive", Some(e)), Self::PostMac(e) => ("PostMac", Some(e)),
         };
         match detail { Some(value) => f.debug_tuple(name).field(value).finish(), None => f.write_str(name) }
@@ -171,6 +171,15 @@ impl startup::Diagnostic for Attempt<'_> {
                     &mut queues.receive, self.board, bar_bytes, self.runtime.as_ref().ok_or(Error::State)?).map_err(Error::PostMac)?);
                 mind::println!("[RTW89] MAC/RX DMA PREPARED; DATA TX STOPPED, RADIO CALIBRATION AND WLAN PENDING");
             }
+            Stage::InitialPhy if serving() => {
+                let mut scratch = [0; rx::BUFFER_BYTES];
+                let queues = self.queues.as_mut().ok_or(Error::State)?;
+                let stop = receive_service::serve(&mut self.native, &mut queues.command, &mut queues.receive,
+                    self.receiving.as_ref().ok_or(Error::State)?, self.ready.take().ok_or(Error::State)?, self.board,
+                    self.capabilities.as_ref().ok_or(Error::State)?, &mut scratch, LISTEN_MHZ, served);
+                mind::println!("[RTW89] WLANHW SERVICE STOPPED: {:?}", stop);
+                return Err(Error::Served(stop));
+            }
             Stage::InitialPhy => {
                 let mut scratch = [0; rx::BUFFER_BYTES];
                 let queues = self.queues.as_mut().ok_or(Error::State)?;
@@ -223,6 +232,22 @@ impl startup::Diagnostic for Attempt<'_> {
     fn quiesce(&mut self) -> Result<(), Error> {
         mind::platform::quiesce(self.index).map_err(Error::System)?;
         self.command(0)
+    }
+}
+
+// 213-KRN-0123: init lends an endpoint in SLOT_SERVICE when wlan may drive this radio.
+fn serving() -> bool { cap_info(SLOT_SERVICE).0 == CAP_KIND_ENDPOINT }
+
+// The agreed lines of 213-KRN-0123's check, and what a country's limits left.
+fn served(event: receive_service::Event) {
+    match event {
+        receive_service::Event::Serving { channel } => {
+            mind::println!("[RTW89] RECEIVE-ONLY CHANNEL {}: SCHEDULER ZERO, DATA DMA STOPPED", channel);
+            mind::println!("[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED");
+        }
+        receive_service::Event::CountryTaken { code, channels, listen_only } =>
+            mind::println!("[RTW89] COUNTRY {}{}: {} CHANNELS, {} LISTEN ONLY; NOT APPLIED: NO CALIBRATED CHANNEL YET, RECEIVE ONLY",
+                code[0] as char, code[1] as char, channels, listen_only),
     }
 }
 
@@ -281,6 +306,7 @@ fn main(_info: &'static BootInfo) {
     let report = startup::run(&mut attempt);
     mind::println!("[RTW89] DIAGNOSTIC {:?}", report);
     mind::println!("[RTW89] DMA RETAINED={}; NO RETRY, CALIBRATED RF, WLAN ENDPOINT OR NETWORK LINK", attempt.dma.is_some());
+    if serving() { receive_service::absent_forever(); }
     idle()
 }
 
