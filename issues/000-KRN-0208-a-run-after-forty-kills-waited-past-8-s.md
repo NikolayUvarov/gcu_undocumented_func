@@ -26,6 +26,19 @@ This is not a root cause (MC-12.2).
 - The cause is named, with the log that shows it.
 - The check passes 20 times in a row on x32-128.
 
+## Progress
+
+2026-11-05, plan step 1 in part, on `main` f81cd4d9 (round 84):
+- **The run:** `tests/qemu_smoke.py --memory 6G --suites normal`, 20 times in a row, on x32-128 in lane `KRN-2`.
+- **Beside it:** lane `KRN` repeated the x86 updater group for 000-KRN-0210, as the gate's other lane did in round 79.
+- **All 20 passed,** in 170 to 173 s each. So the forty kills and the `run` at once never waited 8 s. The second criterion is met, on that machine and that load (MC-12.1).
+- **Not seen, so not named:** the cause of round 79's wait (MC-12.2).
+- **What differed from round 79:** its group ran `normal` first, then `display`, `net`, `vfs` and `fill`, and its neighbour was another gate group, not the updater's.
+
+**Left:**
+- the cause, if the wait comes back. The gate keeps the logs of a group that fails (000-KRN-0210's `bounded`);
+- the run delayed after the kills, from plan step 1, only if it does.
+
 ## Related
 
 262-KRN-0178 (a badge reused only after its retirement), round 79's gate log.
