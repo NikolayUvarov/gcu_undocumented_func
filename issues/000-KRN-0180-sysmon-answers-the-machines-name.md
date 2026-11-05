@@ -1,6 +1,6 @@
 # 000-KRN-0180 — `sysmon` answers the machine's name (`sysinfo.wit` 4.2)
 
-**Type:** `sysmon`, `idl/sysinfo.wit`, `init` (a read-only scope) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** APP's choice of the file (its task for the setting) · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-12.4
+**Type:** `sysmon`, `idl/sysinfo.wit`, `init` (a read-only scope) · **Owner:** `KRN` · **Priority:** P1 (the maintainer, 2026-11-05) · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-12.4
 
 **Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, item 3, after the maintainer's word of 2026-10-28: the machine's name, set on the machine itself.
 
@@ -36,6 +36,14 @@
   - `stat caps` shows `sysmon`'s scope and nothing wider.
 - **Docs:** `docs/api` and the profile's `sysmon` row.
 
+## The file (2026-11-05)
+
+APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): `data/machine/name`, a directory of its own, as point 2 asks.
+- **What it holds:** one RFC 1123 label, with an optional line end.
+- **Capital letters** are taken as small ones, as APP's rule says, so `sysmon` reads the name as the shell writes it.
+- **A missing file, or one that is not a label,** gives `mindcore`.
+- **Who writes it:** APP's `hostname <name>`. Until that command lands, the owner can write the file by hand.
+
 ## Related
 
-[000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, the APP task for the setting.
+[000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md) (the setting and `hostname`).
