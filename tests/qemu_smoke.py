@@ -6852,18 +6852,7 @@ def vfs_suite(args):
             require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048 (DEVICE WRITABLE)")
             require(mounted, "[VFS] MOUNTED FAT16 FROM RAM AS RAM: (")
             for command, answer in [("mkdir data/sub", "OK"), ("write data/notes.txt line one", "WROTE 9 BYTES"), ("write data/sub/a.txt alpha", "WROTE 6 BYTES"),
-                                    ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK")]:
-                require(vm.command(command), answer)
-
-            # 000-KRN-0212: a rename, a removal and a new directory are on the disk at once, with no sync or close since.
-            def names(path):
-                listing = subprocess.run(["mdir", "-b", "-i", part, f"::/{path}"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
-                return {line.rstrip("/").rpartition("/")[2].lower() for line in listing.splitlines() if line.strip()}
-            data = names("data")
-            assert "b.txt" in data and "sub" not in data, data
-            require(vm.command("mkdir data/made"), "OK")
-            assert "made" in names("data"), names("data")
-            for command, answer in [("rm data/made", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
+                                    ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
                 require(vm.command(command), answer)
             # screenshot (issue 086): the screen in front (the shell's) as a BMP in data/, and under a free name on ram:.
             def slow(command):  # 3 MB written through the block driver take a while under emulation
@@ -8061,6 +8050,18 @@ def linkupdate_suite(args):
             link.put(server / path, path)
         print(f"TIME: {len(files)} files, {sum((server / p).stat().st_size for p in files)} bytes, put through the link in "
               f"{time.monotonic() - started:.0f} s", flush=True)
+        # 000-KRN-0212: link's put ends in a rename, and its mkdir, mv and rm flush nothing of their own: the disk holds
+        # each as soon as it is answered, with nothing flushed since.
+        last, small = files[-1], min(files, key=lambda p: (server / p).stat().st_size)
+        assert image.read(f"data/link/{link_update.DIR}/{last}") == (server / last).read_bytes(), last
+        link.run("mkdir", "made")
+        link.put(server / small, "copy")
+        link.run("mv", f"{link_update.DIR}/copy", "made/moved")
+        assert image.read("data/link/made/moved") == (server / small).read_bytes() and image.read(f"data/link/{link_update.DIR}/copy") is None, small
+        link.run("rm", "made/moved")
+        link.run("rmdir", "made")
+        listing = subprocess.run(["mdir", "-b", "-i", image.drive, "::/data/link"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
+        assert "made" not in {line.rstrip("/").rpartition("/")[2] for line in listing.splitlines()}, listing
         # The script's follower stops at a refusal, as it would on a real machine: an expired channel (351-UPD-0025), then
         # one whose signature was changed.
         for bad, refusal in ((channel(6, 5, "2020-01-01T00:00:00Z"), "Expired"), (forged, "Signature")):
