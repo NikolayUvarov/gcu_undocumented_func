@@ -7049,7 +7049,8 @@ def vfs_suite(args):
         try:
             require(vm.command("cat data/notes.txt"), "line one")
             # With the screenshot, the recording, and the camera's still and video.
-            require(vm.command("ls data"), f"8 ENTRIES, 7 FILES, {15 + size + len(avi_file) + len(half) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
+            # data/machine/ is init's, made for sysmon's scope where data/ is (000-KRN-0180).
+            require(vm.command("ls data"), f"9 ENTRIES, 7 FILES, {15 + size + len(avi_file) + len(half) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
             # Three screenshots and a recording, and PrintScreen's on x86.
             shots = 5 if args.arch == "x86_64" else 4
             require(vm.command("ls data/media"), f"{shots} ENTRIES, {shots} FILES, ")
@@ -7255,7 +7256,7 @@ def edit_check(vm):
     keys(b"\r", "[EDIT] NOT SAVED denied")
     leave(f10, "[EDIT] DONE")
     require(vm.command("ls ram:"), "1 ENTRIES, 1 FILES")
-    require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
+    require(vm.command("ls data"), "3 ENTRIES, 2 FILES, 59 BYTES")  # and data/machine/ (000-KRN-0180)
     # T4: a Rust file in its language's colours on the classic blue, pixel for pixel: keyword, plain text, comment.
     require(vm.command("write ram:colour.rs fn main() // note"), "WROTE 18 BYTES")  # no braces: msh would read them
     start("ram:colour.rs")
@@ -7312,7 +7313,7 @@ def edit_suite(args):
         assert mtools("mtype", "-i", part, "::/data/crlf.txt") == "один\r\ntwo\r\nтри\r\n4".encode()
         assert mtools("mtype", "-i", part, "::/readme.txt") == readme.read_bytes()
         names = mtools("mdir", "-b", "-i", part, "::/data").decode().split()
-        # data/machine/ is init's, made at each boot for sysmon's scope (000-KRN-0180).
+        # data/machine/ is init's, made where data/ is for sysmon's scope (000-KRN-0180).
         assert sorted(n.rstrip("/").rsplit("/", 1)[-1] for n in names) == ["crlf.txt", "edit.txt", "machine"], names
     print("PASS: edit image: fsck.fat clean; mtools reads the saved files byte for byte; no temporary files left", flush=True)
 
