@@ -346,16 +346,17 @@ impl Head {
     fn removed(&self) -> bool { !self.kept[0].points }
     // The roots the name retains: those of its kept versions, none once it is removed.
     fn retains(&self) -> impl Iterator<Item = &Version> { self.versions().iter().filter(move |v| v.points && !self.removed()) }
-    // Keeps `v` among the newest HISTORY versions; once the newest removes the name, only it is kept.
+    // Keeps `v` among the newest HISTORY versions; a removal ends the versions before it, so none older than one is
+    // kept, whatever order a mount meets them in (a commit record may lie after a removal on the medium).
     fn keep(&mut self, v: Version) {
         let n = self.count as usize;
-        if self.kept[..n].iter().any(|k| k.version == v.version) { return; }
+        if self.kept[..n].iter().any(|k| k.version == v.version || !k.points && k.version > v.version) { return; }
         let at = self.kept[..n].iter().position(|k| k.version < v.version).unwrap_or(n);
         if at == HISTORY { return; }
         self.kept.copy_within(at..HISTORY - 1, at + 1);
         self.kept[at] = v;
         self.count = (n + 1).min(HISTORY) as u8;
-        if self.removed() { self.count = 1; }
+        if !v.points { self.count = at as u8 + 1; }
     }
 }
 
@@ -565,6 +566,8 @@ pub struct Store<'a, D: Device> {
     // Where the scrub goes on from (0: no pass under way), and what this pass found so far.
     scrub_at: u64,
     scrubbing: Scrubbed,
+    // The block the last walk could not read, lacking or damaged (309-STO-0041).
+    unread: Option<Cid>,
 }
 
 // Records of domains not yet met a mount keeps for later.
@@ -759,7 +762,7 @@ impl<'a, D: Device> Store<'a, D> {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
             scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made, kept,
             recoveries: [0; RECOVERIES], remembered: 0, recovered: 0, domain: VOLUME, domains: [None; DOMAINS],
-            deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0, scrubbing: Scrubbed::default(),
+            deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0, scrubbing: Scrubbed::default(), unread: None,
         };
         store.mount_pass()?;
         store.size_retained();
@@ -1232,10 +1235,12 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(self.heads[self.find(name).map_err(|_| Error::NotFound)?].versions())
     }
 
-    // Walks the object, directory tree or journal `root` through the store; `visit` sees the store and each block's CID.
-    fn walk(&mut self, root: &Cid, visit: impl FnMut(&mut Self, &Cid) -> Result<(), dag::Error>) -> Result<u64, Error> {
+    /// Walks the object, directory tree or journal `root` through the store, within the steps it gives its own walks;
+    /// `visit` sees the store and each block's CID before the walk reads it (a copy's blocks follow it, 309-STO-0040).
+    pub fn walk(&mut self, root: &Cid, visit: impl FnMut(&mut Self, &Cid) -> Result<(), dag::Error>) -> Result<u64, Error> {
         let scratch = self.scratch.take().ok_or(Error::Device)?;
         let steps = self.steps();
+        self.unread = None;
         let walked = journal::walk(self, root, scratch, steps, visit);
         self.scratch = Some(scratch);
         walked.map_err(|e| match e {
@@ -1245,6 +1250,10 @@ impl<'a, D: Device> Store<'a, D> {
             _ => Error::Invalid,
         })
     }
+
+    /// The block the last walk stopped at, one the store lacks or holds damaged, read by the walk itself: where a rebuild
+    /// from the copy says it stopped (309-STO-0041). A block `visit` reads is its own to tell.
+    pub fn unread(&self) -> Option<Cid> { self.unread }
 
     // Steps a walk may take: four for each block the index can hold. A tree that needs more is refused as out of shape,
     // so no root keeps the store at it longer than its medium's worth.
@@ -1511,6 +1520,16 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(len)
     }
 
+    /// Whether the block `cid` names reads back whole, checked as `get` checks it and copied nowhere; one that does not
+    /// leaves the index as with `get`, so a put of the same bytes stores it again (309-STO-0040: a repair).
+    pub fn check_block(&mut self, cid: &Cid) -> Result<bool, Error> {
+        let at = self.position(&cid.to_bytes(), self.domain).map_err(|_| Error::NotFound)?;
+        let Entry { lba, len, .. } = self.index[at];
+        if self.verify(lba as u64, cid, len as usize)? { return Ok(true); }
+        self.remove(at);
+        Ok(false)
+    }
+
     pub fn stats(&self) -> Stats {
         Stats {
             blocks: self.count as u32, bytes: self.bytes, used: self.end, sectors: self.dev.sectors(),
@@ -1568,6 +1587,9 @@ impl<'a, D: Device> Store<'a, D> {
         let mut i = 0;
         while i < self.index.len() { if self.index[i].used() && self.index[i].domain == id { self.remove(i); } else { i += 1; } }
     }
+
+    /// The domain requests work in.
+    pub fn domain(&self) -> u16 { self.domain }
 
     /// Works in domain `id` for the requests that follow (VOLUME: the volume's own); `NotFound` for one not live.
     pub fn set_domain(&mut self, id: u16) -> Result<(), Error> {
@@ -1727,7 +1749,7 @@ impl<'a, D: Device> Store<'a, D> {
         Ok((one && (parse_name(sector).is_some() || parse_pin(sector).is_some()), n))
     }
 
-    #[cfg(test)]
+    /// The medium itself: the copy's gate opens through it (309-STO-0041), and the tests reach their simulated media.
     pub fn device(&mut self) -> &mut D { &mut self.dev }
 }
 
@@ -1741,8 +1763,8 @@ impl<D: Device> dag::Blocks for Store<'_, D> {
     }
     fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
         Store::get(self, cid, out).map_err(|e| match e {
-            Error::NotFound => dag::Error::NotFound,
-            Error::Corrupt => dag::Error::Corrupt,
+            Error::NotFound => { self.unread = Some(*cid); dag::Error::NotFound }
+            Error::Corrupt => { self.unread = Some(*cid); dag::Error::Corrupt }
             _ => dag::Error::Store,
         })
     }

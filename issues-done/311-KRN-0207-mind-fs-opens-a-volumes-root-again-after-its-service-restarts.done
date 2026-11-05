@@ -1,6 +1,6 @@
-# 311-KRN-0207 — `mind::fs` opens a volume's root again after its service restarts
+# 311-KRN-0207 — `mind::fs` opens a volume's root again after its service restarts — done
 
-**Type:** `libmind` (`mind::fs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.md) · **Constitution:** MC-6.6
+**Type:** `libmind` (`mind::fs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-6.6
 
 **Asked by:** STO, 2026-11-04 (`requests-KRN.md`, taken out of it with this issue), from a run by hand on x86 while building 311-STO-0032's QEMU checks.
 
@@ -62,6 +62,18 @@
 
 **Every acceptance criterion is met.** `check` is not asked again: its visit runs once. That is a limit of this change, not a criterion. The issue closes once this lands.
 
+## Resolution
+
+- **`volumes::again`** (`libmind/src/fs/volumes.rs`): a call on a kept root that answers `invalid` is asked once more after the root is opened again; a second `invalid` and every other answer come back as they are.
+- **`mind::fs`** goes through it in `Dir::open`, `Dir::create`, `File::open_mode`, `remove`, `rename` and `volume`. An open file's handle is never reopened.
+- **Host tests** in `tests/fs_routing_host.rs`.
+- **QEMU** on x86 and aarch64, in the shell suite:
+  - `storefs_check`: `ls` and `cat` of a store volume after `svc restart storefs` (round 81, `main` e860d0bc);
+  - `vfs_restart_check`: `ls`, `write`, `cat` and `rm` in `data/` after `svc restart vfs_server` (round 82, `main` 4e5a72be).
+
+  Neither restarts the shell.
+- **Not done:** `check` is not asked again; its visit runs once.
+
 ## Related
 
-STO's 311-STO-0032; [311-KRN-0203](../issues-done/311-KRN-0203-a-lent-files-client-and-a-held-storefs-client.done) (the routing).
+STO's 311-STO-0032; [311-KRN-0203](311-KRN-0203-a-lent-files-client-and-a-held-storefs-client.done) (the routing).

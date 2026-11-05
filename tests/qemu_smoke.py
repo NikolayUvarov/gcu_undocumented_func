@@ -13162,27 +13162,76 @@ def held_clients(vm, name):
     return {int(slot): (int(badge), named.get(servers.get(int(ep)), "?")) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
 
 
+def store_frames(image):
+    """The sealed records on a store's image (308-STO-0021): each frame's first sector and the sectors it covers, read
+    from the frame, which is in the clear."""
+    data = image.read_bytes()
+    found, lba = [], 1
+    while (lba + 1) * 512 <= len(data):
+        at = lba * 512
+        n = int.from_bytes(data[at + 12:at + 16], "little")
+        if data[at:at + 8] == b"MIND-SLD" and data[at + 8:at + 10] == (4).to_bytes(2, "little") and 1 <= n <= 33:
+            found.append((lba, n))
+            lba += n
+        else:
+            lba += 1
+    return found
+
+
+def damage_record(image, sectors, which=0):
+    """Flips one bit in the sealed part of the `which`th record of `sectors` sectors on a store's image, so its seal no
+    longer opens; returns its first sector."""
+    of = [lba for lba, n in store_frames(image) if n == sectors]
+    assert len(of) > which, (image.name, sectors, store_frames(image))
+    with image.open("r+b") as f:
+        f.seek((of[which] + 1) * 512 + 100)
+        byte = f.read(1)
+        f.seek(-1, 1)
+        f.write(bytes([byte[0] ^ 0x10]))
+    return of[which]
+
+
 def store_copy_disk_check(args, disk):
     """309-KRN-0209: beside the boot disk, two blank VirtIO disks: the first is the block store's own, the next its copy's.
-    blockstore holds a write client of each (slots 2 and 4), vfs_server neither, and after a reboot both are found again."""
+    blockstore holds a write client of each (slots 2 and 4), vfs_server neither, and after a reboot both are found again.
+    309-STO-0040: the copy holds the names chosen for it: a name's copy turned on replies COPIED, and so does its next
+    publication; a record damaged on either disk while the machine runs is repaired by a scrub from the other disk; one
+    damaged on each before a reboot is put back on the copy by its catch-up and read back whole from the copy into the
+    store; the next scrubs find nothing; turned off, a publication replies FLUSHED. The images are written in place
+    (snapshot=off), so damage made on the host reaches the guest's next read."""
     with tempfile.TemporaryDirectory(prefix="mind-store-copy-") as temp:
         images = [Path(temp) / name for name in ("store.img", "copy.img")]
         extra = []
         for n, image in enumerate(images):
             with image.open("wb") as f:
                 f.truncate(8 << 20)  # the store formats its own at start: about 10 s on aarch64 under TCG
-            extra += ["-drive", f"format=raw,file={image},if=none,id=store{n}", "-device", f"virtio-blk-pci,drive=store{n}"]
+            extra += ["-drive", f"format=raw,file={image},if=none,id=store{n},snapshot=off", "-device", f"virtio-blk-pci,drive=store{n}"]
+        # RDRAND on x86, so that both volume keys are random and kept by keystore, each under its own id.
+        if getattr(args, "arch", None) != "aarch64":
+            extra += ["-cpu", "qemu64,+rdrand"]
         vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+
+        def blocks(command, *expected, timeout=60):
+            out = vm.command(f"blocks {command}", raw=True, timeout=timeout)
+            for e in expected:
+                require(out, e)
+            return out
+
+        def store_log(until, tries=60):
+            log = ""
+            for _ in range(tries):
+                log = vm.command("dmesg -s blockstore", raw=True)
+                if until in log:
+                    return log
+                time.sleep(2)
+            raise AssertionError(f"{until!r} not in\n{log[-3000:]}")
 
         def found():
             log = vm.command("dmesg -s init", raw=True)
             own = re.search(r"\[INIT\] THE BLOCK STORE'S DISK: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
             copy = re.search(r"\[INIT\] THE BLOCK STORE'S COPY: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
             assert own and copy and own[1] != copy[1], log
-            for _ in range(60):
-                if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
-                    break
-                time.sleep(2)
+            store_log("[BLOCKSTORE] COPY MOUNTED")
             require(vm.command("dmesg -s blockstore", raw=True), "[BLOCKSTORE] READY")
             store = held_clients(vm, "blockstore")
             assert store.get(2) == (1, own[1]) and store.get(4) == (1, copy[1]), (own[0], copy[0], store)
@@ -13192,23 +13241,170 @@ def store_copy_disk_check(args, disk):
         try:
             own, copy = found()
             assert own[2] == copy[2] == "BLANK", (own[0], copy[0])
-            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            put = re.search(r"PUT (\S+) SIZE 5000", blocks("pattern 5000"))
             assert put, vm.output
-            require(vm.command(f"blocks publish disk {put[1]}", raw=True), "PUBLISHED disk VERSION 1 (FLUSHED)")
+            blocks(f"publish disk {put[1]}", "PUBLISHED disk VERSION 1 (FLUSHED)")
+            # 309-STO-0040: a name's copy turned on, then its next publication: both reach the copy.
+            first = re.search(r"PUT (\S+) SIZE 40000", blocks("pattern 40000"))[1]
+            blocks(f"publish obj {first}", "PUBLISHED obj VERSION 1 (FLUSHED)")
+            blocks("copies obj on", "COPY ON obj (COPIED)")
+            second = re.search(r"PUT (\S+) SIZE 30000", blocks("pattern 30000"))[1]
+            blocks(f"publish obj {second} 1", "PUBLISHED obj VERSION 2 (COPIED)")
+            blocks("copy stat", "NAMES=1", "BEHIND=0")
+            # A chunk damaged on each disk while the machine runs, two chunks apart: the scrub repairs each from the other.
+            damage_record(images[0], 33, 0)
+            damage_record(images[1], 33, 1)
+            blocks("scrub", "1 CORRUPT", timeout=180)
+            log = store_log("COPY SCRUBBED")
+            assert "FROM THE COPY" in log and "ON THE COPY FROM THE STORE" in log, log[-3000:]
+            require(log, "AFTER REPAIRS: THE DAMAGED RECORDS FREED")
+            blocks("scrub", "0 CORRUPT, 0 DAMAGED", timeout=180)
+            passes = re.findall(r"COPY SCRUBBED \d+ RECORDS: (\d+) CORRUPT, (\d+) DAMAGED SECTORS, ASKED BY PID", store_log("COPY SCRUBBED"))
+            assert passes and passes[-1] == ("0", "0"), passes
+            blocks(f"check {first} pattern", "CHECKED 40000 BYTES = PATTERN")
+            blocks(f"check {second} pattern", "CHECKED 30000 BYTES = PATTERN")
+            # Damaged between two boots: the first object's last chunk on the store's disk, the second's on the copy's.
+            damage_record(images[0], 15)
+            damage_record(images[1], 27)
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
             time.sleep(1); vm.collect(); vm.output = ""
             again, copied = found()
-            assert (again[1], again[2]) == (own[1], "THE STORE'S") and copied[1] == copy[1], (again[0], copied[0])
-            require(vm.command("blocks resolve disk", raw=True), f"disk VERSION 1 ROOT {put[1]}")
+            assert (again[1], again[2]) == (own[1], "THE STORE'S") and (copied[1], copied[2]) == (copy[1], "THE STORE'S"), (again[0], copied[0])
+            blocks("resolve disk", f"disk VERSION 1 ROOT {put[1]}")
+            # The copy's mount found its damage: the name is caught up between requests, its missing block put back.
+            store_log("COPIED obj VERSION 2 ON THE COPY, 1 BLOCKS PUT THERE")
+            # The store's mount found its own: the chunk is read back from the copy and put back in the store.
+            blocks(f"check {first} pattern", "CHECKED 40000 BYTES = PATTERN")
+            store_log("FROM THE COPY")
+            blocks("scrub", timeout=180)
+            blocks("scrub", "0 CORRUPT, 0 DAMAGED", timeout=180)
+            passes = re.findall(r"COPY SCRUBBED \d+ RECORDS: (\d+) CORRUPT, (\d+) DAMAGED SECTORS", store_log("COPY SCRUBBED"))
+            assert passes and passes[-1] == ("0", "0"), passes
+            blocks("copy stat", "NAMES=1", "BEHIND=0")
+            blocks("resolve obj", f"obj VERSION 2 ROOT {second}")
+            # Off: the copy no longer follows the name.
+            blocks("copies obj off", "COPY OFF obj (FLUSHED)")
+            blocks(f"publish obj {first} 2", "PUBLISHED obj VERSION 3 (FLUSHED)")
+            blocks("copy stat", "NAMES=0")
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-store-copy-{args.cpus}cpu.log").write_text(vm.log)
-    # The copy stays blank until blockstore writes it (309-STO-0040).
     print(f"PASS: store copy: two blank VirtIO disks beside the boot disk, the block store's ({own[1]}) and its copy's ({copy[1]}); "
-          f"blockstore holds a write client of each in slots 2 and 4, vfs_server neither; after a reboot the store's is found as "
-          f"THE STORE'S with its name, the copy's again as {copied[2]} (309-KRN-0209)", flush=True)
+          f"blockstore holds a write client of each in slots 2 and 4, vfs_server neither; after a reboot both are found as "
+          f"THE STORE'S (309-KRN-0209). A name's copy turned on and its next publication reply COPIED; a record damaged on "
+          f"either disk while running repaired by a scrub from the other, collected on both; one damaged on each before the "
+          f"reboot put back on the copy by its catch-up and read back from the copy into the store; the next scrubs clean; "
+          f"turned off, a publication replies FLUSHED (309-STO-0040)", flush=True)
+
+
+def store_rebuild_check(args, disk):
+    """309-STO-0041: a store rebuilt from its copy. Two blank VirtIO disks beside the boot disk, the store's and its
+    copy's, written in place: two names published with copies; then, the machine idle, a chunk only the second name holds
+    damaged on the copy's image and the store's image overwritten with zeros, a blank disk in its place, and a reboot. The
+    store formats its blank disk and leaves the copy's names as they are; `blocks rebuild --check` says one name whole and
+    one lost at the damaged chunk's CID, putting nothing; `blocks rebuild` brings the whole one back, `COPIED`, read
+    again by its pattern; after another reboot both disks are the store's and the name resolves at the same root. The
+    machine reboots rather than starting again: keystore keeps the copy's volume key on the boot volume, whose snapshot
+    overlay outlives a reboot and not QEMU."""
+    with tempfile.TemporaryDirectory(prefix="mind-store-rebuild-") as temp:
+        images = [Path(temp) / name for name in ("store.img", "copy.img")]
+        extra = []
+        for n, image in enumerate(images):
+            with image.open("wb") as f:
+                f.truncate(8 << 20)
+            extra += ["-drive", f"format=raw,file={image},if=none,id=store{n},snapshot=off", "-device", f"virtio-blk-pci,drive=store{n}"]
+        # RDRAND on x86, so that both volume keys are random and kept by keystore, each under its own id.
+        if getattr(args, "arch", None) != "aarch64":
+            extra += ["-cpu", "qemu64,+rdrand"]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+
+        def blocks(command, *expected, timeout=60):
+            out = vm.command(f"blocks {command}", raw=True, timeout=timeout)
+            for e in expected:
+                require(out, e)
+            return out
+
+        def store_log(until, tries=60):
+            log = ""
+            for _ in range(tries):
+                log = vm.command("dmesg -s blockstore", raw=True)
+                if until in log:
+                    return log
+                time.sleep(2)
+            raise AssertionError(f"{until!r} not in\n{log[-3000:]}")
+
+        def disks(own_was, copy_was):
+            log = vm.command("dmesg -s init", raw=True)
+            own = re.search(r"\[INIT\] THE BLOCK STORE'S DISK: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
+            copy = re.search(r"\[INIT\] THE BLOCK STORE'S COPY: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
+            assert own and copy and own[1] != copy[1] and (own[2], copy[2]) == (own_was, copy_was), log
+            store_log("[BLOCKSTORE] COPY MOUNTED")
+            return own[1], copy[1]
+
+        def reboot():
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND>", timeout=60)
+            time.sleep(1); vm.collect(); vm.output = ""
+        try:
+            own, copy = disks("BLANK", "BLANK")
+            # Two names with copies; chunks 0 and 1 of the pattern are the same blocks in both, chunk 2 only `gone`'s.
+            keep = re.search(r"PUT (\S+) SIZE 40000", blocks("pattern 40000"))[1]
+            gone = re.search(r"PUT (\S+) SIZE 50000", blocks("pattern 50000"))[1]
+            for name, root in (("keep", keep), ("gone", gone)):
+                blocks(f"publish {name} {root}", f"PUBLISHED {name} VERSION 1 (FLUSHED)")
+                blocks(f"copies {name} on", f"COPY ON {name} (COPIED)")
+            blocks("copy stat", "NAMES=2", "BEHIND=0")
+            blocks("rebuild --check", "IN STEP gone", "IN STEP keep", "CHECKED 2 NAMES ON THE COPY: 0 WHOLE, 0 LOST, 2 IN STEP, 0 BEHIND")
+            # The copy's full chunks in the order it was written: keep's two, then gone's third.
+            lost_chunk = cid_raw(bytes((i * 31 + 7) % 251 for i in range(32768, 49152)))
+            damage_record(images[1], 33, 2)
+            # The store's disk replaced by a blank one: its image overwritten with zeros while the store is idle.
+            with images[0].open("r+b") as f:
+                f.write(bytes(8 << 20))
+            reboot()
+            assert disks("BLANK", "THE STORE'S") == (own, copy)
+            log = store_log("ONLY ON THE COPY")
+            for name, root in (("gone", gone), ("keep", keep)):
+                require(log, f"[BLOCKSTORE] {name} ONLY ON THE COPY, VERSION 1 ROOT {root}: LEFT AS IT IS")
+            blocks("resolve keep", "blocks: resolve keep: NotFound")
+            held = re.search(r"BLOCKS=\d+ NAMES=\d+", blocks("stat"))[0]
+            # The check: the copy's mount found the chunk damaged and left it out of its index, so `gone` is incomplete
+            # there; `keep` is whole, its node and three chunks for the store to put. Nothing is put or published.
+            lost_line = f"LOST gone VERSION 1 ROOT {gone}: INCOMPLETE AT {lost_chunk}"
+            blocks("rebuild --check", lost_line, f"WHOLE keep VERSION 1 ROOT {keep}: 4 BLOCKS, 4 TO PUT",
+                   "CHECKED 2 NAMES ON THE COPY: 1 WHOLE, 1 LOST, 0 IN STEP, 0 BEHIND", "NOT ON THE COPY, SO NOT SAID HERE")
+            blocks("stat", held)
+            blocks("resolve keep", "blocks: resolve keep: NotFound")
+            # The rebuild brings `keep` back; `gone` stays on the copy as it is.
+            blocks("rebuild", lost_line, f"REBUILT keep VERSION 1 ROOT {keep} (COPIED): 4 BLOCKS PUT",
+                   "REBUILT 2 NAMES ON THE COPY: 1 WHOLE, 1 LOST, 0 IN STEP, 0 BEHIND")
+            require(store_log("REBUILT keep"), f"[BLOCKSTORE] REBUILT keep VERSION 1 ROOT {keep} FROM THE COPY, 4 BLOCKS PUT")
+            blocks(f"check {keep} pattern", "CHECKED 40000 BYTES = PATTERN")
+            blocks("resolve keep", f"keep VERSION 1 ROOT {keep}")
+            blocks("resolve gone", "blocks: resolve gone: NotFound")
+            blocks("rebuild --check", "IN STEP keep", lost_line, "CHECKED 2 NAMES ON THE COPY: 0 WHOLE, 1 LOST, 1 IN STEP, 0 BEHIND")
+            # Through a memory domain's client, where one can be made: refused.
+            made = re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))
+            if made:
+                blocks(f"-d {made[1]} rebuild --check", "blocks: rebuild: Rights")
+                require(store_log("THROUGH DOMAIN"), f"REFUSED CopyNames FOR PID")
+            # Found again after a reboot: both disks the store's, the name at the same root, its blocks whole.
+            reboot()
+            assert disks("THE STORE'S", "THE STORE'S") == (own, copy)
+            blocks("resolve keep", f"keep VERSION 1 ROOT {keep}")
+            blocks(f"check {keep} pattern", "CHECKED 40000 BYTES = PATTERN")
+            blocks("rebuild --check", "IN STEP keep", lost_line)
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-store-rebuild-{args.cpus}cpu.log").write_text(vm.log)
+    print(f"PASS: store rebuild: two names copied to the copy's disk ({copy}); a chunk only one holds damaged there, the "
+          f"store's disk ({own}) replaced by a blank image and the machine rebooted: the copy's names left as they are; "
+          f"`blocks rebuild --check` says one WHOLE and one LOST, INCOMPLETE at the damaged chunk's CID, putting nothing; "
+          f"`blocks rebuild` brings the whole one back (COPIED), read again by its pattern; after a reboot both disks are "
+          f"THE STORE'S and the name resolves at the same root (309-STO-0041)", flush=True)
 
 
 def store_disk_check(args, disk):
@@ -13916,6 +14112,7 @@ def main():
                 svc_boot_check(args)
             if suite == "store":  # its own machine with two store disks, booted twice (309-KRN-0209)
                 store_copy_disk_check(args, disk)
+                store_rebuild_check(args, disk)  # another, the store's disk replaced by a blank one (309-STO-0041)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at

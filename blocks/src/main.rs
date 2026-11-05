@@ -11,13 +11,15 @@
 // from the copy (`export`, `import`, 309-STO-0031). Appends to a journal under a name and checks it from its head
 // (`journal`, 312-STO-0034). Builds a text index of a journal, searches it with each answer checked against the journal,
 // and checks it by a rebuild (`index`, 312-STO-0035). Says things about objects in a journal, lists what is said of one
-// and withdraws them (`assert`, 312-STO-0038).
+// and withdraws them (`assert`, 312-STO-0038). Turns a name's copy on the store's second medium on or off and shows what
+// the copy holds (`copies`, `copy stat`, 309-STO-0040). Says what of the copy's names the store lost, and brings back
+// each one the copy holds whole (`rebuild`, 309-STO-0041).
 use core::sync::atomic::{AtomicUsize, Ordering};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ, SLOT_FILE};
 use mind::cid::{Cid, Codec};
 use mind::dag::{self, Blocks, Builder, CHUNK};
 use mind::fs::File;
-use mind::idl::blockstore::{self, Error, Update};
+use mind::idl::blockstore::{self, Error, Standing, Update, Walked};
 use mind::idl::codec::{List, Text};
 use mind::ipc::Endpoint;
 
@@ -210,9 +212,93 @@ fn recovery(mut words: core::str::SplitWhitespace) {
     }
 }
 
+// A name's copy on the store's second medium (309-STO-0040): `copies <name> on|off` turns it on or off and prints the
+// class the reply gives; `copy stat` shows what the copy holds.
+fn copies(mut words: core::str::SplitWhitespace) {
+    match (words.next(), words.next(), words.next(), words.next()) {
+        (Some("copies"), Some(name), Some(which @ ("on" | "off")), None) => match blockstore::copy(store(), name, which == "on") {
+            Ok(Ok(reached)) => mind::println!("COPY {} {} ({})", if which == "on" { "ON" } else { "OFF" }, name, mind::blockstore::class(reached as u8)),
+            Ok(Err(e)) => mind::println!("blocks: copies {} {}: {:?}", name, which, e),
+            Err(e) => store_silent(e),
+        },
+        (Some("copy"), Some("stat"), None, _) => match blockstore::copy_stat(store()) {
+            Ok(Ok(s)) => mind::println!("BLOCKS={} NAMES={} SECTORS={}/{} BEHIND={} REPAIRED_FROM_COPY={} REPAIRED_FROM_STORE={}", s.blocks, s.names, s.used, s.sectors, s.behind, s.from_copy, s.from_store),
+            Ok(Err(e)) => mind::println!("blocks: copy stat: {:?}", e),
+            Err(e) => store_silent(e),
+        },
+        _ => mind::println!("blocks: copies <name> on|off | copy stat"),
+    }
+}
+
+// The store's names brought back from its copy (309-STO-0041): each name of the copy is listed with how it stands; each
+// one the store does not hold is checked, and without `--check` each one found whole is brought back. A line per name,
+// then the counts, then what the copy cannot hold.
+fn rebuild(mut words: core::str::SplitWhitespace) {
+    let check = match (words.next(), words.next(), words.next()) {
+        (Some("rebuild"), None, _) => false,
+        (Some("rebuild"), Some("--check"), None) => true,
+        _ => return mind::println!("blocks: rebuild [--check]"),
+    };
+    let (mut after, mut names, mut whole, mut lost, mut in_step, mut behind, mut unmounted) = (Text::<64>::default(), 0, 0, 0, 0, 0, false);
+    loop {
+        let page = match blockstore::copy_names(store(), after.as_str()) {
+            Ok(Ok(page)) => page,
+            Ok(Err(e)) => return mind::println!("blocks: rebuild: {:?}", e),
+            Err(e) => return store_silent(e),
+        };
+        for n in page.as_slice() {
+            names += 1;
+            let Ok(root) = Cid::from_bytes(n.root.as_slice()) else { mind::println!("blocks: rebuild: no CID for {}", n.name); continue };
+            match n.standing {
+                Standing::InStep => { in_step += 1; mind::println!("IN STEP {}", n.name) }
+                Standing::Behind => { behind += 1; mind::println!("BEHIND {}", n.name) }
+                // Only on the copy, or the store not mounted: what the copy would bring back.
+                Standing::OnlyOnCopy | Standing::Unknown => {
+                    unmounted |= n.standing == Standing::Unknown;
+                    let found = match blockstore::rebuild(store(), n.name.as_str(), true) {
+                        Ok(Ok(found)) => found,
+                        Ok(Err(e)) => { mind::println!("blocks: rebuild {} --check: {:?}", n.name, e); continue }
+                        Err(e) => return store_silent(e),
+                    };
+                    if found.walked != Walked::Whole {
+                        lost += 1;
+                        lost_line(n.name.as_str(), n.version, &root, found.walked, found.at.as_slice());
+                        continue;
+                    }
+                    whole += 1;
+                    if check {
+                        mind::println!("WHOLE {} VERSION {} ROOT {}: {} BLOCKS, {} TO PUT", n.name, n.version, root, found.visited, found.lacked);
+                        continue;
+                    }
+                    match blockstore::rebuild(store(), n.name.as_str(), false) {
+                        Ok(Ok(r)) if r.walked == Walked::Whole => mind::println!("REBUILT {} VERSION {} ROOT {} ({}): {} BLOCKS PUT", n.name, r.version, root, mind::blockstore::class(r.durability as u8), r.put),
+                        // Changed since the check.
+                        Ok(Ok(r)) => lost_line(n.name.as_str(), n.version, &root, r.walked, r.at.as_slice()),
+                        Ok(Err(e)) => mind::println!("NOT REBUILT {} VERSION {} ROOT {}: {:?}", n.name, n.version, root, e),
+                        Err(e) => return store_silent(e),
+                    }
+                }
+            }
+        }
+        match page.as_slice().last() { Some(last) if page.len() == 16 => after = last.name, _ => break }
+    }
+    mind::println!("{} {} NAMES ON THE COPY: {} WHOLE, {} LOST, {} IN STEP, {} BEHIND", if check { "CHECKED" } else { "REBUILT" }, names, whole, lost, in_step, behind);
+    if unmounted && !check { mind::println!("THE STORE IS NOT MOUNTED: NOTHING IS BROUGHT BACK INTO IT UNTIL IT MOUNTS"); }
+    mind::println!("NOT ON THE COPY, SO NOT SAID HERE: NAMES THAT HAD NO COPY, VERSIONS OLDER THAN EACH NAME'S ON THE COPY, PINS, AND CHANGES THE COPY WAS BEHIND ON; THESE CANNOT BE TOLD FROM WHAT NEVER EXISTED");
+}
+
+// A name the copy holds incomplete or damaged: where its walk stopped, and why.
+fn lost_line(name: &str, version: u64, root: &Cid, walked: Walked, at: &[u8]) {
+    let why = if walked == Walked::Corrupt { "CORRUPT" } else { "INCOMPLETE" };
+    match Cid::from_bytes(at) {
+        Ok(at) => mind::println!("LOST {} VERSION {} ROOT {}: {} AT {}", name, version, root, why, at),
+        Err(_) => mind::println!("LOST {} VERSION {} ROOT {}: {}", name, version, root, why),
+    }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -246,6 +332,8 @@ fn main(_info: &'static BootInfo) {
         Some("assert") => return assertion::command(rest, buffer, data, &mut remote),
         Some("domain") | Some("domains") => return domains(words),
         Some("recovery") => return recovery(rest),
+        Some("copies") | Some("copy") => return copies(words),
+        Some("rebuild") => return rebuild(words),
         _ => {}
     }
     match (words.next(), words.next(), words.next(), words.next()) {
@@ -399,6 +487,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion>"),
+        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]"),
     }
 }
