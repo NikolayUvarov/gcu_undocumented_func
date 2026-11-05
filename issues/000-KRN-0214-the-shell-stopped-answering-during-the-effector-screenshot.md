@@ -1,4 +1,4 @@
-# 000-KRN-0214 — The shell stopped answering during the Effector suite's screenshot, on x86
+# 000-KRN-0214 — The shell stopped answering during the Effector suite's screenshot, on x86 (and once in `disks_check`)
 
 **Type:** a suite to find, then the service at fault · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
@@ -40,6 +40,19 @@ This is not a cause (MC-12.2). Candidates only:
 
 - The suite's failed wait leaves a record that names the state of every CPU, and the test that makes it fails without it.
 - The cause is named, with the record that shows it; or 10 runs in a row pass on x32-128 beside a busy lane, and that is recorded.
+
+## Progress
+
+2026-11-05, **a third time, with no Effector suite:**
+- **Where:** 000-KRN-0180's tree dfb513f1, x32-128, lane `KRN`, `x86: files and block writes`; lane `KRN-2` ran `x86: network, TLS and Effector` beside it.
+- **When:** in the `vfs` suite's `disks_check`, on a VM with the boot disk on ATA and two VirtIO disks.
+- **The console:**
+  - `dmesg -s vfs_server` ran, then `df` (it took 3.00 s to count the 256 MiB FAT32 volume's free clusters, against 0.12 s in the next run);
+  - `MIND> dmesg -s blockstore` was echoed, and no `STARTED` line came before the suite's wait ran out.
+- **Run again** on the same commit and lane, the group passed `disks_check`.
+- **Its console log was lost:** the next run's `disks_check` wrote the same file before it could be kept.
+
+**So the screenshot is not needed.** In all three cases the shell echoed a command line and never started the program. That points at the shell's start of a program (`loader`, `vfs_server` reading the image), not at the gateway's capture. It is still a candidate, not a cause (MC-12.2).
 
 ## Related
 
