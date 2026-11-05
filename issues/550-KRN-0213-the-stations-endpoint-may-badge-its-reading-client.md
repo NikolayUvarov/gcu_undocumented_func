@@ -24,8 +24,18 @@ From NET's request of 2026-11-05 for 550-NET-0058 (`issues/requests-KRN.md`, and
 
 ## Acceptance criteria
 
-- [ ] Builds on x86 and aarch64; the `net` suite passes with the grant.
+- [x] Builds on x86 and aarch64; the `net` suite passes with the grant.
 - [ ] NET's check passes once 550-NET-0058 lands: in the `net` suite over `wlansim`, `wificheck wifi` takes the reading client, reads through it, and is denied the changes.
+
+## Progress
+
+2026-11-05, on `claude/550-KRN-0213-wlan-reading-client`:
+- `init` gives `wlan` its endpoint with `ALL | CAP_BADGE`, and `mind::process` has `REQUEST_WIFI_READ` (`1 << 28`). `docs/profile/bootstrap.md`'s `wlan` row says so.
+- **Tested** on 40624d06 (`main` 6253e7a7 merged), through Effector:
+  - x32-128, x86: `network, TLS and Effector` passed (1078 s);
+  - acc-1, aarch64: `network, TLS and Effector` passed (914 s).
+
+**Left:** the second criterion, NET's check, which lands with 550-NET-0058.
 
 ## Related
 
