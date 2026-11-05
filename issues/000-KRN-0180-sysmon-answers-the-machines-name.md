@@ -54,8 +54,13 @@ APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): 
 - **`bench`'s head:** `MIND Core on <name>, …` in `check`, `bench` and `kbench`, on the screen and in their logs.
 - **Tests:**
   - host: `tests/hostname_host.rs`;
-  - QEMU: `hostname_check` in the `vfs` suite; `kbench_check` requires the head's name; `edit_suite`'s listing of `data/` now holds `machine`.
+  - QEMU: `sysmon_name_check` in the `vfs` suite; `kbench_check` requires the head's name; `edit_suite`'s listing of `data/` now holds `machine`.
 - **Docs:** `docs/api/README.md` (`hostname`), `docs/profile/bootstrap.md` (`sysmon`).
+
+2026-11-05, after `main` brought APP's `hostname` (round 86):
+- **The two checks had one name.** APP's `hostname_check` in the `shell` suite and this task's in the `vfs` suite were both `hostname_check`, and Python keeps the later. The merge raised no conflict, so APP's check would no longer have run. This task's is now `sysmon_name_check`.
+- **A removed `data/machine/`.** APP's check ends with `rm data/machine`. `vfs_server` ends a scope of a removed directory, so `sysmon` then answers `mindcore` (`NOT READ`) until it starts again. At that start `init` makes the directory and a new scope. `sysmon_name_check` now checks both, and the profile's `sysmon` row says so.
+- **One rule, two copies:** `shell/src/hostname.rs` (APP's) and `mind::hostname` say the same rule word for word. Whether the shell uses `mind::hostname` once this lands is APP's choice.
 
 ## Related
 
