@@ -1637,6 +1637,24 @@ fn every_page_and_row_of_settings_reacts() {
     s.country = Some(country("UZ", "", Origin::Detected { announced: 2, heard: 3 }));
     let shown = screen(&s);
     assert!(shown.contains("Country: UZ, announced by 2 of 3 access points") && shown.contains("a change asks in its window."), "{}", shown);
+    // The machine's name (000-APP-0123): the last row, after Policy; typed, Enter sets it through the shell.
+    s.key(key(KEY_ENTER), &config);
+    for _ in 0..settings::NAME_ROW { s.key(key(KEY_DOWN), &config); }
+    assert_eq!(s.net_row, settings::NAME_ROW);
+    s.key(key(KEY_DOWN), &config);
+    assert_eq!(s.net_row, settings::NAME_ROW, "the last row");
+    s.machine = Some(String::from("mindcore"));
+    assert!(screen(&s).contains("Name") && screen(&s).contains("now mindcore"), "{}", screen(&s));
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay, "nothing typed");
+    assert_eq!(s.message.as_deref(), Some("Type the machine's name, then Enter"));
+    for ch in "dexp".chars() { s.key(chr(ch), &config); }
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::SetHostname(String::from("dexp")));
+    s.key(key(KEY_UP), &config);
+    assert_eq!(s.net_row, settings::NAME_ROW - 1, "↑ back to the rows");
+    // A click on its row chooses it.
+    let inner = s.area().inner();
+    assert_eq!(s.click(inner.x + 30, inner.y + 1 + settings::NAME_ROW, &config), Outcome::Stay);
+    assert_eq!(s.net_row, settings::NAME_ROW);
     // Each row of the background page: Enter changes it, or a line says why not.
     for row in 0..ROWS.len() {
         let mut s = Settings::new(&config, (160, 50));

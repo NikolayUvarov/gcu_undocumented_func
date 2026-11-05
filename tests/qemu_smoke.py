@@ -12506,6 +12506,13 @@ def wm_suite(vm):
         screen_has("console netpolicy")
         screen_has("wifi --countries")  # the country beside Wi-Fi (550-APP-0082)
         screen_has("Country: no station to ask")  # and why none is named: QEMU's wm suite has no station
+        # 000-APP-0123: the machine's name, the page's last row, set through the shell at once (shell.wit 1.11).
+        keys(*["down"] * 6, text="SETTINGS=Network:Name")
+        screen_has("now mindcore")
+        keys("d", "e", "x", "p")
+        keys("ret", text="[WM] SET HOSTNAME dexp: The machine's name is dexp now, kept in data/machine/name")
+        screen_has("now dexp")
+        keys(*["up"] * 6, text="SETTINGS=Network:Wi-Fi")
         keys("ret", text="[WM] STARTED wifi PID")
         pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
         while not any(m[1] == pid for m in windows_re.findall("".join(seen))):

@@ -42,6 +42,8 @@ pub const NETWORK_ROWS: [(&str, &str, &str); 6] = [
     ("Flow grants", "console netgrants", "what each program may reach"),
     ("Policy", "console netpolicy", "its lines; a change asks first"),
 ];
+/// The network page's last row, after the others: the machine's name, typed and set through the shell (000-APP-0123).
+pub const NAME_ROW: usize = NETWORK_ROWS.len();
 pub const CLOCK_ROWS: [&str; 8] = ["Year", "Month", "Day", "Hours", "Minutes", "Seconds", "Time zone", "Set the clock"];
 const ZONE: usize = 6;
 const SET: usize = 7;
@@ -71,6 +73,8 @@ pub struct Settings {
     /// On the network page: the Wi-Fi station's country as `wm` last read it through its client (550-APP-0082); None:
     /// not read, or no station.
     pub country: Option<WifiCountry>,
+    /// The machine's name as the shell last answered it (000-APP-0123; None: not read), and the name being typed.
+    pub machine: Option<String>, pub hostname: InputLine,
 }
 
 /// Where the station's country came from (wifi.wit 1.2): not known yet; the user's choice; announced by `announced` of
@@ -150,7 +154,7 @@ impl Browser {
 
 /// What a key or a click did.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, SetZone { west: bool, minutes: u32 }, SetKeymap { layout: usize, switch: usize }, Run(String) }
+pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, SetZone { west: bool, minutes: u32 }, SetKeymap { layout: usize, switch: usize }, Run(String), SetHostname(String) }
 
 /// A zone's name: `UTC`, `UTC+03:00`, `UTC-05:30`.
 pub fn zone_name(minutes: i32) -> String {
@@ -176,7 +180,7 @@ impl Settings {
         let mut file = InputLine::new();
         if let Some(name) = config.picture.file() { for ch in name.chars() { file.insert(ch); } }
         Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, zone: 0, message: None, shell: false,
-               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, browser: None, lister: no_files, country: None }
+               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, browser: None, lister: no_files, country: None, machine: None, hostname: InputLine::new() }
     }
 
     /// The grid became `screen` cells at `scale` (000-APP-0061): the window is centred on it anew.
@@ -358,10 +362,22 @@ impl Settings {
             };
             return self.keymap_step(self.key_row, step);
         }
+        if self.page == NETWORK && self.net_row == NAME_ROW {
+            // The machine's name: typed, Enter sets it through the shell; ↑ back to the rows above.
+            match key.code() {
+                Code::Up => self.net_row -= 1,
+                Code::Down | Code::Tab => {}
+                _ => if let Edit::Submit = self.hostname.key(key) {
+                    let name = String::from(self.hostname.as_str().trim());
+                    if name.is_empty() { self.message = Some(String::from("Type the machine's name, then Enter")); } else { return Outcome::SetHostname(name); }
+                },
+            }
+            return Outcome::Stay;
+        }
         if self.page == NETWORK {
             match key.code() {
                 Code::Up => self.net_row = self.net_row.saturating_sub(1),
-                Code::Down => self.net_row = (self.net_row + 1).min(NETWORK_ROWS.len() - 1),
+                Code::Down => self.net_row = (self.net_row + 1).min(NAME_ROW),
                 Code::Left => self.on_pages = true,
                 Code::Right | Code::Enter => return self.network(),
                 Code::Char if key.char() == Some(' ') => return self.network(),
@@ -577,6 +593,10 @@ impl Settings {
             (self.net_row, self.on_pages) = (cy - 1, false);
             return self.network();
         }
+        if self.page == NETWORK && cy == NAME_ROW + 1 {
+            (self.net_row, self.on_pages) = (NAME_ROW, false);
+            return Outcome::Stay;
+        }
         // The screen page: a click on a row chooses it and steps it on.
         if self.page == SCREEN && (1..=SCREEN_ROWS.len()).contains(&cy) {
             (self.screen_row, self.on_pages) = (cy - 1, false);
@@ -683,12 +703,16 @@ impl Settings {
                 let chosen = !self.on_pages && self.net_row == i;
                 grid.text_padded(x, inner.y + 1 + i, &format!("{:<11} {:<17} {}", name, command, what), w, if chosen { theme.selected } else { theme.dialog });
             }
-            grid.text_max(x, inner.y + 2 + NETWORK_ROWS.len(), &country_line(self.country.as_ref()), w, theme.dialog);
+            let chosen = !self.on_pages && self.net_row == NAME_ROW;
+            let now = self.machine.as_deref().map_or(String::from("(not read)"), |n| format!("now {}", n));
+            grid.text_padded(x, inner.y + 1 + NAME_ROW, &format!("{:<11} {:<17} {}", "Name", self.hostname.as_str(), now), w, if chosen { theme.selected } else { theme.dialog });
+            if chosen { cursor = Some((x + 12 + self.hostname.cursor_chars(), inner.y + 1 + NAME_ROW)); }
+            grid.text_max(x, inner.y + 3 + NETWORK_ROWS.len(), &country_line(self.country.as_ref()), w, theme.dialog);
             let lines = ["Wi-Fi goes through the 802.11 station of the network track",
                          "(task 550). Until it runs, wifi says so; wifi --demo shows",
                          "the program with a stand-in station. console passes the",
                          "shell's commands to the shell; a change asks in its window."];
-            let below = inner.y + 4 + NETWORK_ROWS.len();
+            let below = inner.y + 5 + NETWORK_ROWS.len();
             for (i, line) in lines.iter().enumerate() { grid.text_max(x, below + i, line, w, theme.dialog); }
             if let Some(message) = &self.message { grid.text_max(x, below + lines.len() + 1, message, w, theme.accent); }
         } else if self.page == DATE {
@@ -712,6 +736,7 @@ impl Settings {
         let help = if self.browser.is_some() { "↑↓: choose · Enter: open it or take the picture · Backspace: up · Esc: back" }
             else if self.on_pages && ![0, KEYBOARD, DATE, NETWORK, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
             else if !self.on_pages && self.page == KEYBOARD { "↑↓: rows · ← → Enter Space: change, at once through the shell · Tab: pages · Esc: close" }
+            else if !self.on_pages && self.page == NETWORK && self.net_row == NAME_ROW { "type the machine's name · Enter: set it, through the shell · ↑: rows · Esc: close" }
             else if !self.on_pages && self.page == NETWORK { "↑↓: rows · Enter: open it in a window · Tab: pages · Esc: close" }
             else if !self.on_pages && self.page == SCREEN { "↑↓: rows · ← → Enter Space: change, used at once · Tab: pages · Esc: close" }
             else if self.on_pages { "↑↓: page · Enter or →: its settings · Esc: close" } else if self.page == DATE { "↑↓: rows · ← → or digits: change · Enter: set the clock · Tab: pages · Esc: close" }
