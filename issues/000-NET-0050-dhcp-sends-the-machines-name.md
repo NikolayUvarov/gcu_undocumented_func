@@ -31,7 +31,7 @@
   - every card's DHCP client sends it as option 12 (`set_outgoing_options`), so each DISCOVER, REQUEST and renewal carries it;
   - **when:** at its start, when a link comes back up (before its new DISCOVER), and every 60 s;
   - a read waits at most 500 ms, and one that fails keeps the name as it was: the stack does not wait on files;
-  - each change logs `[NETSTACK] DHCP AS <name> (<source>)`;
+  - each change logs `[NETSTACK] NAME FOR DHCP: <name> (<source>)`. The plan's `[NETSTACK] DHCP AS` began as the lease's line does, which the suites wait for: the first x86 run's wait for the lease ended on it;
   - **without a name,** `mindcore` is sent.
 - **Memory:** smoltcp keeps the option by reference for the socket's life, so each new name's few bytes stay allocated.
 - **`init`:** `scopes_of("netstack")`, made only below a `data/` that is there, as `sysmon`'s is (000-KRN-0180).

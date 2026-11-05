@@ -9645,7 +9645,7 @@ def dhcp_sent(pcap):
 def dhcp_name_check(vm, pcap):
     """000-NET-0050: netstack sends the machine's name as option 12 in each DISCOVER and REQUEST, read from
     data/machine/name through init's read-only scope; a name changed later goes out with the next lease."""
-    require(vm.command("dmesg -s netstack", raw=True), "[NETSTACK] DHCP AS dexp (data/machine/name)")
+    require(vm.command("dmesg -s netstack", raw=True), "[NETSTACK] NAME FOR DHCP: dexp (data/machine/name)")
     sent = dhcp_sent(pcap)
     assert {kind for kind, _ in sent} >= {1, 3} and all(name == b"dexp" for _, name in sent), sent
     # A new name, then the link down and up: the stack reads the file again before its new DISCOVER.
@@ -9655,7 +9655,7 @@ def dhcp_name_check(vm, pcap):
     require(vm.service_logs("netstack", "LINK DOWN"), "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
     vm.hmp("set_link n0 on")
     log = vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15/24")
-    require(log, "[NETSTACK] DHCP AS lab-2 (data/machine/name)")
+    require(log, "[NETSTACK] NAME FOR DHCP: lab-2 (data/machine/name)")
     deadline = time.monotonic() + 30
     while {kind for kind, _ in dhcp_sent(pcap)[before:]} < {1, 3}:
         assert time.monotonic() < deadline, dhcp_sent(pcap)

@@ -32,10 +32,10 @@ impl Name {
         if matches!(source, Source::Unread(_)) && !self.text.is_empty() { return false; }
         if text == self.text { return false; }
         match source {
-            Source::File => mind::println!("[NETSTACK] DHCP AS {} ({})", text, hostname::FILE),
-            Source::Missing => mind::println!("[NETSTACK] DHCP AS {} (NO {})", text, hostname::FILE),
-            Source::Invalid(why) => mind::println!("[NETSTACK] DHCP AS {} ({} HOLDS NO NAME: {})", text, hostname::FILE, why),
-            Source::Unread(why) => mind::println!("[NETSTACK] DHCP AS {} ({} NOT READ: {})", text, hostname::FILE, why),
+            Source::File => mind::println!("[NETSTACK] NAME FOR DHCP: {} ({})", text, hostname::FILE),
+            Source::Missing => mind::println!("[NETSTACK] NAME FOR DHCP: {} (NO {})", text, hostname::FILE),
+            Source::Invalid(why) => mind::println!("[NETSTACK] NAME FOR DHCP: {} ({} HOLDS NO NAME: {})", text, hostname::FILE, why),
+            Source::Unread(why) => mind::println!("[NETSTACK] NAME FOR DHCP: {} ({} NOT READ: {})", text, hostname::FILE, why),
         }
         // smoltcp keeps the options by reference for the socket's life: each new name's few bytes stay allocated.
         let data: &'static [u8] = Box::leak(text.as_bytes().to_vec().into_boxed_slice());
