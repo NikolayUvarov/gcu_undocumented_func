@@ -60,6 +60,11 @@ APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): 
 2026-11-05, after `main` brought APP's `hostname` (round 86):
 - **The two checks had one name.** APP's `hostname_check` in the `shell` suite and this task's in the `vfs` suite were both `hostname_check`, and Python keeps the later. The merge raised no conflict, so APP's check would no longer have run. This task's is now `sysmon_name_check`.
 - **A removed `data/machine/`.** APP's check ends with `rm data/machine`. `vfs_server` ends a scope of a removed directory, so `sysmon` then answers `mindcore` (`NOT READ`) until it starts again. At that start `init` makes the directory and a new scope. `sysmon_name_check` now checks both, and the profile's `sysmon` row says so.
+- **A volume without `data/`.** The first x86 run (x32-128, dd7fc88b) failed in two suites, for one reason: `init` made `data/machine/` with its parents at each boot.
+  - **`tools`:** `fm_check` (APP's) found `data/` in a root that had none, and `fm /` opened on it.
+  - **`vfs`:** `ls data` counted one entry more.
+
+  `init` now makes the directory only below a `data/` that is there (`Make::InParent`). A volume without `data/` gives `sysmon` no scope, and `init` logs `NO FILES IN data/machine`. Its name is then read from `sysmon`'s next start. The `vfs` and `edit` suites count `data/machine/` in `data/`.
 - **One rule, two copies:** `shell/src/hostname.rs` (APP's) and `mind::hostname` say the same rule word for word. Whether the shell uses `mind::hostname` once this lands is APP's choice.
 
 ## Related
