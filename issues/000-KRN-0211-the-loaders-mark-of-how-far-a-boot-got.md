@@ -29,13 +29,13 @@ DRV has no screen or serial console there. The loader writes nothing on a confir
 
 ## Acceptance criteria
 
-- [ ] Host tests: the mark's encoding and refusals (`tests/boot_mark_host.rs`); `boot_switch.py`'s reading of each stage, an unchanged count, no mark, and marks of another shape (`tests/boot_switch_test.py`).
-- [ ] QEMU, x86 and aarch64 (`boot_slots_check.py`):
+- [x] Host tests: the mark's encoding and refusals (`tests/boot_mark_host.rs`); `boot_switch.py`'s reading of each stage, an unchanged count, no mark, and marks of another shape (`tests/boot_switch_test.py`).
+- [x] QEMU, x86 and aarch64 (`boot_slots_check.py`):
   - each boot's three marks in order, and `HANDOVER` with one count more on the disk;
   - a slot's own loader carrying the count the loader at `EFI/BOOT/` started;
   - a boot reset in its pause left at `READ`;
   - the file system consistent after.
-- [ ] Docs: `docs/update/slots.md` and `docs/write-disk.md`, in English and Russian.
+- [x] Docs: `docs/update/slots.md` and `docs/write-disk.md`, in English and Russian.
 - [ ] On un-rizen, with DRV: the stage of the next boot that leaves no log, or that many cycles without one, recorded in 000-KRN-0124.
 
 ## Progress
