@@ -1,4 +1,4 @@
-// The radio as a service (550-DRV-0027): idl/wlanhw.wit 1.3 served on the service endpoint, which init lends to the
+// The radio as a service (550-DRV-0027): idl/wlanhw.wit 2.0 served on the service endpoint, which init lends to the
 // station `wlan` alone (MC-2.3). Received frames are polled from the ring every few milliseconds; `wait` answers when
 // one is queued. No shared ring yet: frames go by `receive`, as the station takes them.
 use crate::radio::{Counts, Error, Filter, Radio, Sent, FRAME_MAX, OFDM_RATES, RADIO_HEADER};

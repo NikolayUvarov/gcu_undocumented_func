@@ -1,4 +1,4 @@
-// The radio as a service: idl/wlanhw.wit 1.2 on the service endpoint, which init lends to the station `wlan` alone
+// The radio as a service: idl/wlanhw.wit 2.0 on the service endpoint, which init lends to the station `wlan` alone
 // (MC-2.3), as bcm_wifi serves it (550-DRV-0027). Received frames are polled from the ring every few milliseconds;
 // `wait` answers when one is queued. No shared ring: frames go by `receive`.
 use rtw88_wifi::radio::{Fail, Radio, FRAME_MAX, RADIO_HEADER};

@@ -1,4 +1,4 @@
-//! Bounded wlanhw 1.1 adapter for one actually admitted channel; native construction remains separate.
+//! Bounded wlanhw 2.0 adapter for one actually admitted channel; native construction remains separate.
 
 use crate::{btc_session::{DeviceIo,data_mode::{self,DataSession}},frames,rx,rxdesc,tx};
 use mind::{dev,idl::{codec::List,wire,wlanhw},ipc::Endpoint,sys,time};
