@@ -56,7 +56,10 @@ From DRV's report of 2026-11-05 (`KRN/2026-11-05T1852Z-DRV-the-ryzens-boot-volum
   - `writable()` is false while held, so every write path answers `read-only`.
 - **`vfs_server/src/main.rs`:** the boot volume and the log partition are checked after the medium's identity is recorded (000-KRN-0079), with three log lines: `WAS LEFT DIRTY: CHECKING`, the counts with the first problem, then `IS HELD READ-ONLY…` or `NO DAMAGE A WRITE COULD SPREAD, WRITABLE`.
 - **Host tests** (`tests/fat_host.rs`, FAT16 by `format`, FAT32 by `mkfs.fat`): three new tests, all 21 pass. With `writable()` ignoring the hold, `a_volume_left_dirty_with_a_chain_into_free_clusters_is_held` fails. The same test shows, without the check, the next new file given the cut entry's first cluster and a cross-link.
-- **QEMU:** `dirty_volume_check` in the `vfs` suite. Its runs on x86 and aarch64 are next.
+- **QEMU:** `dirty_volume_check` in the `vfs` suite.
+  - **The first x86 run** (9267d8bb) showed OVMF itself writing its variables to `NvVars` on the boot volume before MIND Core starts: QEMU gives it no flash store on x86. It took `cut.bin`'s freed first cluster, a cross-link. `vfs_server` reported it and held the volume, as it should; the test had expected the bad chain alone.
+  - **Since f73a003e,** a freed `gap.bin` before `cut.bin` takes the firmware's file. Only `NvVars`'s sectors may change, and every cut cluster must still be free.
+  - **On f73a003e** all passed, through Effector: x32-128, x86, `files and block writes` (899 s; 26 sectors changed, all `NvVars`'s) and `NVMe boot disk` (71 s); acc-2, aarch64, `files and the block store` (786 s; no sector changed) and `NVMe boot disk` (92 s). `host tests` passed on 9267d8bb (x32-128, 1188 s).
 - **Docs:** the threat model's power-loss row and an evidence row.
 - **The shell** names the error `READ-ONLY DEVICE`, which is APP's text; the log says why.
 
