@@ -53,7 +53,9 @@
 #                  still waiting for their ACK) are saved from the volume MIND CORE into
 #                  ~/.config/mind/effector (700, files 600; a fresh disk uses what was saved last), and after it put
 #                  back and read back. With --mode=maintenance the agent then comes up as the same endpoint, with no
-#                  owner step. The files may hold the agent's token: never printed or committed.
+#                  owner step. The files may hold the agent's token: never printed or committed. A missing or empty
+#                  part or file of the old disk keeps what was saved before, and the copy it replaces stays as
+#                  ~/.config/mind/effector.prev (800-LNK-0036); the same holds for --keep-wifi and --keep-settings.
 #   --keep-settings keep everything the owner set on the machine (800-LNK-0024): --keep-wifi and --keep-effector,
 #                  and the rest of data/ and system/: the time zone (data/clock.conf), the desktop (data/wm.conf and
 #                  its picture), data/memory.conf, data/services.txt, data/mode.conf, installed apps, the owner's files.
@@ -206,6 +208,33 @@ put_link() {
     winps "${script//__CONF__/$conf}" | tr -d '\r'
 }
 
+# A damaged or half-written old disk never erases what was saved (800-LNK-0036): a part or file of it that is missing
+# or empty keeps the one saved before, and a saved copy that is replaced stays beside it as <dir>.prev.
+has_content() { [[ -d $1 && -n $(find "$1" -type f -size +0c -print -quit) ]]; }
+rotate_kept() {
+    local next=$1 keep=$2
+    rm -rf "${keep:?}.prev"; if [[ -e $keep ]]; then mv "$keep" "$keep.prev" || return 1; fi
+    mv "$next" "$keep"
+}
+# File $1 kept as $2 when it holds something, the saved one staying as $2.prev; an empty or missing $1 keeps $2.
+keep_file() {
+    local from=$1 to=$2
+    if [[ -s $from ]]; then
+        [[ -s $to ]] && (umask 077; cp "$to" "$to.prev")
+        (umask 077; cp "$from" "$to") && chmod 600 "$to"
+    else
+        [[ -f $from && -s $to ]] && echo "keep: ${from##*/} on the disk is empty: the copy saved before is kept" >&2
+        return 1
+    fi
+}
+# The empty files under $1 refilled from the same files under $2 where those hold something.
+refill_empty() {
+    local f
+    [[ -d $2 ]] || return 0
+    while IFS= read -r f; do [[ -s $2/$f ]] && cp "$2/$f" "$1/$f"; done < <(cd "$1" && find . -type f -size 0c)
+    return 0
+}
+
 # The remembered Wi-Fi networks (keystore's files, 550-NET-0024), carried across a write through WSL's mount of the
 # volume, so their bytes are on no command line; the mount is undone at once (the writer needs the volume unlocked).
 KEEP_DIR="${KEEP_DIR:-$HOME/.config/mind/keystore}"
@@ -255,7 +284,7 @@ save_keystore() {
     if [[ -f $dir/system/keystore/wifi.kept ]]; then
         mkdir -p "$KEEP_DIR" && chmod 700 "$KEEP_DIR"
         for f in "${KEPT_FILES[@]}"; do
-            if [[ -f $dir/system/keystore/$f ]]; then (umask 077; cp "$dir/system/keystore/$f" "$KEEP_DIR/$f") && chmod 600 "$KEEP_DIR/$f" && n=$((n + 1)); fi
+            keep_file "$dir/system/keystore/$f" "$KEEP_DIR/$f" && n=$((n + 1))
         done
         echo "keep-wifi: $n file(s) of $letter:\\system\\keystore saved in $KEEP_DIR"
     else
@@ -331,12 +360,19 @@ EFFECTOR_KEEP="${EFFECTOR_KEEP:-$HOME/.config/mind/effector}"
 keep_effector_from() {
     local vol=$1 next="$EFFECTOR_KEEP.next" n
     [[ -d $vol/data/effector || -d $vol/system/effector ]] || return 1
+    local part
     rm -rf "$next"; (umask 077; mkdir -p "$next/data" "$next/system")
-    [[ -d $vol/data/effector ]] && (umask 077; cp -r "$vol/data/effector/." "$next/data/")
-    [[ -d $vol/system/effector ]] && (umask 077; cp -r "$vol/system/effector/." "$next/system/")
+    for part in data system; do
+        if has_content "$vol/$part/effector"; then
+            (umask 077; cp -r "$vol/$part/effector/." "$next/$part/") && refill_empty "$next/$part" "$EFFECTOR_KEEP/$part"
+        elif has_content "$EFFECTOR_KEEP/$part"; then
+            (umask 077; cp -r "$EFFECTOR_KEEP/$part/." "$next/$part/")
+            echo "keep-effector: the disk's $part/effector is missing or empty: what was saved before is kept" >&2
+        fi
+    done
     find "$next" -type d -exec chmod 700 {} + && find "$next" -type f -exec chmod 600 {} +
     n=$(find "$next" -type f | wc -l)
-    rm -rf "${EFFECTOR_KEEP:?}" && mv "$next" "$EFFECTOR_KEEP" && echo "$n"
+    rotate_kept "$next" "$EFFECTOR_KEEP" && echo "$n"
 }
 # Puts $EFFECTOR_KEEP's files on the volume at $1 and reads them back.
 put_effector_to() {
@@ -386,14 +422,19 @@ keep_settings_from() {
     [[ -d $vol/data || -d $vol/system ]] || return 1
     rm -rf "$next"; (umask 077; mkdir -p "$next/data" "$next/system")
     for sub in data system; do
-        [[ -d $vol/$sub ]] || continue
-        args=()
-        if [[ $sub == data ]]; then for x in "${SETTINGS_SKIP_DATA[@]}"; do args+=("--exclude=./$x"); done
-        else for x in "${SETTINGS_SKIP_SYSTEM[@]}"; do args+=("--exclude=./$x"); done; fi
-        (cd "$vol/$sub" && tar cf - "${args[@]}" .) | (umask 077; cd "$next/$sub" && tar xf - --no-same-owner) || { rm -rf "$next"; return 1; }
+        if [[ -d $vol/$sub ]]; then
+            args=()
+            if [[ $sub == data ]]; then for x in "${SETTINGS_SKIP_DATA[@]}"; do args+=("--exclude=./$x"); done
+            else for x in "${SETTINGS_SKIP_SYSTEM[@]}"; do args+=("--exclude=./$x"); done; fi
+            (cd "$vol/$sub" && tar cf - "${args[@]}" .) | (umask 077; cd "$next/$sub" && tar xf - --no-same-owner) || { rm -rf "$next"; return 1; }
+        fi
+        if ! has_content "$next/$sub" && has_content "$SETTINGS_KEEP/$sub"; then
+            (umask 077; cp -r "$SETTINGS_KEEP/$sub/." "$next/$sub/")
+            echo "keep-settings: the disk's $sub/ holds none of the settings: what was saved before is kept" >&2
+        fi
     done
     find "$next" -type d -exec chmod 700 {} + && find "$next" -type f -exec chmod 600 {} +
-    rm -rf "${SETTINGS_KEEP:?}" && mv "$next" "$SETTINGS_KEEP" && find "$SETTINGS_KEEP" -type f | wc -l
+    rotate_kept "$next" "$SETTINGS_KEEP" && find "$SETTINGS_KEEP" -type f | wc -l
 }
 # Puts $SETTINGS_KEEP's files on the volume at $1 and reads each back.
 put_settings_to() {
