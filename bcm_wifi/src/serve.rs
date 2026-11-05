@@ -1,4 +1,4 @@
-// The radio as a service (550-DRV-0027): idl/wlanhw.wit 1.2 served on the service endpoint, which init lends to the
+// The radio as a service (550-DRV-0027): idl/wlanhw.wit 1.3 served on the service endpoint, which init lends to the
 // station `wlan` alone (MC-2.3). Received frames are polled from the ring every few milliseconds; `wait` answers when
 // one is queued. No shared ring yet: frames go by `receive`, as the station takes them.
 use crate::radio::{Counts, Error, Filter, Radio, Sent, FRAME_MAX, OFDM_RATES, RADIO_HEADER};
@@ -23,41 +23,13 @@ const STARVED_MS: u64 = 5000;
 pub fn offer_ofdm(on: bool) { OFDM.store(on, Ordering::Relaxed); }
 fn bands() -> u8 { BAND_2GHZ | if OFDM.load(Ordering::Relaxed) { BAND_2GHZ_OFDM } else { 0 } }
 // The radio's own channels.
-const CHANNELS: core::ops::RangeInclusive<u8> = 1..=13;
-const PROBE_REQUEST: u8 = 0x40;
+use crate::country::{Country, CHANNELS};
 
-// A country's limits (wlanhw.wit 1.2, 550-NET-0035): the channels the station may use and those it may only listen on,
-// as bit masks. None until first set, when 1.1's ways hold, as the station of stage A sets none (so does wlansim). EIRP
-// is not applied: the transmit gain is fixed and not calibrated in dBm (550-DRV-0028).
-#[derive(Clone, Copy)]
-struct Country { channels: u16, listen: u16 }
-
-impl Country {
-    fn allows(c: Option<Country>, channel: u8) -> bool { c.map_or(CHANNELS.contains(&channel), |c| c.channels >> channel & 1 != 0) }
-
-    // Whether `frame` may go out on `channel`: no probe request where the station may only listen.
-    fn may_send(c: Option<Country>, channel: u8, frame: &[u8]) -> bool {
-        let Some(c) = c else { return true };
-        c.channels >> channel & 1 != 0 && !(c.listen >> channel & 1 != 0 && frame.first() == Some(&PROBE_REQUEST))
-    }
-
-    fn list(c: Option<Country>) -> List<u8, 64> {
-        let mut channels = List::default();
-        for ch in CHANNELS.filter(|&ch| Country::allows(c, ch)) { channels.push(ch); }
-        channels
-    }
-
-    // The limits checked: a two-letter capital code, each channel once and the radio's own.
-    fn from(code: &str, limits: &[wlanhw::Limit]) -> Option<Country> {
-        if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_uppercase()) { return None; }
-        let mut c = Country { channels: 0, listen: 0 };
-        for l in limits {
-            if !CHANNELS.contains(&l.channel) || c.channels >> l.channel & 1 != 0 { return None; }
-            c.channels |= 1 << l.channel;
-            if l.listen { c.listen |= 1 << l.channel; }
-        }
-        Some(c)
-    }
+// The country's channel list for `info`, as the IDL's list.
+fn channel_list(c: Option<Country>) -> List<u8, 64> {
+    let mut channels = List::default();
+    for ch in CHANNELS.filter(|&ch| Country::allows(c, ch)) { channels.push(ch); }
+    channels
 }
 
 /// The radio's traffic over a period (550-DRV-0036), logged when unicast data went out in it, so a ping's loss can be
@@ -247,7 +219,7 @@ pub fn run(radio: &mut Radio) -> ! {
             // No shared ring yet: frames go by `receive`.
             wlanhw::Request::Attach { ring } => { let _ = mind::ipc::drop_cap(ring); wlanhw::reply_attach(call, Err(wlanhw::Error::Invalid)) }
             wlanhw::Request::Kick => wlanhw::reply_kick(call, Err(wlanhw::Error::Invalid)),
-            wlanhw::Request::SetCountry { code, limits, .. } => match Country::from(code.as_str(), limits.as_slice()) {
+            wlanhw::Request::SetCountry { code, limits, .. } => match Country::from(code.as_str(), limits.as_slice().iter().map(|l| (l.channel, l.listen))) {
                 None => wlanhw::reply_set_country(call, Err(wlanhw::Error::Invalid)),
                 Some(c) => {
                     country = Some(c);
@@ -256,7 +228,7 @@ pub fn run(radio: &mut Radio) -> ! {
                                    code.as_str(), list.len(), list.iter().filter(|l| l.listen).count());
                     // Off a channel the country does not allow, to its first one.
                     if !Country::allows(country, radio.channel()) {
-                        if let Some(&first) = Country::list(country).as_slice().first() { let _ = radio.set_channel(first); }
+                        if let Some(&first) = channel_list(country).as_slice().first() { let _ = radio.set_channel(first); }
                     }
                     wlanhw::reply_set_country(call, Ok(&info(radio, country)))
                 }
@@ -266,7 +238,7 @@ pub fn run(radio: &mut Radio) -> ! {
 }
 
 fn info(radio: &Radio, country: Option<Country>) -> wlanhw::Info {
-    wlanhw::Info { mac: mac64(&radio.mac), bands: bands(), channels: Country::list(country), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+    wlanhw::Info { mac: mac64(&radio.mac), bands: bands(), channels: channel_list(country), frame_max: FRAME_MAX as u16, channel: radio.channel() }
 }
 
 // No radio to serve (it did not come up): every request answered no-device, `wait` with none, so the station is not
