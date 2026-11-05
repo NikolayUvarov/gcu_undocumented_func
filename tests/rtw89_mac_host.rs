@@ -18,7 +18,7 @@ struct Device {
 }
 impl Device {
     fn new() -> Self {
-        let mut d = Self { registers: vec![0; 0xc004], command: 2, now: 0, frozen: false,
+        let mut d = Self { registers: vec![0; 0xe004], command: 2, now: 0, frozen: false,
             writes: Vec::new(), reads: Vec::new(), fail_write: None, ignore_write: None,
             cleanup_faults: false, read_cost: 0, ready_after: [0; 2], late_ready: None, late_final_read: false, hfc_reads: 0 };
         d.put(SYS_CFG1, 0x1000); d.put(R_AX_IC_PWR_STATE, 0x100); d
@@ -72,6 +72,7 @@ fn download_profile_keeps_scc_wcpu_minimum_and_only_command_flow_control() {
     bus.put(mac::WDE_CONFIG, 0x4000_0040); bus.put(mac::PLE_CONFIG, 0x4000_0040);
     bus.put(mac::HFC_CONTROL, 0xfff);
     mac::prepare_download(&mut bus).unwrap();
+    assert_eq!(bus.get(mac::HCI_FUNC_EN) & 3, 3);
     assert_eq!(bus.get(R_AX_DMAC_FUNC_EN), 0x64c4_0000);
     assert_eq!(bus.get(mac::DMAC_CLOCK), 0x0484_0000);
     assert_eq!(bus.get(mac::WDE_CONFIG), 0x4000_0040);
@@ -197,4 +198,73 @@ fn final_successful_readback_must_finish_within_the_stage_deadline() {
     assert_eq!(err.stage, mac::Stage::FlowControl); assert_eq!(err.cause.kind, FaultKind::Timeout);
     assert_eq!(err.hfc_disable, None); assert_eq!(err.dle_disable, None);
     assert_eq!(bus.now, 10_000); bus.cleaned();
+}
+
+#[test]
+fn hci_left_on_is_stopped_with_mastering_off_and_preparation_then_proceeds() {
+    let mut bus = Device::new();
+    bus.put(fwcmd::INIT_CONFIG, 0x00c1_5e00);
+    assert_eq!(mac::quiesce(&mut bus).unwrap(), Some(0x00c1_5e00));
+    assert_eq!(bus.get(fwcmd::INIT_CONFIG), 0x00c1_5e00 & !(1 << 11 | 1 << 13));
+    assert_eq!(bus.get(fwcmd::DMA_STOP) & 0x001f_0f00, 0x001f_0f00);
+    assert_eq!(bus.command, 2);
+    mac::prepare_download(&mut bus).unwrap();
+}
+
+#[test]
+fn quiesce_writes_nothing_when_hci_is_off_or_mastering_is_on() {
+    let mut bus = Device::new();
+    assert_eq!(mac::quiesce(&mut bus).unwrap(), None);
+    assert!(bus.writes.is_empty());
+    for command in [6, u16::MAX] {
+        let mut bus = Device::new();
+        bus.command = command; bus.put(fwcmd::INIT_CONFIG, 1 << 13);
+        assert_eq!(mac::quiesce(&mut bus).unwrap_err().kind, FaultKind::Access);
+        assert!(bus.writes.is_empty());
+    }
+}
+
+#[test]
+fn quiesce_reports_hci_that_does_not_stop_or_dma_that_stays_busy() {
+    let mut bus = Device::new();
+    bus.put(fwcmd::INIT_CONFIG, 1 << 11); bus.ignore_write = Some(fwcmd::INIT_CONFIG);
+    assert!(mac::quiesce(&mut bus).is_err());
+    let mut bus = Device::new();
+    bus.put(fwcmd::INIT_CONFIG, 1 << 11); bus.put(fwcmd::DMA_BUSY, 1);
+    assert_eq!(mac::quiesce(&mut bus).unwrap_err().kind, FaultKind::Timeout);
+    assert_eq!(bus.get(fwcmd::INIT_CONFIG) & (1 << 11 | 1 << 13), 0);
+}
+
+#[test]
+fn quiesce_holds_on_the_ryzens_dma_stop_without_rxq_or_rpq_bits() {
+    let mut bus = Device::new();
+    bus.put(fwcmd::INIT_CONFIG, 0x00c1_5f00); bus.put(fwcmd::DMA_STOP, 0x001f_ff00);
+    assert_eq!(mac::quiesce(&mut bus).unwrap(), Some(0x00c1_5f00));
+    assert_eq!(bus.get(fwcmd::DMA_STOP) & 3, 0);
+}
+
+#[test]
+fn host_interrupts_left_enabled_are_masked_and_reported() {
+    let mut bus = Device::new();
+    assert_eq!(mac::mask_host(&mut bus).unwrap(), [0; 3]); assert!(bus.writes.is_empty());
+    bus.put(0x1a0, 1 << 21); bus.put(0x13b0, 5);
+    assert_eq!(mac::mask_host(&mut bus).unwrap(), [1 << 21, 0, 5]);
+    assert_eq!((bus.get(0x1a0), bus.get(0x10b0), bus.get(0x13b0)), (0, 0, 0));
+    assert_eq!(bus.writes, [(0x1a0, 0), (0x13b0, 0)]);
+    let mut bus = Device::new(); bus.put(0x1a0, 1 << 21); bus.ignore_write = Some(0x1a0);
+    assert!(mac::mask_host(&mut bus).is_err());
+}
+
+#[test]
+fn cmac_ready_takes_all_one_clocks_and_an_absent_band1() {
+    let ready = |functions: u32, clocks: u32, band1: u32| {
+        let mut bus = Device::new(); bus.put(0xc000, functions); bus.put(0xc004, clocks); bus.put(0xe000, band1);
+        io::cmac_ready(&mut bus)
+    };
+    for band1 in [0, 0xdead_beef, 0xeaea_eaea, !(1 << 30)] { ready(0xf000_803f, u32::MAX, band1).unwrap(); }
+    ready(0xf000_003f, 0x4000_003f, 0).unwrap();
+    assert_eq!(ready(0xf000_803f, u32::MAX, 1 << 30).unwrap_err().register, 0xe000);
+    assert_eq!(ready(0xf000_803f, 0x4000_001f, 0).unwrap_err().register, 0xc004);
+    assert_eq!(ready(0x3000_003f, u32::MAX, 0).unwrap_err().register, 0xc000);
+    assert_eq!(ready(u32::MAX, u32::MAX, 0).unwrap_err().kind, FaultKind::Unavailable);
 }

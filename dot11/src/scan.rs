@@ -36,6 +36,8 @@ pub struct Bss {
     pub rsne_len: usize,
     /// When it was last heard (the station's clock, ms).
     pub seen: u64,
+    /// The country its Country element names (two capital letters), or none (550-NET-0035).
+    pub country: Option<[u8; 2]>,
 }
 
 impl Bss {
@@ -91,9 +93,11 @@ pub fn describe(frame: &[u8], h: &Header, channel: u8, weakness: u8, now: u64) -
     let elements = &frame[h.len + 12..];
     let ssid = Elements::find(elements, frame::SSID).filter(|s| s.len() <= 32)?;
     let mut bss = Bss { bssid: h.a3, ssid: [0; 32], ssid_len: ssid.len(), channel, weakness, capability, security: Security::Open,
-                        rsne: [0; RSNE_MAX], rsne_len: 0, seen: now };
+                        rsne: [0; RSNE_MAX], rsne_len: 0, seen: now, country: None };
     bss.ssid[..ssid.len()].copy_from_slice(ssid);
     if let Some(&[own]) = Elements::find(elements, frame::DS_PARAMETER) { bss.channel = own; }
+    // Its country: two capital letters, then the environment and the channel triplets, which the catalogue's rules replace.
+    bss.country = Elements::find(elements, frame::COUNTRY).filter(|c| c.len() >= 3).map(|c| [c[0], c[1]]).filter(|c| c.iter().all(u8::is_ascii_uppercase) && c != b"XX");
     match Elements::find_whole(elements, frame::RSN) {
         Some(rsne) if rsne.len() <= RSNE_MAX => {
             bss.rsne[..rsne.len()].copy_from_slice(rsne);
@@ -126,6 +130,23 @@ impl List {
         }
     }
     pub fn iter(&self) -> impl Iterator<Item = &Bss> { self.entries.iter().flatten() }
+    /// The country the access points heard announce (550-NET-0035, the maintainer's decision of 2026-11-04): the code
+    /// most of them name, with how many named it and how many named any. None when none names one, or when two codes are
+    /// named by as many: a border, where the station does not choose for the user.
+    pub fn announced(&self) -> Option<([u8; 2], usize, usize)> {
+        let mut counts: [([u8; 2], usize); LIST] = [([0; 2], 0); LIST];
+        let mut named = 0;
+        for code in self.iter().filter_map(|b| b.country) {
+            named += 1;
+            match counts.iter_mut().find(|(c, n)| *n > 0 && *c == code) {
+                Some(entry) => entry.1 += 1,
+                None => if let Some(free) = counts.iter_mut().find(|(_, n)| *n == 0) { *free = (code, 1); },
+            }
+        }
+        let most = counts.iter().map(|&(_, n)| n).max().unwrap_or(0);
+        if most == 0 || counts.iter().filter(|&&(_, n)| n == most).count() > 1 { return None; }
+        counts.iter().find(|&&(_, n)| n == most).map(|&(code, n)| (code, n, named))
+    }
     /// The strongest access point of the network named `ssid` that the station can join.
     pub fn best(&self, ssid: &[u8]) -> Option<&Bss> {
         let rank = |b: &&Bss| if b.weakness == 0 { u8::MAX } else { b.weakness };

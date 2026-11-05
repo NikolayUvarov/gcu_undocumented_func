@@ -348,6 +348,10 @@ impl<B:DeviceIo> Session<'_,'_,'_,B>{
             c.drain(s,deadline)?;let remaining=left(s,deadline)?.min(10_000);s.receive_permit(remaining)?;Ok(())
         })
     }
+    /// Observe the BTC events retained since the last poll; a passive listen sends no command that would drain them.
+    pub(crate) fn observe_events(&mut self,timeout_us:u32)->Result<(),Error>{
+        self.connection_call(timeout_us,|_|Ok(()),|c,s,deadline|c.events(s,deadline))
+    }
     /// Initial slot zero only; completion is command DMA/required receipt, not firmware-applied RF or TX permission.
     pub(crate) fn notify_mcc(&mut self,channel:u8,timeout_us:u32)->Result<(),Error>{
         if !(1..=13).contains(&channel){return Err(Error::Profile)}

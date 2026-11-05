@@ -6,7 +6,10 @@ BUILD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIND_BUILD_BRANCH="$(git -C "$BUILD_SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 MIND_BUILD_COMMIT="$(git -C "$BUILD_SCRIPT_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 [[ -n "$(git -C "$BUILD_SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]] && MIND_BUILD_COMMIT+="+CHANGES"
-export MIND_BUILD_BRANCH MIND_BUILD_COMMIT
+# The commit's time, in seconds since 1970: timed never sets the clock before it (111-NET-0057); the same for every build of
+# the commit, so the build stays reproducible.
+MIND_SOURCE_TIME="$(git -C "$BUILD_SCRIPT_DIR" log -1 --format=%ct 2>/dev/null || echo 0)"
+export MIND_BUILD_BRANCH MIND_BUILD_COMMIT MIND_SOURCE_TIME
 # ARCH=aarch64 builds the aarch64 image instead (aarch64_root/, issue 204); arguments go to scripts/build_aarch64.sh.
 case "${ARCH:-x86_64}" in
     x86_64) ;;
@@ -83,6 +86,7 @@ USER_CRATES=(
     "blockstore:blockstore:blockstore.elf"
     "blocks:blocks:blocks.elf"
     "tally:tally:tally.elf"
+    "fsstep:fsstep:fsstep.elf"
     "storefs:storefs:storefs.elf"
     "gpio:gpio:gpio.elf"
     "battery:battery:battery.elf"
@@ -99,6 +103,7 @@ USER_CRATES=(
     "wlan:wlan:wlan.elf"
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
+    "timed:timed:timed.elf"
     "parse:parse:parse.elf"
     "nnd:nnd:nnd.elf"
     "tpm:tpm:tpm.elf"

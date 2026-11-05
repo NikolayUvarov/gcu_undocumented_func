@@ -1,0 +1,72 @@
+# 111-NET-0057 — `timed` sets the calendar clock by SNTP within bounds (111's stage 1) — done
+
+**Type:** network (a client service, `idl/socket.wit`) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md) · **Roadmap:** track D (network) · **Constitution:** MC-5.6, MC-9.4, MC-10.3, MC-11.4, MC-11.6, MC-11.11, MC-12.3, MC-12.4
+
+## Problem
+
+Nothing sets the calendar clock but the user (111's problem). This task makes 111's stage 1, the service and its bounds. Starting it at boot with its grants is [111-KRN-0206](111-KRN-0206-timed-among-the-boot-services.done).
+
+## Plan
+
+- **`mind::sntp`** (`libmind/src/sntp.rs`), pure and host-tested:
+  - the request, with an unpredictable nonce as its transmit time;
+  - the answer checked: its length, mode 4, version 3 or 4, not unsynchronised, stratum 1 to 15, the origin time the request's nonce, and non-zero times;
+  - each answer's offset and round trip;
+  - the choice: the largest set of at least two answers that all agree within 1 s beyond half their round trips, and its median. No choice when two such sets of the same size differ;
+  - the bounds: never before the floor, nor past 2099; a step of more than 24 hours only at the first set since boot.
+- **`socket.wit` 2.10, `grant-rules`:** a grant reads its own rules. `timed` learns its servers from them: the policy's lines `timed <server> udp <port>` are its time servers. The plan said port 123, and a line names it. A test names the ports its servers on the host listen on, since 123 needs root there.
+- **`timed`:**
+  - at most 4 servers asked at once, on one socket, with 2 s for the answers;
+  - the clock read as its second turns, so that the offsets are right to a few milliseconds;
+  - the clock set as the new time's second turns;
+  - again every 6 hours, and every 10 s until the first set;
+  - the log: each set with the old and new time and how many agreed, each answer's offset and round trip and whether it agreed, each refusal with its reason.
+- **The floor:**
+  - the commit time of the build (`MIND_SOURCE_TIME`, from `02_build.sh`). The release's manifest carries no build time, and the commit's time keeps the build reproducible;
+  - the latest time `timed` set, in its private directory `system/timed/floor` (111-KRN-0206), which no other badge opens.
+
+## Acceptance criteria
+
+- **Host tests** (`tests/sntp_host.rs`): the codec, every field that makes an answer wrong, the choice, the floor, the step bound, and the rtc service's day and second.
+- **Seeded fuzzing** of the answer's parser and of the choice, in the same file (`MIND_FUZZ_SEED`, `MIND_FUZZ_ITERATIONS`).
+- **QEMU, x86 and aarch64,** the `net` suite's `timed_check`, against SNTP servers on the host behind QEMU's user network:
+  - the clock set from 2024 to the host's time;
+  - one server an hour ahead of two others left out;
+  - two servers agreeing on 2020, before the floor, refused;
+  - not started with no time line in the policy;
+  - a script's `sleep(25000)` across the step lasting 25 s.
+- **The profile** (`docs/profile/clocks.md`) says what the network time is trusted for, and its bounds.
+
+## Progress
+
+2026-11-04, the network track (f9615a3c to 6794d921):
+
+- **Everything in the plan is made.**
+  - `mind::sntp`, `socket.wit` 2.10 `grant-rules`, and `timed`.
+  - `MIND_SOURCE_TIME` from `02_build.sh`.
+  - The floor's write logged: `[TIMED] THE FLOOR IS NOW …, STORED IN system/timed/floor`.
+- **Host tests:** `tests/sntp_host.rs`, 11 tests, among them 200 000 fuzzed answers and 20 000 fuzzed choices. All of `scripts/host_tests.sh` passes on the branch.
+- **QEMU** (this session's container, TCG, 4 CPUs), `timed_check` alone:
+  - x86 (two runs): the clock set from 2024-01-01 to within 0.1 and 0.2 s of the host's time;
+  - aarch64 (one run): within 0.1 s.
+  
+  In each run:
+  - the server an hour ahead was left out, and two of three agreed;
+  - the floor was stored;
+  - the script's `sleep(25000)` across the step lasted 25 001 to 25 020 ms by the guest's clock and about 24 s by the host's;
+  - two servers agreeing on 2020 were refused below the floor;
+  - with no time line, `timed` was not started.
+- **The profile:** `docs/profile/clocks.md`, the section "Network time".
+
+**Not done:**
+- The floor read back at the next boot: the suite boots on a snapshot.
+- A machine (MC-12.1).
+- The gate's run of the whole `net` suite with the check.
+
+## Resolution
+
+`mind::sntp` with its host tests and seeded fuzzing; `socket.wit` 2.10 `grant-rules`; `timed`; the `net` suite's `timed_check`, which passed alone on x86 and aarch64 (QEMU TCG) and in round 78's gate (candidate 6fc5b253, `main` e28cfe4d) in both network groups (x86 on x32-2, aarch64 on pcu); `docs/profile/clocks.md`'s "Network time". Not claimed: the floor read back at the next boot (the suite boots on a snapshot), and any machine (MC-12.1). Landed in `main` e28cfe4d.
+
+## Related
+
+[111](../issues/111-network-time.md), [111-KRN-0206](111-KRN-0206-timed-among-the-boot-services.done), [211-KRN-0051](../issues/211-KRN-0051-setting-the-clock.md).

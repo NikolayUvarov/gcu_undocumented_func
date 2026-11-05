@@ -1,7 +1,7 @@
 // The device key kept across boots in the key service's private directory of the boot disk, which vfs_server lets only
 // this service open: sealed by the TPM where the machine has one (351-NET-0006), so the blob opens only in that TPM;
-// else the seed itself, unencrypted (351-NET-0005, the interim): whoever has the disk reads it
-// (docs/profile/threat-model.md).
+// else the seed itself, unencrypted (351-NET-0005), whoever has the disk reads it (docs/profile/threat-model.md), until
+// the owner sets a passphrase: then sealed under it instead (lock.rs, 308-NET-0055).
 use mind::fs::{self, File};
 use mind::idl::tpm;
 use mind::ipc::Endpoint;
@@ -42,6 +42,9 @@ pub fn store(seed: &[u8; 32]) -> Result<(), fs::Error> {
 
 /// Overwrites a copy of key material.
 pub fn wipe(bytes: &mut [u8]) { for byte in bytes.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) }; } }
+
+/// Overwrites a decoded text that held a passphrase, its length and its bytes.
+pub fn wipe_text<const N: usize>(text: &mut mind::idl::codec::Text<N>) { unsafe { core::ptr::write_volatile(text, Default::default()) }; }
 
 // The sealed key: magic, the blob's length (u16), the blob the TPM service gave, the SHA-256 of all before.
 pub const SEALED: &str = "system/keystore/device.sealed";
@@ -85,5 +88,14 @@ pub fn seal(seed: &[u8; 32]) -> Result<(), &'static str> {
     File::create(SEALED).and_then(|mut file| { file.write_at(0, &data[..10 + blob + 32])?; file.flush() }).map_err(|_| "NOT WRITTEN")
 }
 
-/// Removes the unencrypted copy, once the key is sealed.
-pub fn remove_plain() -> bool { fs::remove(FILE).is_ok() }
+/// Flushes the boot volume: vfs_server keeps a removal or a rename in its cache until then.
+pub fn flush() -> bool { fs::Dir::open(DIR).and_then(|dir| dir.flush()).is_ok() }
+
+/// Removes the unencrypted copy, once the key is sealed: zeroed and flushed first, so its clusters do not keep the seed
+/// (a flash medium's own remapping may still), then removed and the volume flushed. NotFound when there is none.
+pub fn remove_plain() -> Result<(), fs::Error> {
+    if let Ok(mut file) = File::open_mode(FILE, fs::MODE_WRITE) { let _ = file.write_at(0, &[0u8; LEN]).and_then(|_| file.flush()); }
+    fs::remove(FILE)?;
+    flush();
+    Ok(())
+}

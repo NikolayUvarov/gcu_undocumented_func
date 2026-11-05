@@ -11,6 +11,8 @@
 //! The records are sealed on the medium, and a volume key that does not open the superblock's check is refused (308-STO-0021, 2.1).
 //! Memory domains, each with a key of its own, worked in through a client of their own and forgotten by destroying the key
 //! (308-STO-0023, 2.2). A scrub reads and checks every record, in idle steps and whole on request (309-STO-0025, 2.3).
+//! A volume key kept off the medium is also sealed under recovery keys its owner holds, which open the medium on another
+//! machine; they are made, kept, forgotten and used only through a client of their own (308-STO-0028, 2.4).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -20,18 +22,20 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:blockstore";
-pub const VERSION: (u8, u8, u8) = (2, 3, 0);
+pub const VERSION: (u8, u8, u8) = (2, 4, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
 /// (`mind::blockstore`: put, collect and scrub need BADGE_PUT; get, has, resolve, history, snapshot and names
-/// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any).
+/// BADGE_GET; publish, unpublish, commit, pin and unpin BADGE_PUBLISH; stat, pins, usage and scrubbed any;
+/// recovery-new, recovery-keep, recovery-forget and recover BADGE_RECOVER, never through a domain's client;
+/// recoveries any or BADGE_RECOVER).
 /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
 /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
 /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
 /// owner would retain more than its quota; nothing is published or pinned (1.2). `key`: the store is not mounted,
-/// since its volume key does not open the superblock's check or comes from a source this build does not know; every
-/// request gets it (2.1). `no-random`: no random source for a domain's key, which must not be derivable from anything
+/// since its volume key does not open the superblock's check, comes from a source this build does not know, or is
+/// kept by no keeper of this machine; every request but `recover` gets it (2.1, 2.4). `no-random`: no random source for a domain's key, which must not be derivable from anything
 /// kept, or it could not be destroyed (2.2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
@@ -536,6 +540,79 @@ pub fn scrubbed(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Err
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Scrubbed as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The first of two steps of a new recovery key for a volume key kept off the medium (308-STO-0028): a record that
+/// keeps the volume key sealed under 16 random bytes is written and flushed, and they are returned in the form the
+/// owner writes down (`mind::blockstore::recovery_text`), kept nowhere and logged nowhere. The older keys open the
+/// medium until the owner types the new one back (`recovery-keep`). Errors: invalid (the key is in the superblock: a
+/// RAM disk, or no keeper), no-random, full, read-only, device (2.4).
+pub fn recovery_new(endpoint: Endpoint) -> Result<core::result::Result<Text<39>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 23 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 41, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Text<39> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The second step: `key`, typed back, is kept, and every recovery record it does not open is erased; returns how
+/// many. Errors: invalid (a typo, told by its check before any record is tried; the key in the superblock), key (it
+/// opens no record; nothing is erased), read-only, device (2.4).
+pub fn recovery_keep(endpoint: Endpoint, key: &str) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<39>(key, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 24 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Erases every recovery record, and returns how many: no recovery key opens the medium after it. Errors:
+/// read-only, device (2.4).
+pub fn recovery_forget(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>> {
+    let words = [25 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+}
+
+/// The recovery records on the medium: more than one between `recovery-new` and `recovery-keep` (2.4).
+pub fn recoveries(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>> {
+    let words = [26 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+}
+
+/// On a medium not mounted because no keeper of this machine keeps its volume key: the first recovery record `key`
+/// opens gives the volume key to this machine's `keystore`, under the medium's id, and the store mounts; from then
+/// on the medium mounts as this machine's own. Nothing is written to the medium. Errors: invalid (a typo; a store
+/// mounted already; a key in the superblock), key (it opens no record, or no keeper kept the key: nothing is kept),
+/// device, and what the mount answers (2.4).
+pub fn recover(endpoint: Endpoint, key: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<39>(key, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 27 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 16387;
 
@@ -564,6 +641,11 @@ pub enum Request<'a> {
     Domains,
     Scrub,
     Scrubbed,
+    RecoveryNew,
+    RecoveryKeep { key: Text<39> },
+    RecoveryForget,
+    Recoveries,
+    Recover { key: Text<39> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -732,6 +814,37 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Scrubbed, call))
         }
+        23 => {
+            let (call, length) = wire::take_buffer(request, cap, 41, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::RecoveryNew, call))
+        }
+        24 => {
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let key = <Text<39> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::RecoveryKeep { key }, call))
+        }
+        25 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::RecoveryForget, Call::words(request, cap)))
+        }
+        26 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Recoveries, Call::words(request, cap)))
+        }
+        27 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let key = <Text<39> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Recover { key }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -824,4 +937,24 @@ pub fn reply_scrub(call: Call, value: core::result::Result<&Scrubbed, Error>) ->
 pub fn reply_scrubbed(call: Call, value: core::result::Result<&Scrubbed, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_recovery_new(call: Call, value: core::result::Result<&str, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_str::<39>(value, w))
+}
+pub fn reply_recovery_keep(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_recovery_forget(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_recoveries(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_recover(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

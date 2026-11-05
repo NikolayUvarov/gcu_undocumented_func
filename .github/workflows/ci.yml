@@ -187,6 +187,9 @@ jobs:
             suites: updater,modes
           - group: an update through the link
             suites: linkupdate
+          - group: the link
+            # dev's grants, and none of its input in a safe start (800-KRN-0191)
+            suites: link
           - group: RAM, ACPI and PCI above 4 GiB
             suites: normal,fill
             machine: virt,gic-version=3,highmem=on

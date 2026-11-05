@@ -521,8 +521,36 @@ gate containing this slice remain pending. Interrupts, RX activation, command
 ACK routing, BTC coordination and WLAN service registration remain separate.
 A warm device is not silently reset: MEM-only PCI decoding does not imply
 MAC-off or establish ownership of old DMA. The board's cold-state guard
-remains; an owned quiescence/reset transition is still required for warm
-boot/restart support.
+remains.
+
+**The owned quiescence (2026-11-03).** On the Ryzen, `INIT_CONFIG` comes up as
+`00C15F00`, with TXHCI on, after Linux's driver and also after a cold start:
+that register is outside the MAC's power domain. Before the guard,
+`mac::quiesce` refuses unless PCI mastering is off. It then does what
+`pci.c`'s pre-init does:
+- sets the RTL8852B stop set (`0x001f0f00`, as `B_AX_TX_STOP1_MASK_V1` plus WPDMA and PCIEIO);
+- clears TX/RX HCI;
+- waits for DMA idle;
+- logs the value it found.
+
+`mac::mask_host` clears HIMR0, PCIE_HIMR00 and PCIE_HIMR10, as `disable_intr`
+does. It runs before the MAC preparation and again after the download,
+because the firmware enables its halt interrupt (HIMR0 bit 21).
+`prepare_download` then sets `R_AX_HCI_FUNC_EN` (0x8380) TX/RX DMA first, as
+`rtw89_mac_partial_init` does. Without it the PCIe BDRAM reset bit stays set
+forever (seen for 4 ms, and with mastering on); with it the reset ends in 3–4 µs.
+
+**The receive-only listen (2026-11-04).** After the initial PHY, `btc_session::listen`
+tunes one 2.4 GHz channel under `Policy::passive`:
+- `PassiveOnly`, the world group, every limit at -64 half-dBm and version 0, so no calibration transmit token can match it;
+- the report tail as in the diagnostic;
+- the scan filter mac80211 sets for `FIF_BCN_PRBRESP_PROMISC` (`mac80211.c:304–378`): `BCN_CHK_EN`, `BC` and `A1_MATCH` cleared in `0xce20`, the other checks kept;
+- a bounded listen that decodes beacons and probe responses. Every poll re-checks the startup permit: scheduler zero, data DMA stopped.
+
+On the Ryzen, three writes do not read back as written. Linux reads none of them back:
+- RF `0xcf` bit 0 (`RR_LCKST_BIN`) is a trigger, written 0 then 1 (`rtw8852b_rfk.c:4098–4099`); it reads 0;
+- RF18's direct copy (`0x10018`, BB `0xe060`/`0xf060`) keeps only its CH field: written `0x1c01`, it reads `0x00001`. `_ch_setting` and `_bw_setting` write it unread (`rtw8852b_rfk.c:3978`, `4096`). The channel stage and the data-mode check read its CH field alone and keep the full check on the indirect copy `0x18`;
+- the MAC power tables (`0xd2c0`–`0xd36b`) keep seven bits of each byte: `0xc0c0c0c0` reads `0x40404040`, which matches Linux's -64..63 range for MAC power values. The power stage compares those seven bits.
 
 ## Native firmware diagnostic integration (213-KRN-0114)
 

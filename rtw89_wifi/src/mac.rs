@@ -18,6 +18,11 @@ const HFC_ENABLE: u32 = 1 | 1 << 3;
 const MEMORY_FIELDS: u32 = 0x1fff_3f03;
 const DMAC_BASE: u32 = B_AX_MAC_FUNC_EN | B_AX_DMAC_FUNC_EN | B_AX_DISPATCHER_EN | B_AX_PKT_BUF_EN;
 const DISPATCH_CLOCK: u32 = 1 << 18;
+const HCI_ENABLE: u32 = 1 << 11 | 1 << 13;
+const STOP_ALL: u32 = 0x001f_0f00;
+const HOST_MASKS: [usize; 3] = [0x1a0, 0x10b0, 0x13b0];
+pub const HCI_FUNC_EN: usize = 0x8380;
+const HCI_DMA: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Stage { Guard, Engines, Quotas, Ready, FlowControl }
@@ -47,6 +52,34 @@ fn disable(bus: &mut impl RegisterIo, at: usize, mask: u32) -> io::Result<()> {
     timed.delay_us(0)
 }
 
+/// Stop the TX/RX HCI a previous owner left on, as pci.c's pre-init does; only with PCI mastering off.
+/// Returns the INIT_CONFIG value found when it had to stop them, None when they were already off.
+pub fn quiesce(bus: &mut impl Bus) -> io::Result<Option<u32>> {
+    let command = bus.pci_command()?;
+    if command & 7 != 2 { return Err(Fault::new(FaultKind::Access, 4, command as u32)); }
+    let found = io::read32(bus, fwcmd::INIT_CONFIG)?;
+    if found & HCI_ENABLE == 0 { return Ok(None); }
+    let mut timed = TimedIo::new(bus, 1_000);
+    io::modify32(&mut timed, fwcmd::DMA_STOP, 0, STOP_ALL)?;
+    require(&mut timed, fwcmd::DMA_STOP, STOP_ALL, STOP_ALL)?;
+    io::modify32(&mut timed, fwcmd::INIT_CONFIG, HCI_ENABLE, 0)?;
+    require(&mut timed, fwcmd::INIT_CONFIG, HCI_ENABLE, 0)?;
+    io::poll32(&mut timed, fwcmd::DMA_BUSY, fwcmd::BUSY_MASK, 0, 10, 100)?;
+    timed.delay_us(0)?;
+    Ok(Some(found))
+}
+
+/// Mask the host interrupts a previous owner left enabled (HIMR0, PCIE_HIMR00, PCIE_HIMR10), as pci.c's disable_intr does.
+/// Returns the values found; all zero when nothing was left.
+pub fn mask_host(bus: &mut impl Bus) -> io::Result<[u32; 3]> {
+    let mut found = [0; 3];
+    for (value, at) in found.iter_mut().zip(HOST_MASKS) {
+        *value = io::read32(bus, at)?;
+        if *value != 0 { bus.write32(at, 0)?; require(bus, at, u32::MAX, 0)?; }
+    }
+    Ok(found)
+}
+
 pub(crate) fn guard(bus: &mut impl Bus) -> io::Result<()> {
     let command = bus.pci_command()?;
     if command & 7 != 2 { return Err(Fault::new(FaultKind::Access, 4, command as u32)); }
@@ -56,19 +89,22 @@ pub(crate) fn guard(bus: &mut impl Bus) -> io::Result<()> {
     require(bus, R_AX_PLATFORM_ENABLE, 1 << 1, 0)?;
     let bb = bus.read8(R_AX_SYS_FUNC_EN)?;
     if bb & 3 != 0 { return Err(Fault::new(FaultKind::PowerState, R_AX_SYS_FUNC_EN, bb as u32)); }
-    require(bus, fwcmd::INIT_CONFIG, 1 << 11 | 1 << 13, 0)?;
+    require(bus, fwcmd::INIT_CONFIG, HCI_ENABLE, 0)?;
     require(bus, fwcmd::DMA_BUSY, fwcmd::BUSY_MASK, 0)
 }
 
 /// Prepare internal MAC memory on the verified RTL8852BE grant after board power-on, with BB/WCPU held stopped.
 /// The caller retains PCI MEM-only ownership and must power the MAC off after a failed preparation.
-/// This neither performs PCIe pre-initialization nor enables DMA, WCPU, BB/RF or any packet channel.
+/// It turns the MAC's HCI DMA function on; host DMA stays off behind INIT_CONFIG's HCI bits and PCI mastering.
+/// This neither performs PCIe pre-initialization nor enables WCPU, BB/RF or any packet channel.
 pub fn prepare_download(bus: &mut impl Bus) -> core::result::Result<(), Failure> {
     let failure = |cause| Failure { stage: Stage::Guard, cause, hfc_disable: None, dle_disable: None };
     guard(bus).map_err(failure)?;
     let mut stage = Stage::Engines;
     let result = (|| {
         let mut timed = TimedIo::new(bus, 10_000);
+        // HCI TX/RX DMA on first, as mac.c's partial_init: without it the BDRAM reset never ends (Ryzen, 2026-11-03).
+        modify(&mut timed, HCI_FUNC_EN, 0, HCI_DMA)?;
         write(&mut timed, R_AX_DMAC_FUNC_EN, DMAC_BASE)?;
         write(&mut timed, DMAC_CLOCK, DISPATCH_CLOCK)?;
         modify(&mut timed, R_AX_DMAC_FUNC_EN, DLE_ENABLE, 0)?;

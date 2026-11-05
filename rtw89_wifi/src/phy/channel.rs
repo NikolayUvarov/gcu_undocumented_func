@@ -46,6 +46,15 @@ impl Policy{
         Ok(Self{country:hint.raw,selected_country:rule.country,plan:hint.raw_channel_plan,version:rule.version,channel:(delta/5)as u8,
             access:rule.access,eirp_half_dbm:rule.eirp_half_dbm,conducted_half_dbm:rule.conducted_half_dbm,group:selected.groups[0],limits})
     }
+    /// Receive-only tuning: world group, lowest limits, version zero; PassiveOnly never admits calibration or packet TX.
+    pub(crate) fn passive(board:&Board,center_mhz:u16)->Result<Self,PolicyError>{
+        let hint=defaults::board_country(board).map_err(|_|PolicyError::Board)?;
+        let delta=center_mhz.checked_sub(2407).ok_or(PolicyError::Frequency)?;
+        if delta%5!=0||!(1..=13).contains(&(delta/5)){return Err(PolicyError::Frequency);}
+        Ok(Self{country:hint.raw,selected_country:*b"00",plan:hint.raw_channel_plan,version:0,channel:(delta/5)as u8,
+            access:Access::PassiveOnly,eirp_half_dbm:-64,conducted_half_dbm:-64,group:defaults::Group::WORLDWIDE,
+            limits:Constraints{per_ntx:[-64;2],per_path:[-64;2]}})
+    }
 }
 
 /// Delegate to the same owned register mailbox as runtime_mac::scheduler_zero; no retry after an uncertain error.
@@ -205,15 +214,22 @@ fn lock(bus:&mut impl RegisterIo,saved:&mut Cleanup)->io::Result<()>{
     let actual=rf_read(bus,0,0xc5,1<<15)?;
     if actual==0{return Err(fault(0xc5,actual));}Ok(())
 }
+// RF18's direct copy reads back only its CH field on the Ryzen; Linux reads none back (rtw8852b_rfk.c:3978, 4096).
+fn rf18(bus:&mut impl RegisterIo,path:u8,at:u32,value:u32)->io::Result<()>{
+    if at&0x10000==0{return rf(bus,path,at,RF_MASK,value);}
+    rf_write_masked(bus,path,at,RF_MASK,value)?;
+    let actual=rf_read(bus,path,at,255)?;if actual!=value&255{return Err(fault(at as usize,actual));}Ok(())
+}
 fn radio(bus:&mut impl RegisterIo,channel:u8,saved:&mut Cleanup)->io::Result<()>{
     for(path,at)in[(0,0x18),(1,0x18),(0,0x10018),(1,0x10018)]{
         let old=rf_read(bus,path,at,RF_MASK)?;
         let value=(old&!(0x30000|0xe000|0x300|255|0x1000))|u32::from(channel)|0x1000;
-        if path==0&&at==0x18{arfc(bus,value,saved)?;lock(bus,saved)?;}else{rf(bus,path,at,RF_MASK,value)?;}
-        rf(bus,path,0xcf,1,0)?;rf(bus,path,0xcf,1,1)?;
+        if path==0&&at==0x18{arfc(bus,value,saved)?;lock(bus,saved)?;}else{rf18(bus,path,at,value)?;}
+        // The lock-status bin is a trigger, never read back (rtw8852b_rfk.c:4098-4099); the Ryzen reads it as 0.
+        rf_write_masked(bus,path,0xcf,1,0)?;rf_write_masked(bus,path,0xcf,1,1)?;
     }
     for(path,at)in[(0,0x18),(1,0x18),(0,0x10018),(1,0x10018)]{
-        let old=rf_read(bus,path,at,RF_MASK)?;rf(bus,path,at,RF_MASK,(old&!(0xc00|0xe000|0x1000))|0x1c00)?;
+        let old=rf_read(bus,path,at,RF_MASK)?;rf18(bus,path,at,(old&!(0xc00|0xe000|0x1000))|0x1c00)?;
     }
     for path in 0..2{
         saved.rx_lut[path as usize]=true;rf(bus,path,0xee,4,1)?;rf(bus,path,0x33,31,0x12)?;
@@ -257,8 +273,10 @@ pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefi
         timed.delay_us(40)?;reset(&mut timed,false)?;
         stage=Stage::Mac;mac(&mut timed)?;stage=Stage::Baseband;baseband(&mut timed,policy.channel,configured.rx_path,&cal,prefix)?;
         stage=Stage::Radio;radio(&mut timed,policy.channel,&mut saved)?;
+        // The MAC power tables keep 7-bit signed bytes: bit 7 reads back 0 (the Ryzen, 2026-11-04).
         stage=Stage::Power;for w in image.writes(){let old=timed.read32(w.at)?;timed.write32(w.at,(old&!w.mask)|w.bits)?;let value=timed.read32(w.at)?;
-            if value&w.mask!=w.bits{return Err(fault(w.at,value));}}
+            let kept=if (0xd2c0..0xd36c).contains(&w.at){0x7f7f_7f7f}else{u32::MAX};
+            if value&w.mask&kept!=w.bits&kept{return Err(fault(w.at,value));}}
         stage=Stage::Finish;timed.write32(0xce40,0x2b)?;
         let actual=io::read32(&mut timed,0xce40)?;if actual!=0x2b{return Err(fault(0xce40,actual));}
         field(&mut timed,0x9c18,3,1)?;

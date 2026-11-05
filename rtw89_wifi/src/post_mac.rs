@@ -6,9 +6,9 @@ use core::{marker::PhantomData,sync::atomic::{fence,Ordering}};
 use crate::{board::Board,download,fwcmd::{self,Bus,Queue},io::{self,Fault,FaultKind,RegisterIo,TimedIo},mac,runtime_mac,rx};
 use crate::post_mac_regs::*;
 
-const STOPPED:u32=0x000b0f03;
+const STOPPED:u32=0x000b0f00;
 const RECEIVING:u32=STOPPED&!3;
-const STOP_MASK:u32=0x001f0f03;
+const STOP_MASK:u32=0x001f0f00;
 const HCI:u32=1<<11|1<<13;
 const TIMEOUT_US:u64=10_000;
 const HOST_MASKS:[usize;3]=[0x1a0,0x10b0,0x13b0];
@@ -58,7 +58,7 @@ impl Receiving{
             require(&mut timed,download::FW_CONTROL,0xe0,0xe0)?;
             require(&mut timed,0xf0,0xf000,1<<12)?;require(&mut timed,0x3f0,0x300,1<<8)?;require(&mut timed,0x88,3,3)?;
             require(&mut timed,0x8400,0xfffd0000,0xfffd0000)?;require(&mut timed,0x8404,0x0f9f0000,0x0f9f0000)?;
-            require(&mut timed,0xc000,0xf000003f,0xf000003f)?;require(&mut timed,0xc004,0x4000003f,0x4000003f)?;require(&mut timed,0xe000,1<<30,0)?;
+            io::cmac_ready(&mut timed)?;
             require(&mut timed,mac::WDE_CONFIG,0x1fff3f03,510<<16)?;require(&mut timed,mac::PLE_CONFIG,0x1fff3f03,496<<16|4<<8|1)?;
             require(&mut timed,mac::HFC_CONTROL,0xfff,0x19)?;
             require(&mut timed,fwcmd::INIT_CONFIG,HCI|1<<18,HCI)?;
@@ -132,8 +132,7 @@ fn guard(bus:&mut impl Bus,queue:&mut Queue<'_>,rings:&rx::Rings<'_>,board:&Boar
     require(bus,download::FW_CONTROL,0xe0,0xe0)?;
     require(bus,0xf0,0xf000,1<<12)?;require(bus,0x3f0,0x300,1<<8)?;
     require(bus,0x88,3,3)?;require(bus,0x8400,0xfffd0000,0xfffd0000)?;
-    require(bus,0x8404,0x0f9f0000,0x0f9f0000)?;require(bus,0xc000,0xf000003f,0xf000003f)?;
-    require(bus,0xc004,0x4000003f,0x4000003f)?;require(bus,0xe000,1<<30,0)?;
+    require(bus,0x8404,0x0f9f0000,0x0f9f0000)?;io::cmac_ready(bus)?;
     require(bus,0xc348,0xffff,0)?;require(bus,0xc6ec,1<<7,0)?;
     require(bus,mac::WDE_CONFIG,0x1fff3f03,510<<16)?;
     require(bus,mac::PLE_CONFIG,0x1fff3f03,496<<16|4<<8|1)?;
@@ -190,7 +189,6 @@ fn activate_inner(bus:&mut impl Bus,queue:&mut Queue<'_>,rings:&mut rx::Rings<'_
         rings.installed(&mut timed)?;
         stage=Stage::Receive;fence(Ordering::Release);
         modify(&mut timed,fwcmd::INIT_CONFIG,0,1<<13,0)?;
-        modify(&mut timed,fwcmd::DMA_STOP,3,0,0)?;
         stage=Stage::Verify;
         require(&mut timed,fwcmd::DMA_STOP,STOP_MASK,RECEIVING)?;
         require(&mut timed,fwcmd::INIT_CONFIG,HCI|1<<18,HCI)?;

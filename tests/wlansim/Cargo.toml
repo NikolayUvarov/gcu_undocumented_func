@@ -13,6 +13,8 @@ wpa = { path = "../../wpa" }
 [features]
 # Test only (550-NET-0030): a radio that answers late, and goes silent when asked; never in a release image.
 slow = []
+# Test only (550-NET-0035): an access point that announces no country, for the station's 00.
+no-country = []
 
 [profile.release]
 panic = "abort"

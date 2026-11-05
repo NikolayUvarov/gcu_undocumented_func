@@ -4,13 +4,15 @@
 // endpoint, idl/net.wit to the network stack (a client without BADGE_WIFI) and idl/wifi.wit to clients with BADGE_WIFI.
 // It holds the radio and nothing else that can act (MC-2.3); a passphrase becomes a PMK at once and is not kept. A
 // network to remember goes to `keystore` (slot 3, BADGE_KEY_STATION, 550-NET-0024), which keeps its PMK and answers
-// each handshake's keys: the station holds no PMK of a remembered network (MC-11.9). The country (wifi.wit 1.1,
-// 550-NET-0035) needs the regulatory catalogue, not in this build yet (stage A): its calls answer `unsupported`, no
-// country is applied, and the station keeps to the rules that hold before one is known (probes on 1 to 11 alone).
+// each handshake's keys: the station holds no PMK of a remembered network (MC-11.9). The country (wifi.wit 1.2,
+// 550-NET-0035 stage B) comes from the regulatory catalogue (`regdb`): the one the user chose and `keystore` keeps;
+// with none, the first scan sends nothing and the station runs under the country the access points announce, or `00`
+// (the maintainer's decision of 2026-11-04: it must work, not go quiet). The radio is given the country's limits.
 // At start and after a network is lost it joins a remembered one heard by itself, trying again and logging each try,
 // until `wifi leave` (550-NET-0041): a boot service, so every release through the link brings it.
+use dot11::catalogue::{self, Source};
 use dot11::scan::{Bss, Security};
-use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};
+use dot11::station::{Allowed, Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};
 use mind::abi::BootInfo;
 use mind::deadline::Deadline;
 use mind::idl::codec::List;
@@ -103,6 +105,16 @@ struct Wlan {
     trying: Option<Try>,
     // The network last joined, tried first after it is lost.
     previous: ([u8; 32], usize),
+    // The radio's channels, as its `info` gave them.
+    channels: ([u8; catalogue::CHANNELS], usize),
+    // The country (550-NET-0035): the user's choice and whether `keystore` keeps it, the one the station runs under and
+    // why, whether the radio confirmed or refused its limits, and whether the first scan is still listening for one.
+    chosen: Option<[u8; 2]>,
+    kept: bool,
+    running: Option<([u8; 2], Source)>,
+    confirmed: bool,
+    refused: bool,
+    first: bool,
 }
 
 impl Wlan {
@@ -117,6 +129,136 @@ impl Wlan {
         self.station = Station::new(own, channels, ofdm);
         self.own = own;
         self.radio = true;
+        let n = channels.len().min(catalogue::CHANNELS);
+        self.channels.0[..n].copy_from_slice(&channels[..n]);
+        self.channels.1 = n;
+        self.country_start();
+    }
+
+    fn radio_channels(&self) -> &[u8] { &self.channels.0[..self.channels.1] }
+
+    // At the radio's first answer: the country `keystore` keeps, or the first scan, which only listens.
+    fn country_start(&mut self) {
+        self.chosen = match self.deadline.call(|| keystore::wifi_country(KEYSTORE)) {
+            Ok(Ok(code)) => code.as_str().as_bytes().try_into().ok(),
+            _ => None,
+        };
+        self.kept = self.chosen.is_some();
+        if let Some(code) = self.chosen.filter(|&c| regdb::select(c).is_ok()) { self.run_under(code, Source::Chosen); return; }
+        let plan = catalogue::listening(self.radio_channels());
+        let mut out = Out::default();
+        self.station.restrict(plan.allowed(), &mut out, &mut self.tx);
+        self.apply(out);
+        let mut out = Out::default();
+        let started = self.station.scan(mind::time::uptime_ms() as u64, &mut out, &mut self.tx);
+        self.apply(out);
+        self.first = started.is_ok();
+        mind::println!("[WLAN] NO COUNTRY CHOSEN: THE FIRST SCAN SENDS NOTHING AND LISTENS FOR THE COUNTRY THE ACCESS POINTS ANNOUNCE");
+        if !self.first { let (code, source) = catalogue::decide(None, None); self.run_under(code, source); }
+    }
+
+    // A scan ended: the first decides the country; a later one, while the station is not joined, may move a country
+    // the user did not choose to another one the access points announce.
+    fn scanned(&mut self) {
+        let announced = self.station.networks().announced();
+        if core::mem::replace(&mut self.first, false) {
+            let (code, source) = catalogue::decide(None, announced);
+            self.run_under_first(code, source);
+        } else if let Some((code, source)) = self.running.and_then(|r| catalogue::moves(r, announced)) {
+            if !matches!(self.station.state(), State::Joining | State::Joined) { self.run_under(code, source); }
+        }
+    }
+
+    // The first country, after the scan that only listened: the networks it heard stay (`relax`), so a network listed
+    // then is joined with no new scan.
+    fn run_under_first(&mut self, code: [u8; 2], source: Source) { self.run_country(code, source, true) }
+
+    // Runs the station under country `code`: its channels restricted, the radio given the limits, and the log says why.
+    fn run_under(&mut self, code: [u8; 2], source: Source) { self.run_country(code, source, false) }
+
+    fn run_country(&mut self, code: [u8; 2], source: Source, first: bool) {
+        let Some(country) = catalogue::entry(code) else { return };
+        let plan = catalogue::plan(country, self.radio_channels());
+        let mut limits = List::<wlanhw::Limit, 64>::default();
+        for &(channel, eirp, listen) in plan.limits() { limits.push(wlanhw::Limit { channel, eirp, listen }); }
+        let dfs = match country.dfs_region() { regdb::DfsRegion::Unspecified => 0, regdb::DfsRegion::Fcc => 1, regdb::DfsRegion::Etsi => 2, regdb::DfsRegion::Jp => 3 };
+        let text = core::str::from_utf8(&code).unwrap_or("00");
+        let answer = self.deadline.call(|| wlanhw::set_country(RADIO, text, dfs, limits.as_slice()));
+        (self.confirmed, self.refused) = match answer { Ok(Ok(_)) => (true, false), Ok(Err(wlanhw::Error::Failed)) => (false, true), _ => (false, false) };
+        // A radio that refuses the limits sends nothing: the station only listens, and does not fall back.
+        let allowed = if self.refused { catalogue::listening(self.radio_channels()) } else { plan };
+        if first { self.station.relax(allowed.allowed()); } else {
+            let mut out = Out::default();
+            self.station.restrict(allowed.allowed(), &mut out, &mut self.tx);
+            self.apply(out);
+        }
+        self.running = Some((code, source));
+        let (send, listen) = plan.counts();
+        let why = match source {
+            Source::Chosen => alloc::format!("CHOSEN BY THE USER{}", if self.kept { ", KEPT BY KEYSTORE" } else { "" }),
+            Source::Detected { announced, heard } => alloc::format!("NONE CHOSEN; ANNOUNCED BY {} OF THE {} ACCESS POINTS THAT NAMED A COUNTRY", announced, heard),
+            Source::World => alloc::format!("NONE CHOSEN, NONE ANNOUNCED: THE RULES EVERY COUNTRY ALLOWS"),
+        };
+        let radio = if self.refused { "THE RADIO REFUSED ITS LIMITS: LISTENING ONLY" } else if self.confirmed { "THE RADIO APPLIED ITS LIMITS" } else { "THE RADIO DID NOT CONFIRM: THE STATION KEEPS TO THE CHANNELS" };
+        mind::println!("[WLAN] COUNTRY {} ({}): {} CHANNELS TO SEND ON, {} TO LISTEN ON; {}", text, why, send, listen, radio);
+    }
+
+    fn country_status(&self) -> wifi::CountryStatus {
+        let text = |code: Option<[u8; 2]>| code.and_then(|c| core::str::from_utf8(&c).ok().and_then(wire_text)).unwrap_or_default();
+        let state = match (self.running, self.refused) { (None, _) => wifi::CountryState::None, (Some(_), true) => wifi::CountryState::Failed, _ => wifi::CountryState::Applied };
+        wifi::CountryStatus { asked: text(self.chosen), applied: text(self.running.map(|r| r.0)), state, radio: self.confirmed, kept: self.kept,
+                              catalogue: mind::idl::codec::Text::new(&regdb::SOURCE_SHA256[..16]).unwrap_or_default() }
+    }
+
+    fn country_origin(&self) -> wifi::CountryOrigin {
+        match self.running.map(|r| r.1) {
+            None => wifi::CountryOrigin::default(),
+            Some(Source::Chosen) => wifi::CountryOrigin { origin: wifi::Origin::Chosen, announced: 0, heard: 0 },
+            Some(Source::Detected { announced, heard }) => wifi::CountryOrigin { origin: wifi::Origin::Detected, announced, heard },
+            Some(Source::World) => wifi::CountryOrigin { origin: wifi::Origin::World, announced: 0, heard: 0 },
+        }
+    }
+
+    // A page of the catalogue, `00` left out, each country with its channels to send and listen on.
+    fn countries(&self, from: u16) -> wifi::Countries {
+        let all = regdb::countries().iter().filter(|c| !c.is_world());
+        let total = all.clone().count().min(u16::MAX as usize) as u16;
+        let mut page = List::default();
+        for country in all.skip(from as usize).take(32) {
+            let (send, listen) = catalogue::plan(country, self.radio_channels()).counts();
+            let code = country.alpha2();
+            page.push(wifi::Country { code: core::str::from_utf8(&code).ok().and_then(wire_text).unwrap_or_default(), send, listen });
+        }
+        wifi::Countries { total, page }
+    }
+
+    // The radio's channels under `code` (`00` too).
+    fn channels_under(&self, code: &str) -> Result<List<wifi::Channel, 64>, wifi::Error> {
+        let code = code_of(code, true)?;
+        let country = catalogue::entry(code).ok_or(wifi::Error::NotFound)?;
+        if !self.radio { return Err(wifi::Error::NoDevice); }
+        let plan = catalogue::plan(country, self.radio_channels());
+        let mut list = List::default();
+        for &(number, allowed) in plan.allowed() {
+            let eirp = plan.limits().iter().find(|l| l.0 == number).map_or(0, |l| l.1);
+            let standing = match allowed { Allowed::Send => wifi::Standing::Send, Allowed::Listen => wifi::Standing::Listen, Allowed::Nothing => wifi::Standing::Barred };
+            list.push(wifi::Channel { number, standing, eirp });
+        }
+        Ok(list)
+    }
+
+    // The user's country: the station leaves the network and drops the scan (`restrict`), runs under it, and `keystore`
+    // keeps it.
+    fn set_country(&mut self, code: &str) -> Result<wifi::CountryStatus, wifi::Error> {
+        let code = code_of(code, false)?;
+        regdb::select(code).map_err(|_| wifi::Error::NotFound)?;
+        if !self.radio { return Err(wifi::Error::NoDevice); }
+        self.first = false;
+        self.chosen = Some(code);
+        let text = core::str::from_utf8(&code).unwrap_or("");
+        self.kept = matches!(self.deadline.call(|| keystore::wifi_keep_country(KEYSTORE, text)), Ok(Ok(())));
+        self.run_under(code, Source::Chosen);
+        Ok(self.country_status())
     }
 
     // What the station asked of the radio: tune, filter, send; a received Ethernet frame for the stack.
@@ -254,17 +396,24 @@ impl Wlan {
                 }
             }
             wifi::Request::Status => wifi::reply_status(call, &self.status()),
-            // No catalogue yet (stage A): no country to list, show or apply.
-            wifi::Request::Countries { .. } => wifi::reply_countries(call, Err(wifi::Error::Unsupported)),
-            wifi::Request::Channels { .. } => wifi::reply_channels(call, Err(wifi::Error::Unsupported)),
-            wifi::Request::Country => wifi::reply_country(call, &wifi::CountryStatus::default()),
+            // The catalogue (550-NET-0035, stage B).
+            wifi::Request::Countries { from } => wifi::reply_countries(call, Ok(&self.countries(from))),
+            wifi::Request::Channels { code } => {
+                let result = self.channels_under(code.as_str());
+                wifi::reply_channels(call, result.as_ref().map(|l| l.as_slice()).map_err(|e| *e))
+            }
+            wifi::Request::Country => wifi::reply_country(call, &self.country_status()),
+            wifi::Request::CountryOrigin => wifi::reply_country_origin(call, &self.country_origin()),
             _ if !may_change => match request {
                 wifi::Request::Forget { .. } => wifi::reply_forget(call, Err(wifi::Error::Denied)),
                 wifi::Request::Leave => wifi::reply_leave(call, Err(wifi::Error::Denied)),
                 wifi::Request::SetCountry { .. } => wifi::reply_set_country(call, Err(wifi::Error::Denied)),
                 _ => wifi::reply_join(call, Err(wifi::Error::Denied)),
             },
-            wifi::Request::SetCountry { .. } => wifi::reply_set_country(call, Err(wifi::Error::Unsupported)),
+            wifi::Request::SetCountry { code } => {
+                let result = self.set_country(code.as_str());
+                wifi::reply_set_country(call, result.as_ref().map_err(|e| *e))
+            }
             wifi::Request::Join { ssid, passphrase, remember } => wifi::reply_join(call, self.join(ssid.as_slice(), passphrase.as_str(), remember, now)),
             wifi::Request::Leave => {
                 let mut out = Out::default();
@@ -339,6 +488,8 @@ impl Wlan {
     // The automatic join (550-NET-0041): when the station is not joined, a scan, then the remembered network heard (the
     // one last joined first, else the strongest) with its kept key; each try ends in one line of the log.
     fn auto_join(&mut self, now: u64) {
+        // The first scan decides the country before anything is joined.
+        if self.first { return; }
         let state = self.station.state();
         if state == State::Joined {
             if let Some(Try::Joining(name, len, number)) = self.trying.take() {
@@ -422,6 +573,16 @@ impl Wlan {
     }
 }
 
+// A country's code as a client gave it: two capital letters, or `00` where `world` allows it.
+fn code_of(code: &str, world: bool) -> Result<[u8; 2], wifi::Error> {
+    let bytes: [u8; 2] = code.as_bytes().try_into().map_err(|_| wifi::Error::Invalid)?;
+    if bytes == *b"00" { return if world { Ok(bytes) } else { Err(wifi::Error::Invalid) }; }
+    if !bytes.iter().all(u8::is_ascii_uppercase) { return Err(wifi::Error::Invalid); }
+    Ok(bytes)
+}
+
+fn wire_text<const N: usize>(text: &str) -> Option<mind::idl::codec::Text<N>> { mind::idl::codec::Text::new(text) }
+
 // Why the station failed or lost its network, for the log.
 fn said(reason: Reason) -> &'static str {
     match reason {
@@ -457,7 +618,8 @@ fn main(_info: &'static BootInfo) {
     let mut wlan = Wlan { station: Station::new([0; 6], &[], false), deadline: Deadline::after(0, 0), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
                           radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
-                          waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0) };
+                          waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0),
+                          channels: ([0; catalogue::CHANNELS], 0), chosen: None, kept: false, running: None, confirmed: false, refused: false, first: false };
     let mut scratch = [0u8; net::REQUEST_MAX];
     let mut last = State::Off;
     let (mut asked, mut waited) = (0u64, false);
@@ -494,6 +656,8 @@ fn main(_info: &'static BootInfo) {
             }
         }, |wlan| wlan.radio && wlan.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some(), Wlan::pump);
         if wlan.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some() { wlan.auto_join(mind::time::uptime_ms() as u64); }
+        let state = wlan.station.state();
+        if last == State::Scanning && state != State::Scanning { wlan.scanned(); }
         let state = wlan.station.state();
         if state != last {
             let reason = wlan.station.reason();

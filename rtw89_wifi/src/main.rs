@@ -5,10 +5,13 @@ use core::mem::ManuallyDrop;
 use mind::abi::{BootInfo, CAP_KIND_DMA, CAP_KIND_ENDPOINT, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM, SLOT_VFS};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 use mind::mem::Pages;
-use rtw89_wifi::{board, btc_session, download, fwcmd, initial_phy, mac, native_dma, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
+use rtw89_wifi::{board, btc_session, download, fwcmd, listen, mac, native_dma, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
 mod startup;
 
 const FIRMWARE_PATH: &str = "data/firmware/rtw89/rtw8852b_fw-1.bin";
+// Channel 1 has the most access points near the Ryzen (Linux scan, 2026-11-04); receive only, for 20 s.
+const LISTEN_MHZ: u16 = 2412;
+const LISTEN_US: u64 = 20_000_000;
 
 struct Native { bar: Mmio }
 
@@ -40,7 +43,7 @@ enum Error {
     Grant, Length, State, System(mind::sys::Error), File(mind::fs::Error), Verify(download::VerifyError),
     Io(Fault), Mac(mac::Failure), Pcie(pcie::Failure), Queue(fwcmd::Error), Download(download::Failure),
     PhyCap(phycap::Failure), Runtime(runtime_mac::Failure), Receive(rx::Error), PostMac(post_mac::Failure), Stop(Stopped),
-    InitialPhy(initial_phy::Failure), NativeDma(native_dma::Error),
+    Listen(listen::Failure), NativeDma(native_dma::Error),
 }
 
 #[derive(Debug)]
@@ -54,7 +57,7 @@ impl core::fmt::Debug for Error {
             Self::Io(e) => ("Io", Some(e)), Self::Mac(e) => ("Mac", Some(e)), Self::Pcie(e) => ("Pcie", Some(e)),
             Self::Queue(e) => ("Queue", Some(e)), Self::Download(e) => ("Download", Some(e)), Self::Stop(e) => ("Stop", Some(e)),
             Self::PhyCap(e) => ("PhyCap", Some(e)),
-            Self::InitialPhy(e) => ("InitialPhy", Some(e)), Self::NativeDma(e) => ("NativeDma", Some(e)),
+            Self::Listen(e) => ("Listen", Some(e)), Self::NativeDma(e) => ("NativeDma", Some(e)),
             Self::Runtime(e) => ("Runtime", Some(e)), Self::Receive(e) => ("Receive", Some(e)), Self::PostMac(e) => ("PostMac", Some(e)),
         };
         match detail { Some(value) => f.debug_tuple(name).field(value).finish(), None => f.write_str(name) }
@@ -120,7 +123,14 @@ impl startup::Diagnostic for Attempt<'_> {
                 power::on_for_board_read(&mut timed).map_err(Error::Io)?;
                 timed.delay_us(0).map_err(Error::Io)?;
             }
-            Stage::Mac => mac::prepare_download(&mut self.native).map_err(Error::Mac)?,
+            Stage::Mac => {
+                if let Some(found) = mac::quiesce(&mut self.native).map_err(Error::Io)? {
+                    mind::println!("[RTW89] HCI LEFT ON (INIT_CONFIG {:08X}): STOPPED WITH PCI MASTERING OFF", found);
+                }
+                let masks = mac::mask_host(&mut self.native).map_err(Error::Io)?;
+                if masks != [0; 3] { mind::println!("[RTW89] HOST INTERRUPTS LEFT ENABLED (HIMR {:08X?}): MASKED", masks); }
+                mac::prepare_download(&mut self.native).map_err(Error::Mac)?
+            }
             Stage::Pcie => self.prepared = Some(pcie::prepare(&mut self.native).map_err(Error::Pcie)?),
             Stage::Install => self.queues.as_mut().ok_or(Error::State)?.command.install(&mut self.native).map_err(Error::Queue)?,
             Stage::Finish => self.prepared.take().ok_or(Error::State)?.finish(&mut self.native, &self.queues.as_ref().ok_or(Error::State)?.command).map_err(Error::Pcie)?,
@@ -135,6 +145,9 @@ impl startup::Diagnostic for Attempt<'_> {
             Stage::Download => {
                 let ready = download::run(&mut self.native, &mut self.queues.as_mut().ok_or(Error::State)?.command, self.verified.take().ok_or(Error::State)?).map_err(Error::Download)?;
                 mind::println!("[RTW89] FW STATUS 7 OBSERVED: {:?}", ready.version());
+                // The firmware enables its halt interrupt (HIMR0 bit 21); this polled driver keeps host interrupts masked.
+                let masks = mac::mask_host(&mut self.native).map_err(Error::Io)?;
+                if masks != [0; 3] { mind::println!("[RTW89] THE FIRMWARE ENABLED HOST INTERRUPTS (HIMR {:08X?}): MASKED", masks); }
                 self.ready = Some(ready);
             }
             Stage::PhyCap => {
@@ -161,12 +174,24 @@ impl startup::Diagnostic for Attempt<'_> {
             Stage::InitialPhy => {
                 let mut scratch = [0; rx::BUFFER_BYTES];
                 let queues = self.queues.as_mut().ok_or(Error::State)?;
-                let observed = initial_phy::diagnose(&mut self.native, &mut queues.command,
-                    &mut queues.receive, self.receiving.as_ref().ok_or(Error::State)?,
-                    self.ready.take().ok_or(Error::State)?, self.board, self.capabilities.as_ref().ok_or(Error::State)?,
-                    &mut scratch).map_err(Error::InitialPhy)?;
-                mind::println!("[RTW89] INITIAL PHY/BTC DIAGNOSTIC: {:?}", observed);
-                mind::println!("[RTW89] CHANNEL CALIBRATION AND WLAN PENDING; SHUTTING DOWN DIAGNOSTIC");
+                let listened = listen::listen(&mut self.native, &mut queues.command, &mut queues.receive,
+                    self.receiving.as_ref().ok_or(Error::State)?, self.ready.take().ok_or(Error::State)?, self.board,
+                    self.capabilities.as_ref().ok_or(Error::State)?, &mut scratch, LISTEN_MHZ, LISTEN_US, heard);
+                let listened = match listened {
+                    Ok(listened) => listened,
+                    Err(failure) => {
+                        mind::println!("[RTW89] LISTEN FAILED: {:?}", failure.cause);
+                        mind::println!("[RTW89] BEFORE THE FAILURE: {:?}", failure.tally);
+                        return Err(Error::Listen(failure));
+                    }
+                };
+                let (i, t) = (&listened.initial, listened.tally);
+                mind::println!("[RTW89] INITIAL PHY: THERMAL {:?}, RX PATH {}, RX NSS {}, SUBMITTED {}", i.thermal, i.rx_path, i.rx_nss, i.submitted);
+                mind::println!("[RTW89] LISTENED {} MS ON CHANNEL {}, RECEIVE ONLY: {} FRAMES, {} BEACONS, {} PROBE RESPONSES, {} BSSIDS",
+                    listened.elapsed_us / 1_000, listened.channel, t.frames, t.beacons, t.probe_responses, listened.heard);
+                mind::println!("[RTW89] ALSO {} OTHER FRAMES, {} REJECTED, {} UNLISTED, {} OTHER PACKETS, {} BTC EVENTS, {} PPDU REPORTS",
+                    t.other_frames, t.rejected, t.unlisted, t.other_packets, t.btc_events, listened.counts.ppdu_reports);
+                mind::println!("[RTW89] CALIBRATION, PACKET TX AND WLAN PENDING; SHUTTING DOWN");
             }
         }
         Ok(())
@@ -201,9 +226,19 @@ impl startup::Diagnostic for Attempt<'_> {
     }
 }
 
+// Printable ASCII only; other SSID bytes show as '?'.
+fn heard(found: &listen::Heard) {
+    let (ssid, b) = (found.ssid(), found.bssid);
+    let mut text = [b'?'; 32];
+    for (out, byte) in text.iter_mut().zip(ssid) { if (0x20..0x7f).contains(byte) { *out = *byte; } }
+    let name = core::str::from_utf8(&text[..ssid.len()]).unwrap_or("");
+    mind::println!("[RTW89] HEARD {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} DS {} SSID {} BYTES \"{}\"",
+        b[0], b[1], b[2], b[3], b[4], b[5], found.ds_channel, ssid.len(), name);
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::println!("[RTW89] BOUNDED FIRMWARE/MAC/RX/INITIAL-PHY DIAGNOSTIC: NO WLAN NETWORK LINK");
+    mind::println!("[RTW89] BOUNDED FIRMWARE/MAC/RX/INITIAL-PHY DIAGNOSTIC AND RECEIVE-ONLY LISTEN: NO TRANSMISSION, NO WLAN LINK");
     if !cfg!(target_arch = "x86_64") { mind::println!("[RTW89] UNSUPPORTED DMA ARCHITECTURE"); idle(); }
     let (_, resolution, frequency) = mind::time::clock_info();
     if let Err(error) = io::validate_clock(resolution, frequency) {

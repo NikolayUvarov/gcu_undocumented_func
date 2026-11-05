@@ -36,7 +36,13 @@
 /// 2.8 (000-NET-0049): a grant may ask for a TCP flow its rules do not name (`ask`, `asked`). The stack decides
 /// nothing: the policy badge reads the questions (`questions`) and gives the user's answer (`decide`), which adds the
 /// rule to the grant.
-package mind:socket@2.8.0;
+///
+/// 2.9 (110-NET-0052): a grant may listen. The policy badge registers which TCP ports it may listen on and from which
+/// networks a peer may connect (`policy-listen`); the grant opens a listening socket (`tcp-listen`) on the default card
+/// and takes each connection a peer set up (`tcp-accept`) as a connected socket, used and charged as one it made. A
+/// peer outside the port's networks is reset as soon as the stack sees it, and a port nothing listens on answers a SYN
+/// with a reset.
+package mind:socket@2.10.0;
 
 interface socket {
     /// Why a request failed.
@@ -137,4 +143,24 @@ interface socket {
     /// to its grant; with `once`, the rule ends with the grant's first connection through it. `not-found`: no question
     /// waits with that id; `limit`: the grant holds 16 rules.
     decide: func(id: u32, address: u32, allowed: bool, once: bool) -> result<_, error>;
+
+    /// Who may connect to a grant's listening socket (2.9): its TCP port and a network a peer's address must be in
+    /// (`prefix` bits of `network`; 0 bits: any address).
+    record listen-rule { port: u16, network: u32, prefix: u8 }
+    /// A connection a listening socket took (2.9): the connected socket's handle, the peer's address and port.
+    record accepted { socket: u32, address: u32, port: u16 }
+    /// Registers who may connect to grant `badge`'s listening sockets, replacing what it had (policy badge, 2.9).
+    /// `not-found`: no grant with that badge; `invalid`: port 0, a prefix over 32, or more than 4 networks for a port.
+    policy-listen: func(badge: u16, rules: list<listen-rule, 16>) -> result<_, error>;
+    /// A listening TCP socket on `port`, on the default card, holding up to `backlog` connections (1 to 16) set up and
+    /// not yet accepted (2.9). `denied`: no listening rule names the port; `refused`: another socket listens on it;
+    /// `invalid`: port 0 or a backlog out of range; `limit`: the client holds 8 sockets, or the stack's listening
+    /// sockets would pass 32; `no-network`: no card.
+    tcp-listen: func(port: u16, backlog: u8) -> result<u32, error>;
+    /// The oldest connection listening socket `listener` holds, as a connected socket (2.9). `again`: none yet;
+    /// `limit`: the client holds 8 sockets (the connection waits).
+    tcp-accept: func(listener: u32) -> result<accepted, error>;
+    /// The rules of the caller's own grant (2.10, 111-NET-0057): the destinations the broker registered and the user's
+    /// answers added, so that a service the policy gives its servers learns them here. `denied`: not a live grant's badge.
+    grant-rules: func() -> result<list<rule, 16>, error>;
 }

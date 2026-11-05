@@ -8,6 +8,7 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
 dot11 = { path = "../dot11" }
+regdb = { path = "../regdb" }
 wpa = { path = "../wpa" }
 
 [profile.release]

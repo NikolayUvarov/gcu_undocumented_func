@@ -78,6 +78,22 @@ pub fn report(keeper: usize) {
     let _ = mind::ipc::drop_cap(client);
 }
 
+/// The platform's transmit power policy for a WLAN device (213-KRN-0122): every DSDT and SSDT read whole and checked,
+/// and the SAR names searched for; a table that cannot be mapped makes it unknown. Read once at boot, while the platform
+/// privilege allows it.
+pub fn power_policy() -> mind::platform_power::Policy {
+    let mut search = mind::platform_power::Search::new();
+    for index in 0..256 {
+        let Ok(slot) = platform::cap(PLATFORM_ACPI_TABLE, index, 0) else { break };
+        match Mapping::new(slot) {
+            Ok(map) => { search.feed(map.as_slice()); drop(map); }
+            Err(_) => search.unreadable(),
+        }
+        let _ = mind::ipc::drop_cap(slot);
+    }
+    search.finish()
+}
+
 /// The embedded controller's command/status and data ports (the ECDT), its SMBus host's base (ACPI0001's `_EC` in the
 /// DSDT or an SSDT) and, where the tables name it, the AC adapter's bit in its space (`_PSR`), for the battery service
 /// (211-PRT-0008); None where the tables do not name the ports and the base.

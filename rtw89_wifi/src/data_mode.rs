@@ -121,7 +121,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
                 stage=Stage::Dma;modified=true;
                 fence(Ordering::Release);
                 io::modify32(&mut window,fwcmd::DMA_STOP,OWN_DMA,0)?;
-                require(&mut window,fwcmd::DMA_STOP,0x001f0f03,STOPPED_UNUSED)?;
+                require(&mut window,fwcmd::DMA_STOP,0x001f0f00,STOPPED_UNUSED)?;
                 stage=Stage::Scheduler;
                 runtime_mac::exchange_register(&mut window,[0x205|u32::from(SCHEDULER)<<16,0xffff,0,0],4)?;
                 require(&mut window,0xc348,0xffff,u32::from(SCHEDULER))?;
@@ -263,9 +263,10 @@ fn radio(bus:&mut impl RegisterIo,channel:u8)->io::Result<()>{
     let cycle=bus.read8(0x8040)?;
     if cycle==u8::MAX||cycle&15!=15{return Err(Fault::new(FaultKind::PowerState,0x8040,u32::from(cycle)))}
     require(bus,crate::phy::PHY_BASE+0x734,0x00ff0000,u32::from(channel)<<16)?;
-    for path in 0..2{for at in [0x18,0x10018]{
-        let actual=crate::phy::rf_read(bus,path,at,0x3ffff)?;
-        if actual!=0x1c00|u32::from(channel){return Err(Fault::new(FaultKind::PowerState,at as usize,actual))}
+    // RF18's direct copy reads back only its CH field on the Ryzen (2026-11-04).
+    for path in 0..2{for (at,mask,expected) in [(0x18,0x3ffff,0x1c00|u32::from(channel)),(0x10018,255,u32::from(channel))]{
+        let actual=crate::phy::rf_read(bus,path,at,mask)?;
+        if actual!=expected{return Err(Fault::new(FaultKind::PowerState,at as usize,actual))}
     }}Ok(())
 }
 

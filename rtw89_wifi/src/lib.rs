@@ -5,7 +5,7 @@
 pub mod board;
 pub mod calibration;
 pub mod channel_policy;
-pub mod regulatory;
+pub use regdb as regulatory;
 #[allow(dead_code)]
 pub(crate) mod channel_power;
 mod power_tables;
@@ -48,6 +48,7 @@ pub(crate) mod report_tail;
 pub mod rxdck;
 
 pub mod btc_session;
+pub use btc_session::listen;
 
 pub mod btc_context;
 pub mod initial_phy;

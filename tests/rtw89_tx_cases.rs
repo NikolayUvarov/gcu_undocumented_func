@@ -18,7 +18,7 @@ impl Device{
     fn new(tx:&Region,rx:&Region)->Self{
         let mut d=Self{mmio:vec![0;0x20000],command:2,now:1,frozen:false,tx:tx.base,rx:rx.base,rx_written:[0;2],
             published:Vec::new(),statuses:Vec::new(),auto_dma:true,auto_rpq:true,auto_firmware:true,fail_write:None,ignore_stop:false,late_read:None,writes:Vec::new()};
-        d.put(fwcmd::DMA_STOP,4,0x001f0f03);d.put(0x1e0,4,0xe0);d.put(0xc660,1,0x10);d
+        d.put(fwcmd::DMA_STOP,4,0x001f0f00);d.put(0x1e0,4,0xe0);d.put(0xc660,1,0x10);d
     }
     fn get(&self,at:usize,width:usize)->u32{let mut raw=[0;4];raw[..width].copy_from_slice(&self.mmio[at..at+width]);u32::from_le_bytes(raw)}
     fn put(&mut self,at:usize,width:usize,value:u32){self.mmio[at..at+width].copy_from_slice(&value.to_le_bytes()[..width]);}

@@ -10,11 +10,14 @@
 // sessions (ten parser sessions in a row, each with a helper of its own, with one endpoint left in the quota, 109-KRN-0133),
 // echo:A.B.C.D:SIZE:HEX (an echo of SIZE data bytes of the pattern HEX, its reply's size and data checked, socket.wit 2.6),
 // ask:HOST:PORT:SECONDS (asks for a TCP flow its grant does not name and waits that long for the user's answer, then
-// connects if allowed, socket.wit 2.8).
+// connects if allowed, socket.wit 2.8), listen:PORT:SECONDS (listens on PORT for up to SECONDS, accepts one connection,
+// reads a line and sends it back after `ECHO `, socket.wit 2.9).
 // A console program; without a grant every network check reports NO GRANT.
 // Its own secrets in keystore (REQUEST_SECRETS, 000-NET-0045): secret-put:NAME:FILE keeps the file's bytes as secret
 // NAME, secret-get:NAME prints its length and SHA-256 (never the value), secret-delete:NAME, secrets lists the names;
-// NO SECRETS CLIENT when the loader gave it none (a run by a path).
+// NO SECRETS CLIENT when the loader gave it none (a run by a path). On the same client (keystore.wit 1.6, 308-NET-0055):
+// key-state prints whether keystore holds the device key; unlock and passphrase-set try the passphrase's calls with a
+// fixed word of their own, never one from the command line, which a client without the passphrase's badge is refused.
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NET, SLOT_NETWORK, SLOT_SECRETS};
 use mind::idl::{keystore, net, socket};
 use mind::ipc::Endpoint;
@@ -198,14 +201,57 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
         "sessions" => return sessions(),
         "echo" => return echo(address, b.parse().unwrap_or(u16::MAX), c),
         "ask" => return ask(a, port, c.parse().unwrap_or(5)),
+        "listen" => return listen(a.parse().unwrap_or(0), b.parse().unwrap_or(10)),
         _ => Err(socket::Error::Invalid),
     })
+}
+
+// Listens on `port` (socket.wit 2.9) for up to `seconds`, takes the first connection, reads its first line and sends it
+// back after `ECHO `; the listening socket is closed after it.
+fn listen(port: u16, seconds: u32) -> mind::sys::Result<Result<(), socket::Error>> {
+    let listener = match socket::tcp_listen(STACK, port, 2)? { Ok(handle) => handle, Err(error) => return Ok(Err(error)) };
+    mind::println!("NETCHECK LISTENING ON {}", port);
+    let start = mind::time::uptime_ms();
+    let accepted = loop {
+        match socket::tcp_accept(STACK, listener)? {
+            Ok(accepted) => break accepted,
+            Err(socket::Error::Again) if mind::time::uptime_ms() - start < seconds as usize * 1000 => { mind::time::sleep(50); }
+            Err(error) => { let _ = socket::close(STACK, listener); return Ok(Err(error)); }
+        }
+    };
+    let [a, b, c, d] = accepted.address.to_be_bytes();
+    mind::println!("NETCHECK ACCEPTED {}.{}.{}.{}:{}", a, b, c, d, accepted.port);
+    let mut line = FixedBuf::<256>::new();
+    let read = mind::time::uptime_ms();
+    let result = loop {
+        let mut data = [0u8; 256];
+        match socket::tcp_receive(STACK, accepted.socket, 256, &mut data)? {
+            Ok(n) => {
+                let _ = line.write_str(core::str::from_utf8(&data[..n]).unwrap_or("?"));
+                if line.as_str().contains('\n') { break Ok(()); }
+            }
+            Err(socket::Error::Again) if mind::time::uptime_ms() - read < 5000 => { mind::time::sleep(20); }
+            Err(socket::Error::Closed) if !line.as_str().is_empty() => break Ok(()),
+            Err(error) => break Err(error),
+        }
+    };
+    let result = result.and_then(|()| {
+        let text = line.as_str().split('\n').next().unwrap_or("");
+        mind::println!("NETCHECK RECEIVED {}", text);
+        let mut reply = FixedBuf::<264>::new();
+        let _ = write!(reply, "ECHO {}\n", text);
+        socket::tcp_send(STACK, accepted.socket, reply.as_str().as_bytes()).ok().unwrap_or(Err(socket::Error::Closed)).map(drop)
+    });
+    mind::time::sleep(200); // the echo leaves before the close
+    let _ = socket::close(STACK, accepted.socket);
+    let _ = socket::close(STACK, listener);
+    Ok(result)
 }
 
 // One check of the program's own secrets: true when `word` is one.
 fn secret(word: &str) -> bool {
     let (kind, rest) = word.split_once(':').unwrap_or((word, ""));
-    if !matches!(kind, "secret-put" | "secret-get" | "secret-delete" | "secrets") { return false; }
+    if !matches!(kind, "secret-put" | "secret-get" | "secret-delete" | "secrets" | "key-state" | "unlock" | "passphrase-set") { return false; }
     let keys = mind::ipc::Endpoint(SLOT_SECRETS);
     if mind::dev::cap_info(SLOT_SECRETS).0 != CAP_KIND_ENDPOINT { mind::println!("NETCHECK {} NO SECRETS CLIENT", word); return true; }
     let shown = |result: mind::sys::Result<Result<FixedBuf<96>, keystore::Error>>| match result {
@@ -233,6 +279,9 @@ fn secret(word: &str) -> bool {
             wipe(value.as_mut_slice());
         }
         "secret-delete" => shown(keystore::secret_delete(keys, rest).map(|r| r.map(|gone| { let mut t = FixedBuf::new(); let _ = write!(t, " {}", gone); t }))),
+        "key-state" => shown(keystore::key_state(keys).map(|r| r.map(|state| { let mut t = FixedBuf::new(); let _ = write!(t, " {:?}", state); t }))),
+        "unlock" => shown(keystore::unlock(keys, NOT_THE_PASSPHRASE).map(|r| r.map(|()| FixedBuf::new()))),
+        "passphrase-set" => shown(keystore::passphrase_set(keys, "", NOT_THE_PASSPHRASE).map(|r| r.map(|()| FixedBuf::new()))),
         _ => shown(keystore::secret_list(keys).map(|r| r.map(|names| {
             let mut text = FixedBuf::new();
             for (i, name) in names.as_slice().iter().enumerate() { let _ = write!(text, "{}{}", if i == 0 { " " } else { "," }, name.as_str()); }
@@ -244,11 +293,12 @@ fn secret(word: &str) -> bool {
 }
 
 const VALUE_MAX: usize = 16384; // keystore.wit's longest secret
+const NOT_THE_PASSPHRASE: &str = "netcheck-is-not-the-owner"; // the word unlock and passphrase-set try
 
 fn wipe(bytes: &mut [u8]) { for byte in bytes.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) }; } }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX  ask:HOST:PORT:SECONDS\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets");
+    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX  ask:HOST:PORT:SECONDS  listen:PORT:SECONDS\nIts own secrets in keystore: secret-put:NAME:FILE  secret-get:NAME (length and SHA-256 only)  secret-delete:NAME  secrets\nThe device key's state and the passphrase's calls, with a fixed word: key-state  unlock  passphrase-set");
     for word in mind::process::args_str().split_whitespace() { if !secret(word) { report(word, check(word)); } }
 }

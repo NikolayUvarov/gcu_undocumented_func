@@ -1,6 +1,6 @@
 # 111 — Network time: the calendar clock set from time servers, authenticated with NTS
 
-**Type:** network (main task: a client service) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** open · **Blocked by:** — for stage 1; stage 2 by the `tls` service's exporter and ALPN · **Roadmap:** track D (network), track C (update: the channel's expiry rests on the clock) · **Constitution:** MC-5.6, MC-9.4, MC-10.3, MC-11.4, MC-11.6, MC-11.11, MC-12.3
+**Type:** network (main task: a client service) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** in progress · **Blocked by:** — for stage 1; stage 2 by the `tls` service's exporter and ALPN · **Roadmap:** track D (network), track C (update: the channel's expiry rests on the clock) · **Constitution:** MC-5.6, MC-9.4, MC-10.3, MC-11.4, MC-11.6, MC-11.11, MC-12.3
 
 **Recorded by:** the kernel session, 2026-10-31, at the maintainer's request: "who sets the time? An NTP client is needed, to take the time from time servers."
 
@@ -61,6 +61,22 @@ Time zones for `date` and `wm` (APP's), and serving time to other machines.
   - a correction leaving `sleep` and the deadlines of running programs unchanged.
 - **Stage 2:** the same against an NTS server on the host; a forged or replayed packet refused.
 - **The profile** (MC-5.6, MC-9.4, MC-12.3) says what the network time is trusted for, and the bounds.
+
+## Progress
+
+2026-11-04: stage 1 is split into [111-NET-0057](../issues-done/111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done), the service and its bounds, and [111-KRN-0206](../issues-done/111-KRN-0206-timed-among-the-boot-services.done), its place among the boot services. Three points of the plan changed, each for a reason:
+- **The servers** come from the grant's own rules (`socket.wit` 2.10 `grant-rules`), each on the port its line names: a test's servers on the host cannot listen on 123 without root.
+- **The floor's first part** is the build's commit time, as the release's manifest carries no build time.
+- **The floor's file** is `system/timed/floor`, a private directory that only `timed`'s badge opens.
+
+`date sync`, the user's ask, waits for a service endpoint of `timed`, which stage 1 does not have.
+
+**Stage 1 is done (2026-11-04).** [111-NET-0057](../issues-done/111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done) and [111-KRN-0206](../issues-done/111-KRN-0206-timed-among-the-boot-services.done) landed in `main` e28cfe4d.
+
+**Left:**
+- stage 2, NTS;
+- `date sync`, which needs a service endpoint of `timed`;
+- a run on a machine.
 
 ## Related
 

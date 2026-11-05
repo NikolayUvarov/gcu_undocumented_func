@@ -40,6 +40,7 @@ extern crate self as rtw89_wifi;
 #[path="rtw89_pipeline_device.rs"]mod model;
 #[path="../rtw89_wifi/src/initial_phy.rs"]mod initial_phy;
 #[path="rtw89_initial_phy_cases.rs"]mod continuation;
+#[path="rtw89_listen_cases.rs"]mod listen_cases;
 
 #[path="../rtw89_wifi/src/channel_policy.rs"] mod channel_policy;
 #[path="../rtw89_wifi/src/power_tables.rs"] mod power_tables;

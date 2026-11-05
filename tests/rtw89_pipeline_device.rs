@@ -81,7 +81,7 @@ impl Device {
         assert!(index < fwcmd::DESCRIPTORS as u32);
         assert!(matches!(self.command & 7, 6 | 7));
         let receiving = self.get(fwcmd::INIT_CONFIG, 4) & 0x2000 != 0;
-        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, if receiving { self.receive_stop() } else { 0x000b_0f03 });
+        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f00, if receiving { self.receive_stop() } else { 0x000b_0f00 });
         assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, if receiving { 0x2800 } else { 0x800 });
         assert!(!self.dma.is_null());
         assert_eq!(self.get(fwcmd::BASE_LOW, 4), 0x200000);
@@ -157,7 +157,7 @@ impl Device {
     }
 
     fn receive_stop(&self)->u32{
-        let value=self.get(fwcmd::DMA_STOP,4)&0x001f0f03;
+        let value=self.get(fwcmd::DMA_STOP,4)&0x001f0f00;
         assert!(matches!(value,0x000b0f00|0x00020000));value
     }
     pub fn inject_c2h(&mut self, event: &[u8]) {
@@ -169,7 +169,7 @@ impl Device {
         assert!(channel<2);
         assert!(matches!(self.command & 7, 6 | 7));
         assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0x2800);
-        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f0f03, self.receive_stop());
+        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f0f00, self.receive_stop());
         assert!(event.len() + 20 <= rx::BUFFER_BYTES);
         let index_at=[0x1050,0x1054][channel];let index = self.get(index_at, 4);
         let hardware = ((index >> 16) & 0xfff) as usize;
@@ -229,7 +229,7 @@ impl Device {
             let reply = match request {
                 [0x103, 0, 0, 0] => self.feature_reply,
                 [0x205, 0xffff, 0, 0] => { self.put(0xc348, 4, 0); Some([0x204, 0, 0, 0]) }
-                [0x010f0205,0xffff,0,0]=>{assert_eq!(self.get(fwcmd::DMA_STOP,4)&0x001f0f03,0x20000);
+                [0x010f0205,0xffff,0,0]=>{assert_eq!(self.get(fwcmd::DMA_STOP,4)&0x001f0f00,0x20000);
                     self.put(0xc348,4,0x010f);Some([0x204,0,0,0])}
                 _ => panic!("unsupported modeled mailbox request: {request:x?}"),
             };
@@ -311,7 +311,7 @@ pub fn prepare<'a>(device: &mut Device, region: &'a mut Region) -> fwcmd::Queue<
     queue.install(device).unwrap(); prepared.finish(device, &queue).unwrap();
     assert_eq!(device.command, 2);
     assert_eq!(device.get(R_AX_CMAC_FUNC_EN, 4), 0x7000803f);
-    assert_eq!(device.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, 0x001f_0f03);
+    assert_eq!(device.get(fwcmd::DMA_STOP, 4) & 0x001f_0f00, 0x001f_0f00);
     device.command = 7;
     startup::command_dma(device).unwrap();
     unsafe { queue.start(device) }.unwrap();

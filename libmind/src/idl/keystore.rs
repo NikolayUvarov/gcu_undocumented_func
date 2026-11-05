@@ -28,6 +28,12 @@
 //! (`mind::network`), on which the secrets calls are about that service's own secrets: its volume keys (308-STO-0022).
 //! No program reaches them, whatever its name: they are kept apart, one file per service in `system/keystore/services/`,
 //! sealed under a key whose label names a service, so a program's file copied there opens no more than under another name.
+//!
+//! 1.6 (308-NET-0055): the device key sealed under the owner's passphrase where no TPM seals it. Until the owner sets
+//! one, the key stays as in 1.0, unsealed in the private directory; once set (`passphrase-set`), it is sealed under it
+//! in `system/keystore/device.locked` (Argon2id of the passphrase, then ChaCha20-Poly1305), and every boot waits for it:
+//! `key-state` says `waiting` until `unlock` opens it. Only the passphrase's badge (`BADGE_KEY_PASSPHRASE`,
+//! `mind::network`) may call `unlock` and `passphrase-set`; the log names each refusal, never a passphrase.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -37,7 +43,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:keystore";
-pub const VERSION: (u8, u8, u8) = (1, 5, 0);
+pub const VERSION: (u8, u8, u8) = (1, 6, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `missing` (1.4): no secret of that name is kept.
@@ -88,6 +94,22 @@ impl Wire for WifiNetwork {
     const MAX: usize = <List<u8, 32> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.ssid.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { ssid: Wire::decode(r)? }) }
+}
+
+/// Whether `keystore` holds the device key (1.6): `held`; `waiting`, sealed under a passphrase not typed yet, or
+/// typed wrong; `none`, no device key (no random source, or a sealed file it does not open). Any client may ask, and
+/// it is answered at once, except while an `unlock` or a `passphrase-set` derives its key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum KeyState { #[default] Held = 0, Waiting = 1, None = 2 }
+impl KeyState {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Held), 1 => Some(Self::Waiting), 2 => Some(Self::None), _ => None } }
+}
+impl Wire for KeyState {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
 /// The device certificate (DER).
@@ -345,6 +367,51 @@ pub fn secret_list(endpoint: Endpoint) -> Result<core::result::Result<List<Text<
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Text<32>, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+pub fn key_state(endpoint: Endpoint) -> Result<core::result::Result<KeyState, Error>> {
+    let words = [18 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xff0000, 0x0], false)?;
+    Ok(Ok(KeyState::from_code(wire::field(&reply, 0, 16, 8)).ok_or(SysError::Invalid)?))
+}
+
+/// Opens the device key sealed under `passphrase` (1.6, the passphrase's badge only; `denied` to others). `denied`
+/// when it does not open it, `budget` when it comes, from the third wrong one in a row, before the waiting time
+/// (from 1 s, doubling to 60 s), `invalid` when nothing waits (a TPM seals the key, or it is held).
+pub fn unlock(endpoint: Endpoint, passphrase: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<128>(passphrase, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 19 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// Seals the device key held under `new`, 8 to 128 bytes, in place of the passphrase `old`, empty when none is set,
+/// then removes its unsealed file (1.6, the passphrase's badge only; `denied` to others). A passphrase once set is
+/// never removed. `denied` when `old` does not open the one set, `budget` as `unlock`'s (a wrong `old` counts with
+/// them), `invalid` with a TPM, while the key waits, or for a `new` of another length, `no-key` without the device
+/// key or when it could not be written.
+pub fn passphrase_set(endpoint: Endpoint, old: &str, new: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<128>(old, &mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<128>(new, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 20 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 16420;
 
@@ -368,6 +435,9 @@ pub enum Request<'a> {
     SecretGet { name: Text<32> },
     SecretDelete { name: Text<32> },
     SecretList,
+    KeyState,
+    Unlock { passphrase: Text<128> },
+    PassphraseSet { old: Text<128>, new: Text<128> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -508,6 +578,27 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::SecretList, call))
         }
+        18 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::KeyState, Call::words(request, cap)))
+        }
+        19 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let passphrase = <Text<128> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Unlock { passphrase }, call))
+        }
+        20 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let old = <Text<128> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let new = <Text<128> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::PassphraseSet { old, new }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -580,4 +671,16 @@ pub fn reply_secret_delete(call: Call, value: core::result::Result<bool, Error>)
 pub fn reply_secret_list(call: Call, value: core::result::Result<&[Text<32>], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<Text<32>, 16>(value, w))
+}
+pub fn reply_key_state(call: Call, value: core::result::Result<KeyState, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_unlock(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_passphrase_set(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

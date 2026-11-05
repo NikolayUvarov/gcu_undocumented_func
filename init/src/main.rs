@@ -26,7 +26,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "restart and process control", "observe privilege", "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input",
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
-    "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
+    "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own disk (else of ramdisk#1) and of its copy's when there is one; keystore's client for its own secrets", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
     "spawn privilege; a VFS client of system/own/ for the programs' own directories; the key service's client for the programs' secrets clients", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
@@ -37,7 +37,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
     "its endpoint, which badges its clients; the block store's client that may get, put and publish", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
-    "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
+    "network stack clients: minting source and policy control; a VFS client", "the flow of program timed; the RTC's setting client; a VFS client of system/timed", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
     "observe privilege", "read-only scopes of data/models/ and models:; its quota and workers by its line of data/memory.conf, read at each start",
     "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
@@ -69,6 +69,7 @@ const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
+const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
 const EFFECTOR_MEMORY_MIB: u16 = 48; // the agent's benchmark: a 16 MiB chase and two 8 MiB copy buffers (750-KRN-0158)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
@@ -133,7 +134,7 @@ enum Off { #[default] No, Disabled, Needs(usize), NoDevice, NoImage, Safe, Mode,
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
-struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<(Option<&'static str>, Option<&'static str>)>,
               link: Option<[u8; LINK_WORDS_MAX]>,
               boot: idl_init::Boot, modes: idl_init::ModeState, link_console: bool,
               // What a service runs in place of its boot image until the next boot, in developer mode (800-KRN-0144): a
@@ -147,7 +148,9 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // A safe start, after an unfinished run or asked at the bootloader: link gets no input (800-KRN-0191).
               safe: bool,
               // The held `stop-notice` call of each service that asked, answered when init decides to stop it (750-KRN-0194).
-              notices: [Option<wire::Call>; UNITS] }
+              notices: [Option<wire::Call>; UNITS],
+              // The ACPI tables' transmit power policy for a WLAN radio, read once at boot (213-KRN-0122).
+              power: mind::platform_power::Policy }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -201,11 +204,14 @@ impl Init {
         minted.slots[minted.count] = slot; minted.count += 1;
         Some(slot)
     }
-    // The block store's own disk (300-KRN-0025): a VirtIO disk that is blank or starts with the store's superblock;
-    // looked at once, through a client of init's own, before vfs_server or the store gets any disk.
-    fn store_disk(&mut self) -> Option<&'static str> {
+    // The block store's own disk (300-KRN-0025) and its copy's (309-KRN-0209): the first and the next VirtIO disk that is
+    // blank or starts with the store's superblock; looked at once, through a client of init's own, before vfs_server or
+    // the store gets any disk.
+    fn store_disk(&mut self) -> Option<&'static str> { self.store_disks().0 }
+    fn store_copy(&mut self) -> Option<&'static str> { self.store_disks().1 }
+    fn store_disks(&mut self) -> (Option<&'static str>, Option<&'static str>) {
         if let Some(found) = self.store { return found; }
-        let mut found = None;
+        let mut found = (None, None);
         for name in ["virtio_blk", "virtio_blk#1", "virtio_blk#2"] {
             if !self.running(service_index(name)) { continue; }
             let Ok(keeper) = self.keeper(name) else { continue };
@@ -216,9 +222,11 @@ impl Init {
                 Err(_) => None,
             };
             let _ = ipc::drop_cap(client);
-            if let Some((blank, store)) = first.filter(|&(blank, store)| blank || store) {
-                mind::println!("[INIT] THE BLOCK STORE'S DISK: {} ({})", name, if blank { "BLANK" } else if store { "THE STORE'S" } else { "?" });
-                found = Some(name);
+            if let Some((blank, _)) = first.filter(|&(blank, store)| blank || store) {
+                let what = if blank { "BLANK" } else { "THE STORE'S" };
+                if found.0.is_none() { mind::println!("[INIT] THE BLOCK STORE'S DISK: {} ({})", name, what); found.0 = Some(name); continue; }
+                mind::println!("[INIT] THE BLOCK STORE'S COPY: {} ({})", name, what);
+                found.1 = Some(name);
                 break;
             }
         }
@@ -657,6 +665,10 @@ impl Init {
                 // in the clear, and says so; keystore never needs the store.
                 if self.present("keystore") { grants.add(3, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_BLOCKSTORE)?, CLIENT); }
                 else { mind::println!("[INIT] BLOCKSTORE STARTS WITHOUT ITS SECRETS CLIENT: KEYSTORE DOES NOT RUN (MC-6.8)"); }
+                // The copy's disk beside a disk of its own, never beside ramdisk#1 (309-KRN-0209); slot 4 stays empty without one.
+                if disk != "ramdisk#1" {
+                    if let Some(copy) = self.store_copy() { grants.add(SLOT_STORE_COPY, self.badged(&mut minted, copy, mind::block::BADGE_WRITE)?, CLIENT); }
+                }
             }
             // The store's file face (311-STO-0032): `vfs.wit` over the store's trees, with the block store's client that
             // may get, put and publish where `tally` and `blocks` find theirs. It badges its own clients, as the store
@@ -672,9 +684,9 @@ impl Init {
                 // It badges the file clients it hands out (idl/vfs.wit), so its endpoint keeps the right to (000-KRN-0073).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL | CAP_BADGE);
                 let mut slot = SLOT_BLOCK_FIRST;
-                let store = self.store_disk(); // the block store's own disk: never a file system's (Appendix B.6)
+                let store = self.store_disks(); // the block store's disk and its copy's: never a file system's (Appendix B.6)
                 for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
-                    if Some(driver) == store { continue; }
+                    if Some(driver) == store.0 || Some(driver) == store.1 { continue; }
                     if self.running(service_index(driver)) && slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
                 if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
@@ -857,6 +869,15 @@ impl Init {
                 // init's client for its stop notice alone, so its last heartbeat can say it is going (750-KRN-0194).
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NOTICE)?, CLIENT);
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
+            }
+            // Network time (111-KRN-0206): the flow the policy gives program `timed`, whose UDP rules are its time servers;
+            // the clock with the setting badge; and its private directory, system/timed, for the floor. Nothing else. Not
+            // started when the policy gives it no flow.
+            "timed" => {
+                let Some(flow) = self.flow(&mut minted, "timed") else { return Err(Error::NotFound) };
+                grants.add(SLOT_NETWORK, flow, CLIENT);
+                grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_TIMED)?, CLIENT);
             }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
@@ -1497,7 +1518,7 @@ impl Init {
                 (Ok(()), _) => mind::println!("[INIT] {} OFF BY {}: PREPARED, `svc start {}` STARTS IT", name, services::FILE, name),
                 (Err(Error::NotFound), _) => {
                     self.missing[index] = true; self.stopped[index] = true; self.placed[index].off = Off::NoDevice;
-                    mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name);
+                    mind::println!("[INIT] {} NOT STARTED: {}", name, not_found(name));
                 }
                 (Err(error), Off::Safe) => { self.stopped[index] = true; mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, NOT PREPARED: {:?}", name, error) }
                 (Err(error), _) => { self.stopped[index] = true; mind::println!("[INIT] {} OFF BY {}, NOT PREPARED: {:?}", name, services::FILE, error) }
@@ -1512,7 +1533,7 @@ impl Init {
                 kernel_lines();
             }
             Ok(_) => {}
-            Err(Error::NotFound) => { self.missing[index] = true; self.placed[index].off = Off::NoDevice; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name); }
+            Err(Error::NotFound) => { self.missing[index] = true; self.placed[index].off = Off::NoDevice; mind::println!("[INIT] {} NOT STARTED: {}", name, not_found(name)); }
             Err(error) => { self.placed[index].off = Off::Failed; mind::println!("[INIT] {} FAILED: {:?}", name, error); return false; }
         }
         true
@@ -1711,6 +1732,9 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
     idl_init::Error::Denied
 }
 
+// Why a service whose plan found nothing to drive is not started: its device, or for timed its time servers.
+fn not_found(name: &str) -> &'static str { if name == "timed" { "THE POLICY GIVES IT NO TIME SERVER" } else { "NO DEVICE" } }
+
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
 // The directories a service gets confined clients of at each start (750-KRN-0120): its slot, the badge init asks with,
@@ -1814,9 +1838,15 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS] };
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
+                         power: hardware::power_policy() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
+    // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122).
+    match init.power {
+        mind::platform_power::Policy::Absent { tables } => mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: ABSENT ({} AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG)", tables),
+        policy => { let mut word = [0u8; 48]; let n = policy.word(&mut word); mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN ({}): A RADIO SENDS NOTHING", core::str::from_utf8(&word[17.min(n)..n]).unwrap_or("?")); }
+    }
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
     {
         let (launch, slot) = (&info.launch, &info.boot_slot);

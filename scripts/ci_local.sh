@@ -112,6 +112,7 @@ A64_GROUPS=(
     "aarch64: a developer's release through the Effector agent|$A64 --suites effector-update"
     "aarch64: the updater and the modes|$A64 --suites updater,modes"
     "aarch64: an update through the link|$A64 --suites linkupdate"
+    "aarch64: the link|$A64 --suites link"
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,fill --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: network above 4 GiB|$A64 --suites net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"

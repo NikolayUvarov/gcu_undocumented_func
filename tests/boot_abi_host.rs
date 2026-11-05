@@ -50,18 +50,21 @@ fn version_read_needs_only_the_old_record() {
 
 // 351-KRN-0166: the loader's handoff apart from the system calls, one version with no range (000-KRN-0175). Handoff 25
 // adds two images, bt_hci (700-KRN-0176) and nnd (262-KRN-0178), which move every field after extra_programs; handoff 28
-// adds storefs after keystore (311-KRN-0190).
+// adds storefs after keystore (311-KRN-0190), handoff 29 timed after netpolicy (111-KRN-0206).
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
-    assert_eq!(BOOT_HANDOFF_VERSION, 28);
+    assert_eq!(BOOT_HANDOFF_VERSION, 29);
     // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192). It
     // stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older, 351-KRN-0166).
     assert!(BOOT_HANDOFF_VERSION > 18, "a handoff is above every ABI an older loader wrote in its place");
     assert!(BOOT_HANDOFF_VERSION > ABI_VERSION, "a handoff that changes is numbered above every ABI so far");
-    assert_eq!(BOOT_IMAGES, 47, "a change of the boot images is a change of the handoff");
-    assert_eq!(size_of::<BootInfo>(), 1112, "a change of BootInfo is a change of the handoff");
+    assert_eq!(BOOT_IMAGES, 48, "a change of the boot images is a change of the handoff");
+    assert_eq!(size_of::<BootInfo>(), 1128, "a change of BootInfo is a change of the handoff");
     let at = BOOT_SERVICES.iter().position(|&name| name == "storefs").unwrap();
     assert_eq!((BOOT_SERVICES[at - 1], BOOT_FILES[at]), ("keystore", "storefs.elf"));
+    // timed takes its grant from netpolicy, so it starts after it (111-KRN-0206).
+    let at = BOOT_SERVICES.iter().position(|&name| name == "timed").unwrap();
+    assert_eq!((BOOT_SERVICES[at - 1], BOOT_FILES[at]), ("netpolicy", "timed.elf"));
     let at = BOOT_SERVICES.iter().position(|&name| name == "rtw88_wifi").unwrap();
     assert_eq!((BOOT_SERVICES[at - 1], BOOT_FILES[at]), ("rtw89_wifi", "rtw88_wifi.elf"));
     assert!(at < BOOT_SERVICES.iter().position(|&name| name == "wlan").unwrap(), "init starts the radio before wlan");

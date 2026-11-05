@@ -426,7 +426,7 @@ types! {
     gpio: Kind Pull Error Controller Pin;
     init: Error Service Boot Mode ModeState Planned Configuration StopReason;
     keyboard: Layout SwitchKey State;
-    keystore: Error Purpose Usage WifiNetwork;
+    keystore: Error Purpose Usage WifiNetwork KeyState;
     loader: Error Program Needs HelperKind;
     log: Error Entry State;
     net: Error Info Counters;
@@ -436,7 +436,7 @@ types! {
     rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters KeyboardLayout LayoutSwitch Keymap;
-    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo QuestionState Question Ruling;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo QuestionState Question Ruling ListenRule Accepted;
     ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;
@@ -445,7 +445,7 @@ types! {
     vfs: Error Entry Volume Report;
     video: Error Camera Frame;
     voice: Action Order;
-    wifi: Security Error State Reason Network Status Standing Channel Country Countries CountryState CountryStatus;
+    wifi: Security Error State Reason Network Status Standing Channel Country Countries CountryState CountryStatus Origin CountryOrigin;
     window: Error Kind Placement Info;
     wlanhw: Error Info Filter Sent Limit;
 }

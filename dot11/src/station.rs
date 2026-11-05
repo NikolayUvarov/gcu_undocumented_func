@@ -115,6 +115,15 @@ impl Station {
         self.channel_count = count;
     }
 
+    /// The first country after a scan that only listened (550-NET-0035): the channels' allowances change, and the
+    /// networks heard stay, as nothing was sent under the rules before. Only from listening to a country: any other
+    /// change goes through `restrict`. A network heard on a channel the country bars is still not joined.
+    pub fn relax(&mut self, channels: &[(u8, Allowed)]) {
+        let count = channels.len().min(64);
+        for (i, &(channel, allowed)) in channels[..count].iter().enumerate() { (self.channels[i], self.allowed[i]) = (channel, allowed); }
+        self.channel_count = count;
+    }
+
     // Whether the station may join an access point on `channel`.
     fn may_join(&self, channel: u8) -> bool {
         self.channels[..self.channel_count].iter().zip(&self.allowed).any(|(&c, &a)| c == channel && a != Allowed::Nothing)

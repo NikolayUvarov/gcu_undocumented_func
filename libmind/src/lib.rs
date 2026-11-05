@@ -58,6 +58,7 @@ pub mod tpm;
 pub mod netring;
 pub mod output;
 pub mod platform;
+pub mod platform_power;
 pub mod process;
 mod arch;
 pub mod random;
@@ -84,6 +85,7 @@ pub mod jpegdec;
 pub mod inflate;
 #[cfg(feature = "alloc")]
 pub mod http_coding;
+pub mod sntp;
 #[cfg(feature = "alloc")]
 pub mod sse;
 #[cfg(feature = "alloc")]

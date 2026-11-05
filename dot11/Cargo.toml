@@ -9,6 +9,7 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 # the host against a simulated access point.
 [dependencies]
 wpa = { path = "../wpa" }
+regdb = { path = "../regdb" }
 
 
 [profile.release]

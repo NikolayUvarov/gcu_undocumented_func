@@ -575,6 +575,34 @@ fn a_country_lets_the_station_probe_where_it_may_and_join_where_it_listens() {
 }
 
 #[test]
+fn the_first_country_after_a_listening_scan_keeps_what_it_heard() {
+    let mut air = Air::new(wpa2());
+    // The first scan only listens: no probe request, and the access point's beacon heard.
+    restrict(&mut air, &rules(|_| Allowed::Listen));
+    air.scan();
+    assert!(air.sent.is_empty(), "the first scan sends nothing");
+    beacon(&mut air);
+    assert_eq!(air.station.networks().iter().count(), 1);
+    // The country the beacon announced: the network heard stays, and is joined with no new scan.
+    air.station.relax(&rules(|_| Allowed::Send));
+    assert_eq!(air.station.networks().iter().count(), 1);
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)).unwrap();
+    assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
+}
+
+#[test]
+fn a_country_that_bars_the_heard_channel_still_joins_nothing_there() {
+    let mut air = Air::new(wpa2());
+    restrict(&mut air, &rules(|_| Allowed::Listen));
+    beacon(&mut air);
+    air.station.relax(&rules(|c| if c == 6 { Allowed::Nothing } else { Allowed::Send }));
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    assert_eq!(air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)), Err(Error::Unsupported));
+    assert!(air.sent.is_empty());
+}
+
+#[test]
 fn a_channel_the_country_leaves_out_is_not_joined() {
     let mut air = Air::new(wpa2());
     let channels: Vec<_> = rules(|_| Allowed::Send).into_iter().filter(|&(c, _)| c != 6).collect();

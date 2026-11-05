@@ -46,7 +46,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -1094,6 +1094,8 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
+    # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked.
+    assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
     if vm.arch != "aarch64":
         # 550-KRN-0061, 213-KRN-0114: QEMU has no Broadcom or Realtek card, so init starts none of their drivers.
         for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
@@ -2553,6 +2555,13 @@ def storefs_check(vm):
     listing = vm.command("ls notes:docs")
     require(listing, "a.txt")
     require(listing, "1 FILES, 15 BYTES")
+    # 311-KRN-0207 (STO's request): after storefs restarts, the shell's kept root of notes: is an earlier instance's;
+    # mind::fs opens it again once, so ls and cat answer with no restart of the shell.
+    require(vm.command("svc restart storefs", timeout=30), "storefs restarted: PID")
+    require(vm.service_logs("storefs", "READY VOLUMES"), "[STOREFS] READY VOLUMES")
+    require(vm.command("ls notes:docs"), "1 FILES, 15 BYTES")
+    require(vm.command("cat notes:docs/a.txt"), "from the store")
+    require(vm.command("ls notes:"), "docs")
     # 311-APP-0121: a program whose arguments name a store volume (find, grep: no request for files) gets a read-only
     # scope of that volume from the shell, and reads it through mind::fs as before; another store volume it does not reach.
     found = vm.command("find notes:")
@@ -2592,8 +2601,8 @@ def storefs_check(vm):
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
-          "vfs_server's volumes as before; find and grep read the store volume their arguments name through a read-only scope, "
-          "and no other store volume; edit on a store volume wrote "
+          "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); find and grep read the store "
+          "volume their arguments name through a read-only scope, and no other store volume; edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 
@@ -4169,6 +4178,8 @@ def store_suite(vm):
     store_journal_check(vm)
     store_index_check(vm)
     store_assertion_check(vm)
+    storefs_writers_check(vm)
+    store_recovery_check(vm)
 
 
 def run_tally(vm, args):
@@ -4352,6 +4363,27 @@ def store_tree_check(vm):
     assert [(k, n) for k, _, _, n in listed("docs", 2)] == [("FILE", "a.txt"), ("FILE", "c.bin")]
     require(blocks("tree cat home docs/c.bin ram:back.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
     print("PASS: blocks tree: a move and two removals, each published; a directory with entries is not removed", flush=True)
+    # 311-STO-0039: the versions kept (5 to 8) compared and read. The move and the removals, from version 5 to the current one.
+    out = blocks("tree diff home@5 home")
+    found = re.findall(r"^(ADDED|REMOVED|CHANGED) (FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)
+    assert [(c, k, s, p) for c, k, s, _, p in found] == [("REMOVED", "FILE", "20000", "c.bin"), ("ADDED", "FILE", "20000", "docs/c.bin"), ("REMOVED", "DIR", "1", "docs/deep")], out
+    assert found[0][3] == found[1][3] == put[1], out
+    require(out, "3 CHANGES FROM home VERSION 5 TO home VERSION 8")
+    # One file removed two levels down; the empty tree to version 5, the root's two entries added whole; a tree with itself.
+    require_all(blocks("tree diff home@6 home@7"), f"REMOVED FILE 12 {cid_raw(second)} docs/deep/b.txt", "1 CHANGES FROM home VERSION 6 TO home VERSION 7")
+    out = blocks("tree diff home@0 home@5")
+    assert [(c, k, s, p) for c, k, s, _, p in re.findall(r"^(ADDED|REMOVED|CHANGED) (FILE|DIR) (\d+) (\S+) (\S+)\r?$", out, re.M)] == [("ADDED", "FILE", "20000", "c.bin"), ("ADDED", "DIR", "2", "docs")], out
+    require(out, "2 CHANGES FROM home VERSION 0 TO home VERSION 5")
+    out = blocks("tree diff home home@8")
+    assert not re.search(r"^(ADDED|REMOVED|CHANGED) ", out, re.M), out
+    require(out, "0 CHANGES FROM home VERSION 8 TO home VERSION 8")
+    # Older versions read as they were: version 5's root and c.bin at its old path, version 6's b.txt removed since.
+    require(blocks("tree ls home@5"), "2 ENTRIES IN / OF home VERSION 5")
+    require(blocks("tree cat home@5 c.bin ram:old.bin"), f"READ 20000 BYTES SHA-256 {hashlib.sha256(big).hexdigest()}")
+    require(blocks("tree cat home@6 docs/deep/b.txt ram:old.txt"), f"READ 12 BYTES SHA-256 {hashlib.sha256(second).hexdigest()}")
+    require(blocks("tree ls home@4"), "blocks: tree home: no version 4 kept")
+    print("PASS: blocks tree diff: between kept versions, a move and the removals named, an equal tree none; older versions "
+          "listed and read back (SHA-256), one no longer kept refused", flush=True)
 
 
 def store_copy_check(vm):
@@ -4696,6 +4728,119 @@ def store_assertion_check(vm):
     require(blocks(f"-d {domain} assert about claims {subject}"), f"blocks: domain {domain}: NotFound")
     about(3, [second])
     print("PASS: assertions: one in a memory domain is the domain's alone and goes with it", flush=True)
+
+
+def storefs_writers_check(vm):
+    """311-STO-0032, 0037: storefs's writers and scopes on the platform, through `fsstep`, which the shell starts with a
+    writable scope of its file's directory on the store volume `w:` (the store's name `fs/w`), as for every program that
+    asks for its file. Two writers: fsstep holds the first 20000 bytes of the pattern unpublished while the shell writes
+    another file of the volume; its close is told Conflict, the name stays at the shell's version and the file as its
+    creation left it, and written again without a hold it reads back whole. A cut: a writer killed between its writes and
+    its close leaves the name at the version it had, the file empty, and a later write works. A read-only scope that
+    fsstep makes of its directory lists and reads it and is refused a write and a new file; the writable one writes in
+    its directory and nowhere else. storefs logs each scope made, and ends an ended task's scope at the next one made."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def fsstep(args, timeout=240):
+        vm.send(f"fsstep {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"fsstep {args}\n")
+    def background(args):
+        started = re.search(r"PID=(\d+) NAME=fsstep BACKGROUND", vm.command(f"run fsstep {args} &"))
+        assert started, f"fsstep {args} did not start in the background"
+        require(vm.program_logs(started[1], "FSSTEP HOLDING"), "FSSTEP HOLDING 20000 BYTES")
+        return started[1]
+    def head():
+        found = re.search(r"^fs/w VERSION (\d+) ROOT (\S+)\r?$", blocks("resolve fs/w"), re.M)
+        assert found, "fs/w has no head"
+        return int(found[1]), found[2]
+    def entries(path):
+        return [(kind, int(size), cid, name) for kind, size, cid, name in re.findall(r"^(FILE|DIR) (\d+) (\S+) (\S+)\r?$", blocks(f"tree ls fs/w {path}".rstrip()), re.M)]
+    data = bytes((i * 31 + 7) % 251 for i in range(40000))
+    whole, empty = f"READ 40000 BYTES SHA-256 {hashlib.sha256(data).hexdigest()}", cid_raw(b"")
+    require(vm.command("mkdir w:a"), "OK")
+    # Two writers from one version: fsstep made x.bin (one version) and holds 20000 bytes of it; the shell publishes
+    # b.txt meanwhile (its creation and its flush); fsstep's close is refused, and nothing of its data is published.
+    pid = background("w:a/x.bin 20000 15 20000")
+    created = head()
+    assert entries("a") == [("FILE", 0, empty, "x.bin")], blocks("tree ls fs/w a")
+    require(vm.command("write w:b.txt the other writer"), "WROTE 17 BYTES TO w:b.txt")
+    other = head()
+    assert other[0] == created[0] + 2, (created, other)
+    require(vm.program_logs(pid, "FSSTEP CLOSE"), "FSSTEP CLOSE: Conflict")
+    assert head() == other, "fsstep published after the conflict"
+    require(blocks("history fs/w"), f"fs/w VERSION {other[0]} ROOT {other[1]}")
+    assert entries("a") == [("FILE", 0, empty, "x.bin")], blocks("tree ls fs/w a")
+    require_all(vm.command("ls w:a"), "x.bin", "1 ENTRIES, 1 FILES, 0 BYTES")
+    require(vm.command("cat w:b.txt"), "the other writer")
+    # The writer writes again from the name's current version, through a new scope: published whole.
+    require(fsstep("w:a/x.bin 20000 0 20000"), "FSSTEP CLOSED 40000 BYTES")
+    require(blocks("tree cat fs/w a/x.bin ram:x.bin"), whole)
+    require(vm.command("ls w:a"), "1 ENTRIES, 1 FILES, 40000 BYTES")
+    print("PASS: storefs: two writers on a store volume, a program through its lent scope and the shell; the program's "
+          "close is told Conflict, the name keeps the shell's version and the file as its creation left it; written "
+          "again, it reads back whole (SHA-256) through the store (311-STO-0032)", flush=True)
+    # A cut: the writer killed between its writes and its close, its data held. The name stays where the file's creation
+    # left it; the next scope made ends the killed task's, its handles closed unpublished, and a write then works.
+    pid = background("w:a/y.bin 20000 120 20000")
+    cut = head()
+    require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
+    assert head() == cut, "the killed writer's data was published"
+    assert [e for e in entries("a") if e[3] == "y.bin"] == [("FILE", 0, empty, "y.bin")], blocks("tree ls fs/w a")
+    require(vm.command("ls w:a"), "2 ENTRIES, 2 FILES, 40000 BYTES")
+    require(fsstep("w:a/y.bin 20000 0 20000"), "FSSTEP CLOSED 40000 BYTES")
+    require(blocks("tree cat fs/w a/y.bin ram:y.bin"), whole)
+    print("PASS: storefs: a writer killed between its writes and its close leaves the name at the version it had and the "
+          "file as its creation left it; a later write works and reads back whole (311-STO-0032)", flush=True)
+    # 311-STO-0037: a read-only scope of the lent one's directory reads it and is refused every change.
+    before = head()
+    out = fsstep("w:a/x.bin --read-only")
+    require_all(out, "FSSTEP SCOPE READ-ONLY OF w:a", "FSSTEP ENTRY FILE 40000 x.bin", "FSSTEP ENTRY FILE 40000 y.bin", "FSSTEP LISTED 2 ENTRIES",
+                f"FSSTEP {whole}", "FSSTEP WRITE w:a/x.bin REFUSED: Denied", "FSSTEP CREATE w:a/fsstep.new REFUSED: Denied")
+    assert head() == before, "the read-only scope published"
+    # The writable scope writes in its directory and nowhere else: its volume's root is the directory, and `..` and
+    # other volumes' roots are refused by storefs itself.
+    out = fsstep("w:a/inside.txt --bounds")
+    require_all(out, "FSSTEP WROTE 17 BYTES TO w:a/inside.txt", "FSSTEP ROOT OF w IS a", "FSSTEP OPEN ../fsstep.out REFUSED: Invalid",
+                "FSSTEP OPEN-DIR .. REFUSED: Invalid", "FSSTEP ROOT ram REFUSED: Denied", "FSSTEP ROOT notes REFUSED: Denied")
+    require(vm.command("cat w:a/inside.txt"), "in its directory")
+    top = entries("")
+    assert [(k, s, n) for k, s, _, n in top] == [("DIR", 3, "a"), ("FILE", 17, "b.txt")] and top[1][2] == cid_raw(b"the other writer\n"), top
+    assert [n for _, _, _, n in entries("a")] == ["inside.txt", "x.bin", "y.bin"], blocks("tree ls fs/w a")
+    # Each scope made is logged; each of an ended task ended when the next was made, the last one's task's still to end.
+    logs = vm.service_logs("storefs", "(READ-ONLY)")
+    made = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR w:/a \((WRITABLE|READ-ONLY)\)", logs)
+    ended = re.findall(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) ENDED", logs)
+    assert [kind for _, kind in made] == ["WRITABLE"] * 5 + ["READ-ONLY", "WRITABLE"], logs[-3000:]
+    assert all(badge in ended for badge, _ in made[:-1]) and made[-1][0] not in ended, logs[-3000:]
+    print("PASS: storefs scopes: a read-only scope a program made of its lent one lists and reads its directory and is "
+          "refused a write and a new file; the writable one writes in its directory and nowhere else, `..` and other "
+          "volumes refused by storefs; each scope logged when made, and ended after its task at the next one's making "
+          "(311-STO-0037)", flush=True)
+
+
+def store_recovery_check(vm):
+    """308-STO-0028: blockstore.wit 2.4's recovery calls answer only a client badged BADGE_RECOVER, which no program
+    holds yet (308-KRN-0204). `blocks` holds the shell's client (badge 7) and `blocksro` the read-only one (badge 1):
+    each of recovery-new, recovery-keep, recover and recovery-forget is refused (`Rights`) and logged with the badge,
+    and nothing is written; how many recovery records there are is any client's: none on the RAM disk, whose key is in
+    its superblock."""
+    def used():
+        found = re.search(r"SECTORS=(\d+)/", vm.command("blocks stat"))
+        assert found, "no stat"
+        return int(found[1])
+    before = used()
+    for tool, badge in (("blocks", 7), ("blocksro", 1)):
+        require_all(vm.command(f"{tool} recovery try"), "RECOVERY-NEW Rights", "RECOVERY-KEEP Rights", "RECOVER Rights", "RECOVERY-FORGET Rights")
+        require(vm.command(f"{tool} recovery"), "RECOVERY RECORDS 0")
+        log = vm.service_logs("blockstore", f"REFUSED RecoveryForget FOR PID")
+        for operation in ("RecoveryNew", "RecoveryKeep", "Recover", "RecoveryForget"):
+            assert re.search(rf"\[BLOCKSTORE\] REFUSED {operation} FOR PID \d+ \(BADGE {badge}\)", log), (tool, operation, log)
+        assert "RECOVERY KEY" not in log and "RECOVERED" not in log, log
+    assert used() == before, "a refused recovery call wrote to the medium"
+    print("PASS: recovery keys: each of blockstore.wit 2.4's recovery calls refused to the shell's client (badge 7) and to "
+          "the read-only one (badge 1), and logged with the badge; nothing written; the count of recovery records, none "
+          "on the RAM disk, any client's (308-STO-0028)", flush=True)
 
 
 def store_domains_check(vm):
@@ -5852,6 +5997,9 @@ def link_suite(args):
             require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
             time.sleep(.1); vm.collect(); vm.output = ""
             require(vm.command("dmesg -s link", raw=True), 'INPUT REFUSED: link.conf HAS NO "dev"')
+            # 800-KRN-0191: without `dev` link holds no input privilege at all.
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert "KIND=6 " not in caps, caps
             # Another address and a frame with none go unanswered: bounded by the tries.
             for other in (("--address", "6"), ()):
                 r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
@@ -5860,6 +6008,25 @@ def link_suite(args):
             require(link(port, "--address", "5", "hello"), '"MIND Core link"')
         finally:
             vm.close()
+    # 800-KRN-0191: in a safe start with `dev`, link gets its developer grants but not the input privilege, as whoever asked
+    # for the safe start is at the machine. A reset within the minute after READY leaves the run's mark (000-KRN-0076).
+    with tempfile.TemporaryDirectory(prefix="smoke-link-safe-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            require(vm.command(f"stat caps {vm.services()['link']}", raw=True), "KIND=6 ")  # the normal start: input held
+            vm.qmp("system_reset")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
+            require(log, "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; NO INPUT IN A SAFE START; ")
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert "KIND=6 " not in caps, caps
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-link-safe-{args.cpus}cpu.log").write_text(vm.log)
     # 800-LNK-0019: with `dev` and `link-console` in data/mode.conf, a script put over the link runs as the console's
     # (800-APP-0108), its line logged whole; `mode` stays refused.
     with tempfile.TemporaryDirectory(prefix="smoke-link-console-", dir=ROOT / IMAGE) as temp:
@@ -9158,14 +9325,15 @@ def wifi_join_check(vm):
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
-    # 550-APP-0082: wlan answers wifi.wit 1.1's country calls; built without a catalogue (550-NET-0035 stage A), it says so.
-    run("wifi country", 30, "[WIFI] COUNTRY: NO CATALOGUE IN THIS STATION")
-    run("wifi country uz", 30, "[WIFI] COUNTRY UZ NOT SET: NO CATALOGUE IN THIS STATION")
-    run("wifi countries", 30, "[WIFI] COUNTRIES: NO CATALOGUE IN THIS STATION")
+    # 550-APP-0082 over 550-NET-0035 stage B: with none chosen the station runs under the country wlansim's access point
+    # announces; the whole catalogue is listed but 00, and a country's channels are shown.
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, none ASKED")
+    run("wifi countries", 30, " OF 181 COUNTRIES")
+    run("wifi channels uz", 30, "[WIFI] 13 CHANNELS UNDER UZ (Uzbekistan)")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
-          "station's reason, MIND-TEST joined, wifi status, wifi scan (MIND-TEST marked joined) and wifi leave; wifi country: no "
-          "catalogue in this station", flush=True)
+          "station's reason, MIND-TEST joined, wifi status, wifi scan (MIND-TEST marked joined) and wifi leave; wifi country: UZ "
+          "from the access point, 181 countries listed, UZ's 13 channels", flush=True)
     # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
     sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
     offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))
@@ -9242,6 +9410,43 @@ def wifi_join_check(vm):
     print("PASS: after keystore and wlan restarted the station joined MIND-TEST by itself (550-NET-0041), the gateway "
           f"answering through the link; the access point away 25 s, the station joined it again by itself after {len(failed)} "
           "logged tries; after wifi leave no join by itself; forgotten through wifi's screen, then refused without a passphrase", flush=True)
+    # 550-NET-0035, stage B (the maintainer's decision of 2026-11-04): with no country chosen the first scan sent nothing,
+    # and the station ran under the country wlansim's access point announces (UZ, every channel to send on). Then the
+    # user's US, kept by keystore across a restart of the station, under which it joins again on channel 6.
+    log = vm.command("dmesg -s wlan", raw=True)
+    require_all(log, "[WLAN] NO COUNTRY CHOSEN: THE FIRST SCAN SENDS NOTHING",
+                "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
+    radio = vm.command("dmesg -s wlansim", raw=True)
+    require(radio, "[WLANSIM] COUNTRY UZ: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, "the first scan sent a probe request"
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")
+    run("wifi country US", 30, "[WIFI] COUNTRY US (United States) APPLIED")
+    require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 30), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE): 11 CHANNELS TO SEND ON")
+    require(vm.service_logs("wlansim", "COUNTRY US"), "[WLANSIM] COUNTRY US: 11 CHANNELS")
+    # A restart reads it back from keystore, and nothing announced moves a chosen country.
+    pid = vm.services()["wlan"]
+    require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+    for _ in range(50):
+        if vm.services().get("wlan", pid) != pid:
+            break
+        time.sleep(.2)
+    require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 60), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE)")
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # A change of country while joined leaves the network under the old rules and drops the scan (dot11's host tests
+    # check the scan); the station joins again under the new one.
+    vm.command("logs " + str(vm.services()["wlansim"]), raw=True)
+    run("wifi country RU", 30, "[WIFI] COUNTRY RU (Russia) APPLIED")
+    require(vm.service_logs("wlansim", "THE STATION LEFT"), "[WLANSIM] THE STATION LEFT THE ACCESS POINT")
+    after = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30).partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
+    if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
+        after += wlan_until("[WLAN] Off", 30)
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # Under US the radio reports the 11 channels its limits leave (wlanhw.wit 1.2), and the restarted station took those.
+    channels = run("wifi channels 00", 30, "[WIFI] 11 CHANNELS UNDER 00 (the world domain)")
+    assert re.search(r"CHANNEL +11 2\.4 GHZ SEND", channels) and "CHANNEL  12" not in channels, channels[-1500:]
+    print("PASS: the station's country (550-NET-0035): with none chosen the first scan sent nothing and the access point's UZ "
+          "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it; a change to RU "
+          "while joined left the access point, and the station joined again under RU", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -9562,6 +9767,9 @@ def net_suite(args, disk):
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-net-cards-{mode.split()[0].lower()}-{args.cpus}cpu.log").write_text(vm.log)
+    static_setup_check(args, disk)
+    listen_check(args, disk)
+    timed_check(args, disk)
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
@@ -9584,12 +9792,206 @@ def net_suite(args, disk):
         vm.close()
     late_attach_check(args)
     slow_radio_check(args)
+    world_country_check(args)
     browse_check(args)
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+class _Sntp:
+    """A time server on the host for timed's check (111-NET-0057): SNTPv4 answers, `shift` seconds from the host's
+    clock or from `since` (a fixed time, counted on), only while `answering` is set."""
+
+    def __init__(self, shift=0.0, since=None):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(("127.0.0.1", 0))
+        self.port = self.socket.getsockname()[1]
+        self.shift, self.since, self.started = shift, since, time.time()
+        self.answering, self.asked = threading.Event(), 0
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def now(self):
+        return (self.since + time.time() - self.started if self.since is not None else time.time()) + self.shift
+
+    def serve(self):
+        stamp = lambda t: struct.pack(">II", int(t) + 2_208_988_800, int((t % 1) * 2**32))
+        while True:
+            try:
+                data, peer = self.socket.recvfrom(512)
+            except OSError:
+                return
+            self.asked += 1
+            if not self.answering.is_set() or len(data) < 48:
+                continue
+            t = self.now()
+            reply = bytes([0x24, 2, 6, 0xEC]) + bytes(8) + b"MIND" + stamp(t) + data[40:48] + stamp(t) + stamp(t)
+            self.socket.sendto(reply, peer)
+
+    def close(self):
+        self.socket.close()
+
+
+def timed_check(args, disk):
+    """111-NET-0057, 111-KRN-0206: timed sets the clock from the time servers its policy names. Three servers on the
+    host, the third an hour ahead; the RTC two years and more behind. The servers stay silent until a script's sleep has
+    begun, so that the clock is set while it sleeps: timed follows the two that agree, leaves the third out, and the
+    sleep lasts what it asked. Then two servers that agree on a time before the floor (the build's commit time) are
+    refused, and with no time line in the policy timed does not start."""
+    import datetime
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    servers = [_Sntp(), _Sntp(0.2), _Sntp(3600)]
+    try:
+        policy.write_text((before or "") + "".join(f"timed 10.0.2.2 udp {s.port} {2**32 - 1}\n" for s in servers))
+        (disk / "data").mkdir(exist_ok=True)
+        (disk / "data/sleep.msh").write_text("#!msh\nlet start = now()\nsleep(25000)\nprint(\"SLEPT {now() - start} MS\")\n")
+        card = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
+        try:
+            require(vm.service_logs("timed", "NO ANSWER IN"), "[TIMED] STARTED: THE FLOOR IS ")
+            require(vm.command("date"), "DATE: 2024-01-01 ")
+            vm.send("msh data/sleep.msh\n")
+            time.sleep(1)
+            for server in servers:
+                server.answering.set()
+            started = time.monotonic()
+            out = vm.expect("MIND> ", timeout=60, after="SLEPT ")
+            slept = time.monotonic() - started
+            guest = int(re.search(r"SLEPT (\d+) MS", out)[1])
+            log = vm.service_logs("timed", "[TIMED] SET ")
+            for server in servers[:2]:
+                assert re.search(rf"\[TIMED\] 10\.0\.2\.2:{server.port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, AGREES", log), log[-3000:]
+            require(log, f"[TIMED] 10.0.2.2:{servers[2].port}: OFFSET ")
+            assert re.search(rf"10\.0\.2\.2:{servers[2].port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, LEFT OUT: IT DISAGREES WITH THE OTHERS", log), log[-3000:]
+            require_all(log, "(WAS 2024-01-01 ", "2 OF 3 SERVERS AGREED")
+            # The sleep that spanned the step lasted what it asked, by the guest's monotonic clock and by the host's.
+            assert 25_000 <= guest < 26_500 and 24 <= slept < 32, (guest, slept)
+            shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
+            gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
+            assert gap < 3, (shown, gap)
+            # The floor, written in system/timed after the set (`logs` drains: the lines since the set).
+            require(log + vm.service_logs("timed", "THE FLOOR IS NOW"), "STORED IN system/timed/floor")
+        finally:
+            vm.close()
+        # Two servers that agree on a time before the floor.
+        for server in servers:
+            server.close()
+        servers = [_Sntp(since=1_577_836_800), _Sntp(since=1_577_836_800)]
+        for server in servers:
+            server.answering.set()
+        policy.write_text((before or "") + "".join(f"timed 10.0.2.2 udp {s.port} {2**32 - 1}\n" for s in servers))
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
+        try:
+            log = vm.service_logs("timed", "IS BEFORE THE FLOOR")
+            assert re.search(r"\[TIMED\] NOTHING SET: 2020-01-01 \d\d:\d\d:\d\d IS BEFORE THE FLOOR 20(2[6-9]|[3-9]\d)-", log), log[-3000:]
+            assert "[TIMED] SET " not in log, log[-3000:]
+            require(vm.command("date"), "DATE: 2024-01-01 ")
+        finally:
+            vm.close()
+        # No time line: init does not start it.
+        policy.write_text(before or "")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=card)
+        try:
+            require(vm.command("dmesg -s init", raw=True), "[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER")
+            assert "timed" not in vm.services(), vm.command("ps", raw=True)
+        finally:
+            vm.close()
+    finally:
+        for server in servers:
+            server.close()
+        if before is None:
+            policy.unlink()
+        else:
+            policy.write_text(before)
+        (disk / "data/sleep.msh").unlink(missing_ok=True)
+    print(f"PASS: network time (111-NET-0057): timed set the clock from 2024 to the host's time ({gap:.1f} s apart) by the "
+          f"two servers that agreed, the one an hour ahead left out; a sleep across the step lasted {guest} ms ({slept:.1f} s "
+          "on the host); two servers agreeing on 2020 refused below the floor; not started without a time line", flush=True)
+
+
+def listen_check(args, disk):
+    """110-NET-0052: a program listens (socket.wit 2.9) on a port its policy names, through QEMU's forwarded port.
+    `listen netcheck tcp 7000 from 10.0.2.0/24 60 20`: netcheck takes the host's connection (QEMU's 10.0.2.2), reads a
+    line and sends it back, and the 27 bytes pass the grant's 20, so the stack ends the grant: the accepted connection is
+    charged to it. A port without a line is denied; a peer outside 7002's 192.168.0.0/16 is reset and logged."""
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    policy.write_text((before or "") + "listen netcheck tcp 7000 from 10.0.2.0/24 60 20\nlisten netcheck tcp 7002 from 192.168.0.0/16\n")
+    allowed, outside = free_port(), free_port()
+    network = f"user,id=n0,hostfwd=tcp:127.0.0.1:{allowed}-:7000,hostfwd=tcp:127.0.0.1:{outside}-:7002"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", network, "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+        vm.send("netcheck listen:7000:30\n")
+        vm.expect("NETCHECK LISTENING ON 7000", timeout=20)
+        with socket.create_connection(("127.0.0.1", allowed), timeout=20) as peer:
+            peer.sendall(b"hello mind\n")
+            got = b""
+            while not got.endswith(b"\n"):
+                chunk = peer.recv(256)
+                if not chunk:
+                    break
+                got += chunk
+        assert got == b"ECHO hello mind\n", got
+        require(vm.expect("MIND> ", timeout=20, after="NETCHECK listen:7000:30 OK"), "NETCHECK RECEIVED hello mind")
+        stack = vm.service_logs("netstack", "ENDED")
+        require(stack, "[NETSTACK] PORT 7000 LISTENS FOR PID")
+        assert re.search(r"\[NETSTACK\] PORT 7000 ACCEPTED 10\.0\.2\.2:\d+ FOR PID \d+ \(BADGE (\d+)\)", stack), stack[-2000:]
+        badge = re.search(r"PORT 7000 ACCEPTED .*\(BADGE (\d+)\)", stack)[1]
+        require(stack, f"[NETSTACK] GRANT {badge} ENDED")  # 27 bytes through the accepted connection against its 20
+        require(vm.service_logs("netpolicy", "LISTENS ON TCP 7000"), "LISTENS ON TCP 7000 FROM 10.0.2.0/24")
+        # A port no line names.
+        require(vm.command("netcheck listen:7001:2", timeout=20), "NETCHECK listen:7001:2 Denied")
+        # A peer outside the port's networks: reset as soon as the stack sees it, and logged.
+        vm.send("netcheck listen:7002:8\n")
+        vm.expect("NETCHECK LISTENING ON 7002", timeout=20)
+        try:
+            with socket.create_connection(("127.0.0.1", outside), timeout=10) as peer:
+                peer.sendall(b"let me in\n")
+                reply = peer.recv(256)
+        except OSError:
+            reply = b""
+        assert reply == b"", reply
+        vm.expect("MIND> ", timeout=30, after="NETCHECK listen:7002:8 Again")
+        require(vm.service_logs("netstack", "REFUSED"), "[NETSTACK] PORT 7002 REFUSED 10.0.2.2:")
+    finally:
+        vm.close()
+        if before is None:
+            policy.unlink()
+        else:
+            policy.write_text(before)
+    print("PASS: a listening grant (110-NET-0052): netcheck took the host's connection on 7000 and echoed its line, the "
+          "connection charged to the grant until its volume ended it; 7001 denied without a line; a peer outside 7002's "
+          "network reset and logged", flush=True)
+
+
+def static_setup_check(args, disk):
+    """000-NET-0054: QEMU user networking's static setup (10.0.2.15) is for a card with QEMU's own MAC prefix alone. A card
+    on a hub port with nothing else on it hears no DHCP: with QEMU's default MAC the stack takes the static setup, with
+    another MAC it stays without an address, as a real card on a real network waits for its lease."""
+    waited = None
+    for mac in (None, "02:00:00:4d:43:01"):
+        device = "virtio-net-pci,netdev=n0" + (f",mac={mac}" if mac else "")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "hubport,id=n0,hubid=7", "-device", device])
+        try:
+            require(vm.service_logs("netstack", "WAITING FOR DHCP"), "[NETSTACK] CARD 0")
+            start = time.monotonic()
+            if mac is None:
+                require(vm.service_logs("netstack", "[NETSTACK] STATIC"), "[NETSTACK] STATIC 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 ON CARD 0")
+                waited = time.monotonic() - start
+            else:
+                # Three times as long as QEMU's MAC needed, and at least 8 s: still no address.
+                time.sleep(max(8, 3 * waited))
+                log = vm.command("dmesg -s netstack", raw=True)
+                assert "[NETSTACK] STATIC" not in log and "10.0.2.15" not in log, log[-2000:]
+                require(vm.command("ip"), "IP: NoNetwork")
+        finally:
+            vm.close()
+    print(f"PASS: QEMU's static setup (000-NET-0054): 10.0.2.15 without DHCP on QEMU's MAC in {waited:.1f} s, none on "
+          f"another MAC in {max(8, 3 * waited):.0f} s", flush=True)
 
 
 def browse_check(args):
@@ -9630,8 +10032,11 @@ def browse_check(args):
             def asked(seconds, then=""):  # netcheck asks from the background; the shell shows the question at the prompt
                 out = vm.command(f"run netcheck ask:11.0.2.80:81:{seconds}{then} &")
                 pid = re.search(r"PID=(\d+) NAME=netcheck BACKGROUND", out)[1]
-                if "ALWAYS? " not in out.partition(question)[2]:  # it may show before the prompt or after it
+                # It may show before the prompt, after it, or begin before it and end after it.
+                if question not in out:
                     vm.expect("ALWAYS? ", timeout=20, after=question)
+                elif "ALWAYS? " not in out.partition(question)[2]:
+                    vm.expect("ALWAYS? ", timeout=20)
                 return pid
 
             # No, typed once the question shows: refused at once.
@@ -9708,6 +10113,37 @@ def late_attach_check(args):
     print("PASS: a late answer to attach: the stack kept the ring lent, the driver took it without a fault and the network works", flush=True)
 
 
+def world_country_check(args):
+    """550-NET-0035, stage B (the maintainer's decision of 2026-11-04): an access point that announces no country, with
+    none chosen. The station runs under 00, the rules every country allows: it sends on channels 1 to 11, listens on 12
+    and 13, gives the radio those limits, says why, and joins the network on channel 6."""
+    if not args.world_radio_elf or not raw_tools():
+        print("SKIP: the world country check needs wlansim built with `no-country` (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-world-country-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"wlansim.elf": args.world_radio_elf}, extra={"data/wifijoin.txt": b"MIND-TEST\nmind test passphrase\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-cpu", "qemu64,+rdrand", "-nic", "none"])
+        try:
+            log = vm.service_logs("wlan", "[WLAN] COUNTRY 00")
+            require_all(log, "[WLAN] NO COUNTRY CHOSEN: THE FIRST SCAN SENDS NOTHING",
+                        "[WLAN] COUNTRY 00 (NONE CHOSEN, NONE ANNOUNCED: THE RULES EVERY COUNTRY ALLOWS): 11 CHANNELS TO SEND ON, 2 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
+            radio = vm.service_logs("wlansim", "COUNTRY 00")
+            require(radio, "[WLANSIM] COUNTRY 00: 13 CHANNELS, 2 TO LISTEN ON ONLY")
+            assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, radio
+            out = vm.command("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", timeout=90)
+            for _ in range(20):
+                if "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6" in out:
+                    break
+                out += vm.command("dmesg -s wifi", raw=True)
+                time.sleep(.5)
+            require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED")
+        finally:
+            vm.close()
+    print("PASS: the station's country with none chosen and none announced (550-NET-0035): 00 applied, 11 channels to send "
+          "on and 2 to listen on given to the radio, the first scan sending nothing, and MIND-TEST joined on channel 6", flush=True)
+
+
 def slow_radio_check(args):
     """550-NET-0030: wlansim built with `slow` answers nothing for its first 60 s, and for 20 s after the station asks
     (ARP) for 10.0.4.99. While the radio is silent the wired card's network works at once: each ping answered within 2 s,
@@ -9754,15 +10190,17 @@ def slow_radio_check(args):
             else:
                 raise AssertionError(("the radio never answered", radio))
             require(vm.service_logs("wlan", "[WLAN] RADIO "), "[WLAN] RADIO 02:00:00:57:4C:01")
-            # The station's last scan was made while the radio was silent, as on the MacBook Pro at a boot's start: the join
-            # scans once by itself, then joins (550-APP-0098; before it, wifi's window scanned first).
+            # 550-NET-0035 stage B: once the radio answers, the station's first scan listens for the country, and a join
+            # meanwhile is refused as busy; so the check waits for the country the access point announces.
+            require(vm.service_logs("wlan", "[WLAN] COUNTRY "), "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS")
+            # Where the station's last scan missed the network, the join scans once by itself, then joins (550-APP-0098).
             join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
             vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
             joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
             require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
                              joined + vm.command("dmesg -s wifi", raw=True))
-            assert scan and scan.group(1) == "IT AMONG THEM", joined
+            assert scan is None or scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
             vm.command("ping 10.0.4.99")
@@ -9774,7 +10212,7 @@ def slow_radio_check(args):
             vm.close()
             web.shutdown()
     print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms and a page fetched while it was "
-          f"silent, the station joined once it answered, scanning by itself first; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
+          f"silent, the station joined once it answered and its first scan had found the country; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
 def _roots_with_test_ca(certificates, disk):
@@ -10532,6 +10970,7 @@ def device_key_check(args, cpu):
             # 108: a change of the network policy is kept on the disk too.
             require(policy_answer(vm, "netpolicy add kept 10.0.2.2 tcp 7", "y"), "NETPOLICY: ADDED 1 LINE(S)")
             secrets_first_boot(vm)
+            passphrase_calls_check(vm)
             volume = service_secrets_first_boot(vm)
         finally:
             vm.close()
@@ -10557,6 +10996,7 @@ def device_key_check(args, cpu):
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
         assert third != first, (first, third)
+        locked_file_check(args, cpu, image, part, Path(temp), store)
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
           "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
@@ -10564,10 +11004,65 @@ def device_key_check(args, cpu):
           f"after a reboot (SHA-256 checked); netpeer, the same program by another name, finds none, nor opens netcheck's file "
           f"copied under its name; a copy run by a path gets no secrets client; the file ({kept} bytes) is sealed, and the value "
           "is in no log line and no command line", flush=True)
+    print("PASS: keystore's passphrase (308-NET-0055): key-state Held without a TPM; unlock and passphrase-set refused (Denied) to a "
+          "client without the passphrase's badge and logged; a sealed file placed from the host waits (key-state Waiting, no key, the "
+          "unencrypted file kept beside it), a damaged one leaves no key, and neither file is changed; unlock itself not run (no task "
+          "holds badge 6 before 308-KRN-0205)", flush=True)
     print(f"PASS: the block store's own secrets in keystore (308-KRN-0183): its client from init in slot 3 (BADGE_KEY_BLOCKSTORE), "
           f"the volume key of its blank disk kept as {volume} and read back at the next boot, not on the medium; no program runs by the "
           "store's name, another program's client sees none of it nor opens the store's file copied under its name; under a new device "
           "key it opens no more", flush=True)
+
+
+def passphrase_calls_check(vm):
+    """308-NET-0055: any client reads the device key's state (keystore.wit 1.6); the passphrase's calls, tried with
+    netcheck's own fixed word, are refused to its secrets client, which lacks BADGE_KEY_PASSPHRASE, and logged."""
+    require_all(vm.command("netcheck key-state unlock passphrase-set"), "NETCHECK key-state OK Held", "NETCHECK unlock Denied", "NETCHECK passphrase-set Denied")
+    log = vm.service_logs("keystore", "REFUSED PASSPHRASE-SET FOR PID")
+    for call in ("UNLOCK", "PASSPHRASE-SET"):
+        assert re.search(fr"\[KEYSTORE\] REFUSED {call} FOR PID \d+: NOT THE PASSPHRASE'S CLIENT", log), log
+    assert "netcheck-is-not-the-owner" not in vm.log, "the word tried is in the log"
+
+
+def locked_file_check(args, cpu, image, part, temp, store):
+    """308-NET-0055: a device.locked placed from the host beside device.key, of the file's form (passlock) with a sealed
+    part that opens under no passphrase: keystore waits for its passphrase, holds no key, and changes neither file.
+    Then the same file damaged: no key, nothing made in its place, the file left as it is."""
+    def stored(name):
+        out = temp / f"stored-{name}"
+        subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
+        return out.read_bytes()
+
+    def boot(locked, until):
+        path = temp / "device.locked"
+        path.write_bytes(locked)
+        subprocess.run(["mcopy", "-o", "-i", part, str(path), "::/system/keystore/device.locked"], env=MTOOLS_ENV, check=True, capture_output=True)
+        plain = stored("device.key")
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
+                extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
+                       "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"])
+        try:
+            log = vm.service_logs("keystore", until)
+            require(log, until)
+            assert "DEVICE KEY READY" not in log and "DEVICE KEY MADE" not in log, log
+            out = vm.command("netcheck key-state unlock secret-get:token")
+        finally:
+            vm.close()
+        assert stored("device.locked") == locked and stored("device.key") == plain, "a file changed"
+        return log, out
+
+    # MINDPWD1, version 1, 9216 KiB, 4 passes, 1 lane, a salt and a nonce, then 48 random bytes for the sealed seed.
+    header = b"MINDPWD1" + bytes([1]) + struct.pack("<III", 9216, 4, 1) + os.urandom(16 + 12)
+    locked = header + os.urandom(48)
+    log, out = boot(locked, "IT WAITS FOR IT")
+    require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN system/keystore/device.locked: IT WAITS FOR IT")
+    require(log, "[KEYSTORE] THE UNENCRYPTED COPY system/keystore/device.key IS REMOVED ONCE THE PASSPHRASE OPENS THE KEY")
+    assert "NO TPM: THE DEVICE KEY IS KEPT ON DISK" not in log, log
+    require_all(out, "NETCHECK key-state OK Waiting", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
+    damaged = b"MINDPWX1" + locked[8:]
+    log, out = boot(damaged, "NO NEW KEY MADE")
+    require(log, "[KEYSTORE] system/keystore/device.locked DAMAGED: NO DEVICE KEY, THE FILE LEFT AS IT IS AND NO NEW KEY MADE")
+    require_all(out, "NETCHECK key-state OK None", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
 
 
 def service_log(vm, name, until, tries=120):
@@ -10671,10 +11166,12 @@ def tls_lending_check(vm, servers, tls, ssh):
     what the script declares."""
     services = {name: {ep for ep, server in servers.items() if server == pid} for name, pid in (("tls", tls), ("ssh", ssh))}
 
-    def lent(command):
+    def lent(command, alive=None):
         out = vm.command(command)
         pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
         caps = vm.command(f"stat caps {pid + BASE}", raw=True)
+        if alive:
+            alive()  # while the program runs: netpolicy drops its grant at a sweep after the exit
         require(vm.command(f"kill {pid}"), "KILLED")
         held = {}
         for slot, name in ((20, "tls"), (34, "ssh")):
@@ -10683,9 +11180,8 @@ def tls_lending_check(vm, servers, tls, ssh):
                 held[name] = int(found[1])
         return out, held
 
-    out, held = lent("run tlsclock &")
+    out, held = lent("run tlsclock &", alive=lambda: require(vm.command("netgrants"), "tlsclock RULES="))
     assert held == {"tls": 1, "ssh": 0}, (held, out)  # BADGE_TLS_NO_DEVICE; the SSH service's as it is
-    require(vm.command("netgrants"), "GRANT ")
     out, held = lent("run tlsnone &")
     require(out, "NETWORK FOR tlsnone: NoPolicy")
     assert not held, "no flow grant, no TLS or SSH client"
@@ -10786,6 +11282,7 @@ def tpm_check(args, cpu):
             require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key SEALED BY THE TPM IN system/keystore/device.sealed; THE UNENCRYPTED COPY REMOVED")
             require(vm.command("tpm"), f"TPM 2.0 BY IBM, {interface} INTERFACE")
             require(vm.command("tpm seal not mine"), "TPM: Rights")
+            require_all(vm.command("netcheck key-state unlock"), "NETCHECK key-state OK Held", "NETCHECK unlock Denied")  # 308-NET-0055
             log = vm.command("dmesg -s tpm")
             assert re.search(r"\[TPM\] SEALED 32 BYTES FOR PID \d+", log) and re.search(r"\[TPM\] REFUSED SEAL FOR PID \d+ \(BADGE 0\)", log), log
             store_opens(vm, root)
@@ -12754,6 +13251,64 @@ def no_serial_check(args, disk):
     print("PASS: without COM1 (no 16550 at 3F8) the shell still draws: init lends it no serial line", flush=True)
 
 
+def held_clients(vm, name):
+    """The endpoint clients service `name` holds, by slot: (badge, the service that serves it)."""
+    pids = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    named = {pid: n for n, pid in pids.items()}
+    caps = vm.command(f"stat caps {pids[name]}", raw=True)
+    return {int(slot): (int(badge), named.get(servers.get(int(ep)), "?")) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
+
+
+def store_copy_disk_check(args, disk):
+    """309-KRN-0209: beside the boot disk, two blank VirtIO disks: the first is the block store's own, the next its copy's.
+    blockstore holds a write client of each (slots 2 and 4), vfs_server neither, and after a reboot both are found again."""
+    with tempfile.TemporaryDirectory(prefix="mind-store-copy-") as temp:
+        images = [Path(temp) / name for name in ("store.img", "copy.img")]
+        extra = []
+        for n, image in enumerate(images):
+            with image.open("wb") as f:
+                f.truncate(8 << 20)  # the store formats its own at start: about 10 s on aarch64 under TCG
+            extra += ["-drive", f"format=raw,file={image},if=none,id=store{n}", "-device", f"virtio-blk-pci,drive=store{n}"]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+
+        def found():
+            log = vm.command("dmesg -s init", raw=True)
+            own = re.search(r"\[INIT\] THE BLOCK STORE'S DISK: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
+            copy = re.search(r"\[INIT\] THE BLOCK STORE'S COPY: (virtio_blk(?:#\d)?) \((BLANK|THE STORE'S)\)", log)
+            assert own and copy and own[1] != copy[1], log
+            for _ in range(60):
+                if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
+                    break
+                time.sleep(2)
+            require(vm.command("dmesg -s blockstore", raw=True), "[BLOCKSTORE] READY")
+            store = held_clients(vm, "blockstore")
+            assert store.get(2) == (1, own[1]) and store.get(4) == (1, copy[1]), (own[0], copy[0], store)
+            files = {server for _, server in held_clients(vm, "vfs_server").values()}
+            assert own[1] not in files and copy[1] not in files, files
+            return own, copy
+        try:
+            own, copy = found()
+            assert own[2] == copy[2] == "BLANK", (own[0], copy[0])
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.output
+            require(vm.command(f"blocks publish disk {put[1]}", raw=True), "PUBLISHED disk VERSION 1 (FLUSHED)")
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND>", timeout=60)
+            time.sleep(1); vm.collect(); vm.output = ""
+            again, copied = found()
+            assert (again[1], again[2]) == (own[1], "THE STORE'S") and copied[1] == copy[1], (again[0], copied[0])
+            require(vm.command("blocks resolve disk", raw=True), f"disk VERSION 1 ROOT {put[1]}")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-store-copy-{args.cpus}cpu.log").write_text(vm.log)
+    # The copy stays blank until blockstore writes it (309-STO-0040).
+    print(f"PASS: store copy: two blank VirtIO disks beside the boot disk, the block store's ({own[1]}) and its copy's ({copy[1]}); "
+          f"blockstore holds a write client of each in slots 2 and 4, vfs_server neither; after a reboot the store's is found as "
+          f"THE STORE'S with its name, the copy's again as {copied[2]} (309-KRN-0209)", flush=True)
+
+
 def store_disk_check(args, disk):
     """300-KRN-0025: a blank VirtIO disk is the block store's own: the store formats it, vfs_server never gets it,
     and an object put there is found after a reboot (the snapshot overlay outlives the guest's reboot)."""
@@ -13267,6 +13822,8 @@ def main():
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
     args.slow_radio_elf = args.slow_radio_elf or (str(slow) if args.arch == "x86_64" and slow.exists() else None)
+    world = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-nocountry-target/x86_64-unknown-none/release/wlansim"
+    args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:
@@ -13461,6 +14018,8 @@ def main():
                 continue
             if suite == "tools":  # its own raw disk, booted twice (173-APP-0092)
                 svc_boot_check(args)
+            if suite == "store":  # its own machine with two store disks, booted twice (309-KRN-0209)
+                store_copy_disk_check(args, disk)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at

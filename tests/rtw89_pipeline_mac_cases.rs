@@ -13,7 +13,7 @@ fn shutdown(device: &mut model::Device, queue: &mut fwcmd::Queue<'_>, rings: &mu
     assert_eq!(download::stop(device, queue), download::Stop { dma: None, cpu: None });
     model::power_off(device);
     assert_eq!(device.command, 0);
-    assert_eq!(device.get(fwcmd::DMA_STOP, 4) & 0x1f0f03, 0x1f0f03);
+    assert_eq!(device.get(fwcmd::DMA_STOP, 4) & 0x1f0f00, 0x1f0f00);
     assert_eq!(device.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0);
     assert_eq!(device.get(0x88, 4) & 2, 0);
     assert_eq!(device.get(2, 1) & 3, 0);
@@ -43,7 +43,7 @@ fn one_cold_device_reaches_actual_capabilities_mac_and_receive_without_reseeding
             assert_eq!(queue.pending(), 0); assert_eq!(queue.retained(), 8);
             assert_eq!(rings.state(), rx::State::Running);
             assert_eq!(device.get(0xc348, 4) & 0xffff, 0);
-            assert_eq!(device.get(fwcmd::DMA_STOP, 4) & 0x1f0f03, 0xb0f00);
+            assert_eq!(device.get(fwcmd::DMA_STOP, 4) & 0x1f0f00, 0xb0f00);
             assert_eq!([0x1a0, 0x10b0, 0x13b0].map(|at| device.get(at, 4)), [0; 3]);
             assert_eq!(board.identity.mac, [2, 3, 4, 5, 6, 7]);
             assert!(device.now < 2_000_000);

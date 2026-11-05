@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.25 (2026-10-31): assertions about objects, kept in a journal, `blocks assert` (312-STO-0038); 0.24 (2026-10-31): a scope of a store volume, `storefs`'s `scope` and `adopt`, host-tested (311-STO-0037); 0.23 (2026-10-31): a text index derived from a journal, `blocks index` (312-STO-0035); 0.22 (2026-10-30): a journal checked from its head, `blocks journal` (312-STO-0034); 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.28 (2026-11-04): two roots of a tree compared, `blocks tree diff`, and a name's kept versions read (311-STO-0039); 0.27 (2026-11-04): the recovery key's calls on the wire, `blockstore.wit` 2.4, answered only through a client badged `BADGE_RECOVER`, which no program holds yet (308-STO-0028); 0.26 (2026-11-04): `storefs`'s two writers, a writer cut and its scopes run on the platform through `fsstep` (311-STO-0032, 0037); 0.25 (2026-10-31): assertions about objects, kept in a journal, `blocks assert` (312-STO-0038); 0.24 (2026-10-31): a scope of a store volume, `storefs`'s `scope` and `adopt`, host-tested (311-STO-0037); 0.23 (2026-10-31): a text index derived from a journal, `blocks index` (312-STO-0035); 0.22 (2026-10-30): a journal checked from its head, `blocks journal` (312-STO-0034); 0.21 (2026-10-30): `storefs`'s logic, host-tested, and its service built, not in the images (311-STO-0032); 0.20 (2026-10-30): copies of named roots in a file, `blocks export` and `import`, and repair from them (309-STO-0031); 0.19 (2026-10-30): a working tree published by compare-and-swap, `blocks tree` (311-STO-0029); 0.18 (2026-10-30): the volume key kept by `keystore`, run on the platform (308-STO-0022); 0.17 (2026-10-30): directories as objects, host-tested (311-STO-0027); 0.16 (2026-10-29): the volume key kept by `keystore`, built (308-STO-0022); 0.15 (2026-10-29): the scrub, `blockstore.wit` 2.3 (309-STO-0025); 0.14 (2026-10-29): memory domains, layout 4, `blockstore.wit` 2.2 (308-STO-0023); 0.13 (2026-10-28): sealed records, layout 3, `blockstore.wit` 2.1 (308-STO-0021); 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -138,7 +138,61 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - once the leases have ended, a collection frees the refused tree's root, and every file is still read;
   - a move and two removals are published, and a directory with entries is not removed.
 
-## Files over the store: `storefs` — host-tested, at boot since 311-KRN-0190; its scopes host-tested only (311-STO-0032, 0037)
+## Two roots compared — host-tested, run in QEMU (311-STO-0039)
+
+A name keeps its last 4 versions, each a whole tree (History, below). **`tree::diff`** (`libmind/src/tree.rs`) says where two of them differ, so a reader sees what a writer changed without reading both trees.
+
+- **What it is given:** two roots, each a directory or none (the empty tree), two buffers of a block, a buffer for the path and a number of steps.
+- **What it visits:** each path below the roots where the trees differ, in the order of the names' bytes, depth first:
+  - **added:** an entry only in the second tree;
+  - **removed:** an entry only in the first;
+  - **changed:** an entry in both that names another object, or has another size or kind (a file become a directory among them). Each side's kind, size (a file's bytes, a directory's entries) and CID are given.
+- **What it reads:**
+  - **an entry the same on both sides** (kind, size and CID) is not read: one CID is one tree (MC-4.2), so the work follows the changes, not the size of the trees;
+  - **a directory on one side only** is one change, its entries not listed;
+  - **a directory on both sides whose entries differ** is gone into. Each node read is checked against its CID, the schema, and the entry count its parent's entry gives, as `walk` checks them. An entry of one CID with two counts is so read and refused (`shape`);
+  - a node missing is `not-found`, a damaged one `corrupt`, a file's node where a directory belongs `shape`.
+- **Bounds:**
+  - a step is an entry compared or a node read, and past its steps it is `too-large`;
+  - more than 32 directories down is `shape`, as for `walk`;
+  - a path longer than its buffer is `too-large`. `PATH_MAX`, 32 names of 255 bytes and the `/` between them, holds every path.
+- **No heap and no system calls.** Each pair of directories is read again when the comparison comes back up to it, as `walk` reads its own, so it holds two blocks at a time.
+- **`blocks tree`:**
+  - `diff <name>[@<version>] <name>[@<version>]` prints a line for each change, then `<n> CHANGES FROM <name> VERSION <v> TO <name> VERSION <w>`:
+    - `ADDED <kind> <size> <cid> <path>`;
+    - `REMOVED <kind> <size> <cid> <path>`;
+    - `CHANGED <kind> <size> <cid> TO <kind> <size> <cid> <path>`.
+
+    Its steps are twice the store's bound on a walk, one bound for each tree;
+  - `ls` and `cat` read a version the name keeps as `<name>@<version>`, and `@0` is the empty tree. Store names never hold `@`, so the form cannot be mistaken for a name. A version no longer kept is refused: `blocks: tree <name>: no version <v> kept`;
+  - two different names can be compared too.
+- **What it does not give:**
+  - **no merge:** a comparison only reports changes. Nothing applies one tree's changes to another, and a conflict stays a conflict (MC-4.9);
+  - **no moves:** a moved entry is reported as removed at one path and added at another, since a tree keeps no identity of a path;
+  - **only kept versions:** a version older than the last 4 is gone, with whatever it alone retained.
+
+Evidence: host tests of the code, not a proof (MC-12.2). `tests/tree_host.rs`:
+- each kind of change, at the root and two levels down, and against a comparison of the trees' models;
+- the trees compared the other way round, each change turned over;
+- the empty tree against a tree, and a root against itself, with nothing read;
+- 300 pairs of random trees against their models: random edits at random depths, files and directories of the same names;
+- a subtree of 200 directories left unread beside one changed file: 10 blocks read, as many as beside a subtree of one;
+- refused: a missing node, a changed node, a file or a file's node as a root or as a directory, and an entry whose count disagrees with its node;
+- the steps counted to the last one, the depth to 32 directories, the path buffer to its last byte, and a full `PATH_MAX` path;
+- a visit's error ends the comparison and is its answer;
+- each of 15 changes of the logic made a test fail, among them a resumed pair started again from its first entry, which the tests' bound of a million steps ends.
+
+On the platform, the QEMU `store` suite on x86 and aarch64 (`store_tree_check`), over the versions 5 to 8 that `home` keeps:
+- from version 5 to the current one, the move and the removals: `c.bin` removed and `docs/c.bin` added, both naming the CID the suite put, and the directory `docs/deep` removed as one change;
+- from version 6 to 7, a file removed two directories down, with its CID;
+- from the empty tree (`@0`) to version 5, the root's file and directory added, each as one change;
+- the current version against itself, no change;
+- version 5 listed and its `c.bin` read back at its old path, and version 6's `docs/deep/b.txt`, removed since, read back, each by SHA-256;
+- version 4, no longer kept, refused.
+
+Not run on the platform: a comparison past its steps, its depth or its path buffer, and a node missing or damaged in a comparison (host-tested).
+
+## Files over the store: `storefs` — host-tested, at boot since 311-KRN-0190; two writers, a writer cut and its scopes run in QEMU (311-STO-0032, 0037)
 
 `storefs/src/fs.rs` is the logic of a service that serves `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues/311-storefs-a-file-face.md). `storefs/src/main.rs` answers `vfs.wit` 2.6's calls with it, and builds for x86 and aarch64. `init` starts it as a boot image after `blockstore`, with a client of the store, and gives the shell a client badged `mind::fs::BADGE_USER` (311-KRN-0190); `vfs.wit` 2.6's error `conflict` came with 311-KRN-0189.
 
@@ -164,17 +218,32 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - its client's `root` of the directory's volume, in any case, is that directory, opened at the name's current version as any root; every other root is `denied`. A path never leaves it, as none leaves a handle's directory;
   - it may write only if `writable` and `dir` may: never more than `dir`. A read-only scope of a volume's root is a client that reads the volume and never writes. So a client writes by its badge: `mind::fs::BADGE_USER` every volume, a scope's badge as its scope says, and every other badge none;
   - **its user:** the first task that asks a root with its badge, whatever that root answers, is its only user; another task's root is `denied`. `adopt(scope, task)` makes it a named task's, asked only by the task that made it (by its PID), and is `denied` for a scope another task uses already; a badge of no scope is `not-found`;
-  - **its end:** when its user ends, or after a minute (60 s) if nobody took it up. The service ends such scopes before it makes or adopts one, before each request with a scope's badge, and when a table is full. Its capability is revoked and dropped, and its client's handles are closed unpublished, so they answer `invalid`;
+  - **its end:** when its user ends, or after a minute (60 s) if nobody took it up. `storefs` is not told of a task's end: it finds both only when it next sweeps its scopes, so a scope ends lazily, at the first of these after its task ended or its minute passed:
+    - the next `scope` made, by any client;
+    - an `adopt`;
+    - a request with a scope's badge, of any scope;
+    - a `root`, `open-dir` or `open` while the table of handles, of trees or of open files is full, which also closes the handles of ended clients (`forget`).
+
+    Until then the ended task's scope keeps its capability minted and its handles, its tree and its chunks held, with nothing of them published; no other task can use them, as a scope's first task is its only user. At that sweep its capability is revoked and dropped, `[STOREFS] SCOPE <badge> ENDED` is logged, and its client's handles are closed unpublished, so they answer `invalid`. On the platform (below), the scope of a program that ended or was killed ends when the shell makes the next one, for the next program it starts with a file;
   - **bounds:** 16 scopes (`SCOPES`), 8 made by one client (`SCOPES_EACH`); past them, or if the capability cannot be minted, `handles`, with nothing changed. A scope keeps a path and no tree: a tree is its client's, from its own share, once it opens the root;
   - **its lines:** `[STOREFS] SCOPE 0x100 FOR notes:/docs (WRITABLE)`, or `(READ-ONLY)`, when it is made, and `[STOREFS] SCOPE 0x100 ENDED`.
-- **What a scope does not give:**
-  - **a path, not an object:** a scope names its directory by its path from the volume's root. A directory moved by another writer is not followed, and a new one made at that path is the scope's. A directory removed is `not-found`, and a root open in it is closed as its tree follows the name;
-  - **no QEMU check yet:** a scope reaches a program only through the shell's lending, which is APP's ([requests-APP.md](../../issues/requests-APP.md)). The host tests check the logic, and the QEMU checks wait for that lending.
+- **What a scope does not give:** a scope names its directory by a path, not an object, from the volume's root. A directory moved by another writer is not followed, and a new one made at that path is the scope's. A directory removed is `not-found`, and a root open in it is closed as its tree follows the name.
 - **Errors** are the logic's own, each with the error of `vfs.wit` 2.6 that says it. A conflict is `conflict`: nothing of the write was stored under the name, and the client reads the file again and writes once more.
 - **The service** answers `check`, `format` and `fill` with `denied`: they are `vfs_server`'s. `volume` gives the label `MIND STORE`, no FAT type and no room (the store's own `stat` says it), and a chunk as the cluster. A directory's size is 0, as on FAT, and no time stamps are kept (`modified` is 0). The store's client is in `SLOT_BLOCKSTORE`, where `init` grants it; its first line is `[STOREFS] READY …`, with its bounds.
-- **On the platform:** the shell's file commands on a store volume are the `shell` suite's `storefs_check` (the kernel track's). Not run there yet: two writers, a cut publication, and a scope, which wait for a program that holds a client of `storefs` (APP).
+- **On the platform:**
+  - the shell's file commands on a store volume are the `shell` suite's `storefs_check` (the kernel track's), with `edit` writing through the writable scope of its file's directory the shell lends it for `REQUEST_FILE` (311-APP-0121);
+  - two writers, a writer cut and the scopes are the `store` suite's `storefs_writers_check`, through `fsstep` (below), on the volume `w:` (the name `fs/w`). The shell lends `fsstep` a writable scope of its file's directory, as it lends one to `edit`;
+  - **not run on the platform:** a flush cut at each of its writes to the medium, which the host tests make (below); and `storefs` restarted while a writer holds data. Tried once by hand on x86 (2026-11-04): the writer's next write was `invalid` and nothing of it was published, but the shell's own calls on the volume were `invalid` too, as `mind::fs` keeps the root handles it opened, and the new instance knows none of them; so the suite does not restart it.
+- **`fsstep`** (`fsstep/`, a console program in both images, for these checks): it asks for its file (`REQUEST_FILE`), takes the scope the shell lends in `SLOT_FILE` and keeps full paths (`mind::fs::use_scope`), as `edit` does. Its bytes are the pattern `(i*31+7) % 251` at offset `i`, as `blocks pattern`'s. Each line it prints:
+  - `fsstep <file> <bytes> <seconds> <bytes>` makes or empties the file, writes the first bytes, prints `FSSTEP HOLDING <n> BYTES` and waits, the bytes held by `storefs` unpublished; then it writes the rest and closes, and prints `FSSTEP CLOSED <total> BYTES`, or the call that failed and its `mind::fs` error: `FSSTEP ROOT: <error>`, `FSSTEP OPEN: <error>`, `FSSTEP WRITE: <error>` (the file then left open, so its data is dropped unpublished when its scope ends) or `FSSTEP CLOSE: <error>` (`FSSTEP CLOSE: Conflict` when another writer published first). These go to the lent client through `vfs.wit` itself, as `mind::fs`'s `File` closes in `drop` and drops close's answer. What it holds is `storefs`'s share of written chunks for a client at most (128 KiB);
+  - `fsstep <file> --read-only` makes, from the scope it was lent, a scope of the same directory that does not write (`Dir::scope(false, …)`), and through it prints `FSSTEP SCOPE READ-ONLY OF <directory>`, `FSSTEP ENTRY FILE|DIR <size> <name>` for each entry and `FSSTEP LISTED <n> ENTRIES`, `FSSTEP READ <n> BYTES SHA-256 <hex>` of the file, then `FSSTEP WRITE <file> REFUSED: <error>` for the file opened to write and `FSSTEP CREATE <directory>/fsstep.new REFUSED: <error>` for a new file (`ALLOWED` in place of `REFUSED` if one is not refused; a failed step says `FSSTEP SCOPE:`, `FSSTEP LIST:` or `FSSTEP READ:` and the error);
+  - `fsstep <file> --bounds` writes `in its directory` and a line end to the file (`FSSTEP WROTE 17 BYTES TO <file>`), then asks the lent client itself, as `mind::fs` refuses a path outside its scope before asking: `FSSTEP ROOT OF <volume> IS <name>`, the name of the directory its own volume's root is; `FSSTEP OPEN ../fsstep.out REFUSED: <error>` and `FSSTEP OPEN-DIR .. REFUSED: <error>`; `FSSTEP ROOT ram REFUSED: <error>` and `FSSTEP ROOT notes REFUSED: <error>`, `vfs_server`'s RAM disk and another store volume (`ALLOWED` if one is not refused).
+- **What the `store` suite's `storefs_writers_check` runs** (x86 and aarch64, the suite's last check):
+  - **two writers:** `fsstep w:a/x.bin 20000 15 20000` holds 20000 bytes of the file it made, while the shell writes `w:b.txt` (its creation and its flush, two versions). Its close is told `FSSTEP CLOSE: Conflict`; the name stays at the shell's version, its head in `blocks history fs/w`, and `blocks tree ls` and the shell's `ls` show `x.bin` empty, as its creation left it. Run again without a hold, through a new scope, it publishes, and `blocks tree cat` reads 40000 bytes with the SHA-256 the suite computes from the pattern;
+  - **a cut:** `fsstep w:a/y.bin 20000 120 20000` killed (`kill`) while it holds its first 20000 bytes, between its writes and its close: the name stays at the version its creation made and `y.bin` empty; the next scope the shell makes ends the killed task's, its handles closed unpublished, and a write of the file then reads back whole. What is cut is a writer, not a flush: a flush stopped at each of its writes to the medium is host-tested only;
+  - **the scopes:** `fsstep w:a/x.bin --read-only` lists both files, reads `x.bin` whole (SHA-256) and is `Denied` a write and a new file, the name unchanged; `fsstep w:a/inside.txt --bounds` writes its file, finds its volume's root to be `a`, and is refused `..` (`Invalid`) and the roots of `ram` and `notes` (`Denied`); `blocks tree ls` finds nothing new outside `a`. `storefs`'s log has each scope made, six writable and the read-only one, in their order, and each but the last one `ENDED`, at the next one's making.
 
-Evidence: host tests of the code, not a proof (MC-12.2).
+Evidence: host tests of the code, and QEMU runs of the service (above), not a proof (MC-12.2).
 - `tests/storefs_host.rs`, through the store's own logic on a simulated medium:
   - `root` (refusing `vfs_server`'s volumes), `open-dir` (directories made on the way), `open` by each mode, `read`, `write` with a gap read as zeros, `truncate` shorter and longer, `stat`, `list` sixteen at a time, `remove`, `rename` across directory handles, `volume`, and their refusals; each change of a directory one version of the name, and a file's data published at its close;
   - a file of three chunks and more, written in pieces, flushed and read back by SHA-256 through its handle, another client's root and the store alone; changed across a chunk's end, and read so through a reader's open file; 400 random writes, truncations and flushes read as a model of them does;
@@ -560,7 +629,7 @@ A medium that outlives the machine's memory keeps no key: `keystore` keeps it as
 - **The ready line** says `SEALED, KEY KEPT BY KEYSTORE` or `SEALED, KEY IN THE CLEAR`; a key made at this mount is logged with where it went and why.
 - **What it does not give:**
   - where there is no TPM, the device key lies on the boot volume in the clear. So a store disk alone opens nothing, but with the boot volume beside it, it opens. The stick's own store partition (307-STO-0020) is beside it. Where there is a TPM, it seals the device key (351-NET-0006), and the store opens only on that TPM;
-  - a recovery key and a passphrase are still to come, with `APP` and `KRN` ([308-STO-0028](../../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)); the store's part of the recovery key is host-tested (next section), but no program can make or use one. Until then, a medium whose machine is gone or whose device key was made anew stays closed;
+  - a recovery key and a passphrase are still to come, with `APP` and `KRN` ([308-STO-0028](../../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)); the store's part of the recovery key is host-tested and its calls are on the wire (next section), but no program holds a client that may call them. Until then, a medium whose machine is gone or whose device key was made anew stays closed;
   - the key of a medium that is gone stays kept until deleted.
 
 Evidence, `tests/blockstore_host.rs` (a keeper in memory):
@@ -575,9 +644,13 @@ On the platform, the QEMU `tls` suite (x86 and aarch64), on a raw image with a b
 
 These are tests of the configurations named, not a proof (MC-12.2). The device key on the boot volume beside the disk, without a TPM, is not a protection, as said above.
 
-## The recovery key — host-tested, not on the wire yet (308-STO-0028)
+## The recovery key — host-tested; its calls on the wire, refused to every client so far (308-STO-0028)
 
-**No program can make or use a recovery key yet.** What follows is the store's own part, in `blockstore/src/store.rs` and `libmind/src/blockstore.rs`, tested on the host only. The wire (`blockstore.wit` 2.4), who may call it, and how the console shows a key and takes it back wait for an agreement with `APP` and `KRN`. Until then, the previous section's limits stand on the platform.
+**No program can make or use a recovery key yet.** The store's own part, in `blockstore/src/store.rs` and `libmind/src/blockstore.rs`, is tested on the host. Its calls are on the wire (`blockstore.wit` 2.4, below), and answer only a client badged `BADGE_RECOVER`. No program holds one:
+- `init` is to mint it and grant it to the shell alone, which lends it on to a program that asks for it (308-KRN-0204, the kernel session's);
+- the program that shows a key once and takes it back is `recovery`, with a window of its own, so the key reaches no serial line (308-APP-0122, the tools track's).
+
+Until then, the previous section's limits stand on the platform.
 
 A medium whose volume key `keystore` keeps opens on no other machine, nor on its own once its device key is made anew. A recovery key, kept by the owner away from the machine, is the way back.
 
@@ -600,6 +673,19 @@ A medium whose volume key `keystore` keeps opens on no other machine, nor on its
   - a store whose key is in the clear has nothing to recover (`invalid`).
 - **The layout stays 4.** A medium without a recovery record is one this build wrote before, so nothing converts anything.
 
+**The wire** (`blockstore.wit` 2.4, a minor version: no earlier call changes):
+- **Who may.** `recovery-new`, `recovery-keep`, `recovery-forget` and `recover` need `BADGE_RECOVER` (8, `mind::blockstore`), a right of its own: a recovery key opens the whole medium on any machine, so no other right gives it. They are refused through a memory domain's client, as recovery keys are the volume's. `recoveries`, the count of records, is any client's. Each refusal is logged with the badge (`REFUSED RecoveryNew FOR PID <pid> (BADGE <b>)`).
+- **`recovery-new`** writes and flushes a new record and returns the key in its text form, 39 characters. The key goes in the reply alone: no line logs it, and the service zeroes its copies once it has answered. The log says `RECOVERY KEY MADE BY PID <pid>: <n> RECORDS UNTIL IT IS TYPED BACK`.
+- **`recovery-keep(key)`** parses the typed text first: a typo is `invalid`, before any record is tried. Then it erases every record the key does not open, and returns how many (`RECOVERY KEY KEPT BY PID <pid>: <e> OTHER RECORDS ERASED, <n> LEFT`). A key that opens none is `key`, and nothing is erased.
+- **`recovery-forget`** erases them all and returns how many (`RECOVERY KEYS FORGOTTEN BY PID <pid>: <n> RECORDS ERASED`).
+- **`recover(key)`** is for a medium that is not mounted because no keeper of this machine keeps its volume key (`NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS volume-…`):
+  - the service opens the medium again, gives `keystore` the volume key from the first record the key opens, and mounts the store, which then serves every client as if it had mounted at boot (`RECOVERED BY PID <pid>: …, AND MOUNTED`, then the ready line);
+  - a store already mounted, a typo or a key in the clear is `invalid`. A store not mounted for another reason (a damaged medium, another layout) answers that reason;
+  - a key that opens nothing, or no secrets client to give the key to, is `key`, and nothing is kept (`NOT RECOVERED FOR PID <pid>: Key`). Without `keystore`'s client the volume key could only go into the superblock in the clear, so it is not recovered.
+
+  The request's copy of a typed key is zeroed once it is answered.
+- **`blocks recovery`** prints `RECOVERY RECORDS <n>`. **`blocks recovery try`** asks each of the four calls, with a well-formed key that opens nothing, and prints what the store answers. `blocks` shows no key: the console reaches the serial line, and the shell lends `blocks` its own client, which may not recover.
+
 Evidence, `tests/blockstore_host.rs`: host tests of the logic on a simulated medium with the stand-in cipher, not a proof (MC-12.2).
 - `a_recovery_key_opens_a_medium_whose_keeper_lacks_its_key`: a fresh keeper gives `kept`; the recovery key puts the volume key in it, writing nothing; the medium then mounts whole, and the object and its name read back. The record is opened as this section describes it, with HKDF checked against RFC 5869's first test case;
 - `a_wrong_recovery_key_opens_nothing_and_writes_nothing`: a wrong key, `key`; a forged record that opens but holds another volume key, `key`; a refusing keeper, `kept`; nothing written or kept; a key in the clear, `invalid`;
@@ -609,13 +695,16 @@ Evidence, `tests/blockstore_host.rs`: host tests of the logic on a simulated med
 - `a_recovery_record_is_sealed_kept_by_a_collection_and_not_reported_by_a_scrub`: neither key in any 16 or 32 bytes of the medium; a mount counts nothing corrupt or damaged, a whole scrub reports nothing, and a collection that frees a block keeps the record;
 - `a_recovery_key_needs_a_kept_key_and_a_random_source_and_is_forgotten_whole`: a key in the clear, no random source and a read-only medium refused with nothing written; two records forgotten, after which neither key opens anything;
 - `recovery_records_past_those_a_mount_remembers_are_found_and_erased`: 6 records of keys never typed back, all erased by a forget, and all but its own by the last key typed back, whose record the mount did not remember;
-- `a_domains_records_before_its_key_record_are_found`: a mount that scans twice counts a recovery record once.
+- `a_domains_records_before_its_key_record_are_found`: a mount that scans twice counts a recovery record once;
+- `rights_come_from_the_badge`: the four calls only with `BADGE_RECOVER`, which grants nothing else, and no other right gives them; the count with any right.
+
+On the platform, the QEMU `store` suite (x86 and aarch64), `store_recovery_check`: through the shell's client (badge 7) and the read-only one (badge 1), each of the four calls is refused (`Rights`) and logged with its badge, and nothing is written to the medium. `blocks recovery` gives 0 records on the RAM disk, whose key is in its superblock. Making a key, keeping it and recovering a medium with it have not run on the platform: no program holds a client that may.
 
 **What erasing a recovery record does not reach:**
 - a flash medium's spare blocks, which may keep the erased sector beneath its interface, as for a forgotten domain's key record;
 - a record whose frame is damaged: it is no longer taken for a recovery record (a damaged magic, for one, leaves its sector counted as damaged), so neither a replacement nor a forget erases it.
 
-**Not provided:** anything on the platform (above), and the passphrase where there is no TPM (308-STO-0028's other half).
+**Not provided:** a client that may recover, and a program that shows a key and takes it back (above), so no recovery has run on the platform; the passphrase where there is no TPM (308-STO-0028's other half, with `keystore`'s part in 308-NET-0055 and the boot's wait in 308-KRN-0205).
 
 ## Memory domains — run on the platform (308-STO-0023)
 

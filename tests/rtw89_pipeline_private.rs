@@ -52,7 +52,7 @@ fn roundtrip(file: &[u8], speed: u8, no_h2c: bool) {
     assert_eq!(queue.state(), fwcmd::State::Faulted);
     assert_eq!(device.get(registers::R_AX_PLATFORM_ENABLE, 4) & 2, 0);
     assert_eq!(device.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0);
-    assert_eq!(device.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, 0x001f_0f03);
+    assert_eq!(device.get(fwcmd::DMA_STOP, 4) & 0x001f_0f00, 0x001f_0f00);
     model::power_off(&mut device);
     assert_eq!(device.command, 0);
     println!("PASS cumulative GEN{speed}, no_h2c={no_h2c}: packets={}, modeled_us={}; modeled board/PCI, no hardware claim", device.packets.len(), device.now);

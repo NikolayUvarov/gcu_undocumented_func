@@ -4,6 +4,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod catalogue;
 pub mod country;
 pub mod frame;
 pub mod scan;
