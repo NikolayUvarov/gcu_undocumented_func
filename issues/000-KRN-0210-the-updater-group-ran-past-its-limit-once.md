@@ -97,6 +97,17 @@ The thread stacks show the test release server idle in `select`, with no connect
 - **A second race of the same suite,** seen on aarch64 (acc-2's run of 750-KRN-0159 on `main` 281c13a1): after the trial, `logged()` returned the updater's log at `SLOT B CONFIRMED ON THE DISK`, 12 ms before `VERSION FLOOR 1 RAISED TO 6`, which the next line required. It now waits for the floor's line, the later of the two.
 - **Its host test** is `tests/qemu_trial_test.py`: lines a command took from the output are read from the log; a confirmation from before the mark, or before the trial, is not taken; a panic ends the wait.
 
+**The fix, repeated** (e0e3c173, 2026-11-05): runs 31–42 on x32-128, lane `KRN`, each with its own limit of 1000 s. Lane `KRN-2` ran x86 groups beside them the whole time.
+- **All 12 passed,** 604–627 s each.
+- **Not evidence:** one part of the lanes' work beside them (13:55–14:33 UTC) ran on a tree that a mistaken operation of mine rebuilt under it at 14:09; its `the window manager` failed for that reason. The repeats in lane `KRN` were not touched.
+- **Seen beside them, on `main` 46b69344, not explained:** `x86: network, TLS and Effector` failed once in lane `KRN-2` (13:18–13:55 UTC, 994 s). Its logs were lost to the next run in that lane. The same group passed in the next part (1053 s).
+
+**The criteria:**
+- the first was met on 2026-11-04;
+- the second, the cause named with the log that shows it, is met by run 17's record above.
+
+The task closes once these fixes land.
+
 ## Related
 
 [000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another wait seen once in a gate); `docs/effector.md`, section 1 (a failed group runs once more, alone).
