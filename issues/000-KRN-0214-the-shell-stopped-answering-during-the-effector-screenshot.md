@@ -54,6 +54,18 @@ This is not a cause (MC-12.2). Candidates only:
 
 **So the screenshot is not needed.** In all three cases the shell echoed a command line and never started the program. That points at the shell's start of a program (`loader`, `vfs_server` reading the image), not at the gateway's capture. It is still a candidate, not a cause (MC-12.2).
 
+**Step 1, on `claude/youthful-mendel-mf1soy`:**
+- **`VM.expect`** in `tests/qemu_smoke.py`: a wait of at least 5 s that runs out (`STUCK_AFTER`) records, before it raises, every CPU's registers through QEMU's monitor (`info registers -a`) and the console's end.
+- **Where:** `mind-core-stuck-<pid>-<n>.log` in the temporary directory, which the gate copies with the suites' logs. At most two a VM (`STUCK_RECORDS`), since eight places catch a wait's timeout on purpose.
+- A shell command's own wait is 8 s, so the three cases seen would each have left one.
+- **Its host test** is `tests/qemu_stuck_test.py`, run by `scripts/host_tests.sh`, on a scripted VM whose shell never answers:
+  - the record holds each CPU's `RIP` and the line waited after;
+  - a wait under the threshold records nothing;
+  - a VM records twice at most;
+  - a monitor that does not answer is recorded as such.
+
+**Not yet:** a reader of the kernel's task table that needs no shell. `CR3` in each CPU's registers names the address space that ran, but not the task.
+
 ## Related
 
 [000-KRN-0210](../issues-done/000-KRN-0210-the-updater-group-ran-past-its-limit-once.done) (a gate's hang, and the logs `land.py` keeps); [750-KRN-0153](../issues-done/750-KRN-0153-the-gateways-screen-capture.done) (the capture), 750-EFF-0007.

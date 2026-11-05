@@ -49,6 +49,7 @@ python3 tests/font_test.py
 python3 tests/manifest_test.py
 python3 tests/release_test.py
 python3 tests/qemu_trial_test.py # a trial boot's confirmation read from the console's log (000-KRN-0210)
+python3 tests/qemu_stuck_test.py # a wait that ran out keeps the CPUs' registers (000-KRN-0214)
 python3 tests/app_package_test.py
 python3 tests/test_usb_writer.py
 python3 tests/boot_switch_test.py
