@@ -9,6 +9,9 @@ use service_ipc::{ipc,mem,dev,time,network};
 #[path="../libmind/src/idl/wlanhw.rs"]pub mod wlanhw;
 mod idl{pub use crate::{codec,wire,wlanhw};}
 #[path="../rtw89_wifi/src/service.rs"]mod service;
+#[path="../rtw89_wifi/src/receive_service.rs"]mod receive_service;
+#[path="../rtw89_wifi/src/country.rs"]mod country;
+#[path="../regdb/src/lib.rs"]mod regulatory;
 extern crate self as mind;
 extern crate self as rtw89_wifi;
 #[path="../libmind/src/sha256.rs"]pub mod sha256;
@@ -67,3 +70,4 @@ extern crate self as rtw89_wifi;
 #[path="../rtw89_wifi/src/tx.rs"]mod tx;
 #[path="../rtw89_wifi/src/frames.rs"]mod frames;
 #[path="rtw89_connection_cases.rs"]mod connection_cases;
+#[path="rtw89_receive_service_cases.rs"]mod receive_service_cases;

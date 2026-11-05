@@ -11,9 +11,10 @@
 
 /// Taken at once.
 pub const NOW: [&str; 16] = ["ps", "cpus", "free", "faults", "quotas", "heap", "devices", "irqs", "endpoints", "physmap", "time", "ip", "net", "netgrants", "sync", "battery"];
-/// Taken after the user agrees in the shell's window (`date` with `set`, `netpolicy` with a change, `caps` with a PID).
-pub const ASKED: [&str; 20] = ["kill", "stop", "reboot", "poweroff", "shutdown", "budget", "netrevoke", "netpolicy", "date", "logs", "stat", "pmap", "caps", "logger",
-    "ping", "nslookup", "fetch", "https", "tpm", "netstat"];
+/// Taken after the user agrees in the shell's window (`date` with `set`, `netpolicy` with a change, `caps` with a PID,
+/// `hostname` with a name).
+pub const ASKED: [&str; 21] = ["kill", "stop", "reboot", "poweroff", "shutdown", "budget", "netrevoke", "netpolicy", "date", "logs", "stat", "pmap", "caps", "logger",
+    "ping", "nslookup", "fetch", "https", "tpm", "netstat", "hostname"];
 
 /// Of `ASKED`, never taken from the link's client outside the `link-console` mode: the network policy's changes
 /// (800-NET-0038). `mode` is refused to every client, the link's console too.
@@ -42,7 +43,7 @@ pub fn taken_by(line: &str, client: Client) -> Taken {
     let word = word.to_ascii_lowercase();
     let word = word.as_str();
     match word {
-        "date" | "netpolicy" if args.is_empty() => Taken::Now,
+        "date" | "netpolicy" | "hostname" if args.is_empty() => Taken::Now, // `hostname <name>` sets the machine's name (000-APP-0123)
         "help" => Taken::Now, // what a command or program does: the shell's lines and the program's file, read only
         "date" if !args.starts_with("set") => Taken::Refused,
         "caps" if args.is_empty() => Taken::Refused, // the caps tool, a program

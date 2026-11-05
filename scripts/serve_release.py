@@ -28,6 +28,17 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def handle(self):
+        # Over TLS the handshake runs here, in the connection's own thread: in accept, one client that never finished
+        # it held every other connection (000-KRN-0210). A handshake that fails closes its connection alone.
+        if isinstance(self.connection, ssl.SSLSocket):
+            try:
+                self.connection.do_handshake()
+            except OSError:
+                self.close_connection = True
+                return
+        super().handle()
+
     def send_head(self):
         self.remaining = None
         self.requests.append((self.path, self.headers.get("Range")))
@@ -87,7 +98,7 @@ def serve(directory, cert=None, key=None, host="127.0.0.1", port=0, cuts=None, r
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.load_cert_chain(cert, key)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 

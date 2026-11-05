@@ -1,0 +1,122 @@
+# 000-KRN-0210 — The x86 updater group ran past Effector's limit once, and its logs were lost — done
+
+**Type:** the landing gate (`scripts/land.py`), and a suite to find · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-05) · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+
+## Problem
+
+**Seen once.** Round 81's gate ran candidate e860d0bc on x32-128, lane `x32`, the group `x86: the updater and an update through the link`.
+- The group started at 16:56:13 UTC.
+- Effector ended it at 17:54:33, after its 3500 s: `command timed out`. It printed nothing.
+- The group usually takes about 600 s. Run again alone on the same lane, it passed in 604 s, so the gate was green.
+- Beside it, lane `x32-2` ran other groups on the same machine, as in every gate since 2026-11-03.
+
+**Its logs are lost:**
+- the group's command copies the logs only after `scripts/ci_local.sh` ends, and Effector's limit killed it first;
+- the run again used the same lane's `TMPDIR`, and `ci_local.sh` empties its log directory at its start.
+
+**What is not known:** which suite hung, and on what. Its suites are `updater` (raw images, the release server, reboots) and `link-update` (the link's tool over a pty and TCP). This is not a root cause (MC-12.2).
+
+## Plan
+
+1. **Keep the logs of a group that hangs.**
+   - `land.py` runs each group in a session of its own and ends it, with every process in it, after 3300 s (`bounded`, `GROUP_LIMIT`).
+   - It then prints the group's FAIL row and copies its logs, the suites' own `mind-core-*.log` among them.
+2. **Reproduce:** the group alone, 10 times, on x32-128 with the other lane busy. Then find the suite, and the wait in it, from its logs.
+3. **Fix the wait** if it is the test's or the code's; or give the wait a limit of its own, so that it fails with its own message.
+
+## Acceptance criteria
+
+- `land.py`'s test runs a group that hangs with a child of its own. It checks that both end at the limit and a FAIL row is printed.
+- The cause is named, with the log that shows it, or 10 runs in a row pass on x32-128 beside a busy lane and that is recorded.
+
+## Progress
+
+2026-11-04:
+- **`bounded` and `GROUP_LIMIT`** are in `scripts/land.py`. The group's command copies `mind-core-*.log` too, and shows the log's tail for a group its limit ended.
+- **The test** is `tests/land_test.py`'s `test_a_group_past_its_limit_ends_with_its_processes_and_a_fail_row`, run with `sh`:
+  - a hung group with a child of its own ends at the limit, and its FAIL row is printed;
+  - one that ends in time prints nothing.
+
+  With the kills taken out of `bounded`, it fails.
+
+2026-11-05, on the gate's machines (x32-128 in `sh`, acc-1, acc-2 and PCU), through Effector:
+- **The command:** `bounded` with a limit of 4 s, around a command that hangs with a child of its own.
+- **On each machine:**
+  - the FAIL row came at 4 s, and no process of the group was left;
+  - a command that ends at once printed nothing, and its watchdog went with it.
+- `setsid` and `/bin/kill` (procps) are on all four.
+
+**Left:** steps 2 and 3.
+
+2026-11-05, step 2: the group alone in lane `KRN` on x32-128 (`main` f81cd4d9), three runs per Effector operation:
+- **Runs 1–6 and 10–12 passed,** 603–675 s each.
+- **Run 7 hung, the second time seen:**
+  - it started at 10:40:14 UTC, two minutes after round 85's gate began on lane `x32-2` of the same machine (there `x86: network, TLS and Effector` from 10:40:20);
+  - its output stopped at the group's first line;
+  - Effector ended the operation at 11:38:33, after its 3500 s, and runs 8 and 9 never started.
+- **Its logs were lost again.** The operation copied them only after the group, and run 10's `ci_local.sh` emptied the log directory at its start.
+- **Both hangs came beside a busy second lane,** running different groups there: `x86: boot, display, shell, memory, clock` in round 81, `x86: network, TLS and Effector` here.
+- **The suites' waits** (`updater`, `update`, `install`, `linkupdate`):
+  - each has a limit of its own, the longest 1500 s (`update_suite`'s trial boot), so one wait that runs out fails the group;
+  - two have none: the `cargo build --quiet` of `mindlink` (`mindlink_tool`, and the link suite's).
+
+  That is a candidate, not a cause (MC-12.2).
+
+**Next:** runs 13–24, each in a session of its own with a limit of 1050 s, with lane `KRN-2` kept busy by x86 groups. At the limit the run:
+- records the session's processes (`ps` with `wchan`);
+- interrupts `qemu_smoke.py` with `SIGINT`, so its traceback names the wait and its `finally` blocks write the serial logs;
+- copies the logs, then ends the session.
+
+The second criterion is not met: a run hung within the first ten.
+
+2026-11-05, runs 13–19 with lane `KRN-2` busy beside them:
+- **Runs 13, 14, 16, 18 and 19 passed,** 601–627 s each.
+- **Runs 15 and 17 reached their limit,** each in `update_suite`, past its parser check, with the update VM alive more than 1000 s. A group takes about 600 s.
+  - Run 15's `SIGINT` was ignored. A non-interactive shell starts a background command with `SIGINT` ignored, so Python set no handler.
+  - From run 17 on, each run starts with `SIGINT` at its default and `faulthandler` on `SIGUSR1`. At the limit it records every thread's stack, its sockets, then the traceback, and the serial logs its `finally` blocks wrote.
+
+**The cause, from run 17's record** (`/tmp/mind-KRN/repro-updater/17/` on x32-128): a race in `update_suite` itself, not in the updater.
+1. The suite reads `dmesg -s updater` once a second until it shows `[UPDATER] FETCH: VERSION 6 STAGED` or `[UPDATER] APPLY:`. It ends that reading on a read that times out, which a restart is taken to cause.
+2. The last read before the restart showed `FETCH: 104 OF 106`. The next read's echo was on the console when init restarted the machine: `MIND> dmesg -s updater`, then `MIND CORE KERNEL: REBOOT VIA PORT 0xCF9`.
+3. The new boot's prompt answered that read, so it did not time out. The new boot's `dmesg -s updater` holds neither line, so the reading went on: 900 reads of `CHECK: REFUSED: Older`, `RUNNING 6`.
+4. Each read's `expect()` emptied `vm.output`, and with it `BOOT: SLOT B LOADED ON TRIAL` and `THE TRIAL BOOT IS CONFIRMED`. The trial had been confirmed at once.
+5. The suite then waited 1500 s for those lines in the output. The 900 reads and that wait together pass Effector's 3500 s.
+
+The thread stacks show the test release server idle in `select`, with no connection open.
+
+**Not shown:** that round 81's and run 7's hangs were this one. Their logs were lost; they match it in the group, the suite's place and the time.
+
+**A defect found on the way, not the cause:**
+- The test release server's TLS handshake ran in `accept`, in its one serving thread with no timeout.
+- So a client that connected and never finished its handshake held every other connection.
+- It is fixed in `scripts/serve_release.py`, with `tests/release_test.py`'s new test, which fails without the fix.
+
+**The fix** (`tests/qemu_smoke.py`):
+- `update_suite`'s reading ends as well on a read that holds `MIND CORE KERNEL: REBOOT VIA`.
+- `trial_confirmed` waits for the confirmation after `BOOT: SLOT B LOADED ON TRIAL` in the console's log from a mark set before the reading, not in what `expect()` left. `install_suite` uses it too after `mkdir data/apply`, where the restart could take its prompt the same way.
+- **A second race of the same suite,** seen on aarch64 (acc-2's run of 750-KRN-0159 on `main` 281c13a1): after the trial, `logged()` returned the updater's log at `SLOT B CONFIRMED ON THE DISK`, 12 ms before `VERSION FLOOR 1 RAISED TO 6`, which the next line required. It now waits for the floor's line, the later of the two.
+- **Its host test** is `tests/qemu_trial_test.py`: lines a command took from the output are read from the log; a confirmation from before the mark, or before the trial, is not taken; a panic ends the wait.
+
+**The fix, repeated** (e0e3c173, 2026-11-05): runs 31–42 on x32-128, lane `KRN`, each with its own limit of 1000 s. Lane `KRN-2` ran x86 groups beside them the whole time.
+- **All 12 passed,** 604–627 s each.
+- **Not evidence:** one part of the lanes' work beside them (13:55–14:33 UTC) ran on a tree that a mistaken operation of mine rebuilt under it at 14:09; its `the window manager` failed for that reason. The repeats in lane `KRN` were not touched.
+- **Seen beside them, on `main` 46b69344, not explained:** `x86: network, TLS and Effector` failed once in lane `KRN-2` (13:18–13:55 UTC, 994 s). Its logs were lost to the next run in that lane. The same group passed in the next part (1053 s).
+
+**The criteria:**
+- the first was met on 2026-11-04;
+- the second, the cause named with the log that shows it, is met by run 17's record above.
+
+The task closes once these fixes land.
+
+## Resolution
+
+- **The cause** was a race in `update_suite` itself, named with run 17's record: a read answered by the new boot's prompt kept the reading going, and the trial's lines were taken from the output before the wait for them.
+- **The fix,** in `tests/qemu_smoke.py`: the reading ends on `MIND CORE KERNEL: REBOOT VIA`; `trial_confirmed` reads the console's log from a mark set before the reading (`update_suite`, `install_suite`); the wait after the trial is for `VERSION FLOOR 1 RAISED TO 6`. Host test: `tests/qemu_trial_test.py`.
+- **On the way:** `scripts/serve_release.py` does each TLS handshake in its connection's own thread (`tests/release_test.py`).
+- **A group's own limit** (`bounded`, `GROUP_LIMIT` in `scripts/land.py`, `tests/land_test.py`) keeps the logs of a group that hangs.
+- **Evidence:** 12 runs in a row on x32-128 beside a busy lane (runs 31–42), then round 86's gate, where both updater groups passed. Landed in round 86 (`main` 6253e7a7).
+- **Not shown:** that round 81's and run 7's hangs were this race; their logs were lost.
+
+## Related
+
+[000-KRN-0208](../issues/000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another wait seen once in a gate); `docs/effector.md`, section 1 (a failed group runs once more, alone).

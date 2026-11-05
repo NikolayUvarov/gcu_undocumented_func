@@ -36,6 +36,8 @@ mod nnclients;
 mod flowask;
 #[path = "../shell/src/named.rs"]
 mod named;
+#[path = "../shell/src/hostname.rs"]
+mod hostname;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -567,4 +569,38 @@ fn the_store_paths_a_programs_arguments_may_name() {
     assert!(paths("a+b:c заметки:d a=b:c").is_empty(), "a name storefs does not take");
     assert!(paths("kernel.elf").is_empty());
     assert_eq!(named::store_name("Notes"), "fs/notes", "storefs ignores the case and writes it lower");
+}
+
+#[test]
+fn the_machines_name_is_one_label_and_mindcore_when_none() {
+    // 000-APP-0123: an RFC 1123 label, its capitals taken as small letters.
+    use hostname::{label, read, shown, Source};
+    assert_eq!(label("dexp"), Ok(String::from("dexp")));
+    assert_eq!(label("DEXP-2"), Ok(String::from("dexp-2")));
+    assert_eq!(label("a"), Ok(String::from("a")));
+    assert_eq!(label(&"a".repeat(63)), Ok("a".repeat(63)));
+    assert_eq!(label(&"a".repeat(64)), Err("LONGER THAN 63 CHARACTERS"));
+    assert_eq!(label(""), Err("NO NAME"));
+    for wrong in ["my_pc", "my.pc", "my pc", "имя", "a/b", "a:b"] { assert_eq!(label(wrong), Err("A CHARACTER OTHER THAN a-z 0-9 -"), "{}", wrong); }
+    for wrong in ["-a", "a-", "-"] { assert_eq!(label(wrong), Err("A HYPHEN FIRST OR LAST"), "{}", wrong); }
+    assert_eq!(label("9-lives"), Ok(String::from("9-lives")), "a digit first, as RFC 1123 allows");
+    // The file: its label, a line end taken off; none, or no label, is mindcore and says why.
+    assert_eq!(read(Some(b"dexp\n")), (String::from("dexp"), Source::File));
+    assert_eq!(read(Some(b"dexp\r\n")), (String::from("dexp"), Source::File));
+    assert_eq!(read(Some(b"dexp")), (String::from("dexp"), Source::File));
+    assert_eq!(read(None), (String::from("mindcore"), Source::Missing));
+    assert_eq!(read(Some(b"DEXP\n")), (String::from("mindcore"), Source::Invalid("CAPITAL LETTERS")), "the shell writes small letters");
+    assert_eq!(read(Some(b"two\nlines\n")), (String::from("mindcore"), Source::Invalid("A CHARACTER OTHER THAN a-z 0-9 -")));
+    assert_eq!(read(Some(b"")), (String::from("mindcore"), Source::Invalid("NO NAME")));
+    assert_eq!(read(Some(b"\xff")), (String::from("mindcore"), Source::Invalid("NOT UTF-8")));
+    assert_eq!(hostname::text("dexp"), "dexp\n");
+    assert_eq!(shown("dexp", Source::File), "THE MACHINE'S NAME: dexp (data/machine/name)");
+    assert_eq!(shown("mindcore", Source::Missing), "THE MACHINE'S NAME: mindcore (NONE SET: NO data/machine/name; HOSTNAME <NAME> SETS ONE)");
+    assert_eq!(hostname::changed("mindcore", "dexp"), "[SHELL] THE MACHINE'S NAME: mindcore -> dexp");
+    // Who may: anyone reads it at once; a program's client is asked to set it, the link in developer mode sets it at once.
+    use clients::{taken_by, Client, Taken};
+    assert_eq!(taken_by("hostname", Client::Program), Taken::Now);
+    assert_eq!(taken_by("hostname dexp", Client::Program), Taken::Asked);
+    assert_eq!(taken_by("hostname dexp", Client::Link), Taken::Now);
+    assert_eq!(taken_by("hostname dexp", Client::LinkConsole), Taken::Now);
 }

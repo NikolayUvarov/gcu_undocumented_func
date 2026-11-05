@@ -199,6 +199,8 @@ impl Server {
                     let (volume, node, zone, name) = (h.volume, h.node, h.zone, h.name.clone());
                     if !node.is_dir() { return Err(Error::NotDirectory); }
                     let (node, zone) = self.walk(volume, node, zone, &parts, create, badge)?;
+                    // A directory made here reaches the medium now, as a remove and a rename do (000-KRN-0212).
+                    if create && self.volumes[volume].volume.changed() { self.volumes[volume].volume.flush().map_err(error)?; }
                     let name = parts.last().map_or(name, |p| String::from(*p));
                     self.add(Handle { owner: sender, badge, volume, node, name, zone })
                 })();
@@ -304,7 +306,8 @@ impl Server {
                     for slot in self.handles.iter_mut() {
                         if slot.as_ref().is_some_and(|h| h.volume == volume && (h.node.entry == entry.node.entry || (entry.node.cluster >= 2 && h.node.cluster == entry.node.cluster))) { *slot = None; }
                     }
-                    Ok(())
+                    // Only directory entries and the FAT changed, which no close flushes: a pulled disk keeps the removal (000-KRN-0212).
+                    self.volumes[volume].volume.flush().map_err(error)
                 })();
                 vfs::reply_remove(call, result)
             }
@@ -319,7 +322,8 @@ impl Server {
                     let old = v.find(&source, name).map_err(error)?.node;
                     let moved = v.rename(&source, name, &destination, new_name).map_err(error)?;
                     for h in self.handles.iter_mut().flatten() { if h.volume == volume && old.entry.is_some() && h.node.entry == old.entry { h.node = moved; h.name = String::from(new_name); } }
-                    Ok(())
+                    // As a removal: a pulled disk keeps the new name, not the old file's removal alone (000-KRN-0212).
+                    self.volumes[volume].volume.flush().map_err(error)
                 })();
                 vfs::reply_rename(call, result)
             }

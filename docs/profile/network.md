@@ -158,8 +158,9 @@ It is not called by the native executable and adds no physical networking
 guarantee. After own build and raw publication, all sixteen cold/real-wire
 service cases passed, including an actual 15 ms coexistence ACK through
 service progress; the updated full harness passed 294 cases with one
-inherited private-firmware case ignored. Native endpoint/configuration
-authority and hardware association/traffic acceptance remain open.
+inherited private-firmware case ignored. `init` grants the native endpoint,
+whose client goes to `wlan` alone and carries no transmit authority
+(213-KRN-0123); hardware association/traffic acceptance remains open.
 
 ### Current scope (2026-10-16)
 
