@@ -39,6 +39,13 @@
 
   With the kills taken out of `bounded`, it fails.
 
+2026-11-05, on the gate's machines (x32-128 in `sh`, acc-1, acc-2 and PCU), through Effector:
+- **The command:** `bounded` with a limit of 4 s, around a command that hangs with a child of its own.
+- **On each machine:**
+  - the FAIL row came at 4 s, and no process of the group was left;
+  - a command that ends at once printed nothing, and its watchdog went with it.
+- `setsid` and `/bin/kill` (procps) are on all four.
+
 **Left:** steps 2 and 3.
 
 ## Related
