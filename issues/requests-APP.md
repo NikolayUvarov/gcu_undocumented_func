@@ -74,3 +74,7 @@ Numbered on 2026-10-31 as [000-APP-0120](../issues-done/000-APP-0120-the-shell-a
 ## A recovery key shown once and typed back, and a store opened with one (for 308-STO-0028)
 
 Numbered on 2026-11-04 as [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md): a program with a window of its own, `recovery`, and `--key-file` for the tests.
+
+## The machine's name as one system setting, and `hostname` (for 750-EFF-0018 and 000-KRN-0180)
+
+Asked on 2026-10-28 in `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` (EFF with LNK) and not recorded here then. Numbered on 2026-11-05 as [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md), at P1 by the maintainer's word: the file is `data/machine/name`.
