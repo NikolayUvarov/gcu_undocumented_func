@@ -3,7 +3,8 @@
 
   boot_switch.py status                       the boot entries, Linux's and MIND Core's, the MIND Core disk
   boot_switch.py once [--disk DEV] [--reboot] BootNext set to the MIND Core disk's entry (made if missing)
-  boot_switch.py logs DIR [--disk DEV]        the MIND LOG volume copied into DIR, read-only
+  boot_switch.py logs DIR [--disk DEV]        the MIND LOG volume copied into DIR, read-only, and how far the
+                                              last boot got by the loader's mark (000-KRN-0211)
 
 BootOrder is never written: Linux's entry stays first, so whatever ends the run (reboot, a panic, the watchdog, a power
 cut, a bootloader that refuses the volume) the next boot is Linux. Run as root, on a machine booted by UEFI.
@@ -29,6 +30,15 @@ BOOT_VOLUME, LOG_VOLUME = "MIND CORE", "MIND LOG"
 STATE = Path(os.environ.get("MIND_BOOT_SWITCH_STATE", "/var/tmp/mind-boot-switch.json"))
 SECURE_BOOT = Path("/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c")
 LOG_NAME = re.compile(r"boot(\d{4})\.log$", re.IGNORECASE)
+# The loader's mark on the boot volume (bootloader/src/mark.rs): the boot count and the last point it reached.
+MARK = Path("MIND", "REACHED")
+STAGES = {
+    "STARTED": "the loader started and stopped before it had read and checked the kernel and the services",
+    "READ": "the loader read and checked the kernel and the services, and stopped before boot services ended "
+            "(choosing the display, or starting the processors)",
+    "HANDOVER": "the loader handed over to the kernel: the boot stopped in the kernel, init or the services "
+                "before the log volume's first write",
+}
 DEVICE_PATH = r"\s+(?=(?:HD|PciRoot|VenHw|VenMedia|BBS|File|Fv|FvFile|MemoryMapped|Acpi|USB|Uri)\()"
 
 
@@ -147,8 +157,26 @@ class System:
             subprocess.run(["systemctl", "reboot"], check=True)
 
 
+def parse_mark(data):
+    """(count, stage) of the loader's mark, or None for one of another shape."""
+    words = data.split(b"\n", 1)[0].split()
+    if len(words) != 4 or words[:2] != [b"MIND-REACHED", b"1"] or not re.fullmatch(rb"[0-9]+", words[2]):
+        return None
+    stage = words[3].decode("ascii", "replace")
+    return (int(words[2]), stage) if stage in STAGES and int(words[2]) < 1 << 32 else None
+
+
+def read_mark(root):
+    """The mark on a mounted boot volume, or None: no mark, or a loader older than the mark."""
+    try:
+        return parse_mark((Path(root) / MARK).read_bytes())
+    except OSError:
+        return None
+
+
 def read_log_volume(system, device, visit):
-    """Mounts the log volume read-only in a temporary directory for `visit`, then unmounts it."""
+    """Mounts a volume of the disk (the log volume, or the boot volume for the mark) read-only in a temporary
+    directory for `visit`, then unmounts it."""
     with tempfile.TemporaryDirectory(prefix="mind-log-") as directory:
         system.mount(device, directory)
         try:
@@ -203,11 +231,12 @@ def once(system, requested=None, reboot=False, out=print):
     if not boot["entries"][number]["active"]:
         system.efibootmgr("--bootnum", number, "--active")
     newest = read_log_volume(system, log["path"], newest_log)
+    mark = read_log_volume(system, part["path"], read_mark)
     system.efibootmgr("--bootnext", number)
     if parse_entries(system.efibootmgr("-v"))["next"] != number:
         raise Refused("the firmware did not keep BootNext")
     STATE.write_text(json.dumps({"disk": disk["path"], "serial": disk.get("serial"), "entry": number,
-                                 "newest_log": newest, "time": int(time.time())}))
+                                 "newest_log": newest, "mark": mark[0] if mark else None, "time": int(time.time())}))
     out(f"the next boot starts Boot{number} ({disk['path']}) once; every boot after it starts Boot{boot['order'][0]}")
     if system.secure_boot():
         out("Secure Boot is on: if the firmware refuses MIND Core's bootloader, it starts Linux instead")
@@ -219,13 +248,31 @@ def once(system, requested=None, reboot=False, out=print):
     return number
 
 
+def reached(before, mark):
+    """What the loader's mark says of the boots since `once` recorded `before`, for a run that left no new log."""
+    if mark is None:
+        return "the loader left no mark: it never started, or it is older than the mark (000-KRN-0211)"
+    count, stage = mark
+    if before is None:
+        return f"the loader's mark is boot {count}, {stage}; no mark was recorded at the switch to compare it with"
+    if count == before:
+        return (f"the loader's mark is still boot {count}: the loader did not start. The firmware may skip USB "
+                "(Fast Boot), ignore BootNext, or stop before it starts the stick's loader")
+    if count < before:
+        return f"the loader's mark went back from boot {before} to {count}: the stick was written again since"
+    since = f" ({count - before} boots since the switch; the mark is the last one's)" if count - before > 1 else ""
+    return f"boot {count}: {STAGES[stage]}{since}"
+
+
 def logs(system, target, requested=None, out=print):
-    """The log volume copied into a new directory under `target`; says whether MIND Core booted since `once`."""
-    _, _, log = choose_disk(system.tree(), requested)
+    """The log volume copied into a new directory under `target`; says whether MIND Core booted since `once`, and
+    from the loader's mark how far a boot that left no log got."""
+    _, part, log = choose_disk(system.tree(), requested)
     try:
-        before = json.loads(STATE.read_text())["newest_log"]
-    except (OSError, ValueError, KeyError):
-        before = None
+        state = json.loads(STATE.read_text())
+        before, before_mark = state["newest_log"], state.get("mark")
+    except (OSError, ValueError, KeyError, TypeError):
+        before, before_mark = None, None
     destination = Path(target) / time.strftime("mind-log-%Y%m%d-%H%M%S")
 
     def copy(root):
@@ -233,6 +280,7 @@ def logs(system, target, requested=None, out=print):
         return newest_log(root)
 
     newest = read_log_volume(system, log["path"], copy)
+    mark = read_log_volume(system, part["path"], read_mark)
     out(f"copied {log['path']} into {destination}")
     if before is None:
         out(f"the newest boot log is boot{newest:04d}.log (no switch was recorded)")
@@ -242,8 +290,10 @@ def logs(system, target, requested=None, out=print):
                                    and int(LOG_NAME.match(p.name)[1]) == newest)).read_text(errors="replace")
         autorun = "ended" if "AUTORUN ENDED" in text else "started, no end logged" if "AUTORUN" in text else "none"
         out(f"MIND Core booted: {boots}; autorun in the last: {autorun}")
+        if mark:
+            out(f"the loader's mark: boot {mark[0]}, {mark[1]}")
     else:
-        out("MIND Core did not boot: no new boot log. The firmware may skip USB (Fast Boot) or ignore BootNext")
+        out(f"MIND Core did not boot: no new boot log; {reached(before_mark, mark)}")
     return destination
 
 
