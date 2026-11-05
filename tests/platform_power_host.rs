@@ -102,6 +102,23 @@ fn a_signature_that_is_not_text_is_named_safely() {
 }
 
 #[test]
+fn every_word_is_one_the_drivers_parser_reads() {
+    // rtw89_wifi's args.rs: `platform=absent`, or `platform=unknown:` and a reason of 1 to 48 bytes of printable ASCII
+    // without a space, a word of its own after the index (213-KRN-0122, 213-DRV-0032).
+    let odd = [0xFF, b' ', b'\t', 0x7F];
+    let all = [Policy::Absent { tables: 3 }, Policy::Unknown(Why::NoDsdt), Policy::Unknown(Why::Truncated(odd, 0)),
+               Policy::Unknown(Why::Checksum(*b"SSDT", 1)), Policy::Unknown(Why::Named(odd, *b"RTAG")),
+               Policy::Unknown(Why::TooMuch), Policy::Unknown(Why::Unreadable(2))];
+    for policy in all {
+        let word = word(policy);
+        if word == "platform=absent" { continue; }
+        let reason = word.strip_prefix("platform=unknown:").unwrap_or_else(|| panic!("{word}"));
+        assert!(!reason.is_empty() && reason.len() <= 48 && reason.bytes().all(|b| (0x21..0x7f).contains(&b)), "{word}");
+    }
+    assert_eq!(word(Policy::Unknown(Why::Truncated(odd, 0))), "platform=unknown:truncated-????");
+}
+
+#[test]
 fn a_table_that_could_not_be_mapped_is_unknown() {
     let dsdt = table(b"DSDT", PLAIN);
     let mut search = Search::new();

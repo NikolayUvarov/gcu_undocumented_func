@@ -5,7 +5,7 @@ use core::mem::ManuallyDrop;
 use mind::abi::{BootInfo, CAP_KIND_DMA, CAP_KIND_ENDPOINT, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM, SLOT_VFS};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 use mind::mem::Pages;
-use rtw89_wifi::{board, btc_session, download, fwcmd, listen, mac, native_dma, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
+use rtw89_wifi::{args, board, btc_session, download, fwcmd, listen, mac, native_dma, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
 mod startup;
 
 const FIRMWARE_PATH: &str = "data/firmware/rtw89/rtw8852b_fw-1.bin";
@@ -253,7 +253,13 @@ fn main(_info: &'static BootInfo) {
         mind::println!("[RTW89] REJECTED GRANT {:?}; PCI {:08X}, COMMAND {:04X}", error, id, command as u16);
         idle();
     }
-    let Ok(index) = mind::process::args_str().parse::<usize>() else { mind::println!("[RTW89] NO PCI DEVICE INDEX"); idle(); };
+    let Some((index, platform)) = args::parse(mind::process::args_str()) else { mind::println!("[RTW89] NO PCI DEVICE INDEX"); idle(); };
+    // 213-KRN-0122's word; this receive-only build only reports it, and Unknown would forbid any later transmission.
+    match platform {
+        args::Platform::Absent => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: ABSENT"),
+        args::Platform::Limits { per_ntx, per_path } => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: LIMITS NTX {:?}, PATH {:?} HALF-DBM", per_ntx, per_path),
+        args::Platform::Unknown(reason) => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: UNKNOWN ({}): NO TRANSMISSION", reason.unwrap_or("none given")),
+    }
     let bytes = match firmware_file() {
         Ok(bytes) => bytes,
         Err(error) => { mind::println!("[RTW89] PRIVATE FILE {} UNAVAILABLE/REJECTED: {:?}; NO DEVICE START", FIRMWARE_PATH, error); idle(); }

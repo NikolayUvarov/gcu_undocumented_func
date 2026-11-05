@@ -322,6 +322,13 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - `fg <id|name>` (000-APP-0107): a program by its PID, or by its name in any case: the one called so, or else the one whose name holds the text (`fg wm`, `fg dzen`). With several, none is taken and they are listed: `SEVERAL PROGRAMS ANSWER TO clock: PID 1 clock, PID 2 clock, FG <PID> TAKES ONE`. Services and the shell are not among them.
 - **A shell `init` restarted** (000-APP-0106): it gives the screen back to the `wm` still running, `[SHELL] WM (PID n) RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN`. What only the `wm` the shell itself started may ask (the clock, the zone, the radio, the cards' counters) stays refused or asked for that one, since a name proves nothing. A caller that gave up on a call before the shell's answer revoked the buffer it lent: the shell then drops the call unanswered and logs it, `[SHELL] A CALLER GAVE UP ON NET-COUNTERS BEFORE ITS ANSWER: NOT WRITTEN (1 SO FAR)`, rather than write there and fault (the MacBook Pro, 2026-10-22). It does not run `autorun.msh` again: that is once a boot, and `init`'s `starts` tells a restart (`[SHELL] START 2 OF THIS BOOT: AUTORUN.MSH RAN AT THE FIRST, NOT AGAIN`).
 
+**Store volumes** (311-KRN-0190, 311-APP-0121): `storefs`'s volumes, such as `notes:`, stand beside `vfs_server`'s (the boot disk, `ram:`, `log:`, `models:`). The shell's own commands reach them through its client. A program reaches one only so:
+- **One that asks for its file** (`edit notes:docs/a.txt`) gets a writable scope of the file's directory, as on a FAT volume.
+- **One that asks for the user's files** (`fm`) gets a copy of the shell's client, as of `vfs_server`'s; `mind::fs` sends the store volumes to it (311-KRN-0203).
+- **Any other program** gets a read-only scope of the store volume its arguments name (`find notes:`, `grep -r word notes:`). It reads that volume and no other. One that names none reaches none: KRN's answer of 2026-11-04, as a store volume holds the user's own documents.
+  - **Which word names one:** a store volume's name (1 to 16 of `A-Z a-z 0-9 . _ -`), a colon, and no other colon (`secret-put:token:file` is a program's own word). The first such volume that has been written gets the scope.
+  - **How the shell tells:** it asks the block store for the volume's name (`fs/notes`), which makes nothing, and asks `storefs` nothing for a volume never written. While the store mounts at boot it waits 500 ms at most, and the program starts without the scope.
+
 **A running program's question about a flow** (000-APP-0120, `netpolicy.wit` 1.3, for 000-NET-0049): a program that reaches a host the user names only as it runs asks through its grant, and only the user answers.
 - **Where it shows:** the shell asks the broker every 500 ms and shows the oldest question on the console its program was started from. For a program the shell did not start, it shows in the shell's window when a window manager the shell started runs, else on the console shown. The serial line names the console when it is not the first.
 - **What it says:** `NETWORK: get (PID 57) ASKS TO REACH example.org:443`, then the program's reason as its own words. A control character in it, an escape sequence's start among them, is shown as `?`, so a program cannot draw a question of its own.
@@ -488,8 +495,12 @@ The design is [docs/nn/runtime.md](../nn/runtime.md) 1.0; the interface is `idl/
   - with no badge free, the start is refused (`EVERY CLIENT OF THE MODEL SERVICE IS IN USE`);
   - at its start the shell retires every badge an earlier shell lent, and lends none before `nnd` has answered.
 - **`nn [status]`, `nn models`** in the shell: `nnd`'s memory, workers, models, sessions and badges, then each badge the shell lent and to which PID.
-- **`nncheck [hold SECONDS]`**, the test program: its client's badge and rights, `nnd`'s status, and its `retire` and `retire-all` refused (`owner`).
-- **No model is claimed to run in the system yet** (MC-12.3): loading and running `NRL`'s model natively is the `nnd` suite's next part.
+- **`nncheck`**, the test program, with `NRL`'s inputs and references built in (docs/nn/runtime.md section 8):
+  - `nncheck [hold SECONDS]`: its client's badge and rights, `nnd`'s status, and its `retire` and `retire-all` refused (`owner`);
+  - `nncheck load PATH ID`: one load and its answer;
+  - `nncheck run PATH ID`: the pinned model's outputs within `NRL`'s tolerance and their charges, the budget's refusals, a cancellation and a deadline partway, a numeric failure and a new session, `nnd`'s memory back after the unload;
+  - `nncheck share PATH ID SECONDS` and `nncheck other SESSION JOB ID`: a session and a job held by one client, and another client's calls on them.
+- **Where a model runs:** the `nnd` suite runs `NRL`'s pinned model from `data/models/` on the configurations its PASS line names. That is evidence for those configurations only (MC-12.1, MC-12.2). Another model, machine or configuration is not covered by it.
 
 ## 5. Phases
 

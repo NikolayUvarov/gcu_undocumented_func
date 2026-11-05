@@ -18,6 +18,7 @@ mod keymap;
 mod modectl;
 mod modes;
 mod msh;
+mod named;
 mod net;
 mod netstat;
 mod nnclients;
@@ -34,6 +35,7 @@ mod ring;
 mod safe;
 mod screenshot;
 mod start;
+mod storescope;
 mod tpm;
 mod updatectl;
 mod updates;
@@ -773,6 +775,14 @@ impl Shell {
         let help = args.trim() == "--help";
         // The model service's client (262-APP-0112): a copy badged for this start alone, minted last, before the commit.
         let nn = requests & mind::process::REQUEST_NN != 0 && nnctl::present() && granted("nn") && !help;
+        // A store volume (311-APP-0121): the user's files reach it through a copy of the shell's own client of storefs,
+        // as they reach vfs_server's volumes; another program, through a read-only scope of the written store volume its
+        // arguments name, so it reads what the user named and nothing beside it (KRN, 2026-11-04). A program that asks
+        // for its file has its directory's scope already.
+        let storefs = mind::dev::cap_info(SLOT_STOREFS).0 != 0;
+        let store_files = storefs && needs.files;
+        let store_named = (storefs && !needs.files && !(needs.file && !needs.files) && (granted("file") || granted("files")))
+            .then(|| storescope::named(args)).flatten();
         let firmware_granted = granted("firmware") && !help;
         // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
         // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
@@ -802,6 +812,15 @@ impl Shell {
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
         if let Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
+        // Not needed to start: without them the program finds no store volume, as before.
+        if store_files {
+            if let Ok(copy) = mind::ipc::mint(SLOT_STOREFS, CAP_WRITE | CAP_GRANT, 0, 0) { let _ = lend(SLOT_STOREFS, copy); let _ = mind::ipc::drop_cap(copy); }
+        } else if let Some(volume) = &store_named {
+            if storescope::make(volume, SCOPE_RECEIVE) {
+                let _ = lend(SLOT_STOREFS, SCOPE_RECEIVE);
+                let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); // the loader holds its copy
+            }
+        }
         // A program that asks for the network gets what the policy broker grants it, or runs without (issue 102).
         let mut network = None;
         if network_wanted {
