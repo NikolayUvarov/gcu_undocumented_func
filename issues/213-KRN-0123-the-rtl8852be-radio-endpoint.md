@@ -1,6 +1,6 @@
 # 213-KRN-0123 — The RTL8852BE as a radio of `wlan`: its `wlanhw` endpoint once the driver serves it, transmission once its datapath is admitted
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the drivers track's 213-DRV-0032 (a persistent `wlanhw` service loop, logging `SERVING WLANHW`); [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) (the Realtek drivers started with DMA off, in `main` since 289e84b); [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) before transmission · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the drivers track's 213-DRV-0032 for transmission (its datapath admitted); [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) before transmission · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -42,6 +42,10 @@ Tested on 525982245, through Effector (the boots named that commit), all passed:
 QEMU has no RTL8852BE, so these show only that the other routes are unchanged (MC-12.1).
 
 It lands with `DRV`'s service loop or after it, never before (point 4): it waits for that landing request.
+
+2026-11-05, landed in round 86 (`main` 6253e7a7), after `DRV`'s service loop (`claude/ASR-DRV` 5849050b, `[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED`) in the same round. [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) is in `main` since 289e84b.
+
+**Left:** the criteria, on the Ryzen and the MacBook Pro once `DRV` admits the datapath.
 
 ## Related
 

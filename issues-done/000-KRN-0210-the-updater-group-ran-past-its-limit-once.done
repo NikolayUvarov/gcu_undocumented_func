@@ -1,6 +1,6 @@
-# 000-KRN-0210 — The x86 updater group ran past Effector's limit once, and its logs were lost
+# 000-KRN-0210 — The x86 updater group ran past Effector's limit once, and its logs were lost — done
 
-**Type:** the landing gate (`scripts/land.py`), and a suite to find · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** the landing gate (`scripts/land.py`), and a suite to find · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-05) · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -108,6 +108,15 @@ The thread stacks show the test release server idle in `select`, with no connect
 
 The task closes once these fixes land.
 
+## Resolution
+
+- **The cause** was a race in `update_suite` itself, named with run 17's record: a read answered by the new boot's prompt kept the reading going, and the trial's lines were taken from the output before the wait for them.
+- **The fix,** in `tests/qemu_smoke.py`: the reading ends on `MIND CORE KERNEL: REBOOT VIA`; `trial_confirmed` reads the console's log from a mark set before the reading (`update_suite`, `install_suite`); the wait after the trial is for `VERSION FLOOR 1 RAISED TO 6`. Host test: `tests/qemu_trial_test.py`.
+- **On the way:** `scripts/serve_release.py` does each TLS handshake in its connection's own thread (`tests/release_test.py`).
+- **A group's own limit** (`bounded`, `GROUP_LIMIT` in `scripts/land.py`, `tests/land_test.py`) keeps the logs of a group that hangs.
+- **Evidence:** 12 runs in a row on x32-128 beside a busy lane (runs 31–42), then round 86's gate, where both updater groups passed. Landed in round 86 (`main` 6253e7a7).
+- **Not shown:** that round 81's and run 7's hangs were this race; their logs were lost.
+
 ## Related
 
-[000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another wait seen once in a gate); `docs/effector.md`, section 1 (a failed group runs once more, alone).
+[000-KRN-0208](../issues/000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another wait seen once in a gate); `docs/effector.md`, section 1 (a failed group runs once more, alone).
