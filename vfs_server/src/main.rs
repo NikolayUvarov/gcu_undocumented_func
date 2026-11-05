@@ -456,6 +456,21 @@ fn entry(name: &str, node: &Node) -> vfs::Entry {
 }
 
 // This boot's log file on the log volume, when vfs_server may read the system log (init gives it logd's read badge).
+// A volume its last writer left dirty is checked before anything is written to it; one with damage a write could
+// spread is held, every write refused, and the log says why (000-KRN-0215).
+fn checked_if_dirty(volume: &mut Volume<Shared>) {
+    if !volume.left_dirty() { return; }
+    let (bits, start) = (volume.bits(), volume.start());
+    mind::println!("[VFS] FAT{} AT LBA {} WAS LEFT DIRTY: CHECKING", bits, start);
+    match volume.check_at_mount() {
+        Ok(r) => mind::println!("[VFS] CHECK OF LBA {}: {} FILES, {} DIRECTORIES, {} LOST CLUSTERS, {} CROSS-LINKED, {} BAD CHAINS, {} BAD ENTRIES, {} SIZES{}{}",
+                                start, r.files, r.directories, r.lost, r.cross_linked, r.bad_chains, r.bad_entries, r.sizes, if r.first.is_empty() { "" } else { "; FIRST: " }, r.first),
+        Err(e) => mind::println!("[VFS] CHECK OF LBA {}: NOT FINISHED ({:?})", start, e),
+    }
+    if volume.held() { mind::println!("[VFS] FAT{} AT LBA {} IS HELD READ-ONLY: A WRITE COULD SPREAD THE DAMAGE; REPAIR IT FROM ANOTHER SYSTEM", bits, start); }
+    else { mind::println!("[VFS] FAT{} AT LBA {}: NO DAMAGE A WRITE COULD SPREAD, WRITABLE", bits, start); }
+}
+
 fn start_journal(volumes: &mut [Mounted]) -> Option<(usize, Journal)> {
     let index = volumes.iter().position(|m| m.name == "log" && m.volume.writable())?;
     if !matches!(mind::idl::log::state(Endpoint(SLOT_LOG)), Ok(Ok(_))) { mind::println!("[VFS] LOG: NOT KEPT, THE SYSTEM LOG CANNOT BE READ"); return None; }
@@ -533,6 +548,8 @@ fn main(info: &'static BootInfo) {
             }
             // What was read so far, the manifest's sectors among them, tells this medium from another (000-KRN-0079).
             disk.mounted();
+            // Checked after that: what a check reads is no part of the medium's identity.
+            for m in volumes.iter_mut() { checked_if_dirty(&mut m.volume); }
             boot_slot = Some(slot);
             break 'disks;
         }
