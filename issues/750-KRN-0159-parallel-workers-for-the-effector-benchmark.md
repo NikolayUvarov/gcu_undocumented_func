@@ -1,6 +1,6 @@
 # 750-KRN-0159 — Parallel workers for the Effector agent's benchmark
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.13, MC-10.2
+**Type:** `init` · **Owner:** kernel session · **Priority:** P1 (the maintainer, 2026-11-05) · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.13, MC-10.2
 
 From EFF's request of 2026-10-23 (`KRN/2026-10-23T0609Z-EFF-a-request-memory-and-workers-for-the-agents-benchmark.md` on `internal-dev-messages`), for 750-EFF-0016, and its new request of 2026-11-05 (`KRN/2026-11-05T1400Z-EFF-…`).
 
