@@ -22,6 +22,10 @@
 //! works. Its first scan sends nothing; then it runs under the country the access points it heard announce (their
 //! Country element), or with none announced under `00`, the rules every country allows. `country-source` says which
 //! and why. A chosen country always comes first, and `00` is still never a chosen one.
+//!
+//! 1.3 (550-NET-0058): `reader`, a client of the station that only reads (`BADGE_WIFI` without the change bit), for
+//! a program that only shows the station, such as a status line. The station mints it from its own endpoint, so
+//! whoever holds a client of this interface may narrow it, and nobody widens one.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -31,7 +35,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:wifi";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// How a network is protected: `wpa2` is RSN with PSK and CCMP, which the station joins, as it joins `open`;
@@ -361,6 +365,18 @@ pub fn country_origin(endpoint: Endpoint) -> Result<CountryOrigin> {
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <CountryOrigin as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
 
+/// A client of the station that only reads (1.3): `scan`, `status` and the country calls answer, the calls that
+/// change answer `denied`. Any client of this interface may ask. `unsupported`: the station cannot make one (its
+/// endpoint lacks the right to badge). A word call, so it can carry the capability.
+pub fn reader(endpoint: Endpoint, receive: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [11 | MAJOR << 8, 0];
+    let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
+    match wire::check_cap_reply(&reply, received, receive)? {
+        None => Ok(Ok(())),
+        Some(code) => Ok(Err(Error::from_code(wire::enum_code(code)?).ok_or(SysError::Invalid)?)),
+    }
+}
+
 /// A request to the `wifi` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -374,6 +390,7 @@ pub enum Request {
     Country,
     SetCountry { code: Text<2> },
     CountryOrigin,
+    Reader,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -457,6 +474,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::CountryOrigin, call))
         }
+        11 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Reader, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -497,4 +518,9 @@ pub fn reply_set_country(call: Call, value: core::result::Result<&CountryStatus,
 }
 pub fn reply_country_origin(call: Call, value: &CountryOrigin) -> Result<()> {
     wire::reply_buffer(call, |w| value.encode(w))
+}
+/// `value` is the handle of the capability to send (copied).
+pub fn reply_reader(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish_cap(call, value, false)
 }

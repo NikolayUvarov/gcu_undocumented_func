@@ -1,6 +1,6 @@
 # The Wi-Fi station: what joins by itself
 
-**Version:** 0.1 (2026-10-22) · **Track:** `NET`, task [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) for main task [550](../../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
+**Version:** 0.2 (2026-11-05) · **Track:** `NET`, tasks [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) and [550-NET-0058](../../issues/550-NET-0058-a-read-only-wifi-client.md) (who may change the station) for main task [550](../../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
 
 `wlan` is the 802.11 station, a boot service that runs when a radio does (`bcm_wifi`, or `wlansim` in the tests). A program joins a network through its `idl/wifi.wit` client (the `wifi` tool). The station also joins a network by itself, as this page describes. It is a boot service, so every release, including one put through the link, brings this behaviour with it. A script at the volume's root does not.
 
@@ -35,6 +35,13 @@ Each try ends in one line:
 - **A client's `wifi join`** goes first. It stops a scan the station started by itself, and the station's next try waits 10 s, so the join's outcome stands for that long.
 - **No word turns it off for good yet.** A setting kept by `keystore`, a file, or a word of `wifi` are possible later; `wifi`'s part would be the tools track's.
 
+## Who may change the station
+
+- **A client badged `BADGE_WIFI_CHANGE`** may join, leave, forget and set the country. `init` gives one to the shell (`SLOT_WIFI`), and to `link` in developer mode. The shell lends a copy for `REQUEST_WIFI`: to `wifi`, and to `wm`, which passes it to `wifi` from Settings.
+- **A client badged `BADGE_WIFI` alone only reads:** `scan`, `status`, the countries, the country and where it came from. Its `join`, `leave`, `forget` and `set-country` answer `denied`, and nothing changes.
+- **The station mints that reading client itself** (`wifi.wit` 1.3, `reader`), from its own endpoint, once at its start. Any client of the station may ask for one, since narrowing a client needs nobody's leave. `init` grants its endpoint with the badge right for that (550-KRN-0213). Without that right `reader` answers `unsupported`, and the log says `[WLAN] NO READING CLIENT`.
+- **Not done yet:** a launcher lending the reading client to a program that asks only to look. The request bit is there (`REQUEST_WIFI_READ`, 550-KRN-0213); the shell's lending for it is 550-APP-0124. Until then a program gets it only by asking through the changing client it was lent, and dropping that one.
+
 ## How it is checked
 
 - `tests/wlan_auto_host.rs` checks:
@@ -44,5 +51,6 @@ Each try ends in one line:
 - The `net` suite runs over `wlansim`, on x86 and aarch64:
   - after `keystore` and `wlan` restart, the remembered `MIND-TEST` is joined with no command;
   - the access point goes away for 25 s, and the station's failed tries are logged before it joins again by itself;
-  - after `wifi leave`, nothing is joined by itself.
+  - after `wifi leave`, nothing is joined by itself;
+  - `wificheck wifi`, a program lent the changing client, takes the reading one and drops its own; through it the link and the country are read, and `join`, `leave`, `forget` and `set-country` are each denied, the station joined and under its country as before (550-NET-0058).
 - These are QEMU runs against a stand-in radio. They say nothing yet about a real radio, such as the MacBook Pro's BCM4331 (MC-12.1).
