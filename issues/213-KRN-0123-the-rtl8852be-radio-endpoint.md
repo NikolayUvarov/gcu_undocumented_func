@@ -35,6 +35,12 @@
 - `rtw89_wifi` is among `RADIOS`, after `rtw88_wifi` and before `wlansim`; `wlan` takes the first that runs.
 - Docs: `docs/profile/bootstrap.md` (`rtw89_wifi` and `wlan`), `docs/profile/network.md`, `README.md`.
 
+Tested on 525982245, through Effector (the boots named that commit), all passed:
+- acc-1, x86: `boot, display, shell, memory, clock` (no Realtek or Broadcom driver started: `NOT STARTED: NO DEVICE`); `network, TLS and Effector` (`wlan` over `wlansim`'s client, which nobody else holds);
+- acc-2, aarch64: `boot and fault containment`, `network, TLS and Effector`.
+
+QEMU has no RTL8852BE, so these show only that the other routes are unchanged (MC-12.1).
+
 It lands with `DRV`'s service loop or after it, never before (point 4): it waits for that landing request.
 
 ## Related
