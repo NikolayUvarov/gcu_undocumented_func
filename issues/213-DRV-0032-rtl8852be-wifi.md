@@ -1112,3 +1112,10 @@ KRN asked (`DRV/2026-11-04T1040Z`) that `rtw89_wifi` read a word after its index
   - other words are left alone.
 - **The driver logs it** as `PLATFORM POWER POLICY FROM INIT: …`. This receive-only build only reports it; `Unknown` will forbid transmission once calibration consumes it.
 - **Tests:** `tests/rtw89_args_host.rs`, four cases, in `scripts/host_tests.sh`.
+
+**A second boot hung with a dark screen (2026-11-05).**
+- **Before it:** MIND Core had run for about 22 h since the listen trial (`boot0017.log`, to 05:17 UTC).
+- **The sequence:** DRV rebooted it into Linux over the link. Linux came up (10:17–10:18 local), set `BootNext` and rebooted.
+- **The hang:** the next boot left a dark screen until the maintainer's restart at 05:36 UTC. It wrote no MIND log: `boot_switch.py logs` found no `boot0018.log`.
+
+As on 2026-11-03 at 18:56, the hang comes before `init` writes its log: in the firmware, the boot loader or the kernel's early start. Two of about twenty-five `BootNext` boots hung like this. The cause is not known; `boot_switch` is KRN's (000-KRN-0124).
