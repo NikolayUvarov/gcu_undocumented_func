@@ -64,7 +64,9 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 - **Not tested in QEMU:** it has no RTL8852BE, so `rtw89_wifi` does not start there.
 - **Land it with DRV's parser or after it, never before.** An earlier driver stops on a second word with `NO PCI DEVICE INDEX`.
 
-**Left:** the result on the Ryzen with its log, once both are in a build; a service refused another device's result.
+**Landed (2026-11-05).** Round 83 (`main` 3460771e) landed DRV's parser (444790b9) first, then `init`'s word (01863699). The gate was green on every group, but QEMU has no RTL8852BE, so no run gave the driver the word yet.
+
+**Left:** the result on the Ryzen with its log, from a build of `main` 3460771e or later; a service refused another device's result.
 
 ## Related
 
