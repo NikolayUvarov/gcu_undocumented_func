@@ -18,6 +18,7 @@ use mind::idl::wire::{self, Call};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
 use mind::stat;
+use mind::hostname;
 
 mod limit;
 use limit::Limiter;
@@ -53,6 +54,8 @@ struct Monitor {
     // Messages are counted from STAT_ENDPOINTS once a second, not every 100 ms (000-APP-0012): the last second's count,
     // spread over the fast samples of the next.
     messages_second: u32,
+    // The machine's name and its source as last logged (000-KRN-0180): a line only when either changes.
+    named: Option<(alloc::string::String, hostname::Source)>,
 }
 
 // e^(-1/60), e^(-1/300), e^(-1/900) x 2048: one-second samples into 1, 5 and 15 minute averages.
@@ -249,6 +252,19 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
             });
             sysinfo::reply_holders(call, holders.as_deref().map_err(|e| *e))
         }
+        Request::Hostname => {
+            let (name, source) = machine_name();
+            if monitor.named.as_ref() != Some(&(name.clone(), source)) {
+                match source {
+                    hostname::Source::File => mind::println!("[SYSMON] THE MACHINE'S NAME: {} ({})", name, hostname::FILE),
+                    hostname::Source::Missing => mind::println!("[SYSMON] THE MACHINE'S NAME: {} (NO {})", name, hostname::FILE),
+                    hostname::Source::Invalid(why) => mind::println!("[SYSMON] THE MACHINE'S NAME: {} ({} HOLDS NO NAME: {})", name, hostname::FILE, why),
+                    hostname::Source::Unread(why) => mind::println!("[SYSMON] THE MACHINE'S NAME: {} ({} NOT READ: {})", name, hostname::FILE, why),
+                }
+                monitor.named = Some((name.clone(), source));
+            }
+            sysinfo::reply_hostname(call, Ok(&name))
+        }
         Request::Load => {
             let [one, five, fifteen] = monitor.load.map(|l| (l * 100 / 2048) as u32);
             sysinfo::reply_load(call, Ok(&sysinfo::Load { one, five, fifteen, uptime_ms: mind::time::uptime_ms() as u64, fast_ms: FAST_MS as u32, slow_ms: 1000, fast_count: monitor.fast.count as u32, slow_count: monitor.slow.count as u32 }))
@@ -267,6 +283,7 @@ fn refuse(request: Request, call: Call) -> mind::Result<()> {
         Request::Devices => sysinfo::reply_devices(call, Err(busy)), Request::History { .. } => sysinfo::reply_history(call, Err(busy)),
         Request::Load => sysinfo::reply_load(call, Err(busy)), Request::Holders { .. } => sysinfo::reply_holders(call, Err(busy)),
         Request::Authority { .. } => sysinfo::reply_authority(call, Err(busy)), Request::Pool => sysinfo::reply_pool(call, Err(busy)),
+        Request::Hostname => sysinfo::reply_hostname(call, Err(busy)),
     }
 }
 
@@ -274,7 +291,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let Some(scratch) = Pages::new(16 * 1024) else { mind::println!("[SYSMON] NO MEMORY"); return };
     let mut monitor = Monitor { scratch, fast: Ring::new(), slow: Ring::new(), totals: Totals::default(), pending: [Sample::default(); 10], pending_count: 0,
-                                pending_busy: Vec::new(), load: [0; 3], limiter: Limiter::new(), messages_second: 0 };
+                                pending_busy: Vec::new(), load: [0; 3], limiter: Limiter::new(), messages_second: 0, named: None };
     if stat::read(STAT_CPUS, 0, monitor.buffer()).is_err() { mind::println!("[SYSMON] NO OBSERVE PRIVILEGE"); return; }
     monitor.sample();
     mind::println!("[SYSMON] READY: SAMPLES EVERY {} MS", FAST_MS);
@@ -294,5 +311,16 @@ fn main(_info: &'static BootInfo) {
             Ok((request_data, call)) => serve(&mut monitor, request_data, call, request.badge == stat::BADGE_AUTHORITY),
             Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
         };
+    }
+}
+
+// The machine's name from data/machine/name, through init's read-only scope of data/machine/ in SLOT_VFS, whose root
+// is that directory (000-KRN-0180); read at each call, so a name set while it runs is the next answer.
+fn machine_name() -> (alloc::string::String, hostname::Source) {
+    let mut bytes = [0u8; 2 * hostname::MAX];
+    match mind::fs::File::open(hostname::NAME).and_then(|mut file| file.read(&mut bytes)) {
+        Ok(n) => hostname::read(Some(&bytes[..n])),
+        Err(mind::fs::Error::NotFound) => hostname::read(None),
+        Err(_) => (alloc::string::String::from(hostname::DEFAULT), hostname::Source::Unread("NO SCOPE OF data/machine/, OR A READ THAT FAILED")),
     }
 }

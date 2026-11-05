@@ -1,6 +1,6 @@
 # 000-KRN-0180 — `sysmon` answers the machine's name (`sysinfo.wit` 4.2)
 
-**Type:** `sysmon`, `idl/sysinfo.wit`, `init` (a read-only scope) · **Owner:** `KRN` · **Priority:** P1 (the maintainer, 2026-11-05) · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-12.4
+**Type:** `sysmon`, `idl/sysinfo.wit`, `init` (a read-only scope) · **Owner:** `KRN` · **Priority:** P1 (the maintainer, 2026-11-05) · **Status:** in progress · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-12.4
 
 **Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, item 3, after the maintainer's word of 2026-10-28: the machine's name, set on the machine itself.
 
@@ -40,9 +40,22 @@
 
 APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): `data/machine/name`, a directory of its own, as point 2 asks.
 - **What it holds:** one RFC 1123 label, with an optional line end.
-- **Capital letters** are taken as small ones, as APP's rule says, so `sysmon` reads the name as the shell writes it.
+- **Capital letters** are taken as small ones when the name is set. A file that holds capitals was not written by the shell, so `sysmon` reads it as holding no name, as APP's `read` does.
 - **A missing file, or one that is not a label,** gives `mindcore`.
 - **Who writes it:** APP's `hostname <name>`. Until that command lands, the owner can write the file by hand.
+
+## Progress
+
+2026-11-05, on `claude/000-KRN-0180-hostname`:
+- **`sysinfo.wit` 4.2:** `hostname() -> string<63>`. `libmind/src/idl/sysinfo.rs` is generated again.
+- **`mind::hostname`** (`libmind/src/hostname.rs`) holds the directory, the file, the default and APP's rule (`label`, `read`). The shell may use it in place of its own copy.
+- **`sysmon`** answers `hostname` from `name` in its `SLOT_VFS` scope, at each call. It logs `[SYSMON] THE MACHINE'S NAME: <name> (<source>)` when the name or its source changes, and answers `mindcore` when the file is missing, holds no label, or cannot be read.
+- **`init`** gives `sysmon` a read-only scope of `data/machine/` (`scopes_of`), made if missing. A name set later is then read without a restart. A volume that cannot be written gives no scope, and `init` says so.
+- **`bench`'s head:** `MIND Core on <name>, …` in `check`, `bench` and `kbench`, on the screen and in their logs.
+- **Tests:**
+  - host: `tests/hostname_host.rs`;
+  - QEMU: `hostname_check` in the `vfs` suite; `kbench_check` requires the head's name; `edit_suite`'s listing of `data/` now holds `machine`.
+- **Docs:** `docs/api/README.md` (`hostname`), `docs/profile/bootstrap.md` (`sysmon`).
 
 ## Related
 
