@@ -48,6 +48,27 @@
 
 **Left:** steps 2 and 3.
 
+2026-11-05, step 2: the group alone in lane `KRN` on x32-128 (`main` f81cd4d9), three runs per Effector operation:
+- **Runs 1–6 and 10–12 passed,** 603–675 s each.
+- **Run 7 hung, the second time seen:**
+  - it started at 10:40:14 UTC, two minutes after round 85's gate began on lane `x32-2` of the same machine (there `x86: network, TLS and Effector` from 10:40:20);
+  - its output stopped at the group's first line;
+  - Effector ended the operation at 11:38:33, after its 3500 s, and runs 8 and 9 never started.
+- **Its logs were lost again.** The operation copied them only after the group, and run 10's `ci_local.sh` emptied the log directory at its start.
+- **Both hangs came beside a busy second lane,** running different groups there: `x86: boot, display, shell, memory, clock` in round 81, `x86: network, TLS and Effector` here.
+- **The suites' waits** (`updater`, `update`, `install`, `linkupdate`):
+  - each has a limit of its own, the longest 1500 s (`update_suite`'s trial boot), so one wait that runs out fails the group;
+  - two have none: the `cargo build --quiet` of `mindlink` (`mindlink_tool`, and the link suite's).
+
+  That is a candidate, not a cause (MC-12.2).
+
+**Next:** runs 13–24, each in a session of its own with a limit of 1050 s, with lane `KRN-2` kept busy by x86 groups. At the limit the run:
+- records the session's processes (`ps` with `wchan`);
+- interrupts `qemu_smoke.py` with `SIGINT`, so its traceback names the wait and its `finally` blocks write the serial logs;
+- copies the logs, then ends the session.
+
+The second criterion is not met: a run hung within the first ten.
+
 ## Related
 
 [000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another wait seen once in a gate); `docs/effector.md`, section 1 (a failed group runs once more, alone).
