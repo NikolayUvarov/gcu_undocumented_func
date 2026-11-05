@@ -1,6 +1,6 @@
 # 000-APP-0123 — The machine's name: one setting in `data/machine/name`, `hostname` in the shell, a field in `wm`'s Settings
 
-**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (raised by the maintainer, 2026-11-05) · **Status:** open · **Blocked by:** nothing; the readers are [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md)'s · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-11.5
+**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (raised by the maintainer, 2026-11-05) · **Status:** in progress (the shell's part written, 2026-11-05; `wm`'s field left) · **Blocked by:** nothing; the readers are [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md)'s · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-11.5
 
 **Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, items 1 and 2, after the maintainer's word of 2026-10-28. It was not recorded in `requests-APP.md` then, and so went unnumbered until 2026-11-05. **Blocks:** [750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md) (which waits for the file's choice), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md) and [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), through it.
 
@@ -40,6 +40,18 @@ MIND Core has no name for the machine:
   - from a program's client it is asked first; from the link's client in developer mode it is set at once (the `link` suite).
 - **`wm`'s field**, in its suite.
 - **docs/tools**, English and Russian.
+
+## Progress (2026-11-05): the shell's part
+
+- **`shell/src/hostname.rs`** (no system calls): the label rule, the file's reading (a line end taken off; capitals, two lines, nothing or not UTF-8 is no name), the lines `hostname` prints and the log's.
+- **`hostname [name]`** in `shell/src/main.rs`:
+  - it reads `data/machine/name`; a file it cannot read is said apart from one that holds no name;
+  - it writes the name through the shell's own client, making `data/machine/` first, and flushes it;
+  - it logs each change once; the same name again changes nothing.
+- **Who may** (`clients.rs`): `hostname` at once for any client; `hostname <name>` asked of a program's client and at once for the link's; in a script, `requires: files`.
+- **Its help line**, and docs/tools in both languages.
+- **Tests:** host, `tests/shell_host.rs`; the `shell` suite's `hostname_check`.
+- **Left:** `wm`'s field (a minor version of `shell.wit`), and the link suite's `hostname` at once.
 
 ## Related
 

@@ -1512,6 +1512,7 @@ def shell_suite(vm):
     require(vm.command("cat ram:script.txt"), "ENTRIES, ")
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
+    hostname_check(vm)
     storefs_check(vm)
     vfs_restart_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
@@ -2561,6 +2562,29 @@ def vfs_restart_check(vm):
     require(vm.command("cat data/after.txt"), "after the restart")
     require(vm.command("rm data/after.txt"), "OK")
     print("PASS: vfs_server restarted: the shell's ls, write, cat and rm in data/ answer again with no restart of the shell (311-KRN-0207)", flush=True)
+
+
+def hostname_check(vm):
+    """000-APP-0123: the machine's name, one RFC 1123 label in data/machine/name, mindcore when none is set; `hostname`
+    says it and where from, `hostname <name>` sets it in small letters and logs the change once; a name that is no
+    label is refused, and the file stays as it was."""
+    require(vm.command("hostname"), "THE MACHINE'S NAME: mindcore (NONE SET: NO data/machine/name; HOSTNAME <NAME> SETS ONE)")
+    require(vm.command("hostname my_pc"), "ERROR: HOSTNAME: A CHARACTER OTHER THAN a-z 0-9 -: A NAME IS 1 TO 63 OF a-z 0-9 -, NEITHER FIRST NOR LAST A HYPHEN")
+    require(vm.command("hostname DEXP"), "THE MACHINE'S NAME: dexp, KEPT IN data/machine/name")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: dexp (data/machine/name)")
+    require(vm.command("cat data/machine/name"), "dexp")
+    require(vm.command("hostname dexp"), "THE MACHINE'S NAME IS dexp ALREADY")
+    require(vm.command("hostname -dexp"), "ERROR: HOSTNAME: A HYPHEN FIRST OR LAST")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: dexp (data/machine/name)")
+    log = vm.command("dmesg -s shell", raw=True)
+    assert log.count("[SHELL] THE MACHINE'S NAME: mindcore -> dexp") == 1 and "-> -dexp" not in log, log[-1500:]
+    require(vm.command("hostname mind-2"), "THE MACHINE'S NAME: mind-2, KEPT IN data/machine/name")
+    require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE MACHINE'S NAME: dexp -> mind-2")
+    require(vm.command("rm data/machine/name"), "OK")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: mindcore (NONE SET")
+    require(vm.command("rm data/machine"), "OK")
+    print("PASS: hostname (000-APP-0123): mindcore with none set; DEXP kept as dexp in data/machine/name and logged once; "
+          "the same name again changes nothing; my_pc and -dexp refused with the rule, the file as it was", flush=True)
 
 
 def storefs_check(vm):
