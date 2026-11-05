@@ -62,8 +62,8 @@ const WIFI_RADIO: usize = 2;
 const WIFI_KEYS: usize = 3;
 const WIFI_CARD: usize = 4;
 // The radios wlan may drive (idl/wlanhw.wit): the MacBook Pro's bcm_wifi (550-DRV-0027), the DEXP's rtw88_wifi
-// (550-KRN-0172), else QEMU's stand-in.
-const RADIOS: [&str; 3] = ["bcm_wifi", "rtw88_wifi", "wlansim"];
+// (550-KRN-0172), the Ryzen's rtw89_wifi (213-KRN-0123), else QEMU's stand-in; the first that runs.
+const RADIOS: [&str; 4] = ["bcm_wifi", "rtw88_wifi", "rtw89_wifi", "wlansim"];
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
@@ -605,6 +605,9 @@ impl Init {
                     if self.running(service_index("vfs_server")) {
                         grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                     }
+                    // Its idl/wlanhw.wit endpoint, whose client goes to wlan alone; it carries no transmit authority, which
+                    // the driver keeps until a country, the word above and calibration allow it (213-KRN-0123).
+                    grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 }
             }
             "rtw88_wifi" => {

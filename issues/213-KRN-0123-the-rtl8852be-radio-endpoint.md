@@ -28,6 +28,21 @@
 - [ ] On the Ryzen: `SERVING WLANHW`, then `wlan`'s `set-country`, then `DATAPATH ADMITTED ON CHANNEL n` only after the country, the word `absent` and calibration; no frame sent before it.
 - [ ] On the Intel MacBook Pro and the Ryzen, each separately: association, DHCP and ping under test load, recorded per machine, before a physical claim is made.
 
+## Progress
+
+2026-11-05, `init`'s part, on `claude/213-KRN-0123-endpoint`:
+- `rtw89_wifi` gets its endpoint in `SLOT_SERVICE` at its start, with the grants 0114 and 0122 gave it.
+- `rtw89_wifi` is among `RADIOS`, after `rtw88_wifi` and before `wlansim`; `wlan` takes the first that runs.
+- Docs: `docs/profile/bootstrap.md` (`rtw89_wifi` and `wlan`), `docs/profile/network.md`, `README.md`.
+
+Tested on 525982245, through Effector (the boots named that commit), all passed:
+- acc-1, x86: `boot, display, shell, memory, clock` (no Realtek or Broadcom driver started: `NOT STARTED: NO DEVICE`); `network, TLS and Effector` (`wlan` over `wlansim`'s client, which nobody else holds);
+- acc-2, aarch64: `boot and fault containment`, `network, TLS and Effector`.
+
+QEMU has no RTL8852BE, so these show only that the other routes are unchanged (MC-12.1).
+
+It lands with `DRV`'s service loop or after it, never before (point 4): it waits for that landing request.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done), [requests-NET.md](requests-NET.md), [requests-APP.md](requests-APP.md).
