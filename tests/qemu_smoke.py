@@ -6840,13 +6840,21 @@ def camera_files(mtype, frame, video):
 def sysmon_name_check(vm):
     """000-KRN-0180: sysmon answers the machine's name from data/machine/name through a read-only scope of that directory
     alone, which init made, and reads it at each call; kbench's head shows the answer. Set, written with capitals (no
-    name: the shell writes small letters), set again, removed; the directory removed ends the scope until sysmon starts
-    again, when init makes it and a new scope."""
+    name: the shell writes small letters), set again, removed; no data/ at boot gives no scope, and the directory removed
+    ends it, each until sysmon starts again."""
     def shown():
         out = vm.command("kbench ipc --quick", timeout=120)
         found = re.search(r"MIND Core on (\S+), (?:x86_64|aarch64), ABI \d+", out)
         assert found, out[-2000:]
         return found[1]
+    # This image had no data/ at boot: init made none for sysmon, which has no scope and answers mindcore until its next
+    # start, after the directory is made.
+    require(vm.command("dmesg -s init", raw=True), "[INIT] sysmon: NO FILES IN data/machine")
+    assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
+    require(vm.command("dmesg -s sysmon", raw=True), "[SYSMON] THE MACHINE'S NAME: mindcore (data/machine/name NOT READ: ")
+    require(vm.command("mkdir data/machine"), "OK")
+    require(vm.command("svc restart sysmon", timeout=30), "sysmon restarted: PID")
+    require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY")
     assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
     for text, name in (("dexp", "dexp"), ("Lab-2", "mindcore"), ("lab-2", "lab-2")):
         require(vm.command(f"write data/machine/name {text}"), f"WROTE {len(text) + 1} BYTES")
@@ -6860,7 +6868,8 @@ def sysmon_name_check(vm):
     # vfs_server ends a scope of a removed directory: sysmon answers mindcore, the file not read, until it starts again.
     require(vm.command("rm data/machine"), "OK")
     assert shown() == "mindcore", vm.command("dmesg -s sysmon", raw=True)[-1500:]
-    require(vm.command("dmesg -s sysmon", raw=True), "[SYSMON] THE MACHINE'S NAME: mindcore (data/machine/name NOT READ: ")
+    log = vm.command("dmesg -s sysmon", raw=True)
+    assert log.count("[SYSMON] THE MACHINE'S NAME: mindcore (data/machine/name NOT READ: ") == 2, log[-1500:]  # at boot, and now
     require(vm.command("svc restart sysmon", timeout=30), "sysmon restarted: PID")
     require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY")
     require(vm.command("write data/machine/name lab-3"), "WROTE 6 BYTES")
