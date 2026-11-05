@@ -1,6 +1,6 @@
 # 750-KRN-0159 — Parallel workers for the Effector agent's benchmark
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.13, MC-10.2
+**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** in progress · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.13, MC-10.2
 
 From EFF's request of 2026-10-23 (`KRN/2026-10-23T0609Z-EFF-a-request-memory-and-workers-for-the-agents-benchmark.md` on `internal-dev-messages`), for 750-EFF-0016, and its new request of 2026-11-05 (`KRN/2026-11-05T1400Z-EFF-…`).
 
@@ -25,6 +25,13 @@ Revised 2026-11-05 at EFF's request. Workers replace the earlier plan of a secon
 - [ ] QEMU, x86 and aarch64 (the Effector suite): `effector`'s quota is 32 tasks, 1 endpoint and 48 MiB, and the capabilities it holds are as before.
 - [ ] `docs/profile/bootstrap.md` names the right.
 - [ ] EFF's check: on 4 CPUs, `cpu_parallel.worker_threads` is 4.
+
+## Progress
+
+2026-11-05, `init`'s part, on `claude/750-KRN-0159-effector-workers`:
+- `effector` starts with `SPAWN_WORKERS` and the quota of point 1 (`EFFECTOR_TASKS`). `init` logs `[INIT] effector: 48 MIB, 1 ENDPOINT AND WORKERS, AT MOST ONE PER CPU`.
+- The `modes` suite's `effector_grants_check` requires that quota and that line.
+- `docs/profile/bootstrap.md` names the right.
 
 ## Related
 
