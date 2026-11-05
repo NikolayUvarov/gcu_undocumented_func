@@ -62,8 +62,8 @@ const WIFI_RADIO: usize = 2;
 const WIFI_KEYS: usize = 3;
 const WIFI_CARD: usize = 4;
 // The radios wlan may drive (idl/wlanhw.wit): the MacBook Pro's bcm_wifi (550-DRV-0027), the DEXP's rtw88_wifi
-// (550-KRN-0172), else QEMU's stand-in.
-const RADIOS: [&str; 3] = ["bcm_wifi", "rtw88_wifi", "wlansim"];
+// (550-KRN-0172), the Ryzen's rtw89_wifi (213-KRN-0123), else QEMU's stand-in; the first that runs.
+const RADIOS: [&str; 4] = ["bcm_wifi", "rtw88_wifi", "rtw89_wifi", "wlansim"];
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
@@ -71,6 +71,7 @@ const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
 const EFFECTOR_MEMORY_MIB: u16 = 48; // the agent's benchmark: a 16 MiB chase and two 8 MiB copy buffers (750-KRN-0158)
+const EFFECTOR_TASKS: u16 = 32; // its benchmark's workers: a ceiling, the kernel allows one per online CPU (750-KRN-0159)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
@@ -604,6 +605,9 @@ impl Init {
                     if self.running(service_index("vfs_server")) {
                         grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                     }
+                    // Its idl/wlanhw.wit endpoint, whose client goes to wlan alone; it carries no transmit authority, which
+                    // the driver keeps until a country, the word above and calibration allow it (213-KRN-0123).
+                    grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 }
             }
             "rtw88_wifi" => {
@@ -774,7 +778,8 @@ impl Init {
                 // A radio a safe start prepared serves the station once `svc start` starts it (000-KRN-0131).
                 let radio = RADIOS.into_iter().find(|&r| self.running(service_index(r)))
                     .or_else(|| RADIOS.into_iter().find(|&r| self.prepared(service_index(r)))).ok_or(Error::NotFound)?;
-                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+                // With the badge right: it mints the reading client, BADGE_WIFI, of its own endpoint (550-KRN-0213).
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL | CAP_BADGE);
                 self.lend(&mut grants, WIFI_RADIO, radio)?;
                 if self.present("keystore") { grants.add(WIFI_KEYS, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_STATION)?, CLIENT); }
             }
@@ -872,6 +877,9 @@ impl Init {
                 grants.add(mind::effector::SLOT_GATEWAY, self.badged(&mut minted, "effector_gw", mind::effector::BADGE_SESSION)?, CLIENT);
                 // init's client for its stop notice alone, so its last heartbeat can say it is going (750-KRN-0194).
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NOTICE)?, CLIENT);
+                // Workers for its benchmark on every CPU, each holding only what it grants them (750-KRN-0159).
+                flags |= SPAWN_WORKERS;
+                mind::println!("[INIT] effector: {} MIB, 1 ENDPOINT AND WORKERS, AT MOST ONE PER CPU", EFFECTOR_MEMORY_MIB);
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
             // Network time (111-KRN-0206): the flow the policy gives program `timed`, whose UDP rules are its time servers;
@@ -1005,7 +1013,8 @@ impl Init {
             // The block store's index grows with its disk (251-STO-0013): 56 MiB at most, beside what it held before.
             "blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() },
             // The Effector session measures memory as the other agents do, beside its own heap (750-KRN-0158).
-            "effector" => Quota { memory_mib: EFFECTOR_MEMORY_MIB, ..Quota::default() },
+            // One endpoint, which its workers answer on (750-KRN-0159).
+            "effector" => Quota { tasks: EFFECTOR_TASKS, endpoints: 1, memory_mib: EFFECTOR_MEMORY_MIB },
             // On top of the default, three screens: the compositor's shadow copy of the framebuffer, and the two sealed
             // copies `record` holds, the frame it codes and the one before (211-KRN-0095); 20 MiB each at 2880 × 1800.
             "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + 3 * self.screen_mib, ..Quota::default() },

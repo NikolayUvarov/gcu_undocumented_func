@@ -48,6 +48,24 @@ fn supported_profile_requires_real_consistent_board_identity_and_internal_pa(){f
         3=>b.maps.logical[0x400]^=2,4=>b.maps.phycap[0x6c]=0,5=>b.maps.phycap[0x6d]=0,_=>b.identity.xtal^=1}
     assert!(matches!(Resolved::resolve(&b,rule(),limits()),Err(Error::Board)),"case {change}");
 }}
+// The Ryzen's board: country erased (FFFF), so the station's country decides (wlanhw.wit 1.3).
+fn erased()->Board{let mut b=board();
+    for at in [crate::efuse::COUNTRY_AT,crate::efuse::COUNTRY_AT+1]{b.maps.logical[at]=0xff;}
+    b.identity=crate::board::identity(b.identity.cut,&b.maps).unwrap();b}
+#[test]
+fn the_stations_country_and_the_world_reach_the_calibration_policy(){
+    let b=erased();
+    for (code,channel,eirp) in [(*b"UZ",1,40),(*b"00",6,40),(*b"US",11,60),(*b"RU",13,40)]{
+        let rule=Rule::station(code,1,channel,eirp,false);
+        assert_eq!((rule.center_mhz,rule.conducted_half_dbm),(2407+5*u16::from(channel),eirp));
+        Resolved::resolve(&b,rule,PlatformInput::CheckedAbsent).unwrap();
+    }
+    assert!(matches!(Resolved::resolve(&b,Rule::station(*b"00",1,12,40,true),PlatformInput::CheckedAbsent),Err(Error::Passive)),"listen-only");
+    assert!(Resolved::resolve(&b,Rule::station(*b"UZ",0,1,40,false),PlatformInput::CheckedAbsent).is_err(),"version zero");
+    assert!(matches!(Resolved::resolve(&b,Rule::station(*b"UZ",1,1,40,false),PlatformInput::Unknown),Err(Error::UnknownPlatform)));
+    assert!(Resolved::resolve(&board(),Rule::station(*b"00",1,1,40,false),PlatformInput::CheckedAbsent).is_err(),
+        "a board programmed with another country keeps refusing it");
+}
 #[test]
 fn country_frequency_passive_and_disabled_rules_do_not_grant_calibration(){for change in 0..6{
     let mut r=rule();match change{0=>r.country=*b"DE",1=>r.version=0,2=>r.center_mhz=2484,

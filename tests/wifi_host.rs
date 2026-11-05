@@ -355,17 +355,31 @@ fn the_country_is_asked_for_applied_and_read_back_by_its_code() {
     // The names are the tool's: the catalogue has codes only.
     assert_eq!((countries::name("UZ"), countries::name("DE"), countries::name("00"), countries::name("ZZ")), (Some("Uzbekistan"), Some("Germany"), None, None));
     assert!(countries::NAMES.windows(2).all(|w| w[0].0 < w[1].0) && countries::NAMES.len() == 249);
-    // None asked for: said so. Asked for and applied, read back, kept; the radio confirmed its limits.
+    // 550-NET-0035 stage B (the maintainer, 2026-11-04): none yet before the first scan, then the country the access
+    // points announce, each with why (wifi.wit 1.2); none is silence.
     let mut demo = Demo::new();
     let (code, line) = headless::country(&mut demo, None);
-    assert_eq!(code, headless::JOINED);
-    assert!(line.starts_with("[WIFI] COUNTRY NONE ASKED: THE STATION PROBES NOWHERE") && line.ends_with("; CATALOGUE 0123456789abcdef"), "{line}");
+    assert_eq!((code, line.as_str()), (headless::JOINED, "[WIFI] COUNTRY NONE YET: THE STATION LISTENS FOR THE COUNTRY THE ACCESS POINTS ANNOUNCE, ELSE IT RUNS UNDER 00 (WIFI COUNTRY <CODE> CHOOSES ONE); CATALOGUE 0123456789abcdef"));
+    demo.scan().unwrap();
+    assert_eq!(headless::country(&mut demo, None).1, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, ANNOUNCED BY 3 OF THE 4 ACCESS POINTS THAT NAMED A COUNTRY (WIFI COUNTRY <CODE> CHOOSES ONE); CATALOGUE 0123456789abcdef");
+    // Asked for and applied, read back, kept; the radio confirmed its limits; a scan does not move a chosen country.
     let (code, line) = headless::country(&mut demo, Some("UZ"));
-    assert_eq!((code, line.as_str()), (headless::JOINED, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, THE RADIO CONFIRMED ITS LIMITS, KEPT; CATALOGUE 0123456789abcdef"));
+    assert_eq!((code, line.as_str()), (headless::JOINED, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, THE RADIO CONFIRMED ITS LIMITS; CHOSEN BY THE USER, KEPT BY KEYSTORE; CATALOGUE 0123456789abcdef"));
+    demo.scan().unwrap();
     assert_eq!(headless::country(&mut demo, None).1, line, "read back");
+    // None announced, or none the catalogue has: the world's rules, said so.
+    let mut quiet = Demo::new();
+    quiet.beacons = false;
+    quiet.scan().unwrap();
+    assert_eq!(headless::country(&mut quiet, None).1, "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS: THE RULES EVERY COUNTRY ALLOWS (WIFI COUNTRY <CODE> CHOOSES ONE); CATALOGUE 0123456789abcdef");
+    // A station that has not said why: said so too.
+    let unsaid = CountryStatus { applied: String::from("DE"), state: CountryState::Applied, radio: true, ..CountryStatus::none("0123456789abcdef") };
+    assert!(headless::country_line(&unsaid).ends_with("DE (Germany) APPLIED, THE RADIO CONFIRMED ITS LIMITS; THE STATION HAS NOT SAID WHY YET; CATALOGUE 0123456789abcdef"));
     // A radio that refuses the limits: failed, nothing applied; not a country of the catalogue: refused.
     let (code, line) = headless::country(&mut demo, Some("XX"));
     assert_eq!((code, line.as_str()), (headless::REFUSED, "[WIFI] COUNTRY XX ASKED, FAILED: THE RADIO REFUSED ITS LIMITS, NONE APPLIED, NOT KEPT ACROSS RESTARTS; CATALOGUE 0123456789abcdef"));
+    demo.scan().unwrap();
+    assert_eq!(headless::country(&mut demo, None).1, line, "a refused choice is not replaced by the announced country");
     assert_eq!(headless::country(&mut demo, Some("ZZ")), (headless::REFUSED, String::from("[WIFI] COUNTRY ZZ NOT SET: NOT A COUNTRY OF THE CATALOGUE")));
     assert_eq!(headless::country(&mut demo, Some("00")).0, headless::REFUSED, "the world domain is never chosen");
     // Joined, a change leaves the network first.
@@ -425,29 +439,48 @@ fn a_station_without_a_catalogue_or_without_the_change_badge_says_so() {
 }
 
 #[test]
+fn the_screen_names_where_its_country_came_from_within_76_columns() {
+    let base = CountryStatus::none("0123456789abcdef");
+    let applied = |code: &str, origin| CountryStatus { applied: String::from(code), state: CountryState::Applied, radio: true, origin, ..base.clone() };
+    let lines = [
+        (base.clone(), "Country: none yet, listening for the access points' country (c: choose one)"),
+        (applied("UZ", Origin::Detected { announced: 3, heard: 4 }), "Country: UZ (Uzbekistan), announced by 3 of 4 access points (c: choose one)"),
+        (applied("00", Origin::World), "Country: 00, every country's rules: none chosen or announced (c: choose one)"),
+        (CountryStatus { asked: String::from("US"), kept: true, ..applied("US", Origin::Chosen) }, "Country: US (United States), chosen, kept"),
+        (CountryStatus { asked: String::from("US"), ..applied("US", Origin::Chosen) }, "Country: US (United States), chosen, not kept across restarts"),
+        (CountryStatus { catalogue: String::new(), ..base.clone() }, "Country: no catalogue in this station"),
+    ];
+    for (status, line) in lines {
+        assert_eq!(country_shown(&status), line);
+        assert!(line.chars().count() <= 76, "{line}");
+    }
+}
+
+#[test]
 fn the_screens_country_list_finds_and_asks_for_a_country() {
     // 550-APP-0082: c opens the catalogue; typing finds by code or name; Enter asks for the one chosen; Esc goes back.
+    // The first scan applies the country the access points announce, and the line says so (wifi.wit 1.2).
     let mut demo = Demo::new();
     let mut w = Wifi::new(true);
     w.refresh(&mut demo);
-    assert!(w.status().ends_with(" COUNTRY=NONE"), "{}", w.status());
-    assert!(screen(&w).iter().any(|r| r.contains("Country: none asked yet (c: choose one)")));
+    assert!(w.status().ends_with(" COUNTRY=UZ ORIGIN=DETECTED"), "{}", w.status());
+    assert!(screen(&w).iter().any(|r| r.contains("Country: UZ (Uzbekistan), announced by 3 of 4 access points (c: choose one)")), "{:?}", screen(&w));
     w.key(char_key('c'), &mut demo);
-    assert!(w.status().starts_with("MODE=COUNTRIES 5 OF 5 AT DE"), "{}", w.status());
+    assert!(w.status().starts_with("MODE=COUNTRIES 5 OF 5 AT UZ"), "the cursor on the one applied: {}", w.status());
     let shown = screen(&w);
     assert!(shown.iter().any(|r| r.contains("The country: 5 of 5")) && shown.iter().any(|r| r.contains("XX ") && r.contains("none usable")), "{:?}", shown);
     typed(&mut w, &mut demo, "uzb");
     assert!(w.status().starts_with("MODE=COUNTRIES 1 OF 5 AT UZ"), "{}", w.status());
     w.key(key(abi::KEY_ENTER), &mut demo);
-    assert!(w.status().starts_with("MODE=LIST") && w.status().ends_with(" COUNTRY=UZ"), "{}", w.status());
+    assert!(w.status().starts_with("MODE=LIST") && w.status().ends_with(" COUNTRY=UZ ORIGIN=CHOSEN"), "{}", w.status());
     assert_eq!(w.notice, "Country UZ (Uzbekistan): applied, kept");
-    assert!(screen(&w).iter().any(|r| r.contains("Country: UZ (Uzbekistan)")));
+    assert!(screen(&w).iter().any(|r| r.contains("Country: UZ (Uzbekistan), chosen, kept")));
     // Opened again, the cursor is on the one applied; a radio that refuses: failed, shown so.
     w.key(char_key('c'), &mut demo);
     assert!(w.status().starts_with("MODE=COUNTRIES 5 OF 5 AT UZ"), "{}", w.status());
     w.key(key(abi::KEY_DOWN), &mut demo);
     w.key(key(abi::KEY_ENTER), &mut demo);
-    assert!(w.status().ends_with(" COUNTRY=FAILED-XX") && w.notice.contains("refused its limits"), "{} {}", w.status(), w.notice);
+    assert!(w.status().ends_with(" COUNTRY=FAILED-XX ORIGIN=NONE") && w.notice.contains("refused its limits"), "{} {}", w.status(), w.notice);
     // Esc leaves it as it was; a station without a catalogue says so and stays in the list.
     w.key(char_key('c'), &mut demo);
     w.key(key(abi::KEY_ESC), &mut demo);
@@ -457,7 +490,7 @@ fn the_screens_country_list_finds_and_asks_for_a_country() {
     let mut w = Wifi::new(true);
     w.refresh(&mut old);
     w.key(char_key('c'), &mut old);
-    assert!(w.status().starts_with("MODE=LIST") && w.status().ends_with(" COUNTRY=-"), "{}", w.status());
+    assert!(w.status().starts_with("MODE=LIST") && w.status().contains(" COUNTRY=- "), "{}", w.status());
     assert!(w.notice.starts_with("No catalogue in this station"));
     assert!(screen(&w).iter().any(|r| r.contains("Country: no catalogue in this station")));
     // `wifi --countries` opens the list at start, as `c` does.

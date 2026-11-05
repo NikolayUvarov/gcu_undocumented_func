@@ -1119,3 +1119,38 @@ KRN asked (`DRV/2026-11-04T1040Z`) that `rtw89_wifi` read a word after its index
 - **The hang:** the next boot left a dark screen until the maintainer's restart at 05:36 UTC. It wrote no MIND log: `boot_switch.py logs` found no `boot0018.log`.
 
 As on 2026-11-03 at 18:56, the hang comes before `init` writes its log: in the firmware, the boot loader or the kernel's early start. Two of about twenty-five `BootNext` boots hung like this. The cause is not known; `boot_switch` is KRN's (000-KRN-0124).
+
+## The station's country reaches the calibration policy (2026-11-05)
+
+The country comes from the station through `wlanhw.wit` 1.3 `set-country`, any country of the catalogue or `00` (213-KRN-0123 as revised, 550-NET-0035). DRV's consumer:
+- **`rtw89_wifi/src/country.rs`, `Limits::accept`:**
+  - takes two capital letters or `00`, each of channels 1–13 at most once; otherwise `Invalid`. A code `regdb` does not hold is `Failed`;
+  - applies the station's EIRP (whole dBm) under the radio's own copy of the catalogue: the rule's EIRP caps it, NO-IR keeps a channel listen-only, and a channel outside the rules or this driver's 2G20 scope is left out;
+  - numbers each accepted setting, so that an older one cannot pass for it.
+- **`Rule::station`** builds one channel's rule from that. The conducted limit equals the EIRP: with no antenna-gain table on the platform (`RTAG` absent), Linux's rtw89 applies none either. This assumes 0 dBi; it is not a measured value.
+- **`Policy::resolve` takes `00`** with the WORLDWIDE power group. A board programmed with another country still refuses it.
+
+**On the catalogue's 2.4 GHz rules:**
+- UZ, RU and DE allow all 13 channels at 20 dBm EIRP;
+- US allows 1–11 at 30 dBm;
+- `00` allows 1–11 and keeps 12–13 listen-only;
+- none of them carries a WMM rule there, so `assess_initial_driver` admits them.
+
+**Tests:**
+- `tests/rtw89_country_host.rs`, four cases;
+- a case in `rtw89_calibration_policy_cases.rs`: on an erased board like the Ryzen's, UZ, `00`, US and RU resolve under `CheckedAbsent`; a listen-only channel, version 0 and an `Unknown` platform do not.
+
+**Not yet:** the service answers `set-country` with `failed` until the persistent loop applies these limits to a calibrated channel.
+
+## The receive-only wlanhw service: the first of 0123's two lines (2026-11-05)
+
+KRN agreed (`DRV/2026-11-05T0800Z`) that the endpoint comes before admission, since the country arrives through it. `rtw89_wifi` now serves `wlanhw` 2.0 receive-only when `init` lends `SLOT_SERVICE`:
+- it logs `[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED`;
+- `send` is `failed`;
+- `set-country` is checked, taken and answered `failed` until a calibrated channel exists.
+
+Details and limits are in [the service notes](../hwdocs/rtl8852be-service.md#receive-only-service-before-calibration-213-krn-0123s-gate-2026-11-05). `listen.rs` now shares the setup (`open`, `prepare_receive`, `Session::poll_frames`) between the bounded listen and the service. The PHY stays the caller's, so that the calibration step can continue the same attempt.
+
+**Next, for the second line:**
+- the channel stage run again from a tuned channel (retune);
+- on an applied country: tune that channel actively, grant, calibrate (IQK, TSSI, DPK), prepare the station and data mode, then hand over to `service.rs`'s data service, logging `DATAPATH ADMITTED ON CHANNEL n`.

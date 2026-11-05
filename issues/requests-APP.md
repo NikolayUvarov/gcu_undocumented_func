@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered, 2026-11-04) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (1 request waiting to be numbered: NET's reading client of the station, 2026-11-05) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -74,3 +74,11 @@ Numbered on 2026-10-31 as [000-APP-0120](../issues-done/000-APP-0120-the-shell-a
 ## A recovery key shown once and typed back, and a store opened with one (for 308-STO-0028)
 
 Numbered on 2026-11-04 as [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md): a program with a window of its own, `recovery`, and `--key-file` for the tests.
+
+## The machine's name as one system setting, and `hostname` (for 750-EFF-0018 and 000-KRN-0180)
+
+Asked on 2026-10-28 in `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` (EFF with LNK) and not recorded here then. Numbered on 2026-11-05 as [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md), at P1 by the maintainer's word: the file is `data/machine/name`.
+
+## The shell lends the station's reading client (for 550-NET-0058), once `KRN` gives the request bit
+
+Asked by NET on 2026-11-05. Numbered the same day as [550-APP-0124](550-APP-0124-the-shell-lends-a-reading-wifi-client.md), its plan taken from this request; blocked by KRN's bit.

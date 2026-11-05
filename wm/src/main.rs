@@ -41,6 +41,9 @@ const SYNC_MS: usize = 250;
 // How long wm waits for the shell to answer its menu's Shell item; and to set the clock or the zone, which the shell may
 // answer only after a command it runs or the cards' counters (a slow network stack) end.
 const SHELL_MS: u32 = 2000;
+// How long the network page waits for the station's country, in ms, and how often it reads it again while shown.
+const STATION_MS: u32 = 500;
+const COUNTRY_MS: usize = 2000;
 const SETTING_MS: u32 = 8000;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
@@ -529,6 +532,26 @@ fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colou
 
 mind::entry!(main);
 
+// The machine's name as the shell says it (shell.wit 1.11, 000-APP-0123); None without its commands or an answer.
+fn machine_name() -> Option<String> {
+    if !holds(SLOT_SHELL) { return None; }
+    mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::hostname(Endpoint(SLOT_SHELL))).ok()?.ok().map(|name| String::from(name.as_str()))
+}
+
+// The network page's country, read through wm's client of the station (wifi.wit 1.1 and 1.2, 550-APP-0082): it only
+// reads. None without a station or an answer within STATION_MS.
+fn wifi_country() -> Option<wm::settings::WifiCountry> {
+    use mind::idl::wifi;
+    use wm::settings::{Origin, WifiCountry};
+    if !holds(SLOT_WIFI) { return None; }
+    let (s, o) = mind::idl::wire::with_timeout(STATION_MS, || Some((wifi::country(Endpoint(SLOT_WIFI)).ok()?, wifi::country_origin(Endpoint(SLOT_WIFI)).ok()?)))?;
+    let origin = match o.origin { wifi::Origin::None => Origin::None, wifi::Origin::Chosen => Origin::Chosen, wifi::Origin::World => Origin::World,
+                                  wifi::Origin::Detected => Origin::Detected { announced: o.announced, heard: o.heard } };
+    let applied = if s.state == wifi::CountryState::Applied { String::from(s.applied.as_str()) } else { String::new() };
+    let refused = if s.state == wifi::CountryState::Failed { String::from(s.asked.as_str()) } else { String::new() };
+    Some(WifiCountry { applied, refused, catalogue: !s.catalogue.as_str().is_empty(), origin })
+}
+
 // The date page's clock as the clocks show it: local, and its zone (000-APP-0099).
 fn show_clock(settings: &mut wm::settings::Settings) {
     let local = mind::rtc::local_date_time();
@@ -565,6 +588,7 @@ fn main(info: &'static BootInfo) {
     let mut last_pattern = mind::time::uptime_ms();
     let mut frame_times = FrameTimes::default();
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
+    let mut next_country = 0usize; // when Settings' network page reads the station's country again
     let mut keymap_asked = false; // whether Settings' keyboard page asked the shell for the layout, this time it is open
     let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
@@ -729,6 +753,24 @@ fn main(info: &'static BootInfo) {
                     }
                     manager.wm.notice = Some(text);
                 }
+                Action::SetHostname(name) => {
+                    // The machine's name through the shell, at once as the clock (shell.wit 1.11, 000-APP-0123); the shell
+                    // checks it is a name and keeps it in data/machine/name.
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the name needs the shell's commands, which wm does not hold") } else {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_hostname(Endpoint(SLOT_SHELL), &name)) {
+                            Ok(Ok(())) => format!("The machine's name is {} now, kept in data/machine/name", name.to_ascii_lowercase()),
+                            Ok(Err(mind::idl::shell::Error::Invalid)) => format!("{} is not a name: 1 to 63 of a-z 0-9 -, neither first nor last a hyphen", name),
+                            Ok(Err(error)) => format!("The name is not set ({:?})", error),
+                            Err(error) => shell_failed("The name is not set", "set-hostname", "1.11", SETTING_MS, error),
+                        }
+                    };
+                    mind::println!("[WM] SET HOSTNAME {}: {}", name, text);
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        settings.machine = machine_name();
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                }
                 Action::SetZone { west, minutes } => {
                     // The zone through the shell, at once as the clock (shell.wit 1.9, 000-APP-0099); every clock shows it
                     // from its next reading of the RTC, this page and the background at once.
@@ -835,6 +877,17 @@ fn main(info: &'static BootInfo) {
                     relayout = true;
                 }
             }
+            // The network page names the station's country and why it applies (550-APP-0082), read every 2 s.
+            if settings.page == wm::settings::NETWORK && now >= next_country {
+                next_country = now + COUNTRY_MS;
+                if settings.machine.is_none() { settings.machine = machine_name(); relayout = true; }
+                let read = wifi_country();
+                if read != settings.country {
+                    mind::println!("[WM] NETWORK PAGE: {}", wm::settings::country_line(read.as_ref()));
+                    settings.country = read;
+                    relayout = true;
+                }
+            }
             if settings.page == wm::settings::DATE && now >= next_clock {
                 // The RTC itself, not the background's clock, which reads it once a minute: the shell may just have set it.
                 next_clock = now + INFO_MS;
@@ -843,6 +896,7 @@ fn main(info: &'static BootInfo) {
             }
         } else {
             keymap_asked = false;
+            next_country = 0;
         }
         let pattern_due = backdrop.moving() && now >= next_pattern;
         if backdrop.shown() && (pattern_due || now >= next_info) {

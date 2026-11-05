@@ -2,8 +2,8 @@
 //! What a window manager and its console ask of the shell (211-APP-0044). The shell alone holds the operator's
 //! authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
 //! (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
-//! asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3)
-//! and the keyboard's layout (1.10).
+//! asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3),
+//! the keyboard's layout (1.10) and the machine's name (1.11).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,7 +13,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 10, 0);
+pub const VERSION: (u8, u8, u8) = (1, 11, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -229,6 +229,39 @@ pub fn set_keymap(endpoint: Endpoint, keymap: &Keymap) -> Result<core::result::R
     Ok(Ok(()))
 }
 
+/// The machine's name, as `hostname` says it (1.11, 000-APP-0123): `mindcore` when none is set, or
+/// `data/machine/name` holds no name. For any client: it only reads.
+pub fn hostname(endpoint: Endpoint) -> Result<core::result::Result<Text<63>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 12 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 65, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Text<63> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Sets it, as `hostname <name>` does (1.11): an RFC 1123 label, capitals taken as small letters (`invalid` for any
+/// other), kept in `data/machine/name` (`unavailable` when the disk refused it). For the window manager the shell
+/// started, at once, as the clock (its Settings are the user's choice); for any other client, once the user agrees in
+/// the shell's window.
+pub fn set_hostname(endpoint: Endpoint, name: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<63>(name, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 13 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -243,6 +276,8 @@ pub enum Request {
     SetZone { west: bool, minutes: u32 },
     Keymap,
     SetKeymap { keymap: Keymap },
+    Hostname,
+    SetHostname { name: Text<63> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -313,6 +348,21 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::SetKeymap { keymap }, call))
         }
+        12 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 65, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Hostname, call))
+        }
+        13 => {
+            let mut copy = [0u8; 65];
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<63> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SetHostname { name }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -360,6 +410,14 @@ pub fn reply_keymap(call: Call, value: core::result::Result<&Keymap, Error>) -> 
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_set_keymap(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_hostname(call: Call, value: core::result::Result<&str, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_str::<63>(value, w))
+}
+pub fn reply_set_hostname(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
 }

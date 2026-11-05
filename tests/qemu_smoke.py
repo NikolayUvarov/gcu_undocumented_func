@@ -1512,6 +1512,7 @@ def shell_suite(vm):
     require(vm.command("cat ram:script.txt"), "ENTRIES, ")
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
+    hostname_check(vm)
     storefs_check(vm)
     vfs_restart_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
@@ -2561,6 +2562,29 @@ def vfs_restart_check(vm):
     require(vm.command("cat data/after.txt"), "after the restart")
     require(vm.command("rm data/after.txt"), "OK")
     print("PASS: vfs_server restarted: the shell's ls, write, cat and rm in data/ answer again with no restart of the shell (311-KRN-0207)", flush=True)
+
+
+def hostname_check(vm):
+    """000-APP-0123: the machine's name, one RFC 1123 label in data/machine/name, mindcore when none is set; `hostname`
+    says it and where from, `hostname <name>` sets it in small letters and logs the change once; a name that is no
+    label is refused, and the file stays as it was."""
+    require(vm.command("hostname"), "THE MACHINE'S NAME: mindcore (NONE SET: NO data/machine/name; HOSTNAME <NAME> SETS ONE)")
+    require(vm.command("hostname my_pc"), "ERROR: HOSTNAME: A CHARACTER OTHER THAN a-z 0-9 -: A NAME IS 1 TO 63 OF a-z 0-9 -, NEITHER FIRST NOR LAST A HYPHEN")
+    require(vm.command("hostname DEXP"), "THE MACHINE'S NAME: dexp, KEPT IN data/machine/name")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: dexp (data/machine/name)")
+    require(vm.command("cat data/machine/name"), "dexp")
+    require(vm.command("hostname dexp"), "THE MACHINE'S NAME IS dexp ALREADY")
+    require(vm.command("hostname -dexp"), "ERROR: HOSTNAME: A HYPHEN FIRST OR LAST")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: dexp (data/machine/name)")
+    log = vm.command("dmesg -s shell", raw=True)
+    assert log.count("[SHELL] THE MACHINE'S NAME: mindcore -> dexp") == 1 and "-> -dexp" not in log, log[-1500:]
+    require(vm.command("hostname mind-2"), "THE MACHINE'S NAME: mind-2, KEPT IN data/machine/name")
+    require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE MACHINE'S NAME: dexp -> mind-2")
+    require(vm.command("rm data/machine/name"), "OK")
+    require(vm.command("hostname"), "THE MACHINE'S NAME: mindcore (NONE SET")
+    require(vm.command("rm data/machine"), "OK")
+    print("PASS: hostname (000-APP-0123): mindcore with none set; DEXP kept as dexp in data/machine/name and logged once; "
+          "the same name again changes nothing; my_pc and -dexp refused with the rule, the file as it was", flush=True)
 
 
 def storefs_check(vm):
@@ -6656,9 +6680,11 @@ def effector_grants_check(vm):
         return {int(s): (int(b), named.get(servers.get(int(ep)), "?")) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
                 if servers.get(int(ep)) != pids[name]}
     gw, session = held("effector_gw"), held("effector")
-    # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap.
-    quota = re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
-    assert quota and int(quota[1]) == 48 << 20, quota and quota[0]
+    # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap; 750-KRN-0159: the right to start
+    # workers for it, a ceiling of 32 tasks (the kernel allows one per online CPU), and one endpoint they answer on.
+    quota = re.search(r"QUOTA TASKS=\d+/(\d+) ENDPOINTS=\d+/(\d+) MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
+    assert quota and (int(quota[1]), int(quota[2]), int(quota[3])) == (32, 1, 48 << 20), quota and quota[0]
+    require(vm.command("dmesg -s init", raw=True), "[INIT] effector: 48 MIB, 1 ENDPOINT AND WORKERS, AT MOST ONE PER CPU")
     assert set(gw) == {3, 5, 7, 10, 11, 12, 15, 35, 38} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
     assert gw[35] == (1, "updater"), gw  # BADGE_UPDATE_GATEWAY: the updater's client, gated by remote-update (751-KRN-0185)
     assert gw[38][1] == "vfs_server" and gw[38][0] > 7, gw  # SLOT_APPS: a writable scope of data/apps/ (750-KRN-0169)
@@ -7581,6 +7607,26 @@ def update_releases(temp, arch, changed=None, minimum6=None, gateway=None):
     return volume, newer, server, kept, good, forged, manifest6, boot_files, channel
 
 
+def trial_confirmed(vm, since, timeout):
+    """The console from position `since` of its log, once init's confirmation of the trial boot follows `BOOT: SLOT B
+    LOADED ON TRIAL` there. Read from the log, not from what expect() left: a command whose prompt the new boot answered
+    took those lines with it (000-KRN-0210)."""
+    deadline, clean = time.monotonic() + timeout, ""
+    while time.monotonic() < deadline:
+        vm.collect()
+        if vm.log.find("THE TRIAL BOOT IS CONFIRMED", since) >= 0 or "KERNEL EXCEPTION" in vm.output or "KERNEL PANIC" in vm.output:
+            clean = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+            if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
+                raise AssertionError(clean[-3000:])
+            if "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED" in clean.partition("BOOT: SLOT B LOADED ON TRIAL")[2]:
+                vm.output = ""
+                return clean
+        if vm.process.poll() is not None:
+            raise AssertionError(f"QEMU exited {vm.process.returncode}: {vm.log[-3000:]}")
+        time.sleep(.05)
+    raise AssertionError(f"Timeout waiting for the trial boot's confirmation: {(clean or vm.log[since:])[-3000:]}")
+
+
 def update_suite(args):
     """The updater (351-UPD-0007): a raw image with release 5 in slot A, confirmed, the channel it came with kept there,
     and update.txt naming the test release server over HTTPS, trusted by its pinned key, with `automatic apply` every
@@ -7670,17 +7716,21 @@ def update_suite(args):
         cut = (newer / largest[0]).stat().st_size // 2
         https.cuts[f"/blobs/{largest[1]}"] = cut
         vm.collect(); vm.output = ""
+        since = len(vm.log)
         # How long each boot file took, as the updater logs it (351-UPD-0018): evidence for a slow machine, not a check.
-        # Its log goes with the restart, so it is read while the fetch runs, until the version is staged; a read the
-        # restart cuts short ends the reading, and the restart's lines stay in the output.
+        # Its log goes with the restart, so it is read while the fetch runs, until the version is staged. A read the
+        # restart cuts short ends the reading, and so does one whose prompt the new boot answered (000-KRN-0210).
         log = ""
         for _ in range(900):
             try:
-                log = vm.command("dmesg -s updater", raw=True)
+                read = vm.command("dmesg -s updater", raw=True)
             except AssertionError as error:
                 if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
                     raise
                 break
+            if "MIND CORE KERNEL: REBOOT VIA" in read:
+                break
+            log = read
             if "[UPDATER] FETCH: VERSION 6 STAGED" in log or "[UPDATER] APPLY:" in log:
                 break
             time.sleep(1)
@@ -7689,7 +7739,7 @@ def update_suite(args):
         # init's confirmation is a kernel line that can land inside the shell's first prompt (M…IND>): the suite waits for
         # the line, whole, then for a fresh prompt (000-KRN-0136).
         try:
-            out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+            out = trial_confirmed(vm, since, 1500)
         except AssertionError:
             # What the updater did after staging: its lines are in the log service, not on the serial line.
             try:
@@ -7711,9 +7761,10 @@ def update_suite(args):
         assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
         # init confirms the trial within seconds (000-KRN-0102); the updater asks it every second and records it at once,
         # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
-        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
+        # The floor is raised after the confirmation is recorded, so its line is the one waited for (000-KRN-0210).
+        log = logged("[UPDATER] VERSION FLOOR 1 RAISED TO 6", 90)  # 351-UPD-0024
+        require(log, "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT")
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
-        require(log, "[UPDATER] VERSION FLOOR 1 RAISED TO 6")  # 351-UPD-0024
         # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
         assert "PARSER: THE SHARED SERVICE" not in log, log
         # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
@@ -7896,8 +7947,9 @@ def install_suite(args, stub_elf):
             require(log, line)
         assert "REFUSED TO THE EFFECTOR GATEWAY" not in log, log[-3000:]
         vm.collect(); vm.output = ""
+        since = len(vm.log)
         require(vm.command("mkdir data/apply"), "OK")
-        out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
+        out = trial_confirmed(vm, since, 900)
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
         require(out, f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}")
@@ -7976,6 +8028,18 @@ def linkupdate_suite(args):
             link.put(server / path, path)
         print(f"TIME: {len(files)} files, {sum((server / p).stat().st_size for p in files)} bytes, put through the link in "
               f"{time.monotonic() - started:.0f} s", flush=True)
+        # 000-KRN-0212: link's put ends in a rename, and its mkdir, mv and rm flush nothing of their own: the disk holds
+        # each as soon as it is answered, with nothing flushed since.
+        last, small = files[-1], min(files, key=lambda p: (server / p).stat().st_size)
+        assert image.read(f"data/link/{link_update.DIR}/{last}") == (server / last).read_bytes(), last
+        link.run("mkdir", "made")
+        link.put(server / small, "copy")
+        link.run("mv", f"{link_update.DIR}/copy", "made/moved")
+        assert image.read("data/link/made/moved") == (server / small).read_bytes() and image.read(f"data/link/{link_update.DIR}/copy") is None, small
+        link.run("rm", "made/moved")
+        link.run("rmdir", "made")
+        listing = subprocess.run(["mdir", "-b", "-i", image.drive, "::/data/link"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
+        assert "made" not in {line.rstrip("/").rpartition("/")[2] for line in listing.splitlines()}, listing
         # The script's follower stops at a refusal, as it would on a real machine: an expired channel (351-UPD-0025), then
         # one whose signature was changed.
         for bad, refusal in ((channel(6, 5, "2020-01-01T00:00:00Z"), "Expired"), (forged, "Signature")):
@@ -9348,16 +9412,29 @@ def wifi_join_check(vm):
     vm.send("wm\n")
     rate = vm.expect(", THE FIRST RATE)", timeout=180)  # a loaded machine (gate 25: PCU at a load of 11) is slow to start wm
     assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
+    # 550-APP-0082: Settings' network page names the station's country and why it applies, read through wm's client of
+    # the station (wifi.wit 1.2): wlansim's access point announces UZ, and none is chosen yet.
+    since = len(vm.log)
+    vm.hmp("sendkey alt-s")
+    time.sleep(.3)
+    for _ in range(3):  # to the network page (settings::NETWORK)
+        vm.hmp("sendkey down")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("[WM] NETWORK PAGE: Country: UZ, announced by 1 of 1 access points", since)
+    vm.hmp("sendkey esc")
+    time.sleep(.2)
     since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
     vm.logged("SHELL RESUMED.", since)
-    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7)", flush=True)
+    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7); Settings' network "
+          "page names the country the access point announced (550-APP-0082)", flush=True)
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
     # 550-APP-0082 over 550-NET-0035 stage B: with none chosen the station runs under the country wlansim's access point
-    # announces; the whole catalogue is listed but 00, and a country's channels are shown.
-    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, none ASKED")
+    # announces, and wifi says so (wifi.wit 1.2); the whole catalogue is listed but 00, and a country's channels are shown.
+    run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY")
     run("wifi countries", 30, " OF 181 COUNTRIES")
     run("wifi channels uz", 30, "[WIFI] 13 CHANNELS UNDER UZ (Uzbekistan)")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
@@ -9450,7 +9527,7 @@ def wifi_join_check(vm):
     require(radio, "[WLANSIM] COUNTRY UZ: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, "the first scan sent a probe request"
     run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")
-    run("wifi country US", 30, "[WIFI] COUNTRY US (United States) APPLIED")
+    run("wifi country US", 30, "[WIFI] COUNTRY US (United States) APPLIED, THE RADIO CONFIRMED ITS LIMITS; CHOSEN BY THE USER, KEPT BY KEYSTORE")
     require(wlan_until("[WLAN] COUNTRY US (CHOSEN BY THE USER", 30), "[WLAN] COUNTRY US (CHOSEN BY THE USER, KEPT BY KEYSTORE): 11 CHANNELS TO SEND ON")
     require(vm.service_logs("wlansim", "COUNTRY US"), "[WLANSIM] COUNTRY US: 11 CHANNELS")
     # A restart reads it back from keystore, and nothing announced moves a chosen country.
@@ -10178,7 +10255,7 @@ def world_country_check(args):
                 out += vm.command("dmesg -s wifi", raw=True)
                 time.sleep(.5)
             require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED")
+            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS")
         finally:
             vm.close()
     print("PASS: the station's country with none chosen and none announced (550-NET-0035): 00 applied, 11 channels to send "
@@ -10756,7 +10833,12 @@ def effector_actions_check(vm, server, agent, until, beats):
     server.inject("/api/commands/ack", "ack_500")
     late_id = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 3}, program="mind")
     until(f"EFFECTOR: ACK {late_id} completed LATE, WITHOUT ring.log")
-    late = server.operation(late_id)["result"]
+    # The refused try logs that line too: the fixture's record comes with the accepted retry, 5 s or more later.
+    deadline = time.monotonic() + 60
+    while (record := server.operation(late_id)) is None:
+        assert time.monotonic() < deadline, ("the late ACK never reached the fixture", vm.command("dmesg -s effector", raw=True)[-3000:])
+        time.sleep(1)
+    late = record["result"]
     assert late["status"] == "completed" and "artifact" not in late, late.keys()
     assert re.fullmatch(r"not sent: the server had ended the command; ring\.log \d+ [0-9a-f]{64}", late["stdout"]), late["stdout"]
     after_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
@@ -12422,6 +12504,14 @@ def wm_suite(vm):
         keys("ret", text="SETTINGS=Network:Wi-Fi")
         screen_has("console netpolicy")
         screen_has("wifi --countries")  # the country beside Wi-Fi (550-APP-0082)
+        screen_has("Country: no station to ask")  # and why none is named: QEMU's wm suite has no station
+        # 000-APP-0123: the machine's name, the page's last row, set through the shell at once (shell.wit 1.11).
+        keys(*["down"] * 6, text="SETTINGS=Network:Name")
+        screen_has("now mindcore")
+        keys("d", "e", "x", "p")
+        keys("ret", text="[WM] SET HOSTNAME dexp: The machine's name is dexp now, kept in data/machine/name")
+        screen_has("now dexp")
+        keys(*["up"] * 6, text="SETTINGS=Network:Wi-Fi")
         keys("ret", text="[WM] STARTED wifi PID")
         pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
         while not any(m[1] == pid for m in windows_re.findall("".join(seen))):
