@@ -1,6 +1,6 @@
-# 000-KRN-0214 — The shell stopped answering during the Effector suite's screenshot, on x86 (and once in `disks_check`)
+# 000-KRN-0214 — The shell stopped answering during the Effector suite's screenshot, on x86 (and once in `disks_check`) — done
 
-**Type:** a suite to find, then the service at fault · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** a suite to find, then the service at fault · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-06) · **Blocked by:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -68,6 +68,19 @@ This is not a cause (MC-12.2). Candidates only:
 
 **Not yet:** a reader of the kernel's task table that needs no shell. `CR3` in each CPU's registers names the address space that ran, but not the task.
 
+## Resolution
+
+**Both criteria are met; the cause is not named.**
+- **The record** (step 1, round 88, `main` f5692919): a suite's wait of 5 s or more that runs out leaves `mind-core-stuck-<pid>-<n>.log` with every CPU's registers and the console's end. `tests/qemu_stuck_test.py` fails without it.
+- **10 runs in a row passed** (step 2, 2026-11-06):
+  - **What:** `x86: network, TLS and Effector` on `main` 557ffae9, x32-128, lane `KRN`, each in 1074 to 1087 s;
+  - **Beside it:** lane `KRN-2` ran `x86: files and block writes` the whole time, 13 runs, all passed (832 to 840 s);
+  - **Effector operations:** `20261106001317.796281436_002421` (the first) to `20261106025657.503845021_002442` (the last), with the build groups in each.
+- **No run stopped,** so no record was made and the task that stopped in the three cases above is not known. These 23 runs show only that the stop did not happen in them, on that machine and tree (MC-12.1, MC-12.2).
+- **If it happens again,** its record is kept with the gate's logs (`land.py`) or the run's (`x32/repeat_on.py`). A new issue starts from that record, with step 3 of the plan: find the task and the wait, then fix it or pass it to the service's track.
+
+**Not done:** a reader of the kernel's task table that needs no shell. `CR3` names the address space that ran, not the task.
+
 ## Related
 
-[000-KRN-0210](../issues-done/000-KRN-0210-the-updater-group-ran-past-its-limit-once.done) (a gate's hang, and the logs `land.py` keeps); [750-KRN-0153](../issues-done/750-KRN-0153-the-gateways-screen-capture.done) (the capture), 750-EFF-0007.
+[000-KRN-0210](000-KRN-0210-the-updater-group-ran-past-its-limit-once.done) (a gate's hang, and the logs `land.py` keeps); [750-KRN-0153](750-KRN-0153-the-gateways-screen-capture.done) (the capture), 750-EFF-0007.
