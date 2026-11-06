@@ -8959,6 +8959,7 @@ def download_check(args, disk):
     service = _service_server(certificates)
     api_stub = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # 000-NET-0047
     api_other = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # another host for get's redirects
+    api_asked = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # not in get's lines: asked at run time
     _expired_certificate(certificates)
     expired, _ = _https_server(certificates, "expired")
     service_port, expired_port = service.server_address[1], expired.server_address[1]
@@ -8996,7 +8997,7 @@ def download_check(args, disk):
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
         service_runs(vm, service_port)
         api_runs(vm, api_stub.server_address[1])
-        get_runs(vm, api_stub.server_address[1], api_other.server_address[1], secure, tls_port, rogue_port, port, files)
+        get_runs(vm, api_stub.server_address[1], api_other.server_address[1], api_asked.server_address[1], secure, tls_port, rogue_port, port, files)
         pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
     finally:
         vm.close()
@@ -9004,7 +9005,7 @@ def download_check(args, disk):
         stall.go.set()
         if sftp:
             sftp.stop()
-        for server in (release, secure, rogue, held, stall, service, api_stub, api_other, expired):
+        for server in (release, secure, rogue, held, stall, service, api_stub, api_other, api_asked, expired):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -9089,11 +9090,12 @@ def api_runs(vm, port):
           "body), PATCH and DELETE (204) on one connection", flush=True)
 
 
-def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, files):
+def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, plain_port, files):
     """000-NET-0048: `get`, the console's wget and curl, against tests/http_api_stub.py and the release server over HTTPS:
     a body to the console and to files (-o, -O), a download cut short and resumed with -c, a JSON POST, a multipart form
     and a PUT of a file, redirects by their rules (--max-redirs, HTTPS to HTTP, credentials kept from another host), -f,
-    -I, -w, --max-time, plain HTTP only when asked, and curl's exit statuses for each failure."""
+    -I, -w, --max-time, plain HTTP only when asked, curl's exit statuses for each failure, and a host its grant does not
+    name asked of the user at run time (refused, then allowed once)."""
     api = f"https://10.0.2.2:{port}/api"
     data = (files / "get.bin").read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -9172,15 +9174,39 @@ def get_runs(vm, port, other_port, secure, tls_port, rogue_port, plain_port, fil
     out = get(f"--insecure-http http://10.0.2.2:{plain_port}/get.txt")
     require(out, f"GET: PLAIN HTTP TO 10.0.2.2:{plain_port}, NOT ENCRYPTED")
     require(out, "plain text over http")
-    code, out = status("https://10.0.2.3/")
-    assert code == 7, out
     for arguments, expected in (("-X TRACE https://h/", 2), (f"-O {api}/", 2), ("ftp://h/x", 3)):
         code, out = status(arguments)
         assert code == expected, (arguments, out)
+
+    # A host its grant does not name: asked of the user at run time (socket.wit 2.8), on the console get runs in front
+    # of. A script's program is not asked yet: msh's wait on it does not put the question (requests-APP.md).
+    asked = f"https://10.0.2.2:{asked_port}/api/final?asked=1"
+
+    def answered(key):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(f"get {asked}\n")
+        vm.logged("ALWAYS? ", since, timeout=30)
+        time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
+        vm.send_bytes(key)
+        # The prompt once get has ended (the shell took the keys for the question, so it says no EXITED line).
+        vm.expect("MIND> ", timeout=60, after={b"n": "REFUSED BY THE USER", b"o": "the end asked=1"}[key])
+        out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+        require_all(out, f"GET: 10.0.2.2:{asked_port} IS NOT IN ITS GRANT: THE USER IS ASKED", "NETWORK: get (PID ",
+                    f") ASKS TO REACH 10.0.2.2:{asked_port}", 'ITS REASON, IN ITS OWN WORDS: "the URL on its command line"',
+                    {b"n": "NO\n", b"o": "ONCE\n"}[key])
+        return out
+    out = answered(b"n")
+    assert f"GET: 10.0.2.2:{asked_port}: REFUSED BY THE USER" in out and "the end asked=1" not in out, out
+    out = answered(b"o")
+    assert "the end asked=1" in out and "REFUSED" not in out, out
+    require(vm.service_logs("netpolicy", "ASKS FOR"), f"ASKS FOR 10.0.2.2:{asked_port} TCP")
+
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
           "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
-          "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's", flush=True)
+          "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's; a host not in its grant asked at run "
+          "time, refused and allowed once", flush=True)
 
 
 def pinned_runs(vm, certificates, port, rogue_port, expired_port):
