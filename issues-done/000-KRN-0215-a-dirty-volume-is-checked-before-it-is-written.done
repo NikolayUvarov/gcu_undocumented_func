@@ -1,6 +1,6 @@
-# 000-KRN-0215 — A FAT volume left dirty is checked at its mount, and one found damaged is not written
+# 000-KRN-0215 — A FAT volume left dirty is checked at its mount, and one found damaged is not written — done
 
-**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-4.8, MC-12.3
+**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-11-06) · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-4.8, MC-12.3
 
 From DRV's report of 2026-11-05 (`KRN/2026-11-05T1852Z-DRV-the-ryzens-boot-volume-had-a-fat-cross-link.md` on `internal-dev-messages`).
 
@@ -63,6 +63,16 @@ From DRV's report of 2026-11-05 (`KRN/2026-11-05T1852Z-DRV-the-ryzens-boot-volum
 - **Docs:** the threat model's power-loss row and an evidence row.
 - **The shell** names the error `READ-ONLY DEVICE`, which is APP's text; the log says why.
 
+## Resolution
+
+- **`vfs_server`:** a boot volume or log partition on a writable device whose clean bit is clear is checked before anything is written to it. A cross-link, a chain into a free or invalid cluster or an invalid entry holds it: every write answers `read-only`, and the log names the first problem. Lost clusters alone hold nothing.
+- **Tests:**
+  - `tests/fat_host.rs`: three tests on FAT16 and FAT32. The held test fails when writes ignore the hold;
+  - `dirty_volume_check` in the `vfs` suite: x86, where only OVMF's `NvVars` changed, and aarch64, where no sector changed; also with the boot disk on NVMe.
+- **Docs:** the threat model's power-loss row and an evidence row.
+- **Landed** in round 88 (`main` f5692919). The gate `land-f5692919` passed every group.
+- **Not done here:** a repair. The shell's `READ-ONLY DEVICE` for a held volume is APP's text.
+
 ## Related
 
-[175-KRN-0049](../issues-done/175-KRN-0049-fat-clean-only-after-a-good-flush.done) (the dirty and clean marks), [000-KRN-0212](../issues-done/000-KRN-0212-a-remove-rename-or-new-directory-reaches-the-disk.done) (a remove reaches the disk at once), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md) (the Ryzen's boots), 800-LNK-0036 (the writer's kept parts).
+[175-KRN-0049](175-KRN-0049-fat-clean-only-after-a-good-flush.done) (the dirty and clean marks), [000-KRN-0212](000-KRN-0212-a-remove-rename-or-new-directory-reaches-the-disk.done) (a remove reaches the disk at once), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (the Ryzen's boots), 800-LNK-0036 (the writer's kept parts).

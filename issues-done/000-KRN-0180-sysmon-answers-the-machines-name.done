@@ -1,6 +1,6 @@
-# 000-KRN-0180 — `sysmon` answers the machine's name (`sysinfo.wit` 4.2)
+# 000-KRN-0180 — `sysmon` answers the machine's name (`sysinfo.wit` 4.2) — done
 
-**Type:** `sysmon`, `idl/sysinfo.wit`, `init` (a read-only scope) · **Owner:** `KRN` · **Priority:** P1 (the maintainer, 2026-11-05) · **Status:** in progress · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-12.4
+**Type:** `sysmon`, `idl/sysinfo.wit`, `init` (a read-only scope) · **Owner:** `KRN` · **Priority:** P1 (the maintainer, 2026-11-05) · **Status:** done (2026-11-06) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-12.4
 
 **Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, item 3, after the maintainer's word of 2026-10-28: the machine's name, set on the machine itself.
 
@@ -24,7 +24,7 @@
    - `effector_gw`;
    - `link` in developer mode;
    - the shell.
-4. **`netstack` starts before `sysmon`,** so it gets the same read-only scope of the name's directory. Its use is the network track's [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md).
+4. **`netstack` starts before `sysmon`,** so it gets the same read-only scope of the name's directory. Its use is the network track's [000-NET-0050](../issues/000-NET-0050-dhcp-sends-the-machines-name.md).
 
 ## Acceptance criteria
 
@@ -38,7 +38,7 @@
 
 ## The file (2026-11-05)
 
-APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md): `data/machine/name`, a directory of its own, as point 2 asks.
+APP chose it in [000-APP-0123](../issues/000-APP-0123-the-machines-name-and-hostname.md): `data/machine/name`, a directory of its own, as point 2 asks.
 - **What it holds:** one RFC 1123 label, with an optional line end.
 - **Capital letters** are taken as small ones when the name is set. A file that holds capitals was not written by the shell, so `sysmon` reads it as holding no name, as APP's `read` does.
 - **A missing file, or one that is not a label,** gives `mindcore`.
@@ -87,6 +87,15 @@ All four criteria are met on those runs. The task closes once it lands.
 - A disk without the directory, the tests' images among them, gives no scope until `sysmon`'s next start after it is made.
 - The `Make` modes are gone. The `vfs`, `edit` and `disk` suites' expectations are `main`'s again: `disk_check`'s extra key, told to APP, is taken back. `sysmon_name_check` makes the directory, and removes it at its end.
 
+## Resolution
+
+- **`sysinfo.wit` 4.2** `hostname() -> string<63>`, and **`mind::hostname`**, holding APP's rule for `data/machine/name`.
+- **`sysmon`** answers the name at each call through a read-only scope of `data/machine/` alone, `mindcore` without a name, and logs each change. `bench`'s head names it.
+- **`init` never makes the directory,** so a boot writes nothing for it. `scripts/make_usb_image.py` puts it on every image it writes.
+- **Tests:** `tests/hostname_host.rs`; `sysmon_name_check` in the `vfs` suite; `kbench_check`.
+- **Docs:** `docs/api`, `docs/profile/bootstrap.md`.
+- **Landed** in round 88 (`main` f5692919), after round 87's return. The gate `land-f5692919` passed every group.
+
 ## Related
 
-[000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md) (the setting and `hostname`).
+[000-NET-0050](../issues/000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, [000-APP-0123](../issues/000-APP-0123-the-machines-name-and-hostname.md) (the setting and `hostname`).

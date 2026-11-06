@@ -64,6 +64,8 @@ This is not a cause (MC-12.2). Candidates only:
   - a VM records twice at most;
   - a monitor that does not answer is recorded as such.
 
+**Step 1 landed** in round 88 (`main` f5692919): every suite's wait that runs out now leaves the record. The first criterion is met. Next: the 10 runs on x32-128 beside a busy lane.
+
 **Not yet:** a reader of the kernel's task table that needs no shell. `CR3` in each CPU's registers names the address space that ran, but not the task.
 
 ## Related

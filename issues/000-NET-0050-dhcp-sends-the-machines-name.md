@@ -1,6 +1,6 @@
 # 000-NET-0050 — DHCP sends the machine's name (option 12)
 
-**Type:** network (`netstack`'s DHCP client) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md) (the name's file and its read-only scope) · **Main task:** — · **Constitution:** MC-11.6, MC-12.1
+**Type:** network (`netstack`'s DHCP client) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** [000-KRN-0180](../issues-done/000-KRN-0180-sysmon-answers-the-machines-name.done) (the name's file and its read-only scope) · **Main task:** — · **Constitution:** MC-11.6, MC-12.1
 
 **Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, item 4.
 
@@ -57,8 +57,10 @@ The first criterion is met on those runs.
 - **Its own check is unchanged:** the `net` suite's disk holds `data/machine/name`.
 - **To run again:** `network, TLS and Effector` on both architectures, on the merged tree.
 
+**Landed in round 88** (`main` f5692919), with 000-KRN-0180. The gate `land-f5692919` passed `network, TLS and Effector` on x86 and aarch64, `dhcp_name_check` among them: the first criterion holds on `main`.
+
 **Left:** the DEXP's router (the second criterion), on the maintainer's word.
 
 ## Related
 
-[000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md), 750-EFF-0018.
+[000-KRN-0180](../issues-done/000-KRN-0180-sysmon-answers-the-machines-name.done), 750-EFF-0018.

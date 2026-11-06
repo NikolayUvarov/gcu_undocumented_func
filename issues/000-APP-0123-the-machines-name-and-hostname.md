@@ -1,8 +1,8 @@
 # 000-APP-0123 — The machine's name: one setting in `data/machine/name`, `hostname` in the shell, a field in `wm`'s Settings
 
-**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (raised by the maintainer, 2026-11-05) · **Status:** in progress (the shell's part in a landing request, `wm`'s field written, 2026-11-05) · **Blocked by:** nothing; the readers are [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md)'s · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-11.5
+**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (raised by the maintainer, 2026-11-05) · **Status:** in progress (the shell's part in a landing request, `wm`'s field written, 2026-11-05) · **Blocked by:** nothing; the readers are [000-KRN-0180](../issues-done/000-KRN-0180-sysmon-answers-the-machines-name.done)'s · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-11.5
 
-**Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, items 1 and 2, after the maintainer's word of 2026-10-28. It was not recorded in `requests-APP.md` then, and so went unnumbered until 2026-11-05. **Blocks:** [750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md) (which waits for the file's choice), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md) and [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), through it.
+**Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, items 1 and 2, after the maintainer's word of 2026-10-28. It was not recorded in `requests-APP.md` then, and so went unnumbered until 2026-11-05. **Blocks:** [750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](../issues-done/000-KRN-0180-sysmon-answers-the-machines-name.done) (which waits for the file's choice), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md) and [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), through it.
 
 ## Problem
 
@@ -66,4 +66,4 @@ MIND Core has no name for the machine:
 
 ## Related
 
-[750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.md), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), [000-APP-0099](000-APP-0099-clocks-show-the-time-zone.md) (`data/clock.conf`, set the same way).
+[750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](../issues-done/000-KRN-0180-sysmon-answers-the-machines-name.done), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), [000-APP-0099](000-APP-0099-clocks-show-the-time-zone.md) (`data/clock.conf`, set the same way).
