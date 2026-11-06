@@ -9167,7 +9167,7 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
         vm.logged("ALWAYS? ", since, timeout=30)
         time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
         vm.send_bytes(key)
-        # The prompt once get has ended (the shell took the keys for the question, so it says no EXITED line).
+        # The prompt once get has ended (a console program's end is the prompt alone, no EXITED line).
         vm.expect("MIND> ", timeout=60, after={b"n": "REFUSED BY THE USER", b"o": "the end asked=1"}[key])
         out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
         require_all(out, f"GET: 10.0.2.2:{asked_port} IS NOT IN ITS GRANT: THE USER IS ASKED", "NETWORK: get (PID ",
