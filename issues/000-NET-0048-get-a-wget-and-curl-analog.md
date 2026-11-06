@@ -84,6 +84,29 @@ In `main` at ef3faf0d (landing round 41, the request's commit 3f4fa0aa): `get` a
 
 Still left: what the Progress section lists (`-u`, a host refused at run time, HEAD, PATCH and DELETE).
 
+## Progress (2026-11-06)
+
+**HEAD, PATCH and DELETE** were done with 000-NET-0047 (f7fd71f5, 2026-10-30): `-I` sends HEAD and `-X` takes the three;
+the `get_runs` check covers them. That item of the list above was left there.
+
+**A host asked at run time, on `claude/youthful-mendel-mf1soy`** (000-NET-0049's `socket.wit` 2.8, the shell's question
+from 000-APP-0120):
+- a connection or a name's lookup the grant refuses (`Denied`) becomes a question through the grant, with the reason
+  `the URL on its command line` (or `a redirect from …`). The URL itself is not sent, as its query may hold a token;
+- the answer's address is connected to; `N` or no answer: exit 7, `REFUSED BY THE USER`;
+- `get` waits on the question up to `--max-time`, and 90 s at most (the broker refuses it at 60 s);
+- **tested** in QEMU, `get_runs`: a stand-in on a port the policy does not give `get`, with `get` in front of the serial
+  console; refused with `N`, allowed with `O` and its body fetched.
+
+**What waits for the shell (APP), both in [requests-APP.md](requests-APP.md):**
+- **`-u user`.** `get` is a console program: the shell keeps the keys typed while it runs (Esc and Ctrl+C stop it,
+  `Shell::key`), so it cannot read a password from the console. A first version read the keys itself and was taken
+  out when the `get_runs` check showed that none arrived.
+- **A question from a script.** `msh`'s wait on its program (`ShellHost::run`) does not put the question, so a
+  script's `get` to a host its grant does not name is refused at 60 s (exit 7).
+
+**Left:** those two, once the shell gives them.
+
 ## Related
 
 [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0049](../issues-done/000-NET-0049-a-flow-grant-asked-at-run-time.done), [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done).

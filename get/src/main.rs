@@ -4,9 +4,10 @@
 // (`-d TEXT`, `-d @FILE`, `-F` multipart), redirects followed by their rules, the body to the console or a file (`-o`,
 // `-O` into ram:, `-c` resuming it), `-I` the head alone, `-w` the status and the time, `-f` failing on an HTTP error,
 // `--max-time`; exit statuses as curl's (args.rs). HTTPS through the launcher's TLS client (BADGE_TLS_NO_DEVICE: never
-// as the device); plain HTTP only with --insecure-http, said on the console. It reaches only what its flow grant names,
-// a line of the network policy for `get` (a host asked for at run time is 000-NET-0049's remainder), and writes only the
-// user's files its launcher lends (REQUEST_FILES). `-I` asks with GET and reads no body (HEAD waits for 000-NET-0047).
+// as the device); plain HTTP only with --insecure-http, said on the console. It reaches what its flow grant names (a
+// line of the network policy for `get`, or a browsing grant); a host it does not name is asked of the user at run time
+// through the grant (socket.wit 2.8), on the console `get` was started from. It writes only the user's files its
+// launcher lends (REQUEST_FILES).
 extern crate alloc;
 
 mod args;
@@ -86,44 +87,93 @@ fn ipv4(text: &str) -> Option<u32> {
     parts.next().is_none().then_some(u32::from_be_bytes(address))
 }
 
+// Why no connection was made: the grant does not name the host (the user may allow it), or anything else.
+enum Refused { Grant, Fail(Fail) }
+
+impl From<Fail> for Refused { fn from(fail: Fail) -> Self { Refused::Fail(fail) } }
+
 // The host's address: as written, or the stack's DNS answer (the grant must allow DNS).
-fn resolve(host: &str) -> Result<u32, Fail> {
+fn resolve(host: &str) -> Result<u32, Refused> {
     if let Some(address) = ipv4(host) { return Ok(address); }
     match socket::resolve(STACK, host, 0, 0, 5000) {
         Ok(Ok(address)) => Ok(address),
-        Ok(Err(error)) => Err(Fail(args::NO_HOST, format!("{}: NOT RESOLVED ({:?})", host, error))),
-        Err(_) => Err(Fail(args::NO_HOST, format!("{}: NO NETWORK GRANT", host))),
+        Ok(Err(socket::Error::Denied)) => Err(Refused::Grant),
+        Ok(Err(error)) => Err(Fail(args::NO_HOST, format!("{}: NOT RESOLVED ({:?})", host, error)).into()),
+        Err(_) => Err(Fail(args::NO_HOST, format!("{}: NO NETWORK GRANT", host)).into()),
     }
 }
 
-fn connect(url: &Url, deadline: usize) -> Result<Connection<Timed>, Fail> {
-    let address = resolve(url.host)?;
+const ANSWER_MS: usize = 90_000; // the broker refuses an unanswered question at 60 s; past this the question is lost
+const ANSWER_POLL_MS: usize = 250;
+
+// Asks the user to let the grant reach the URL's host and port (socket.wit 2.8, 000-NET-0049): the shell puts the
+// question on the console `get` was started from, and the broker resolves a name. The address the new rule names.
+fn ask(url: &Url, deadline: usize, redirected: bool, quiet: bool) -> Result<u32, Fail> {
+    let why = if redirected { "a redirect from the URL on its command line" } else { "the URL on its command line" };
+    let id = match socket::ask(STACK, url.host, url.port, why) {
+        Ok(Ok(id)) => id,
+        Ok(Err(error)) => return Err(Fail(args::NO_CONNECTION, format!("{}:{}: NOT IN ITS GRANT, AND NOT ASKED ({:?})", url.host, url.port, error))),
+        Err(_) => return Err(Fail(args::NO_CONNECTION, format!("{}: NO NETWORK GRANT", url.host))),
+    };
+    if !quiet { mind::println!("GET: {}:{} IS NOT IN ITS GRANT: THE USER IS ASKED", url.host, url.port); }
+    let asked = now();
+    loop {
+        let ruling = match socket::asked(STACK, id) {
+            Ok(Ok(ruling)) => ruling,
+            _ => return Err(Fail(args::NO_CONNECTION, format!("{}:{}: ITS QUESTION WAS LOST", url.host, url.port))),
+        };
+        match ruling.state {
+            socket::QuestionState::Allowed => return Ok(ruling.address),
+            socket::QuestionState::Refused => return Err(Fail(args::NO_CONNECTION, format!("{}:{}: REFUSED BY THE USER", url.host, url.port))),
+            socket::QuestionState::Pending if now() >= deadline => return Err(Fail(args::TIMEOUT, String::from("THE TIME IS UP (--max-time)"))),
+            socket::QuestionState::Pending if now() - asked >= ANSWER_MS => return Err(Fail(args::NO_CONNECTION, format!("{}:{}: NO ANSWER TO ITS QUESTION", url.host, url.port))),
+            socket::QuestionState::Pending => { mind::time::sleep(ANSWER_POLL_MS); }
+        }
+    }
+}
+
+// A connection through the grant; one it does not name is asked of the user once, then made to the answer's address.
+fn connect(url: &Url, deadline: usize, redirected: bool, quiet: bool) -> Result<Connection<Timed>, Fail> {
+    let link = match resolve(url.host).and_then(|address| link(url, address, deadline)) {
+        Ok(link) => link,
+        Err(Refused::Fail(fail)) => return Err(fail),
+        Err(Refused::Grant) => match link(url, ask(url, deadline, redirected, quiet)?, deadline) {
+            Ok(link) => link,
+            Err(Refused::Fail(fail)) => return Err(fail),
+            Err(Refused::Grant) => return Err(Fail(args::NO_CONNECTION, format!("{}:{}: DENIED, THOUGH ALLOWED", url.host, url.port))),
+        },
+    };
+    Ok(Connection::new(Timed { link, deadline }))
+}
+
+fn link(url: &Url, address: u32, deadline: usize) -> Result<Link, Refused> {
     let wait = (deadline.saturating_sub(now())).clamp(1, 10_000) as u32;
-    let link = if url.https {
+    if url.https {
         let session = match tls::attach(TLS, SLOT_NETWORK) {
             Ok(Ok(session)) => session,
-            Ok(Err(error)) => return Err(Fail(args::TLS_ERROR, format!("TLS: {:?}", error))),
-            Err(_) => return Err(Fail(args::TLS_ERROR, String::from("NO TLS CLIENT (THE LAUNCHER LENT NONE)"))),
+            Ok(Err(error)) => return Err(Fail(args::TLS_ERROR, format!("TLS: {:?}", error)).into()),
+            Err(_) => return Err(Fail(args::TLS_ERROR, String::from("NO TLS CLIENT (THE LAUNCHER LENT NONE)")).into()),
         };
         let failed = match tls::connect(TLS, session, url.host, address, url.port, false, wait) {
             Ok(Ok(_)) => None,
-            Ok(Err(tls::Error::Certificate)) => Some(Fail(args::CERTIFICATE, format!("{}: CERTIFICATE REFUSED", url.host))),
-            Ok(Err(tls::Error::Timeout)) => Some(Fail(args::TIMEOUT, format!("{}: NO ANSWER", url.host))),
-            Ok(Err(error @ (tls::Error::Refused | tls::Error::Denied | tls::Error::NoNetwork))) => Some(Fail(args::NO_CONNECTION, format!("{}:{}: {:?}", url.host, url.port, error))),
-            Ok(Err(error)) => Some(Fail(args::TLS_ERROR, format!("{}: TLS {:?}", url.host, error))),
-            Err(error) => Some(Fail(args::TLS_ERROR, format!("{}: TLS {:?}", url.host, error))),
+            Ok(Err(tls::Error::Certificate)) => Some(Fail(args::CERTIFICATE, format!("{}: CERTIFICATE REFUSED", url.host)).into()),
+            Ok(Err(tls::Error::Timeout)) => Some(Fail(args::TIMEOUT, format!("{}: NO ANSWER", url.host)).into()),
+            Ok(Err(tls::Error::Denied)) => Some(Refused::Grant),
+            Ok(Err(error @ (tls::Error::Refused | tls::Error::NoNetwork))) => Some(Fail(args::NO_CONNECTION, format!("{}:{}: {:?}", url.host, url.port, error)).into()),
+            Ok(Err(error)) => Some(Fail(args::TLS_ERROR, format!("{}: TLS {:?}", url.host, error)).into()),
+            Err(error) => Some(Fail(args::TLS_ERROR, format!("{}: TLS {:?}", url.host, error)).into()),
         };
-        if let Some(fail) = failed { let _ = tls::close(TLS, session); return Err(fail); }
-        Link::Tls(session)
+        if let Some(refused) = failed { let _ = tls::close(TLS, session); return Err(refused); }
+        Ok(Link::Tls(session))
     } else {
         match socket::tcp_connect(STACK, address, url.port, wait) {
-            Ok(Ok(socket)) => Link::Tcp(socket),
-            Ok(Err(socket::Error::Timeout)) => return Err(Fail(args::TIMEOUT, format!("{}: NO ANSWER", url.host))),
-            Ok(Err(error)) => return Err(Fail(args::NO_CONNECTION, format!("{}:{}: {:?}", url.host, url.port, error))),
-            Err(_) => return Err(Fail(args::NO_CONNECTION, format!("{}: NO NETWORK GRANT", url.host))),
+            Ok(Ok(socket)) => Ok(Link::Tcp(socket)),
+            Ok(Err(socket::Error::Timeout)) => Err(Fail(args::TIMEOUT, format!("{}: NO ANSWER", url.host)).into()),
+            Ok(Err(socket::Error::Denied)) => Err(Refused::Grant),
+            Ok(Err(error)) => Err(Fail(args::NO_CONNECTION, format!("{}:{}: {:?}", url.host, url.port, error)).into()),
+            Err(_) => Err(Fail(args::NO_CONNECTION, format!("{}: NO NETWORK GRANT", url.host)).into()),
         }
-    };
-    Ok(Connection::new(Timed { link, deadline }))
+    }
 }
 
 fn method(name: &str) -> Method { Method::parse(name).unwrap_or(Method::Get) }
@@ -161,7 +211,7 @@ const CREDENTIALS: [&str; 3] = ["authorization", "cookie", "proxy-authorization"
 fn exchange(o: &Options, url: &Url, method_now: Method, with_body: bool, trusted: bool, offset: u64, deadline: usize,
             sink: &mut dyn FnMut(&http::Head, &[u8]) -> Result<(), Fail>, parser: &mut mind::parse::Service, next: &mut [u8], followed: u32)
             -> Result<(Answer, Option<http::Redirected>), Fail> {
-    let mut connection = connect(url, deadline)?;
+    let mut connection = connect(url, deadline, followed > 0, o.silent)?;
     let mut headers: Vec<(&str, &str)> = o.headers.iter().filter(|(n, _)| trusted || !CREDENTIALS.iter().any(|c| n.eq_ignore_ascii_case(c)))
         .map(|(n, v)| (n.as_str(), v.as_str())).collect();
     let range = format!("bytes={}-", offset);
@@ -336,7 +386,7 @@ fn head_text(h: &http::Head) -> String {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("get — an HTTP request from the console or a script, as wget and curl make them (000-NET-0048).\nUsage: get [options] URL\n  -o FILE  save the body (the user's files: ram:, data/, log:)   -O  save it in ram: under the URL's last name\n  -c  resume a saved file   -I  the head alone (HEAD)   -X GET|POST|PUT|HEAD|PATCH|DELETE   -H 'Name: value' (up to 14)\n  -d TEXT | -d @FILE  a body (POST)   -F name=value | -F name=@FILE  a multipart form (POST, up to 8)\n  -L  follow redirects (the default; --no-location stops, --max-redirs N, 10 at most)   -s  silent   -w  the status, bytes and time\n  -f  exit 22 on an HTTP error   -m, --max-time S   --insecure-http  plain http:// (not encrypted)\nExit statuses as curl's: 0, 1 not https, 2 usage, 3 URL, 6 host, 7 connection, 22 HTTP error (-f), 23 write, 26 read,\n28 time, 35 TLS, 47 redirects, 56 receive, 60 certificate.\nIt reaches only what the network policy gives `get` (a line naming the host and port, or a browsing grant).");
+    mind::about!("get — an HTTP request from the console or a script, as wget and curl make them (000-NET-0048).\nUsage: get [options] URL\n  -o FILE  save the body (the user's files: ram:, data/, log:)   -O  save it in ram: under the URL's last name\n  -c  resume a saved file   -I  the head alone (HEAD)   -X GET|POST|PUT|HEAD|PATCH|DELETE   -H 'Name: value' (up to 14)\n  -d TEXT | -d @FILE  a body (POST)   -F name=value | -F name=@FILE  a multipart form (POST, up to 8)\n  -L  follow redirects (the default; --no-location stops, --max-redirs N, 10 at most)   -s  silent   -w  the status, bytes and time\n  -f  exit 22 on an HTTP error   -m, --max-time S   --insecure-http  plain http:// (not encrypted)\nExit statuses as curl's: 0, 1 not https, 2 usage, 3 URL, 6 host, 7 connection or refused, 22 HTTP error (-f), 23 write,\n26 read, 28 time, 35 TLS, 47 redirects, 56 receive, 60 certificate.\nIt reaches what the network policy gives `get` (a line naming the host and port, or a browsing grant); for another host\nit asks you on its console (N, O, S or A), not yet when a script runs it.");
     let code = match args::split(mind::process::args_str()).and_then(|words| args::parse(&words)) {
         Err(why) => { mind::println!("GET: {} (help get)", why); args::USAGE }
         Ok(options) => match run(&options) {

@@ -70,7 +70,19 @@ answer to the console or a file. It is a process of its own, and `help get` list
 - **What it asks its launcher for** (MC-3.11: the request grants nothing):
   - `REQUEST_NETWORK`: a flow grant from the policy broker. It reaches only what `netpolicy.txt` names for `get`: lines
     naming a host and port, or a browsing grant (`browse get public tcp 443`, 000-NET-0049). A line `get dns` lets it
-    look names up. A host asked of the user at run time is 000-NET-0049's remainder.
+    look names up.
+  - **A host the grant does not name** (its connection or its name's lookup `Denied`) is asked of the user at run time
+    through the grant (`socket.wit` 2.8). The shell puts the question on the console `get` was started from:
+    `NETWORK: get (PID n) ASKS TO REACH host:port`, with the reason `the URL on its command line` (or `a redirect from the
+    URL on its command line`). The broker resolves a name.
+    - `N`, or no answer in 60 s: exit 7, `REFUSED BY THE USER`;
+    - `O`, `S` or `A`: `get` connects to the address the new rule names (`O`'s rule ends with that connection, so a
+      redirect back to the host asks again).
+
+    `get` says `GET: host:port IS NOT IN ITS GRANT: THE USER IS ASKED` first, unless `-s`.
+
+    **Not from a script yet.** A script's `get` (`msh -c "get …"`) is not asked: the shell's wait on a script's program
+    does not put the question, so the broker refuses it at 60 s and `get` ends with 7 (`requests-APP.md`).
   - `REQUEST_FILES`: the shell's own client of the user's files (`ram:`, `data/`, `log:`), for `-o`, `-O`, `-d @FILE` and
     `-F name=@FILE`. A client confined to one directory (`REQUEST_FILE`) would hold only the first argument's.
   - `REQUEST_PARSE`: the parser service reads each response head (109-NET-0009).
@@ -92,9 +104,10 @@ answer to the console or a file. It is a process of its own, and `help get` list
 - **The body:** decoded as it comes (gzip, deflate, chunked; 000-NET-0047). On the console a body that is valid UTF-8 is
   printed; one that is not is counted and `get` says to save it with `-o`.
 - **The exit status** follows `curl`'s, so that a script reads it (msh: `get … or { … }`): 0; 1 a scheme not allowed;
-  2 usage; 3 a malformed URL; 6 a name not resolved; 7 no connection (a host the grant does not name: `Denied`);
-  22 an HTTP error with `-f`; 23 a file not written; 26 a file to send not read; 28 the time is up; 35 TLS; 47 a
-  redirect not followed; 56 the connection ended before the whole answer; 60 a certificate refused.
+  2 usage; 3 a malformed URL; 6 a name not resolved; 7 no connection (a host the user refused at run time, or a
+  question that could not be asked); 22 an HTTP error with `-f`; 23 a file not written; 26 a file to send not read; 28
+  the time is up; 35 TLS; 47 a redirect not followed; 56 the connection ended before the whole answer; 60 a
+  certificate refused.
 
 ## `sftp://`
 
@@ -150,14 +163,16 @@ These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networ
   form with the saved file, read by Python's own parser; a PUT of a file with a header; a chain of 301, 308, 307 and 302;
   `--max-redirs 2` (47); HTTPS to HTTP (47); 303 after a POST; `Authorization` kept on the same host and dropped for
   another port; `-f` on 503 (22); `-I`; a gzip body saved decoded; `-w`; `-m 3` against an 8 s answer (28); a server
-  from a CA nobody trusts (60); `http://` refused (1) and allowed with `--insecure-http`; a host the grant does not name
-  (7); usage (2) and a URL (3).
+  from a CA nobody trusts (60); `http://` refused (1) and allowed with `--insecure-http`; usage (2) and a URL (3).
+  - **A host its grant does not name,** asked at run time with `get` in front of the serial console: the shell's
+    question with `get`'s reason; `N` refused it (`REFUSED BY THE USER`, the body not fetched); `O` let it through, and
+    the body came.
 
 ## Not provided yet
 
-- **In `get`:** `-u user` (the password asked on the console); a host asked of the user at run time (000-NET-0049's
-  remainder, which waits for the shell's question); HEAD, PATCH and DELETE (000-NET-0047's methods).
-
+- **In `get`:** `-u user`, the password typed on the console: a console program does not get the keys typed at its
+  console (the shell keeps them, Esc and Ctrl+C stop it), so `get` cannot read one. Requested of APP in
+  `requests-APP.md`. A question asked at run time from a script, also requested there.
 - **Roots covered by a release's signature:** the image ships Mozilla's roots as `tlsroots.pem` (000-NET-0046), but the boot manifest does not list the file and a slot update does not replace it. The roots are whatever the file holds, which nothing authenticates; a pin is the way to trust the update server for now.
 - **HTTPS by name with a pin from the channel:** the updater's (351-UPD-0007).
 - **In `mind::http::get` and `download`:** chunked bodies, redirects, keep-alive, several connections at once, IPv6 (the program `get` has the first two through `mind::http::Connection`). A service has chunked bodies and keep-alive through `mind::http::Connection` ([services.md](services.md), 750-NET-0019).
