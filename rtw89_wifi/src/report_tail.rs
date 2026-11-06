@@ -5,6 +5,8 @@
 use crate::{download, fwcmd::{Bus, Queue}, io::{self, Fault, FaultKind, RegisterIo, TimedIo}, post_mac, runtime_mac, rx};
 
 const PPDU:usize=0xce40;
+// The bits Linux defines there (it never reads them back); bit 24, of 0xCE43, is the hardware's own (the Ryzen, 2026-11-06).
+const PPDU_BITS:u32=0x1ff;
 const FORWARD:usize=0x9c18;
 const RTS:usize=0xc614;
 const BUDGET_US:u64=10_000;
@@ -55,10 +57,10 @@ pub(crate) fn configure(bus:&mut impl Bus,queue:&mut Queue<'_>,rings:&mut rx::Ri
     let encoded=thresholds(requested_rts);let mut stage=Stage::Ppdu;
     let result=(||{
         let budget=remaining(bus,start)?;let mut timed=TimedIo::new(bus,budget);
-        timed.write32(PPDU,0x2b)?;require(&mut timed,PPDU,u32::MAX,0x2b)?;
+        timed.write32(PPDU,0x2b)?;require(&mut timed,PPDU,PPDU_BITS,0x2b)?;
         stage=Stage::Forward;io::modify32(&mut timed,FORWARD,3,1)?;require(&mut timed,FORWARD,3,1)?;
         stage=Stage::Rts;field16(&mut timed,0xff00,encoded&0xff00)?;field16(&mut timed,255,encoded&255)?;
-        stage=Stage::Verify;require(&mut timed,PPDU,u32::MAX,0x2b)?;
+        stage=Stage::Verify;require(&mut timed,PPDU,PPDU_BITS,0x2b)?;
         require(&mut timed,FORWARD,3,1)?;
         let actual=timed.read16(RTS)?;
         if actual!=encoded{return Err(Fault::new(FaultKind::PowerState,RTS,actual as u32));}

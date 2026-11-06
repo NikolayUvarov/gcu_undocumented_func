@@ -1179,3 +1179,28 @@ The rule it replaces (DRV's own, 2026-10-16) refused a ready value read after th
 - **The fix:** `board::power_off_left_on` now powers such a MAC off before the board read, as Linux's `rtw89_mac_pwr_on` powers off and on again after "MAC has already powered on". The grant has bus mastering off, so no DMA runs. The service logs `THE MAC WAS LEFT ON … POWERED OFF FIRST`.
 - **On the Ryzen,** a replaced build then went through to `SERVING WLANHW` again.
 - **Still refused:** a MAC that stays on, and an unknown chip, which gets no write.
+
+## The second of 0123's lines on the Ryzen: `DATAPATH ADMITTED ON CHANNEL 1` (2026-11-06)
+
+**What the service does now (`receive_service.rs`):**
+- **Before a country,** every `set-channel` is a passive tune (`channel::run` may tune a tuned channel again, as Linux's `set_channel`). `info` names channels 1 to 13, so the station's first scan hears them all.
+- **`set-country` is applied** (answered with `info`) unless 0122's platform word is unknown.
+- **The first `send` on a channel the country lets it send on** is answered `busy` and admits that channel:
+  - `calibrate`: the station's rule, an active tune, `grant`, IQK, TSSI, DPK and the station;
+  - then the data mode and `connection::activate`, the tail now shared with `connection::run`;
+  - then `service.rs` takes the endpoint, and the service logs `[RTW89] DATAPATH ADMITTED ON CHANNEL n`.
+- **The session gets its packet inbox** (`Session::attach_inbox`) only before the data mode, so receive-only and the calibrations retain no packet.
+- **`rtw89_wifi` asks for a 256 KiB stack** (`PT_GNU_STACK`): the 64 KiB default overflowed (`FAULT VECTOR 14`).
+
+**What the Ryzen showed on the way** (each now modelled in `rtw89_initial_phy_device.rs`):
+- **0xCE40** reads back bit 24 set: only the PPDU report's bits 0–8 (Linux's) are compared.
+- **RF restores after IQK, DPK and DACK, and TSSI's thermal-offset table, are now written unread,** as Linux's `_rfk_restore_rf_reg` and `write32` do:
+  - RF0's gain field is the AGC's in RX mode;
+  - path B's RF 0x85 and the table at 0x7C00 read back changed while Bluetooth was active.
+- **The station and data-mode guards** now name each condition they refused.
+
+**On the Ryzen** (a replaced build, `wlan` restarted from its boot image):
+- the country came from the APs, or `00` when none named one;
+- the first send admitted channel 1 and logged `DATAPATH ADMITTED ON CHANNEL 1`.
+
+**Next:** 330 ms later the data service stopped with `TransmitTimeout`. The first frame sent got no completion within 100 ms. The TX path on the hardware comes next.

@@ -44,7 +44,8 @@ fn field(bus:&mut impl RegisterIo,at:u32,mask:u32,value:u32)->io::Result<()>{
 }
 fn read(bus:&mut impl RegisterIo,at:u32,mask:u32)->io::Result<u32>{Ok((io::read32(bus,PHY_BASE+at as usize)?&mask)>>mask.trailing_zeros())}
 fn verified(bus:&mut impl RegisterIo,at:u32,mask:u32,value:u32)->io::Result<()>{field(bus,at,mask,value)?;let actual=read(bus,at,mask)?;if actual!=value{return Err(fault(at,actual));}bus.delay_us(0)}
-fn rf_restore(bus:&mut impl RegisterIo,path:u8,at:u32,value:u32)->io::Result<()>{phy::rf_write_masked(bus,path,at,RF_MASK,value)?;let actual=phy::rf_read(bus,path,at,RF_MASK)?;if actual!=value{return Err(fault(at,actual));}bus.delay_us(0)}
+// Written back unread, as Linux's _rfk_restore_rf_reg (see iqk::restore_registers).
+fn rf_restore(bus:&mut impl RegisterIo,path:u8,at:u32,value:u32)->io::Result<()>{phy::rf_write_masked(bus,path,at,RF_MASK,value)?;bus.delay_us(0)}
 fn table(bus:&mut impl RegisterIo,values:&[(u32,u32,u32)])->io::Result<()>{for &(at,mask,value)in values{field(bus,at,mask,value)?;}bus.delay_us(0)}
 fn notice(state:RfkState)->BtcNotice{BtcNotice{calibration:Calibration::Dpk,state,phy_map:0x10}}
 fn scheduler(bus:&mut impl RxdckIo,budget:u32)->io::Result<()>{

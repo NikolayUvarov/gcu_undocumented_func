@@ -43,11 +43,15 @@ pub(crate) fn prepare<'p,B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:
     calibrated:&'p channel_rfk::Completed,owner:&'p Initialized,station:station::Prepared,queue:&tx::Queue<'_>)
     ->Result<PreparedActivation<'p>,station::Failure>{
     let command=phy.bus_between_stages().command_session();
-    if phy.state()!=State::ChannelTuned||phy.attempt()!=tuned.attempt||command!=tuned.session
-        ||phy.identity()!=board.identity||tuned.access!=channel::Access::InitiateRadiation||!calibrated.matches(tuned)
-        ||!owner.matches(tuned.attempt,command)||!station.matches(tuned,board.identity.mac)
-        ||station.current_filter().is_none()||queue.state()!=tx::State::Installed||queue.session()==0||!phy.bus_between_stages().retains_packets(){
-        return Err(station::Failure{stage:station::Stage::Guard,cause:station::Cause::Register(Fault::new(FaultKind::PowerState,0,0)),
+    // A refusal names each condition that failed (bits 0-10, in this order) and the PHY state (bits 16 and up).
+    let refused=[phy.state()!=State::ChannelTuned,phy.attempt()!=tuned.attempt,command!=tuned.session,
+        phy.identity()!=board.identity,tuned.access!=channel::Access::InitiateRadiation,!calibrated.matches(tuned),
+        !owner.matches(tuned.attempt,command),!station.matches(tuned,board.identity.mac),station.current_filter().is_none(),
+        queue.state()!=tx::State::Installed||queue.session()==0,!phy.bus_between_stages().retains_packets()]
+        .iter().enumerate().fold(0u32,|bits,(i,&failed)|bits|u32::from(failed)<<i);
+    if refused!=0{
+        return Err(station::Failure{stage:station::Stage::Guard,
+            cause:station::Cause::Register(Fault::new(FaultKind::PowerState,0,refused|(phy.state() as u32)<<16)),
             radio_stop:None,port_stop:None,selector_restore:None});
     }
     station.validate(phy,board,tuned,owner,LIVE_US)?;

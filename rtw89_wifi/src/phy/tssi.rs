@@ -61,7 +61,8 @@ fn thermal(bus:&mut impl RegisterIo,path:usize,value:u8)->io::Result<()>{
     let p=path*0x2000;let reference=if value==255{32}else{u32::from(value)&63};
     bb(bus,0x5810+p,1<<16,0)?;bb(bus,0x5810+p,1<<24,1)?;
     bb(bus,0x5810+p,0xfc00,reference)?;bb(bus,0x5864+p,0x3f00000,reference)?;
-    for(i,word)in thermal_words(path,value).into_iter().enumerate(){bb(bus,0x5c00+p+i*4,u32::MAX,word)?;}
+    // The offset table is written unread, as Linux's write32: path B's read back changed (the Ryzen, 2026-11-06).
+    for(i,word)in thermal_words(path,value).into_iter().enumerate(){bus.write32(PHY_BASE+0x5c00+p+i*4,word)?;}
     bb(bus,0x5864+p,1<<26,1)?;bb(bus,0x5864+p,1<<26,0)
 }
 fn configure(bus:&mut impl RegisterIo,cal:&Calibration,path:usize)->io::Result<()>{

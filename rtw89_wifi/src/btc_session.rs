@@ -82,6 +82,12 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         if !inbox.bind(queue.session()){return Err(Error::Session)}
         let mut session=Self::new(bus,queue,rings,receiving,firmware,scratch)?;session.inbox=Some(inbox);Ok(session)
     }
+    /// Gives a startup session its packet inbox just before the data mode (receive_service's admission): until then the
+    /// receive-only service takes every packet itself, and a calibration's own polls retain none.
+    pub fn attach_inbox(&mut self,inbox:&'a mut Inbox)->Result<(),Error> {
+        if self.inbox.is_some()||!inbox.bind(self.queue.session()){return Err(Error::Session)}
+        self.inbox=Some(inbox);Ok(())
+    }
     pub fn retains_packets(&self)->bool { self.inbox.is_some() }
     pub fn pending_packets(&self)->usize { self.inbox.as_ref().map_or(0,|inbox|inbox.pending()) }
     /// The record remains borrowed until processed; consume only after its actual owner accepts it.

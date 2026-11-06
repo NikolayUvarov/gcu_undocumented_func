@@ -11,6 +11,8 @@ mod idl{pub use crate::{codec,wire,wlanhw};}
 #[path="../rtw89_wifi/src/service.rs"]mod service;
 #[path="../rtw89_wifi/src/receive_service.rs"]mod receive_service;
 #[path="../rtw89_wifi/src/country.rs"]mod country;
+#[path="../rtw89_wifi/src/args.rs"]mod args;
+#[path="../rtw89_wifi/src/native_dma.rs"]mod native_dma;
 #[path="../regdb/src/lib.rs"]mod regulatory;
 extern crate self as mind;
 extern crate self as rtw89_wifi;
