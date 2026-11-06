@@ -39,6 +39,10 @@ This is not a root cause (MC-12.2).
 - the cause, if the wait comes back. The gate keeps the logs of a group that fails (000-KRN-0210's `bounded`);
 - the run delayed after the kills, from plan step 1, only if it does.
 
+2026-11-06: **a recurrence now leaves a record.** Since round 88 (`main` f5692919, 000-KRN-0214), a suite's wait of
+5 s or more that runs out writes every CPU's registers and the console's end to `mind-core-stuck-<pid>-<n>.log`, which
+the gate keeps with the group's logs. This check's wait is 8 s, so round 79's case would have left one.
+
 ## Related
 
-262-KRN-0178 (a badge reused only after its retirement), round 79's gate log.
+262-KRN-0178 (a badge reused only after its retirement), round 79's gate log, [000-KRN-0214](../issues-done/000-KRN-0214-the-shell-stopped-answering-during-the-effector-screenshot.done) (the record).
