@@ -1,6 +1,6 @@
 # 000-NET-0048 — `get`, an analog of `wget` and `curl`
 
-**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** open · **Blocked by:** [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0049](../issues-done/000-NET-0049-a-flow-grant-asked-at-run-time.done) (a host named at run time), [000-NET-0046](000-NET-0046-public-root-certificates.md) (public sites) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
+**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (a host asked at run time in `main`; `-u` and a script's question wait for APP) · **Blocked by:** [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0049](../issues-done/000-NET-0049-a-flow-grant-asked-at-run-time.done) (a host named at run time), [000-NET-0046](000-NET-0046-public-root-certificates.md) (public sites) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md), at the maintainer's request: "an analog of wget/curl".
 
@@ -106,6 +106,9 @@ from 000-APP-0120):
   script's `get` to a host its grant does not name is refused at 60 s (exit 7).
 
 **Left:** those two, once the shell gives them.
+
+**Landed (2026-11-06).** Round 89 (`main` 5ef99d16): the gate was green on every group, the `net` suite's `get_runs`
+with the question among them, on x86 and aarch64.
 
 ## Related
 
