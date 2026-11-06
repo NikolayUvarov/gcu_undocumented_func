@@ -6,7 +6,7 @@ The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other 
 
 The request on `bcm_wifi`'s DMA region and interrupt became [550-KRN-0091](550-KRN-0091-bcm-wifi-dma-and-its-interrupt.md) (2026-10-12).
 
-NET's station endpoint with the badge right (for 550-NET-0058) became [550-KRN-0213](550-KRN-0213-the-stations-endpoint-may-badge-its-reading-client.md) (2026-11-05).
+NET's station endpoint with the badge right (for 550-NET-0058) became [550-KRN-0213](../issues-done/550-KRN-0213-the-stations-endpoint-may-badge-its-reading-client.done) (2026-11-05).
 
 The store's own partition (STO, for 307) became [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md), and the model service `nnd` (APP, for 262-APP-0112) [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md) with the wait on a shared word [262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md) (2026-10-28).
 

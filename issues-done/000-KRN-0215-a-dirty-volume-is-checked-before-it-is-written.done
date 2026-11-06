@@ -1,6 +1,6 @@
-# 000-KRN-0215 — A FAT volume left dirty is checked at its mount, and one found damaged is not written
+# 000-KRN-0215 — A FAT volume left dirty is checked at its mount, and one found damaged is not written — done
 
-**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-4.8, MC-12.3
+**Type:** `vfs_server` · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-11-06) · **Blocked by:** — · **Roadmap:** storage · **Constitution:** MC-4.8, MC-12.3
 
 From DRV's report of 2026-11-05 (`KRN/2026-11-05T1852Z-DRV-the-ryzens-boot-volume-had-a-fat-cross-link.md` on `internal-dev-messages`).
 
@@ -56,10 +56,23 @@ From DRV's report of 2026-11-05 (`KRN/2026-11-05T1852Z-DRV-the-ryzens-boot-volum
   - `writable()` is false while held, so every write path answers `read-only`.
 - **`vfs_server/src/main.rs`:** the boot volume and the log partition are checked after the medium's identity is recorded (000-KRN-0079), with three log lines: `WAS LEFT DIRTY: CHECKING`, the counts with the first problem, then `IS HELD READ-ONLY…` or `NO DAMAGE A WRITE COULD SPREAD, WRITABLE`.
 - **Host tests** (`tests/fat_host.rs`, FAT16 by `format`, FAT32 by `mkfs.fat`): three new tests, all 21 pass. With `writable()` ignoring the hold, `a_volume_left_dirty_with_a_chain_into_free_clusters_is_held` fails. The same test shows, without the check, the next new file given the cut entry's first cluster and a cross-link.
-- **QEMU:** `dirty_volume_check` in the `vfs` suite. Its runs on x86 and aarch64 are next.
+- **QEMU:** `dirty_volume_check` in the `vfs` suite.
+  - **The first x86 run** (9267d8bb) showed OVMF itself writing its variables to `NvVars` on the boot volume before MIND Core starts: QEMU gives it no flash store on x86. It took `cut.bin`'s freed first cluster, a cross-link. `vfs_server` reported it and held the volume, as it should; the test had expected the bad chain alone.
+  - **Since f73a003e,** a freed `gap.bin` before `cut.bin` takes the firmware's file. Only `NvVars`'s sectors may change, and every cut cluster must still be free.
+  - **On f73a003e** all passed, through Effector: x32-128, x86, `files and block writes` (899 s; 26 sectors changed, all `NvVars`'s) and `NVMe boot disk` (71 s); acc-2, aarch64, `files and the block store` (786 s; no sector changed) and `NVMe boot disk` (92 s). `host tests` passed on 9267d8bb (x32-128, 1188 s).
 - **Docs:** the threat model's power-loss row and an evidence row.
 - **The shell** names the error `READ-ONLY DEVICE`, which is APP's text; the log says why.
 
+## Resolution
+
+- **`vfs_server`:** a boot volume or log partition on a writable device whose clean bit is clear is checked before anything is written to it. A cross-link, a chain into a free or invalid cluster or an invalid entry holds it: every write answers `read-only`, and the log names the first problem. Lost clusters alone hold nothing.
+- **Tests:**
+  - `tests/fat_host.rs`: three tests on FAT16 and FAT32. The held test fails when writes ignore the hold;
+  - `dirty_volume_check` in the `vfs` suite: x86, where only OVMF's `NvVars` changed, and aarch64, where no sector changed; also with the boot disk on NVMe.
+- **Docs:** the threat model's power-loss row and an evidence row.
+- **Landed** in round 88 (`main` f5692919). The gate `land-f5692919` passed every group.
+- **Not done here:** a repair. The shell's `READ-ONLY DEVICE` for a held volume is APP's text.
+
 ## Related
 
-[175-KRN-0049](../issues-done/175-KRN-0049-fat-clean-only-after-a-good-flush.done) (the dirty and clean marks), [000-KRN-0212](../issues-done/000-KRN-0212-a-remove-rename-or-new-directory-reaches-the-disk.done) (a remove reaches the disk at once), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md) (the Ryzen's boots), 800-LNK-0036 (the writer's kept parts).
+[175-KRN-0049](175-KRN-0049-fat-clean-only-after-a-good-flush.done) (the dirty and clean marks), [000-KRN-0212](000-KRN-0212-a-remove-rename-or-new-directory-reaches-the-disk.done) (a remove reaches the disk at once), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (the Ryzen's boots), 800-LNK-0036 (the writer's kept parts).
