@@ -78,13 +78,14 @@ pub fn poll32(io: &mut impl RegisterIo, at: usize, mask: u32, expected: u32, int
     let start = io.now_us();
     let interval = interval_us.max(1);
     let mut value = 0;
+    // The time is taken before each read, so a poller preempted past its deadline still reads once after it, as Linux's
+    // read_poll_timeout does (a 30 us SWSI poll timed out unread on the Ryzen, 2026-11-06).
     for _ in 0..=u64::from(timeout_us) / u64::from(interval) + 1 {
         let elapsed = io.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock, at, value))?;
-        if elapsed >= timeout_us as u64 { break; }
         value = read32(io, at)?;
-        let elapsed = io.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock, at, value))?;
-        if elapsed >= timeout_us as u64 { break; }
+        io.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock, at, value))?;
         if value & mask == expected { return Ok(value); }
+        if elapsed >= timeout_us as u64 { break; }
         io.delay_us(interval.min((timeout_us as u64 - elapsed) as u32))?;
     }
     Err(Fault::new(FaultKind::Timeout, at, value))
