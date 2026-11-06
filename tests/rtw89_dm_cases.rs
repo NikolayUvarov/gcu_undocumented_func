@@ -114,7 +114,8 @@ fn dm_whole_budget_includes_xtal_waits_and_late_final_read(){
 }
 #[test]
 fn dm_xtal_source_ceiling_prevents_late_success(){
-    let mut d=Device::new();let mut p=Phy::new(&mut d,identity());prepared(&mut p);p.bus_between_stages().xtal_delay_us=50_000;
+    // Done after the 50 ms ceiling and the one read past it: a timeout.
+    let mut d=Device::new();let mut p=Phy::new(&mut d,identity());prepared(&mut p);p.bus_between_stages().xtal_delay_us=60_000;
     let e=dm::run(&mut p,dack::Band::Ghz2).unwrap_err();assert_eq!(e.stage,dm::Stage::Crystal);assert_eq!(e.cause.kind,FaultKind::Timeout);assert_eq!(p.state(),State::Failed);
     assert_eq!(p.bus_between_stages().command,6);
 }
