@@ -141,6 +141,26 @@ fn unknown_cut_unavailable_or_already_active_mac_get_no_writes() {
 }
 
 #[test]
+fn a_mac_left_on_is_powered_off_before_the_board_read() {
+    // Off already: nothing is written.
+    let mut d = Device::new();
+    assert!(!board::power_off_left_on(&mut d).unwrap()); assert!(d.writes.is_empty());
+    // Left on by a replaced instance: powered off, and the board read then succeeds.
+    for state in 1..=3 {
+        let mut d = Device::new(); d.put(R_AX_IC_PWR_STATE, 4, state << 8);
+        assert!(board::power_off_left_on(&mut d).unwrap());
+        assert_eq!(d.get(R_AX_IC_PWR_STATE, 4) & B_AX_WLMAC_PWR_STE_MASK, 0);
+        assert!(d.writes.iter().any(|w| w.at == R_AX_SYS_PW_CTRL && w.value & B_AX_APFM_OFFMAC != 0));
+        assert_eq!(board::read(&mut d).ok().unwrap().identity.mac, [2, 3, 4, 5, 6, 7]);
+    }
+    // A MAC that stays on is refused, and an unknown chip gets no write.
+    let mut d = Device::new(); d.put(R_AX_IC_PWR_STATE, 4, 1 << 8); d.off_state = 1 << 8;
+    assert_eq!(board::power_off_left_on(&mut d).unwrap_err().kind, FaultKind::PowerState);
+    let mut d = Device::new(); d.put(SYS_CFG1, 4, 0); d.put(R_AX_IC_PWR_STATE, 4, 1 << 8);
+    assert!(board::power_off_left_on(&mut d).is_err()); assert!(d.writes.is_empty());
+}
+
+#[test]
 fn full_cycle_reads_real_map_offsets_then_powers_down_without_releasing_baseband() {
     let mut d = Device::new(); d.minimum_delay = 1_000;
     let board = board::read(&mut d).ok().unwrap();

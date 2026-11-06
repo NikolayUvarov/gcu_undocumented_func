@@ -1173,3 +1173,9 @@ The rule it replaces (DRV's own, 2026-10-16) refused a ready value read after th
 - the MAC, DM and BTC cases that expected a late ready to fail now expect it to count once, and to time out when the ready comes after that one read.
 
 [The PHY notes](../hwdocs/rtl8852be-phy.md) say so.
+
+**A MAC left on is powered off first (2026-11-06).**
+- **What happened:** a `replace` of the serving service left the MAC on. The new instance then refused it at `Identify` (`PowerState` at 0x3F0, 0x02200105).
+- **The fix:** `board::power_off_left_on` now powers such a MAC off before the board read, as Linux's `rtw89_mac_pwr_on` powers off and on again after "MAC has already powered on". The grant has bus mastering off, so no DMA runs. The service logs `THE MAC WAS LEFT ON … POWERED OFF FIRST`.
+- **On the Ryzen,** a replaced build then went through to `SERVING WLANHW` again.
+- **Still refused:** a MAC that stays on, and an unknown chip, which gets no write.

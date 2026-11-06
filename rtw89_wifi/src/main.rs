@@ -292,6 +292,11 @@ fn main(_info: &'static BootInfo) {
     let Ok(bar) = Mmio::map(SLOT_DEV0) else { mind::println!("[RTW89] BAR2 MAP FAILED"); idle(); };
     if bar.len() != len { mind::println!("[RTW89] BAR2 SIZE CHANGED"); idle(); }
     let mut native = Native { bar };
+    match board::power_off_left_on(&mut native) {
+        Ok(true) => mind::println!("[RTW89] THE MAC WAS LEFT ON (A REPLACED OR STOPPED INSTANCE): POWERED OFF FIRST, AS LINUX DOES"),
+        Ok(false) => {}
+        Err(cause) => { mind::println!("[RTW89] THE MAC WAS LEFT ON AND DID NOT POWER OFF: {:?}; NO NETWORK LINK", cause); idle(); }
+    }
     let board = match board::read(&mut native) {
         Ok(board) => {
             let b = board.identity;
