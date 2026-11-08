@@ -85,17 +85,12 @@ Asked by NET on 2026-11-05. Numbered the same day as [550-APP-0124](550-APP-0124
 
 ## A script's program asked about a flow while the script waits on it (for 000-NET-0048)
 
-Asked by NET on 2026-11-06. `get` now asks for a host its grant does not name through the grant (`socket.wit` 2.8), and the shell's question shows it when `get` is in front of a console. Started from a script (`msh -c "get …"`, `msh file`), it is not shown: `ShellHost::run` (`shell/src/msh.rs`) waits on the program with its own loop, which does not call `flowctl::tend`, so the broker refuses the question at 60 s and `get` ends with 7. The same holds for any program a script runs that asks.
-
-What would do: the script's wait puts a question to the user as the shell's loop does (on the script's console, the program's keys taken for the answer and given back), and its answer key is not read as the script's Esc or Ctrl+C. Until then `docs/network/downloads.md` says that a script's `get` is refused after 60 s for a host its grant does not name.
+Asked by NET on 2026-11-06. Numbered on 2026-11-08 as [000-APP-0125](000-APP-0125-a-scripts-program-asks-about-a-flow.md).
 
 ## A console program reads a secret typed at its console (for 000-NET-0048's `get -u`)
 
-Asked by NET on 2026-11-06. `get -u user` should ask for the password on the console and never take it from the command line (000-NET-0048's plan). `get` is a console program (no screen), and while one runs the shell keeps the keys typed: Esc and Ctrl+C stop it, the others are dropped (`Shell::key`). The serial line's keys go to a program only when it has the focus (`Shell::uart`). So `get` cannot read the password.
+Asked by NET on 2026-11-06. Numbered on 2026-11-08 as [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md): the shell reads one secret line for the program.
 
-What would do, in whichever form the tools track prefers:
-- the shell passes a console program in front of it the keys typed at its console (not Esc and Ctrl+C), echoing none, so that the program prints what it wants; or
-- the shell reads one secret line for a console program that asks for it (without echo, Enter ends it, Esc stops it) and gives it the bytes, never shown, logged or kept in the history.
+## A display mode chosen by hand, and two screens side by side, on the DEXP (for 177)
 
-`get` then reads it, makes `Authorization: Basic`, sends it over HTTPS only and zeroes it.
-
+Asked by DRV for the maintainer on 2026-11-08, in `APP/2026-11-08T1210Z-DRV-…` on `internal-dev-messages`. The mode by hand is numbered as [177-APP-0127](177-APP-0127-a-display-mode-chosen-by-hand.md); the screens' places are [177-APP-0094](177-APP-0094-wm-over-several-monitors.md)'s. The maintainer will say when to start.
