@@ -10,6 +10,12 @@ const POLL_MS:u32=2;
 const DRAIN:usize=32;
 const WORK_US:u32=100_000;
 const COMMAND_US:u32=100_000;
+// A send times out here this much before the data mode's own deadline for it, so that a frame that never ends stops
+// the service as TransmitTimeout with what it saw, not as whatever register read ran out of its time (the Ryzen, 2026-11-08).
+const FRAME_MARGIN_MS:u64=10;
+// DEBUG (the Ryzen, 2026-11-08: everything runs first, hardening later): a send makes at most this many submissions, which
+// fit its time at about 7 ms each; wlan's 15 at 24 Mb/s, none acknowledged, outran it, so its rate never stepped down.
+const SEND_TRIES:u8=8;
 const WAIT_MS:u64=1000;
 const WAITERS:usize=4;
 const FRAMES:usize=4;
@@ -20,7 +26,8 @@ const KEEP_SENDING:bool=true;
 
 #[derive(Debug)]
 pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTimeout(tx::Seen),UnknownAttempts,RetainedControl,Frame(frames::Error)}
-struct Pending{call:wire::Call,slot:usize,deadline:u64}
+// `grace_us`: the data mode's grace when the send began; a recovery it outlasts since moves `deadline` (OUTLAST_SER).
+struct Pending{call:wire::Call,slot:usize,deadline:u64,grace_us:u64}
 struct Waiter{call:wire::Call,deadline:u64}
 struct Frames{bytes:[[u8;FRAME_BYTES];FRAMES],lengths:[usize;FRAMES],head:usize,count:usize}
 impl Frames{
@@ -124,19 +131,16 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         }Ok(())
     }
     fn progress(&mut self,now:u64)->Result<(),Fatal>{
-        if self.pending.as_ref().is_some_and(|p|now>=p.deadline){return Err(Fatal::TransmitTimeout(self.data().transmit_seen()))}
-        if self.pending.is_some(){
-            if let Some(done)=self.data().advance(WORK_US).map_err(Fatal::Radio)?{
-                let tx::AttemptCount::Known(attempts)=done.attempts else{return Err(Fatal::UnknownAttempts)};
-                if !(1..=15).contains(&attempts){return Err(Fatal::UnknownAttempts)}
-                let pending=self.pending.take().unwrap();
-                let _=wlanhw::reply_send(pending.call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));
-            }
-        }
+        let grace_ms=|p:&Pending,data:&DataSession<'q,'memory,'p,'a,'command,'receive,B>|data.grace_us().saturating_sub(p.grace_us)/1000;
+        if self.pending.as_ref().is_some_and(|p|now>=p.deadline.saturating_add(grace_ms(p,self.owner.as_deref().unwrap()))){
+            return Err(Fatal::TransmitTimeout(self.data().transmit_seen()))}
+        if self.pending.is_some(){self.finish_send()?}
         for _ in 0..DRAIN{
             let received=self.data().poll_packets(WORK_US).map_err(Fatal::Radio)?;self.collect()?;
             if received==[false,false]{break}
         }
+        // A release the drain took is acted on in this step, not the next one after its receive wait.
+        if self.pending.is_some(){self.finish_send()?}
         let waiting=self.frames.count as u32;
         for waiter in &mut self.waiters{
             if waiter.as_ref().is_some_and(|w|waiting!=0||now>=w.deadline){
@@ -145,9 +149,18 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         }
         Ok(())
     }
-    // DEBUG: the first change of each SNAPSHOT register.
+    fn finish_send(&mut self)->Result<(),Fatal>{
+        if let Some(done)=self.data().advance(WORK_US).map_err(Fatal::Radio)?{
+            let tx::AttemptCount::Known(attempts)=done.attempts else{return Err(Fatal::UnknownAttempts)};
+            if !(1..=15).contains(&attempts){return Err(Fatal::UnknownAttempts)}
+            let pending=self.pending.take().unwrap();
+            let _=wlanhw::reply_send(pending.call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));
+        }Ok(())
+    }
+    // DEBUG: the first change of each SNAPSHOT register, while the data mode runs: after its shutdown they are its own
+    // (BB off, DMA stopped), which the Ryzen's log of 2026-11-08 had taken for the firmware's.
     fn watch(&mut self){
-        let Some(data)=self.owner.as_deref_mut()else{return};let now=data.registers();
+        let Some(data)=self.owner.as_deref_mut()else{return};if data.snapshot().is_some(){return}let now=data.registers();
         let ms=(time::monotonic_ns()/1_000_000).saturating_sub(self.start_ms);let pending=self.pending.is_some();
         for (i,change) in self.changes.0.iter_mut().enumerate(){
             if change.is_none()&&now.0[i]!=self.first.0[i]{*change=Some((ms,now.0[i],pending));}
@@ -191,12 +204,14 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             wlanhw::Request::Send{frame,rate,attempts}=>{
                 if self.refused{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));return}
                 if self.pending.is_some(){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
-                let Some(deadline)=now.checked_add(u64::from(COMMAND_US/1000))else{
+                let Some(deadline)=now.checked_add(u64::from(COMMAND_US/1000)-FRAME_MARGIN_MS)else{
                     let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));self.fail(Fatal::Clock);return};
                 let mut call=call;
                 if call.defer().is_err(){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
-                match self.data().begin(frame,rate,attempts,COMMAND_US){
-                    Ok(())=>self.pending=Some(Pending{call,slot,deadline}),
+                let grace_us=self.data().grace_us();
+                let tries=if attempts<=15{attempts.min(SEND_TRIES)}else{attempts};
+                match self.data().begin(frame,rate,tries,COMMAND_US){
+                    Ok(())=>self.pending=Some(Pending{call,slot,deadline,grace_us}),
                     Err(failure)=>{let _=wlanhw::reply_send(call,Err(error(&failure)));
                         if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}},
                 }

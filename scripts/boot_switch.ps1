@@ -248,6 +248,12 @@ function Invoke-Logs($System, [string]$Target, [int]$Requested) {
     $destination
 }
 
+# A partition's volume: its letter, or its \\?\Volume{...}\ path without one. A function, as the blocks below run after New-WindowsSystem returns.
+function Get-VolumeRoot([int]$Number, [int]$Partition) {
+    $volume = Get-Partition -DiskNumber $Number -PartitionNumber $Partition | Get-Volume
+    if ($volume.DriveLetter) { "$($volume.DriveLetter):\" } else { $volume.Path }
+}
+
 # What the script does to the machine; the tests replace it.
 function New-WindowsSystem {
     if (-not ('MindFirmware' -as [type])) {
@@ -285,11 +291,6 @@ public static class MindFirmware {
 '@
     }
     [MindFirmware]::Enable()
-    $root = {
-        param([int]$number, [int]$partition)
-        $volume = Get-Partition -DiskNumber $number -PartitionNumber $partition | Get-Volume
-        if ($volume.DriveLetter) { "$($volume.DriveLetter):\" } else { $volume.Path }
-    }
     @{
         Get = { param($name) [MindFirmware]::Get($name) }
         Set = { param($name, $bytes) [MindFirmware]::Set($name, [byte[]]$bytes) }
@@ -307,10 +308,10 @@ public static class MindFirmware {
         }
         Read = {
             param([int]$number, [int]$partition, [string]$relative)
-            $file = [IO.Path]::Combine((& $root $number $partition), $relative)
+            $file = [IO.Path]::Combine((Get-VolumeRoot $number $partition), $relative)
             if ([IO.File]::Exists($file)) { , [IO.File]::ReadAllBytes($file) } else { $null }
         }
-        Files = { param([int]$number, [int]$partition) @([IO.Directory]::GetFiles((& $root $number $partition)) | ForEach-Object { [IO.Path]::GetFileName($_) }) }
+        Files = { param([int]$number, [int]$partition) @([IO.Directory]::GetFiles((Get-VolumeRoot $number $partition)) | ForEach-Object { [IO.Path]::GetFileName($_) }) }
         # Windows' own folders on the volume are left out: they are not MIND Core's, and reading them is refused. .NET
         # rather than Copy-Item, which takes no \\?\Volume{...}\ path of a volume without a letter.
         Copy = {
@@ -324,7 +325,7 @@ public static class MindFirmware {
                     if (@('System Volume Information', '$RECYCLE.BIN') -notcontains $name) { & $copy $folder ([IO.Path]::Combine($to, $name)) }
                 }
             }
-            & $copy (& $root $number $partition) $destination
+            & $copy (Get-VolumeRoot $number $partition) $destination
             @([IO.Directory]::GetFiles($destination) | ForEach-Object { [IO.Path]::GetFileName($_) })
         }
         Text = { param($path) [IO.File]::ReadAllText($path) }

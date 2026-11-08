@@ -1239,3 +1239,38 @@ DHCP's exchange is data both ways over the CCMP-protected link.
 **To harden later** (the maintainer: everything runs first): `KEEP_SENDING`, `OUTLAST_SER` and `RPQ_ALONE` are constants in `service.rs`, `data_mode.rs` and `tx.rs`, each with the strict path beside it and its host cases.
 
 **What this shows:** that machine, that AP and those builds only (MC-12.1).
+
+## The Wi-Fi alone, the cable out (2026-11-08, evening)
+
+**The setup:** the same image. The maintainer pulled the Ryzen's Ethernet cable, so card 2 became the default route. The trial builds were replaced over the link.
+
+**What stood in the way, in order:**
+
+| What the Ryzen did | Why | The change |
+|---|---|---|
+| 75 minutes joined with `bt_hci`'s rounds paused; 1.5 s after the cable came out, the data mode stopped: `Station(CheckFailure { Timeout })`, `SER_DBG_INFO` counting a second recovery | The first TLS traffic over the Wi-Fi. A firmware recovery outlasted during a pending frame used up that frame's 100 ms, and the station's register check ran out of it | `OUTLAST_SER`'s wait has its own time; the frame's and the operation's deadlines move by it and 20 ms. A recovery that begins during the checks is outlasted, and they run again |
+| The stop line's changes showed the BB in reset and all host DMA stopped | They were the data mode's own shutdown, read after it | The service watches no change after the data mode's shutdown |
+| A frame released as dropped stops the data mode | — | **`DROP_UNACKED`**: answered as not acknowledged |
+| `TransmitTimeout`, 7 tries done, each about 10.4 ms | The release reports were batched (30, Linux's value), with one frame in flight | **`REPORT_EACH`**: a report per frame |
+| Then `Session(Permit(Timeout))` near a frame's deadline, and `TransmitTimeout` after 12 unacknowledged tries at 24 Mb/s | wlan asks 15 tries a send. At about 7 ms each they outran the send's time, so wlan's rate never stepped down | **`SEND_TRIES`**: at most 8 submissions a send. A release is acted on in the step that took it. The service times a send out 10 ms before the data mode does, with the frame's queue, length and age |
+
+**The result** (build `rtw89_tries1`):
+- **Effector's TLS.** It reached hesere.uz over the Wi-Fi alone: `CONNECTED TO hesere.uz (PINNED)`, twice in 3 minutes.
+- **Card 2** carried 130 frames.
+
+**Still open:**
+- **A frame that never ends.** After about 3 minutes, one frame of 84 bytes was fetched by the DMA after five tries, and its release did not come in the 45 ms left. That is the next thing to find.
+- **No ARP answer from the LAN.**
+  - The laptop's ping of 192.168.2.169 still got no ARP answer: `Destination host unreachable` from the laptop itself.
+  - The shell's pings from the Ryzen timed out too. That was after the frame above had stopped the data mode.
+
+**`RESTART_AFTER_FAILURE`** (`main.rs`):
+- **What it does.** After such a failure the device stops, powers off and quiesces, and the driver exits. `init` starts a fresh one, up to 3 times in 60 s.
+- **What it still needs.** `wlan` sends its country only at its own start, so the fresh radio stays receive-only. That part is asked of NET on `internal-dev-messages` (2026-11-08T1840Z).
+- **Its first run (`rtw89_restart1`)** joined CoolNet2 and reconnected Effector.
+
+**`OWN_DEADLINES`** (`data_mode.rs`): an operation keeps its own deadline while a frame is pending. `rtw89_restart1` had stopped after 57 s on `Register(Timeout)` near a pending frame's deadline. `rtw89_own1` joined, took DHCP and reconnected Effector.
+
+**To harden later:** `KEEP_SENDING`, `OUTLAST_SER`, `RPQ_ALONE`, `DROP_UNACKED`, `REPORT_EACH`, `SEND_TRIES`, `OWN_DEADLINES` and `RESTART_AFTER_FAILURE`. Each is a constant with its strict path beside it; the host cases run both where the path is the driver's own.
+
+**What this shows:** that machine, that AP and those builds only (MC-12.1).

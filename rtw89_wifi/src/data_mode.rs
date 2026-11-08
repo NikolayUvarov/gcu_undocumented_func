@@ -14,6 +14,13 @@ const ACTIVATE_US:u64=1_000_000;
 // counted, and goes on. False: the permit and coexistence checks stop the data mode.
 const OUTLAST_SER:bool=true;
 const SER_WAIT_US:u64=60_000;
+// What an operation and a pending frame are given beyond a recovery's own wait: the 100 ms of a frame sent as one began
+// ran out in the station's check on the Ryzen (2026-11-08, the first TLS traffic over the Wi-Fi alone).
+const SER_GRACE_US:u64=20_000;
+// DEBUG (the same): an operation keeps its own deadline while a frame is pending. A frame that never ends is the
+// service's to time out (FRAME_MARGIN_MS) and the queue's budget's; capped by the frame's deadline, the operations near
+// it ran out in whichever register they read (the Ryzen, 2026-11-08). False: the frame's deadline caps them.
+const OWN_DEADLINES:bool=true;
 const SER_DBG_INFO:usize=0x8424;
 const CMAC_ERR_ISR:usize=0xc164;
 const LIVE_US:u32=10_000;
@@ -88,7 +95,7 @@ pub(crate) fn prepare<'p,B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:
 pub(crate) struct DataSession<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>,stopped:bool,
     cleanup_allowed:bool,last_shutdown:Option<Shutdown>,counts:Counts,tx_deadline:Option<u64>,snapshot:Option<Snapshot>,
-    ser_seen:u32,recoveries:u32,recovery:Option<Recovery>,
+    ser_seen:u32,recoveries:u32,recovery:Option<Recovery>,grace_us:u64,
 }
 pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     pub owner:DataSession<'q,'memory,'p,'a,'command,'receive,B>,pub failure:Failure,
@@ -125,7 +132,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn activate(session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>)
         ->Result<Self,ActivationFailure<'q,'memory,'p,'a,'command,'receive,B>>{
         let mut own=Self{session,queue,prepared,stopped:false,cleanup_allowed:false,last_shutdown:None,counts:Counts::default(),tx_deadline:None,snapshot:None,
-            ser_seen:0,recoveries:0,recovery:None};
+            ser_seen:0,recoveries:0,recovery:None,grace_us:0};
         if let Err(failure)=own.activate_inner(){return Err(ActivationFailure{owner:own,failure})}
         own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);Ok(own)
     }
@@ -196,10 +203,11 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     }
     // OUTLAST_SER: a BB in reset or a scheduler off is waited for, before and after each reconcile. SER_DBG_INFO counts the firmware's recovery only once
     // it is over (the Ryzen); a scheduler still off after it is restored. Without a counted recovery, it is refused.
-    fn outlast_ser(&mut self,deadline:u64,after_reconcile:bool)->Result<(),Cause>{
-        if !OUTLAST_SER{return Ok(())}
-        let seen=self.ser_seen;
-        let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+    // The wait has its own time, and the deadline returned, the pending frame's and the operation's, move by it and SER_GRACE_US.
+    fn outlast_ser(&mut self,deadline:u64,after_reconcile:bool)->Result<u64,Cause>{
+        if !OUTLAST_SER{return Ok(deadline)}
+        let seen=self.ser_seen;let own=self.session.now()?.saturating_add(SER_WAIT_US+SER_GRACE_US);
+        let mut window=Window{bus:self.session.bus,deadline:deadline.max(own),last:self.session.last,clock_bad:false};
         let result=(||->io::Result<Option<Recovery>>{
             let bb_on=|bb:u8|bb!=u8::MAX&&bb&3==3;
             let bb=window.read8(crate::registers::R_AX_SYS_FUNC_EN)?;
@@ -224,26 +232,38 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             Ok(Some(Recovery{count:0,ser,cmac,bb_us,restored:true,waited_us:waited,after_reconcile}))
         })();
         self.session.last=window.last;
-        if let Some(mut recovery)=result?{
-            self.recoveries=self.recoveries.saturating_add(1);recovery.count=self.recoveries;
-            self.ser_seen=recovery.ser;self.recovery=Some(recovery);
-        }Ok(())
+        let Some(mut recovery)=result? else{return Ok(deadline)};
+        self.recoveries=self.recoveries.saturating_add(1);recovery.count=self.recoveries;
+        self.ser_seen=recovery.ser;self.recovery=Some(recovery);
+        let grace=recovery.waited_us.saturating_add(SER_GRACE_US);self.grace_us=self.grace_us.saturating_add(grace);
+        self.tx_deadline=self.tx_deadline.map(|at|at.saturating_add(grace));self.queue.extend(grace);
+        Ok(deadline.saturating_add(grace))
     }
-    fn live(&mut self,deadline:u64)->Result<(),Cause>{
+    // The deadline the operation goes on with: later by an outlasted recovery's time (OUTLAST_SER).
+    fn live(&mut self,deadline:u64)->Result<u64,Cause>{
         if self.stopped||!self.identity()||!matches!(self.session.mode,Mode::Data(_)){return Err(Cause::State)}
         if let Some(error)=self.session.failed{return Err(Cause::Session(error))}
-        self.outlast_ser(deadline,false)?;
+        let mut deadline=self.outlast_ser(deadline,false)?;
+        let mut result=self.checks(deadline);
+        // OUTLAST_SER: a recovery that began during the checks is outlasted, and they are made once more.
+        if result.is_err()&&OUTLAST_SER{
+            let before=self.recoveries;let after=self.outlast_ser(deadline,false)?;
+            if self.recoveries!=before{deadline=after;result=self.checks(deadline);}
+        }
+        result?;
+        let left=self.session.left(deadline)?;self.session.live(left.min(LIVE_US))?;self.session.left(deadline)?;Ok(deadline)
+    }
+    fn checks(&mut self,deadline:u64)->Result<(),Cause>{
         let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
         let result=(||{self.queue.validate_data(&mut window)?;
             self.prepared.station.check_registers(&mut window).map_err(Cause::Station)?;
                 radio(&mut window,self.prepared.tuned.channel)?;Ok::<_,Cause>(())})();
-        self.session.last=window.last;result?;
-        let left=self.session.left(deadline)?;self.session.live(left.min(LIVE_US))?;self.session.left(deadline)?;Ok(())
+        self.session.last=window.last;result
     }
     fn deadline(&mut self,timeout_us:u32)->Result<u64,Cause>{
         if timeout_us==0||timeout_us>super::MAX_COMMAND_US{return Err(Cause::Session(super::Error::Request))}
         let own=self.session.now()?.checked_add(u64::from(timeout_us)).ok_or(Cause::Session(super::Error::Clock))?;
-        Ok(self.tx_deadline.map_or(own,|tx|tx.min(own)))
+        Ok(if OWN_DEADLINES{own}else{self.tx_deadline.map_or(own,|tx|tx.min(own))})
     }
     fn runtime_failure(&mut self,cause:Cause)->Failure{
         let cause=self.session.btc_event_error.map_or(cause,Cause::Coexistence);
@@ -255,7 +275,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn command(&mut self,command:h2c::Command,body:&[u8],acks:h2c::Acks,timeout_us:u32)->Result<h2c::Outcome,Failure>{
         Self::request(timeout_us)?;
         if body.len()>h2c::MAX_BODY{return Err(Failure{stage:Stage::Runtime,cause:Cause::Session(super::Error::Request),shutdown:None})}
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;self.outlast_ser(deadline,true)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.live(deadline)?;self.reconcile(deadline)?;let deadline=self.outlast_ser(deadline,true)?;
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             let outcome=self.session.command_deadline_with(command,body,acks,deadline,&mut handler)
                 .map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
@@ -264,7 +284,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     }
     pub(crate) fn poll_packets(&mut self,timeout_us:u32)->Result<[bool;2],Failure>{
         Self::request(timeout_us)?;
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;self.outlast_ser(deadline,true)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.live(deadline)?;self.reconcile(deadline)?;let deadline=self.outlast_ser(deadline,true)?;
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             let outcome=self.session.poll_before_with(deadline,&mut handler)
                 .map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
@@ -277,7 +297,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         if frame.get(10..16)!=self.prepared.station.current_filter().map(|f|f.own()).as_ref().map(|v|v.as_slice()){
             return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Input(txdesc::Error::Address)),shutdown:None})}
         if let Err(e)=txdesc::frame(frame,rate,max_submissions){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Input(e)),shutdown:None})}
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;self.outlast_ser(deadline,true)?;let left=self.session.left(deadline)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.live(deadline)?;self.reconcile(deadline)?;let deadline=self.outlast_ser(deadline,true)?;let left=self.session.left(deadline)?;
             let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
             let result=self.queue.begin(&mut window,frame,rate,max_submissions,self.prepared.station.mac_id(),left);
             self.session.last=window.last;result?;self.session.left(deadline)?;self.tx_deadline=Some(deadline);Ok(())})();
@@ -285,7 +305,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     }
     pub(crate) fn advance(&mut self,timeout_us:u32)->Result<Option<tx::Completion>,Failure>{
         Self::request(timeout_us)?;
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;self.outlast_ser(deadline,true)?;if !self.queue.pending_request(){return Ok(None)}
+        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.live(deadline)?;self.reconcile(deadline)?;let deadline=self.outlast_ser(deadline,true)?;if !self.queue.pending_request(){return Ok(None)}
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             self.session.poll_before_with(deadline,&mut handler).map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
             self.reconcile(deadline)?;
@@ -306,6 +326,8 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn snapshot(&self)->Option<Snapshot>{self.snapshot}
     /// What the pending send has seen (a timeout's diagnostic).
     pub(crate) fn transmit_seen(&self)->tx::Seen{self.queue.seen()}
+    /// The time outlasted recoveries added to pending frames so far (OUTLAST_SER).
+    pub(crate) fn grace_us(&self)->u64{self.grace_us}
     /// The firmware recovery outlasted since the last call, if any (OUTLAST_SER).
     pub(crate) fn take_recovery(&mut self)->Option<Recovery>{self.recovery.take()}
     /// The SNAPSHOT registers now, read only.

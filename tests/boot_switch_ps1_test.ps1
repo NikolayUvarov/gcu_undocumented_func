@@ -140,5 +140,12 @@ Check 'status names the entries and the disk' (($script:out | Where-Object { $_ 
 $system = New-Machine; $script:disks = @(); Show-Status $system
 Check 'status without a stick says so' (@($script:out | Where-Object { $_ -like 'MIND Core disk: no disk with a MIND CORE volume*' }).Count) 1
 
+# The machine's blocks run after New-WindowsSystem returns: a variable of its own is gone by then (the DEXP's logs, 2026-11-08).
+$body = (Get-Command New-WindowsSystem).ScriptBlock.Ast.Body
+$own = @($body.FindAll({ param($a) $a -is [Management.Automation.Language.AssignmentStatementAst] -and $a.Left -is [Management.Automation.Language.VariableExpressionAst] }, $false) | ForEach-Object { $_.Left.VariablePath.UserPath })
+$blocks = @($body.FindAll({ param($a) $a -is [Management.Automation.Language.ScriptBlockExpressionAst] }, $false))
+$used = @($blocks | ForEach-Object { $_.FindAll({ param($a) $a -is [Management.Automation.Language.VariableExpressionAst] }, $true) } | ForEach-Object { $_.VariablePath.UserPath } | Where-Object { $own -contains $_ } | Sort-Object -Unique)
+Check "the machine's $($blocks.Count) blocks use none of New-WindowsSystem's variables" ($used -join ',') ''
+
 if ($script:failed) { [Console]::Out.WriteLine('boot_switch.ps1: FAILED'); exit 1 }
 [Console]::Out.WriteLine('boot_switch.ps1: all passed'); exit 0

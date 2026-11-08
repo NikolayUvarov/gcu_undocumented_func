@@ -7,7 +7,7 @@
 On the Ryzen (2026-11-08, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), build 8e3913fd) the station joined CoolNet2 and got an address over the RTL8852BE. **Six minutes later it lost the network:**
 - `bt_hci`'s round ran a 10-second inquiry (one every 320 s);
 - the station heard nothing from the access point for 10 s (`SILENCE_MS`) and began to scan;
-- its next frame found the BB fully in reset (`SYS_FUNC_EN` `0xDC`) and all host DMA stopped (`DMA_STOP` `0x000BFF00`), with no firmware recovery counted. The data mode stopped (`Tx(Io(Timeout))`).
+- its next frame timed out, and the data mode stopped (`Tx(Io(Timeout))`). The BB in reset and the host DMA stopped that the stop line showed then were the data mode's own shutdown, read after it (corrected 2026-11-08 evening, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)).
 
 **The cause.** `rtw89_wifi`'s coexistence keeps the `NoLink` policy and antenna after association, as at startup. It has only `ResetDefaults`, `NoLink` and `Rfk` (`btc_codec.rs`). Under `NoLink` the firmware gives the shared RF to Bluetooth whenever Bluetooth asks, a whole inquiry long.
 
