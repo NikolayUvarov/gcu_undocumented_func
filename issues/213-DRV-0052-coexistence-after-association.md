@@ -85,7 +85,17 @@ The source and the layouts: [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852b
 
 So the reconcile now retries on any coexistence error during which a recovery is found, and only then (`rtw89_late6`). One admission between them failed in TSSI `ConfigureA`, path A's table read back changed, and the driver restarted.
 
-**Across these runs:** 18 whole inquiries (1, 4, 5 and 8) passed with the station joined, and none lost the network. Each stop was another cause: a late frame's queue budget, or a recovery during the reconcile.
+**`rtw89_late6`** (ef5a29b2) ran the whole hour without a stop (2026-11-08, 20:39–21:45 UTC; 64 minutes joined in the log):
+- **12 whole inquiries passed** with the station joined.
+- **Outlasted:** 142 late frames, answered as not acknowledged and released, and 108 firmware recoveries.
+- **The gateway pings,** 3 every 2 minutes, 33 rounds:
+  - from 20:53 nothing lost in all but three rounds (one lost all three, two one each), 15–131 ms;
+  - **the first 13 minutes were poor:** 33–100 % lost and up to 870 ms, with the recoveries coming fast.
+- **Against the criteria:**
+  - **The hardware criterion:** an hour across at least ten inquiries, no loss of the network. Met once, on that machine and build (MC-12.1). "Ping answered" held in 31 rounds of 33.
+  - **The host criterion:** the role notice's encoding and the policy's slot match Linux's worked values. `Station` has no TDMA, and the TDMA policies are not ported. The transition from `NoLink` to connected is tested; back to `NoLink` is a driver restart (`RESTART_AFTER_FAILURE`), where Linux returns to no-link only at power-off. So this issue stays open: closing it, or amending that criterion, is the maintainer's.
+
+**Across these runs:** 30 whole inquiries (1, 4, 5, 8 and 12) passed with the station joined, and none lost the network. Each stop was another cause: a late frame's queue budget, or a recovery during the reconcile.
 
 One machine and one AP (MC-12.1). The acceptance criterion, an hour across ten inquiries in one run, is not met yet.
 
