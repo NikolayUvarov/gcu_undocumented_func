@@ -65,7 +65,11 @@ impl Receiving{
             if let Some(layout)=layout{
                 require(&mut timed,fwcmd::DMA_STOP,STOP_MASK,crate::btc_session::data_mode::STOPPED_UNUSED)?;
                 require(&mut timed,fwcmd::DMA_BUSY,1<<17,0)?;
-                require(&mut timed,0xc348,0xffff,u32::from(crate::btc_session::data_mode::SCHEDULER))?;
+                // OUTLAST_SER: a scheduler the firmware's L0 recovery zeroed is the next operation's to outlast, not a broken
+                // permit (the Ryzen, 2026-11-08: the permit check found it at zero after 42 minutes).
+                let scheduler=io::read32(&mut timed,0xc348)?&0xffff;
+                if scheduler!=u32::from(crate::btc_session::data_mode::SCHEDULER)&&!(crate::btc_session::data_mode::OUTLAST_SER&&scheduler==0){
+                    return Err(Fault::new(FaultKind::PowerState,0xc348,scheduler).into())}
                 layout.check_registers(&mut timed)?;
             }else{
                 require(&mut timed,fwcmd::DMA_STOP,STOP_MASK,RECEIVING)?;
