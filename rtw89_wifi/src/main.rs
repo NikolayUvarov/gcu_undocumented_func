@@ -265,6 +265,9 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] FIRMWARE RECOVERY {} {} (SER_DBG_INFO {:08X}, CMAC_ERR_ISR {:08X}): BB BACK AFTER {} US, THE SCHEDULER {} AFTER {} US; DEBUG MODE GOES ON",
                 count, if after_reconcile { "AFTER A COEXISTENCE RECONCILE" } else { "BETWEEN OPERATIONS" }, ser, cmac, bb_us,
                 if restored { "RESTORED BY THE DRIVER" } else { "BACK FROM THE FIRMWARE" }, waited_us),
+        receive_service::Event::LateFrame { count, finished, fetched, released, length, age_us } =>
+            mind::println!("[RTW89] A FRAME OUTRAN ITS TIME ({}): {} BYTES, {} SUBMISSIONS DONE, THE NEXT {} AND {} AFTER {} US; ANSWERED NOT ACKNOWLEDGED, ITS RELEASE AWAITED 1 S MORE (DEBUG)",
+                count, length, finished, if fetched { "FETCHED" } else { "NOT FETCHED" }, if released { "RELEASED" } else { "NOT RELEASED" }, age_us),
         receive_service::Event::DataCountry { code, channel, kept: true, .. } =>
             mind::println!("[RTW89] COUNTRY {}{} IN DATA MODE: CHANNEL {} KEPT", code[0] as char, code[1] as char, channel),
         receive_service::Event::DataCountry { code, channel, kept: false, enforced: true } =>
@@ -357,9 +360,19 @@ fn main(_info: &'static BootInfo) {
         dma: None, queues: None, prepared: None, ready: None, runtime: None, capabilities: None, receiving: None, radio_attempted: false, platform };
     let report = startup::run(&mut attempt);
     pieces("DIAGNOSTIC", &report);
+    let clean = [&report.stop, &report.power_off, &report.quiesce].iter().all(|step| matches!(step, Some(Ok(()))));
+    if RESTART_AFTER_FAILURE && report.failure.is_some() && clean {
+        mind::println!("[RTW89] THE DEVICE STOPPED CLEANLY: EXITING, SO THAT INIT STARTS A FRESH DRIVER (DEBUG)");
+        mind::process::exit_with(1)
+    }
     mind::println!("[RTW89] DMA RETAINED={}; NO RETRY, CALIBRATED RF, WLAN ENDPOINT OR NETWORK LINK", attempt.dma.is_some());
     if serving() { receive_service::absent_forever(); }
     idle()
 }
+
+// DEBUG (the maintainer, 2026-11-08: everything runs first, hardening later): after a failure that stopped, powered off
+// and quiesced the device, the driver exits; init restarts it within its budget, the device quiesced and the DMA region
+// cleared. False: it serves `absent` for good.
+const RESTART_AFTER_FAILURE: bool = true;
 
 fn idle() -> ! { loop { mind::time::sleep(60_000); } }

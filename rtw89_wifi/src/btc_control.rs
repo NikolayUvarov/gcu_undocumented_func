@@ -31,6 +31,7 @@ impl WlanShadow {
     pub fn new() -> Self { Self { value: 0, failed: false } }
     pub fn value(&self) -> u32 { self.value }
     pub(crate) fn clear(&mut self,mask:u32){self.value&=!mask;}
+    pub(crate) fn set(&mut self,mask:u32){self.value|=mask;}
     pub fn initialize(&mut self) { self.value = WL_ACTIVE | WL_ON | WL_BTLOG; }
     pub fn set_rfk(&mut self, active: bool) { if active { self.value |= WL_RFK; } else { self.value &= !WL_RFK; } }
     // Shutdown may clear our RFK request after an ambiguous write, but can never rehabilitate the failed shadow.

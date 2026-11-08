@@ -181,10 +181,25 @@ It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 - **Path B's TSSI DAC gain table** is written unread, as Linux. On the Ryzen its readback changed in three admissions of four; path B is shared with Bluetooth.
 - **With all of it the Ryzen joined CoolNet2:** WPA2 handshake, `JOINED (TRY 1)`, DHCP `192.168.2.169/24` on the Wi-Fi card.
 - **Not solved:** the coexistence keeps the `NoLink` policy after association.
-  - **What it did:** 6 minutes after joining, during `bt_hci`'s 10-second inquiry, the station heard nothing for 10 s and lost the network. The next frame then found the BB fully in reset and all host DMA stopped, with no recovery counted.
-  - **What Linux does:** it tells the coexistence of the connection (`BTC_ROLE_MSTS_STA_CONN_END`), which then shares the time between Wi-Fi and Bluetooth.
+  - **What it did:** 6 minutes after joining, during `bt_hci`'s 10-second inquiry, the station heard nothing for 10 s and lost the network.
+  - **What Linux does:** it tells the coexistence of the connection (`BTC_ROLE_MSTS_STA_CONN_END`), which then shares the time between Wi-Fi and Bluetooth. That is [213-DRV-0052](../issues/213-DRV-0052-coexistence-after-association.md).
+- **A correction to the stop line's changes.** The BB in reset and all host DMA stopped that the changes showed at a stop (`0=D9DC3F80`, `1010=000BFF00`, `+TX`) were the data mode's own shutdown: the service read the registers after it. It no longer watches once the data mode has shut down.
 
-After a stop it answers `no-device` for as long as the process lives (`absent_forever`).
+**The Wi-Fi alone, the cable out (the Ryzen, 2026-11-08).** Effector's TLS to hesere.uz went over it. Each step below was found on the machine, and each is a debug mode, on until hardening:
+- **`OUTLAST_SER`'s wait has its own time.** A recovery's wait moves the pending frame's deadline, and the operation's, by its length and `SER_GRACE_US` (20 ms). A recovery that begins during the checks is outlasted, and the checks are made once more. Before, a recovery during the first traffic ran out the frame's 100 ms inside the station's register check.
+- **`DROP_UNACKED`** (`tx.rs`): a frame the RPQ releases as dropped (lifetime, or a MACID drop during a recovery) is answered as sent and not acknowledged. False: the data mode stops (`Dropped`).
+- **`REPORT_EACH`** (`post_mac.rs`): a release report per frame. Linux batches 30, with many frames in flight. With one in flight, each try waited for the batch's timeout, about 10 ms, so wlan's 15 tries outran a send's time.
+- **`SEND_TRIES`** (`service.rs`): at most 8 submissions a send, so a frame nobody acknowledges ends in its time as not acknowledged, and wlan's rate steps down. At 24 Mb/s, 12 tries in a row went unacknowledged.
+- **A release taken in a step is acted on in that step**, not after the next receive wait.
+- **A send times out in the service 10 ms before the data mode's own deadline** (`FRAME_MARGIN_MS`), so a frame that never ends stops the service as `TransmitTimeout`, with `Seen`, its queue, length and age.
+- **`OWN_DEADLINES`** (`data_mode.rs`): an operation keeps its own deadline while a frame is pending. Capped by the frame's, the operations near it ran out in whichever register they read: `Session(Permit(Timeout))` at `0x13b0`, `Register(Timeout)`.
+- **`RESTART_AFTER_FAILURE`** (`main.rs`): after a failure that stopped, powered off and quiesced the device, the driver exits, and `init` starts a fresh one within its budget (3 in 60 s). `wlan` learns the fresh radio's country only at its own start: asked of NET on `internal-dev-messages`, 2026-11-08.
+
+- **`KEEP_LATE`** (`service.rs`): a send that outruns its time is answered as sent and not acknowledged, and its release is awaited 1 s more (`LATE_MS`), while every other send is `busy`. The log says `A FRAME OUTRAN ITS TIME (n): …`. One that outruns that too stops the service.
+
+**Still open:** a frame fetched by the DMA whose release does not come within its time. One frame waited over 45 ms after five tries, about 3 minutes into a run; with the connected station's policy (213-DRV-0052), one after 9 minutes. Without `KEEP_LATE` and `RESTART_AFTER_FAILURE` the machine stays off the network then.
+
+After a stop with `RESTART_AFTER_FAILURE` false, or one that did not quiesce, it answers `no-device` for as long as the process lives (`absent_forever`).
 
 **Its limits:**
 - data mode keeps the one channel it admitted. It has no retune or recalibration of another channel, so a station that loses its network there cannot scan elsewhere until the driver restarts;

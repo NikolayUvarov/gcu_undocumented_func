@@ -64,7 +64,7 @@ fn active_busy_and_bad_timeout_refuse_before_cam_without_killing_current_tx(){ru
 
 #[test]
 fn active_cam_ack_without_dma_and_dma_without_ack_never_publish_filter(){for fault in[1,2]{run(0,true,true,|data,c|{
-    c.borrow_mut().filter_fault=fault;let failure=data.set_filter(false,AP,[0;6],100_000).unwrap_err();
+    data.poll_packets(100_000).unwrap();c.borrow_mut().filter_fault=fault;let failure=data.set_filter(false,AP,[0;6],100_000).unwrap_err();
     assert_eq!(failure.stage,Stage::Filter(station::Stage::Cam));assert!(failure.shutdown.is_some());
     assert_eq!(c.borrow().cam_packets.len(),1);assert_eq!(c.borrow().filter_writes,0);
     assert!(data.poll_packets(100_000).is_err());
@@ -72,7 +72,7 @@ fn active_cam_ack_without_dma_and_dma_without_ack_never_publish_filter(){for fau
 
 #[test]
 fn active_corrupt_applied_failed_and_late_filter_writes_are_terminal(){for fault in[3,4,5]{run(0,true,true,|data,c|{
-    c.borrow_mut().filter_fault=fault;let failure=data.set_filter(false,AP,[0;6],100_000).unwrap_err();
+    data.poll_packets(100_000).unwrap();c.borrow_mut().filter_fault=fault;let failure=data.set_filter(false,AP,[0;6],100_000).unwrap_err();
     assert_eq!(failure.stage,Stage::Filter(station::Stage::Filter));assert!(failure.shutdown.is_some());
     assert_eq!(c.borrow().cam_packets.len(),1);assert_eq!(c.borrow().filter_writes,1);assert_eq!(c.borrow().published,0);
     assert!(data.set_filter(true,[0;6],[0;6],100_000).is_err());
@@ -80,7 +80,7 @@ fn active_corrupt_applied_failed_and_late_filter_writes_are_terminal(){for fault
 
 #[test]
 fn active_selector_restore_failure_is_retained_after_cam(){run(0,true,true,|data,c|{
-    c.borrow_mut().filter_fault=6;let failure=data.set_filter(false,AP,[0;6],100_000).unwrap_err();
+    data.poll_packets(100_000).unwrap();c.borrow_mut().filter_fault=6;let failure=data.set_filter(false,AP,[0;6],100_000).unwrap_err();
     assert_eq!(failure.stage,Stage::Filter(station::Stage::Verify));assert!(failure.shutdown.is_some());
     let Cause::Station(check)=failure.cause else{panic!("lost station restore failure")};
     assert_eq!(check.selector_restore.unwrap().register,0xc04);

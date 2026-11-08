@@ -60,7 +60,7 @@ impl<B:DeviceIo> DataSession<'_,'_,'_,'_,'_,'_,B>{
         let mut context=self.session.btc.take().ok_or(Cause::State)?;
         let mut transport=Runtime{session:&mut self.session,queue:self.queue,counts:&mut self.counts,
             filter,channel:self.prepared.tuned.channel,deadline,error:None};
-        let result=context.runtime(&mut transport,self.prepared.tuned.attempt,self.prepared.command,deadline);
+        let result=context.runtime(&mut transport,self.prepared.tuned.attempt,self.prepared.command,self.prepared.tuned.channel,deadline);
         let transmit=transport.error;self.session.btc=Some(context);
         if result.is_ok_and(|v|v!=Progress::Stable){self.counts.btc_deferred=self.counts.btc_deferred.saturating_add(1)}
         result.map_err(|cause|transmit.map_or(Cause::Coexistence(cause),Cause::Tx))

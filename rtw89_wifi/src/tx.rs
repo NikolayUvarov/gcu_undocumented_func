@@ -39,9 +39,9 @@ pub(crate) enum Receive{Empty,Rpq,TxReport{final_report:bool},Other(rx::Outcome)
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct Stop{pub request:Option<Fault>,pub idle:Option<Fault>}
 /// What a pending send has seen, for a timeout's diagnostic: submissions finished, the current one's DMA fetch, RPQ release
-/// and final firmware report, the hardware tries counted and the polls made.
+/// and final firmware report, the hardware tries counted and the polls made; the frame's queue, length and age.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
-pub(crate) struct Seen{pub finished:u8,pub fetched:bool,pub released:bool,pub reported:bool,pub tries:u16,pub polls:u32}
+pub(crate) struct Seen{pub finished:u8,pub fetched:bool,pub released:bool,pub reported:bool,pub tries:u16,pub polls:u32,pub queue:u8,pub length:u16,pub age_us:u64}
 #[derive(Clone,Copy)]
 struct Pending{queue:usize,sequence:u16,descriptor:u64,report:Option<Status>,firmware:Option<txdesc::FirmwareReport>,last_counter:u8}
 struct Request{meta:Frame,mac_id:u8,limit:u8,completed:u8,raw_count:u16,start:u64,budget:u32,last:u64,polls:u32,frame:[u8;txdesc::MAX_FRAME]}
@@ -53,11 +53,14 @@ struct Request{meta:Frame,mac_id:u8,limit:u8,completed:u8,raw_count:u16,start:u6
 // one hardware try a submission (SELECTED_LIMIT). The host models keep the strict path unless a case asks for this.
 const RPQ_ALONE:bool=true;
 const MGQ:usize=4;
+// DEBUG (the same): a frame the RPQ releases as dropped (its lifetime, or its MACID during the firmware's L0 recovery) is
+// answered as sent and not acknowledged, and the data mode goes on. False: it stops the data mode (Dropped).
+const DROP_UNACKED:bool=true;
 
 pub(crate) struct Queue<'a>{
     base:NonNull<u8>,physical:u64,session:u64,state:State,issued:[u64;CHANNELS],completed:[u64;CHANNELS],
     serial:u64,request:Option<Request>,pending:Option<Pending>,last_report:Option<txdesc::Report>,last_firmware:Option<txdesc::FirmwareReport>,
-    rpq_alone:bool,_exclusive:PhantomData<&'a mut[u8]>,
+    rpq_alone:bool,drop_unacked:bool,_exclusive:PhantomData<&'a mut[u8]>,
 }
 impl<'a> Queue<'a>{
     /// # Safety
@@ -74,7 +77,7 @@ impl<'a> Queue<'a>{
         let session=io::dma_session()?;
         for at in 0..DMA_BYTES{base.as_ptr().add(at).write_volatile(0);}
         Ok(Self{base,physical,session,state:State::Allocated,issued:[0;CHANNELS],completed:[0;CHANNELS],serial:0,
-            request:None,pending:None,last_report:None,last_firmware:None,rpq_alone:RPQ_ALONE&&!cfg!(test),_exclusive:PhantomData})
+            request:None,pending:None,last_report:None,last_firmware:None,rpq_alone:RPQ_ALONE&&!cfg!(test),drop_unacked:DROP_UNACKED&&!cfg!(test),_exclusive:PhantomData})
     }
     pub(crate) fn state(&self)->State{self.state}
     pub(crate) fn session(&self)->u64{self.session}
@@ -83,13 +86,21 @@ impl<'a> Queue<'a>{
     /// RPQ_ALONE in a host model, whose default is the strict path.
     #[cfg(test)]
     pub(crate) fn rpq_alone(&mut self){self.rpq_alone=true;}
+    /// DROP_UNACKED in a host model.
+    #[cfg(test)]
+    pub(crate) fn drop_unacked(&mut self){self.drop_unacked=true;}
+    /// More time for the pending send: a firmware recovery the data mode outlasted held it (OUTLAST_SER).
+    pub(crate) fn extend(&mut self,us:u64){
+        if let Some(request)=self.request.as_mut(){request.budget=request.budget.saturating_add(u32::try_from(us).unwrap_or(u32::MAX));}
+    }
     // Whether a frame of queue `q` waits for the firmware's final report.
     fn reported(&self,q:usize)->bool{!self.rpq_alone||q==MGQ}
     pub(crate) fn seen(&self)->Seen{
         let(finished,tries,polls)=self.request.as_ref().map_or((0,0,0),|r|(r.completed,r.raw_count,r.polls));
+        let(queue,length,age_us)=self.request.as_ref().map_or((0,0,0),|r|(r.meta.queue as u8,r.meta.length as u16,r.last.saturating_sub(r.start)));
         let pending=self.pending;
         Seen{finished,fetched:pending.is_some_and(|p|self.completed[p.queue]>p.descriptor),
-            released:pending.is_some_and(|p|p.report.is_some()),reported:pending.is_some_and(|p|p.firmware.is_some()),tries,polls}
+            released:pending.is_some_and(|p|p.report.is_some()),reported:pending.is_some_and(|p|p.firmware.is_some()),tries,polls,queue,length,age_us}
     }
     pub(crate) fn poison(&mut self){self.state=State::Faulted;}
     pub(crate) fn installed_for_data(&mut self,bus:&mut impl Bus)->Result<()>{
@@ -215,7 +226,13 @@ impl<'a> Queue<'a>{
         if self.completed[pending.queue]<=pending.descriptor{return Ok(None);}
         let Some(status)=pending.report else{return Ok(None);};
         let request=self.request.as_mut().ok_or(Error::State)?;
-        if matches!(status,Status::Lifetime|Status::MacIdDrop){return Err(Error::Dropped{status,completed_descriptors:request.completed});}
+        if matches!(status,Status::Lifetime|Status::MacIdDrop){
+            if !self.drop_unacked{return Err(Error::Dropped{status,completed_descriptors:request.completed});}
+            request.completed=request.completed.checked_add(1).ok_or(Error::Count)?;self.pending=None;
+            let attempts=u8::try_from(request.raw_count).map_err(|_|Error::Count)?.max(1).min(request.limit);
+            let completion=Completion{status,acked:false,attempts:AttemptCount::Known(attempts),completed_descriptors:request.completed,raw_data_tx_count:request.raw_count};
+            self.time(bus)?;self.request=None;return Ok(Some(completion));
+        }
         let tries=if !self.rpq_alone||pending.queue==MGQ{
             let Some(firmware)=pending.firmware else{return Ok(None);};
             if firmware.status!=status{return Err(Error::Report);}
