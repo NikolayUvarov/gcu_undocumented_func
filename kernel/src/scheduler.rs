@@ -1265,6 +1265,13 @@ impl Scheduler {
         Ok(pid as usize)
     }
 
+    // Who asked for the machine's end, on the console (000-KRN-0216): the evidence after the system log is gone.
+    fn asked_by(&self, slot: usize, what: &str) {
+        let Some(task) = self.tasks[slot].as_ref() else { return };
+        let name = core::str::from_utf8(&task.name.bytes[..task.name.len as usize]).unwrap_or("?");
+        let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: {} (PID {}) ASKED TO {}\n", name, task.pid, what));
+    }
+
     // Process control (TASK_LIST ... HALT): only for the holder of the control capability.
     unsafe fn control(&mut self, slot: usize, ptr: *mut SyscallMailbox, request: &SyscallMailbox) -> Result<usize, usize> {
         // Statistics need only the observe privilege; kill, focus, key listening, logs, console and halt need process control (MC-10.2).
@@ -1361,8 +1368,8 @@ impl Scheduler {
                 Ok(used)
             }
             SYSCALL_HALT => { crate::firmware::clear_run_mark(); crate::halt_asked() }
-            SYSCALL_REBOOT if request.arg1 == REBOOT_POWER_OFF => { crate::firmware::clear_run_mark(); crate::acpi::power_off() }
-            SYSCALL_REBOOT => { crate::firmware::clear_run_mark(); crate::acpi::reboot() }
+            SYSCALL_REBOOT if request.arg1 == REBOOT_POWER_OFF => { self.asked_by(slot, "TURN THE MACHINE OFF"); crate::firmware::clear_run_mark(); crate::acpi::power_off() }
+            SYSCALL_REBOOT => { self.asked_by(slot, "RESTART THE MACHINE"); crate::firmware::clear_run_mark(); crate::acpi::reboot() }
             _ => Err(ERR_INVALID),
         }
     }

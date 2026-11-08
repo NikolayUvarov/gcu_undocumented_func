@@ -1,6 +1,6 @@
 # 100000-PRT-0009 — The board from the device tree: the reader, and what every board has
 
-**Type:** porting (kernel) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** an intention · **Blocked by:** a PinePhone at hand (the maintainer, 2026-10-25: the port starts then); — ([210-KRN-0029](../issues-done/210-KRN-0029-device-tree-in-bootinfo.done): the tree's address in `BootInfo.device_tree`, done) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
+**Type:** porting (kernel) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** open (started 2026-11-08 at the maintainer's word, before the phone) · **Blocked by:** — ([210-KRN-0029](../issues-done/210-KRN-0029-device-tree-in-bootinfo.done): the tree's address in `BootInfo.device_tree`, done) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
 
 ## Problem
 

@@ -5,6 +5,8 @@ extern crate alloc;
 
 #[path = "../../common/abi.rs"]
 pub mod abi;
+#[path = "../../common/fadt.rs"]
+pub mod fadt;
 #[path = "../../common/font.rs"]
 pub mod font;
 #[path = "../../common/font16.rs"]

@@ -1,6 +1,6 @@
 # 100000 — MIND Core on a phone: the PinePhone first
 
-**Type:** porting (main task) · **Owner:** `MOB` track (later) · **Priority:** P2 · **Status:** an intention · **Blocked by:** a PinePhone at hand: the port starts then, stage 0 included (the maintainer, 2026-10-25; [issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)) · **Roadmap:** track H (boards with UEFI) · **Constitution:** MC-1.3, MC-1.5, MC-5.1, MC-6.3, MC-11.3, MC-11.4, MC-11.11, MC-12.1, MC-12.3
+**Type:** porting (main task) · **Owner:** `MOB` track (later) · **Priority:** P2 · **Status:** stage 0 started (the maintainer, 2026-11-08: before the phone, for a test run) · **Blocked by:** for stage 1, a PinePhone at hand ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)); stage 0 is not · **Roadmap:** track H (boards with UEFI) · **Constitution:** MC-1.3, MC-1.5, MC-5.1, MC-6.3, MC-11.3, MC-11.4, MC-11.11, MC-12.1, MC-12.3
 
 **Recorded by:** the kernel session, 2026-10-25, at the maintainer's request:
 - the question: what MIND Core needs to run on mobile phones, and which phone to start with;
@@ -37,6 +37,21 @@ As found on 2026-10-25 (sources at the end). Each point is checked on the phone 
 - **Its limits, stated:**
   - no IOMMU: drivers with DMA are in the TCB, as on x86 (MC-1.5);
   - 2–3 GiB and slow cores, so little room for large models.
+
+## The maintainer's word of 2026-11-08
+
+**Stage 0 starts now,** before the phone, for a test run. Its goal is that the phone boots and works with Effector at least minimally: updates, logs and tests.
+
+**The way to it, until Wi-Fi exists (stage 3):** the link over the headphone jack's UART, with `effector485` on the host.
+- That cable carries the console, the files, the log, the programs and updates (a request to `LNK`, `requests-LNK.md`).
+- The agent inside MIND Core waits for a network.
+- **Through Effector, from anywhere** (the maintainer, later the same day): the Effector agent on the Linux or Windows host that holds the cable relays the console (RS-232 or RS-485) and, in link mode, effector485's operations. The specification is [docs/remote-serial.md](../docs/remote-serial.md) ([Russian](../docs/remote-serial_RU.md)): the agent's part goes to the Effector project through `EFF` ([requests-EFF.md](requests-EFF.md)), effector485's to `LNK` ([requests-LNK.md](requests-LNK.md)). Nothing of it exists yet.
+
+**In QEMU first:**
+- **`virt`, with U-Boot's UEFI (`u-boot-qemu`'s `qemu_arm64`) and no ACPI,** as Tow-Boot gives the phone, on GICv2 and four Cortex-A53;
+- **the forum's A64 fork of QEMU** for the A64's own UART and addresses: `-M pinephone`, [rdev0x1/qemu](https://github.com/rdev0x1/qemu), branch `pinephone_wip`, 2020, serial console only. It may not build or boot UEFI; that is checked.
+
+**Neither is the phone:** what passes there is evidence for that emulator only (MC-12.1).
 
 ## Plan
 
