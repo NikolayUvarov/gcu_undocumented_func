@@ -197,9 +197,11 @@ struct Scheduler {
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
-static LOCK: AtomicBool = AtomicBool::new(false);
-struct Guard; impl Drop for Guard { fn drop(&mut self) { LOCK.store(false, Ordering::Release); } }
-fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { while LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { while LOCK.load(Ordering::Relaxed) { core::hint::spin_loop(); } } let _guard = Guard; f() }) }
+// A ticket lock (000-KRN-0219): each CPU is served in the order it asked, so none waits behind one that takes it again and
+// again, as CPU 0 did behind a test-and-set lock in round 91's gate. Taken with interrupts off, never twice by one CPU.
+static LOCK: crate::ticket::Ticket = crate::ticket::Ticket::new();
+struct Guard; impl Drop for Guard { fn drop(&mut self) { LOCK.unlock(); } }
+fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { LOCK.lock(); let _guard = Guard; f() }) }
 
 // The mailbox of the task each CPU runs (0: idle), and the system calls answered there without the lock since the
 // CPU last selected: they are added to the task and the CPU at the next select (000-KRN-0011).
@@ -1862,8 +1864,6 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         if let Some(job) = revocation {
             let mut job = Some(job);
             let next = loop {
-                // A CPU waiting for the lock takes it now: a test-and-set lock would otherwise go back to this one.
-                for _ in 0..LET_GO_SPINS { if LOCK.load(Ordering::Relaxed) { break; } core::hint::spin_loop(); }
                 ZEROING[cpu].store(true, Ordering::Relaxed); interrupts::window(); ZEROING[cpu].store(false, Ordering::Relaxed);
                 let done = locked(|| {
                     let s = scheduler();
@@ -1893,8 +1893,6 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
     }
 }
 
-// Spins a CPU between two steps of a revocation leaves for another to take the lock (000-KRN-0104).
-const LET_GO_SPINS: usize = 2000;
 // Each CPU's mark while it takes interrupts between the pieces of a block it zeroes (262-KRN-0165), and whether a wake
 // came then. Such an interrupt only keeps the books: the frame under it is the kernel's, never a task's to switch from.
 static ZEROING: [AtomicBool; cpu::MAX] = [const { AtomicBool::new(false) }; cpu::MAX];
