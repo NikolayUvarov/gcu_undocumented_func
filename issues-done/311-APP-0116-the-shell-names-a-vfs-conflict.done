@@ -1,0 +1,35 @@
+# 311-APP-0116 — The shell builds against `vfs.wit` 2.6's `conflict` — done
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (311-KRN-0189 lands with it) · **Status:** done (2026-11-08) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-12.4
+
+Numbered on 2026-10-30 from the kernel track's request in `requests-APP.md`, "An arm for `vfs.wit` 2.6's error `conflict` in the shell", for 311-KRN-0189 (STO's `storefs`, 311-STO-0032).
+
+## Problem
+
+- **What 2.6 changes.** `vfs.wit` 2.6 appends the error `conflict`, a write or `flush` refused because another writer published the file first, and `mind::fs::Error` gets `Conflict`.
+- **Why the shell is in the way.** `shell/src/files.rs` `text` matched `mind::fs::Error` exhaustively, so the shell would not build with 2.6.
+
+## Plan
+
+- **Now:** a last arm, `#[allow(unreachable_patterns)] _ => "REFUSED"`, which builds against `main` as it is and against 2.6.
+- **Once 2.6 is in `main`:** `Error::Conflict => "CHANGED BY ANOTHER WRITER; READ IT AGAIN"`, in place of the arm.
+
+## Acceptance criteria
+
+- The shell builds against `main` now. It builds against 311-KRN-0189's branch too.
+- With 2.6: a write `storefs` refuses with `conflict` is named so in the shell (STO's check of `storefs`).
+
+## Resolution
+
+- **The arm while 2.6 was not in `main`:** `#[allow(unreachable_patterns)] _ => "REFUSED"`, landed with 311-KRN-0189's round. The shell built against both trees.
+- **Its words, now that 2.6 is in `main`** (`shell/src/files.rs`, c815743e4): `Error::Conflict => "CHANGED BY ANOTHER WRITER MEANWHILE; READ IT AGAIN"`, in place of the arm.
+  - The match is whole again, so an error added later breaks the build instead of reading as `REFUSED` (MC-12.4).
+- **Shown on the platform:** the `shell` suite's `storefs_check`, QEMU x86, 4 CPUs, TCG, 2026-11-08.
+  - A listing redirected into `notes:` is published: `116 BYTES WRITTEN TO notes:list.txt`.
+  - Then `fsstep notes:steps/x.bin 100 3 100 > notes:out.txt`. The shell writes `fsstep`'s `HOLDING` line into its file, and `fsstep` then publishes the volume through its own scope. `storefs` refuses the shell's flush, and the shell says `ERROR: > notes:out.txt: CHANGED BY ANOTHER WRITER MEANWHILE; READ IT AGAIN`.
+  - With `fsstep` holding nothing, the shell's tree had nothing unpublished, followed the name, and published. So the check holds `fsstep` for 3 s.
+- **Not covered:** the same refusal through `write`, `mv` or `rm`. Each of them opens, changes and publishes within one command, so no second writer comes between; their words are the same `text`.
+
+## Related
+
+311-KRN-0189, 311-STO-0032.

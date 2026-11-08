@@ -2638,13 +2638,14 @@ def storefs_check(vm):
     require(vm.command("rm other:x/c.txt"), "OK")
     require(vm.command("rm other:x"), "OK")
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
-    # 311-APP-0116: a redirect's file on a store volume is published at its flush. With no other writer it is; when the
-    # redirected program itself publishes the volume first (fsstep writes its file through its scope), storefs refuses
-    # the shell's flush with vfs.wit 2.6's `conflict`, which the shell names.
+    # 311-APP-0116: a redirect's file on a store volume is published at its flush. With no other writer it is. When the
+    # redirected program publishes the volume after the shell wrote its first line there (fsstep's HOLDING line, then
+    # its close 3 s later, through its own scope), storefs refuses the shell's flush with vfs.wit 2.6's `conflict`, and
+    # the shell names it; a tree with nothing unpublished would have followed the name instead.
     require(vm.command("ls notes: > notes:list.txt"), "WRITTEN TO notes:list.txt")
     require(vm.command("cat notes:list.txt"), "docs")
     require(vm.command("mkdir notes:steps"), "OK")
-    out = vm.command("fsstep notes:steps/x.bin 100 0 100 > notes:out.txt", timeout=60)
+    out = vm.command("fsstep notes:steps/x.bin 100 3 100 > notes:out.txt", timeout=60)
     require(out, "ERROR: > notes:out.txt: CHANGED BY ANOTHER WRITER MEANWHILE; READ IT AGAIN")
     require(vm.command("ls notes:steps"), "1 ENTRIES, 1 FILES, 200 BYTES")  # fsstep's own file, published
     for path in ("notes:steps/x.bin", "notes:steps", "notes:out.txt", "notes:list.txt"):
