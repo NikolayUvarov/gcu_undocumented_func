@@ -1271,6 +1271,8 @@ DHCP's exchange is data both ways over the CCMP-protected link.
 
 **`OWN_DEADLINES`** (`data_mode.rs`): an operation keeps its own deadline while a frame is pending. `rtw89_restart1` had stopped after 57 s on `Register(Timeout)` near a pending frame's deadline. `rtw89_own1` joined, took DHCP and reconnected Effector.
 
-**To harden later:** `KEEP_SENDING`, `OUTLAST_SER`, `RPQ_ALONE`, `DROP_UNACKED`, `REPORT_EACH`, `SEND_TRIES`, `OWN_DEADLINES` and `RESTART_AFTER_FAILURE`. Each is a constant with its strict path beside it; the host cases run both where the path is the driver's own.
+**`KEEP_LATE`** (`service.rs`): a send that outruns its time is answered as not acknowledged, and its release is awaited 1 s more while nothing else is sent; only one that outruns that too stops the service.
+
+**To harden later:** `KEEP_SENDING`, `OUTLAST_SER`, `RPQ_ALONE`, `DROP_UNACKED`, `REPORT_EACH`, `SEND_TRIES`, `OWN_DEADLINES`, `KEEP_LATE` and `RESTART_AFTER_FAILURE`. Each is a constant with its strict path beside it; the host cases run both where the path is the driver's own.
 
 **What this shows:** that machine, that AP and those builds only (MC-12.1).

@@ -40,6 +40,32 @@ The coexistence then picks a policy for a connected station (`_action_wl_2g_sta`
 
 One run on that machine (MC-12.1): this supports the cause, it does not prove it.
 
+## Progress (2026-11-08, evening): plan steps 2 and 3's idle case
+
+**Built** (fb10b69d). The data mode's first coexistence reconcile sends what Linux sends at `BTC_ROLE_MSTS_STA_CONN_END` for one 2.4 GHz station (pinned `05f7e89a`):
+- ROLE v2, the station connected on the admitted channel;
+- the policy `Station`, Linux's `OFF_BWB1`: the OFF slot's table `0xea5a5a5a` instead of `NoLink`'s `0xe5555555`, TDMA off;
+- AFH around the channel;
+- path B's S1 standby, and the WLAN scoreboard's bits 13 and 12.
+
+**What the source settled about the plan:**
+- **The antenna.** Linux's antenna is the same connected as not (`BTC_ANT_W2G`), so `Antenna` gains no `Connected`: plan step 3's second point is not needed.
+- **Leaving (step 4).** Linux too keeps the connected policy after a disconnect, and returns to no-link only at power-off. Here a data mode that stops ends the driver (`RESTART_AFTER_FAILURE`, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)).
+
+**Not ported:** Linux's TDMA branches:
+- `FIX_TD7010` while linking;
+- `FIX_TD4010ISO` for a busy Wi-Fi;
+- `PFIX_TD5050` for a busy Wi-Fi during an inquiry, which also needs null-data templates.
+
+The source and the layouts: [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852be-btc-runtime.md).
+
+**On the Ryzen** (`rtw89_conn1`, the cable out, `bt_hci` from its boot image with rounds every 300 s):
+- **The inquiry.** A whole 10-second inquiry (`INQUIRY COMPLETE AFTER 10263 MS`) passed with the station joined. Before, the first inquiry after six minutes lost the network.
+- **The gateway pings,** every 2 minutes: 0 to 33 % lost.
+- **After 9 minutes** the data mode stopped: one frame's release did not come in its time (`Tx(Io(Timeout))` after 5 submissions). That is [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)'s open problem, not the inquiry.
+
+One run on that machine (MC-12.1). The acceptance criterion, an hour across ten inquiries, is not met yet.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852be-btc-runtime.md), [700](700-bluetooth.md).

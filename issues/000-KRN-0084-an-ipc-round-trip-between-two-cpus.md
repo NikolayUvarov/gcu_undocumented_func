@@ -46,6 +46,8 @@ On this Ivy Bridge, `HLT` may become C1E (`MSR_POWER_CTL` bit 1, not in the repo
 
 **2026-10-11, the MacBook Pro** (build 8223d24, `hw0002.txt`): `MSR_POWER_CTL` = 0x300047, so bit 1 is set and C1E is on. An idle CPU's `HLT` may drop it into C1E, which supports the reading above; the `kbench` rows of step 1 are to measure what that costs a round trip.
 
+2026-11-08: **a candidate found:** the APs run with their caches disabled ([000-KRN-0220](000-KRN-0220-the-application-processors-run-with-caches-disabled.md)), and `kbench --child` runs on one. Not measured yet (MC-12.2).
+
 ## Related
 
 [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [174](174-full-use-of-pc-hardware.md) (step on C-states), [000-KRN-0083](../issues-done/000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done).

@@ -38,6 +38,9 @@ pub enum Event {
     /// A `set-country` in data mode: `kept` if it still lets the radio send on the admitted `channel` at no less EIRP;
     /// if not, `enforced` when sending stops, and otherwise only logged (service.rs's KEEP_SENDING).
     DataCountry { code: [u8; 2], channel: u8, kept: bool, enforced: bool },
+    /// The `count`-th send that outran its time (service.rs's KEEP_LATE): its submissions finished, whether the last was
+    /// fetched and released, its length and age; answered as not acknowledged, its release awaited.
+    LateFrame { count: u32, finished: u8, fetched: bool, released: bool, length: u16, age_us: u64 },
 }
 
 #[derive(Debug)]
