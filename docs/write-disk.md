@@ -279,3 +279,29 @@ reboot
 - On the Ryzen the AMD FCH's watchdog does the same ([213-KRN-0125](../issues/213-KRN-0125-the-amd-fch-watchdog.md)). It is checked against a model of its registers only, so the first runs show whether it holds: the boot line says `WATCHDOG: AMD FCH, A RESET AFTER 30 S ...` when it is armed. If it says `WATCHDOG: NONE`, a freeze waits for the power button.
 
 **Effector's machines.** On a machine Effector works on (the Ryzen is one), only the maintainer runs `once --reboot`, after checking that no operation is active ([docs/effector.md](effector.md)).
+
+## 11. One boot of MIND Core from Windows, and back
+
+The same switch from Windows 10 or 11, for a PC such as the DEXP N100 that runs Windows from its own disk ([800-LNK-0037](../issues/800-LNK-0037-boot-switch-from-windows.md)). In PowerShell as administrator:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\boot_switch.ps1 status      # the boot entries, Windows' first, and the MIND Core disk
+powershell -ExecutionPolicy Bypass -File scripts\boot_switch.ps1 once -Reboot  # the next boot starts the stick, once
+# ... the run in MIND Core; its reboot, a panic, the watchdog or a power cut brings Windows back ...
+powershell -ExecutionPolicy Bypass -File scripts\boot_switch.ps1 logs C:\mind-runs   # the MIND LOG volume copied, and the loader's mark read
+```
+
+**What it does,** as section 10 describes, through the firmware's variables themselves:
+- it reads and writes `Boot####` and `BootNext` with `Get/SetFirmwareEnvironmentVariableEx`, which needs an administrator (`SeSystemEnvironmentPrivilege`);
+- it finds the stick's entry by its first partition (`HD(1,MBR,signature,start,size)`, the signature and partition read from the disk's MBR);
+- if there is none, it makes one, `MIND Core` with `\EFI\BOOT\BOOTX64.EFI`, at the lowest free number from `Boot0000` to `Boot00FF`;
+- `-Disk N` names the disk by its number in Windows' Disk Management when several hold MIND Core.
+
+It refuses what `boot_switch.py` refuses, Windows standing for Linux. It never writes `BootOrder`. `-Reboot` asks Windows to restart in 5 s (`shutdown /r /t 5`). The state is kept in `%ProgramData%\mind-boot-switch.json`.
+
+**Windows writes to the stick.** It mounts the stick's FAT volumes and may write to them: `System Volume Information`, and `$RECYCLE.BIN` when a file is deleted there. Such writes cut short by a hard reset damaged a stick's FAT once (2026-11-05). So:
+- restart with `shutdown /r` or `-Reboot`, never with the power button, while Windows runs;
+- delete nothing on the stick from Windows;
+- `logs` leaves Windows' two folders out of its copy.
+
+**Checked** against a modelled firmware and disks by `tests/boot_switch_ps1_test.ps1` (Windows PowerShell 5.1 or PowerShell 7: `powershell -ExecutionPolicy Bypass -File tests\boot_switch_ps1_test.ps1`). The firmware calls themselves are not yet run on a real machine.
