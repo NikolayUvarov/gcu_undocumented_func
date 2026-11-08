@@ -229,7 +229,12 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let grace_us=self.data().grace_us();
                 let tries=if attempts<=15{attempts.min(SEND_TRIES)}else{attempts};
                 match self.data().begin(frame,rate,tries,COMMAND_US){
-                    Ok(())=>self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us}),
+                    Ok(())=>{
+                        // KEEP_LATE: the queue's own budget never ends a frame first; the service's deadlines do. Within a step
+                        // the 10 ms margin was not always enough (the Ryzen, 2026-11-08: Tx(Io(Timeout)) inside a drain).
+                        if self.late{self.data().extend_send(LATE_MS*1000);}
+                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us})
+                    },
                     Err(failure)=>{let _=wlanhw::reply_send(call,Err(error(&failure)));
                         if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}},
                 }

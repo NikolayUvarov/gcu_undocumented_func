@@ -12,7 +12,7 @@ const ACTIVATE_US:u64=1_000_000;
 // recovery holds the BB in reset and zeroes the scheduler, which Linux never reads back. The data mode gives the firmware
 // SER_WAIT_US to bring both back, restores the scheduler itself if only it is still off after a recovery SER_DBG_INFO
 // counted, and goes on. False: the permit and coexistence checks stop the data mode.
-const OUTLAST_SER:bool=true;
+pub(crate) const OUTLAST_SER:bool=true;
 const SER_WAIT_US:u64=60_000;
 // What an operation and a pending frame are given beyond a recovery's own wait: the 100 ms of a frame sent as one began
 // ran out in the station's check on the Ryzen (2026-11-08, the first TLS traffic over the Wi-Fi alone).
@@ -244,15 +244,16 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         if self.stopped||!self.identity()||!matches!(self.session.mode,Mode::Data(_)){return Err(Cause::State)}
         if let Some(error)=self.session.failed{return Err(Cause::Session(error))}
         let mut deadline=self.outlast_ser(deadline,false)?;
-        let mut result=self.checks(deadline);
-        // OUTLAST_SER: a recovery that began during the checks is outlasted, and they are made once more.
+        let mut result=self.checks(deadline).and_then(|()|self.permits(deadline));
+        // OUTLAST_SER: a recovery that began during the checks or the permits' (the Ryzen, 2026-11-08: the scheduler read
+        // zero there after 42 minutes) is outlasted, and they are made once more.
         if result.is_err()&&OUTLAST_SER{
             let before=self.recoveries;let after=self.outlast_ser(deadline,false)?;
-            if self.recoveries!=before{deadline=after;result=self.checks(deadline);}
+            if self.recoveries!=before{deadline=after;result=self.checks(deadline).and_then(|()|self.permits(deadline));}
         }
-        result?;
-        let left=self.session.left(deadline)?;self.session.live(left.min(LIVE_US))?;self.session.left(deadline)?;Ok(deadline)
+        result?;self.session.left(deadline)?;Ok(deadline)
     }
+    fn permits(&mut self,deadline:u64)->Result<(),Cause>{let left=self.session.left(deadline)?;self.session.live(left.min(LIVE_US))?;Ok(())}
     fn checks(&mut self,deadline:u64)->Result<(),Cause>{
         let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
         let result=(||{self.queue.validate_data(&mut window)?;

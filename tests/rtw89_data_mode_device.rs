@@ -12,7 +12,11 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
     // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
     // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
-    pub ser:bool,pub ser_heal:Option<usize>}
+    pub ser:bool,pub ser_heal:Option<usize>,
+    // `ser` begins only after this many more scheduler reads.
+    pub ser_skip:usize,
+    // A transient BB reset: SYS_FUNC_EN's byte reads as off after the first `.0` reads of it, for `.1` reads.
+    pub bb_off:Option<(usize,usize)>}
 pub(super) struct Region{pub base:*mut u8}
 impl Region{pub fn new()->Self{let base=unsafe{std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())};assert!(!base.is_null());Self{base}}}
 impl Drop for Region{fn drop(&mut self){unsafe{std::alloc::dealloc(self.base,std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())}}}
@@ -144,12 +148,16 @@ impl Device{
     }
 }
 impl RegisterIo for Device{
-    fn read8(&mut self,at:usize)->io::Result<u8>{self.inject_old();let c=self.control.borrow();
+    fn read8(&mut self,at:usize)->io::Result<u8>{self.inject_old();
+        if at==2{let mut c=self.control.borrow_mut();if let Some((pass,off))=c.bb_off{
+            c.bb_off=match(pass,off){(0,0)=>None,(0,n)=>Some((0,n-1)),(p,n)=>Some((p-1,n))};if pass==0&&off>0{return Ok(0)}}}
+        let c=self.control.borrow();
         if c.armed&&((c.fault==9&&at==2)||(c.fault==12&&at==0x8040)){return Ok(0)}drop(c);self.station.read8(at)}
     fn read16(&mut self,at:usize)->io::Result<u16>{self.inject_old();self.station.read16(at)}
     fn read32(&mut self,at:usize)->io::Result<u32>{self.inject_old();
         if at==0xc348{
-            if std::mem::take(&mut self.control.borrow_mut().ser){self.raw().put(0xc348,4,0);self.raw().put(0x8424,4,1);self.raw().put(0xc164,4,8);}
+            let begins={let mut c=self.control.borrow_mut();if c.ser&&c.ser_skip>0{c.ser_skip-=1;false}else{std::mem::take(&mut c.ser)}};
+            if begins{self.raw().put(0xc348,4,0);self.raw().put(0x8424,4,1);self.raw().put(0xc164,4,8);}
             else if let Some(n)={let heal=self.control.borrow().ser_heal;heal}{
                 if n==0{self.raw().put(0xc348,4,0x010f);self.control.borrow_mut().ser_heal=None;}else{self.control.borrow_mut().ser_heal=Some(n-1);}
             }
