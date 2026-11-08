@@ -1,6 +1,6 @@
 # 100000-PRT-0010 — A 16550 UART in memory, as the kernel's console and the shell's
 
-**Type:** porting (the console) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** an intention · **Blocked by:** a PinePhone at hand (the maintainer, 2026-10-25: the port starts then); [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md) (the console from `stdout-path`) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
+**Type:** porting (the console) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** open (started 2026-11-08 at the maintainer's word, before the phone) · **Blocked by:** [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md) (the console from `stdout-path`) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
 
 ## Problem
 
