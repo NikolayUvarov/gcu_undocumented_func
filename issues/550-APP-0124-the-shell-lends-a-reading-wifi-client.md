@@ -1,6 +1,6 @@
 # 550-APP-0124 — The shell lends the Wi-Fi station's reading client, for a program that only shows the link
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** `KRN`'s request bit (proposed `REQUEST_WIFI_READ`, in [requests-KRN.md](requests-KRN.md), for 550-NET-0058) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.1, MC-6.1
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — (`REQUEST_WIFI_READ`, `1 << 28`, and `wifi.wit` 1.3's `reader` are in `main` since round 7f260e43, NET's notice of 2026-11-05) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-3.1, MC-6.1
 
 **Asked by:** NET (worked by the storage session), 2026-11-05, in [requests-APP.md](requests-APP.md), for [550-NET-0058](../issues-done/550-NET-0058-a-read-only-wifi-client.done). Numbered the same day.
 
