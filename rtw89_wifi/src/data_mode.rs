@@ -17,6 +17,10 @@ const SER_WAIT_US:u64=60_000;
 // What an operation and a pending frame are given beyond a recovery's own wait: the 100 ms of a frame sent as one began
 // ran out in the station's check on the Ryzen (2026-11-08, the first TLS traffic over the Wi-Fi alone).
 const SER_GRACE_US:u64=20_000;
+// DEBUG (the same): an operation keeps its own deadline while a frame is pending. A frame that never ends is the
+// service's to time out (FRAME_MARGIN_MS) and the queue's budget's; capped by the frame's deadline, the operations near
+// it ran out in whichever register they read (the Ryzen, 2026-11-08). False: the frame's deadline caps them.
+const OWN_DEADLINES:bool=true;
 const SER_DBG_INFO:usize=0x8424;
 const CMAC_ERR_ISR:usize=0xc164;
 const LIVE_US:u32=10_000;
@@ -259,7 +263,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     fn deadline(&mut self,timeout_us:u32)->Result<u64,Cause>{
         if timeout_us==0||timeout_us>super::MAX_COMMAND_US{return Err(Cause::Session(super::Error::Request))}
         let own=self.session.now()?.checked_add(u64::from(timeout_us)).ok_or(Cause::Session(super::Error::Clock))?;
-        Ok(self.tx_deadline.map_or(own,|tx|tx.min(own)))
+        Ok(if OWN_DEADLINES{own}else{self.tx_deadline.map_or(own,|tx|tx.min(own))})
     }
     fn runtime_failure(&mut self,cause:Cause)->Failure{
         let cause=self.session.btc_event_error.map_or(cause,Cause::Coexistence);

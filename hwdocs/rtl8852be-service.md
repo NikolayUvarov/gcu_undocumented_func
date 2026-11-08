@@ -192,6 +192,7 @@ It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 - **`SEND_TRIES`** (`service.rs`): at most 8 submissions a send, so a frame nobody acknowledges ends in its time as not acknowledged, and wlan's rate steps down. At 24 Mb/s, 12 tries in a row went unacknowledged.
 - **A release taken in a step is acted on in that step**, not after the next receive wait.
 - **A send times out in the service 10 ms before the data mode's own deadline** (`FRAME_MARGIN_MS`), so a frame that never ends stops the service as `TransmitTimeout`, with `Seen`, its queue, length and age.
+- **`OWN_DEADLINES`** (`data_mode.rs`): an operation keeps its own deadline while a frame is pending. Capped by the frame's, the operations near it ran out in whichever register they read: `Session(Permit(Timeout))` at `0x13b0`, `Register(Timeout)`.
 - **`RESTART_AFTER_FAILURE`** (`main.rs`): after a failure that stopped, powered off and quiesced the device, the driver exits, and `init` starts a fresh one within its budget (3 in 60 s). `wlan` learns the fresh radio's country only at its own start: asked of NET on `internal-dev-messages`, 2026-11-08.
 
 **Still open:** a frame fetched by the DMA whose release does not come within its time. One frame waited over 45 ms after five tries, about 3 minutes into a run. Without `RESTART_AFTER_FAILURE` the machine stays off the network then.

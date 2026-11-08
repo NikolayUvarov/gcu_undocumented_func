@@ -1269,6 +1269,8 @@ DHCP's exchange is data both ways over the CCMP-protected link.
 - **What it still needs.** `wlan` sends its country only at its own start, so the fresh radio stays receive-only. That part is asked of NET on `internal-dev-messages` (2026-11-08T1840Z).
 - **Its first run (`rtw89_restart1`)** joined CoolNet2 and reconnected Effector.
 
-**To harden later:** `KEEP_SENDING`, `OUTLAST_SER`, `RPQ_ALONE`, `DROP_UNACKED`, `REPORT_EACH`, `SEND_TRIES` and `RESTART_AFTER_FAILURE`. Each is a constant with its strict path beside it; the host cases run both where the path is the driver's own.
+**`OWN_DEADLINES`** (`data_mode.rs`): an operation keeps its own deadline while a frame is pending. `rtw89_restart1` had stopped after 57 s on `Register(Timeout)` near a pending frame's deadline. `rtw89_own1` joined, took DHCP and reconnected Effector.
+
+**To harden later:** `KEEP_SENDING`, `OUTLAST_SER`, `RPQ_ALONE`, `DROP_UNACKED`, `REPORT_EACH`, `SEND_TRIES`, `OWN_DEADLINES` and `RESTART_AFTER_FAILURE`. Each is a constant with its strict path beside it; the host cases run both where the path is the driver's own.
 
 **What this shows:** that machine, that AP and those builds only (MC-12.1).
