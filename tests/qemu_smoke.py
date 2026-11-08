@@ -8122,7 +8122,12 @@ def update_store_suite(args):
         log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
         require(log, "[UPDATER] SLOT B CONFIRMED ON THE DISK")
         assert "LET GO" not in log, log
-        assert re.search(r"COLLECTED \d+ BLOCKS", vm.command("blocks collect", raw=True, timeout=120))
+        # An object nothing retains, so the collection has something to free once its lease (60 s) has ended.
+        loose = re.search(r"PUT (\S+) SIZE 40000", vm.command("blocks pattern 40000", raw=True))[1]
+        time.sleep(62)
+        collected = re.search(r"COLLECTED (\d+) BLOCKS", vm.command("blocks collect", raw=True, timeout=120))
+        assert collected and int(collected[1]) >= 4, vm.output
+        require(vm.command(f"blocks check {loose}", raw=True), "blocks: check: NotFound")
         for root, directory, manifest, channel in ((root5, volume, manifest5, kept), (root6, newer, manifest6, good)):
             files, size = tree_of(directory, manifest, channel)
             require(vm.command(f"blocks check {root} tree", raw=True, timeout=600), f"CHECKED TREE {root}: {files} FILES, {size} BYTES")
