@@ -1684,14 +1684,18 @@ impl Init {
         if on && present == 0 { mind::println!("[INIT] A MODE IS ON, BUT THIS BUILD HAS NO EFFECTOR SERVICES (750-KRN-0119)"); }
     }
 
-    // A restart of the machine the updater asked for: what the volumes cache is written, the services stop in reverse
-    // start order (their devices quiesced), then the reset through the restart privilege.
-    fn reboot(&mut self) -> ! {
-        mind::println!("[INIT] RESTARTING THE MACHINE: THE VOLUMES WRITTEN, THE SERVICES STOPPED");
+    // A restart of the machine the updater asked for, or a power-off by the power button (000-KRN-0216): what the
+    // volumes cache is written, the services stop in reverse start order (their devices quiesced), then the reset or S5
+    // through the restart privilege; the kernel clears the run's mark there, so the next boot is no safe start.
+    fn reboot(&mut self) -> ! { self.down(false) }
+
+    fn down(&mut self, off: bool) -> ! {
+        mind::println!("[INIT] {} THE MACHINE: THE VOLUMES WRITTEN, THE SERVICES STOPPED", if off { "TURNING OFF" } else { "RESTARTING" });
         // The services that asked are told together and waited for once, before anything stops (750-KRN-0194).
         let (mut told, mut told_count) = ([0usize; UNITS], 0);
         for index in 1..UNITS {
-            if self.running(index) && self.warn(index, idl_init::StopReason::Restart) { self.stopped[index] = true; told[told_count] = index; told_count += 1; }
+            let reason = if off { idl_init::StopReason::PowerOff } else { idl_init::StopReason::Restart };
+            if self.running(index) && self.warn(index, reason) { self.stopped[index] = true; told[told_count] = index; told_count += 1; }
         }
         if told_count > 0 { let _ = self.ended_within(&told[..told_count]); }
         if let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)) {
@@ -1711,6 +1715,10 @@ impl Init {
             if self.running(index) { let _ = mind::control::kill(pid); }
             for _ in 0..200 { if !mind::process::alive(pid) { break; } mind::time::sleep(10); }
             if self.quiesce(index).is_ok() { mind::println!("[INIT] STOPPED {} PID={}", unit_name(index), pid); }
+        }
+        if off {
+            let refused = mind::control::power_off();
+            mind::println!("[INIT] THE MACHINE DID NOT TURN OFF ({:?}): RESTARTING IT", refused);
         }
         let _ = mind::control::reboot();
         loop { mind::time::sleep(1000); }
@@ -1790,6 +1798,51 @@ fn boot_order() -> impl Iterator<Item = usize> {
 const SAFE_LEFT_OUT: [&str; 7] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
+
+// The power button's PM1 event blocks (000-KRN-0216): their status and enable registers, through ports the kernel lent.
+struct Button { blocks: [Option<(mind::dev::Ports, u16, u16)>; 2], irq: mind::dev::Irq }
+
+impl Button {
+    // An SCI: whether it was the power button. Every status bit set is cleared (written 1), then the line acknowledged.
+    fn pressed(&self) -> bool {
+        let mut pressed = false;
+        for (ports, status, _) in self.blocks.iter().flatten() {
+            let found = ports.in16(*status);
+            pressed |= found & mind::fadt::PWRBTN != 0;
+            if found != 0 { ports.out16(*status, found); }
+        }
+        let _ = self.irq.ack();
+        pressed
+    }
+}
+
+// The power button as a fixed feature (x86): the kernel lends the PM1 event blocks once the chipset is in ACPI mode with
+// every GPE off; the SCI is bound to init's endpoint, PWRBTN_EN set. None, with the reason logged, where it cannot be.
+fn power_button() -> Option<Button> {
+    let why = |reason: &str| { mind::println!("[INIT] THE POWER BUTTON IS NOT READ: {}", reason); None };
+    let Some(fixed) = hardware::fadt() else { return why("NO FADT") };
+    if fixed.hardware_reduced() { return why("A HARDWARE-REDUCED PLATFORM (ITS BUTTON IS AN ACPI DEVICE, WHICH NEEDS AML)"); }
+    if !fixed.fixed_power_button() { return why("THE BUTTON IS A CONTROL METHOD DEVICE (\\_SB.PWRB, WHICH NEEDS AML)"); }
+    let Some(first) = fixed.pm1a_evt else { return why("NO PM1 EVENT BLOCK IN I/O SPACE") };
+    if fixed.sci == 0 || fixed.sci > 15 { return why("ITS SCI IS NOT AN ISA LINE"); }
+    let lend = |block: mind::fadt::Block| -> Option<(mind::dev::Ports, u16, u16)> {
+        let slot = platform::cap(PLATFORM_PORTS, block.port as usize, block.len as usize).ok()?;
+        let (status, enable) = mind::fadt::Fixed::status_enable(block);
+        Some((mind::dev::Ports(slot), status, enable))
+    };
+    let Some(a) = lend(first) else { return why("THE KERNEL DID NOT LEND THE PM1 EVENTS (ACPI MODE NOT REACHED)") };
+    let b = fixed.pm1b_evt.and_then(lend);
+    let Ok(line) = platform::cap(PLATFORM_IRQ, fixed.sci as usize, 0) else { return why("THE SCI'S LINE WAS NOT GIVEN") };
+    let irq = mind::dev::Irq(line);
+    if irq.bind(Endpoint::SERVICE).is_err() { return why("THE SCI COULD NOT BE BOUND"); }
+    // A press before now is not one to act on: its status is cleared, then the button enabled.
+    for (ports, status, enable) in [Some(&a), b.as_ref()].into_iter().flatten() {
+        ports.out16(*status, mind::fadt::PWRBTN);
+        ports.out16(*enable, ports.in16(*enable) | mind::fadt::PWRBTN);
+    }
+    mind::println!("[INIT] THE POWER BUTTON SHUTS THE MACHINE DOWN (SCI {}, PM1 EVENTS AT {:#X})", fixed.sci, first.port);
+    Some(Button { blocks: [Some(a), b], irq })
+}
 
 // The mark of an unfinished run (RUN_MARK_NAME): whether the last run left it, and whether this one set it.
 fn run_mark(firmware: usize) -> (bool, bool) {
@@ -1912,6 +1965,8 @@ fn boot(info: &'static BootInfo) {
     } else if info.boot_slot.trial != 0 {
         mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" });
     }
+    // The power button (000-KRN-0216): its ports and the SCI taken while the platform privilege allows it.
+    let button = power_button();
     match platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_RESTART, 0) {
         Ok(_) => { let _ = ipc::drop_cap(SLOT_DEV0); mind::println!("[INIT] PLATFORM PRIVILEGE DROPPED"); }
         Err(error) => mind::println!("[INIT] KEEPS PLATFORM PRIVILEGE: {:?}", error),
@@ -1930,6 +1985,10 @@ fn boot(info: &'static BootInfo) {
         }
         let Ok(request) = received else { continue };
         if let Some(exit) = request.exit { init.ended(exit); continue; }
+        if request.irq.is_some() {
+            if button.as_ref().is_some_and(Button::pressed) { mind::println!("[INIT] THE POWER BUTTON WAS PRESSED: SHUTTING DOWN"); init.down(true); }
+            continue;
+        }
         if !request.is_call { continue; }
         let (badge, sender) = (request.badge, request.sender);
         let _ = match idl_init::decode(&request, RECEIVED) { Ok((decoded, call)) => init.serve(decoded, call, badge, sender), Err(reason) => wire::reject(reason) };
