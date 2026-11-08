@@ -37,15 +37,23 @@ pub(crate) fn run<B: DeviceIo, T>(mut session: Session<'_, '_, '_, B>, queue: &m
     let activation = data_mode::prepare(&mut phy, board, &tuned, &calibrated, &initial.owner, station, queue)
         .map_err(Failure::Station)?;
     drop(phy);
-    let reports = report_tail::configure(session.bus, session.queue, session.rings, session.receiving, None)
-        .map_err(Failure::Reports)?;
+    let (mut data, reports) = activate(session, queue, activation)?;
     initial.observations.encoded_rts = reports.encoded_rts;
-    let mut data = match DataSession::activate(session, queue, activation) {
-        Ok(data) => data,
-        Err(failed) => return Err(Failure::Activation(failed.failure)),
-    };
     let value = serve(&mut data);
     let shutdown = data.shutdown();
     drop(data);
     Ok(Completed { value, initial: initial.observations, shutdown })
+}
+
+/// The tail after the PHY's stages, for `run` and for an admission that began receive-only (receive_service): the report
+/// tail configured again, then the data owner activated.
+pub(crate) fn activate<'q, 'memory, 'p, 'a, 'command, 'receive, B: DeviceIo>(session: Session<'a, 'command, 'receive, B>,
+    queue: &'q mut tx::Queue<'memory>, activation: data_mode::PreparedActivation<'p>)
+    -> Result<(DataSession<'q, 'memory, 'p, 'a, 'command, 'receive, B>, report_tail::Configured), Failure> {
+    let reports = report_tail::configure(session.bus, session.queue, session.rings, session.receiving, None)
+        .map_err(Failure::Reports)?;
+    match DataSession::activate(session, queue, activation) {
+        Ok(data) => Ok((data, reports)),
+        Err(failed) => Err(Failure::Activation(failed.failure)),
+    }
 }

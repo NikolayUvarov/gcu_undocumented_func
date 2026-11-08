@@ -458,6 +458,12 @@ python3 tests/test_usb_writer.py
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\usb_writer_windows.ps1
 ```
 
+The Windows boot switch's logic against a modelled firmware and disks (`scripts/boot_switch.ps1`, [docs/write-disk.md](docs/write-disk.md) section 11):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\boot_switch_ps1_test.ps1
+```
+
 To test the actual image as a USB storage device in QEMU/OVMF:
 
 ```bash
