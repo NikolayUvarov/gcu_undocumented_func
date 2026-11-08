@@ -412,6 +412,19 @@ fn retained_ingest_and_dma_progress_share_finite_deadline_and_poll_budget(){run(
     assert!(matches!(q.advance(d),Err(Error::Io(Fault{kind:FaultKind::Timeout,..}))));assert_eq!(d.published.len(),1);
 });}
 
+// DEBUG DROP_UNACKED (the Ryzen, 2026-11-08): a frame the RPQ releases as dropped is answered as sent and not acknowledged,
+// and the queue takes the next frame; the strict path is lifetime_and_macid_drops_cannot_invent_actual_attempts_or_retry.
+#[test]
+fn drop_unacked_answers_a_dropped_frame_as_not_acknowledged_and_goes_on(){
+    for status in [Status::Lifetime,Status::MacIdDrop]{run(|d,q,r,s,_|{q.drop_unacked();
+        d.statuses=vec![Status::RetryLimit,status];q.begin(d,&frame(0,None,false),2,15,0,100_000).unwrap();cycle(q,d,r,s).unwrap();
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status,acked:false,attempts:AttemptCount::Known(1),completed_descriptors:2,raw_data_tx_count:1}));
+        assert_eq!(q.state(),State::Running);assert!(q.pending.is_none()&&q.request.is_none());
+        d.statuses=vec![Status::Done];q.begin(d,&frame(0,None,false),2,1,0,100_000).unwrap();
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));
+    });}
+}
+
 // DEBUG RPQ_ALONE (the Ryzen, 2026-11-08): a data queue's frame asks for no firmware report and is final on DMA and the
 // RPQ, one try a submission; the management queue's still waits for the firmware's.
 #[test]

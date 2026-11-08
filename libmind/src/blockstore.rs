@@ -4,7 +4,8 @@
 //! (308-STO-0023), each with the rights of the client that asked for it. A store's recovery key in the form its owner
 //! writes down and types back, and the right to make, keep, forget and use one (308-STO-0028). A name's copy on a second
 //! medium is retention, as a publication is (309-STO-0040); listing the copy's names is reading, and bringing one back
-//! into the store is a publication (309-STO-0041).
+//! into the store is a publication (309-STO-0041). Bits 4 to 7 of a badge name its owner apart from its rights, so the
+//! updater's pins are its own (351-STO-0006).
 use crate::sha256;
 
 /// May read blocks and names (`get`, `has`, `resolve`, `history`, `snapshot`, `names`). Knowing a CID grants nothing: reading needs this right (MC-4.7).
@@ -20,6 +21,13 @@ pub const BADGE_PUBLISH: u16 = 4;
 pub const BADGE_RECOVER: u16 = 8;
 /// The first badge of a domain's client; below it, the badges `init` and the shell give.
 pub const FIRST_DOMAIN_CLIENT: u16 = 0x100;
+/// The bits of a badge below FIRST_DOMAIN_CLIENT that name its owner and grant nothing: the store takes the whole badge
+/// as the owner of the names, pins and account a client makes, so two clients of the same rights and another owner keep
+/// theirs apart, and neither ends the other's pins (351-STO-0006). Rights are the bits below.
+pub const OWNER_BITS: u16 = 0xf0;
+/// The updater's owner: the running and the last-known-good releases it pins, which no client of another owner ends
+/// (351-STO-0006, MC-9.3). `init` gives it with get, put and publish.
+pub const OWNER_UPDATER: u16 = 0x10;
 
 /// A request to the store, as its rights see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
