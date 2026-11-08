@@ -32,6 +32,14 @@ The coexistence then picks a policy for a connected station (`_action_wl_2g_sta`
 - **The Ryzen with `bt_hci` running its rounds:** joined to CoolNet2 for an hour across at least ten inquiries, with no loss of the network and ping answered.
 - **Host tests:** the role notice's encoding and the policy's TDMA and slots against Linux's values; the transitions from `NoLink` to connected and back.
 
+## Progress (2026-11-08)
+
+**Plan step 1, the check of the cause.** The Ryzen ran `bt_hci` with one round a day (a trial build, replaced over the link), then joined CoolNet2 again with 8e3913fd.
+- **The result:** Wi-Fi held for the 12 minutes watched, past two of the old rounds' times. The card received 595 to 1403 frames, and its address stayed.
+- **Before**, with the rounds every 320 s, the network was lost at the first inquiry after six minutes.
+
+One run on that machine (MC-12.1): this supports the cause, it does not prove it.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852be-btc-runtime.md), [700](700-bluetooth.md).
