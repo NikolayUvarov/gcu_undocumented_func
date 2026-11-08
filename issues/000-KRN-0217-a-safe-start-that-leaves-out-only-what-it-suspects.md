@@ -13,7 +13,7 @@ Asked by LNK for the maintainer (`KRN/2026-11-08T1513Z-LNK-a-safe-start-that-lea
 - **Its cause was wrong:** every service had started and the network worked, so nothing pointed at a driver.
 - **The watchdog** is `NONE` on this machine (the LPC bridge's ACPI I/O is off), so nothing told a freeze from a cut power.
 
-**Why it happens.** `init` keeps one mark for the whole run (`RUN_MARK_NAME`) and clears it a minute past `READY`. A run that ends before that for any reason is taken for a freeze, and the whole of `SAFE_LEFT_OUT` is left out. A shutdown from the shell within that minute does the same: nothing clears the mark on the way down.
+**Why it happens.** `init` keeps one mark for the whole run (`RUN_MARK_NAME`) and clears it a minute past `READY`; the kernel clears it at every halt, restart and power-off asked of it. A run that ends before that minute otherwise, a cut power among them, is taken for a freeze, and the whole of `SAFE_LEFT_OUT` is left out.
 
 ## Plan
 
@@ -29,8 +29,7 @@ Asked by LNK for the maintainer (`KRN/2026-11-08T1513Z-LNK-a-safe-start-that-lea
 4. **Back by itself.**
    - A safe start that left something out starts it again once the machine has run 5 minutes past `READY` without a fault.
    - One service at a time, each with its mark, and a line each, so that a freeze then names that one service at the next boot.
-5. **A shutdown asked of `init` ends the run as asked:** the run's mark is cleared on the way down. This covers the power button (000-KRN-0216) and the updater's restart. The shell's `shutdown` stops services one by one through `init.wit`. A call that tells `init` the run ends as asked would need APP's shell to make it; it is asked of APP with this task's number.
-6. **Said where it can be read without a screen:** the safe start and what it left out, in Effector's telemetry and in the link's log. A machine with no network then says so the next time it has one, and a machine reached by the cable says so at once. Those are EFF's and LNK's parts, asked of them once the lines exist.
+5. **Said where it can be read without a screen:** the safe start and what it left out, in Effector's telemetry and in the link's log. A machine with no network then says so the next time it has one, and a machine reached by the cable says so at once. Those are EFF's and LNK's parts, asked of them once the lines exist.
 
 ## Acceptance criteria
 
