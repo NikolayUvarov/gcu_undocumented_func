@@ -125,7 +125,8 @@ fn only<B: Blocks>(blocks: &mut B, root: &Cid, name: &[u8], buffer: &mut [u8; CH
 /// Shape.
 pub fn version<B: Blocks>(blocks: &mut B, root: &Cid, arch: &str, buffer: &mut [u8; CHUNK]) -> Result<u64, Error> {
     let (name, kind, ..) = only(blocks, root, b"releases", buffer)?;
-    let version = name.parse::<u64>().ok().filter(|v| *v > 0 && format!("{}", v) == name && kind == Kind::Directory).ok_or(Error::Shape)?;
+    // A name that is not the number written plainly (`05`) holds no `releases/5/`: the lookup refuses it.
+    let version = name.parse::<u64>().ok().filter(|v| *v > 0 && kind == Kind::Directory).ok_or(Error::Shape)?;
     find(blocks, root, &format!("releases/{}/{}/MANIFEST", version, arch), buffer)?.ok_or(Error::Shape)?;
     Ok(version)
 }

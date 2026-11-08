@@ -83,7 +83,6 @@ pub fn raise(records: [Option<Record>; 2], running: u8, minimum: u64, version: u
 /// The last known good release among those the block store keeps (351-UPD-0033): the newest below the running one
 /// and not below `minimum`, which a rollback may boot; none while the running version is not known.
 pub fn last_good(versions: &[u64], running: u64, minimum: u64) -> Option<u64> {
-    if running == 0 { return None; }
     versions.iter().copied().filter(|&v| v < running && v >= minimum).max()
 }
 
