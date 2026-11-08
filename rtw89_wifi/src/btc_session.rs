@@ -6,6 +6,7 @@ use crate::{c2h,download,fwcmd,h2c,io::{self,Fault,FaultKind,RegisterIo},phy::Ph
 pub use inbox::Inbox;
 #[allow(dead_code)]
 #[path="data_mode.rs"] pub(crate) mod data_mode;
+pub use data_mode::Snapshot;
 #[allow(dead_code)]
 #[path="connection.rs"] pub(crate) mod connection;
 #[path="listen.rs"] pub mod listen;

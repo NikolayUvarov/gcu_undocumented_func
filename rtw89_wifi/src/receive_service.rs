@@ -7,6 +7,7 @@ use crate::{args::Platform, board::Board, btc_session::{DeviceIo, Inbox, Session
     channel_power::Constraints, channel_rfk, country::{Limits, Refusal}, download::{self, DefaultTables}, frames, initial_phy,
     native_dma::Queues, phy::{Phy, channel::{self, Policy, Rule, calibration_policy::{PlatformInput, Resolved}}},
     phycap::Capabilities, post_mac, rx, rxdesc, service, station::{self, Filter}};
+use crate::io::{self, Fault, FaultKind};
 use mind::{idl::{codec::List, wire, wlanhw}, ipc::Endpoint, sys, time};
 
 const RECEIVE: usize = 9;
@@ -24,11 +25,16 @@ pub enum Event {
     Serving { channel: u8 },
     /// A well-formed `set-country` taken; `applied` unless the platform's power policy is unknown (213-KRN-0122).
     CountryTaken { code: [u8; 2], channels: usize, listen_only: usize, applied: bool },
-    /// `[RTW89] DATAPATH ADMITTED ON CHANNEL n`: calibrated under the station's country, and served for data.
-    Admitted { channel: u8 },
+    /// `[RTW89] DATAPATH ADMITTED ON CHANNEL n`: calibrated under the station's country, and served for data; the
+    /// registers a data mode's stop reports, as they are now.
+    Admitted { channel: u8, registers: crate::btc_session::Snapshot },
     /// A scan the station ended (its filter left `all-beacons`): its passive tunes, the longest, the frames kept for the
     /// station and those dropped because four were already waiting.
     Scanned { tunes: u32, longest_us: u64, kept: u32, dropped: u32 },
+    /// The data mode outlasted the firmware's n-th recovery (data_mode's OUTLAST_SER): SER_DBG_INFO and CMAC_ERR_ISR
+    /// then, when the BB was out of reset, whether the driver restored the scheduler after `waited_us` or the firmware did,
+    /// and whether it was found right after a coexistence reconcile.
+    Recovered { count: u32, ser: u32, cmac: u32, bb_us: u64, restored: bool, waited_us: u64, after_reconcile: bool },
     /// A `set-country` in data mode: `kept` if it still lets the radio send on the admitted `channel` at no less EIRP;
     /// if not, `enforced` when sending stops, and otherwise only logged (service.rs's KEEP_SENDING).
     DataCountry { code: [u8; 2], channel: u8, kept: bool, enforced: bool },
@@ -46,10 +52,11 @@ pub struct Retune { pub channel: u8, failure: Option<channel::Failure> }
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct Admission { pub channel: u8, failure: connection::Failure }
-/// The data service's end: its failure, if any, and the data owner's shutdown.
+/// The data service's end: its failure, if any, the data owner's shutdown and the registers it found.
 #[derive(Debug)]
 #[allow(dead_code)]
-pub struct Data { failure: Option<service::Fatal>, shutdown: data_mode::Shutdown }
+pub struct Data { failure: Option<service::Fatal>, shutdown: data_mode::Shutdown, registers: Option<crate::btc_session::Snapshot>,
+    changes: service::Changes }
 
 struct Waiter { call: wire::Call, deadline: u64 }
 // One scan's counts, from the filter that began it.
@@ -66,6 +73,8 @@ pub(crate) struct ReceiveOnly {
     mac: [u8; 6], channel: u8, filter: Filter, limits: Option<Limits>, settings: u64, admits: bool, ask: Option<Ask>,
     frames: [[u8; FRAME_BYTES]; FRAMES], lengths: [usize; FRAMES], head: usize, count: usize, dropped: u64,
     waiters: [Option<Waiter>; WAITERS], last_ms: u64, failure: Option<Stop>, tally: Tally,
+    // The hardware filter: narrowed for a network's filter (`narrow`), and a change the serving loop has to apply.
+    narrow: bool, narrowing: Option<bool>,
 }
 
 impl ReceiveOnly {
@@ -73,13 +82,16 @@ impl ReceiveOnly {
     pub(crate) fn new(mac: [u8; 6], channel: u8, admits: bool) -> Self {
         Self { mac, channel, filter: Filter::new(mac, true, [0; 6], [0; 6]), limits: None, settings: 0, admits, ask: None,
             frames: [[0; FRAME_BYTES]; FRAMES], lengths: [0; FRAMES], head: 0, count: 0, dropped: 0,
-            waiters: [const { None }; WAITERS], last_ms: time::monotonic_ns() / 1_000_000, failure: None, tally: Tally::default() }
+            waiters: [const { None }; WAITERS], last_ms: time::monotonic_ns() / 1_000_000, failure: None, tally: Tally::default(),
+            narrow: false, narrowing: None }
     }
     pub(crate) fn limits(&self) -> Option<&Limits> { self.limits.as_ref() }
     /// The `set-country` requests taken so far, which number the next.
     pub(crate) fn settings(&self) -> u64 { self.settings }
     /// The station's filter, which the admitted channel keeps.
     pub(crate) fn filter(&self) -> Filter { self.filter }
+    /// A hardware filter change to apply: true narrows it to the station's (SCAN_OPEN set), false opens it for a scan.
+    pub(crate) fn take_narrowing(&mut self) -> Option<bool> { self.narrowing.take() }
     #[cfg(test)]
     pub(crate) fn dropped(&self) -> u64 { self.dropped }
     pub(crate) fn take_ask(&mut self) -> Option<Ask> { self.ask.take() }
@@ -178,6 +190,9 @@ impl ReceiveOnly {
                 }
                 self.filter = Filter::new(self.mac, filter.all_beacons, address(filter.bssid), address(filter.own));
                 self.head = 0; self.count = 0;
+                // A network's filter narrows the hardware's too, as Linux's outside a scan: the scan's let the whole busy
+                // channel through, and the firmware's recovery then reset the BB under the calibration (the Ryzen, 2026-11-08).
+                if self.narrow == filter.all_beacons { self.narrow = !filter.all_beacons; self.narrowing = Some(self.narrow); }
                 let _ = wlanhw::reply_set_filter(call, Ok(()));
             }
             // No calibrated channel, so nothing is sent. Under a country that lets it send here, the first `send` admits this
@@ -310,6 +325,17 @@ pub fn serve<B: DeviceIo>(bus: &mut B, queues: &mut Queues<'_>, receiving: &post
     events(Event::Serving { channel });
     let admit = loop {
         if !service.step(phy.bus_between_stages(), &mut events) { return service.failure.take().unwrap_or(Stop::Clock) }
+        if let Some(narrow) = service.take_narrowing() {
+            let session = phy.bus_between_stages();
+            let wanted = if narrow { listen::SCAN_OPEN } else { 0 };
+            let applied = session.clock().and_then(|now| session.registers(now + 10_000, |window| {
+                io::modify32(window, listen::RX_FILTER, listen::SCAN_OPEN, wanted)?;
+                let value = io::read32(window, listen::RX_FILTER)?;
+                if value & listen::SCAN_OPEN != wanted { return Err(Fault::new(FaultKind::PowerState, listen::RX_FILTER, value)); }
+                Ok(())
+            }));
+            if let Err(error) = applied { service.hand_over(); return Stop::Radio(Cause::Filter(error)) }
+        }
         match service.take_ask() {
             None => {}
             Some(Ask::Tune(channel, call)) => {
@@ -345,11 +371,11 @@ pub fn serve<B: DeviceIo>(bus: &mut B, queues: &mut Queues<'_>, receiving: &post
     };
     drop(phy);
     let mut data = match connection::activate(session, transmit, activation) { Ok((data, _)) => data, Err(failure) => return failed(failure) };
-    events(Event::Admitted { channel: admit });
+    events(Event::Admitted { channel: admit, registers: data.registers() });
     let stop = match service::Service::new(&mut data) {
         Ok(served) => {
             let stopped = served.under(admitted.eirp_half_dbm, service.settings()).run(&mut events);
-            Stop::Data(Data { failure: stopped.failure, shutdown: stopped.shutdown })
+            Stop::Data(Data { failure: stopped.failure, shutdown: stopped.shutdown, registers: stopped.owner.snapshot(), changes: stopped.changes })
         }
         Err(error) => Stop::Ipc(error),
     };

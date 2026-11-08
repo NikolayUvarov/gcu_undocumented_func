@@ -5,6 +5,9 @@ use mind::{dev,idl::{codec::List,wire,wlanhw},ipc::Endpoint,sys,time};
 
 const RECEIVE:[usize;2]=[9,10];
 const POLL_MS:u32=2;
+// Receive passes a step: each takes one descriptor of each ring. One a step let the Ryzen's packet buffer fill on a busy
+// channel (2026-11-08: CMAC RX DMA error, then the firmware's L0 recovery); Linux's NAPI takes 64 a pass.
+const DRAIN:usize=32;
 const WORK_US:u32=100_000;
 const COMMAND_US:u32=100_000;
 const WAIT_MS:u64=1000;
@@ -16,7 +19,7 @@ const FRAME_BYTES:usize=frames::HEADER_BYTES+frames::FRAME_MAX;
 const KEEP_SENDING:bool=true;
 
 #[derive(Debug)]
-pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTimeout,UnknownAttempts,RetainedControl,Frame(frames::Error)}
+pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTimeout(tx::Seen),UnknownAttempts,RetainedControl,Frame(frames::Error)}
 struct Pending{call:wire::Call,slot:usize,deadline:u64}
 struct Waiter{call:wire::Call,deadline:u64}
 struct Frames{bytes:[[u8;FRAME_BYTES];FRAMES],lengths:[usize;FRAMES],head:usize,count:usize}
@@ -33,10 +36,23 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // The EIRP the channel was admitted under and the settings taken so far; `refused`: a country it cannot keep, so
     // nothing is sent (wlanhw 1.2). `event`: one for the caller's log.
     country:Option<(i8,u64)>,refused:bool,event:Option<Event>,strict:bool,
+    // DEBUG (2026-11-08): the SNAPSHOT registers at the start, and when each first changed (ms from the start, its value,
+    // whether a send was pending), read once a step.
+    first:data_mode::Snapshot,changes:Changes,start_ms:u64,
+}
+/// When each SNAPSHOT register first changed in data mode: (ms from the start, value, a send pending).
+#[derive(Clone,Copy)]
+pub(crate) struct Changes(pub [Option<(u64,u32,bool)>;data_mode::SNAPSHOT.len()]);
+impl core::fmt::Debug for Changes{
+    fn fmt(&self,f:&mut core::fmt::Formatter<'_>)->core::fmt::Result{
+        for(at,change)in data_mode::SNAPSHOT.iter().zip(self.0){
+            if let Some((ms,value,pending))=change{write!(f,"{:X}={:08X}@{}MS{} ",at,value,ms,if pending{"+TX"}else{""})?;}
+        }Ok(())
+    }
 }
 pub(crate) struct Stopped<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     pub owner:&'s mut DataSession<'q,'memory,'p,'a,'command,'receive,B>,
-    pub failure:Option<Fatal>,pub shutdown:data_mode::Shutdown,
+    pub failure:Option<Fatal>,pub shutdown:data_mode::Shutdown,pub changes:Changes,
 }
 fn address(value:u64)->[u8;6]{core::array::from_fn(|i|(value>>(40-8*i))as u8)}
 fn packed(value:[u8;6])->u64{value.into_iter().fold(0,|word,byte|(word<<8)|u64::from(byte))}
@@ -51,13 +67,16 @@ fn error(failure:&data_mode::Failure)->wlanhw::Error{
 impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,'a,'command,'receive,B>{
     pub(crate) fn new(owner:&'s mut DataSession<'q,'memory,'p,'a,'command,'receive,B>)->Result<Self,sys::Error>{
         if RECEIVE.into_iter().any(|slot|dev::cap_info(slot).0!=mind::abi::CAP_KIND_NONE){return Err(sys::Error::NoSlot)}
-        Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:time::monotonic_ns()/1_000_000,failure:None,
-            country:None,refused:false,event:None,strict:!KEEP_SENDING})
+        let first=owner.registers();let start_ms=time::monotonic_ns()/1_000_000;
+        Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
+            country:None,refused:false,event:None,strict:!KEEP_SENDING,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
     #[cfg(test)]
     pub(crate) fn take_event(&mut self)->Option<Event>{self.event.take()}
+    #[cfg(test)]
+    pub(crate) fn take_recovery(&mut self)->Option<data_mode::Recovery>{self.data().take_recovery()}
     /// Whether a country that refuses the channel stops sending (wlanhw 1.2), or is only logged (KEEP_SENDING).
     #[cfg(test)]
     pub(crate) fn strict(mut self,on:bool)->Self{self.strict=on;self}
@@ -85,7 +104,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     }
     fn data(&mut self)->&mut DataSession<'q,'memory,'p,'a,'command,'receive,B>{self.owner.as_deref_mut().unwrap()}
     fn fail(&mut self,cause:Fatal){
-        if self.failure.is_none(){self.failure=Some(cause);}
+        if self.failure.is_none(){self.watch();self.failure=Some(cause);}
         self.data().shutdown();self.answer_pending();
     }
     fn answer_pending(&mut self){
@@ -105,7 +124,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         }Ok(())
     }
     fn progress(&mut self,now:u64)->Result<(),Fatal>{
-        if self.pending.as_ref().is_some_and(|p|now>=p.deadline){return Err(Fatal::TransmitTimeout)}
+        if self.pending.as_ref().is_some_and(|p|now>=p.deadline){return Err(Fatal::TransmitTimeout(self.data().transmit_seen()))}
         if self.pending.is_some(){
             if let Some(done)=self.data().advance(WORK_US).map_err(Fatal::Radio)?{
                 let tx::AttemptCount::Known(attempts)=done.attempts else{return Err(Fatal::UnknownAttempts)};
@@ -113,8 +132,12 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let pending=self.pending.take().unwrap();
                 let _=wlanhw::reply_send(pending.call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));
             }
-        }else{self.data().poll_packets(WORK_US).map_err(Fatal::Radio)?;}
-        self.collect()?;let waiting=self.frames.count as u32;
+        }
+        for _ in 0..DRAIN{
+            let received=self.data().poll_packets(WORK_US).map_err(Fatal::Radio)?;self.collect()?;
+            if received==[false,false]{break}
+        }
+        let waiting=self.frames.count as u32;
         for waiter in &mut self.waiters{
             if waiter.as_ref().is_some_and(|w|waiting!=0||now>=w.deadline){
                 let _=wlanhw::reply_wait(waiter.take().unwrap().call,waiting);
@@ -122,9 +145,18 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         }
         Ok(())
     }
+    // DEBUG: the first change of each SNAPSHOT register.
+    fn watch(&mut self){
+        let Some(data)=self.owner.as_deref_mut()else{return};let now=data.registers();
+        let ms=(time::monotonic_ns()/1_000_000).saturating_sub(self.start_ms);let pending=self.pending.is_some();
+        for (i,change) in self.changes.0.iter_mut().enumerate(){
+            if change.is_none()&&now.0[i]!=self.first.0[i]{*change=Some((ms,now.0[i],pending));}
+        }
+    }
     /// One receive and one bounded RX/TX progress step; continuous IPC or RX traffic cannot suppress the other.
     pub(crate) fn step(&mut self)->bool{
         if self.failure.is_some(){return false}
+        self.watch();
         let slot=if self.pending.as_ref().is_some_and(|p|p.slot==RECEIVE[0]){RECEIVE[1]}else{RECEIVE[0]};
         let received=Endpoint::SERVICE.recv_timeout(slot,POLL_MS);
         let now=time::monotonic_ns()/1_000_000;
@@ -196,10 +228,15 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     }
     pub(crate) fn stop(mut self)->Stopped<'s,'q,'memory,'p,'a,'command,'receive,B>{
         self.answer_pending();let owner=self.owner.take().unwrap();let shutdown=owner.shutdown();
-        Stopped{owner,failure:self.failure.take(),shutdown}
+        Stopped{owner,failure:self.failure.take(),shutdown,changes:self.changes}
     }
     pub(crate) fn run(mut self,events:&mut impl FnMut(Event))->Stopped<'s,'q,'memory,'p,'a,'command,'receive,B>{
-        loop{let more=self.step();if let Some(event)=self.event.take(){events(event)}if !more{break}}self.stop()
+        loop{
+            let more=self.step();if let Some(event)=self.event.take(){events(event)}
+            if let Some(r)=self.owner.as_deref_mut().and_then(|data|data.take_recovery()){
+                events(Event::Recovered{count:r.count,ser:r.ser,cmac:r.cmac,bb_us:r.bb_us,restored:r.restored,waited_us:r.waited_us,after_reconcile:r.after_reconcile})}
+            if !more{break}
+        }self.stop()
     }
 }
 impl<B:DeviceIo> Drop for Service<'_,'_,'_,'_,'_,'_,'_,B>{

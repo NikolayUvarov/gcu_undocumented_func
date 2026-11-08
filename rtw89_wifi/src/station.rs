@@ -17,7 +17,13 @@ const CONTROL_MASK:[u32;8]=[1<<21,0,0,0,0xe00,0xffff0000,0xf0c0000,0];
 const INITIAL_CMAC:[u32;8]=[4,0x400a0004,0,0,0,0x0e43000b,0,0xb8109];
 const RX_FILTER:usize=0xce20;
 const RX_FILTER_MASK:u32=!0x003f0000;
-const RX_FILTER_HOST:u32=0x03004400;
+// A scan's hardware filter, Linux's FIF_ALLMULTI|OTHER_BSS|BCN_PRBRESP_PROMISC|PROBE_REQ (mac80211.c:318-354); outside a
+// scan, Linux's station keeps address-1, broadcast, CAM and beacon checks (DEFAULT_AX_RX_FLTR less B_AX_A_MC). The scan's
+// in data mode passed the whole channel to the host: on the Ryzen's busy channel 8 the packet buffer filled within 200 ms
+// (CMAC RX DMA error, then the firmware's L0 recovery, 2026-11-08).
+const RX_FILTER_SCAN:u32=0x03004400;
+const RX_FILTER_STATION:u32=0x030044b6;
+pub(crate) fn rx_filter(filter:&Filter)->u32{if filter.all_beacons(){RX_FILTER_SCAN}else{RX_FILTER_STATION}}
 
 #[path="station_filter.rs"]mod filter;
 pub(crate) use filter::Filter;
@@ -50,8 +56,12 @@ impl Prepared{
     /// Fixed station-register checks only; the caller supplies its time window and actual device/session ownership.
     /// This neither accepts active DMA ownership nor grants transmission; it preserves unrelated firmware fields.
     pub(crate) fn check_registers(&self,bus:&mut impl RegisterIo)->Result<(),CheckFailure>{
+        self.check_registers_for(bus,self.filter)
+    }
+    /// As check_registers, with `filter` the one installed (a reconfiguration checks the new one).
+    pub(crate) fn check_registers_for(&self,bus:&mut impl RegisterIo,filter:Option<Filter>)->Result<(),CheckFailure>{
         let selector=io::read32(bus,SELECTOR).map_err(|cause|CheckFailure{cause,selector_restore:None})?;
-        let result=verify(bus,&self.cmac).and_then(|()|if self.filter.is_some(){verify_filter(bus)}else{Ok(())});
+        let result=verify(bus,&self.cmac).and_then(|()|if let Some(f)=filter{verify_filter(bus,rx_filter(&f))}else{Ok(())});
         let restore=select(bus,selector).and_then(|()|bus.delay_us(0)).err();
         match(result,restore){(Ok(()),None)=>Ok(()),(Err(cause),selector_restore)=>Err(CheckFailure{cause,selector_restore}),
             (Ok(()),Some(cause))=>Err(CheckFailure{cause,selector_restore:Some(cause)})}
@@ -94,11 +104,11 @@ impl Prepared{
             remaining(phy.bus_between_stages(),start)?;
             command(phy.bus_between_stages(),6,0,&cam(filter.own(),filter.bssid()),true,deadline)?;
             stage=Stage::Filter;
-            phy.bus_between_stages().registers(deadline,|bus|field(bus,RX_FILTER,RX_FILTER_MASK,RX_FILTER_HOST))?;
+            phy.bus_between_stages().registers(deadline,|bus|field(bus,RX_FILTER,RX_FILTER_MASK,rx_filter(&filter)))?;
             stage=Stage::Verify;
             phy.bus_between_stages().registers(deadline,|bus|{
                 self.check_registers(bus).map_err(|e|{selector_restore=e.selector_restore;e.cause})?;
-                verify_filter(bus)
+                verify_filter(bus,rx_filter(&filter))
             })?;
             live(phy,board,owner,start)?;Ok(())
         })();
@@ -163,9 +173,9 @@ fn cam(mac:[u8;6],bssid:[u8;6])->[u8;60]{
         0,0,2<<16,0,0,8<<16,1|0x3f<<2|u32::from(u16::from_le_bytes([bssid[0],bssid[1]]))<<16,
         u32::from_le_bytes([bssid[2],bssid[3],bssid[4],bssid[5]])],&mut out);out
 }
-fn verify_filter(bus:&mut impl RegisterIo)->io::Result<()>{
+fn verify_filter(bus:&mut impl RegisterIo,expected:u32)->io::Result<()>{
     let value=io::read32(bus,RX_FILTER)?;
-    if value&RX_FILTER_MASK!=RX_FILTER_HOST{return Err(fault(RX_FILTER,value));}bus.delay_us(0)
+    if value&RX_FILTER_MASK!=expected{return Err(fault(RX_FILTER,value));}bus.delay_us(0)
 }
 fn control(antenna:u8)->([u8;68],[u32;8]){
     let paths=if antenna==0{3}else{antenna};let mut words=[0u32;17];words[0]=0x80;

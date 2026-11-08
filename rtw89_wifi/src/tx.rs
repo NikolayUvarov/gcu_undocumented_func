@@ -38,6 +38,10 @@ pub(crate) struct Completion{pub status:Status,pub acked:bool,pub attempts:Attem
 pub(crate) enum Receive{Empty,Rpq,TxReport{final_report:bool},Other(rx::Outcome)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct Stop{pub request:Option<Fault>,pub idle:Option<Fault>}
+/// What a pending send has seen, for a timeout's diagnostic: submissions finished, the current one's DMA fetch, RPQ release
+/// and final firmware report, the hardware tries counted and the polls made.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub(crate) struct Seen{pub finished:u8,pub fetched:bool,pub released:bool,pub reported:bool,pub tries:u16,pub polls:u32}
 #[derive(Clone,Copy)]
 struct Pending{queue:usize,sequence:u16,descriptor:u64,report:Option<Status>,firmware:Option<txdesc::FirmwareReport>,last_counter:u8}
 struct Request{meta:Frame,mac_id:u8,limit:u8,completed:u8,raw_count:u16,start:u64,budget:u32,last:u64,polls:u32,frame:[u8;txdesc::MAX_FRAME]}
@@ -68,6 +72,12 @@ impl<'a> Queue<'a>{
     pub(crate) fn session(&self)->u64{self.session}
     pub(crate) fn physical(&self)->u64{self.physical}
     pub(crate) fn pending_request(&self)->bool{self.request.is_some()}
+    pub(crate) fn seen(&self)->Seen{
+        let(finished,tries,polls)=self.request.as_ref().map_or((0,0,0),|r|(r.completed,r.raw_count,r.polls));
+        let pending=self.pending;
+        Seen{finished,fetched:pending.is_some_and(|p|self.completed[p.queue]>p.descriptor),
+            released:pending.is_some_and(|p|p.report.is_some()),reported:pending.is_some_and(|p|p.firmware.is_some()),tries,polls}
+    }
     pub(crate) fn poison(&mut self){self.state=State::Faulted;}
     pub(crate) fn installed_for_data(&mut self,bus:&mut impl Bus)->Result<()>{
         if self.state!=State::Installed||self.request.is_some()||self.pending.is_some()||self.serial!=0{return Err(Error::State)}

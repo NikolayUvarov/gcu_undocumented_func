@@ -255,9 +255,16 @@ fn served(event: receive_service::Event) {
         receive_service::Event::CountryTaken { code, channels, listen_only, applied: false } =>
             mind::println!("[RTW89] COUNTRY {}{}: {} CHANNELS, {} LISTEN ONLY; NOT APPLIED: THE PLATFORM'S POWER POLICY IS UNKNOWN, RECEIVE ONLY",
                 code[0] as char, code[1] as char, channels, listen_only),
-        receive_service::Event::Admitted { channel } => mind::println!("[RTW89] DATAPATH ADMITTED ON CHANNEL {}", channel),
+        receive_service::Event::Admitted { channel, registers } => {
+            mind::println!("[RTW89] DATAPATH ADMITTED ON CHANNEL {}", channel);
+            mind::println!("[RTW89] REGISTERS AT ADMISSION: {:?}", registers);
+        }
         receive_service::Event::Scanned { tunes, longest_us, kept, dropped } =>
             mind::println!("[RTW89] SCAN: {} PASSIVE TUNES, THE LONGEST {} US; {} FRAMES KEPT, {} DROPPED", tunes, longest_us, kept, dropped),
+        receive_service::Event::Recovered { count, ser, cmac, bb_us, restored, waited_us, after_reconcile } =>
+            mind::println!("[RTW89] FIRMWARE RECOVERY {} {} (SER_DBG_INFO {:08X}, CMAC_ERR_ISR {:08X}): BB BACK AFTER {} US, THE SCHEDULER {} AFTER {} US; DEBUG MODE GOES ON",
+                count, if after_reconcile { "AFTER A COEXISTENCE RECONCILE" } else { "BETWEEN OPERATIONS" }, ser, cmac, bb_us,
+                if restored { "RESTORED BY THE DRIVER" } else { "BACK FROM THE FIRMWARE" }, waited_us),
         receive_service::Event::DataCountry { code, channel, kept: true, .. } =>
             mind::println!("[RTW89] COUNTRY {}{} IN DATA MODE: CHANNEL {} KEPT", code[0] as char, code[1] as char, channel),
         receive_service::Event::DataCountry { code, channel, kept: false, enforced: true } =>

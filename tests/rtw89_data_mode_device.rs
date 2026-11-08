@@ -9,7 +9,10 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub bt:Option<u32>,pub command_bt:Option<u32>,pub btc_events:Vec<Vec<u8>>,pub btc_on_command:Vec<Vec<u8>>,pub continuous_wifi:usize,pub continuous_bt:usize,
     pub coex_packets:Vec<Vec<u8>>,pub lte_writes:usize,pub grants:u32,pub btg:u32,pub missing_coex_ack:bool,pub delay_next_command:u64,pub delayed_ack:bool,pub ppdu_on_command:usize,
     pub normal_packets:Vec<Vec<u8>>,pub hold_command_dma:bool,
-    pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize}
+    pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
+    // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
+    // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
+    pub ser:bool,pub ser_heal:Option<usize>}
 pub(super) struct Region{pub base:*mut u8}
 impl Region{pub fn new()->Self{let base=unsafe{std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())};assert!(!base.is_null());Self{base}}}
 impl Drop for Region{fn drop(&mut self){unsafe{std::alloc::dealloc(self.base,std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())}}}
@@ -145,6 +148,12 @@ impl RegisterIo for Device{
         if c.armed&&((c.fault==9&&at==2)||(c.fault==12&&at==0x8040)){return Ok(0)}drop(c);self.station.read8(at)}
     fn read16(&mut self,at:usize)->io::Result<u16>{self.inject_old();self.station.read16(at)}
     fn read32(&mut self,at:usize)->io::Result<u32>{self.inject_old();
+        if at==0xc348{
+            if std::mem::take(&mut self.control.borrow_mut().ser){self.raw().put(0xc348,4,0);self.raw().put(0x8424,4,1);self.raw().put(0xc164,4,8);}
+            else if let Some(n)={let heal=self.control.borrow().ser_heal;heal}{
+                if n==0{self.raw().put(0xc348,4,0x010f);self.control.borrow_mut().ser_heal=None;}else{self.control.borrow_mut().ser_heal=Some(n-1);}
+            }
+        }
         if self.active&&self.control.borrow().fault==15&&at==fwcmd::DMA_BUSY{return Ok(1<<18)}
         if self.control.borrow().armed&&matches!((self.control.borrow().fault,at),(10,0x200)|(11,0x2f0)|(13,0x10734)){return Ok(0)}
         if self.control.borrow().corrupt&&at==0x1110{return Ok(self.raw().get(at,4)^4096)}self.station.read32(at)}

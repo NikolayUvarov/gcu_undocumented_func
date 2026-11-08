@@ -217,3 +217,14 @@ fn a_scan_ends_with_its_tunes_and_the_frames_it_kept() { serve(true, vec![beacon
     let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
     assert_eq!(events[1..], [Event::Scanned { tunes: 1, longest_us: 200, kept: 0, dropped: 0 }]);
 });}
+
+#[test]
+fn a_networks_filter_narrows_the_hardware_and_a_scan_opens_it_again() { serve(true, Vec::new(), |service, phy, _, _, _, events| {
+    let set = |service: &mut ReceiveOnly, phy: &mut Live<'_, '_, '_, '_>, events: &mut Vec<Event>, all: bool, bssid: u64| {
+        let id = ipc::buffer(3, &filter(all, bssid)); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    };
+    set(service, phy, events, true, 0); assert_eq!(service.take_narrowing(), None, "the start's filter is already a scan's");
+    set(service, phy, events, false, 0x021122334455); assert_eq!(service.take_narrowing(), Some(true));
+    set(service, phy, events, false, 0x021122334455); assert_eq!(service.take_narrowing(), None);
+    set(service, phy, events, true, 0); assert_eq!(service.take_narrowing(), Some(false));
+});}

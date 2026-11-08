@@ -115,7 +115,12 @@ fn service_no_final_tx_report_times_out_answers_every_owner_and_retains_data(){r
     let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());let busy=ipc::buffer(4,&body(&frame(),12,1));
     assert!(service.step());error(busy,wlanhw::Error::Busy);ipc::advance(101);assert!(!service.step());
     error(send,wlanhw::Error::Failed);assert_eq!(words(wait),[0,0]);assert_eq!(c.borrow().published,1);
-    let stopped=service.stop();assert!(matches!(stopped.failure,Some(Fatal::TransmitTimeout)));assert!(stopped.owner.poll_packets(10_000).is_err());clean();
+    // What the send saw: fetched and released, never reported by the firmware.
+    let stopped=service.stop();let Some(Fatal::TransmitTimeout(seen))=stopped.failure else{panic!("no timeout")};
+    assert_eq!((seen.finished,seen.fetched,seen.released,seen.reported,seen.tries),(0,true,true,false,0));
+    assert!(stopped.owner.poll_packets(10_000).is_err());
+    // The registers as the timeout found them, before the shutdown: the scheduler still the data mode's.
+    let found=stopped.owner.snapshot().unwrap();assert_eq!(found.0[9]&0xffff,0x010f);clean();
 });}
 
 #[test]
@@ -208,3 +213,25 @@ fn service_keeps_its_channel_under_a_country_that_allows_its_admitted_power_and_
         error(id,wlanhw::Error::Failed);assert_eq!(service.take_event(),None);drop(service);clean();
     });
 }
+
+// 213-DRV-0032: the firmware's L0 recovery zeroes the scheduler 100 ms after admission (the Ryzen, 2026-11-08); the debug
+// mode (OUTLAST_SER) waits for the firmware, then restores it, and the data mode goes on.
+#[test]
+fn service_outlasts_the_firmwares_recovery_of_the_scheduler(){
+    for heal in[None,Some(2)]{run(0,true,true,|data,c|{
+        ipc::reset();let mut service=Service::new(data).unwrap();
+        {let mut c=c.borrow_mut();c.ser=true;c.ser_heal=heal;}
+        let id=ipc::buffer(1,&[]);assert!(service.step());assert_eq!(channels(id),[6]);
+        let recovery=service.take_recovery().unwrap();
+        assert_eq!((recovery.count,recovery.ser,recovery.cmac,recovery.restored),(1,1,8,heal.is_none()));
+        assert!(sends(&mut service),"the scheduler is back");assert_eq!(service.take_recovery(),None);
+        let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+    });}
+}
+
+// One step drains what waits (DRAIN passes), not one descriptor: the Ryzen's packet buffer filled at one a step.
+#[test]
+fn service_one_step_takes_every_waiting_frame(){run(0,true,true,|data,c|{
+    ipc::reset();let mut service=Service::new(data).unwrap();c.borrow_mut().incoming=vec![packet();3];
+    let wait=ipc::words(6,0);assert!(service.step());assert_eq!(words(wait),[3<<16,0]);drop(service);clean();
+});}

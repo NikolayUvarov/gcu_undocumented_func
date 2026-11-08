@@ -21,7 +21,8 @@ fn active_scan_to_bssid_uses_actual_cam_done_ack_and_preserves_source_filter_mas
     assert_ne!(word(p,4)&(1<<15),0);
     let expected=[0,0x00400000,0x07010001,0,0x05040302,0x09020706,0x05060708,0,0,0x20000,0,0,0x80000,0x090200fd,0x05060708];
     for(i,wanted)in expected.into_iter().enumerate(){assert_eq!(word(p,8+4*i),wanted,"CAM word {i}");}
-    assert_eq!(c.rx_filter,0x03164400);assert_eq!(c.selector,0x18888000);assert_eq!(c.filter_writes,1);
+    // A network's filter is Linux's station filter outside a scan (address 1, broadcast, CAM, beacon checks), not the scan's.
+    assert_eq!(c.rx_filter,0x031644b6);assert_eq!(c.selector,0x18888000);assert_eq!(c.filter_writes,1);
 });}
 
 #[test]
