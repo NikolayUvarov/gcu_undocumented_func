@@ -227,7 +227,7 @@ This is the part `EFF` hands over to the Effector project. The server's agents a
 
 ### 5.3 The kernel session: the board's UART
 
-- **The board's UART from the device tree:** [100000-PRT-0009](../issues/100000-PRT-0009-the-board-from-the-device-tree.md).
+- **The board's UART from the device tree:** [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done).
 - **The 16550 in memory:** [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md). This covers the kernel's lines and the loader's.
 - **The UART lent to `link`** rather than to the shell, when `link.conf` says so: [100000-KRN-0171](../issues/100000-KRN-0171-platform-devices-from-the-device-tree.md).
 - **In QEMU first:** `virt` with U-Boot's UEFI and no ACPI (as Tow-Boot gives the phone), its PL011 on a pseudo-terminal. The agent's tests can drive that too.

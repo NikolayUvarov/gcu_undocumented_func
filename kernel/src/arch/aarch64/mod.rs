@@ -6,6 +6,9 @@ pub mod board;
 pub mod clock;
 pub mod context;
 pub mod cpu;
+pub mod devicetree;
+#[path = "../../../../common/fdt.rs"]
+pub mod fdt;
 pub mod interrupts;
 pub mod mmu;
 pub mod pcicfg;
