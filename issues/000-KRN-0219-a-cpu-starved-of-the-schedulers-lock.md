@@ -1,6 +1,6 @@
 # 000-KRN-0219 — A CPU starved of the scheduler's lock while another takes it again and again (round 91's record)
 
-**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
+**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (the ticket lock made and tested on the host and in QEMU, below; the 10 runs beside a busy lane left) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
 
 ## Problem
 
@@ -47,6 +47,33 @@
 - The host test shows the starvation with the old lock and none with the new one.
 - The gate passes; `kbench`'s numbers on 4 and 16 CPUs are recorded before and after.
 - 10 runs of `x86: network, TLS and Effector` pass in a row on x32-128 beside a busy lane, and that is recorded.
+
+## Progress (2026-11-08)
+
+- **`common/ticket.rs`:** the ticket lock, `next` and `serving` counters.
+- **`scheduler.rs`:**
+  - `LOCK` is one, taken in `locked` with interrupts off as before;
+  - the revocation loop's `LET_GO_SPINS` and its spin are gone: a CPU that waits is served before this one takes the lock again.
+- **`tests/ticket_host.rs`,** run by `scripts/host_tests.sh`:
+  - mutual exclusion: four threads, 80 000 increments, none lost;
+  - fairness: one thread takes the lock in a tight loop with a short hold while another takes it 2000 times. With the ticket lock the busy one took it at most once while the other waited for a turn.
+  - The test-and-set lock's count is printed beside it: **up to 37 347** in the kernel session's container, 4 CPUs. That is the starvation the record suggested, shown on the host (it does not prove the record's cause, MC-12.2).
+- **`kbench syscall ipc caps timer --quick` on x86,** the kernel session's container (QEMU 8.2.2, TCG, one run each; QEMU's times are not a machine's, MC-12.1).
+  - **The old lock** was measured on the image of `claude/550-NET-0061-the-radio-restarted` (main 85471bfe), **the ticket lock** on `claude/000-KRN-0219-ticket-lock` (main ef12792c).
+  - Medians:
+
+    | Row | 4 CPUs, before | 4 CPUs, after | 16 CPUs, before | 16 CPUs, after |
+    |---|---|---|---|---|
+    | uptime (empty call) | 3.32 µs | 2.77 µs | 3.43 µs | 2.51 µs |
+    | call and reply | 177 µs | 215 µs | 186 µs | 166 µs |
+    | mint and drop | 7.08 µs | 6.49 µs | 6.43 µs | 11.0 µs |
+    | revoke 1000 nodes | 1.94 ms | 1.08 ms | 2.51 ms | 646 µs |
+    | revoke 10000 nodes | 15.1 ms | 4.92 ms | 14.1 ms | 5.12 ms |
+    | sleep 10 ms | 11.4 ms | 10.1 ms | 10.8 ms | 10.9 ms |
+
+  - The revocations are two to four times faster, as their steps no longer spin `LET_GO_SPINS` before taking the lock again. The other rows move both ways within TCG's noise.
+- **Passed with it** in the same container: x86 `normal` (4 CPUs) and aarch64 `smp`.
+- **Left:** the gate; 10 runs of `x86: network, TLS and Effector` on x32-128 beside a busy lane; `kbench` on the gate machines.
 
 ## Related
 
