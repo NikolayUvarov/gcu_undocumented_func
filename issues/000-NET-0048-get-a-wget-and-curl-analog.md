@@ -1,6 +1,6 @@
 # 000-NET-0048 — `get`, an analog of `wget` and `curl`
 
-**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (a host asked at run time in `main`; `-u` and a script's question wait for APP) · **Blocked by:** [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0049](../issues-done/000-NET-0049-a-flow-grant-asked-at-run-time.done) (a host named at run time), [000-NET-0046](000-NET-0046-public-root-certificates.md) (public sites) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
+**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (a host asked at run time in `main`; `-u` and a script's question wait for APP) · **Blocked by:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md) for `-u`, [000-APP-0125](000-APP-0125-a-scripts-program-asks-about-a-flow.md) for a script's question (the rest it waited on is done) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md), at the maintainer's request: "an analog of wget/curl".
 
@@ -98,11 +98,11 @@ from 000-APP-0120):
 - **tested** in QEMU, `get_runs`: a stand-in on a port the policy does not give `get`, with `get` in front of the serial
   console; refused with `N`, allowed with `O` and its body fetched.
 
-**What waits for the shell (APP), both in [requests-APP.md](requests-APP.md):**
-- **`-u user`.** `get` is a console program: the shell keeps the keys typed while it runs (Esc and Ctrl+C stop it,
+**What waits for the shell (APP), numbered by APP on 2026-11-08:**
+- **`-u user`:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md). `get` is a console program: the shell keeps the keys typed while it runs (Esc and Ctrl+C stop it,
   `Shell::key`), so it cannot read a password from the console. A first version read the keys itself and was taken
   out when the `get_runs` check showed that none arrived.
-- **A question from a script.** `msh`'s wait on its program (`ShellHost::run`) does not put the question, so a
+- **A question from a script:** [000-APP-0125](000-APP-0125-a-scripts-program-asks-about-a-flow.md). `msh`'s wait on its program (`ShellHost::run`) does not put the question, so a
   script's `get` to a host its grant does not name is refused at 60 s (exit 7).
 
 **Left:** those two, once the shell gives them.
