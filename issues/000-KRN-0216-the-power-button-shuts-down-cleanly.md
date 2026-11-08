@@ -1,6 +1,6 @@
 # 000-KRN-0216 — A short press of the power button shuts the machine down cleanly (x86, a fixed-feature button)
 
-**Type:** kernel (the ports the FADT names), `init` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made and tested in QEMU on x86; the gate and the DEXP's run left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.1, MC-6.3, MC-12.1, MC-12.3
+**Type:** kernel (the ports the FADT names), `init` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` since round 91; the DEXP's run left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.1, MC-6.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -82,6 +82,13 @@ On `claude/youthful-mendel-mf1soy`:
   - the boot after it is no safe start, the file is there and its volume was not left dirty.
   - Passed in this session's container: 52 s for both machines.
 - **Seen in QEMU:** line 9 is held by `init` alone on both machines, with no SCI before the press, since the devices there use MSI. On a machine whose devices share the SCI's line, `init` takes each of their interrupts too, reads PM1's status and acknowledges.
+
+**Landed (2026-11-08).** Round 91 (`main` 31decbba): the gate was green, the `power` suite in `x86: boot, display, shell, memory, clock` with it.
+- Two groups failed once and passed alone, as the gate allows:
+  - `x86: network, TLS and Effector`: a hang, the record of which became [000-KRN-0219](000-KRN-0219-a-cpu-starved-of-the-schedulers-lock.md);
+  - `x86: keys, shell, tools`: `kbench`'s `sleep 10 ms` at 42 ms against 40, on a loaded acc-2.
+
+**Left:** the DEXP's run, a short press with no screen or keyboard. That is evidence for that machine and build only (MC-12.1).
 
 ## Related
 

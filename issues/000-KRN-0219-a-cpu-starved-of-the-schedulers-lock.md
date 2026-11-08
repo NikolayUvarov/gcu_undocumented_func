@@ -31,6 +31,8 @@
   - the program that stopped was always the shell's start of another (`loader`, on whichever CPU lost);
   - the time was a grant's expiry here, when `netpolicy`, `netstack` and the holder all make calls.
 
+**The group passed when the gate ran it again alone** (1097 s), so round 91 landed. The record is the evidence to keep: `/home/gater/mind-core/KRN/logs/land-746430f6/x32-03/` on x32-128.
+
 ## Plan
 
 1. **A fair lock.** `LOCK` becomes a ticket lock: a `next` and a `serving` counter, each CPU served in the order it asked, with `pause` while it waits. `LET_GO_SPINS` then has nothing to do and goes.
