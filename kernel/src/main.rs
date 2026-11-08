@@ -165,6 +165,14 @@ impl core::fmt::Write for Fatal {
 
 static PANICKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// Whether the platform's watchdog restarted the last run (000-KRN-0217): told to tasks in BootInfo.boot_flags.
+pub fn watchdog_restarted() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    { arch::watchdog::restarted() }
+    #[cfg(not(target_arch = "x86_64"))]
+    { false }
+}
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     use core::fmt::Write;

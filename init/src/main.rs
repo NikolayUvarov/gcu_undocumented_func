@@ -7,6 +7,7 @@
 // application.
 mod hardware;
 mod legacy;
+mod safe;
 mod services;
 
 use mind::abi::*;
@@ -151,7 +152,12 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // The held `stop-notice` call of each service that asked, answered when init decides to stop it (750-KRN-0194).
               notices: [Option<wire::Call>; UNITS],
               // The ACPI tables' transmit power policy for a WLAN radio, read once at boot (213-KRN-0122).
-              power: mind::platform_power::Policy }
+              power: mind::platform_power::Policy,
+              // The safe start's start marks (000-KRN-0217): the firmware variable's client while init keeps one, the
+              // marks, each marked service's end of window, what this boot left out and what still comes back.
+              marks_cap: Option<usize>, marks: safe::Marks, settling: [u64; 8], left_out: u8, returning: u8,
+              // A service that faulted since READY: the left-out services then stay out.
+              faulted: bool }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -1844,6 +1850,24 @@ fn power_button() -> Option<Button> {
     Some(Button { blocks: [Some(a), b], irq })
 }
 
+// The services' start marks the last run left (000-KRN-0217), and how they read.
+fn read_marks(firmware: usize) -> (safe::Marks, safe::Read) {
+    let mut bytes = [0u8; 8];
+    match mind::firmware::get_in(firmware, safe::NAME, &RUN_MARK_GUID, &mut bytes) {
+        Ok((_, length)) => safe::Marks::from_bytes(Some(&bytes[..length.min(bytes.len())])),
+        Err(_) => safe::Marks::from_bytes(None),
+    }
+}
+
+// The names of the services of the list whose bits `mask` holds, in the list's order.
+fn names_of(mask: u8) -> mind::util::FixedBuf<128> {
+    let mut names = mind::util::FixedBuf::<128>::new();
+    for name in SAFE_LEFT_OUT.iter().enumerate().filter(|(i, _)| mask & safe::bit(*i) != 0).map(|(_, n)| n) {
+        let _ = core::fmt::Write::write_fmt(&mut names, format_args!("{}{}", if names.as_str().is_empty() { "" } else { ", " }, name));
+    }
+    names
+}
+
 // The mark of an unfinished run (RUN_MARK_NAME): whether the last run left it, and whether this one set it.
 fn run_mark(firmware: usize) -> (bool, bool) {
     let found = mind::firmware::get_in(firmware, RUN_MARK_NAME, &RUN_MARK_GUID, &mut [0u8; 8]).is_ok();
@@ -1910,7 +1934,7 @@ fn boot(info: &'static BootInfo) {
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
                          configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
-                         power: hardware::power_policy() };
+                         power: hardware::power_policy(), marks_cap: None, marks: safe::Marks::default(), settling: [0; 8], left_out: 0, returning: 0, faulted: false };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122).
@@ -1931,16 +1955,35 @@ fn boot(info: &'static BootInfo) {
     // The last run's mark found: it stopped early, and this one starts safely (000-KRN-0076). The privilege is kept until
     // the mark is cleared, a minute after READY.
     let firmware = platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_FIRMWARE, 0).ok();
-    let (safe, marked) = firmware.map_or((false, false), run_mark);
-    if safe {
-        // Every service left out, named (the list had grown past the five the line once printed).
-        let mut names = mind::util::FixedBuf::<128>::new();
-        for (i, name) in SAFE_LEFT_OUT.iter().enumerate() { let _ = core::fmt::Write::write_fmt(&mut names, format_args!("{}{}", if i == 0 { "" } else { ", " }, name)); }
-        mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: {}", names.as_str());
+    let (unfinished, marked) = firmware.map_or((false, false), run_mark);
+    // Which services this start leaves out (000-KRN-0217): those still starting when the last run ended, at once with
+    // the watchdog's evidence of a freeze, else after a second such run in a row.
+    let evidence = info.boot_flags & BOOT_WATCHDOG_RESTARTED != 0;
+    let (last, read) = firmware.filter(|_| marked).map_or((safe::Marks::default(), safe::Read::None), read_marks);
+    match read {
+        safe::Read::Version(version) => mind::println!("[INIT] THE SERVICES' START MARKS ARE OF VERSION {}, NOT {}: NOT READ", version, safe::VERSION),
+        safe::Read::Damaged => mind::println!("[INIT] THE SERVICES' START MARKS ARE DAMAGED: NOT READ"),
+        safe::Read::Kept | safe::Read::None => {}
     }
+    let decision = safe::decide(unfinished, evidence, last);
+    let named = names_of(decision.named);
+    match decision.why {
+        safe::Why::Ended => {}
+        safe::Why::Nothing => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER), BUT NO SERVICE OF THE SAFE START'S LIST WAS STARTING: A NORMAL START"),
+        safe::Why::Once => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED WHILE {} WAS STARTING, WITH NO SIGN OF A FREEZE (A CUT POWER OR A RESET): A NORMAL START; THE SAME AGAIN LEAVES IT OUT", named.as_str()),
+        safe::Why::Twice => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, A SECOND RUN IN A ROW WHILE THESE WERE STARTING; NOT STARTED: {}", named.as_str()),
+        safe::Why::Evidence => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, AND THE WATCHDOG RESTARTED IT; WHAT WAS STARTING IS NOT STARTED: {}", named.as_str()),
+    }
+    let safe = decision.left_out != 0;
     if !marked { mind::println!("[INIT] NO RUN MARK: THE FIRMWARE KEEPS NO VARIABLES FOR IT; A RUN THAT STOPS EARLY IS NOT NOTICED"); }
     let mut mark = firmware.filter(|_| marked);
     if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
+    // The marks kept for the next boot, then each start of a service of the list marked while it settles.
+    init.left_out = decision.left_out;
+    init.returning = decision.left_out;
+    init.marks = decision.kept;
+    init.marks_cap = mark;
+    init.write_marks();
     // A safe start asked at the bootloader (173-KRN-0036): the service configuration is not read.
     let asked = info.boot_flags & BOOT_SAFE != 0;
     init.safe = safe || asked;

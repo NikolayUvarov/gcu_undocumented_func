@@ -60,12 +60,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // Bluetooth controller's driver `bt_hci` after `rtw88_wifi` (700-KRN-0176). ABI 26: COMPOSITOR_PULL returns in arg2 the
 // PID of the task whose screen is in front (750-KRN-0192). ABI 27 moves SLOT_DYNAMIC to 43 for SLOT_STOREFS, the shell's
 // client of `storefs`, a boot image after `keystore`, and lets a spawn carry SPAWN_GRANTS_MAX grants, one for each fixed
-// slot (32 before), as the shell's are 33 where `wlan` runs (311-KRN-0190).
+// slot (32 before), as the shell's are 33 where `wlan` runs (311-KRN-0190). ABI 28: the kernel sets
+// BOOT_WATCHDOG_RESTARTED in the tasks' BootInfo.boot_flags when the platform's watchdog restarted the last run (000-KRN-0217).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 27;
+pub const ABI_VERSION: u32 = 28;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -80,6 +81,8 @@ pub const BOOT_HANDOFF_VERSION: u32 = 29;
 // BootInfo.boot_flags: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init ignores
 // data/services.txt (173-KRN-0036).
 pub const BOOT_SAFE: u32 = 1;
+// Set by the kernel, never the bootloader (ABI 28): the platform's watchdog restarted the last run, a freeze's evidence.
+pub const BOOT_WATCHDOG_RESTARTED: u32 = 2;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],

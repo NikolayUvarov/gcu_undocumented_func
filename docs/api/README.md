@@ -1,6 +1,6 @@
 # MIND Core API
 
-**Version:** ABI 27 (`ABI_VERSION` in `common/abi.rs`; 311-KRN-0190: `SLOT_STOREFS` 42, a client of `storefs`, and `SPAWN_GRANTS_MAX` = `SLOT_DYNAMIC`, 43 grants, 32 before) · **Stability:** unstable, see [Stability](#stability)
+**Version:** ABI 28 (`ABI_VERSION` in `common/abi.rs`; 000-KRN-0217: the kernel sets `BOOT_WATCHDOG_RESTARTED` in the tasks' `BootInfo.boot_flags` when the platform's watchdog restarted the last run; ABI 27, 311-KRN-0190: `SLOT_STOREFS` 42, a client of `storefs`, and `SPAWN_GRANTS_MAX` = `SLOT_DYNAMIC`, 43 grants, 32 before) · **Stability:** unstable, see [Stability](#stability)
 
 Programs reach MIND Core through three layers:
 
