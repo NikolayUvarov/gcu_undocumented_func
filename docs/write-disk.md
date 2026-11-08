@@ -278,4 +278,6 @@ reboot
 - On an Intel PC, the chipset's watchdog restarts the machine within 30 s, and that restart is a boot into Linux.
 - On the Ryzen the AMD FCH's watchdog does the same ([213-KRN-0125](../issues/213-KRN-0125-the-amd-fch-watchdog.md)). It is checked against a model of its registers only, so the first runs show whether it holds: the boot line says `WATCHDOG: AMD FCH, A RESET AFTER 30 S ...` when it is armed. If it says `WATCHDOG: NONE`, a freeze waits for the power button.
 
+**Turning it off with no screen or keyboard.** On an x86 machine whose firmware names a fixed-feature power button, a short press shuts MIND Core down as `poweroff` does: the services stopped, the disks written, then off. The next boot is a normal one. Holding the button for 4 s still cuts the power past MIND Core; cut within a minute of `READY`, the next boot is a safe start ([000-KRN-0216](../issues/000-KRN-0216-the-power-button-shuts-down-cleanly.md)). The boot log says which applies: `[INIT] THE POWER BUTTON SHUTS THE MACHINE DOWN` or `[INIT] THE POWER BUTTON IS NOT READ: …` with the reason.
+
 **Effector's machines.** On a machine Effector works on (the Ryzen is one), only the maintainer runs `once --reboot`, after checking that no operation is active ([docs/effector.md](effector.md)).

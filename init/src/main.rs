@@ -1694,7 +1694,8 @@ impl Init {
         // The services that asked are told together and waited for once, before anything stops (750-KRN-0194).
         let (mut told, mut told_count) = ([0usize; UNITS], 0);
         for index in 1..UNITS {
-            if self.running(index) && self.warn(index, idl_init::StopReason::Restart) { self.stopped[index] = true; told[told_count] = index; told_count += 1; }
+            let reason = if off { idl_init::StopReason::PowerOff } else { idl_init::StopReason::Restart };
+            if self.running(index) && self.warn(index, reason) { self.stopped[index] = true; told[told_count] = index; told_count += 1; }
         }
         if told_count > 0 { let _ = self.ended_within(&told[..told_count]); }
         if let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)) {
