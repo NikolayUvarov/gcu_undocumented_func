@@ -86,6 +86,7 @@ struct Attempt<'a> {
     dma: Option<ManuallyDrop<Dma>>, queues: Option<native_dma::Queues<'a>>,
     prepared: Option<pcie::Prepared>, ready: Option<download::Ready>, runtime: Option<runtime_mac::Prepared>,
     capabilities: Option<phycap::Capabilities>, receiving: Option<post_mac::Receiving>, radio_attempted: bool,
+    platform: args::Platform<'a>,
 }
 
 impl Attempt<'_> {
@@ -174,10 +175,13 @@ impl startup::Diagnostic for Attempt<'_> {
             Stage::InitialPhy if serving() => {
                 let mut scratch = [0; rx::BUFFER_BYTES];
                 let queues = self.queues.as_mut().ok_or(Error::State)?;
-                let stop = receive_service::serve(&mut self.native, &mut queues.command, &mut queues.receive,
+                // The data mode's packet inbox, in BSS: four receive buffers are too large for the stack.
+                static mut INBOX: btc_session::Inbox = btc_session::Inbox::new();
+                let inbox = unsafe { &mut *core::ptr::addr_of_mut!(INBOX) };
+                let stop = receive_service::serve(&mut self.native, queues,
                     self.receiving.as_ref().ok_or(Error::State)?, self.ready.take().ok_or(Error::State)?, self.board,
-                    self.capabilities.as_ref().ok_or(Error::State)?, &mut scratch, LISTEN_MHZ, served);
-                mind::println!("[RTW89] WLANHW SERVICE STOPPED: {:?}", stop);
+                    self.capabilities.as_ref().ok_or(Error::State)?, &mut scratch, inbox, LISTEN_MHZ, self.platform, served);
+                pieces("WLANHW SERVICE STOPPED", &stop);
                 return Err(Error::Served(stop));
             }
             Stage::InitialPhy => {
@@ -245,10 +249,53 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] RECEIVE-ONLY CHANNEL {}: SCHEDULER ZERO, DATA DMA STOPPED", channel);
             mind::println!("[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED");
         }
-        receive_service::Event::CountryTaken { code, channels, listen_only } =>
-            mind::println!("[RTW89] COUNTRY {}{}: {} CHANNELS, {} LISTEN ONLY; NOT APPLIED: NO CALIBRATED CHANNEL YET, RECEIVE ONLY",
+        receive_service::Event::CountryTaken { code, channels, listen_only, applied: true } =>
+            mind::println!("[RTW89] COUNTRY {}{}: {} CHANNELS, {} LISTEN ONLY; APPLIED: A CHANNEL IS CALIBRATED WHEN THE STATION FIRST SENDS THERE",
                 code[0] as char, code[1] as char, channels, listen_only),
+        receive_service::Event::CountryTaken { code, channels, listen_only, applied: false } =>
+            mind::println!("[RTW89] COUNTRY {}{}: {} CHANNELS, {} LISTEN ONLY; NOT APPLIED: THE PLATFORM'S POWER POLICY IS UNKNOWN, RECEIVE ONLY",
+                code[0] as char, code[1] as char, channels, listen_only),
+        receive_service::Event::Admitted { channel, registers } => {
+            mind::println!("[RTW89] DATAPATH ADMITTED ON CHANNEL {}", channel);
+            mind::println!("[RTW89] REGISTERS AT ADMISSION: {:?}", registers);
+        }
+        receive_service::Event::Scanned { tunes, longest_us, kept, dropped } =>
+            mind::println!("[RTW89] SCAN: {} PASSIVE TUNES, THE LONGEST {} US; {} FRAMES KEPT, {} DROPPED", tunes, longest_us, kept, dropped),
+        receive_service::Event::Recovered { count, ser, cmac, bb_us, restored, waited_us, after_reconcile } =>
+            mind::println!("[RTW89] FIRMWARE RECOVERY {} {} (SER_DBG_INFO {:08X}, CMAC_ERR_ISR {:08X}): BB BACK AFTER {} US, THE SCHEDULER {} AFTER {} US; DEBUG MODE GOES ON",
+                count, if after_reconcile { "AFTER A COEXISTENCE RECONCILE" } else { "BETWEEN OPERATIONS" }, ser, cmac, bb_us,
+                if restored { "RESTORED BY THE DRIVER" } else { "BACK FROM THE FIRMWARE" }, waited_us),
+        receive_service::Event::DataCountry { code, channel, kept: true, .. } =>
+            mind::println!("[RTW89] COUNTRY {}{} IN DATA MODE: CHANNEL {} KEPT", code[0] as char, code[1] as char, channel),
+        receive_service::Event::DataCountry { code, channel, kept: false, enforced: true } =>
+            mind::println!("[RTW89] COUNTRY {}{} IN DATA MODE: CHANNEL {} NOT ALLOWED AT ITS ADMITTED POWER; NOTHING SENT UNTIL A COUNTRY ALLOWS IT",
+                code[0] as char, code[1] as char, channel),
+        receive_service::Event::DataCountry { code, channel, kept: false, enforced: false } =>
+            mind::println!("[RTW89] COUNTRY {}{} IN DATA MODE: CHANNEL {} NOT ALLOWED AT ITS ADMITTED POWER: SENDING SHOULD STOP; DEBUG MODE KEEPS SENDING",
+                code[0] as char, code[1] as char, channel),
     }
+}
+
+// The system log keeps lines of mind::log::LINE bytes: a long value goes out in numbered pieces of a line each.
+struct Pieces { label: &'static str, bytes: [u8; 150], len: usize, count: u32 }
+impl Pieces {
+    fn flush(&mut self) {
+        if self.len == 0 { return }
+        let text = core::str::from_utf8(&self.bytes[..self.len]).unwrap_or("?");
+        mind::println!("[RTW89] {} {}: {}", self.label, self.count, text);
+        self.count += 1; self.len = 0;
+    }
+}
+impl core::fmt::Write for Pieces {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        for &byte in text.as_bytes() { if self.len == self.bytes.len() { self.flush(); } self.bytes[self.len] = byte; self.len += 1; }
+        Ok(())
+    }
+}
+fn pieces(label: &'static str, value: &dyn core::fmt::Debug) {
+    use core::fmt::Write;
+    let mut out = Pieces { label, bytes: [0; 150], len: 0, count: 1 };
+    let _ = write!(out, "{:?}", value); out.flush();
 }
 
 // Printable ASCII only; other SSID bytes show as '?'.
@@ -263,7 +310,7 @@ fn heard(found: &listen::Heard) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::println!("[RTW89] BOUNDED FIRMWARE/MAC/RX/INITIAL-PHY DIAGNOSTIC AND RECEIVE-ONLY LISTEN: NO TRANSMISSION, NO WLAN LINK");
+    mind::println!("[RTW89] FIRMWARE/MAC/RX/INITIAL PHY, THEN WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED AND A CHANNEL CALIBRATED");
     if !cfg!(target_arch = "x86_64") { mind::println!("[RTW89] UNSUPPORTED DMA ARCHITECTURE"); idle(); }
     let (_, resolution, frequency) = mind::time::clock_info();
     if let Err(error) = io::validate_clock(resolution, frequency) {
@@ -279,7 +326,7 @@ fn main(_info: &'static BootInfo) {
         idle();
     }
     let Some((index, platform)) = args::parse(mind::process::args_str()) else { mind::println!("[RTW89] NO PCI DEVICE INDEX"); idle(); };
-    // 213-KRN-0122's word; this receive-only build only reports it, and Unknown would forbid any later transmission.
+    // 213-KRN-0122's word: Unknown forbids any transmission, so a country is then taken but never applied.
     match platform {
         args::Platform::Absent => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: ABSENT"),
         args::Platform::Limits { per_ntx, per_path } => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: LIMITS NTX {:?}, PATH {:?} HALF-DBM", per_ntx, per_path),
@@ -292,6 +339,11 @@ fn main(_info: &'static BootInfo) {
     let Ok(bar) = Mmio::map(SLOT_DEV0) else { mind::println!("[RTW89] BAR2 MAP FAILED"); idle(); };
     if bar.len() != len { mind::println!("[RTW89] BAR2 SIZE CHANGED"); idle(); }
     let mut native = Native { bar };
+    match board::power_off_left_on(&mut native) {
+        Ok(true) => mind::println!("[RTW89] THE MAC WAS LEFT ON (A REPLACED OR STOPPED INSTANCE): POWERED OFF FIRST, AS LINUX DOES"),
+        Ok(false) => {}
+        Err(cause) => { mind::println!("[RTW89] THE MAC WAS LEFT ON AND DID NOT POWER OFF: {:?}; NO NETWORK LINK", cause); idle(); }
+    }
     let board = match board::read(&mut native) {
         Ok(board) => {
             let b = board.identity;
@@ -302,9 +354,9 @@ fn main(_info: &'static BootInfo) {
         Err(error) => { mind::println!("[RTW89] BOARD ACCESS FAILED {:?}; NO NETWORK LINK", error); idle(); }
     };
     let mut attempt = Attempt { native, index, board: &board, file: bytes.as_slice(), verified: None,
-        dma: None, queues: None, prepared: None, ready: None, runtime: None, capabilities: None, receiving: None, radio_attempted: false };
+        dma: None, queues: None, prepared: None, ready: None, runtime: None, capabilities: None, receiving: None, radio_attempted: false, platform };
     let report = startup::run(&mut attempt);
-    mind::println!("[RTW89] DIAGNOSTIC {:?}", report);
+    pieces("DIAGNOSTIC", &report);
     mind::println!("[RTW89] DMA RETAINED={}; NO RETRY, CALIBRATED RF, WLAN ENDPOINT OR NETWORK LINK", attempt.dma.is_some());
     if serving() { receive_service::absent_forever(); }
     idle()

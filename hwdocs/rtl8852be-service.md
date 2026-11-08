@@ -147,24 +147,55 @@ The country reaches the radio through `set-country` on its own endpoint, so the 
 `receive_service::serve` is the first. It runs when `init` lends an endpoint in `SLOT_SERVICE`; without one, the driver keeps its bounded listen. It does the listen's setup:
 - `listen::open`, then `listen::prepare_receive` on the caller's live PHY: the initial PHY, one passive channel, the report tail and the scan filter.
 
-It then serves `wlanhw` 2.0 on that channel:
+It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 
 | Request | Answer |
 |---|---|
-| `info` | `channels` the tuned channel, `supported` 1–13 |
-| `set-channel` | that channel only; others `invalid` |
-| `set-filter` | the station filter applied in software over the scan filter |
+| `info` | `channels` 1–13 before a country, those its limits leave after; `supported` 1–13 |
+| `set-channel` | any of those channels, tuned passively (`channel::run` under `Policy::passive`) and answered after the tune; others `invalid` |
+| `set-filter` | the station filter applied in software over the scan filter. When it ends a scan (`all-beacons` set, then cleared), the service logs `[RTW89] SCAN: n PASSIVE TUNES, THE LONGEST t US; k FRAMES KEPT, d DROPPED` |
 | `receive`, `wait` | the frames that filter accepts, with the 8-byte header; four held, more dropped and counted |
-| `send` | `failed`: no calibrated channel, nothing is sent |
+| `send` | `failed` before a country, on a listen-only channel, and for a probe request. Otherwise `busy`, and that channel is admitted (below) |
 | `attach`, `kick` | `invalid`; a ring capability is dropped |
-| `set-country` | checked by `country::Limits`: `invalid` when malformed. Otherwise logged as taken and answered `failed`, 1.2's "could not apply them", so the station sends nothing. Its limits are kept for the calibration step |
+| `set-country` | checked by `country::Limits`: `invalid` when malformed. Otherwise logged as taken, and applied (answered with `info`) unless 213-KRN-0122's platform word is `unknown`, when it is `failed`, 1.2's "could not apply them" |
+
+**Admission.** The first `send` that may go out admits its channel: an active tune under the station's rule, `grant`, IQK, TSSI and DPK, the station with the filter the station last set, the data mode, then `service.rs`. The service logs `[RTW89] DATAPATH ADMITTED ON CHANNEL n`.
+- **A probe request admits nothing** (2026-11-08). A scan visits every channel, and Linux too calibrates a channel when the station joins there (`rtw89_core_sta_add` → `rtw89_chip_rfk_channel`), not on each scan hop (`__rtw89_set_channel`). So scans stay receive-only, and the join's authentication admits the network's channel.
+- **Before this,** the scan's first probe on channel 1 admitted channel 1 (2026-11-06). Data mode then held channel 1 alone, and the network, on channel 8, was never heard.
+
+**In data mode** (`service.rs`):
+- `set-channel` takes the admitted channel only; others are `invalid`;
+- `set-country` keeps the channel when the new limits still let the radio send there at no less EIRP than it was admitted under. It answers `info` and logs `[RTW89] COUNTRY XX IN DATA MODE: CHANNEL n KEPT`.
+- **Otherwise, for now, a debug mode** (`KEEP_SENDING` in `service.rs`, the maintainer's decision of 2026-11-08: everything runs first, hardening later). The driver logs `… NOT ALLOWED AT ITS ADMITTED POWER: SENDING SHOULD STOP; DEBUG MODE KEEPS SENDING`, answers `info` as if the limits were applied, and keeps sending at the admitted power. **This breaks wlanhw 1.2's rule** that a radio which cannot apply its limits sends nothing.
+- With `KEEP_SENDING` false, it answers `failed` and logs `… NOTHING SENT UNTIL A COUNTRY ALLOWS IT`, and every `send` is `failed` until a country it can keep. The host tests run both modes.
+
+**On the Ryzen, 2026-11-08** (channel 8, CoolNet2):
+- **The hardware filter.** The data mode, and the receive-only service once the station sets a network's filter, narrow it to Linux's station value ([station notes](rtl8852be-station.md)). The scan's broad filter let the whole busy channel through: within 200 ms the CMAC reported a receive DMA error, and the firmware's L0 recovery reset the BB and the scheduler (`SER_DBG_INFO`). With the narrow filter, no such recovery was seen.
+- **Receive draining.** The data service takes up to 32 descriptors of each ring a step (`DRAIN`); before, it took one.
+- **A debug mode, `OUTLAST_SER`** (`data_mode.rs`, on until hardening): a BB in reset or a scheduler off is waited for up to 60 ms. A scheduler still off after a recovery the firmware counted is restored, and the service logs `FIRMWARE RECOVERY n …`.
+- **Diagnostics in the stop line:**
+  - the registers the first shutdown found, and the same ones at admission (`REGISTERS AT ADMISSION`);
+  - when each first changed;
+  - for `TransmitTimeout`, what the frame went through (`tx::Seen`).
+- **A debug mode, `RPQ_ALONE`** (`tx.rs`, on until hardening). A data queue's frame asks for no firmware report and is final on DMA and the RPQ, one hardware try a submission, as Linux's PCIe path takes a status (`rtw89_pci_release_rpp`). The firmware reported the management queue's frames only: the WPA2 handshake's message 2 was fetched and released, never reported.
+- **Path B's TSSI DAC gain table** is written unread, as Linux. On the Ryzen its readback changed in three admissions of four; path B is shared with Bluetooth.
+- **With all of it the Ryzen joined CoolNet2:** WPA2 handshake, `JOINED (TRY 1)`, DHCP `192.168.2.169/24` on the Wi-Fi card.
+- **Not solved:** the coexistence keeps the `NoLink` policy after association.
+  - **What it did:** 6 minutes after joining, during `bt_hci`'s 10-second inquiry, the station heard nothing for 10 s and lost the network. The next frame then found the BB fully in reset and all host DMA stopped, with no recovery counted.
+  - **What Linux does:** it tells the coexistence of the connection (`BTC_ROLE_MSTS_STA_CONN_END`), which then shares the time between Wi-Fi and Bluetooth.
 
 After a stop it answers `no-device` for as long as the process lives (`absent_forever`).
 
 **Its limits:**
-- one channel, because the channel stage is still single-shot. Retuning, and a scan over the country's channels, come with the calibration step;
-- nothing is transmitted: every poll re-checks the startup permit, with the scheduler zero and data DMA stopped.
+- data mode keeps the one channel it admitted. It has no retune or recalibration of another channel, so a station that loses its network there cannot scan elsewhere until the driver restarts;
+- a scan's dwell includes the passive tune: the station's timer starts before `set-channel` is answered. The `SCAN` line measures the tunes on the hardware.
 
-**Host tests:** `tests/rtw89_receive_service_cases.rs` in `rtw89_service_host.rs` runs the real setup over the initial-PHY fixture and the IPC seam. It covers `info` and `set-channel`, `send` failing, a country taken and answered `failed` (UZ and `00`, and three malformed ones refused), and a beacon delivered while another station's data is filtered out. The fixture's scheduler and DMA stay stopped throughout.
+**Host tests:** `tests/rtw89_receive_service_cases.rs` and `tests/rtw89_service_cases.rs` in `rtw89_service_host.rs` run the real setup over the initial-PHY fixture and the IPC seam. They cover:
+- `info` and `set-channel`;
+- `send` before and under a country, a probe request and a listen-only channel;
+- countries taken, applied or not, and malformed ones refused;
+- a scan's counts;
+- a beacon delivered while another station's data is filtered out;
+- in data mode, countries kept and refused at the admitted power.
 
-**Not run on hardware:** today's `init` lends no endpoint, so the Ryzen takes the listen path.
+`tests/rtw89_connection_cases.rs` runs the full admission, from the receive-only start to a frame sent, with the join's filter kept.

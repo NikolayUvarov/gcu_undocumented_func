@@ -136,6 +136,12 @@ The hardware register uses the source combination ALLMULTI, OTHER_BSS,
 BCN_PRBRESP_PROMISC and PROBE_REQ (`mac80211.c:304–378`), with FCS failures
 disabled and no sniffer mode. The resulting configuration is `0x03004400` at
 `0xce20`, preserving the MPDU-length field exactly as `mac.c:2546` requires.
+**Since 2026-11-08 that is a scan's filter only** (`all-beacons`). A network's filter
+uses Linux's station value outside a scan, `0x030044b6`: `DEFAULT_AX_RX_FLTR` less
+`B_AX_A_MC`, with the address-1, broadcast, CAM and beacon checks. With the scan's
+value kept in data mode, the Ryzen's busy channel 8 filled the packet buffer within
+200 ms. The CMAC then reported a DMA error (`CMAC_ERR_ISR` 8, `0xc800` bit 31), and
+the firmware's L0 recovery held the BB in reset and zeroed the scheduler.
 `check_registers` checks this configuration once a filter is installed. This
 broad hardware path is narrowed by the immutable software predicate, matching
 the existing `bcm_wifi::radio::wanted` and `wlanhw@1.1`: scan beacons and probe

@@ -115,7 +115,12 @@ fn service_no_final_tx_report_times_out_answers_every_owner_and_retains_data(){r
     let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());let busy=ipc::buffer(4,&body(&frame(),12,1));
     assert!(service.step());error(busy,wlanhw::Error::Busy);ipc::advance(101);assert!(!service.step());
     error(send,wlanhw::Error::Failed);assert_eq!(words(wait),[0,0]);assert_eq!(c.borrow().published,1);
-    let stopped=service.stop();assert!(matches!(stopped.failure,Some(Fatal::TransmitTimeout)));assert!(stopped.owner.poll_packets(10_000).is_err());clean();
+    // What the send saw: fetched and released, never reported by the firmware.
+    let stopped=service.stop();let Some(Fatal::TransmitTimeout(seen))=stopped.failure else{panic!("no timeout")};
+    assert_eq!((seen.finished,seen.fetched,seen.released,seen.reported,seen.tries),(0,true,true,false,0));
+    assert!(stopped.owner.poll_packets(10_000).is_err());
+    // The registers as the timeout found them, before the shutdown: the scheduler still the data mode's.
+    let found=stopped.owner.snapshot().unwrap();assert_eq!(found.0[9]&0xffff,0x010f);clean();
 });}
 
 #[test]
@@ -150,4 +155,83 @@ fn service_progress_accepts_real_btc_ack_after_fifteen_milliseconds_then_serves_
     assert!(service.step());let(w,b)=ipc::response(sent).unwrap();assert_eq!(w,[2<<16,0]);
     let mut r=Reader::new(&b[..2]);assert_eq!(wlanhw::Sent::decode(&mut r).unwrap(),wlanhw::Sent{acked:true,attempts:1});
     let stopped=service.stop();assert!(stopped.failure.is_none());assert_eq!(ipc::dropped(sent),1);clean();
+});}
+
+fn country(code:&str,limits:&[(u8,u8,bool)])->Vec<u8>{
+    let mut out=vec![0;wlanhw::REQUEST_MAX];let mut w=Writer::new(&mut out);
+    codec::encode_str::<2>(code,&mut w).unwrap();2u8.encode(&mut w).unwrap();
+    let list:Vec<_>=limits.iter().map(|&(channel,eirp,listen)|wlanhw::Limit{channel,eirp,listen}).collect();
+    codec::encode_slice::<wlanhw::Limit,64>(&list,&mut w).unwrap();let length=w.len();out.truncate(length);out
+}
+fn channels(id:usize)->Vec<u8>{
+    let(w,b)=ipc::response(id).unwrap();assert_eq!(w[0]&255,0);let mut r=Reader::new(&b[..w[0]>>16]);
+    let info=wlanhw::Info::decode(&mut r).unwrap();assert!(r.done());info.channels.as_slice().to_vec()
+}
+fn sends(service:&mut Service<'_,'_,'_,'_,'_,'_,'_,Device>)->bool{
+    let id=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    if ipc::response(id).is_some(){error(id,wlanhw::Error::Failed);return false}
+    assert!(service.step());assert_eq!(words(id),[2<<16,0]);true
+}
+
+// 213-DRV-0032: channel 6 admitted at 20 dBm (40 half-dBm); the station's country may change while it is joined.
+#[test]
+fn service_keeps_its_channel_under_a_country_that_allows_its_admitted_power_and_sends_nothing_under_one_that_does_not(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().under(40,1).strict(true);
+    let all=|eirp|(1..=13).map(|ch|(ch,eirp,false)).collect::<Vec<_>>();
+    let id=ipc::buffer(9,&country("UZ",&all(20)));assert!(service.step());assert_eq!(channels(id),[6]);
+    assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:true,enforced:true}));assert!(sends(&mut service));
+    // 10 dBm on 6 is less than it was admitted at; listening only there is no sending either.
+    let mut listen=all(20);listen[5].2=true;
+    for limits in[all(10),listen]{
+        let id=ipc::buffer(9,&country("UZ",&limits));assert!(service.step());error(id,wlanhw::Error::Failed);
+        assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:false,enforced:true}));
+        assert!(!sends(&mut service),"nothing is sent under a country it cannot keep");
+    }
+    // A malformed request changes nothing; a country it can keep lets it send again: US caps 1-11 at 30 dBm.
+    let id=ipc::buffer(9,&country("uz",&all(20)));assert!(service.step());error(id,wlanhw::Error::Invalid);
+    assert_eq!(service.take_event(),None);assert!(!sends(&mut service));
+    let us:Vec<_>=(1..=11).map(|ch|(ch,30,false)).collect();
+    let id=ipc::buffer(9,&country("US",&us));assert!(service.step());assert_eq!(channels(id),[6]);
+    assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"US",channel:6,kept:true,enforced:true}));assert!(sends(&mut service));
+    assert_eq!(c.borrow().published,2);
+    let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+});
+    // The debug mode (KEEP_SENDING, the default until hardening): the refusal is logged, answered as applied, and sent on.
+    run(0,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().under(40,1);
+        let id=ipc::buffer(9,&country("UZ",&(1..=13).map(|ch|(ch,10,false)).collect::<Vec<_>>()));assert!(service.step());
+        assert_eq!(channels(id),[6]);
+        assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:false,enforced:false}));
+        assert!(sends(&mut service));assert_eq!(c.borrow().published,1);drop(service);clean();
+    });
+    // A channel admitted under no known country keeps none.
+    run(0,true,true,|data,_|{
+        ipc::reset();let mut service=Service::new(data).unwrap();
+        let id=ipc::buffer(9,&country("UZ",&(1..=13).map(|ch|(ch,20,false)).collect::<Vec<_>>()));assert!(service.step());
+        error(id,wlanhw::Error::Failed);assert_eq!(service.take_event(),None);drop(service);clean();
+    });
+}
+
+// 213-DRV-0032: the firmware's L0 recovery zeroes the scheduler 100 ms after admission (the Ryzen, 2026-11-08); the debug
+// mode (OUTLAST_SER) waits for the firmware, then restores it, and the data mode goes on.
+#[test]
+fn service_outlasts_the_firmwares_recovery_of_the_scheduler(){
+    for heal in[None,Some(2)]{run(0,true,true,|data,c|{
+        ipc::reset();let mut service=Service::new(data).unwrap();
+        {let mut c=c.borrow_mut();c.ser=true;c.ser_heal=heal;}
+        let id=ipc::buffer(1,&[]);assert!(service.step());assert_eq!(channels(id),[6]);
+        let recovery=service.take_recovery().unwrap();
+        assert_eq!((recovery.count,recovery.ser,recovery.cmac,recovery.restored),(1,1,8,heal.is_none()));
+        assert!(sends(&mut service),"the scheduler is back");assert_eq!(service.take_recovery(),None);
+        let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+    });}
+}
+
+// One step drains what waits (DRAIN passes), not one descriptor: the Ryzen's packet buffer filled at one a step.
+#[test]
+fn service_one_step_takes_every_waiting_frame(){run(0,true,true,|data,c|{
+    ipc::reset();let mut service=Service::new(data).unwrap();c.borrow_mut().incoming=vec![packet();3];
+    let wait=ipc::words(6,0);assert!(service.step());assert_eq!(words(wait),[3<<16,0]);drop(service);clean();
 });}

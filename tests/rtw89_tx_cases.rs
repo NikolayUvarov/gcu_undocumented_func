@@ -116,7 +116,7 @@ fn cycle(q:&mut Queue<'_>,d:&mut Device,r:&mut rx::Rings<'_>,s:&mut[u8])->Result
 #[test]
 fn descriptor_preserves_raw_sequence_and_selects_exact_legacy_rate_and_selected_limit_one(){
     for(rate_index,rate)in txdesc::LEGACY_RATES.into_iter().enumerate(){
-        let f=frame(0,None,false);let meta=txdesc::frame(&f,rate,15).unwrap();let wd=txdesc::descriptor(meta,7,0x1234,0x300000).unwrap();
+        let f=frame(0,None,false);let meta=txdesc::frame(&f,rate,15).unwrap();let wd=txdesc::descriptor(meta,7,0x1234,0x300000,true).unwrap();
         assert_eq!(Device::word(&wd,0),1<<22|8<<16|12<<11|1<<7);assert_eq!(Device::word(&wd,8),7<<24|0x12<<17|64);
         assert_eq!(Device::word(&wd,12),0x125);assert_eq!(Device::word(&wd,24),1<<30|(rate_index as u32)<<16|1<<10);
         assert_eq!(Device::word(&wd,28),1<<31|1<<25|(rate_index as u32)<<16);assert_eq!(Device::word(&wd,32),0);assert_eq!(Device::word(&wd,36),1<<10);assert_eq!(Device::word(&wd,40),4);assert_eq!(Device::word(&wd,44),0);
@@ -139,7 +139,7 @@ fn frame_metadata_checks_lengths_qos_and_actual_tid_mapping(){
 fn management_order_bit_requires_complete_ht_control_and_encodes_its_length(){
     let mut f=frame(0,None,false);f[1]=0x80;f.truncate(28);
     let meta=txdesc::frame(&f,12,1).unwrap();assert_eq!(meta.header,28);
-    let wd=txdesc::descriptor(meta,0,1,0x300000).unwrap();assert_eq!((Device::word(&wd,0)>>11)&31,14);
+    let wd=txdesc::descriptor(meta,0,1,0x300000,true).unwrap();assert_eq!((Device::word(&wd,0)>>11)&31,14);
     for len in 24..28{assert_eq!(txdesc::frame(&f[..len],12,1),Err(txdesc::Error::Length));}
     f[1]=0;f.truncate(24);assert_eq!(txdesc::frame(&f,12,1).unwrap().header,24);
 }
@@ -411,3 +411,20 @@ fn retained_ingest_and_dma_progress_share_finite_deadline_and_poll_budget(){run(
     for _ in 0..4{assert_eq!(q.ingest(d.now_us(),rx::Channel::Rxq,rx::Outcome::Empty,&[]).unwrap(),Receive::Empty);assert_eq!(q.advance(d).unwrap(),None);}
     assert!(matches!(q.advance(d),Err(Error::Io(Fault{kind:FaultKind::Timeout,..}))));assert_eq!(d.published.len(),1);
 });}
+
+// DEBUG RPQ_ALONE (the Ryzen, 2026-11-08): a data queue's frame asks for no firmware report and is final on DMA and the
+// RPQ, one try a submission; the management queue's still waits for the firmware's.
+#[test]
+fn rpq_alone_finishes_a_data_frame_on_dma_and_rpq_and_keeps_the_management_queue_strict(){
+    run(|d,q,r,s,_|{q.rpq_alone();d.auto_firmware=false;d.statuses=vec![Status::RetryLimit,Status::Done];
+        q.begin(d,&frame(2,None,false),12,5,0,100_000).unwrap();
+        assert_eq!(cycle(q,d,r,s).unwrap(),None);
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(2),completed_descriptors:2,raw_data_tx_count:2}));
+        for p in &d.published{assert_eq!(p.q,0);assert_eq!(Device::word(&p.wd,36)&(1<<10),0,"no firmware report asked");}
+    });
+    run(|d,q,r,s,_|{q.rpq_alone();d.auto_firmware=false;q.begin(d,&frame(0,None,false),2,1,0,100_000).unwrap();
+        assert_eq!(cycle(q,d,r,s).unwrap(),None);assert_ne!(Device::word(&d.published[0].wd,36)&(1<<10),0);
+        d.firmware_last(Status::Done,1);
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));
+    });
+}

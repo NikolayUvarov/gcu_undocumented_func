@@ -8,6 +8,14 @@ use crate::{board::Board,btc_context::Initialized,channel_rfk,fwcmd,h2c,
     io::{self,Fault,FaultKind,RegisterIo},phy::{Phy,State,channel},runtime_mac,rx,rxdesc,station,tx,txdesc};
 
 const ACTIVATE_US:u64=1_000_000;
+// DEBUG (the Ryzen, 2026-11-08: everything runs first, hardening later): after a CMAC error the firmware's own L0
+// recovery holds the BB in reset and zeroes the scheduler, which Linux never reads back. The data mode gives the firmware
+// SER_WAIT_US to bring both back, restores the scheduler itself if only it is still off after a recovery SER_DBG_INFO
+// counted, and goes on. False: the permit and coexistence checks stop the data mode.
+const OUTLAST_SER:bool=true;
+const SER_WAIT_US:u64=60_000;
+const SER_DBG_INFO:usize=0x8424;
+const CMAC_ERR_ISR:usize=0xc164;
 const LIVE_US:u32=10_000;
 pub(crate) const SCHEDULER:u16=0x010f;
 pub(crate) const STOPPED_UNUSED:u32=1<<17;
@@ -34,6 +42,23 @@ impl From<tx::Error> for Cause{fn from(v:tx::Error)->Self{Self::Tx(v)}}
 pub(crate) enum Shutdown{NotActivated,Attempted{radio:Option<Fault>,transmit:tx::Stop}}
 #[derive(Debug)]
 pub(crate) struct Failure{pub stage:Stage,pub cause:Cause,pub shutdown:Option<Shutdown>}
+/// What the first shutdown found, before it changed anything: the firmware's error status (HALT_C2H_CTRL, HALT_C2H,
+/// HALT_H2C_CTRL, as Linux's rtw89_mac_get_err_status), SER_DBG_INFO, the DMAC and CMAC error ISRs, DLE_CTRL and
+/// PHYINFO_ERR_IMR (what Linux dumps for a CMAC DMA error on the 8852B), SYS_FUNC_EN in 0x0's byte 2, the scheduler,
+/// DMA_STOP and INIT_CONFIG. All ones: not read.
+pub const SNAPSHOT:[usize;12]=[0x164,0x16c,0x160,0x8424,0x8524,0xc164,0xc800,0xccfc,0,0xc348,fwcmd::DMA_STOP,fwcmd::INIT_CONFIG];
+/// One firmware recovery the data mode outlasted (OUTLAST_SER): the n-th, SER_DBG_INFO and CMAC_ERR_ISR then, when the
+/// BB was out of reset (0: at once), whether the driver restored the scheduler after `waited_us` or the firmware did, and
+/// whether it was found right after a coexistence reconcile (which may send H2C) or before it.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct Recovery{pub count:u32,pub ser:u32,pub cmac:u32,pub bb_us:u64,pub restored:bool,pub waited_us:u64,pub after_reconcile:bool}
+#[derive(Clone,Copy,Eq,PartialEq)]
+pub struct Snapshot(pub [u32;SNAPSHOT.len()]);
+impl core::fmt::Debug for Snapshot{
+    fn fmt(&self,f:&mut core::fmt::Formatter<'_>)->core::fmt::Result{
+        for(at,value)in SNAPSHOT.iter().zip(self.0){write!(f,"{:X}={:08X} ",at,value)?;}Ok(())
+    }
+}
 
 /// Actual station context is consumed; the calibrated policy and board remain immutably borrowed throughout data mode.
 pub(crate) struct PreparedActivation<'p>{board:&'p Board,tuned:&'p channel::Tuned,calibrated:&'p channel_rfk::Completed,
@@ -43,11 +68,15 @@ pub(crate) fn prepare<'p,B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:
     calibrated:&'p channel_rfk::Completed,owner:&'p Initialized,station:station::Prepared,queue:&tx::Queue<'_>)
     ->Result<PreparedActivation<'p>,station::Failure>{
     let command=phy.bus_between_stages().command_session();
-    if phy.state()!=State::ChannelTuned||phy.attempt()!=tuned.attempt||command!=tuned.session
-        ||phy.identity()!=board.identity||tuned.access!=channel::Access::InitiateRadiation||!calibrated.matches(tuned)
-        ||!owner.matches(tuned.attempt,command)||!station.matches(tuned,board.identity.mac)
-        ||station.current_filter().is_none()||queue.state()!=tx::State::Installed||queue.session()==0||!phy.bus_between_stages().retains_packets(){
-        return Err(station::Failure{stage:station::Stage::Guard,cause:station::Cause::Register(Fault::new(FaultKind::PowerState,0,0)),
+    // A refusal names each condition that failed (bits 0-10, in this order) and the PHY state (bits 16 and up).
+    let refused=[phy.state()!=State::ChannelTuned,phy.attempt()!=tuned.attempt,command!=tuned.session,
+        phy.identity()!=board.identity,tuned.access!=channel::Access::InitiateRadiation,!calibrated.matches(tuned),
+        !owner.matches(tuned.attempt,command),!station.matches(tuned,board.identity.mac),station.current_filter().is_none(),
+        queue.state()!=tx::State::Installed||queue.session()==0,!phy.bus_between_stages().retains_packets()]
+        .iter().enumerate().fold(0u32,|bits,(i,&failed)|bits|u32::from(failed)<<i);
+    if refused!=0{
+        return Err(station::Failure{stage:station::Stage::Guard,
+            cause:station::Cause::Register(Fault::new(FaultKind::PowerState,0,refused|(phy.state() as u32)<<16)),
             radio_stop:None,port_stop:None,selector_restore:None});
     }
     station.validate(phy,board,tuned,owner,LIVE_US)?;
@@ -58,7 +87,8 @@ pub(crate) fn prepare<'p,B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:
 /// The TX region remains exclusively borrowed and no failure, shutdown or Drop releases any DMA allocation.
 pub(crate) struct DataSession<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>,stopped:bool,
-    cleanup_allowed:bool,last_shutdown:Option<Shutdown>,counts:Counts,tx_deadline:Option<u64>,
+    cleanup_allowed:bool,last_shutdown:Option<Shutdown>,counts:Counts,tx_deadline:Option<u64>,snapshot:Option<Snapshot>,
+    ser_seen:u32,recoveries:u32,recovery:Option<Recovery>,
 }
 pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     pub owner:DataSession<'q,'memory,'p,'a,'command,'receive,B>,pub failure:Failure,
@@ -94,8 +124,10 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
 impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a,'command,'receive,B>{
     pub(crate) fn activate(session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>)
         ->Result<Self,ActivationFailure<'q,'memory,'p,'a,'command,'receive,B>>{
-        let mut own=Self{session,queue,prepared,stopped:false,cleanup_allowed:false,last_shutdown:None,counts:Counts::default(),tx_deadline:None};
-        if let Err(failure)=own.activate_inner(){return Err(ActivationFailure{owner:own,failure})}Ok(own)
+        let mut own=Self{session,queue,prepared,stopped:false,cleanup_allowed:false,last_shutdown:None,counts:Counts::default(),tx_deadline:None,snapshot:None,
+            ser_seen:0,recoveries:0,recovery:None};
+        if let Err(failure)=own.activate_inner(){return Err(ActivationFailure{owner:own,failure})}
+        own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);Ok(own)
     }
     fn identity(&self)->bool{
         let p=&self.prepared;
@@ -162,9 +194,45 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             if read==[false,false]{return Ok(())}
         }Err(Cause::State)
     }
+    // OUTLAST_SER: a BB in reset or a scheduler off is waited for, before and after each reconcile. SER_DBG_INFO counts the firmware's recovery only once
+    // it is over (the Ryzen); a scheduler still off after it is restored. Without a counted recovery, it is refused.
+    fn outlast_ser(&mut self,deadline:u64,after_reconcile:bool)->Result<(),Cause>{
+        if !OUTLAST_SER{return Ok(())}
+        let seen=self.ser_seen;
+        let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+        let result=(||->io::Result<Option<Recovery>>{
+            let bb_on=|bb:u8|bb!=u8::MAX&&bb&3==3;
+            let bb=window.read8(crate::registers::R_AX_SYS_FUNC_EN)?;
+            if bb_on(bb)&&io::read32(&mut window,0xc348)?&0xffff==u32::from(SCHEDULER){return Ok(None)}
+            let cmac=io::read32(&mut window,CMAC_ERR_ISR)?;let start=window.now_us();let mut bb_us=None;
+            loop{
+                let waited=window.now_us().saturating_sub(start);
+                if bb_us.is_none()&&bb_on(window.read8(crate::registers::R_AX_SYS_FUNC_EN)?){bb_us=Some(waited)}
+                let scheduler=io::read32(&mut window,0xc348)?&0xffff==u32::from(SCHEDULER);
+                if let(Some(bb_us),true)=(bb_us,scheduler){
+                    let ser=io::read32(&mut window,SER_DBG_INFO)?;
+                    return Ok(Some(Recovery{count:0,ser,cmac,bb_us,restored:false,waited_us:waited,after_reconcile}))
+                }
+                if waited>=SER_WAIT_US{break}
+                window.delay_us(500)?;
+            }
+            let waited=window.now_us().saturating_sub(start);let ser=io::read32(&mut window,SER_DBG_INFO)?;
+            let Some(bb_us)=bb_us else{return Err(Fault::new(FaultKind::PowerState,crate::registers::R_AX_SYS_FUNC_EN,ser))};
+            if ser==seen{return Err(Fault::new(FaultKind::PowerState,0xc348,ser))}
+            runtime_mac::exchange_register(&mut window,[0x205|u32::from(SCHEDULER)<<16,0xffff,0,0],4)?;
+            require(&mut window,0xc348,0xffff,u32::from(SCHEDULER))?;
+            Ok(Some(Recovery{count:0,ser,cmac,bb_us,restored:true,waited_us:waited,after_reconcile}))
+        })();
+        self.session.last=window.last;
+        if let Some(mut recovery)=result?{
+            self.recoveries=self.recoveries.saturating_add(1);recovery.count=self.recoveries;
+            self.ser_seen=recovery.ser;self.recovery=Some(recovery);
+        }Ok(())
+    }
     fn live(&mut self,deadline:u64)->Result<(),Cause>{
         if self.stopped||!self.identity()||!matches!(self.session.mode,Mode::Data(_)){return Err(Cause::State)}
         if let Some(error)=self.session.failed{return Err(Cause::Session(error))}
+        self.outlast_ser(deadline,false)?;
         let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
         let result=(||{self.queue.validate_data(&mut window)?;
             self.prepared.station.check_registers(&mut window).map_err(Cause::Station)?;
@@ -187,7 +255,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn command(&mut self,command:h2c::Command,body:&[u8],acks:h2c::Acks,timeout_us:u32)->Result<h2c::Outcome,Failure>{
         Self::request(timeout_us)?;
         if body.len()>h2c::MAX_BODY{return Err(Failure{stage:Stage::Runtime,cause:Cause::Session(super::Error::Request),shutdown:None})}
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;self.outlast_ser(deadline,true)?;
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             let outcome=self.session.command_deadline_with(command,body,acks,deadline,&mut handler)
                 .map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
@@ -196,7 +264,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     }
     pub(crate) fn poll_packets(&mut self,timeout_us:u32)->Result<[bool;2],Failure>{
         Self::request(timeout_us)?;
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;self.outlast_ser(deadline,true)?;
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             let outcome=self.session.poll_before_with(deadline,&mut handler)
                 .map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
@@ -209,7 +277,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         if frame.get(10..16)!=self.prepared.station.current_filter().map(|f|f.own()).as_ref().map(|v|v.as_slice()){
             return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Input(txdesc::Error::Address)),shutdown:None})}
         if let Err(e)=txdesc::frame(frame,rate,max_submissions){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Input(e)),shutdown:None})}
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;let left=self.session.left(deadline)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;self.outlast_ser(deadline,true)?;let left=self.session.left(deadline)?;
             let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
             let result=self.queue.begin(&mut window,frame,rate,max_submissions,self.prepared.station.mac_id(),left);
             self.session.last=window.last;result?;self.session.left(deadline)?;self.tx_deadline=Some(deadline);Ok(())})();
@@ -217,7 +285,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     }
     pub(crate) fn advance(&mut self,timeout_us:u32)->Result<Option<tx::Completion>,Failure>{
         Self::request(timeout_us)?;
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;if !self.queue.pending_request(){return Ok(None)}
+        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;self.outlast_ser(deadline,true)?;if !self.queue.pending_request(){return Ok(None)}
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             self.session.poll_before_with(deadline,&mut handler).map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
             self.reconcile(deadline)?;
@@ -234,11 +302,22 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn consume_packet(&mut self){self.session.consume_packet()}
     pub(crate) fn terminal_packet(&self)->Option<inbox::Record<'_>>{self.session.terminal_packet()}
     pub(crate) fn pending_packets(&self)->usize{self.session.pending_packets()}
+    /// The registers the first shutdown found (SNAPSHOT), if it ran on an activated data mode.
+    pub(crate) fn snapshot(&self)->Option<Snapshot>{self.snapshot}
+    /// What the pending send has seen (a timeout's diagnostic).
+    pub(crate) fn transmit_seen(&self)->tx::Seen{self.queue.seen()}
+    /// The firmware recovery outlasted since the last call, if any (OUTLAST_SER).
+    pub(crate) fn take_recovery(&mut self)->Option<Recovery>{self.recovery.take()}
+    /// The SNAPSHOT registers now, read only.
+    pub(crate) fn registers(&mut self)->Snapshot{
+        let bus=&mut *self.session.bus;Snapshot(SNAPSHOT.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)))
+    }
     /// Independently stop radiation and owned packet DMA; caller still verifies kernel PCI quiescence and keeps all memory.
     pub(crate) fn shutdown(&mut self)->Shutdown{
         self.stopped=true;let _=self.session.fail::<()>(super::Error::Session);
         if let Some(previous)=self.last_shutdown{return previous}
         if !self.cleanup_allowed{self.last_shutdown=Some(Shutdown::NotActivated);return Shutdown::NotActivated}
+        self.snapshot=Some(self.registers());
         let radio=runtime_mac::disable_radio(self.session.bus).err();let transmit=self.queue.stop(self.session.bus);
         let result=Shutdown::Attempted{radio,transmit};self.last_shutdown=Some(result);result
     }
