@@ -147,24 +147,38 @@ The country reaches the radio through `set-country` on its own endpoint, so the 
 `receive_service::serve` is the first. It runs when `init` lends an endpoint in `SLOT_SERVICE`; without one, the driver keeps its bounded listen. It does the listen's setup:
 - `listen::open`, then `listen::prepare_receive` on the caller's live PHY: the initial PHY, one passive channel, the report tail and the scan filter.
 
-It then serves `wlanhw` 2.0 on that channel:
+It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 
 | Request | Answer |
 |---|---|
-| `info` | `channels` the tuned channel, `supported` 1–13 |
-| `set-channel` | that channel only; others `invalid` |
-| `set-filter` | the station filter applied in software over the scan filter |
+| `info` | `channels` 1–13 before a country, those its limits leave after; `supported` 1–13 |
+| `set-channel` | any of those channels, tuned passively (`channel::run` under `Policy::passive`) and answered after the tune; others `invalid` |
+| `set-filter` | the station filter applied in software over the scan filter. When it ends a scan (`all-beacons` set, then cleared), the service logs `[RTW89] SCAN: n PASSIVE TUNES, THE LONGEST t US; k FRAMES KEPT, d DROPPED` |
 | `receive`, `wait` | the frames that filter accepts, with the 8-byte header; four held, more dropped and counted |
-| `send` | `failed`: no calibrated channel, nothing is sent |
+| `send` | `failed` before a country, on a listen-only channel, and for a probe request. Otherwise `busy`, and that channel is admitted (below) |
 | `attach`, `kick` | `invalid`; a ring capability is dropped |
-| `set-country` | checked by `country::Limits`: `invalid` when malformed. Otherwise logged as taken and answered `failed`, 1.2's "could not apply them", so the station sends nothing. Its limits are kept for the calibration step |
+| `set-country` | checked by `country::Limits`: `invalid` when malformed. Otherwise logged as taken, and applied (answered with `info`) unless 213-KRN-0122's platform word is `unknown`, when it is `failed`, 1.2's "could not apply them" |
+
+**Admission.** The first `send` that may go out admits its channel: an active tune under the station's rule, `grant`, IQK, TSSI and DPK, the station with the filter the station last set, the data mode, then `service.rs`. The service logs `[RTW89] DATAPATH ADMITTED ON CHANNEL n`.
+- **A probe request admits nothing** (2026-11-08). A scan visits every channel, and Linux too calibrates a channel when the station joins there (`rtw89_core_sta_add` → `rtw89_chip_rfk_channel`), not on each scan hop (`__rtw89_set_channel`). So scans stay receive-only, and the join's authentication admits the network's channel.
+- **Before this,** the scan's first probe on channel 1 admitted channel 1 (2026-11-06). Data mode then held channel 1 alone, and the network, on channel 8, was never heard.
+
+**In data mode** (`service.rs`):
+- `set-channel` takes the admitted channel only; others are `invalid`;
+- `set-country` keeps the channel when the new limits still let the radio send there at no less EIRP than it was admitted under. It answers `info` and logs `[RTW89] COUNTRY XX IN DATA MODE: CHANNEL n KEPT`. Otherwise it answers `failed` and logs `… NOT ALLOWED AT ITS ADMITTED POWER …`, and every `send` is `failed` until a country it can keep.
 
 After a stop it answers `no-device` for as long as the process lives (`absent_forever`).
 
 **Its limits:**
-- one channel, because the channel stage is still single-shot. Retuning, and a scan over the country's channels, come with the calibration step;
-- nothing is transmitted: every poll re-checks the startup permit, with the scheduler zero and data DMA stopped.
+- data mode keeps the one channel it admitted. It has no retune or recalibration of another channel, so a station that loses its network there cannot scan elsewhere until the driver restarts;
+- a scan's dwell includes the passive tune: the station's timer starts before `set-channel` is answered. The `SCAN` line measures the tunes on the hardware.
 
-**Host tests:** `tests/rtw89_receive_service_cases.rs` in `rtw89_service_host.rs` runs the real setup over the initial-PHY fixture and the IPC seam. It covers `info` and `set-channel`, `send` failing, a country taken and answered `failed` (UZ and `00`, and three malformed ones refused), and a beacon delivered while another station's data is filtered out. The fixture's scheduler and DMA stay stopped throughout.
+**Host tests:** `tests/rtw89_receive_service_cases.rs` and `tests/rtw89_service_cases.rs` in `rtw89_service_host.rs` run the real setup over the initial-PHY fixture and the IPC seam. They cover:
+- `info` and `set-channel`;
+- `send` before and under a country, a probe request and a listen-only channel;
+- countries taken, applied or not, and malformed ones refused;
+- a scan's counts;
+- a beacon delivered while another station's data is filtered out;
+- in data mode, countries kept and refused at the admitted power.
 
-**Not run on hardware:** today's `init` lends no endpoint, so the Ryzen takes the listen path.
+`tests/rtw89_connection_cases.rs` runs the full admission, from the receive-only start to a frame sent, with the join's filter kept.

@@ -197,9 +197,11 @@ pub(crate) fn prepare<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Bo
     calibrated:&channel_rfk::Completed,owner:&Initialized,caps:&Capabilities)->Result<Prepared,Failure>{
     let bare=|cause|Failure{stage:Stage::Guard,cause,radio_stop:None,port_stop:None,selector_restore:None};
     let session=phy.bus_between_stages().command_session();let attempt=phy.attempt();
-    if phy.state()!=State::ChannelTuned||phy.identity()!=board.identity||phy.bus_between_stages().bar_len()<BAR_BYTES
-        ||tuned.attempt!=attempt||tuned.session!=session||caps.session()!=session||!calibrated.matches(tuned)
-        ||!owner.matches(attempt,session){return Err(bare(fault(0,0).into()));}
+    // A refusal names each condition that failed (bits 0-7, in this order) and the PHY state (bits 16 and up).
+    let refused=[phy.state()!=State::ChannelTuned,phy.identity()!=board.identity,phy.bus_between_stages().bar_len()<BAR_BYTES,
+        tuned.attempt!=attempt,tuned.session!=session,caps.session()!=session,!calibrated.matches(tuned),!owner.matches(attempt,session)]
+        .iter().enumerate().fold(0u32,|bits,(i,&failed)|bits|u32::from(failed)<<i);
+    if refused!=0{return Err(bare(fault(0,refused|(phy.state() as u32)<<16).into()));}
     let start=phy.bus_between_stages().now_us();let deadline=start.checked_add(TOTAL_US).ok_or_else(||bare(Fault::new(FaultKind::Clock,0,0).into()))?;
     live(phy,board,owner,start).map_err(bare)?;
     let old=io::read32(phy.bus_between_stages(),PORT).map_err(|e|bare(e.into()))?;

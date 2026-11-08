@@ -1,6 +1,6 @@
 //! Bounded wlanhw 2.0 adapter for one actually admitted channel; native construction remains separate.
 
-use crate::{btc_session::{DeviceIo,data_mode::{self,DataSession}},frames,rx,rxdesc,tx};
+use crate::{btc_session::{DeviceIo,data_mode::{self,DataSession}},country::{Limits,Refusal},frames,receive_service::Event,rx,rxdesc,tx};
 use mind::{dev,idl::{codec::List,wire,wlanhw},ipc::Endpoint,sys,time};
 
 const RECEIVE:[usize;2]=[9,10];
@@ -27,6 +27,9 @@ impl Frames{
 pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     owner:Option<&'s mut DataSession<'q,'memory,'p,'a,'command,'receive,B>>,
     pending:Option<Pending>,waiters:[Option<Waiter>;WAITERS],frames:Frames,last_ms:u64,failure:Option<Fatal>,
+    // The EIRP the channel was admitted under and the settings taken so far; `refused`: a country it cannot keep, so
+    // nothing is sent (wlanhw 1.2). `event`: one for the caller's log.
+    country:Option<(i8,u64)>,refused:bool,event:Option<Event>,
 }
 pub(crate) struct Stopped<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     pub owner:&'s mut DataSession<'q,'memory,'p,'a,'command,'receive,B>,
@@ -45,7 +48,34 @@ fn error(failure:&data_mode::Failure)->wlanhw::Error{
 impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,'a,'command,'receive,B>{
     pub(crate) fn new(owner:&'s mut DataSession<'q,'memory,'p,'a,'command,'receive,B>)->Result<Self,sys::Error>{
         if RECEIVE.into_iter().any(|slot|dev::cap_info(slot).0!=mind::abi::CAP_KIND_NONE){return Err(sys::Error::NoSlot)}
-        Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:time::monotonic_ns()/1_000_000,failure:None})
+        Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:time::monotonic_ns()/1_000_000,failure:None,
+            country:None,refused:false,event:None})
+    }
+    /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
+    pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
+    #[cfg(test)]
+    pub(crate) fn take_event(&mut self)->Option<Event>{self.event.take()}
+    fn info(&mut self)->wlanhw::Info{
+        let mut channels=List::default();channels.push(self.data().channel());
+        // Its own channels: 1 to 13 on 2.4 GHz at 20 MHz, its library's scope (wlanhw.wit 2.0, 550-NET-0059).
+        let mut supported=List::default();for ch in 1..=13{supported.push(ch);}
+        wlanhw::Info{mac:packed(self.data().mac()),bands:mind::network::BAND_2GHZ|mind::network::BAND_2GHZ_OFDM,
+            channels,supported,frame_max:frames::FRAME_MAX as u16,channel:self.data().channel()}
+    }
+    // A new country keeps the channel if it still lets the radio send there at no less EIRP than it was admitted under.
+    fn country(&mut self,code:&str,limits:&[wlanhw::Limit])->Result<(),wlanhw::Error>{
+        let channel=self.data().channel();
+        let Some((eirp,settings))=self.country.as_mut()else{return Err(wlanhw::Error::Failed)};
+        *settings=settings.saturating_add(1);
+        match Limits::accept(code,*settings,limits.iter().map(|l|(l.channel,l.eirp,l.listen))){
+            Ok(taken)=>{
+                let kept=taken.applied(channel).is_some_and(|a|!a.listen&&a.eirp_half_dbm>=*eirp);
+                self.event=Some(Event::DataCountry{code:taken.code(),channel,kept});
+                if kept{Ok(())}else{Err(wlanhw::Error::Failed)}
+            }
+            Err(Refusal::Invalid)=>Err(wlanhw::Error::Invalid),
+            Err(Refusal::Failed)=>Err(wlanhw::Error::Failed),
+        }
     }
     fn data(&mut self)->&mut DataSession<'q,'memory,'p,'a,'command,'receive,B>{self.owner.as_deref_mut().unwrap()}
     fn fail(&mut self,cause:Fatal){
@@ -109,14 +139,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         };
         if self.failure.is_some(){absent(request,call);return}
         match request{
-            wlanhw::Request::Info=>{
-                let mut channels=List::default();channels.push(self.data().channel());
-                // Its own channels: 1 to 13 on 2.4 GHz at 20 MHz, its library's scope (wlanhw.wit 2.0, 550-NET-0059).
-                let mut supported=List::default();for ch in 1..=13{supported.push(ch);}
-                let info=wlanhw::Info{mac:packed(self.data().mac()),bands:mind::network::BAND_2GHZ|mind::network::BAND_2GHZ_OFDM,
-                    channels,supported,frame_max:frames::FRAME_MAX as u16,channel:self.data().channel()};
-                let _=wlanhw::reply_info(call,Ok(&info));
-            },
+            wlanhw::Request::Info=>{let info=self.info();let _=wlanhw::reply_info(call,Ok(&info));},
             wlanhw::Request::SetChannel{channel}=>{
                 let result=if channel==self.data().channel(){Ok(())}else{Err(wlanhw::Error::Invalid)};
                 let _=wlanhw::reply_set_channel(call,result);
@@ -128,6 +151,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 if let Err(failure)=result{if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}}
             },
             wlanhw::Request::Send{frame,rate,attempts}=>{
+                if self.refused{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));return}
                 if self.pending.is_some(){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
                 let Some(deadline)=now.checked_add(u64::from(COMMAND_US/1000))else{
                     let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));self.fail(Fatal::Clock);return};
@@ -156,15 +180,21 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             },
             wlanhw::Request::Attach{..}=>{let _=wlanhw::reply_attach(call,Err(wlanhw::Error::Invalid));},
             wlanhw::Request::Kick=>{let _=wlanhw::reply_kick(call,Err(wlanhw::Error::Invalid));},
-            // wlanhw 1.2 (550-NET-0035): no country's limits applied yet, so none taken.
-            wlanhw::Request::SetCountry{..}=>{let _=wlanhw::reply_set_country(call,Err(wlanhw::Error::Failed));},
+            // wlanhw 1.2 (550-NET-0035): `failed` leaves the radio sending nothing until a country it can keep.
+            wlanhw::Request::SetCountry{code,limits,..}=>{
+                let reply=self.country(code.as_str(),limits.as_slice());
+                match reply{Ok(())=>self.refused=false,Err(wlanhw::Error::Failed)=>self.refused=true,Err(_)=>{}}
+                let info=self.info();let _=wlanhw::reply_set_country(call,reply.map(|()|&info));
+            },
         }
     }
     pub(crate) fn stop(mut self)->Stopped<'s,'q,'memory,'p,'a,'command,'receive,B>{
         self.answer_pending();let owner=self.owner.take().unwrap();let shutdown=owner.shutdown();
         Stopped{owner,failure:self.failure.take(),shutdown}
     }
-    pub(crate) fn run(mut self)->Stopped<'s,'q,'memory,'p,'a,'command,'receive,B>{while self.step(){}self.stop()}
+    pub(crate) fn run(mut self,events:&mut impl FnMut(Event))->Stopped<'s,'q,'memory,'p,'a,'command,'receive,B>{
+        loop{let more=self.step();if let Some(event)=self.event.take(){events(event)}if !more{break}}self.stop()
+    }
 }
 impl<B:DeviceIo> Drop for Service<'_,'_,'_,'_,'_,'_,'_,B>{
     fn drop(&mut self){self.answer_pending();if let Some(owner)=self.owner.as_deref_mut(){owner.shutdown();}}

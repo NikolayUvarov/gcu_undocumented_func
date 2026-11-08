@@ -83,8 +83,9 @@ fn restore_registers(bus:&mut impl RegisterIo,saved:Saved)->io::Result<()>{
             if actual!=value{return Err(bad(BASE+*at,actual));}Ok(())})();if let Err(e)=result{first.get_or_insert(e);}
     }
     for (at,value) in RF_BACKUP.iter().zip(saved.rf){
-        let result=(||{rf(bus,saved.path,*at,RF_MASK,value)?;let actual=phy::rf_read(bus,saved.path,*at,RF_MASK)?;
-            if actual!=value{return Err(bad(*at as usize,actual));}Ok(())})();if let Err(e)=result{first.get_or_insert(e);}
+        // Written back unread, as Linux's _rfk_restore_rf_reg: RF0's gain is the AGC's, and path B's registers change under
+        // Bluetooth coexistence (the Ryzen, 2026-11-06).
+        let result=rf(bus,saved.path,*at,RF_MASK,value);if let Err(e)=result{first.get_or_insert(e);}
     }
     if let Err(e)=bus.delay_us(0){first.get_or_insert(e);}first.map_or(Ok(()),Err)
 }
