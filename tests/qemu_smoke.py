@@ -7690,10 +7690,14 @@ def updater_suite(args, updater_elf):
         try:
             report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
             # Its own endpoint, the clock, the file system, the loader's client for helpers only (109-KRN-0117), init
-            # (badged for reboot), the log every service has, the flow grant, TLS, the firmware privilege, the parser;
-            # nothing else.
+            # (badged for reboot), the log every service has, the flow grant, TLS, its own client of the block store while
+            # the store runs (351-KRN-0218), the firmware privilege, the parser; nothing else.
             held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
-            assert held and held[1] == " 1:1 2:1 3:1 5:1 11:1 12:1 18:1 20:1 27:16 28:1", report
+            store = " 25:1" if "blockstore" in vm.services() else ""
+            assert held and held[1] == f" 1:1 2:1 3:1 5:1 11:1 12:1 18:1 20:1{store} 27:16 28:1", report
+            if store:  # the owner's badge, OWNER_UPDATER with get, put and publish (0x17 = 23)
+                caps = vm.command(f"stat caps {vm.services()['updater']}", raw=True)
+                assert re.search(r"^SLOT=25 GEN=\d+ KIND=1 .*BADGE=23 ", caps, re.M), caps
             require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
             for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
                 require(vm.command(command), answer)

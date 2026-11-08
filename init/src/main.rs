@@ -842,6 +842,12 @@ impl Init {
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
                 // A loader client that only starts helpers: each check parses in a parser of its own (109-KRN-0117).
                 grants.add(SLOT_LOADER, self.badged(&mut minted, "loader", mind::process::BADGE_HELPERS_ONLY)?, CLIENT);
+                // Its own client of the block store, badged with its owner (351-KRN-0218): its pins and its account are its own,
+                // so the shell's client cannot end them. It starts after the store; without the store it runs as before.
+                if self.present("blockstore") {
+                    let badge = mind::blockstore::OWNER_UPDATER | mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH;
+                    grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", badge)?, CLIENT);
+                }
             }
             // The Effector agent's gateway (750-KRN-0119, `mind::effector`), only in a mode: the memory and the log to read,
             // the volumes to read, its private directory (`private_dir_of`), the screen to capture, as the shell's
