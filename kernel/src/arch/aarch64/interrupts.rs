@@ -92,7 +92,7 @@ pub unsafe fn init() {
     load();
     let frequency: u64; asm!("mrs {}, cntfrq_el0", out(reg) frequency);
     TIMER_STEP.store(frequency * TICK_MS / 1000, Ordering::Release);
-    let now: u64; asm!("isb", "mrs {}, cntvct_el0", out(reg) now);
+    let now = super::clock::count();
     NEXT_TICK.store(now, Ordering::Relaxed);
     rearm();
     asm!("msr cntv_ctl_el0, {}", in(reg) 1u64); // enabled, not masked
@@ -136,7 +136,7 @@ pub unsafe fn load() {
 
 // The next tick a step after the last one, not after now; returns how many ticks passed (more than one when taken late).
 unsafe fn rearm() -> u64 {
-    let (step, now): (u64, u64) = (TIMER_STEP.load(Ordering::Relaxed).max(1), { let c: u64; asm!("isb", "mrs {}, cntvct_el0", out(reg) c); c });
+    let (step, now): (u64, u64) = (TIMER_STEP.load(Ordering::Relaxed).max(1), super::clock::count());
     let next = NEXT_TICK.load(Ordering::Relaxed);
     let passed = if now >= next { (now - next) / step + 1 } else { 0 };
     let next = next + passed * step;

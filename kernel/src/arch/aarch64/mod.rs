@@ -6,6 +6,8 @@ pub mod board;
 pub mod clock;
 pub mod context;
 pub mod cpu;
+#[path = "../../../../common/counter.rs"]
+pub mod counter;
 pub mod devicetree;
 #[path = "../../../../common/fdt.rs"]
 pub mod fdt;

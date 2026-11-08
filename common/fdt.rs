@@ -279,6 +279,15 @@ pub struct Gic {
     phandle: Option<u32>,
 }
 
+/// A counter erratum a timer node names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Erratum {
+    /// `allwinner,erratum-unknown1`, the A64's: a read can be wrong, its low bits all ones or all zeros.
+    Sun50iA64,
+    /// `fsl,erratum-a008585`, Freescale's: a read can be wrong, until two reads agree.
+    FslA008585,
+}
+
 /// PSCI's conduit, from `/psci`'s `method`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Conduit { Smc, Hvc }
@@ -292,8 +301,8 @@ pub struct Board {
     pub gic: Option<Gic>,
     /// The EL1 virtual timer's interrupt ID (a PPI: 16 + its number), from `arm,armv8-timer`'s third interrupt.
     pub timer: Option<u32>,
-    /// The timer node names a known erratum of its counter (the A64's `allwinner,erratum-unknown1`).
-    pub timer_erratum: bool,
+    /// A known erratum of the counter its timer node names.
+    pub timer_erratum: Option<Erratum>,
     pub psci: Option<Conduit>,
     pub console: Option<Uart>,
     /// A PL031 real-time clock and its SPI.
@@ -359,7 +368,7 @@ pub fn board(tree: &Tree) -> Board {
     let timer_node = enabled_compatible(tree, &["arm,armv8-timer"]);
     // The third of the timer's four interrupts is the EL1 virtual timer's, a PPI (kind 1).
     let timer = timer_node.zip(gic.as_ref()).and_then(|(n, g)| interrupt(&n, g, 2)).filter(|&(kind, n)| kind == 1 && n < 16).map(|(_, n)| 16 + n);
-    let timer_erratum = timer_node.is_some_and(|n| n.has("allwinner,erratum-unknown1") || n.has("fsl,erratum-a008585"));
+    let timer_erratum = timer_node.and_then(|n| if n.has("allwinner,erratum-unknown1") { Some(Erratum::Sun50iA64) } else if n.has("fsl,erratum-a008585") { Some(Erratum::FslA008585) } else { None });
     let psci = enabled_compatible(tree, &["arm,psci-1.0", "arm,psci-0.2"]).and_then(|n| match n.string("method") {
         Some(b"smc") => Some(Conduit::Smc), Some(b"hvc") => Some(Conduit::Hvc), _ => None,
     });

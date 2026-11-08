@@ -24,7 +24,7 @@ fn qemus_gicv2_tree_through_u_boot() {
     let gic = b.gic.unwrap();
     assert_eq!((gic.version, gic.distributor, gic.cpu_interface, gic.v2m, gic.redistributor, gic.its), (2, 0x0800_0000, 0x0801_0000, 0x0802_0000, 0, 0));
     assert_eq!(b.timer, Some(27));
-    assert!(!b.timer_erratum);
+    assert_eq!(b.timer_erratum, None);
     assert_eq!(b.psci, Some(Conduit::Hvc));
     assert_eq!(b.console, Some(Uart { base: 0x0900_0000, kind: UartKind::Pl011, spi: Some(1), speed: None }));
     assert_eq!(b.rtc, Some((0x0901_0000, Some(2))));
@@ -53,7 +53,7 @@ fn the_pinephones_tree() {
     let gic = b.gic.unwrap();
     assert_eq!((gic.version, gic.distributor, gic.cpu_interface, gic.v2m), (2, 0x01C8_1000, 0x01C8_2000, 0));
     assert_eq!(b.timer, Some(27));
-    assert!(b.timer_erratum, "the A64's counter erratum is named");
+    assert_eq!(b.timer_erratum, Some(fdt::Erratum::Sun50iA64), "the A64's counter erratum is named");
     assert_eq!(b.psci, Some(Conduit::Smc));
     // UART0 through the alias serial0, a DesignWare 16550 with 32-bit registers, SPI 0, 115200 from stdout-path.
     assert_eq!(b.console, Some(Uart { base: 0x01C2_8000, kind: UartKind::Ns16550 { shift: 2, width: 4, designware: true }, spi: Some(0), speed: Some(115_200) }));
