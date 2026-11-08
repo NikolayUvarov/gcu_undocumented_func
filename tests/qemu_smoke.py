@@ -108,12 +108,18 @@ class VM:
         if self.arch == "aarch64":
             # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
             # GOP framebuffer, a VirtIO keyboard (sendkey) and tablet; the boot disk is a VirtIO block device.
-            variables = Path(tempfile.mkdtemp(prefix="mind-vars-")) / "vars.fd"
-            self.temporary.append(variables.parent)  # 64 MiB a boot: removed in close
-            shutil.copyfile(args.aavmf_vars, variables)
-            machine = ["-machine", getattr(args, "machine", None) or "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra else ["-cpu", "max"]),
-                       "-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}",
-                       "-device", "ramfb", *([] if usb_input else ["-device", "virtio-keyboard-pci"]), *([] if "virtio-tablet-pci" in extra or usb_input else ["-device", "virtio-tablet-pci"])]
+            # With --uboot (100000-PRT-0009): U-Boot's UEFI and no AAVMF, as Tow-Boot gives the PinePhone; its GOP is a
+            # bochs-display, as U-Boot drives no ramfb.
+            if uboot := getattr(args, "uboot", None):
+                firmware, display = ["-bios", uboot], "bochs-display"
+            else:
+                variables = Path(tempfile.mkdtemp(prefix="mind-vars-")) / "vars.fd"
+                self.temporary.append(variables.parent)  # 64 MiB a boot: removed in close
+                shutil.copyfile(args.aavmf_vars, variables)
+                firmware = ["-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}"]
+                display = "ramfb"
+            machine = ["-machine", getattr(args, "machine", None) or "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra or getattr(args, "cpu_model", None) else ["-cpu", "max"]),
+                       *firmware, "-device", display, *([] if usb_input else ["-device", "virtio-keyboard-pci"]), *([] if "virtio-tablet-pci" in extra or usb_input else ["-device", "virtio-tablet-pci"])]
         else:
             machine = ["-bios", args.firmware, *(["-machine", "pc,i8042=off"] if usb_input else []), *(["-machine", m] if (m := getattr(args, "machine", None)) else [])]
         self.process = subprocess.Popen(
@@ -1112,8 +1118,12 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
-    # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked.
-    assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
+    # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked. Without ACPI (a device
+    # tree, 100000-PRT-0009) there is no DSDT to read: the policy is unknown, and a radio sends nothing.
+    if "acpi=off" in (getattr(vm.args, "machine", None) or ""):
+        require(log, "[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN (no-dsdt): A RADIO SENDS NOTHING")
+    else:
+        assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
     if vm.arch != "aarch64":
         # 550-KRN-0061, 213-KRN-0114: QEMU has no Broadcom or Realtek card, so init starts none of their drivers.
         for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
@@ -3356,7 +3366,8 @@ def protection_check(vm):
     assert line, vm.log[-2000:]
     names, model = line[1].split(), getattr(vm.args, "cpu_model", None)
     if vm.arch == "aarch64":
-        assert names == ["PXN", "PAN"], line[0]  # -cpu max has PAN (ARMv8.1)
+        # -cpu max has PAN (ARMv8.1); the ARMv8.0 cores (the PinePhone's Cortex-A53) have none, so PXN alone.
+        assert names == (["PXN"] if model in ("cortex-a53", "cortex-a57", "cortex-a72") else ["PXN", "PAN"]), line[0]
     elif model in (None, "max"):
         assert names == (["SMEP", "SMAP", "UMIP"] if model == "max" else ["NONE"]), line[0]
     if "protection" in (getattr(vm.args, "kernel", None) or ""):
@@ -14098,37 +14109,32 @@ def efivar_check(args, disk):
 
 
 def devicetree_suite(args, disk):
-    """210-KRN-0029, for 210-APL-0002: QEMU virt without ACPI, where the firmware hands over a device tree instead; the
-    bootloader passes its address in BootInfo and the kernel checks its header. The kernel has no console there until
-    it reads the board from the tree, and init's services soon write over its lines on the screen, so the machine is
-    stopped once the bootloader names the tree and run on in 10 ms steps until the kernel's line is on the screen. The
-    steps go through QMP itself: through the monitor's typing pace each let the machine run 110 ms, and a slow runner
-    passed the line between two looks (210-KRN-0055)."""
+    """210-KRN-0029, 100000-PRT-0009: QEMU virt without ACPI, where AAVMF hands over a device tree instead. The bootloader
+    passes its address in BootInfo and writes its own lines to the PL011 the tree's stdout-path names; the kernel checks
+    the header, reads the board from the tree (the GIC, the virtual timer, the CPUs through PSCI, the PL011 and the ECAM)
+    and boots to the shell with every CPU online. U-Boot's UEFI with GICv2 is its own group (--uboot), with the PL031."""
     if args.arch != "aarch64":
         print("SKIP: devicetree: OVMF on x86 hands over no device tree", flush=True)
         return
     machine = (args.machine or "virt,gic-version=3,highmem=off") + ",acpi=off"
-    vm = VM(argparse.Namespace(**{**vars(args), "machine": machine}), disk.relative_to(ROOT).as_posix(), prompt=False)
+    vm = VM(argparse.Namespace(**{**vars(args), "machine": machine, "uboot": None}), disk.relative_to(ROOT).as_posix())
     try:
-        deadline = time.monotonic() + 90
-        while not (loader := re.search(r"BOOT: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES", vm.log)) and time.monotonic() < deadline and vm.process.poll() is None:
-            time.sleep(0.02)
-            vm.collect()
-        vm.qmp("stop")
-        assert loader, vm.log[-3000:]
-        kernel = None
-        for _ in range(500):
-            kernel = next((m for line in screen_text(vm) if (m := re.search(r"MIND CORE KERNEL: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES, VERSION (\d+)", line))), None)
-            if kernel:
-                break
-            vm.qmp("cont")
-            time.sleep(0.01)
-            vm.qmp("stop")
-        assert kernel and kernel[1] == loader[1] and kernel[2] == loader[2] and int(kernel[3]) >= 16, (loader, kernel)
+        vm.collect()
+        require(vm.log, "BOOT: THE LINE: PL011 AT 0x9000000, FROM THE DEVICE TREE")
+        loader = re.search(r"BOOT: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES", vm.log)
+        kernel = re.search(r"MIND CORE KERNEL: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES, VERSION (\d+)", vm.log)
+        assert loader and kernel and kernel[1] == loader[1] and kernel[2] == loader[2] and int(kernel[3]) >= 16, (loader, kernel, vm.log[-3000:])
+        board = re.search(r"MIND CORE KERNEL: BOARD FROM THE DEVICE TREE: GICV(\d) GICD=(0x[0-9a-f]+) .*UART=(0x[0-9a-f]+) PL011 .*LINE (\d+) TIMER PPI (\d+) CPUS (\d+) PSCI (\w+) RTC=(0x[0-9a-f]+) ECAM (\w+)", vm.log)
+        assert board, vm.log[-3000:]
+        version = "2" if "gic-version=2" in machine else "3"
+        # AAVMF keeps the PL031 for its own GetTime and hands on a tree where it is not enabled: no RTC is read from it.
+        assert board.groups() == (version, "0x8000000", "0x9000000", "1", "27", str(vm.cpus), "HVC", "0x0", "YES"), board.groups()
+        online = vm.command("cpus")
+        assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
+        print(f"PASS: devicetree: without ACPI the loader's line and the kernel's board come from the tree (GICv{version}, "
+              f"the PL011, the timer's PPI 27, {vm.cpus} CPUs through PSCI, the ECAM; AAVMF's PL031 left out as disabled); the shell with every CPU online", flush=True)
     finally:
         vm.close()
-    print(f"PASS: devicetree: on virt without ACPI the bootloader passes the device tree at {loader[1]} ({loader[2]} bytes) "
-          f"and the kernel finds an FDT header there (version {kernel[3]})", flush=True)
 
 
 def bar_move_check(args, disk):
@@ -14447,6 +14453,7 @@ def main():
     parser.add_argument("--memory", help="QEMU -m (default 512; e.g. 6G: RAM above 4 GiB)")
     parser.add_argument("--disk", choices=("default", "nvme"), default="default", help="the boot disk's bus: nvme puts it on an NVMe controller (issue 205)")
     parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")
+    parser.add_argument("--uboot", help="aarch64: U-Boot's qemu_arm64 u-boot.bin as the firmware in place of AAVMF, no ACPI with --machine virt,acpi=off (100000-PRT-0009)")
     parser.add_argument("--aavmf-vars", default="/usr/share/AAVMF/AAVMF_VARS.fd")
     parser.add_argument("--cpu-model", help="QEMU -cpu model, e.g. max: AVX state saved with XSAVE (issue 153)")
     parser.add_argument("--firmware", default="OVMF.fd")

@@ -66,8 +66,17 @@ pub fn without<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
+// GICv2 under a device tree, which names no interface numbers: CPU `index`'s own, as the distributor's banked
+// GICD_ITARGETSR0 reads on that CPU (zero on a GIC of one interface: the number stays).
+unsafe fn own_interface(index: usize) {
+    if !v2() || !super::board::INTERFACE_FROM_GIC.load(Ordering::Relaxed) { return; }
+    let mask = read32(gicd() + 0x800) & 0xFF;
+    if mask != 0 { super::board::set(&super::board::INTERFACE[index], mask.trailing_zeros() as usize); }
+}
+
 /// The distributor, this CPU's redistributor and CPU interface, and the tick.
 pub unsafe fn init() {
+    own_interface(0);
     let lines = ((read32(gicd() + 4) & 0x1F) as usize + 1) * 32;
     if v2() {
         // Device lines (SPIs) to the boot CPU's interface (GICD_ITARGETSR, a byte each); the non-secure group.
@@ -106,6 +115,7 @@ pub fn redistributor() -> usize {
 // This CPU's redistributor and CPU interface.
 pub unsafe fn load() {
     if v2() {
+        own_interface(crate::cpu::id());
         // SGIs and PPIs are banked per CPU in the distributor; the CPU interface takes every priority.
         write32(gicd() + 0x100, 1 << timer_ppi() | 1 << SGI_STOP | 1 << SGI_TICK | 1 << SGI_WAKE);
         write32(gicc() + 0x4, 0xFF); // GICC_PMR
