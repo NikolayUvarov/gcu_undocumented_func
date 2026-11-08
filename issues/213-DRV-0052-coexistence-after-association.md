@@ -64,6 +64,11 @@ The source and the layouts: [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852b
 - **The gateway pings,** every 2 minutes: 0 to 33 % lost.
 - **After 9 minutes** the data mode stopped: one frame's release did not come in its time (`Tx(Io(Timeout))` after 5 submissions). That is [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)'s open problem, not the inquiry.
 
+**With `KEEP_LATE`** (`rtw89_late1`, 1b4e3942):
+- **About 20 minutes:** four inquiries passed, and five late frames were answered as not acknowledged, their releases coming in the extra second. The gateway pings lost 0 to 33 %.
+- **Then the queue's own budget** ran out inside a step, before the service's 90 ms (`Tx(Io(Timeout))`, 7 submissions).
+- **Since then** the queue gets the late second at once, so only the service's deadlines end a frame (`rtw89_late2`).
+
 One run on that machine (MC-12.1). The acceptance criterion, an hour across ten inquiries, is not met yet.
 
 ## Related
