@@ -116,6 +116,9 @@ A64_GROUPS=(
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,fill --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: network above 4 GiB|$A64 --suites net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
+    # U-Boot's UEFI and no ACPI, as Tow-Boot gives the PinePhone: the board from the device tree (100000-PRT-0009), on the
+    # phone's core: no PAN, and no RNDR, so no device key for net's SFTP login (net runs on the other groups).
+    "aarch64: the board from a device tree, under U-Boot|$A64 --suites normal,smp --uboot \$(scripts/fetch_uboot.sh) --machine virt,acpi=off,gic-version=2,highmem=off --cpu-model cortex-a53"
     "aarch64: NVMe boot disk|$A64 --suites vfs --disk nvme"
     "aarch64: 16 CPUs|$A64 --cpus 16 --suites normal"
 )

@@ -201,6 +201,12 @@ jobs:
           - group: GICv2 with GICv2m (a Raspberry Pi 4's interrupt controller)
             suites: normal,smp,net
             machine: virt,gic-version=2,highmem=off
+          - group: the board from a device tree, under U-Boot's UEFI without ACPI (as Tow-Boot gives the PinePhone)
+            # the phone's core, Cortex-A53: no PAN, no RNDR (so no device key for net's SFTP login)
+            suites: normal,smp
+            machine: virt,acpi=off,gic-version=2,highmem=off
+            uboot: true
+            cpu_model: cortex-a53
           - group: NVMe boot disk
             suites: vfs
             disk: nvme
@@ -225,7 +231,7 @@ jobs:
           python3 tests/usb_image_smoke.py --arch aarch64 --image /tmp/mind-core-usb-aarch64.img
       - name: QEMU suites on virt, four CPUs (or the group's count)
         if: ${{ matrix.suites }}
-        run: python3 tests/qemu_smoke.py --arch aarch64 --suites ${{ matrix.suites }} ${{ matrix.cpus && format('--cpus {0}', matrix.cpus) || '' }} ${{ matrix.machine && format('--machine {0}', matrix.machine) || '' }} ${{ matrix.memory && format('--memory {0}', matrix.memory) || '' }} ${{ matrix.disk && format('--disk {0}', matrix.disk) || '' }}
+        run: python3 tests/qemu_smoke.py --arch aarch64 --suites ${{ matrix.suites }} ${{ matrix.cpus && format('--cpus {0}', matrix.cpus) || '' }} ${{ matrix.machine && format('--machine {0}', matrix.machine) || '' }} ${{ matrix.memory && format('--memory {0}', matrix.memory) || '' }} ${{ matrix.disk && format('--disk {0}', matrix.disk) || '' }} ${{ matrix.uboot && '--uboot $(scripts/fetch_uboot.sh)' || '' }} ${{ matrix.cpu_model && format('--cpu-model {0}', matrix.cpu_model) || '' }}
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
