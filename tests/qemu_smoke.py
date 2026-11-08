@@ -7723,10 +7723,14 @@ def updater_suite(args, updater_elf):
         try:
             report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
             # Its own endpoint, the clock, the file system, the loader's client for helpers only (109-KRN-0117), init
-            # (badged for reboot), the log every service has, the flow grant, TLS, the firmware privilege, the parser;
-            # nothing else.
+            # (badged for reboot), the log every service has, the flow grant, TLS, its own client of the block store while
+            # the store runs (351-KRN-0218), the firmware privilege, the parser; nothing else.
             held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
-            assert held and held[1] == " 1:1 2:1 3:1 5:1 11:1 12:1 18:1 20:1 27:16 28:1", report
+            store = " 25:1" if "blockstore" in vm.services() else ""
+            assert held and held[1] == f" 1:1 2:1 3:1 5:1 11:1 12:1 18:1 20:1{store} 27:16 28:1", report
+            if store:  # the owner's badge, OWNER_UPDATER with get, put and publish (0x17 = 23)
+                caps = vm.command(f"stat caps {vm.services()['updater']}", raw=True)
+                assert re.search(r"^SLOT=25 GEN=\d+ KIND=1 .*BADGE=23 ", caps, re.M), caps
             require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
             for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
                 require(vm.command(command), answer)
@@ -9810,6 +9814,23 @@ def wifi_join_check(vm):
           "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it; a change to RU "
           "while joined left the access point, and the station joined again under RU. After the restart the radio named its own "
           "13 channels apart from US's 11, and RU and the world domain were planned over all 13 (550-NET-0059)", flush=True)
+    # 550-NET-0061: a radio that restarted (init starts wlansim again, as it starts rtw89_wifi again after its data mode
+    # failed) has no channel set and no country, and sends nothing. Once the network is lost the station notices within
+    # wlan's RESTART_CHECK_MS, gives the radio the country it ran under, and the automatic join joins again by itself.
+    # The network forgotten above is remembered again first: the automatic join joins only a remembered one.
+    run("wifi leave", 30, "[WIFI] LEFT")
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    radio = vm.services()["wlansim"]
+    require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
+    restarted, joined = "[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY RU AGAIN", "[WLAN] AUTO-JOIN MIND-TEST: JOINED"
+    after = wlan_until(restarted, 150).rpartition(restarted)[2]  # `logs` drains: each read holds what came since the last
+    if joined not in after:
+        after += wlan_until(joined, 120)
+    assert vm.services()["wlansim"] != radio, vm.services()
+    require(vm.command(f"logs {vm.services()['wlansim']}", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    print("PASS: a restarted radio (wlansim started again by init, no channel and no country): the station noticed, gave it "
+          "RU again and joined MIND-TEST by itself (550-NET-0061)", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
