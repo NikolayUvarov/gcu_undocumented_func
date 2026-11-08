@@ -29,6 +29,8 @@ pub static GICC: AtomicUsize = AtomicUsize::new(0x0801_0000); // GICv2: the CPU 
 pub static V2M: AtomicUsize = AtomicUsize::new(0); // GICv2m MSI frame; 0: none
 // GICv2: each CPU's interface number (SGI targets), in cpu.rs's order of CPUs.
 pub static INTERFACE: [AtomicUsize; crate::cpu::MAX] = [const { AtomicUsize::new(0) }; crate::cpu::MAX];
+// The counter's erratum the device tree names for the A64: every read of the count retried as Linux does (clock.rs).
+pub static COUNTER_SUN50I: AtomicBool = AtomicBool::new(false);
 // Set for a device tree, which names no interface numbers: each CPU reads its own from the distributor (interrupts.rs).
 pub static INTERFACE_FROM_GIC: AtomicBool = AtomicBool::new(false);
 

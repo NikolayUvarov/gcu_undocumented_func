@@ -76,8 +76,16 @@ pub unsafe fn init(address: u64) -> bool {
     if b.gic.is_none() { crate::serial_print("MIND CORE KERNEL: DEVICE TREE: NO GIC OF A KNOWN KIND\n"); }
     if left > 0 { let _ = writeln!(out, "MIND CORE KERNEL: DEVICE TREE: {} CPUS LEFT OUT (NOT STARTED THROUGH PSCI)\r", left); }
     if b.psci.is_none() { crate::serial_print("MIND CORE KERNEL: DEVICE TREE: NO PSCI 0.2: ONE CPU, NO RESTART\n"); }
-    // The A64's counter can jump (its erratum); the kernel does not work around it yet (100000, stage 1).
-    if b.timer_erratum { crate::serial_print("MIND CORE KERNEL: DEVICE TREE: THE TIMER NAMES A COUNTER ERRATUM, NOT WORKED AROUND YET\n"); }
+    // The A64's counter can jump (its erratum): every read of it is retried as Linux does (100000-PRT-0012). Freescale's
+    // erratum, whose reads are retried until two agree, is named only.
+    match b.timer_erratum {
+        Some(fdt::Erratum::Sun50iA64) => {
+            board::COUNTER_SUN50I.store(true, Ordering::Relaxed);
+            crate::serial_print("MIND CORE KERNEL: DEVICE TREE: THE TIMER NAMES THE A64'S COUNTER ERRATUM: EACH READ RETRIED WHILE ITS LOW BITS ARE ALL ONES OR ZEROS\n");
+        }
+        Some(fdt::Erratum::FslA008585) => crate::serial_print("MIND CORE KERNEL: DEVICE TREE: THE TIMER NAMES FREESCALE'S COUNTER ERRATUM A-008585, NOT WORKED AROUND\n"),
+        None => {}
+    }
     if let Some(f) = b.framebuffer { let _ = writeln!(out, "MIND CORE KERNEL: DEVICE TREE: A SIMPLE FRAMEBUFFER {}x{} AT {:#x}, NOT USED\r", f.width, f.height, f.base); }
     true
 }
