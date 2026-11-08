@@ -74,3 +74,37 @@ tasks/owner handling it, the agreed contract location/version and the first
 build available for joint acceptance. Keep the binding outcome in the tasks
 and this request on main. Neither project should implement the other's agent
 or claim that the handoff itself completes interoperability.
+
+---
+
+# Serial ports through Effector: the console over RS-232 and RS-485, and MIND Link (a second request)
+
+**Asked by:** the kernel session, 2026-11-08, at the maintainer's request of that day · **Status:** open, not numbered yet · **Main task:** [100000](100000-a-phone-the-pinephone-first.md) (stage 0 and 1: the PinePhone's first test run), and EFF's own main task where EFF places it · **Constitution:** MC-7.1, MC-7.4, MC-7.5, MC-7.6, MC-12.1, MC-12.3, MC-12.4 · **The specification:** [docs/remote-serial.md](../docs/remote-serial.md) ([Russian](../docs/remote-serial_RU.md)), version 0.1, a proposal
+
+**The maintainer's request (2026-11-08):**
+- a remote-control module, so that a console can be relayed through Effector over both RS-232 and RS-485;
+- the Effector agent on a Linux or Windows host reaches MIND Core through MIND Link;
+- EFF explains to the Effector project what to build there for remote work with serial ports, and hands it over.
+
+**Asked of EFF:**
+1. **Hand section 4 of the specification to the Effector project,** as a task of its own there (beside its task 81). Section 4 is the serial module of the Effector agent on Linux and Windows:
+   - the ports and the host owner's policy;
+   - the line, with RS-485's direction;
+   - the console session: a ring with offsets, a capture, idempotent writes, the lease, the stream, the audit;
+   - the link mode, through effector485 as a supervised child;
+   - safety, platforms and tests.
+2. **Bring back the Effector project's answer** on `internal-dev-messages`:
+   - the names it chose for the calls;
+   - how streams travel between the server and the agent;
+   - the first agent revision to try;
+   - the setup steps for a host's owner.
+3. **Record the outcome on main:**
+   - in an EFF task;
+   - later in docs/effector.md, a section on serial ports with the hosts that have a cable.
+4. **Later, not for the phone:** the same console contract in MIND Core's own `effector`, for a MIND Core machine hosting another machine's cable through `usb_serial` (the specification, section 5.2).
+
+**What EFF needs of others:**
+- LNK's part: effector485's console stream, its supervised mode and a versioned API ([requests-LNK.md](requests-LNK.md), the same day);
+- the kernel session's part: the board's UART (100000-PRT-0009, PRT-0010, KRN-0171).
+
+**Nothing of this exists yet** (MC-12.3). The specification's section 7 lists what is decided and what is open.

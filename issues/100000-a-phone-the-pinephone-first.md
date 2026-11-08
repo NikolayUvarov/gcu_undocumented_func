@@ -45,6 +45,7 @@ As found on 2026-10-25 (sources at the end). Each point is checked on the phone 
 **The way to it, until Wi-Fi exists (stage 3):** the link over the headphone jack's UART, with `effector485` on the host.
 - That cable carries the console, the files, the log, the programs and updates (a request to `LNK`, `requests-LNK.md`).
 - The agent inside MIND Core waits for a network.
+- **Through Effector, from anywhere** (the maintainer, later the same day): the Effector agent on the Linux or Windows host that holds the cable relays the console (RS-232 or RS-485) and, in link mode, effector485's operations. The specification is [docs/remote-serial.md](../docs/remote-serial.md) ([Russian](../docs/remote-serial_RU.md)): the agent's part goes to the Effector project through `EFF` ([requests-EFF.md](requests-EFF.md)), effector485's to `LNK` ([requests-LNK.md](requests-LNK.md)). Nothing of it exists yet.
 
 **In QEMU first:**
 - **`virt`, with U-Boot's UEFI (`u-boot-qemu`'s `qemu_arm64`) and no ACPI,** as Tow-Boot gives the phone, on GICv2 and four Cortex-A53;
