@@ -102,6 +102,8 @@ $system = New-Machine; $script:vars.Remove('BootCurrent')
 Check 'no BootCurrent is refused' (Refusal { Invoke-Once $system -1 $false }) 'no BootCurrent: Windows was not started by UEFI'
 $system = New-Machine; $script:disks = @($script:disks[0])
 Check 'no MIND Core disk is refused' (Refusal { Invoke-Once $system -1 $false }) 'no disk with a MIND CORE volume followed by MIND LOG: write the image first'
+$system = New-Machine; $script:disks = @()
+Check 'no MBR disk at all is refused the same way' (Refusal { Invoke-Once $system -1 $false }) 'no disk with a MIND CORE volume followed by MIND LOG: write the image first'
 $system = New-Machine; $script:disks += [pscustomobject]@{ Number = 3; Model = 'second'; Serial = 'S2'; Labels = @('MIND CORE', 'MIND LOG') }
 Check 'two MIND Core disks are refused' (Refusal { Invoke-Once $system -1 $false }) 'several MIND Core disks: name one with -Disk (2, 3)'
 Check 'a named disk without the volumes is refused' (Refusal { Invoke-Once $system 1 $false }) 'disk 1 has no MIND CORE volume followed by MIND LOG'
@@ -135,6 +137,8 @@ Check 'no mark at all is said' (@($script:out | Where-Object { $_ -like '*the lo
 $system = New-Machine; Show-Status $system
 Check 'status writes nothing' $script:writes.Count 0
 Check 'status names the entries and the disk' (($script:out | Where-Object { $_ -match '^  Boot0000\* Windows Boot Manager \(Windows, booted now\)$|^MIND Core disk: disk 2 \(USB stick\), entry none yet' }).Count) 2
+$system = New-Machine; $script:disks = @(); Show-Status $system
+Check 'status without a stick says so' (@($script:out | Where-Object { $_ -like 'MIND Core disk: no disk with a MIND CORE volume*' }).Count) 1
 
 if ($script:failed) { [Console]::Out.WriteLine('boot_switch.ps1: FAILED'); exit 1 }
 [Console]::Out.WriteLine('boot_switch.ps1: all passed'); exit 0

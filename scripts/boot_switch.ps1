@@ -131,7 +131,8 @@ function Test-Order($Boot) {
 
 # Disks whose first partition is the MIND CORE volume and whose second is MIND LOG; the one named, or the only one.
 function Select-MindDisk($Disks, [int]$Requested) {
-    $found = @($Disks | Where-Object { $_.Labels.Count -ge 2 -and $_.Labels[0] -eq $BOOT_VOLUME -and $_.Labels[1] -eq $LOG_VOLUME })
+    # No MBR disk at all binds $null, which a pipeline would still pass once (the DEXP, 2026-11-08).
+    $found = @(foreach ($d in @($Disks)) { if ($null -ne $d -and $d.Labels.Count -ge 2 -and $d.Labels[0] -eq $BOOT_VOLUME -and $d.Labels[1] -eq $LOG_VOLUME) { $d } })
     if ($Requested -ge 0) {
         $found = @($found | Where-Object { $_.Number -eq $Requested })
         if ($found.Count -eq 0) { throw [Refused]::new("disk $Requested has no $BOOT_VOLUME volume followed by $LOG_VOLUME") }
