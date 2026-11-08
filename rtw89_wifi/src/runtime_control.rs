@@ -56,6 +56,18 @@ impl<B:DeviceIo> Transport for Runtime<'_,'_,'_,'_,'_,B>{
 }
 impl<B:DeviceIo> DataSession<'_,'_,'_,'_,'_,'_,B>{
     pub(super) fn reconcile(&mut self,deadline:u64)->Result<Progress,Cause>{
+        match self.reconcile_once(deadline){
+            // OUTLAST_SER: a recovery that began after the operation's checks holds the radio off; it is outlasted and the
+            // reconcile made once more (the Ryzen, 2026-11-08: Coexistence(RadioOff) 60 ms after two recoveries).
+            Err(Cause::Coexistence(btc_context::Error::RadioOff)) if super::OUTLAST_SER=>{
+                let before=self.recoveries;let deadline=self.outlast_ser(deadline,true)?;
+                if self.recoveries==before{return Err(Cause::Coexistence(btc_context::Error::RadioOff))}
+                self.reconcile_once(deadline)
+            },
+            other=>other,
+        }
+    }
+    fn reconcile_once(&mut self,deadline:u64)->Result<Progress,Cause>{
         let filter=self.prepared.station.current_filter().ok_or(Cause::State)?;
         let mut context=self.session.btc.take().ok_or(Cause::State)?;
         let mut transport=Runtime{session:&mut self.session,queue:self.queue,counts:&mut self.counts,

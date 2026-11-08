@@ -69,7 +69,14 @@ The source and the layouts: [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852b
 - **Then the queue's own budget** ran out inside a step, before the service's 90 ms (`Tx(Io(Timeout))`, 7 submissions).
 - **Since then** the queue gets the late second at once, so only the service's deadlines end a frame (`rtw89_late2`).
 
-One run on that machine (MC-12.1). The acceptance criterion, an hour across ten inquiries, is not met yet.
+**`rtw89_late2`** (c9cbde29):
+- **About 25 minutes:** five inquiries passed, and 15 late frames were answered and released. The gateway pings lost 0 to 33 % (one round 870 ms at most).
+- **Then two firmware recoveries, 60 ms apart** (`CMAC_ERR_ISR` 8), were outlasted. The next coexistence reconcile found the radio off (`Coexistence(RadioOff)`), and the data mode stopped.
+- **Since then** `OUTLAST_SER` outlasts a recovery found in the reconcile too, and the reconcile runs again (`rtw89_late3`).
+
+**Across these runs:** 14 whole inquiries passed with the station joined, and none lost the network. Each stop was another cause: a late frame's queue budget, or a recovery during the reconcile.
+
+One machine and one AP (MC-12.1). The acceptance criterion, an hour across ten inquiries in one run, is not met yet.
 
 ## Related
 
