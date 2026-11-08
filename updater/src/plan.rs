@@ -80,6 +80,19 @@ pub fn raise(records: [Option<Record>; 2], running: u8, minimum: u64, version: u
     (minimum > floor(records) && confirmed && version >= minimum).then(|| next(records, Record { floor: minimum, ..current })).flatten()
 }
 
+/// The last known good release among those the block store keeps (351-UPD-0033): the newest below the running one
+/// and not below `minimum`, which a rollback may boot; none while the running version is not known.
+pub fn last_good(versions: &[u64], running: u64, minimum: u64) -> Option<u64> {
+    if running == 0 { return None; }
+    versions.iter().copied().filter(|&v| v < running && v >= minimum).max()
+}
+
+/// Whether the store keeps release `version` of `versions` (351-UPD-0033, MC-9.3): the running one, the last known
+/// good, and one staged above the running one. While the running version is not known, it keeps all of them.
+pub fn keeps(version: u64, versions: &[u64], running: u64, minimum: u64, staged: u64) -> bool {
+    running == 0 || version == running || Some(version) == last_good(versions, running, minimum) || (staged > running && version == staged)
+}
+
 /// The version a boot manifest's `version` header line names, 0 without one: as the bootloader reads it (351-UPD-0024).
 pub fn manifest_version(text: &[u8]) -> u64 {
     let line = text.split(|&b| b == b'\n').take_while(|l| !l.starts_with(b"file ")).find(|l| l.starts_with(b"version "));

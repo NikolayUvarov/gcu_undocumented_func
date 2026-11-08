@@ -19,6 +19,8 @@ use crate::{report, store, store_silent, Remote};
 static mut TREE: Worktree = Worktree::new();
 // A path `diff` visits, 8 KiB.
 static mut PATH: [u8; PATH_MAX] = [0; PATH_MAX];
+// A file's chunk while `check` holds its directory and node in the other two.
+static mut CHUNKS: [u8; CHUNK] = [0; CHUNK];
 
 const USAGE: &str = "Usage: blocks tree ls <name>[@version] [path] | cat <name>[@version] <path> <file> | diff <name>[@version] <name>[@version] | put <name> <file> <path> [expected] | mkdir <name> <path> [expected] | rm <name> <path> [expected] | mv <name> <from> <to> [expected]";
 
@@ -176,6 +178,23 @@ fn shown(side: &Side) -> (&'static str, u64, Cid) { (if side.kind == Kind::File 
 
 // diff: each path where the trees differ, ADDED, REMOVED or CHANGED with its sides, then how many; equal subtrees
 // unread. Its steps are the store's bound on a walk for each tree.
+/// `check <cid> tree` (351-UPD-0033): every file of the tree `root` read whole, each directory checked against its CID
+/// and the count its parent gives, each node and chunk against its CID and its place; how many files and bytes.
+pub fn check(remote: &mut Remote, root: &Cid, buffer: &mut [u8; CHUNK], data: &mut [u8; CHUNK]) {
+    let Some(mut left) = steps() else { return };
+    let (path, chunk) = unsafe { (&mut *core::ptr::addr_of_mut!(PATH), &mut *core::ptr::addr_of_mut!(CHUNKS)) };
+    let mut bytes = 0u64;
+    let checked = tree::files(remote, root, buffer, path, &mut left, |remote, _, size, cid| {
+        if dag::each_chunk(remote, cid, data, chunk, |_, _| Ok(()))? != size { return Err(dag::Error::Shape); }
+        bytes += size;
+        Ok(())
+    });
+    match checked {
+        Ok(files) => mind::println!("CHECKED TREE {}: {} FILES, {} BYTES", root, files, bytes),
+        Err(e) => report("check", e, remote),
+    }
+}
+
 fn diff(remote: &mut Remote, first: &str, second: &str, buffer: &mut [u8; CHUNK], data: &mut [u8; CHUNK]) {
     let ((one, at_one), (two, at_two)) = (at(first), at(second));
     let Some((a, from)) = head(one, at_one) else { return };

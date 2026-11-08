@@ -1,5 +1,7 @@
 //! Host tests of the boot records the updater writes (updater/src/plan.rs, 351-UPD-0007; MC-9.3): each goes into the
 //! file that does not hold the newer valid record, and the bootloader (bootloader/src/slots.rs) follows it as meant.
+//! The releases it keeps in the block store (updater/src/kept.rs, 351-UPD-0033): which ones stay, the tree of each, read
+//! back by the layout's paths with every block checked, and a tree out of shape or damaged refused.
 extern crate alloc;
 #[allow(dead_code)]
 #[path = "../bootloader/src/slots.rs"]
@@ -15,7 +17,22 @@ mod zip;
 #[path = "../libmind/src/inflate.rs"]
 mod inflate;
 
-use plan::{confirm, expired, floor, in_slot, manifest_version, kind, may_stage, newest, other, raise, trial_of_other, Kind};
+#[allow(dead_code)]
+#[path = "../libmind/src/sha256.rs"]
+mod sha256;
+#[allow(dead_code)]
+#[path = "../libmind/src/cid.rs"]
+mod cid;
+#[allow(dead_code)]
+#[path = "../libmind/src/dag.rs"]
+mod dag;
+#[allow(dead_code)]
+#[path = "../libmind/src/tree.rs"]
+mod tree;
+#[path = "../updater/src/kept.rs"]
+mod kept;
+
+use plan::{confirm, expired, floor, in_slot, keeps, last_good, manifest_version, kind, may_stage, newest, other, raise, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
@@ -227,4 +244,190 @@ fn a_bundle_of_release_py_is_read_in_place() {
         assert!(read_bundle(&std::fs::read(dir.join(format!("{name}.zip"))).unwrap()).is_none(), "{name}");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_store_keeps_the_running_the_last_known_good_and_a_staged_release() {
+    // The last known good: the newest below the running one that the minimum allows.
+    assert_eq!(last_good(&[3, 4, 5, 6, 7], 6, 1), Some(5));
+    assert_eq!(last_good(&[3, 4, 6], 6, 4), Some(4));
+    assert_eq!(last_good(&[5, 6], 6, 6), None, "a release below the minimum boots no more");
+    assert_eq!(last_good(&[6, 7], 6, 1), None);
+    assert_eq!(last_good(&[5, 6], 0, 1), None, "the running version not known");
+    let versions = [3, 4, 5, 6, 7];
+    let kept = |running, minimum, staged| versions.iter().copied().filter(|&v| keeps(v, &versions, running, minimum, staged)).collect::<Vec<_>>();
+    assert_eq!(kept(6, 1, 7), [5, 6, 7]);
+    assert_eq!(kept(6, 1, 0), [5, 6], "a release above the running one that is not staged goes");
+    assert_eq!(kept(6, 6, 7), [6, 7], "the minimum raised past the last known good");
+    assert_eq!(kept(3, 1, 0), [3]);
+    assert_eq!(kept(0, 1, 0), versions, "all, while the running version is not known");
+    // After a confirmed update from 5 to 6, both stay; after the next, 7 and 6.
+    assert!(keeps(5, &[5, 6], 6, 5, 0) && keeps(6, &[5, 6], 6, 5, 0));
+    assert_eq!([5, 6, 7].iter().copied().filter(|&v| keeps(v, &[5, 6, 7], 7, 5, 0)).collect::<Vec<_>>(), [6, 7]);
+}
+
+// Blocks in memory, by CID, each checked by the reader as the store's are.
+#[derive(Default)]
+struct Blocks { blocks: std::collections::HashMap<cid::Cid, Vec<u8>> }
+
+impl dag::Blocks for Blocks {
+    fn put(&mut self, codec: cid::Codec, data: &[u8]) -> Result<cid::Cid, dag::Error> {
+        let cid = cid::Cid::of(codec, data);
+        self.blocks.entry(cid).or_insert_with(|| data.to_vec());
+        Ok(cid)
+    }
+    fn get(&mut self, cid: &cid::Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
+        let data = self.blocks.get(cid).ok_or(dag::Error::NotFound)?;
+        out[..data.len()].copy_from_slice(data);
+        Ok(data.len())
+    }
+    fn has(&mut self, cid: &cid::Cid) -> Result<bool, dag::Error> { Ok(self.blocks.contains_key(cid)) }
+}
+
+fn bytes(seed: u64, len: usize) -> Vec<u8> {
+    let mut x = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+    (0..len).map(|_| { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x as u8 }).collect()
+}
+
+fn hex(digest: &[u8; 32]) -> String { digest.iter().map(|b| format!("{:02x}", b)).collect() }
+
+// A file put as an object, as the updater puts one: its blob and its bytes.
+fn blob(store: &mut Blocks, builder: &mut dag::Builder, data: &[u8]) -> kept::Blob {
+    builder.reset();
+    builder.write(store, data).unwrap();
+    let (cid, size) = builder.finish(store).unwrap();
+    kept::Blob { digest: sha256::digest(data), size, cid }
+}
+
+// The object `cid` of `size` bytes read whole, every block checked.
+fn read(store: &mut Blocks, cid: &cid::Cid, size: u64) -> Vec<u8> {
+    let (mut out, mut buffer) = (vec![0u8; size as usize], Box::new([0u8; dag::CHUNK]));
+    let mut at = 0;
+    while at < out.len() { at += dag::read_at(store, cid, at as u64, &mut out[at..], &mut buffer).unwrap(); }
+    out
+}
+
+fn release<'a>(version: u64, channel_file: &'a [u8], manifest: &'a [u8]) -> kept::Release<'a> {
+    kept::Release { channel: "stable", channel_file, version, arch: "x86_64", manifest, signature: &[7u8; 64] }
+}
+
+#[test]
+fn a_kept_release_is_the_release_layout_read_back_by_its_paths() {
+    let (mut store, mut builder, mut buffer) = (Blocks::default(), Box::new(dag::Builder::new()), Box::new([0u8; dag::CHUNK]));
+    let files: Vec<Vec<u8>> = [0, 1, dag::CHUNK, 3 * dag::CHUNK + 5, 300_000].iter().enumerate().map(|(k, &len)| bytes(k as u64, len)).collect();
+    let mut blobs: Vec<kept::Blob> = files.iter().map(|f| blob(&mut store, &mut builder, f)).collect();
+    // A digest given twice is one blob.
+    blobs.push(blobs[2]);
+    let (channel, manifest) = (b"{\"name\": \"stable\"}\ned25519 00\n".to_vec(), bytes(99, 20_000));
+    let root = kept::put(&mut store, &mut builder, &release(7, &channel, &manifest), &blobs, &mut buffer).unwrap();
+    assert_eq!(kept::version(&mut store, &root, "x86_64", &mut buffer), Ok(7));
+    assert_eq!(kept::version(&mut store, &root, "aarch64", &mut buffer), Err(dag::Error::Shape), "no manifest for another processor");
+    assert_eq!(kept::channel(&mut store, &root, &mut buffer).as_deref(), Ok("stable"));
+    for (path, want) in [("channels/stable", &channel[..]), ("releases/7/x86_64/MANIFEST", &manifest[..]), ("releases/7/x86_64/MANIFEST.SIG", &[7u8; 64][..])] {
+        let (cid, size) = kept::find(&mut store, &root, path, &mut buffer).unwrap().unwrap();
+        assert_eq!(read(&mut store, &cid, size), want, "{}", path);
+    }
+    for (data, b) in files.iter().zip(&blobs) {
+        let path = format!("blobs/{}", hex(&b.digest));
+        assert_eq!(kept::stored(&path), format!("blobs/{}/{}", &hex(&b.digest)[..2], hex(&b.digest)));
+        let (cid, size) = kept::find(&mut store, &root, &path, &mut buffer).unwrap().unwrap();
+        assert_eq!((cid, size), (b.cid, data.len() as u64));
+        assert_eq!(&read(&mut store, &cid, size), data);
+    }
+    // What the layout does not hold, or a directory where a file is asked for.
+    for path in [format!("blobs/{}", hex(&[0xab; 32])), String::from("blobs"), String::from("releases/7"), String::from("channels/beta"), String::from("releases/7/x86_64/MANIFEST/x")] {
+        assert_eq!(kept::find(&mut store, &root, &path, &mut buffer), Ok(None), "{}", path);
+    }
+    let mut listed = Vec::new();
+    let mut left = 100;
+    kept::blobs(&mut store, &root, &mut buffer, &mut left, |b| listed.push(b)).unwrap();
+    listed.sort_by_key(|b| b.digest);
+    let mut want = blobs[..5].to_vec();
+    want.sort_by_key(|b| b.digest);
+    assert_eq!(listed, want);
+    // The steps are bounded: fewer than the entries is TooLarge.
+    let mut left = 3;
+    assert_eq!(kept::blobs(&mut store, &root, &mut buffer, &mut left, |_| {}), Err(dag::Error::TooLarge));
+}
+
+#[test]
+fn two_releases_share_their_blobs_and_hundreds_fit_under_their_prefixes() {
+    let (mut store, mut builder, mut buffer) = (Blocks::default(), Box::new(dag::Builder::new()), Box::new([0u8; dag::CHUNK]));
+    // More blobs than one directory holds: 400 entries of 64 hex digits are over a block.
+    let files: Vec<Vec<u8>> = (0..400).map(|k| bytes(1000 + k, 100 + k as usize)).collect();
+    let blobs: Vec<kept::Blob> = files.iter().map(|f| blob(&mut store, &mut builder, f)).collect();
+    let flat: Vec<(String, kept::Blob)> = { let mut f: Vec<_> = blobs.iter().map(|b| (hex(&b.digest), *b)).collect(); f.sort_by(|a, b| a.0.cmp(&b.0)); f };
+    let entries: Vec<tree::Entry> = flat.iter().map(|(n, b)| tree::Entry { name: n.as_bytes(), kind: tree::Kind::File, size: b.size, cid: b.cid }).collect();
+    assert_eq!(tree::encode(&entries, &mut buffer), Err(dag::Error::TooLarge), "one flat directory would not hold them");
+    let five = kept::put(&mut store, &mut builder, &release(5, b"five", b"manifest 5"), &blobs, &mut buffer).unwrap();
+    let held = store.blocks.len();
+    // Release 6 changes one file: the others are the same objects, and its tree adds only what differs.
+    let mut six_blobs = blobs.clone();
+    six_blobs[17] = blob(&mut store, &mut builder, b"release 6's file");
+    let six = kept::put(&mut store, &mut builder, &release(6, b"six", b"manifest 6"), &six_blobs, &mut buffer).unwrap();
+    assert!(store.blocks.len() - held < 12, "release 6 added {} blocks", store.blocks.len() - held);
+    for (root, version, set) in [(five, 5, &blobs), (six, 6, &six_blobs)] {
+        assert_eq!(kept::version(&mut store, &root, "x86_64", &mut buffer), Ok(version));
+        let mut left = 10_000;
+        let mut listed = 0;
+        kept::blobs(&mut store, &root, &mut buffer, &mut left, |b| { assert!(set.contains(&b)); listed += 1; }).unwrap();
+        assert_eq!(listed, 400);
+        for b in set.iter() {
+            assert_eq!(kept::find(&mut store, &root, &format!("blobs/{}", hex(&b.digest)), &mut buffer), Ok(Some((b.cid, b.size))));
+        }
+    }
+}
+
+// A directory of `entries` (name, kind, size, cid) put as given.
+fn dir(store: &mut Blocks, entries: &[(&str, tree::Kind, u64, cid::Cid)]) -> cid::Cid {
+    let entries: Vec<tree::Entry> = entries.iter().map(|&(n, kind, size, cid)| tree::Entry { name: n.as_bytes(), kind, size, cid }).collect();
+    let mut buffer = Box::new([0u8; dag::CHUNK]);
+    let len = tree::encode(&entries, &mut buffer).unwrap();
+    dag::Blocks::put(store, cid::Codec::DagCbor, &buffer[..len]).unwrap()
+}
+
+#[test]
+fn a_kept_tree_out_of_shape_or_damaged_is_refused() {
+    use tree::Kind::{Directory, File};
+    let (mut store, mut builder, mut buffer) = (Blocks::default(), Box::new(dag::Builder::new()), Box::new([0u8; dag::CHUNK]));
+    let one = blob(&mut store, &mut builder, b"one");
+    let root = kept::put(&mut store, &mut builder, &release(5, b"c", b"m"), &[one], &mut buffer).unwrap();
+    let (blobs, channels, releases) = {
+        let top = tree::decode(&store.blocks[&root]).unwrap();
+        (top.find(b"blobs").unwrap().side(), top.find(b"channels").unwrap().side(), top.find(b"releases").unwrap().side())
+    };
+    let numbered = tree::decode(&store.blocks[&releases.cid]).unwrap().entry(0).cid;
+    // Two versions under releases/: no release is told.
+    let two = dir(&mut store, &[("5", Directory, 1, numbered), ("6", Directory, 1, numbered)]);
+    let bad = dir(&mut store, &[("blobs", Directory, blobs.size, blobs.cid), ("channels", Directory, 1, channels.cid), ("releases", Directory, 2, two)]);
+    assert_eq!(kept::version(&mut store, &bad, "x86_64", &mut buffer), Err(dag::Error::Shape));
+    // A version that is not a plain number.
+    for name in ["05", "0", "x"] {
+        let other = dir(&mut store, &[(name, Directory, 1, numbered)]);
+        let bad = dir(&mut store, &[("blobs", Directory, blobs.size, blobs.cid), ("channels", Directory, 1, channels.cid), ("releases", Directory, 1, other)]);
+        assert_eq!(kept::version(&mut store, &bad, "x86_64", &mut buffer), Err(dag::Error::Shape), "{}", name);
+    }
+    // A count that is not the directory's: refused on the way down.
+    let bad = dir(&mut store, &[("blobs", Directory, blobs.size + 1, blobs.cid), ("channels", Directory, 1, channels.cid), ("releases", Directory, 1, releases.cid)]);
+    let path = format!("blobs/{}", hex(&one.digest));
+    assert_eq!(kept::find(&mut store, &bad, &path, &mut buffer), Err(dag::Error::Shape));
+    assert_eq!(kept::blobs(&mut store, &bad, &mut buffer, &mut 100, |_| {}), Err(dag::Error::Shape));
+    // A blob under a prefix its name does not start with is not the release's.
+    let name = hex(&one.digest);
+    let wrong = if &name[..2] == "00" { "01" } else { "00" };
+    let group = dir(&mut store, &[(name.as_str(), File, one.size, one.cid)]);
+    let moved = dir(&mut store, &[(wrong, Directory, 1, group)]);
+    let bad = dir(&mut store, &[("blobs", Directory, 1, moved), ("channels", Directory, 1, channels.cid), ("releases", Directory, 1, releases.cid)]);
+    assert_eq!(kept::blobs(&mut store, &bad, &mut buffer, &mut 100, |_| {}), Err(dag::Error::Shape));
+    assert_eq!(kept::find(&mut store, &bad, &path, &mut buffer), Ok(None));
+    // A block of the tree damaged in the store: told, never read as the tree.
+    let group = tree::decode(&store.blocks[&blobs.cid]).unwrap().entry(0).cid;
+    store.blocks.get_mut(&group).unwrap()[3] ^= 1;
+    assert_eq!(kept::find(&mut store, &root, &path, &mut buffer), Err(dag::Error::Corrupt));
+    assert_eq!(kept::blobs(&mut store, &root, &mut buffer, &mut 100, |_| {}), Err(dag::Error::Corrupt));
+    assert_eq!(kept::version(&mut store, &root, "x86_64", &mut buffer), Ok(5), "the rest of the tree reads");
+    store.blocks.get_mut(&root).unwrap()[5] ^= 1;
+    assert_eq!(kept::version(&mut store, &root, "x86_64", &mut buffer), Err(dag::Error::Corrupt));
+    // A file's block where the root belongs.
+    assert_eq!(kept::version(&mut store, &one.cid, "x86_64", &mut buffer), Err(dag::Error::Shape));
 }
