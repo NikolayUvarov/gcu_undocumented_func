@@ -93,7 +93,7 @@ fn service_channel<B:crate::btc_session::DeviceIo>(service:&mut crate::receive_s
     match service.take_ask(){
         Some(Ask::Tune(to,call))=>{assert_eq!(to,ch);let policy=Policy::passive(board,2407+5*u16::from(to)).unwrap();
             channel::run(phy,board,&receive.prepared.prefix,&receive.prepared.paths,tables,&policy).unwrap();
-            service.tuned(to);wlanhw::reply_set_channel(call,Ok(())).unwrap();to}
+            service.tuned(to,0);wlanhw::reply_set_channel(call,Ok(())).unwrap();to}
         Some(Ask::Admit(_))=>panic!("admission asked by a tune"),
         None=>ch,
     }
@@ -144,12 +144,17 @@ fn a_receive_only_start_is_admitted_under_the_stations_country_and_served(){
             assert_eq!(ipc::response(set).unwrap().0[0]&255,0,"the country is applied");
             let mut body=[0;wlanhw::REQUEST_MAX];let mut w=Writer::new(&mut body);
             codec::encode_bytes::<2346>(&frame(),&mut w).unwrap();12u8.encode(&mut w).unwrap();1u8.encode(&mut w).unwrap();let length=w.len();
+            // The join's filter: the access point's frames only, kept into the data mode.
+            let mut filter=[0;17];let mut w=Writer::new(&mut filter);
+            wlanhw::Filter{all_beacons:false,bssid:0x020101010101,own:0}.encode(&mut w).unwrap();
+            let change=ipc::buffer(3,&filter);assert!(service.step(phy.bus_between_stages(),&mut |e|events.push(e)));
+            assert_eq!(ipc::response(change).unwrap().0,[0,0]);
             let first=ipc::buffer(4,&body[..length]);assert!(service.step(phy.bus_between_stages(),&mut |e|events.push(e)));
             assert_eq!(ipc::response(first).unwrap().0,[2,wlanhw::Error::Busy as usize]);
             let Some(Ask::Admit(6))=service.take_ask() else{panic!("no admission asked")};
             service.hand_over();
             let (tuned,calibrated,station)=receive_service::calibrate(&mut phy,&board,&caps,&tables,&receive.prepared,
-                service.limits().unwrap(),6,P::CheckedAbsent).unwrap();
+                service.limits().unwrap(),6,P::CheckedAbsent,service.filter()).unwrap();
             assert_eq!((tuned.channel,tuned.access),(6,channel::Access::InitiateRadiation));
             // As serve does: the inbox only now, so that receive-only and the calibrations retain no packet.
             assert!(!phy.bus_between_stages().retains_packets());phy.bus_between_stages().attach_inbox(&mut bank).unwrap();
@@ -157,6 +162,7 @@ fn a_receive_only_start_is_admitted_under_the_stations_country_and_served(){
             let activation=data_mode::prepare(&mut phy,&board,&tuned,&calibrated,&receive.prepared.owner,station,&transmit).unwrap();
             drop(phy);
             let (mut data,_)=connection::activate(session,&mut transmit,activation).unwrap();
+            assert!(!data.current_filter().all_beacons());assert_eq!(data.current_filter().bssid(),[2,1,1,1,1,1]);
             let mut served=Service::new(&mut data).unwrap();
             let info=ipc::buffer(1,&[]);assert!(served.step());let(words,bytes)=ipc::response(info).unwrap();
             let mut r=Reader::new(&bytes[..words[0]>>16]);assert_eq!(wlanhw::Info::decode(&mut r).unwrap().channel,6);

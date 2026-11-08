@@ -256,6 +256,13 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] COUNTRY {}{}: {} CHANNELS, {} LISTEN ONLY; NOT APPLIED: THE PLATFORM'S POWER POLICY IS UNKNOWN, RECEIVE ONLY",
                 code[0] as char, code[1] as char, channels, listen_only),
         receive_service::Event::Admitted { channel } => mind::println!("[RTW89] DATAPATH ADMITTED ON CHANNEL {}", channel),
+        receive_service::Event::Scanned { tunes, longest_us, kept, dropped } =>
+            mind::println!("[RTW89] SCAN: {} PASSIVE TUNES, THE LONGEST {} US; {} FRAMES KEPT, {} DROPPED", tunes, longest_us, kept, dropped),
+        receive_service::Event::DataCountry { code, channel, kept: true } =>
+            mind::println!("[RTW89] COUNTRY {}{} IN DATA MODE: CHANNEL {} KEPT", code[0] as char, code[1] as char, channel),
+        receive_service::Event::DataCountry { code, channel, kept: false } =>
+            mind::println!("[RTW89] COUNTRY {}{} IN DATA MODE: CHANNEL {} NOT ALLOWED AT ITS ADMITTED POWER; NOTHING SENT UNTIL A COUNTRY ALLOWS IT",
+                code[0] as char, code[1] as char, channel),
     }
 }
 

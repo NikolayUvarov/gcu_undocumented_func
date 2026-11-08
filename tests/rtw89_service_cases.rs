@@ -151,3 +151,51 @@ fn service_progress_accepts_real_btc_ack_after_fifteen_milliseconds_then_serves_
     let mut r=Reader::new(&b[..2]);assert_eq!(wlanhw::Sent::decode(&mut r).unwrap(),wlanhw::Sent{acked:true,attempts:1});
     let stopped=service.stop();assert!(stopped.failure.is_none());assert_eq!(ipc::dropped(sent),1);clean();
 });}
+
+fn country(code:&str,limits:&[(u8,u8,bool)])->Vec<u8>{
+    let mut out=vec![0;wlanhw::REQUEST_MAX];let mut w=Writer::new(&mut out);
+    codec::encode_str::<2>(code,&mut w).unwrap();2u8.encode(&mut w).unwrap();
+    let list:Vec<_>=limits.iter().map(|&(channel,eirp,listen)|wlanhw::Limit{channel,eirp,listen}).collect();
+    codec::encode_slice::<wlanhw::Limit,64>(&list,&mut w).unwrap();let length=w.len();out.truncate(length);out
+}
+fn channels(id:usize)->Vec<u8>{
+    let(w,b)=ipc::response(id).unwrap();assert_eq!(w[0]&255,0);let mut r=Reader::new(&b[..w[0]>>16]);
+    let info=wlanhw::Info::decode(&mut r).unwrap();assert!(r.done());info.channels.as_slice().to_vec()
+}
+fn sends(service:&mut Service<'_,'_,'_,'_,'_,'_,'_,Device>)->bool{
+    let id=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    if ipc::response(id).is_some(){error(id,wlanhw::Error::Failed);return false}
+    assert!(service.step());assert_eq!(words(id),[2<<16,0]);true
+}
+
+// 213-DRV-0032: channel 6 admitted at 20 dBm (40 half-dBm); the station's country may change while it is joined.
+#[test]
+fn service_keeps_its_channel_under_a_country_that_allows_its_admitted_power_and_sends_nothing_under_one_that_does_not(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().under(40,1);
+    let all=|eirp|(1..=13).map(|ch|(ch,eirp,false)).collect::<Vec<_>>();
+    let id=ipc::buffer(9,&country("UZ",&all(20)));assert!(service.step());assert_eq!(channels(id),[6]);
+    assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:true}));assert!(sends(&mut service));
+    // 10 dBm on 6 is less than it was admitted at; listening only there is no sending either.
+    let mut listen=all(20);listen[5].2=true;
+    for limits in[all(10),listen]{
+        let id=ipc::buffer(9,&country("UZ",&limits));assert!(service.step());error(id,wlanhw::Error::Failed);
+        assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:false}));
+        assert!(!sends(&mut service),"nothing is sent under a country it cannot keep");
+    }
+    // A malformed request changes nothing; a country it can keep lets it send again: US caps 1-11 at 30 dBm.
+    let id=ipc::buffer(9,&country("uz",&all(20)));assert!(service.step());error(id,wlanhw::Error::Invalid);
+    assert_eq!(service.take_event(),None);assert!(!sends(&mut service));
+    let us:Vec<_>=(1..=11).map(|ch|(ch,30,false)).collect();
+    let id=ipc::buffer(9,&country("US",&us));assert!(service.step());assert_eq!(channels(id),[6]);
+    assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"US",channel:6,kept:true}));assert!(sends(&mut service));
+    assert_eq!(c.borrow().published,2);
+    let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+});
+    // A channel admitted under no known country keeps none.
+    run(0,true,true,|data,_|{
+        ipc::reset();let mut service=Service::new(data).unwrap();
+        let id=ipc::buffer(9,&country("UZ",&(1..=13).map(|ch|(ch,20,false)).collect::<Vec<_>>()));assert!(service.step());
+        error(id,wlanhw::Error::Failed);assert_eq!(service.take_event(),None);drop(service);clean();
+    });
+}

@@ -70,16 +70,27 @@ fn tune(service: &mut ReceiveOnly, phy: &mut Live<'_, '_, '_, '_>, receive: &lis
     let Some(Ask::Tune(ch, call)) = service.take_ask() else { panic!("no tune asked") };
     let policy = Policy::passive(board, 2407 + 5 * u16::from(ch)).unwrap();
     channel::run(phy, board, &receive.prepared.prefix, &receive.prepared.paths, tables, &policy).unwrap();
-    service.tuned(ch); wlanhw::reply_set_channel(call, Ok(())).unwrap(); ch
+    // A tune is said to take 100 us a channel number, so that a scan's longest is known.
+    service.tuned(ch, u64::from(ch) * 100); wlanhw::reply_set_channel(call, Ok(())).unwrap(); ch
 }
 fn step(service: &mut ReceiveOnly, phy: &mut Live<'_, '_, '_, '_>, events: &mut Vec<Event>) {
     assert!(service.step(phy.bus_between_stages(), &mut |e| events.push(e)));
 }
 fn all(eirp: u8) -> Vec<(u8, u8, bool)> { (1..=13).map(|ch| (ch, eirp, false)).collect() }
-fn send_body() -> Vec<u8> {
+fn send_body() -> Vec<u8> { send_frame(&beacon()[..40]) }
+fn send_frame(frame: &[u8]) -> Vec<u8> {
     let mut body = vec![0; wlanhw::REQUEST_MAX]; let mut w = Writer::new(&mut body);
-    codec::encode_bytes::<2346>(&beacon()[..40], &mut w).unwrap(); 2u8.encode(&mut w).unwrap(); 1u8.encode(&mut w).unwrap();
+    codec::encode_bytes::<2346>(frame, &mut w).unwrap(); 2u8.encode(&mut w).unwrap(); 1u8.encode(&mut w).unwrap();
     let length = w.len(); body.truncate(length); body
+}
+// A management frame of `subtype` to BSSID, as the station sends it.
+fn management(subtype: u8) -> Vec<u8> {
+    let mut frame = vec![subtype << 4, 0, 0, 0]; frame.extend_from_slice(&BSSID); frame.extend_from_slice(&[2, 3, 4, 5, 6, 7]);
+    frame.extend_from_slice(&BSSID); frame.extend_from_slice(&[0, 0, 0, 0, 1, 0, 0, 0]); frame
+}
+fn filter(all_beacons: bool, bssid: u64) -> Vec<u8> {
+    let mut out = vec![0; 17]; let mut w = Writer::new(&mut out);
+    wlanhw::Filter { all_beacons, bssid, own: 0 }.encode(&mut w).unwrap(); out
 }
 
 #[test]
@@ -167,3 +178,42 @@ fn received_beacons_reach_the_station_and_other_traffic_does_not() {
         assert_eq!(service.dropped(), 0);
     });
 }
+
+#[test]
+fn a_scans_probe_request_admits_nothing_and_the_joins_first_frame_does() { serve(true, Vec::new(), |service, phy, receive, tables, board, events| {
+    let id = ipc::buffer(9, &country("RU", &all(20))); step(service, phy, events); info(id);
+    // The scan's probe request on channel 8: refused, and the scan goes on receive-only.
+    let id = ipc::words(2, 8); step(service, phy, events); tune(service, phy, receive, tables, board);
+    assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    let mut probe = management(4); probe[4..10].fill(0xff); probe[16..22].fill(0xff);
+    let id = ipc::buffer(4, &send_frame(&probe)); step(service, phy, events);
+    error(id, wlanhw::Error::Failed); assert!(service.take_ask().is_none());
+    let id = ipc::words(2, 9); step(service, phy, events); assert_eq!(tune(service, phy, receive, tables, board), 9);
+    assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    // The join: back to 8 with the network's filter; its authentication asks admission there, and the filter is kept.
+    let id = ipc::words(2, 8); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
+    let id = ipc::buffer(3, &filter(false, 0x021122334455)); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events);
+    error(id, wlanhw::Error::Busy);
+    assert!(matches!(service.take_ask(), Some(Ask::Admit(8))));
+    let kept = service.filter(); assert!(!kept.all_beacons()); assert_eq!(kept.bssid(), BSSID);
+    assert_eq!(kept.own(), board.identity.mac);
+});}
+
+#[test]
+fn a_scan_ends_with_its_tunes_and_the_frames_it_kept() { serve(true, vec![beacon()], |service, phy, receive, tables, board, events| {
+    // The filter starts as a scan's: the beacon is kept.
+    let wait = ipc::words(6, 0); step(service, phy, events); assert_eq!(ipc::response(wait).unwrap().0, [1 << 16, 0]);
+    for ch in [6, 3] {
+        let id = ipc::words(2, ch); step(service, phy, events); tune(service, phy, receive, tables, board);
+        assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    }
+    let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    assert_eq!(events.as_slice(), &[Event::Scanned { tunes: 2, longest_us: 600, kept: 1, dropped: 0 }]);
+    // A filter that ends no scan logs none; the next scan counts from its own start.
+    let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
+    let id = ipc::buffer(3, &filter(true, 0)); step(service, phy, events); ipc::response(id).unwrap();
+    let id = ipc::words(2, 2); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
+    let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
+    assert_eq!(events[1..], [Event::Scanned { tunes: 1, longest_us: 200, kept: 0, dropped: 0 }]);
+});}
