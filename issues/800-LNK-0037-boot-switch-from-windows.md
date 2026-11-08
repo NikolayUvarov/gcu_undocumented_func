@@ -24,6 +24,21 @@
 - [ ] `status`, `once -Reboot` and `logs` on the DEXP N100 under Windows 11, as administrator: MIND Core boots once, and the next boot is Windows.
 - [x] The test runs as `tests/usb_writer_windows.ps1` does, by hand on Windows (README); it is not in `scripts/host_tests.sh`, as not every machine that runs that suite has PowerShell.
 
+## Progress (2026-11-08, the DEXP N100)
+
+Windows 11, through Effector's Windows agent (as SYSTEM), with the script fetched from the branch:
+- **`status`** ran (a9e6f238):
+  - `BootCurrent 0000, BootNext -, BootOrder 0001,0002,0000`;
+  - the entries: Windows Boot Manager (booted now), and the stick's two firmware entries `UEFI: VendorCoProductCode 2.00, Partition 1` and `Partition 2`;
+  - `MIND Core disk: disk 1 (VendorCo ProductCode), entry Boot0001`.
+- **`once -Reboot`** refused, as it should: `Boot0000, the entry Windows booted from, is not first in BootOrder (0001,0002,0000); a restart after MIND Core would not come back here. Put it first in the firmware's setup`. The firmware had put the stick first. The script never writes `BootOrder`, so moving Windows first is the maintainer's, in the firmware's setup.
+- **`logs` failed** under StrictMode: `$root` was not set. The machine's blocks called a variable of `New-WindowsSystem` that was gone once it returned.
+  - Fixed in dba9edb9: `Get-VolumeRoot`, a script-level function.
+  - The test checks that no block uses a variable of `New-WindowsSystem` (40 checks). It fails on the old script.
+  - Then `logs` copied the stick's `MIND LOG` volume (`boot0009.log`, the DEXP's last boot of MIND Core).
+
+**Left for the criterion:** with Windows first in `BootOrder`, `once -Reboot`, one boot of MIND Core, and the next boot Windows again.
+
 ## Related
 
 [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md) (`boot_switch.py`), [000-KRN-0211](000-KRN-0211-the-loaders-mark-of-how-far-a-boot-got.md) (the loader's mark), [docs/write-disk.md](../docs/write-disk.md) section 11.
