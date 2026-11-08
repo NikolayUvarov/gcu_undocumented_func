@@ -37,6 +37,10 @@ fn bb(bus:&mut impl RegisterIo,at:usize,mask:u32,value:u32)->io::Result<()>{
     let actual=bus.read32(PHY_BASE+at)?;if actual&mask!=bits{return Err(fault(PHY_BASE+at,actual));}Ok(())
 }
 fn table(bus:&mut impl RegisterIo,table:&[tables::Write])->io::Result<()>{for &(at,mask,value)in table{bb(bus,at,mask,value)?;}Ok(())}
+// Written unread, as Linux's rtw89_rfk_parser.
+fn table_unread(bus:&mut impl RegisterIo,table:&[tables::Write])->io::Result<()>{
+    for &(at,mask,value)in table{let before=bus.read32(PHY_BASE+at)?;bus.write32(PHY_BASE+at,(before&!mask)|((value<<mask.trailing_zeros())&mask))?;}Ok(())
+}
 fn disable(bus:&mut impl RegisterIo)->io::Result<()>{
     for path in 0..2{let p=path*0x2000;bb(bus,0x5820+p,1<<31,0)?;bb(bus,0x5818+p,0x18000000,1)?;bb(bus,0x58e4+p,1<<14,1)?;}Ok(())
 }
@@ -72,7 +76,10 @@ fn configure(bus:&mut impl RegisterIo,cal:&Calibration,path:usize)->io::Result<(
     for block in blocks{table(bus,block)?;}thermal(bus,path,cal.thermal_reference[path])?;
     let blocks=if path==0{[tables::DAC_GAIN_DEFS_A,tables::SLOPE_A_DEFS_2G,tables::ALIGN_A_2G_ALL_DEFS,tables::SLOPE_DEFS_A]}
         else{[tables::DAC_GAIN_DEFS_B,tables::SLOPE_B_DEFS_2G,tables::ALIGN_B_2G_ALL_DEFS,tables::SLOPE_DEFS_B]};
-    for block in blocks{table(bus,block)?;}Ok(())
+    // Path B's DAC gain table read back changed at 0x7a10, 0x7a1c and 0x7a2c on the Ryzen (2026-11-08), as its thermal
+    // table and RF 0x85 did (2026-11-06): path B is shared with Bluetooth.
+    if path==1{table_unread(bus,blocks[0])?;}else{table(bus,blocks[0])?;}
+    for block in &blocks[1..]{table(bus,block)?;}Ok(())
 }
 fn efuse(bus:&mut impl RegisterIo,cal:&Calibration,channel:u8)->io::Result<()>{
     let group=match channel{1..=2=>0,3..=5=>1,6..=8=>2,9..=11=>3,12..=13=>4,_=>return Err(fault(0,u32::from(channel)))};

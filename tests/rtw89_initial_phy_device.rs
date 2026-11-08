@@ -82,6 +82,8 @@ impl RegisterIo for Device {
         // Bit 24 of the PPDU report register (0xCE43) is the hardware's own: it reads back set (2026-11-06).
         if at == 0xce40 { return Ok(self.inner.get(at, 4) | 1 << 24); }
         if self.bt_path_b && (0x17c00..0x17c40).contains(&at) { return Ok(self.inner.get(at, 4) ^ 1); }
+        // Path B's TSSI DAC gain table, as the Ryzen read it back while Bluetooth was active (2026-11-08).
+        if self.bt_path_b && (0x17a00..0x17ad0).contains(&at) { return Ok(!self.inner.get(at, 4)); }
         if at == 0xac { return Ok(self.bt); }
         if at == 0xdaf8 { let command = self.lte_pending.unwrap(); assert_eq!(command >> 30, 2); return Ok(self.lte[usize::from(command & 255 == 0x3c)]); }
         if at == 0x1174c {
