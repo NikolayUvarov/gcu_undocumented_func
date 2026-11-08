@@ -195,6 +195,10 @@ It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 - **`OWN_DEADLINES`** (`data_mode.rs`): an operation keeps its own deadline while a frame is pending. Capped by the frame's, the operations near it ran out in whichever register they read: `Session(Permit(Timeout))` at `0x13b0`, `Register(Timeout)`.
 - **`RESTART_AFTER_FAILURE`** (`main.rs`): after a failure that stopped, powered off and quiesced the device, the driver exits, and `init` starts a fresh one within its budget (3 in 60 s). `wlan` learns the fresh radio's country only at its own start: asked of NET on `internal-dev-messages`, 2026-11-08.
 
+- **`OUTLAST_SER` beyond the start of an operation:**
+  - a recovery that holds the radio off in the coexistence reconcile is outlasted, and the reconcile runs again;
+  - one found by the checks or the permits at an operation's start is outlasted, and they run again;
+  - the data permit takes a scheduler at zero, as the recovery leaves it, as the next operation's to outlast.
 - **`KEEP_LATE`** (`service.rs`): a send that outruns its time is answered as sent and not acknowledged, and its release is awaited 1 s more (`LATE_MS`), while every other send is `busy`. The log says `A FRAME OUTRAN ITS TIME (n): …`. One that outruns that too stops the service.
 
 **Still open:** a frame fetched by the DMA whose release does not come within its time. One frame waited over 45 ms after five tries, about 3 minutes into a run; with the connected station's policy (213-DRV-0052), one after 9 minutes. Without `KEEP_LATE` and `RESTART_AFTER_FAILURE` the machine stays off the network then.

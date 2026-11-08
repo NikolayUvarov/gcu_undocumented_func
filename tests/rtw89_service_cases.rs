@@ -289,6 +289,17 @@ fn service_outlasts_a_recovery_that_begins_in_the_coexistence_reconcile(){run(0,
     assert!(sends(&mut service));let stopped=service.stop();assert!(stopped.failure.is_none());clean();
 });}
 
+// OUTLAST_SER: a recovery that begins after the first check and zeroes the scheduler under the session's permit check is
+// outlasted, and the checks made again (the Ryzen, 2026-11-08: Session(Permit(PowerState at 0xc348)) after 42 minutes).
+#[test]
+fn service_outlasts_a_recovery_that_begins_in_the_permit_check(){for skip in[2,3]{run(0,true,true,|data,c|{
+    ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
+    {let mut c=c.borrow_mut();c.ser=true;c.ser_skip=skip;c.ser_heal=Some(20);}
+    let mut recovery=None;for _ in 0..3{assert!(service.step(),"skip {skip}");recovery=recovery.or(service.take_recovery());}
+    assert!(recovery.is_some_and(|r|!r.restored),"skip {skip}: {recovery:?}");
+    assert!(sends(&mut service));let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+});}}
+
 // One step drains what waits (DRAIN passes), not one descriptor: the Ryzen's packet buffer filled at one a step.
 #[test]
 fn service_one_step_takes_every_waiting_frame(){run(0,true,true,|data,c|{

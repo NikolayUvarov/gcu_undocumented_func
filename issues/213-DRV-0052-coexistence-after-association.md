@@ -74,7 +74,12 @@ The source and the layouts: [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852b
 - **Then two firmware recoveries, 60 ms apart** (`CMAC_ERR_ISR` 8), were outlasted. The next coexistence reconcile found the radio off (`Coexistence(RadioOff)`), and the data mode stopped.
 - **Since then** `OUTLAST_SER` outlasts a recovery found in the reconcile too, and the reconcile runs again (`rtw89_late3`).
 
-**Across these runs:** 10 whole inquiries (1, 4 and 5) passed with the station joined, and none lost the network. Each stop was another cause: a late frame's queue budget, or a recovery during the reconcile.
+**`rtw89_late3`** (2169b65c):
+- **42 minutes:** eight inquiries passed, and 27 late frames were answered and released. The gateway pings lost nothing in most rounds.
+- **Then the session's permit check found the scheduler at zero** (`Session(Permit(PowerState at 0xc348))`), a firmware recovery under way. That check runs in every operation, past the outlasting at its start.
+- **Since then,** under `OUTLAST_SER`, the data permit takes a zeroed scheduler as the next operation's to outlast (`rtw89_late4`).
+
+**Across these runs:** 18 whole inquiries (1, 4, 5 and 8) passed with the station joined, and none lost the network. Each stop was another cause: a late frame's queue budget, or a recovery during the reconcile.
 
 One machine and one AP (MC-12.1). The acceptance criterion, an hour across ten inquiries in one run, is not met yet.
 
