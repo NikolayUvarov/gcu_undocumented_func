@@ -94,3 +94,18 @@ fn runtime_ppdu_status_burst_does_not_fill_control_inbox_or_steal_tx_ack(){run(0
     assert_eq!(data.pending_packets(),4);assert_eq!(data.counts().pressure,8);
     assert_eq!(data.advance(100_000).unwrap().unwrap().attempts,tx::AttemptCount::Known(1));
 });}
+
+// 213-DRV-0052: the data mode's first reconcile tells the coexistence of the station on its channel (6 here) once: the
+// role, the policy OFF_BWB1 (only the OFF slot changes) and AFH around the channel, with Bluetooth on.
+#[test]
+fn runtime_tells_the_coexistence_of_the_connected_station_once(){run(0,true,true,|data,c|{
+    c.borrow_mut().bt=Some(BT);data.poll_packets(100_000).unwrap();
+    let sent=|c:&Control,id:u8,body:&[u8]|c.coex_packets.iter().filter(|p|p[1]==id&&p.len()>=8+body.len()&&&p[8..8+body.len()]==body).count();
+    {let c=c.borrow();
+        assert_eq!(sent(&c,5,&[1,64,1,1,2,0,1,0,1,6]),1,"the station's role");
+        assert_eq!(sent(&c,3,&[1,10,1,0,100,0,0x5a,0x5a,0x5a,0xea,0,0]),1,"OFF_BWB1");
+        assert_eq!(sent(&c,10,&[1,6,32]),1,"AFH around channel 6");}
+    let count=c.borrow().coex_packets.len();data.poll_packets(100_000).unwrap();command(data);
+    let c=c.borrow();assert_eq!(sent(&c,5,&[1,64,1,1,2,0,1,0,1,6]),1);assert_eq!(sent(&c,10,&[1,6,32]),1);
+    assert!(c.coex_packets.len()>=count);
+});}

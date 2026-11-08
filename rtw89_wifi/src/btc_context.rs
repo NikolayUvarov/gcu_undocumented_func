@@ -55,11 +55,13 @@ pub(crate) struct Context{
     published:Option<u32>,btg:bool,rx_gain:bool,bt_lna:u8,afh_profiles:Option<u8>,ignore_pending:bool,dirty:bool,
     observed_tdma:Option<[u8;8]>,observed_slots:Option<[btc_reports::Slot;18]>,other_events:u32,rfk:Option<RfkAttempt>,last_rfk:Option<RfkFailure>,
     #[allow(dead_code)] connection:Connection,
+    // The connected station's channel once the role, policy and AFH for it were sent (213-DRV-0052).
+    station:Option<u8>,
 }
 impl Context{
     fn new(profile:Profile,attempt:u64,session:u64)->Self{let mut shadow=WlanShadow::new();shadow.initialize();Self{
         attempt,session,profile,shadow,policy:Policy::ResetDefaults,reports:0,bt:ObservedBt::new(),published:None,btg:false,rx_gain:false,bt_lna:0,
-        afh_profiles:None,ignore_pending:false,dirty:true,observed_tdma:None,observed_slots:None,other_events:0,rfk:None,last_rfk:None,connection:Connection::Fresh}}
+        afh_profiles:None,ignore_pending:false,dirty:true,observed_tdma:None,observed_slots:None,other_events:0,rfk:None,last_rfk:None,connection:Connection::Fresh,station:None}}
     pub(crate) fn observe_score(&mut self,raw:u32){self.dirty|=self.bt.update_score(raw);}
     pub(crate) fn observe(&mut self,bytes:&[u8])->Result<bool,Error>{
         let mut scoreboard=false;
@@ -111,15 +113,20 @@ impl Context{
         if self.btg!=btg{s.registers(deadline,|b|btc_control::btg(b,btg))?;self.btg=btg;}
         if initial{s.registers(deadline,|b|btc_control::preagc_off(b))?;}
         let profiles=(self.bt.info[2]&0xf0).count_ones()as u8;
-        if self.afh_profiles!=Some(profiles){self.send(s,self.profile.afh_no_link(),deadline)?;self.afh_profiles=Some(profiles);}
-        if self.bt.raw&1<<13!=0{self.shadow.clear(1<<13);}
+        if self.afh_profiles!=Some(profiles){
+            let afh=self.station.map_or(self.profile.afh_no_link(),|channel|self.profile.afh_station(channel));
+            self.send(s,afh,deadline)?;self.afh_profiles=Some(profiles);
+        }
+        // High LNA (bit 13) for a linked station with BTG, unless Bluetooth's own is set (`_set_bt_rx_agc`).
+        if self.bt.raw&1<<13!=0{self.shadow.clear(1<<13);}else if self.station.is_some()&&btg{self.shadow.set(1<<13);}
         let constrained=btg&&self.bt.profiles();
         if constrained!=self.rx_gain{s.registers(deadline,|b|receive_gain(b,constrained))?;self.rx_gain=constrained;}
         if self.ignore_pending{self.ignore_pending=false;self.send(s,self.profile.bt_ignore_wlan(),deadline)?;}
         if self.bt.info_count>0&&(self.bt_lna!=7||self.bt.lna()!=7){
             self.shadow.clear(1<<4);self.send(s,self.profile.bt_lna_normal(),deadline)?;self.bt_lna=7;
         }
-        self.shadow.clear(1<<12);
+        // Wi-Fi's receive over Bluetooth's scan (bit 12), for a linked station's downlink (`scan_rx_low_pri`).
+        if self.station.is_some(){self.shadow.set(1<<12);}else{self.shadow.clear(1<<12);}
         let ver=self.bt.version&0xffff;
         self.report(s,1<<3,bt.enabled&&(ver==0||ver==0x8852&&bt.patched),deadline)?;
         if initial{self.send(s,self.profile.driver_no_link(),deadline)?;self.report(s,1<<2,true,deadline)?;}
@@ -127,6 +134,21 @@ impl Context{
             let remaining=left(s,deadline)?.min(100_000);
             s.registers(deadline,|b|self.shadow.publish(b,remaining))?;self.published=Some(self.shadow.value());
         }Ok(())
+    }
+    // 213-DRV-0052: what Linux sends once a 2.4 GHz station has connected (BTC_ROLE_MSTS_STA_CONN_END): the role, the
+    // policy for an idle Wi-Fi beside Bluetooth (OFF_BWB1), AFH around the channel, and path B's standby.
+    // Without policy()'s drain: the data mode's rings need not run empty under continuous traffic.
+    fn connect<T:Transport>(&mut self,s:&mut T,channel:u8,deadline:u64)->Result<(),Error>{
+        self.send(s,self.profile.driver_station(channel),deadline)?;
+        self.shadow.clear(1<<9);
+        if let Some(message)=self.profile.policy(self.policy,Policy::Station){
+            self.send(s,message,deadline)?;self.observed_tdma=None;self.observed_slots=None;
+        }
+        self.policy=Policy::Station;
+        self.send(s,self.profile.afh_station(channel),deadline)?;
+        self.afh_profiles=Some((self.bt.info[2]&0xf0).count_ones()as u8);
+        if self.bt.state().enabled{s.registers(deadline,|b|s1_standby(b,true))?;}
+        self.station=Some(channel);self.dirty=true;Ok(())
     }
     fn drain<T:Transport>(&mut self,s:&mut T,deadline:u64)->Result<(),Error>{
         for _ in 0..1024{self.events(s,deadline)?;let progress=s.poll_before(deadline,self)?;self.events(s,deadline)?;if progress==[false,false]{return Ok(())}}
@@ -258,6 +280,13 @@ pub fn initialize<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Board)
 }
 
 // Shared-antenna RF levels zero and one use WLAN gain zero and two, respectively, with pre-AGC disabled.
+/// Path B's standby as receive while Wi-Fi is linked beside Bluetooth, for GNT_BT_TX's settling from 1 to 0
+/// (rtw8852b_common.c `__rtw8852bx_btc_wl_s1_standby`); off restores RF 0x3f.
+fn s1_standby(bus:&mut impl RegisterIo,on:bool)->io::Result<()>{
+    for (at,value) in [(0xef,0x80000),(0x33,1),(0x3e,0x31),(0x3f,if on{0x179}else{0x20}),(0xef,0)]{
+        crate::phy::rf_write_masked(bus,1,at,0xfffff,value)?;
+    }Ok(())
+}
 fn receive_gain(bus:&mut impl RegisterIo,constrained:bool)->io::Result<()> {
     btc_control::preagc_off(bus)?;
     phy::rf_write_masked(bus,1,0xef,0xfffff,0x1000)?;
