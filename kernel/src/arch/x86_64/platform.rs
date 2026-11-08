@@ -37,3 +37,7 @@ pub fn mmio(index: usize) -> Option<(usize, usize)> {
 pub fn console() -> usize { usize::MAX } // the kernel's console is not MMIO here
 /// ISA lines 1..15 except the cascade (2).
 pub fn irq(line: usize) -> bool { (1..16).contains(&line) && line != 2 }
+/// A PC has ACPI: no device tree is read here (aarch64's reads one, 100000-PRT-0009).
+pub unsafe fn board_from_tree(_address: u64) -> bool { false }
+/// RAM reserved beyond the firmware's map: none on a PC.
+pub fn reserved(_each: impl FnMut(u64, u64)) {}

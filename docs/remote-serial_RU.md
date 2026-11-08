@@ -227,7 +227,7 @@
 
 ### 5.3 Сессия ядра: UART платы
 
-- **UART платы из device tree:** [100000-PRT-0009](../issues/100000-PRT-0009-the-board-from-the-device-tree.md).
+- **UART платы из device tree:** [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done).
 - **16550 в памяти:** [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md). Это касается строк ядра и строк загрузчика.
 - **UART отдаётся `link`,** а не оболочке, когда так сказано в `link.conf`: [100000-KRN-0171](../issues/100000-KRN-0171-platform-devices-from-the-device-tree.md).
 - **Сначала в QEMU:** `virt` с UEFI от U-Boot и без ACPI (как Tow-Boot даёт телефону), его PL011 на псевдотерминале. Тесты агента тоже могут с ним работать.

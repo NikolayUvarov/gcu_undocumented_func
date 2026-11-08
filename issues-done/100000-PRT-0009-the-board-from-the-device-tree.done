@@ -1,0 +1,106 @@
+# 100000-PRT-0009 — The board from the device tree: the reader, and what every board has — done
+
+**Type:** porting (kernel) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** done (2026-11-08) · **Blocked by:** — ([210-KRN-0029](210-KRN-0029-device-tree-in-bootinfo.done): the tree's address in `BootInfo.device_tree`, done) · **Main task:** [100000](../issues/100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
+
+## Problem
+
+- **The aarch64 kernel reads the board from ACPI only** (`arch/aarch64/acpi.rs` into `board.rs`):
+  - the GIC from the MADT;
+  - the console from the SPCR;
+  - the timer's interrupt from the GTDT;
+  - the ECAM from the MCFG;
+  - PSCI's conduit from the FADT.
+- **With only a device tree,** as on the PinePhone under Tow-Boot, the kernel checks the tree's header and then boots with `virt`'s defaults.
+- **[210-APL-0002](../issues/210-APL-0002-board-from-the-device-tree.md) plans the same reader for Apple Silicon,** with Apple's nodes. This task does the generic part; Apple's nodes (the AIC, the spin table, the DARTs, the Samsung-style UART) stay there.
+
+## Plan
+
+- **A bounds-checked FDT reader,** `kernel/src/arch/aarch64/fdt.rs`, as `acpi.rs` is for ACPI:
+  - the header (version 17), the structure block and the strings;
+  - `#address-cells` and `#size-cells`, `reg`;
+  - `interrupts`, with `interrupt-parent` and `#interrupt-cells`;
+  - `status`.
+  - A malformed blob is refused without a panic.
+- **From the tree into `board.rs`'s one record,** whichever source filled it:
+  - the GIC: `arm,gic-400`, `arm,cortex-a15-gic`, `arm,gic-v3`;
+  - the timer's interrupts: `arm,armv8-timer`;
+  - the CPUs: `reg` as the MPIDR, `enable-method = "psci"`;
+  - PSCI's conduit: `/psci`, `method`;
+  - the console from `/chosen` `stdout-path`: `arm,pl011`, `snps,dw-apb-uart`, `ns16550a`;
+  - `/reserved-memory` and the memory reservation block, kept out of the frames the kernel hands out;
+  - a `simple-framebuffer` node, if the firmware gave no GOP.
+- **Memory** still comes from the UEFI map.
+- **The kernel's line:** `MIND CORE KERNEL: BOARD FROM THE DEVICE TREE …`.
+
+## Acceptance criteria
+
+- **Host tests** with:
+  - QEMU `virt`'s tree, dumped with `-machine dumpdtb`;
+  - the PinePhone's tree (Linux's `sun50i-a64-pinephone-1.2.dts`), its licence checked and recorded in THIRD_PARTY.md;
+  - truncated and random blobs.
+- **The `devicetree` suite** (QEMU `virt,acpi=off`) boots to the shell with the GIC, four CPUs through PSCI and the PL011, all read from the tree.
+- **docs/profile/aarch64** says so.
+
+## Related
+
+[100000](../issues/100000-a-phone-the-pinephone-first.md), [210-APL-0002](../issues/210-APL-0002-board-from-the-device-tree.md), [100000-KRN-0171](../issues/100000-KRN-0171-platform-devices-from-the-device-tree.md), [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md), [100000-PRT-0012](../issues/100000-PRT-0012-the-a64s-counter-erratum.md), [205](../issues/205-aarch64-boards.md) (the board from ACPI).
+
+## Resolution
+
+**Where the plan's parts went.** The plan named one file, `kernel/src/arch/aarch64/fdt.rs`. The work is in two:
+- **The reader and the board, pure:** `common/fdt.rs`. The kernel, the loader and the host tests share it.
+- **The kernel's board code:** `kernel/src/arch/aarch64/devicetree.rs`, which fills `board.rs`'s one record as `acpi.rs` does.
+
+**The reader** (`common/fdt.rs`):
+- the header of version 17 (or one compatible with it), its blocks within its size and the blob;
+- tokens bounds-checked, nodes at most 16 deep; a second root is never read;
+- `#address-cells` and `#size-cells`, `reg` translated to the CPU's addresses through each ancestor's `ranges` (none maps nothing, an empty one maps one to one);
+- `interrupts` with the inherited `interrupt-parent`, `status`, paths with or without unit addresses, `/aliases`, phandles;
+- the memory reservation block.
+
+**The board from it:**
+- **the GIC:**
+  - `arm,gic-400` and its kind: the distributor, the CPU interface, a GICv2m frame;
+  - `arm,gic-v3`: the distributor, the first redistributor, the ITS;
+- **the virtual timer's PPI** (`arm,armv8-timer`'s third interrupt), and whether the node names a counter erratum (the A64's; [100000-PRT-0012](../issues/100000-PRT-0012-the-a64s-counter-erratum.md));
+- **the CPUs PSCI starts** (`reg` as the MPIDR, `enable-method = "psci"`) and PSCI's conduit (`/psci`, 0.2 or later);
+- **the console `stdout-path` names,** through an alias or a path, with its options' speed: a PL011 or SBSA UART, or a 16550 with its `reg-shift` and `reg-io-width`;
+- **a PL031,** a generic ECAM with its bus range, and a `simple-framebuffer` (reported, not used);
+- **the reserved ranges** (the reservation block and `/reserved-memory`).
+
+**The kernel:**
+- **`main.rs`:** with no ACPI root, the board comes from the tree (`platform::board_from_tree`), and `acpi::init` is not called. The line `MIND CORE KERNEL: BOARD FROM THE DEVICE TREE: …` names what it read.
+- **`frames.rs`:** the frame pool leaves the reserved ranges out, even where the firmware's map calls them free.
+- **GICv2:** each CPU reads its own interface number from the distributor's banked `GICD_ITARGETSR0` (`interrupts.rs`), as the tree names none.
+- **PSCI's conduit** comes from the tree (`acpi::set_conduit`).
+- **A 16550 console** carries the kernel's lines ([100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md)). It is not lent to the shell's console, which drives a PL011 only.
+
+**The loader** (`bootloader/src/main.rs`, aarch64):
+- **Its own line** is the SPCR's UART under ACPI, else the tree's console: `BOOT: THE LINE: …`.
+  - Before this, it wrote QEMU `virt`'s PL011 address on every board.
+  - On a Raspberry Pi 4 that address is RAM.
+- **With no graphics output at all** (U-Boot drives no display on a board whose panel it does not know), it starts the system without a screen, instead of stopping.
+
+**Tests:**
+- **`tests/fdt_host.rs`,** seven tests, run by `scripts/host_tests.sh`:
+  - QEMU 8.2's `virt` tree as U-Boot 2025.10 hands it on (GICv2, four CPUs, 2 GiB);
+  - its GICv3 tree from `-machine dumpdtb`;
+  - the PinePhone's (Linux v6.12's `sun50i-a64-pinephone-1.2.dts`, compiled without its GPL-2.0-only OPP file, recorded in THIRD_PARTY.md);
+  - trees written in the test: `ranges`, an alias with options, a 16550 with byte registers, disabled nodes, a spin-table CPU, reserved memory, consoles it does not drive, too deep a tree, a second root;
+  - every seventh truncation of the PinePhone's tree, and 1500 trees with four bytes mutated.
+- **The `devicetree` suite** (QEMU `virt,gic-version=3,highmem=off,acpi=off` under AAVMF):
+  - the loader's line and the kernel's board come from the tree (GICv3, the PL011, PPI 27, four CPUs through PSCI, the ECAM);
+  - AAVMF's PL031 is left out, as the tree it hands on does not enable it;
+  - the shell starts with every CPU online.
+- **The new group** `aarch64: the board from a device tree, under U-Boot`: QEMU `virt,acpi=off,gic-version=2,highmem=off`, four Cortex-A53, U-Boot 2025.10's UEFI from `scripts/fetch_uboot.sh` (Ubuntu 24.04's `u-boot-qemu`, pinned by SHA-256), as Tow-Boot gives the PinePhone, with the suites `normal` and `smp`. The PinePhone's core has no PAN, so the boot line says `PROTECTION: PXN`. `net` passed there up to its SFTP login, which needs the device key: a Cortex-A53 has no RNDR, so keystore makes none (`[KEYSTORE] NO RNDR: NO DEVICE KEY`). That is a finding for the phone (100000), not for the tree; `net` stays on the other groups.
+- **Where these ran** (2026-11-08): the kernel session's container, Ubuntu 24.04.5, QEMU 8.2.2 (Ubuntu), AAVMF 2024.02, TCG. A QEMU run says nothing about a real board (MC-12.1).
+
+**docs/profile/aarch64** (README version 1.4, and the TCB) says what is read and where it ran.
+
+**Left to other tasks:**
+- the shell's console on a 16550 and any run of a 16550 ([100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md));
+- the A64's counter erratum ([100000-PRT-0012](../issues/100000-PRT-0012-the-a64s-counter-erratum.md));
+- platform devices by node ([100000-KRN-0171](../issues/100000-KRN-0171-platform-devices-from-the-device-tree.md));
+- the simple framebuffer as the screen;
+- the kernel's version-refusal message on a board without ACPI, which still finds its console from the SPCR only (`acpi::early`);
+- a device key on a core without RNDR, such as the A64's: noted in 100000.

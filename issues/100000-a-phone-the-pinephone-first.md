@@ -57,7 +57,9 @@ As found on 2026-10-25 (sources at the end). Each point is checked on the phone 
 
 ### Stage 0: in QEMU and on the host, started once the phone is at hand
 
-- [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md): the board from the device tree.
+- [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done): the board from the device tree. Done (2026-11-08): MIND Core boots to the shell on QEMU `virt` without ACPI, under AAVMF and under U-Boot's UEFI.
+- [100000-PRT-0012](100000-PRT-0012-the-a64s-counter-erratum.md): the A64's counter erratum, which the PinePhone's tree names.
+- **Found on the way (2026-11-08):** a Cortex-A53 has no RNDR, so `keystore` makes no device key there (`[KEYSTORE] NO RNDR: NO DEVICE KEY`), and what needs it does not work there: the `net` suite's SFTP login with the device key failed for that reason (what else needs the key is to be listed). The A64 has its own random number source (its crypto engine); a task for it is to be opened with stage 1.
 - [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md): platform devices from the device tree (an ABI change).
 - [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md): a 16550 UART in memory as the console.
 - The phone's device tree from Linux (`sun50i-a64-pinephone-1.2.dts`) for host tests, with its licence checked and recorded in THIRD_PARTY.md.
