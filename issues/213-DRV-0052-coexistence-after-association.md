@@ -64,7 +64,30 @@ The source and the layouts: [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852b
 - **The gateway pings,** every 2 minutes: 0 to 33 % lost.
 - **After 9 minutes** the data mode stopped: one frame's release did not come in its time (`Tx(Io(Timeout))` after 5 submissions). That is [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)'s open problem, not the inquiry.
 
-One run on that machine (MC-12.1). The acceptance criterion, an hour across ten inquiries, is not met yet.
+**With `KEEP_LATE`** (`rtw89_late1`, 1b4e3942):
+- **About 20 minutes:** four inquiries passed, and five late frames were answered as not acknowledged, their releases coming in the extra second. The gateway pings lost 0 to 33 %.
+- **Then the queue's own budget** ran out inside a step, before the service's 90 ms (`Tx(Io(Timeout))`, 7 submissions).
+- **Since then** the queue gets the late second at once, so only the service's deadlines end a frame (`rtw89_late2`).
+
+**`rtw89_late2`** (c9cbde29):
+- **About 25 minutes:** five inquiries passed, and 15 late frames were answered and released. The gateway pings lost 0 to 33 % (one round 870 ms at most).
+- **Then two firmware recoveries, 60 ms apart** (`CMAC_ERR_ISR` 8), were outlasted. The next coexistence reconcile found the radio off (`Coexistence(RadioOff)`), and the data mode stopped.
+- **Since then** `OUTLAST_SER` outlasts a recovery found in the reconcile too, and the reconcile runs again (`rtw89_late3`).
+
+**`rtw89_late3`** (2169b65c):
+- **42 minutes:** eight inquiries passed, and 27 late frames were answered and released. The gateway pings lost nothing in most rounds.
+- **Then the session's permit check found the scheduler at zero** (`Session(Permit(PowerState at 0xc348))`), a firmware recovery under way. That check runs in every operation, past the outlasting at its start.
+- **Since then,** under `OUTLAST_SER`, the data permit takes a zeroed scheduler as the next operation's to outlast (`rtw89_late4`).
+
+**`rtw89_late4`** (5cba4875) stopped after 16 s:
+- a recovery at 5.6 s was outlasted;
+- then the coexistence reconcile found SYS_FUNC_EN at `0xDE` (`Coexistence(Register(PowerState at 2))`).
+
+So the reconcile now retries on any coexistence error during which a recovery is found, and only then (`rtw89_late6`). One admission between them failed in TSSI `ConfigureA`, path A's table read back changed, and the driver restarted.
+
+**Across these runs:** 18 whole inquiries (1, 4, 5 and 8) passed with the station joined, and none lost the network. Each stop was another cause: a late frame's queue budget, or a recovery during the reconcile.
+
+One machine and one AP (MC-12.1). The acceptance criterion, an hour across ten inquiries in one run, is not met yet.
 
 ## Related
 
