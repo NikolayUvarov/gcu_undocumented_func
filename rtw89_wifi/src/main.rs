@@ -357,9 +357,19 @@ fn main(_info: &'static BootInfo) {
         dma: None, queues: None, prepared: None, ready: None, runtime: None, capabilities: None, receiving: None, radio_attempted: false, platform };
     let report = startup::run(&mut attempt);
     pieces("DIAGNOSTIC", &report);
+    let clean = [&report.stop, &report.power_off, &report.quiesce].iter().all(|step| matches!(step, Some(Ok(()))));
+    if RESTART_AFTER_FAILURE && report.failure.is_some() && clean {
+        mind::println!("[RTW89] THE DEVICE STOPPED CLEANLY: EXITING, SO THAT INIT STARTS A FRESH DRIVER (DEBUG)");
+        mind::process::exit_with(1)
+    }
     mind::println!("[RTW89] DMA RETAINED={}; NO RETRY, CALIBRATED RF, WLAN ENDPOINT OR NETWORK LINK", attempt.dma.is_some());
     if serving() { receive_service::absent_forever(); }
     idle()
 }
+
+// DEBUG (the maintainer, 2026-11-08: everything runs first, hardening later): after a failure that stopped, powered off
+// and quiesced the device, the driver exits; init restarts it within its budget, the device quiesced and the DMA region
+// cleared. False: it serves `absent` for good.
+const RESTART_AFTER_FAILURE: bool = true;
 
 fn idle() -> ! { loop { mind::time::sleep(60_000); } }

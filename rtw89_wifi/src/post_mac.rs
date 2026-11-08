@@ -150,10 +150,14 @@ fn guard(bus:&mut impl Bus,queue:&mut Queue<'_>,rings:&rx::Rings<'_>,board:&Boar
     rings.installed(bus)?;
     Ok(())
 }
+// DEBUG (the Ryzen, 2026-11-08: everything runs first, hardening later): a release report per frame. Linux batches 30
+// with many frames in flight; with one in flight each try waited the batch's timeout, about 10 ms, so wlan's 15 tries
+// outran a send's time. False: Linux's 30.
+const REPORT_EACH:bool=true;
 fn host_reports(bus:&mut impl RegisterIo)->io::Result<()>{
     modify(bus,R_AX_WDRLS_CFG,B_AX_WDRLS_MODE_MASK,0,0)?;
     modify(bus,R_AX_RLSRPT0_CFG0,0,B_AX_RLSRPT0_FLTR_MAP_MASK,0)?;
-    modify(bus,R_AX_RLSRPT0_CFG1,B_AX_RLSRPT0_AGGNUM_MASK,30,0)?;
+    modify(bus,R_AX_RLSRPT0_CFG1,B_AX_RLSRPT0_AGGNUM_MASK,if REPORT_EACH{1}else{30},0)?;
     modify(bus,R_AX_RLSRPT0_CFG1,B_AX_RLSRPT0_TO_MASK,255<<16,0)
 }
 fn pcie(bus:&mut impl RegisterIo)->io::Result<()>{
