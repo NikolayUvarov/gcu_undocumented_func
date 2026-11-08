@@ -7403,7 +7403,7 @@ def edit_check(vm):
     require(vm.command("ls ram:"), "1 ENTRIES, 1 FILES")
     require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
     # T4: a Rust file in its language's colours on the classic blue, pixel for pixel: keyword, plain text, comment.
-    require(vm.command("write ram:colour.rs fn main() // note"), "WROTE 19 BYTES TO data/power.txt")  # no braces: msh would read them
+    require(vm.command("write ram:colour.rs fn main() // note"), "WROTE 18 BYTES")  # no braces: msh would read them
     start("ram:colour.rs")
     keys(b"\x1b[F", "LINE=1 COL=18 ")  # End: the cursor's underline off the cells checked
     time.sleep(.3)
