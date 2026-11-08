@@ -1,6 +1,6 @@
 # 351-STO-0006 — Releases as objects in the block store, the running and last-known-good ones pinned
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** in progress (2026-11-08) · **Blocked by:** `init`'s store client for the updater ([requests-KRN.md](requests-KRN.md)); the updater's part ([requests-UPD.md](requests-UPD.md)) · the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater, done) · **Main task:** [351](351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** in progress (2026-11-08) · **Blocked by:** `init`'s store client for the updater ([351-KRN-0218](351-KRN-0218-the-updaters-store-client.md)); the updater's part ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md)) · the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater, done) · **Main task:** [351](351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
 
 Numbered by the storage track from the kernel track's request in `requests-STO.md` (recorded 2026-10-08 for main task 351, phase 4, at the maintainer's request).
 
