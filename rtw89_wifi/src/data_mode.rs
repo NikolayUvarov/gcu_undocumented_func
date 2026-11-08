@@ -326,6 +326,8 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn snapshot(&self)->Option<Snapshot>{self.snapshot}
     /// What the pending send has seen (a timeout's diagnostic).
     pub(crate) fn transmit_seen(&self)->tx::Seen{self.queue.seen()}
+    /// More time for the pending send (service.rs's KEEP_LATE).
+    pub(crate) fn extend_send(&mut self,us:u64){self.queue.extend(us);self.tx_deadline=self.tx_deadline.map(|at|at.saturating_add(us));}
     /// The time outlasted recoveries added to pending frames so far (OUTLAST_SER).
     pub(crate) fn grace_us(&self)->u64{self.grace_us}
     /// The firmware recovery outlasted since the last call, if any (OUTLAST_SER).

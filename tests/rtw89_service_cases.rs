@@ -111,7 +111,7 @@ fn service_continuous_ipc_and_rx_each_progress_with_fixed_storage(){run(0,true,t
 
 #[test]
 fn service_no_final_tx_report_times_out_answers_every_owner_and_retains_data(){run(7,true,true,|data,c|{
-    ipc::reset();let mut service=Service::new(data).unwrap();let wait=ipc::words(6,0);assert!(service.step());
+    ipc::reset();let mut service=Service::new(data).unwrap().keep_late(false);let wait=ipc::words(6,0);assert!(service.step());
     let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());let busy=ipc::buffer(4,&body(&frame(),12,1));
     assert!(service.step());error(busy,wlanhw::Error::Busy);ipc::advance(101);assert!(!service.step());
     error(send,wlanhw::Error::Failed);assert_eq!(words(wait),[0,0]);assert_eq!(c.borrow().published,1);
@@ -244,7 +244,7 @@ fn service_a_pending_frame_outlasts_a_recovery_longer_than_its_time_left(){run(0
 // The service's own deadline for a frame moves by the same grace; past it, the frame still times out.
 #[test]
 fn service_a_frame_held_across_a_recovery_times_out_only_after_its_grace(){run(7,true,true,|data,c|{
-    ipc::reset();let mut service=Service::new(data).unwrap();
+    ipc::reset();let mut service=Service::new(data).unwrap().keep_late(false);
     let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
     {let mut c=c.borrow_mut();c.ser=true;c.ser_heal=Some(100);}ipc::advance(80);assert!(service.step());
     assert!(service.take_recovery().is_some());ipc::advance(30);assert!(service.step(),"110 ms, inside the grace");
@@ -261,6 +261,22 @@ fn service_watches_no_change_after_the_data_modes_own_shutdown(){run(0,true,true
     let stopped=service.stop();assert!(matches!(stopped.failure,Some(Fatal::Radio(_))));
     assert!(stopped.changes.0[8].is_none()&&stopped.changes.0[10].is_none(),"{:?}",stopped.changes);
     let found=stopped.owner.snapshot().unwrap();assert_eq!(found.0[8]>>16&3,3,"the BB on before the shutdown");clean();
+});}
+
+// DEBUG KEEP_LATE (the Ryzen, 2026-11-08): a send that outruns its time is answered as not acknowledged and the service
+// goes on, sending nothing else until its release; past LATE_MS more it stops. Fault 7: no final report ever comes.
+#[test]
+fn service_a_late_send_is_answered_unacknowledged_and_its_release_awaited(){run(7,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(send).is_none());
+    ipc::advance(91);assert!(service.step(),"the service goes on");
+    let(w,b)=ipc::response(send).unwrap();assert_eq!(w,[2<<16,0]);let mut r=Reader::new(&b[..2]);
+    assert!(!wlanhw::Sent::decode(&mut r).unwrap().acked);
+    let event=service.take_event();assert!(matches!(event,Some(Event::LateFrame{count:1,length:64,..})),"{event:?}");
+    let busy=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(busy,wlanhw::Error::Busy);
+    ipc::advance(1001);assert!(!service.step());assert_eq!(c.borrow().published,1);
+    let stopped=service.stop();assert!(matches!(stopped.failure,Some(Fatal::TransmitTimeout(_))));clean();
 });}
 
 // One step drains what waits (DRAIN passes), not one descriptor: the Ryzen's packet buffer filled at one a step.
