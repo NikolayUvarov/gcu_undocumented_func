@@ -31,7 +31,7 @@ So the work splits three ways:
 1. **`STO`, the store's owner for the updater** (this task). The badge's bits 4 to 7 name an owner apart from its rights, and `mind::blockstore::OWNER_UPDATER` (`0x10`) is the updater's.
    - Its pins and its account are its own: no other client ends them, whatever rights it holds.
    - The host tests show a release tree, pinned by that owner, kept whole through the removal of every name and a collection, and read back with each block checked.
-   - The quota stays three quarters of the medium for every owner. That holds two releases once the store's medium is at least three times a release (about 26 MiB on x86 now), and less, since the blocks two releases share are stored once. A quota of its own for the updater, and a bound on all owners together, stay open (303-STO-0002's "not done").
+   - The quota stays three quarters of the medium for every owner. An account counts each release whole (303-STO-0002), though the blocks two releases share are stored once. So the quota holds the running, the last known good and a staged release once the store's medium is at least four times a release (about 26 MiB on x86 now). A quota of its own for the updater, and a bound on all owners together, stay open (303-STO-0002's "not done").
 2. **`KRN`, `init`'s grant** ([351-KRN-0218](351-KRN-0218-the-updaters-store-client.md)):
    - the updater gets a store client badged `OWNER_UPDATER` with get, put and publish, when the store runs;
    - it starts after `blockstore`.

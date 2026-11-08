@@ -1,6 +1,6 @@
 # The updater
 
-**Version:** 0.8 (2026-10-25): the floor in the boot records, format 2; records of format 1 not read (351-UPD-0024); 0.7: the version floor raised to the channel's minimum; 0.6 (2026-10-24): the release's loader staged into its slot (351-UPD-0010); 0.5 (2026-10-23): metadata past its expiry, the policy and `metadata` (351-UPD-0025); 0.4 (2026-10-22): a fallback runs its slot's own applications (351-UPD-0023, 351-KRN-0151); 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
+**Version:** 0.9 (2026-11-08): releases kept in the block store, and a rollback writes a damaged slot again from there (351-UPD-0033, `update.wit` 1.4); 0.8 (2026-10-25): the floor in the boot records, format 2; records of format 1 not read (351-UPD-0024); 0.7: the version floor raised to the channel's minimum; 0.6 (2026-10-24): the release's loader staged into its slot (351-UPD-0010); 0.5 (2026-10-23): metadata past its expiry, the policy and `metadata` (351-UPD-0025); 0.4 (2026-10-22): a fallback runs its slot's own applications (351-UPD-0023, 351-KRN-0151); 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
 
 `updater` is the boot service that turns a published release ([publishing.md](publishing.md)) into a staged, verified slot ([slots.md](slots.md)), and does nothing more. It holds:
 - its own endpoint;
@@ -10,7 +10,8 @@
 - `init`'s client badged for `reboot`;
 - the log;
 - the flow grant the network policy gives `updater`;
-- the TLS client.
+- the TLS client;
+- the block store's client badged `OWNER_UPDATER` with get, put and publish, when the store runs (351-KRN-0218).
 
 It cannot write anything else, and the manifest it reads grants nothing (MC-3.11).
 
@@ -33,7 +34,7 @@ The public keys are built in: `$MIND_RELEASE_PUBLIC_KEY` and `$MIND_BOOT_PUBLIC_
 | `check` | The channel, checked as above. Returns what it offers and the running version. |
 | `fetch` | `check`, then the newer release into the slot that did not boot. First it removes the slot's `CHANNEL`, `MANIFEST`, `MANIFEST.SIG`, and every file the new manifest does not list (the bootloader refuses a slot with a boot file its manifest does not list). Then it fetches every boot file, the loader and every application. An application the volume already holds as listed, in the running slot or at the root, is copied from there instead. A partial file is resumed where it ends, a cut connection is resumed with `Range`, and a file that is not as listed is fetched once more whole, then refused. Last come `MANIFEST`, `MANIFEST.SIG` and `CHANNEL`: a slot holds a channel only once all of it is there. |
 | `apply` | Checks the other slot as the bootloader will: the manifest's signature, every boot file it lists, no boot file it does not list, and its loader as listed if it holds one (a slot staged before 351-UPD-0010 holds none). A slot that holds applications must hold every one the manifest lists and none it does not. A slot staged before 351-UPD-0023 holds none, and the root's serve it. The channel kept there must show a version above the running one, and must not have expired (`expired`). Then it writes the record that boots that slot on trial with 1 to 9 tries, falling back to the running slot, and asks `init` to restart the machine. |
-| `rollback` | The same check of the other slot. The channel kept there must show a version not below the highest minimum the updater has seen (the running slot's channel, and the last check). Then it writes the record that boots that slot on trial, falling back to the running one, and asks `init` to restart. |
+| `rollback` | The same check of the other slot. If that slot is not as its manifest lists it, and the block store keeps the last known good release, that release is first written there again from the store (1.4, [below](#releases-kept-in-the-block-store-351-upd-0033)). The channel kept there must show a version not below the highest minimum the updater has seen (the running slot's channel, and the last check). Then it writes the record that boots that slot on trial, falling back to the running one, and asks `init` to restart. |
 | (the floor) | Not a request: once the running slot is confirmed, the updater raises the version floor to the highest minimum a checked channel named, if the running slot's own manifest names that version or above; never down. It writes the newer record again, one on, with that floor (`plan::raise`), and every other record it writes carries the floor on. Records of format 1 it names at start and does not read (`RECORD MIND/BOOT0 OF FORMAT 1, NOT READ`). The bootloader boots no slot below it ([slots.md](slots.md#the-version-floor-351-upd-0024)). A rollback to a release at or above the minimum stays allowed. |
 | `status` | The running slot, whether it is on trial, its version, the slot the newer record names and whether it is confirmed, the version staged in the other slot, and the last failure. |
 | `metadata` (1.1) | The channel the updater holds, checked with the release key: the one it last read from the source, a bundle's, or else the one kept in the running slot. Its name, version, minimum and expiry, whether the expiry has passed, and whether it was read since the updater started. |
@@ -51,6 +52,28 @@ The other slot is not written while the running slot is on trial and not yet con
 - Until the trial is settled it does nothing automatic.
 
 **Records.** Each record goes into the file that does not hold the newer valid record, one past its sequence ([slots.md](slots.md)). It is written whole and in place, then read back. A sequence that could not count two further (a trial and its failure) is not written. `updater/src/plan.rs` chooses the record; its host tests run the bootloader's own encoding (`tests/updater_host.rs`).
+
+## Releases kept in the block store (351-UPD-0033)
+
+MC-9.3 asks that the recovery images and the objects they need be kept from ordinary cleanup. The updater keeps its releases in the block store ([docs/storage](../storage/README.md)) when the store's medium outlives a reset. At start it says which: `[UPDATER] STORE: RELEASES ARE KEPT IN THE BLOCK STORE`, or why not (no client, not mounted, a RAM disk).
+
+- **A release is a tree** of the release layout (`updater/src/kept.rs`):
+  - `channels/<name>`, the channel kept with it;
+  - `releases/<version>/<processor>/MANIFEST` and `MANIFEST.SIG`;
+  - the blob of each file the manifest lists for a slot, under the first two digits of its name (`blobs/ab/ab…`), so that no directory is over a block.
+- **Pinned by the updater's own owner.** Its client is badged `OWNER_UPDATER` ([351-STO-0006](../../issues/351-STO-0006-releases-pinned-in-the-store.md)). Collection never frees what a pin retains, and no client of another owner ends the pin, whatever its rights. No name points at a release: a name keeps its versions, which would hold a release past its pin.
+- **When a release is kept:**
+  - the running one, at start and once a trial is confirmed, if the store does not keep it yet. Its manifest must be the one booted and the boot key's, and its channel the release key's naming it;
+  - a staged one, once `fetch` or `install-commit` has written it and its files passed their checks.
+
+  Each file is read from the slot (or, for an application a slot does not hold, from the root) and checked by size and SHA-256 as it is put. A blob a kept release already holds is taken from that tree, not put again. The log says what was put and taken: `[UPDATER] STORE: VERSION 6 KEPT AS PIN …, ROOT …: … FILES, … BYTES PUT FROM SLOT B, … TAKEN FROM A KEPT RELEASE, IN … MS`.
+- **Which stay** (`plan::keeps`), after a confirmed boot and after a staging:
+  - the running release;
+  - the last known good: the newest below the running one and not below the minimum (the highest the updater has seen, or the records' floor), which a rollback may boot;
+  - a staged release above the running one.
+
+  The pins of the others end (`[UPDATER] STORE: VERSION 4 LET GO (PIN 1)`), and the log lists what stays (`[UPDATER] STORE KEEPS VERSIONS 6, 5`). Nothing ends while the running slot is on trial, since the other slot is then its fallback. While the running version is not known, nothing ends.
+- **A damaged slot written again.** `rollback` checks the other slot first. If it is not as its manifest lists it, the last known good release the store keeps is written there again as from any source (`Source::Store`): its channel against the release key and its version, its manifest against the channel and the boot key, and every file by size and SHA-256. An application the running slot holds as listed is copied from there. The channel's expiry is not asked, as for a rollback. Then the slot is checked as the bootloader will check it, and booted on trial.
 
 ## Metadata past its expiry
 
