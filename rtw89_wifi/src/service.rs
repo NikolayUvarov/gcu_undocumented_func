@@ -11,6 +11,9 @@ const WAIT_MS:u64=1000;
 const WAITERS:usize=4;
 const FRAMES:usize=4;
 const FRAME_BYTES:usize=frames::HEADER_BYTES+frames::FRAME_MAX;
+// DEBUG (the maintainer, 2026-11-08: everything runs first, hardening later): a country that refuses the admitted
+// channel is logged as such, answered as applied, and the radio keeps sending. False is wlanhw 1.2's `failed`.
+const KEEP_SENDING:bool=true;
 
 #[derive(Debug)]
 pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTimeout,UnknownAttempts,RetainedControl,Frame(frames::Error)}
@@ -29,7 +32,7 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     pending:Option<Pending>,waiters:[Option<Waiter>;WAITERS],frames:Frames,last_ms:u64,failure:Option<Fatal>,
     // The EIRP the channel was admitted under and the settings taken so far; `refused`: a country it cannot keep, so
     // nothing is sent (wlanhw 1.2). `event`: one for the caller's log.
-    country:Option<(i8,u64)>,refused:bool,event:Option<Event>,
+    country:Option<(i8,u64)>,refused:bool,event:Option<Event>,strict:bool,
 }
 pub(crate) struct Stopped<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     pub owner:&'s mut DataSession<'q,'memory,'p,'a,'command,'receive,B>,
@@ -49,12 +52,15 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     pub(crate) fn new(owner:&'s mut DataSession<'q,'memory,'p,'a,'command,'receive,B>)->Result<Self,sys::Error>{
         if RECEIVE.into_iter().any(|slot|dev::cap_info(slot).0!=mind::abi::CAP_KIND_NONE){return Err(sys::Error::NoSlot)}
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:time::monotonic_ns()/1_000_000,failure:None,
-            country:None,refused:false,event:None})
+            country:None,refused:false,event:None,strict:!KEEP_SENDING})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
     #[cfg(test)]
     pub(crate) fn take_event(&mut self)->Option<Event>{self.event.take()}
+    /// Whether a country that refuses the channel stops sending (wlanhw 1.2), or is only logged (KEEP_SENDING).
+    #[cfg(test)]
+    pub(crate) fn strict(mut self,on:bool)->Self{self.strict=on;self}
     fn info(&mut self)->wlanhw::Info{
         let mut channels=List::default();channels.push(self.data().channel());
         // Its own channels: 1 to 13 on 2.4 GHz at 20 MHz, its library's scope (wlanhw.wit 2.0, 550-NET-0059).
@@ -70,8 +76,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         match Limits::accept(code,*settings,limits.iter().map(|l|(l.channel,l.eirp,l.listen))){
             Ok(taken)=>{
                 let kept=taken.applied(channel).is_some_and(|a|!a.listen&&a.eirp_half_dbm>=*eirp);
-                self.event=Some(Event::DataCountry{code:taken.code(),channel,kept});
-                if kept{Ok(())}else{Err(wlanhw::Error::Failed)}
+                self.event=Some(Event::DataCountry{code:taken.code(),channel,kept,enforced:self.strict});
+                if kept||!self.strict{Ok(())}else{Err(wlanhw::Error::Failed)}
             }
             Err(Refusal::Invalid)=>Err(wlanhw::Error::Invalid),
             Err(Refusal::Failed)=>Err(wlanhw::Error::Failed),
@@ -183,7 +189,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             // wlanhw 1.2 (550-NET-0035): `failed` leaves the radio sending nothing until a country it can keep.
             wlanhw::Request::SetCountry{code,limits,..}=>{
                 let reply=self.country(code.as_str(),limits.as_slice());
-                match reply{Ok(())=>self.refused=false,Err(wlanhw::Error::Failed)=>self.refused=true,Err(_)=>{}}
+                match reply{Ok(())=>self.refused=false,Err(wlanhw::Error::Failed)=>self.refused=self.strict,Err(_)=>{}}
                 let info=self.info();let _=wlanhw::reply_set_country(call,reply.map(|()|&info));
             },
         }

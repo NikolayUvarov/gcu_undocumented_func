@@ -29,8 +29,9 @@ pub enum Event {
     /// A scan the station ended (its filter left `all-beacons`): its passive tunes, the longest, the frames kept for the
     /// station and those dropped because four were already waiting.
     Scanned { tunes: u32, longest_us: u64, kept: u32, dropped: u32 },
-    /// A `set-country` in data mode: `kept` if it still lets the radio send on the admitted `channel` at no less EIRP.
-    DataCountry { code: [u8; 2], channel: u8, kept: bool },
+    /// A `set-country` in data mode: `kept` if it still lets the radio send on the admitted `channel` at no less EIRP;
+    /// if not, `enforced` when sending stops, and otherwise only logged (service.rs's KEEP_SENDING).
+    DataCountry { code: [u8; 2], channel: u8, kept: bool, enforced: bool },
 }
 
 #[derive(Debug)]

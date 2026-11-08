@@ -172,15 +172,15 @@ fn sends(service:&mut Service<'_,'_,'_,'_,'_,'_,'_,Device>)->bool{
 #[test]
 fn service_keeps_its_channel_under_a_country_that_allows_its_admitted_power_and_sends_nothing_under_one_that_does_not(){run(0,true,true,|data,c|{
     use crate::receive_service::Event;
-    ipc::reset();let mut service=Service::new(data).unwrap().under(40,1);
+    ipc::reset();let mut service=Service::new(data).unwrap().under(40,1).strict(true);
     let all=|eirp|(1..=13).map(|ch|(ch,eirp,false)).collect::<Vec<_>>();
     let id=ipc::buffer(9,&country("UZ",&all(20)));assert!(service.step());assert_eq!(channels(id),[6]);
-    assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:true}));assert!(sends(&mut service));
+    assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:true,enforced:true}));assert!(sends(&mut service));
     // 10 dBm on 6 is less than it was admitted at; listening only there is no sending either.
     let mut listen=all(20);listen[5].2=true;
     for limits in[all(10),listen]{
         let id=ipc::buffer(9,&country("UZ",&limits));assert!(service.step());error(id,wlanhw::Error::Failed);
-        assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:false}));
+        assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:false,enforced:true}));
         assert!(!sends(&mut service),"nothing is sent under a country it cannot keep");
     }
     // A malformed request changes nothing; a country it can keep lets it send again: US caps 1-11 at 30 dBm.
@@ -188,10 +188,19 @@ fn service_keeps_its_channel_under_a_country_that_allows_its_admitted_power_and_
     assert_eq!(service.take_event(),None);assert!(!sends(&mut service));
     let us:Vec<_>=(1..=11).map(|ch|(ch,30,false)).collect();
     let id=ipc::buffer(9,&country("US",&us));assert!(service.step());assert_eq!(channels(id),[6]);
-    assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"US",channel:6,kept:true}));assert!(sends(&mut service));
+    assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"US",channel:6,kept:true,enforced:true}));assert!(sends(&mut service));
     assert_eq!(c.borrow().published,2);
     let stopped=service.stop();assert!(stopped.failure.is_none());clean();
 });
+    // The debug mode (KEEP_SENDING, the default until hardening): the refusal is logged, answered as applied, and sent on.
+    run(0,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().under(40,1);
+        let id=ipc::buffer(9,&country("UZ",&(1..=13).map(|ch|(ch,10,false)).collect::<Vec<_>>()));assert!(service.step());
+        assert_eq!(channels(id),[6]);
+        assert_eq!(service.take_event(),Some(Event::DataCountry{code:*b"UZ",channel:6,kept:false,enforced:false}));
+        assert!(sends(&mut service));assert_eq!(c.borrow().published,1);drop(service);clean();
+    });
     // A channel admitted under no known country keeps none.
     run(0,true,true,|data,_|{
         ipc::reset();let mut service=Service::new(data).unwrap();

@@ -165,7 +165,9 @@ It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 
 **In data mode** (`service.rs`):
 - `set-channel` takes the admitted channel only; others are `invalid`;
-- `set-country` keeps the channel when the new limits still let the radio send there at no less EIRP than it was admitted under. It answers `info` and logs `[RTW89] COUNTRY XX IN DATA MODE: CHANNEL n KEPT`. Otherwise it answers `failed` and logs `… NOT ALLOWED AT ITS ADMITTED POWER …`, and every `send` is `failed` until a country it can keep.
+- `set-country` keeps the channel when the new limits still let the radio send there at no less EIRP than it was admitted under. It answers `info` and logs `[RTW89] COUNTRY XX IN DATA MODE: CHANNEL n KEPT`.
+- **Otherwise, for now, a debug mode** (`KEEP_SENDING` in `service.rs`, the maintainer's decision of 2026-11-08: everything runs first, hardening later). The driver logs `… NOT ALLOWED AT ITS ADMITTED POWER: SENDING SHOULD STOP; DEBUG MODE KEEPS SENDING`, answers `info` as if the limits were applied, and keeps sending at the admitted power. **This breaks wlanhw 1.2's rule** that a radio which cannot apply its limits sends nothing.
+- With `KEEP_SENDING` false, it answers `failed` and logs `… NOTHING SENT UNTIL A COUNTRY ALLOWS IT`, and every `send` is `failed` until a country it can keep. The host tests run both modes.
 
 After a stop it answers `no-device` for as long as the process lives (`absent_forever`).
 
