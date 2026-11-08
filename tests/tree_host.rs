@@ -2,7 +2,9 @@
 //! walk of a tree of them. Node bytes are checked against an encoding written here from the schema; every non-canonical
 //! node, bad entry and node over a block is refused; a walk visits exactly the blocks of a tree, and refuses a missing
 //! block, a changed one, an entry that disagrees with its object and a tree past the depth. Two roots compared
-//! (311-STO-0039) against a comparison of the trees' models, random ones among them, an equal subtree never read.
+//! (311-STO-0039) against a comparison of the trees' models, random ones among them, an equal subtree never read. A tree's
+//! files listed with their paths (351-STO-0006) as the models list them, each directory checked, within the steps, depth
+//! and path given.
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -17,7 +19,7 @@ use cid::{Cid, Codec};
 use dag::{Blocks, Builder, Error, CHUNK, FANOUT};
 use std::collections::{HashMap, HashSet};
 use std::collections::BTreeMap;
-use tree::{decode, diff, encode, size, walk, Change, Entry, Kind, Side, DEPTH, NAME_MAX, PATH_MAX};
+use tree::{decode, diff, encode, files, size, walk, Change, Entry, Kind, Side, DEPTH, NAME_MAX, PATH_MAX};
 
 /// Blocks in memory; `replace` makes the store answer a CID with other bytes; `reads` counts the blocks read.
 #[derive(Default)]
@@ -636,4 +638,109 @@ fn a_comparison_is_bounded_by_its_steps_depth_and_path() {
     let mut left = u64::MAX;
     assert_eq!(diff(&mut blocks, Some(&both.0), Some(&both.1), [&mut one, &mut two], &mut path, &mut left, |_, _| { visits += 1; Err(Error::Store) }), Err(Error::Store));
     assert_eq!(visits, 1);
+}
+
+/// The files `files` lists under `root`: each path, size and CID; or its error.
+fn listing(blocks: &mut Memory, root: &Cid) -> Result<Vec<(String, u64, Cid)>, Error> {
+    let mut buffer = Box::new([0u8; CHUNK]);
+    let mut path = vec![0u8; PATH_MAX];
+    let mut left = u64::MAX;
+    let mut out = Vec::new();
+    files(blocks, root, &mut buffer, &mut path, &mut left, |_, path, size, cid| { out.push((String::from_utf8(path.to_vec()).unwrap(), size, *cid)); Ok(()) })?;
+    Ok(out)
+}
+
+/// The files of a model, as `files` should list them: depth first, in the names' order.
+fn model_files(blocks: &mut Memory, dir: &BTreeMap<String, M>, prefix: &str, out: &mut Vec<(String, u64, Cid)>) {
+    for (name, m) in dir {
+        let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        match m {
+            M::F(_) => { let s = side_of(blocks, m); out.push((path, s.size, s.cid)) }
+            M::D(entries) => model_files(blocks, entries, &path, out),
+        }
+    }
+}
+
+#[test]
+fn a_trees_files_are_listed_with_their_paths_and_read_back() {
+    let (mut blocks, root, _, [_, small, big]) = sample();
+    let listed = listing(&mut blocks, &root).unwrap();
+    let paths: Vec<&str> = listed.iter().map(|(p, _, _)| p.as_str()).collect();
+    // The empty directory lists nothing; a file named twice is listed at each path.
+    assert_eq!(paths, ["a.txt", "big.bin", "same.txt", "sub/b.txt", "sub/deeper/c.txt", "sub/deeper/nothing"]);
+    assert_eq!((listed[0].2, listed[2].2, listed[1].2), (small, small, big));
+    // Each file read through its CID gives its bytes, the size its entry gave.
+    let expected = [pattern(1, 100), pattern(4, 3 * CHUNK + 5), pattern(1, 100), pattern(3, CHUNK), pattern(2, 10), Vec::new()];
+    let mut buffer = Box::new([0u8; CHUNK]);
+    for ((path, size, cid), want) in listed.iter().zip(expected) {
+        let mut out = vec![0u8; *size as usize];
+        let mut done = 0;
+        while done < out.len() { done += dag::read_at(&mut blocks, cid, done as u64, &mut out[done..], &mut buffer).unwrap(); }
+        assert_eq!(out, want, "{path}");
+    }
+    // A visit's error ends the listing, and is its answer.
+    let mut path = vec![0u8; PATH_MAX];
+    let (mut left, mut visits) = (u64::MAX, 0);
+    assert_eq!(files(&mut blocks, &root, &mut buffer, &mut path, &mut left, |_, _, _, _| { visits += 1; Err(Error::Store) }), Err(Error::Store));
+    assert_eq!(visits, 1);
+}
+
+#[test]
+fn random_trees_list_their_files_as_their_models() {
+    let mut rng = Rng(351_0006);
+    let mut seen = 0;
+    for _ in 0..300 {
+        let mut blocks = Memory::default();
+        let model = random_dir(&mut rng, 0);
+        let root = build(&mut blocks, &model);
+        let mut expected = Vec::new();
+        model_files(&mut blocks, &model, "", &mut expected);
+        assert_eq!(listing(&mut blocks, &root).unwrap(), expected, "{model:?}");
+        seen += expected.len();
+    }
+    assert!(seen > 300, "{seen}");
+}
+
+#[test]
+fn a_listing_checks_each_directory_and_keeps_to_its_bounds() {
+    let (mut blocks, root, _, [sub, _, _]) = sample();
+    // A directory that is missing, or answered with other bytes.
+    let mut gone = Memory { blocks: blocks.blocks.clone(), ..Default::default() };
+    gone.blocks.remove(&sub);
+    assert_eq!(listing(&mut gone, &root), Err(Error::NotFound));
+    blocks.replace.insert(sub, put_dir_bytes(&[]));
+    assert_eq!(listing(&mut blocks, &root), Err(Error::Corrupt));
+    blocks.replace.clear();
+    // An entry that gives a directory another count than it has, and a file's object where the root belongs.
+    let inner = put_dir(&mut blocks, &[]);
+    let wrong = put_dir(&mut blocks, &[Entry { name: b"d", kind: Kind::Directory, size: 1, cid: inner }]);
+    assert_eq!(listing(&mut blocks, &wrong), Err(Error::Shape));
+    let (raw, _) = store(&mut blocks, b"a file");
+    assert_eq!(listing(&mut blocks, &raw), Err(Error::Shape));
+    // DEPTH directories hold a file at the bottom; one more is past the depth.
+    let chain = |blocks: &mut Memory, levels: usize| {
+        let mut m = d(&[("f", f("bottom"))]);
+        for _ in 1..levels { m = d(&[("dddd", M::D(m))]); }
+        build(blocks, &m)
+    };
+    let deep = chain(&mut blocks, DEPTH);
+    let listed = listing(&mut blocks, &deep).unwrap();
+    assert_eq!(listed[0].0, format!("{}f", "dddd/".repeat(DEPTH - 1)));
+    let past = chain(&mut blocks, DEPTH + 1);
+    assert_eq!(listing(&mut blocks, &past), Err(Error::Shape));
+    // The steps: each directory of n entries read n + 1 times, and each entry.
+    let needed = (DEPTH * 3) as u64;
+    let mut buffer = Box::new([0u8; CHUNK]);
+    let mut path = vec![0u8; PATH_MAX];
+    let mut left = needed;
+    assert_eq!(files(&mut blocks, &deep, &mut buffer, &mut path, &mut left, |_, _, _, _| Ok(())), Ok(1));
+    assert_eq!(left, 0);
+    let mut left = needed - 1;
+    assert_eq!(files(&mut blocks, &deep, &mut buffer, &mut path, &mut left, |_, _, _, _| Ok(())), Err(Error::TooLarge));
+    // A path buffer one byte short of the file's path, and one that just holds it.
+    let mut short = vec![0u8; listed[0].0.len() - 1];
+    let mut left = u64::MAX;
+    assert_eq!(files(&mut blocks, &deep, &mut buffer, &mut short, &mut left, |_, _, _, _| Ok(())), Err(Error::TooLarge));
+    let mut exact = vec![0u8; listed[0].0.len()];
+    assert_eq!(files(&mut blocks, &deep, &mut buffer, &mut exact, &mut left, |_, _, _, _| Ok(())), Ok(1));
 }

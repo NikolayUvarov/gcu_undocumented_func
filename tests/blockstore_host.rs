@@ -520,8 +520,9 @@ fn rights_come_from_the_badge() {
         // The recovery right grants nothing else (308-STO-0028).
         (BADGE_RECOVER, false, false, false, false, false, false),
         (BADGE_GET | BADGE_PUT | BADGE_PUBLISH | BADGE_RECOVER, true, true, true, true, true, true),
-        // Bits of rights this version does not know grant nothing.
+        // Bits of rights this version does not know grant nothing, nor do an owner's (351-STO-0006).
         (16, false, false, false, false, false, false),
+        (rights::OWNER_UPDATER | BADGE_GET | BADGE_PUT | BADGE_PUBLISH, true, true, true, true, true, true),
         (0xfff0, false, false, false, false, false, false),
         (0xffff, true, true, true, true, true, true),
     ] {
@@ -544,6 +545,15 @@ fn rights_come_from_the_badge() {
         let recover = badge & BADGE_RECOVER != 0;
         assert_eq!([allowed(badge, RecoveryNew), allowed(badge, RecoveryKeep), allowed(badge, RecoveryForget), allowed(badge, Recover)], [recover; 4], "badge {badge:#x}");
         assert_eq!(allowed(badge, Recoveries), stat || recover, "badge {badge:#x}");
+    }
+    // An owner's bits change no right, for every request (351-STO-0006).
+    let every = [Put, Get, Has, Stat, Publish, Resolve, Collect, Unpublish, History, Pin, Unpin, Pins, Usage, Commit, Snapshot, Names, DomainCreate, DomainClient,
+        DomainForget, Domains, Scrub, Scrubbed, RecoveryNew, RecoveryKeep, RecoveryForget, Recoveries, Recover, Copy, CopyStat, CopyNames, Rebuild];
+    for owner in (0..16u16).map(|o| o << 4) {
+        assert_eq!(owner & !rights::OWNER_BITS, 0);
+        for granted in 0..16u16 {
+            for operation in every { assert_eq!(allowed(owner | granted, operation), allowed(granted, operation), "{owner:#x} {granted:#x} {operation:?}"); }
+        }
     }
 }
 
@@ -1214,6 +1224,85 @@ fn a_pin_retains_its_object_until_its_owner_unpins_it() {
     let mut room = Room::new(64).at(2 * LEASE_NS);
     let store = mount(&mut medium, &mut room).unwrap();
     assert_eq!((store.stats().pins, store.stats().damaged), (0, 0));
+}
+
+// The files `tree::files` lists under `root`, each read back through the store: its path and bytes.
+fn read_tree<D: Device>(store: &mut Store<D>, root: &Cid) -> Vec<(String, Vec<u8>)> {
+    let mut buffer = Box::new([0u8; dag::CHUNK]);
+    let mut path = vec![0u8; tree::PATH_MAX];
+    let mut left = u64::MAX;
+    let mut out = Vec::new();
+    tree::files(store, root, &mut buffer, &mut path, &mut left, |store, path, size, cid| {
+        let mut bytes = vec![0u8; size as usize];
+        let mut chunk = Box::new([0u8; dag::CHUNK]);
+        let mut done = 0;
+        while done < bytes.len() { done += dag::read_at(store, cid, done as u64, &mut bytes[done..], &mut chunk)?; }
+        out.push((String::from_utf8(path.to_vec()).unwrap(), bytes));
+        Ok(())
+    }).unwrap();
+    out
+}
+
+#[test]
+fn the_updaters_releases_outlive_another_owners_names_and_a_collection() {
+    use tree::Kind::{Directory, File};
+    // The updater's client and the shell's: the same rights, two owners (351-STO-0006).
+    let updater = rights::OWNER_UPDATER | OWNER;
+    let mut medium = Memory::new(2048);
+    let (first, second, loader, kernel_one, kernel_two, kept);
+    {
+        let mut room = Room::new(256);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        // Two releases as trees of their files: the loader the same in both, the kernel and the manifest not.
+        loader = object(&mut store, 1, 40_000);
+        let release = |store: &mut Store<&mut Memory>, kernel: Cid, manifest: &[u8]| {
+            let manifest = store.put(Codec::Raw, manifest).unwrap();
+            let boot = directory(store, &[entry("BOOTX64.EFI", File, 40_000, loader)]);
+            let efi = directory(store, &[entry("BOOT", Directory, 1, boot)]);
+            directory(store, &[entry("EFI", Directory, 1, efi), entry("MANIFEST", File, 9, manifest), entry("kernel", File, 60_000, kernel)])
+        };
+        kernel_one = object(&mut store, 2, 60_000);
+        first = release(&mut store, kernel_one, b"version 1");
+        kernel_two = object(&mut store, 3, 60_000);
+        second = release(&mut store, kernel_two, b"version 2");
+        let one = store.pin(&first, updater).unwrap();
+        kept = store.pin(&second, updater).unwrap();
+        // Names are anyone's: the shell names a release, points the name elsewhere and removes it. It cannot end the
+        // updater's pins, and its account holds nothing of them.
+        assert_eq!(store.publish(b"release/2", 0, &second, OWNER), Ok(1));
+        assert_eq!(store.publish(b"release/2", 1, &first, OWNER), Ok(2));
+        assert_eq!(store.unpublish(b"release/2", 2, OWNER), Ok(3));
+        for id in [one, kept] { assert_eq!(store.unpin(id, OWNER), Err(Error::Rights)); }
+        assert_eq!(store.pins(OWNER).count(), 0);
+        assert_eq!(store.usage(updater).retained, 2 * (40_000 + 9 + 60_000));
+        // Once every name is gone and the leases have run out, a collection keeps both releases whole.
+        store.set_time(LEASE_NS);
+        assert_eq!(store.unpublish(b"release/2", 3, OWNER), Err(Error::NotFound));
+        store.collect().unwrap();
+        store.collect().unwrap();
+        for (root, kernel, manifest) in [(first, 2, "version 1"), (second, 3, "version 2")] {
+            assert_eq!(read_tree(&mut store, &root), vec![
+                ("EFI/BOOT/BOOTX64.EFI".to_string(), block(1, 40_000)),
+                ("MANIFEST".to_string(), manifest.as_bytes().to_vec()),
+                ("kernel".to_string(), block(kernel, 60_000)),
+            ]);
+        }
+        // The updater ends the older release's pin: what only it held goes, what both share stays.
+        assert_eq!(store.unpin(one, updater), Ok(()));
+        store.set_time(2 * LEASE_NS);
+        store.collect().unwrap();
+        assert!(!store.has(&first) && !store.has(&kernel_one));
+        assert!(store.has(&loader) && store.has(&kernel_two));
+        assert_eq!(store.usage(updater).retained, 40_000 + 9 + 60_000);
+    }
+    // After a mount the updater finds its release by its own pins, whole.
+    let mut room = Room::new(256).at(2 * LEASE_NS);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.pins(updater).map(|p| (p.id, p.root())).collect::<Vec<_>>(), vec![(kept, second)]);
+    assert_eq!(store.pins(OWNER).count(), 0);
+    store.set_time(3 * LEASE_NS);
+    store.collect().unwrap();
+    assert_eq!(read_tree(&mut store, &second).iter().map(|(p, b)| (p.as_str(), b.len())).collect::<Vec<_>>(), [("EFI/BOOT/BOOTX64.EFI", 40_000), ("MANIFEST", 9), ("kernel", 60_000)]);
 }
 
 #[test]

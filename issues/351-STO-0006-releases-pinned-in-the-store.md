@@ -32,10 +32,10 @@ So the work splits three ways:
    - Its pins and its account are its own: no other client ends them, whatever rights it holds.
    - The host tests show a release tree, pinned by that owner, kept whole through the removal of every name and a collection, and read back with each block checked.
    - The quota stays three quarters of the medium for every owner. That holds two releases once the store's medium is at least three times a release (about 26 MiB on x86 now), and less, since the blocks two releases share are stored once. A quota of its own for the updater, and a bound on all owners together, stay open (303-STO-0002's "not done").
-2. **`KRN`, `init`'s grant** ([requests-KRN.md](requests-KRN.md)):
+2. **`KRN`, `init`'s grant** ([351-KRN-0218](351-KRN-0218-the-updaters-store-client.md)):
    - the updater gets a store client badged `OWNER_UPDATER` with get, put and publish, when the store runs;
    - it starts after `blockstore`.
-3. **`UPD`, the updater** ([requests-UPD.md](requests-UPD.md); `STO` offers to make it, as `STO` made 351-UPD-0007):
+3. **`UPD`, the updater** ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md); `STO` makes it, by agreement with the update track's owner, as `STO` made 351-UPD-0007):
    - **Each staged release** goes into the store as a `mind::tree` directory of its files, once its files have passed their checks. It is named `release/<version>` (for people; names are anyone's to change), and pinned.
    - **After a confirmed boot** the pins of the running and the last-known-good release stay, and older ones end (351-KRN-0014). The updater finds its releases by its own pins (`pins`) and the manifest each holds, never by a name.
    - **A slot is rebuilt from the store** as from any other source: every file is checked by size and SHA-256 against the manifest, and the manifest against the boot key. So a name changed by another client, or a damaged medium, can stage nothing the signatures do not allow. A new minor version of `update.wit` asks for it.
@@ -46,6 +46,24 @@ So the work splits three ways:
 ## Acceptance criteria
 
 After collection runs, the last-known-good release is still complete in the store, and a damaged slot is rebuilt from it (QEMU, x86 and aarch64).
+
+## Progress (2026-11-08)
+
+**Part 1, the store's, is made** on `claude/relaxed-meitner-5bmhpz`, in a landing request:
+- **`mind::blockstore`** (`libmind/src/blockstore.rs`): `OWNER_BITS` (`0xf0`) grant nothing, so `allowed` decides by the rights below them alone; `OWNER_UPDATER` is `0x10`. The store's code is unchanged, as it already takes the whole badge as the owner.
+- **`mind::tree::files`** lists a tree's files with their paths, each directory checked against its CID and its count, bounded by depth, path and steps. The updater will rebuild a slot from it.
+- **Host tests:**
+  - `tests/blockstore_host.rs`: an owner's bits change no right, for every owner, every right and every request. In `the_updaters_releases_outlive_another_owners_names_and_a_collection`, two release trees pinned by `OWNER_UPDATER`:
+    - the shell's client (the same rights, another owner) renames and removes their names, and is refused their pins;
+    - a collection frees nothing of either, and both read back whole;
+    - the updater's unpin of the older one frees only what it alone held;
+    - the pin and the release are found again after a remount.
+  - `tests/tree_host.rs`: a sample tree, 300 random ones against their models, and the bounds and the checks.
+  - Five faults put in by hand were each caught: no count check, no `/`, an entry not counted as a step, an unpin by any owner, pins not marked in a collection.
+- **Run in this container** on 60d5a943: `scripts/host_tests.sh`, and the `store` and `storefaults` suites on x86 (32 PASS) and aarch64 (33 PASS). Not run on real hardware.
+- **Docs:** `docs/storage/README.md` (Retention, Directories, Authority) and the profile's line on owners.
+
+**Not done:** `init`'s client (351-KRN-0218) and the updater's part (351-UPD-0033). No client is badged with an owner yet, so no release is kept in the store yet.
 
 ## Related
 

@@ -2,8 +2,9 @@
 //! `{"v": 1, "entries": [[name, kind, size, link], ...]}`, its entries sorted by the names' bytes, each naming a file (an
 //! object of `dag`) or another directory by its CID. A walk goes through every block under a root, checking each
 //! directory against its CID and the schema and each entry against the object it names. Two roots are compared by the
-//! paths where they differ, a subtree of one CID on both sides never read (311-STO-0039). No heap and no system calls:
-//! tests/tree_host.rs.
+//! paths where they differ, a subtree of one CID on both sides never read (311-STO-0039). A tree's files are listed with
+//! their paths, for a reader that writes them out, such as a slot written again from a release kept in the store
+//! (351-STO-0006). No heap and no system calls: tests/tree_host.rs.
 use crate::cid::{Cid, Codec};
 use crate::dag::{self, fetch, Blocks, Error, In, Out, Same, Sink, CHUNK, LINK};
 
@@ -330,4 +331,44 @@ pub fn diff<B: Blocks>(blocks: &mut B, a: Option<&Cid>, b: Option<&Cid>, buffers
         if down.is_some() { depth += 1; } else { depth -= 1; }
     }
     Ok(changes)
+}
+
+// A directory being listed: its CID, the entries its parent says it has (none at the root), the next entry, and the
+// length of its path.
+#[derive(Clone, Copy)]
+struct Listed { cid: Cid, count: Option<u64>, next: usize, path: usize }
+
+/// Visits each file under the directory `root` with its path below it, in the order of the names' bytes, depth first:
+/// the path, the size its entry gives, and its CID. Each directory is checked against its CID, the schema and its
+/// parent's entry; a file is not read, so the visit reads it (`dag::read_at`, `dag::each_chunk`), which checks every block
+/// against its CID and the bytes against the size. `path` holds the path visited (PATH_MAX bytes hold every path): a
+/// longer one, or more than `left` steps (an entry, a directory read), is TooLarge; `left` is left at the steps not
+/// taken. Returns the files visited; a visit's error ends it.
+pub fn files<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], path: &mut [u8], left: &mut u64, mut visit: impl FnMut(&mut B, &[u8], u64, &Cid) -> Result<(), Error>) -> Result<u64, Error> {
+    let mut stack = [Listed { cid: *root, count: None, next: 0, path: 0 }; DEPTH];
+    let (mut depth, mut visited) = (1, 0u64);
+    while depth > 0 {
+        let at = stack[depth - 1];
+        // Read again after each entry: the visit reads its file through `blocks` while the buffer is free.
+        let dir = side(blocks, Some(&at.cid), at.count, buffer, left)?;
+        if at.next == dir.len() { depth -= 1; continue; }
+        *left = left.checked_sub(1).ok_or(Error::TooLarge)?;
+        stack[depth - 1].next += 1;
+        let Entry { name, kind, size, cid } = dir.entry(at.next);
+        // The path: the directory's own, a `/` below the root, and the name.
+        let start = at.path + usize::from(at.path > 0);
+        let end = start + name.len();
+        if end > path.len() { return Err(Error::TooLarge); }
+        if at.path > 0 { path[at.path] = b'/'; }
+        path[start..end].copy_from_slice(name);
+        match kind {
+            Kind::File => { visit(blocks, &path[..end], size, &cid)?; visited += 1; }
+            Kind::Directory => {
+                if depth == DEPTH { return Err(Error::Shape); }
+                stack[depth] = Listed { cid, count: Some(size), next: 0, path: end };
+                depth += 1;
+            }
+        }
+    }
+    Ok(visited)
 }

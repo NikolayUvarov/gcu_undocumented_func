@@ -77,6 +77,11 @@ A directory is a set of named files and subdirectories under one root CID (`libm
   - each directory node is checked against its CID and the schema, and each entry against what it names: its kind against the block it links, its size against the file's bytes or the directory's entries;
   - it returns the bytes of the files under the root; a file named twice counts twice. `tree::size` gives the same from the directory nodes and each file's root block alone;
   - **its work is bounded:** a walk is given a number of steps (an entry gone through, a block visited, a file's blocks included) and stops with `too-large` once it has taken them.
+- **The files of a tree** (`tree::files`, 351-STO-0006) are visited with their paths below the root, in the names' order, depth first: each file's path, the size its entry gives, and its CID.
+  - Each directory is checked against its CID, the schema and its parent's entry, as in the walk.
+  - A file is not read: the visit reads it (`dag::read_at`, `dag::each_chunk`), which checks every block against its CID.
+  - It is bounded as the walk is: the depth, the path's bytes, and steps (an entry, a directory read).
+  - It is for a reader that writes a tree out, such as a slot written again from a release the store keeps.
 - **In the block store:**
   - `put` takes a `dag-cbor` block that is an object's node, a directory or a journal's entry (312-STO-0034, below), and refuses anything else (`invalid`); a mount counts a record of none of them as corrupt.
   - The store's walk is the tree's, and a journal's for a journal's entry (below). A publication, a pin or a commit needs every block under its root (`incomplete`), and a tree out of shape is `invalid`.
@@ -91,7 +96,10 @@ Evidence: host tests of the code, not a proof (MC-12.2).
   - names unsorted or twice, bad names, kinds and links, and a node over a block are refused;
   - the walk of a nested tree visits exactly its blocks;
   - a missing block is `not-found`, a changed one `corrupt`; an entry that disagrees with its object, and a tree past the depth, are out of shape;
-  - a walk and a sizing take exactly the steps counted, and one step fewer stops them.
+  - a walk and a sizing take exactly the steps counted, and one step fewer stops them;
+  - `tree::files` lists a nested tree's files at their paths, an empty directory none and a file named twice at each path, and each reads back; 300 random trees list as their models do;
+  - a missing or changed directory, an entry with the wrong count and a file where the root belongs are refused; a tree past the depth too; a listing takes exactly the steps counted, and a path buffer one byte short stops it;
+  - three deliberate changes of `tree::files`, one at a time on a copy outside git, are each caught: no count check, no `/` between names, an entry not counted as a step.
 - `tests/blockstore_host.rs`:
   - a published tree keeps its files across a collection and a mount, an unretained one is freed, and a removed one goes;
   - a tree missing a file's block is `incomplete` for a publication, a pin and a commit;
@@ -949,6 +957,11 @@ The policy (MC-4.5, MC-4.11, Appendix B.3):
 
 The quota is fixed: three quarters of the medium for every owner. Nobody grants it yet, so it bounds what one owner can take, not what several can take together.
 
+**Owners apart from rights (351-STO-0006).** The owner is the whole badge, below the domain clients' badges (`FIRST_DOMAIN_CLIENT`). Its bits 4 to 7 (`mind::blockstore::OWNER_BITS`) grant nothing, and bits 0 to 3 are the rights. So two clients with the same rights and other owner bits keep their names' charges, their pins and their accounts apart, and neither ends the other's pins.
+- `OWNER_UPDATER` (`0x10`) is the updater's owner. With get, put and publish its badge is `0x17`, beside the shell's `7`.
+- `init` does not give that client yet (requests-KRN.md). The updater does not put, pin or rebuild from releases yet (requests-UPD.md).
+- So on the platform nothing holds an owner apart from the shell's and `storefs`'s shared one.
+
 A collection:
 - **Mark.** It walks every retained object (`tree::walk`, a file with `dag::walk`, a journal entry after entry): each node is read, checked against its CID and the shape, and marked, and each chunk is marked. If an object lacks a block or holds a corrupt node, the collection refuses (`incomplete`, `corrupt`) and frees nothing. A block the object still needs is never freed because another went missing.
 - **Sweep.** One pass over the medium frees what is not marked or leased. Each record is freed in a crash-safe order:
@@ -966,7 +979,7 @@ A collection:
 Not provided yet:
 - **Terms:** a pin lasts until its owner ends it; a pin that ends at a time of its own is not provided (B.3 allows a term or a termination condition; this is the termination condition).
 - **Quotas granted per owner** by whoever grants the clients, and a bound on what all owners retain together.
-- **Owners apart from badges:** clients that share a badge share an account.
+- **Owners apart from badges:** clients that share a badge share an account. Owner bits give two clients of the same rights two accounts (above), but only clients `init` badges apart.
 - **Obligations to consumers.**
 - **Leases across a restart:** they start again when the store mounts.
 
@@ -976,6 +989,11 @@ Evidence: `tests/blockstore_host.rs`:
 - history: an earlier version retains its object until it falls out of the newest 4 (`a_collection_frees_what_no_name_retains_once_its_lease_ends`);
 - removal: the name retains nothing, its objects go at the next collection, the name comes back from the removal's version (`a_removed_name_retains_nothing_and_keeps_its_version`);
 - pins: an object kept until its owner unpins it, another owner refused, pins found again after a mount (`a_pin_retains_its_object_until_its_owner_unpins_it`);
+- two releases as trees, pinned by the updater's owner, kept whole while the shell's owner, with the same rights, names one, points the name at the other and removes it, and cannot end the pins (`the_updaters_releases_outlive_another_owners_names_and_a_collection`):
+  - a collection keeps both, every file read back through `tree::files`;
+  - once the updater ends the older release's pin, what only that release held goes, and the loader both hold stays;
+  - after a mount the updater's one pin is found, its release whole;
+  - two deliberate changes of the store, one at a time on a copy outside git, are each caught by this test: an unpin by any owner, and a collection that does not mark pinned objects. This shows the test can fail, not that it finds every fault;
 - quotas: a publication and a pin refused past the quota, a root counted once, another owner's account apart (`an_owner_retains_no_more_than_its_quota`);
 - a random model with names, history, collections and remounts;
 - every record written only over blank sectors.
@@ -1029,7 +1047,7 @@ A client's rights come from the badge `init` mints into its capability (`mind::b
 | `BADGE_PUBLISH` (4) | `publish`, `unpublish`, `pin`, `unpin`, `copy` (2.5, never through a domain's client) |
 | any of them | `stat`, `copy-stat`, and `pins` and `usage` of the client's own owner |
 
-- A client with neither bit may do nothing, and bits this version does not know grant nothing. A refusal is answered `rights` and logged with the caller's PID and badge.
+- A client with neither bit may do nothing, and bits this version does not know grant nothing, an owner's bits among them (`OWNER_BITS`, Retention above). A refusal is answered `rights` and logged with the caller's PID and badge.
 - **A CID grants nothing (MC-4.7).** A hash names a representation. It does not permit reading: a get needs `BADGE_GET`, whoever knows the CID.
 - **Storing is not reading (MC-4.11).** A put creates a lease, and a publication or a pin makes the store retain an object; these are rights apart from reading. What a publication or a pin retains is charged to the client's badge and bounded by its quota (Retention, above). A lease is not charged: what a put holds for 60 s is bounded only by the medium and the index.
 - **Deduplication (MC-4.7).** Bytes already held are not written again. A client with `BADGE_PUT` can therefore learn whether some bytes are already stored: `stat` does not change and the put is faster. The store treats all its clients as one confidentiality domain. Clients that must not learn of each other's data need separate stores (or a store without deduplication), and none exists yet.
