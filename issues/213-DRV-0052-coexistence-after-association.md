@@ -92,7 +92,7 @@ So the reconcile now retries on any coexistence error during which a recovery is
   - from 20:53 nothing lost in all but three rounds (one lost all three, two one each), 15–131 ms;
   - **the first 13 minutes were poor:** 33–100 % lost and up to 870 ms, with the recoveries coming fast.
 - **Against the criteria:**
-  - **The hardware criterion:** an hour across at least ten inquiries, no loss of the network. Met once, on that machine and build (MC-12.1). "Ping answered" held in 30 rounds of 33.
+  - **The hardware criterion:** an hour across at least ten inquiries, no loss of the network. Met once, on that machine and build (MC-12.1). "Ping answered" held in 31 rounds of 33.
   - **The host criterion:** the role notice's encoding and the policy's slot match Linux's worked values. `Station` has no TDMA, and the TDMA policies are not ported. The transition from `NoLink` to connected is tested; back to `NoLink` is a driver restart (`RESTART_AFTER_FAILURE`), where Linux returns to no-link only at power-off. So this issue stays open: closing it, or amending that criterion, is the maintainer's.
 
 **Across these runs:** 30 whole inquiries (1, 4, 5, 8 and 12) passed with the station joined, and none lost the network. Each stop was another cause: a late frame's queue budget, or a recovery during the reconcile.
