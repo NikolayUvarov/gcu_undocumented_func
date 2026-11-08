@@ -2,11 +2,17 @@
 // LEGACY: ISA devices of the platform profile (docs/legacy.md): PS/2, CMOS, primary ATA, COM1. The PIC, PIT and PCI
 // configuration ports stay with the kernel.
 pub const PORTS: [(u16, u16); 6] = [(0x60, 1), (0x64, 1), (0x70, 2), (0x1F0, 8), (0x3F6, 1), (0x3F8, 8)];
-/// Whether ports `start..end` may go to a driver: the platform profile's above, or one of the two of the embedded
-/// controller that the ECDT names (211-PRT-0008: the battery service's).
+/// Whether ports `start..end` may go to a driver: the platform profile's above, one of the two of the embedded
+/// controller that the ECDT names (211-PRT-0008: the battery service's), or a PM1 event block of the FADT's.
 pub fn ports(start: usize, end: usize) -> bool {
     let within = |base: u16, count: u16| start >= base as usize && end <= base as usize + count as usize;
-    PORTS.iter().any(|&(base, count)| within(base, count)) || ec_ports().iter().flatten().any(|&port| within(port, 1))
+    PORTS.iter().any(|&(base, count)| within(base, count)) || ec_ports().iter().flatten().any(|&port| within(port, 1)) || pm1_events(start, end)
+}
+// A PM1 event block the FADT names (000-KRN-0216: init's power button), lent once the kernel has put the chipset in
+// ACPI mode with every GPE and fixed event off; SMI_CMD, PM1 control and the GPE blocks stay with the kernel.
+fn pm1_events(start: usize, end: usize) -> bool {
+    let Some(f) = super::acpi::fixed() else { return false };
+    [f.pm1a_evt, f.pm1b_evt].into_iter().flatten().any(|b| b.holds(start, end)) && unsafe { super::acpi::events_ready() }
 }
 // The ECDT's command/status and data ports (ACPI 6.5, 5.2.16), each in system I/O space.
 fn ec_ports() -> [Option<u16>; 2] {

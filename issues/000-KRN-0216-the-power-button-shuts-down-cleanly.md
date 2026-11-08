@@ -1,6 +1,6 @@
 # 000-KRN-0216 — A short press of the power button shuts the machine down cleanly (x86, a fixed-feature button)
 
-**Type:** kernel (the ports the FADT names), `init` · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.1, MC-6.3, MC-12.1, MC-12.3
+**Type:** kernel (the ports the FADT names), `init` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made and tested in QEMU on x86; the gate and the DEXP's run left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.1, MC-6.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -63,6 +63,25 @@ Asked by LNK for the maintainer (`KRN/2026-11-08T1346Z-LNK-the-power-button-shut
 - **aarch64:** QEMU's `virt` raises its button through ACPI's GED (hardware-reduced, by AML) or a device tree's `gpio-keys`. Neither is read here.
 - **A button by control method,** and the sleep button.
 - **A narrower safe start** after a cut power: 000-KRN-0217.
+
+## Progress (2026-11-08)
+
+On `claude/youthful-mendel-mf1soy`:
+- **`common/fadt.rs`:** one pure parser of the FADT's fixed hardware, included by the kernel and `libmind`. It reads the blocks, the SCI and the flags; the generic addresses win over the 32-bit fields. Host tests in `tests/fadt_host.rs` (5): QEMU's table, the DEXP's flags, the generic addresses, and what an untrusted table cannot make it accept.
+- **The kernel lends only the PM1 event blocks,** not `SMI_CMD`, PM1 control or the GPE blocks the plan named. Writing `SMI_CMD` runs the firmware's SMM handlers with any value, and PM1 control turns the machine off, which `REBOOT` already does.
+  - Before the first lending it puts the chipset in ACPI mode (`ACPI_ENABLE` to `SMI_CMD`, as `power_off` does) and disables every GPE and fixed event, once.
+  - It says which on the console: `SWITCHED TO ACPI MODE` or `IN ACPI MODE ALREADY`, then `EVERY GPE AND FIXED EVENT DISABLED, THE PM1 EVENTS LENT`.
+- **`REBOOT` names its caller on the console:** `MIND CORE KERNEL: init (PID 1) ASKED TO TURN THE MACHINE OFF` (or `TO RESTART THE MACHINE`). It is the evidence left once the system log is gone.
+- **`init`:**
+  - takes the blocks and the SCI's line before it drops the platform privilege, binds the line to its endpoint, clears `PWRBTN_STS` and sets `PWRBTN_EN`;
+  - on a press, its restart path with `POWER-OFF` as the stop notice's reason and S5 at the end. The kernel clears the run's mark in `REBOOT`.
+- **The hardware report's FADT line** adds the button's kind, `SCI_EN` as found and the PM1 event blocks.
+- **The `power` suite** (x86), in the group `x86: boot, display, shell, memory, clock`, on QEMU's `pc` (PIIX4, PM1 events at `0xB000`) and `q35` (ICH9, at `0x600`):
+  - a reset before a minute past `READY` gives a safe start, so the run's mark is kept across it;
+  - in that boot, a file is written and the button pressed. `init` asks for S5 0.7 s after the press;
+  - the boot after it is no safe start, the file is there and its volume was not left dirty.
+  - Passed in this session's container: 52 s for both machines.
+- **Seen in QEMU:** line 9 is held by `init` alone on both machines, with no SCI before the press, since the devices there use MSI. On a machine whose devices share the SCI's line, `init` takes each of their interrupts too, reads PM1's status and acknowledges.
 
 ## Related
 

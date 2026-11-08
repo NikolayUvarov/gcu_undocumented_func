@@ -9180,7 +9180,7 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
         vm.logged("ALWAYS? ", since, timeout=30)
         time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
         vm.send_bytes(key)
-        # The prompt once get has ended (the shell took the keys for the question, so it says no EXITED line).
+        # The prompt once get has ended (a console program's end is the prompt alone, no EXITED line).
         vm.expect("MIND> ", timeout=60, after={b"n": "REFUSED BY THE USER", b"o": "the end asked=1"}[key])
         out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
         require_all(out, f"GET: 10.0.2.2:{asked_port} IS NOT IN ITS GRANT: THE USER IS ASKED", "NETWORK: get (PID ",
@@ -13560,6 +13560,65 @@ def clock_suite(args, disk):
     print(f"PASS: the TSC measured 9% high at boot is measured again on the PM timer ({was} -> {measured} MHz); "
           f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
 
+def power_button_check(args, disk):
+    """000-KRN-0216 (x86): QEMU's power button (`system_powerdown`, the chipset's fixed-feature event) shuts the machine
+    down as asked, on pc (PIIX4's PM) and q35 (ICH9's): init stops the services, writes the volumes and turns it off (S5),
+    and the next boot is no safe start. QEMU keeps the firmware's variables across a reset of the same process
+    (`-no-shutdown`), so a reset first, before a minute past READY, stands for a cut power: that boot is a safe start, which
+    shows the run's mark is kept. init's own lines go to the system log, which the off machine cannot show: the kernel names
+    who asked for the power-off, and a file written just before the press is there after it, its volume not left dirty
+    (vfs_server writes its cache only when told)."""
+    if args.arch != "x86_64":
+        print("SKIP: the power button: aarch64's is ACPI's GED or the device tree's gpio-keys, not read yet", flush=True)
+        return
+    safe = "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED"
+    taken = "[INIT] THE POWER BUTTON SHUTS THE MACHINE DOWN (SCI 9, PM1 EVENTS AT 0x"
+    (disk / "data").mkdir(exist_ok=True)
+    seen = []
+    for machine in ("pc", "q35"):
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", machine, "-no-shutdown"))
+
+        def booted():
+            vm.expect("MIND> ", timeout=180)
+            return vm.command("dmesg -s init", raw=True, timeout=30)
+        try:
+            log = booted()
+            require(log, taken)
+            assert safe not in log, log[-2000:]
+            assert "THE PM1 EVENTS LENT" in vm.log, vm.log[-3000:]
+            # A cut power before a minute past READY: the next boot is a safe start.
+            vm.hmp("system_reset")
+            require(booted(), safe)
+            # The button, in that boot, a file just written: a clean end, S5, and the boot after it a normal one.
+            require(vm.command(f"write data/power-{machine}.txt kept by the button"), f"WROTE 19 BYTES TO data/power-{machine}.txt")
+            since = len(vm.log)
+            pressed = time.monotonic()
+            vm.hmp("system_powerdown")
+            deadline = pressed + 90
+            while vm.qmp("query-status")["status"] != "shutdown":
+                assert time.monotonic() < deadline, vm.log[-3000:]
+                time.sleep(.5)
+            took = time.monotonic() - pressed
+            vm.collect()
+            down = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+            require_all(down, "MIND CORE KERNEL: init (PID 1) ASKED TO TURN THE MACHINE OFF", "MIND CORE KERNEL: POWER OFF VIA ACPI S5")
+            vm.hmp("system_reset")
+            if vm.qmp("query-status")["status"] != "running":
+                vm.hmp("cont")
+            log = booted()
+            require(log, taken)
+            assert safe not in log, log[-2000:]
+            require(vm.command(f"cat data/power-{machine}.txt"), "kept by the button")
+            assert "WAS LEFT DIRTY" not in vm.command("dmesg -s vfs_server", raw=True, timeout=30)
+        finally:
+            vm.close()
+        seen.append(f"{took:.1f} s on {machine}")
+    print(f"PASS: the power button (000-KRN-0216), on QEMU's pc and q35: a press shut the machine down as asked (init asked "
+          f"for S5 {' and '.join(seen)} after it; a file written just before it was there next time, its volume not left "
+          f"dirty), and the boot after it was no safe start; a reset before a minute past READY, standing for a cut power, "
+          f"was followed by one", flush=True)
+
+
 def watchdog_suite(args, disk):
     """000-KRN-0076, with the test kernel `watchdog-test`, which stops every CPU for good 20 s after the machine's first
     boot. On q35 the kernel arms the ICH9's TCO timer and feeds it from the boot CPU's tick: the chipset resets the frozen
@@ -14406,7 +14465,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -14603,6 +14662,9 @@ def main():
                 continue
             if suite == "watchdog":
                 watchdog_suite(args, disk)
+                continue
+            if suite == "power":  # its own machine, booted three times (000-KRN-0216)
+                power_button_check(args, disk)
                 continue
             if suite == "net":
                 net_suite(args, disk)

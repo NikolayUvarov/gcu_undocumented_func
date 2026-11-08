@@ -59,7 +59,7 @@ jobs:
         include:
           # The long groups are split so that none runs much past 15 minutes on the landing gate's machines (2026-10-29).
           - name: boot, display, shell, memory, clock
-            args: --suites boot,display,normal,memory,dzen
+            args: --suites boot,display,normal,memory,dzen,power
           - name: network, TLS and Effector
             args: --suites net,tls,effector
           - name: a developer's release through the Effector agent

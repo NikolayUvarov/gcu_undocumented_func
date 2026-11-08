@@ -63,6 +63,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 
 The initial distribution ends when `init` logs `[INIT] PLATFORM PRIVILEGE DROPPED` and `[INIT] READY` (after starting `shell`). Before that, `init` keeps 32 MiB of the frame pool for the system band (`MEMORY_RESERVE`, `[INIT] RECOVERY RESERVE 32 MiB`, issue 169: applications cannot take the memory a service restart needs, MC-6.5), mints a **restart** privilege (it can only spawn boot images and services) and drops the platform privilege (slot 2). From then on:
 - `init` restarts services only from the capabilities it handed out at the first start, which it keeps (copies go to each instance);
+- on x86, where the FADT names a fixed-feature power button, `init` keeps the PM1 event blocks' ports and the SCI's line, which it took before the drop and bound to its own endpoint (000-KRN-0216). A press makes it stop the services and write the volumes, as for the updater's restart, and turn the machine off through `REBOOT`; the kernel clears the run's mark there, so the next boot is no safe start;
 - the privileges among them (input, display, spawn, process control, observe) are in escrow (`PRIVILEGE_ESCROW`, issue 170): `init` cannot use them, a service it starts gets the privilege itself; `init` holds no process control and stops services and applications as their ancestor (`TASK_KILL`);
 - it stops and restarts their devices through the BAR capabilities it holds (`DEVICE_STATE`);
 - a service whose hardware was missing at boot cannot be started later.
