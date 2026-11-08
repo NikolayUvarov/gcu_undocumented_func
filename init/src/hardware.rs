@@ -114,6 +114,22 @@ pub fn battery_place() -> Option<(u16, u16, u8, Option<(u8, u8)>)> {
     Some((command, data, base?, ac))
 }
 
+/// The FADT's fixed hardware (000-KRN-0216), for the power button; None where the tables have no FADT.
+pub fn fadt() -> Option<mind::fadt::Fixed> {
+    let mut found = None;
+    for index in 0..256 {
+        let Some(table) = object(PLATFORM_ACPI_TABLE, index) else { break };
+        let bytes = table.1.as_slice();
+        if bytes.starts_with(b"FACP") {
+            let length = bytes.get(4..8).map_or(0, |l| u32::from_le_bytes(l.try_into().unwrap()) as usize).min(bytes.len());
+            found = mind::fadt::parse(&bytes[..length]);
+        }
+        done(table);
+        if found.is_some() { break; }
+    }
+    found
+}
+
 // Every ACPI table to log:acpi/<SIG>.bin (repeated signatures numbered: SSDT1.bin, SSDT2.bin, …).
 fn tables(files: Endpoint, root: u32) {
     let Ok(Ok(dir)) = vfs::open_dir(files, root, "acpi", true) else { return };
