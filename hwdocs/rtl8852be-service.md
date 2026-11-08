@@ -169,6 +169,16 @@ It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 - **Otherwise, for now, a debug mode** (`KEEP_SENDING` in `service.rs`, the maintainer's decision of 2026-11-08: everything runs first, hardening later). The driver logs `… NOT ALLOWED AT ITS ADMITTED POWER: SENDING SHOULD STOP; DEBUG MODE KEEPS SENDING`, answers `info` as if the limits were applied, and keeps sending at the admitted power. **This breaks wlanhw 1.2's rule** that a radio which cannot apply its limits sends nothing.
 - With `KEEP_SENDING` false, it answers `failed` and logs `… NOTHING SENT UNTIL A COUNTRY ALLOWS IT`, and every `send` is `failed` until a country it can keep. The host tests run both modes.
 
+**On the Ryzen, 2026-11-08** (channel 8, CoolNet2):
+- **The hardware filter.** The data mode, and the receive-only service once the station sets a network's filter, narrow it to Linux's station value ([station notes](rtl8852be-station.md)). The scan's broad filter let the whole busy channel through: within 200 ms the CMAC reported a receive DMA error, and the firmware's L0 recovery reset the BB and the scheduler (`SER_DBG_INFO`). With the narrow filter, no such recovery was seen.
+- **Receive draining.** The data service takes up to 32 descriptors of each ring a step (`DRAIN`); before, it took one.
+- **A debug mode, `OUTLAST_SER`** (`data_mode.rs`, on until hardening): a BB in reset or a scheduler off is waited for up to 60 ms. A scheduler still off after a recovery the firmware counted is restored, and the service logs `FIRMWARE RECOVERY n …`.
+- **Diagnostics in the stop line:**
+  - the registers the first shutdown found, and the same ones at admission (`REGISTERS AT ADMISSION`);
+  - when each first changed;
+  - for `TransmitTimeout`, what the frame went through (`tx::Seen`).
+- **Not solved:** with the narrow filter, the join's first frame still got no completion. Once, 320 ms after admission and with a frame pending, the BB was fully in reset and all host DMA stopped, with no recovery counted.
+
 After a stop it answers `no-device` for as long as the process lives (`absent_forever`).
 
 **Its limits:**
