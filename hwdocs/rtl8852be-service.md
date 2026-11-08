@@ -177,7 +177,12 @@ It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
   - the registers the first shutdown found, and the same ones at admission (`REGISTERS AT ADMISSION`);
   - when each first changed;
   - for `TransmitTimeout`, what the frame went through (`tx::Seen`).
-- **Not solved:** with the narrow filter, the join's first frame still got no completion. Once, 320 ms after admission and with a frame pending, the BB was fully in reset and all host DMA stopped, with no recovery counted.
+- **A debug mode, `RPQ_ALONE`** (`tx.rs`, on until hardening). A data queue's frame asks for no firmware report and is final on DMA and the RPQ, one hardware try a submission, as Linux's PCIe path takes a status (`rtw89_pci_release_rpp`). The firmware reported the management queue's frames only: the WPA2 handshake's message 2 was fetched and released, never reported.
+- **Path B's TSSI DAC gain table** is written unread, as Linux. On the Ryzen its readback changed in three admissions of four; path B is shared with Bluetooth.
+- **With all of it the Ryzen joined CoolNet2:** WPA2 handshake, `JOINED (TRY 1)`, DHCP `192.168.2.169/24` on the Wi-Fi card.
+- **Not solved:** the coexistence keeps the `NoLink` policy after association.
+  - **What it did:** 6 minutes after joining, during `bt_hci`'s 10-second inquiry, the station heard nothing for 10 s and lost the network. The next frame then found the BB fully in reset and all host DMA stopped, with no recovery counted.
+  - **What Linux does:** it tells the coexistence of the connection (`BTC_ROLE_MSTS_STA_CONN_END`), which then shares the time between Wi-Fi and Bluetooth.
 
 After a stop it answers `no-device` for as long as the process lives (`absent_forever`).
 

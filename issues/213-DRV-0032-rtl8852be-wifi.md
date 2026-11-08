@@ -1204,3 +1204,38 @@ The rule it replaces (DRV's own, 2026-10-16) refused a ready value read after th
 - the first send admitted channel 1 and logged `DATAPATH ADMITTED ON CHANNEL 1`.
 
 **Next:** 330 ms later the data service stopped with `TransmitTimeout`. The first frame sent got no completion within 100 ms. The TX path on the hardware comes next.
+
+## The Ryzen joins CoolNet2 over the RTL8852BE (2026-11-08)
+
+**The setup:** the Ryzen's image is `fast-test` 44a1a4f1. `rtw89_wifi` was replaced over the link and `wlan` restarted from its boot image, one build after another. CoolNet2 is on channel 8 of 2.4 GHz (and 100 of 5 GHz, which this driver does not tune). Linux's scan that day heard three strong networks on channel 8.
+
+**What stood in the way, in order** (each fix in its own commit on `claude/ASR-DRV`):
+
+| What the Ryzen did | Why | The change |
+|---|---|---|
+| The scan's first probe request admitted channel 1. Data mode then held channel 1 alone, and CoolNet2 was never heard (2026-11-06) | Calibration on every scan hop | A probe request admits nothing; the join's authentication admits the network's channel, as Linux calibrates at `rtw89_core_sta_add` (274654e5) |
+| Data mode refused every `set-country` and kept sending | — | It keeps the admitted channel when the new limits allow it at no less EIRP. A **debug mode, `KEEP_SENDING`**, only logs a refusal and goes on sending (f47ba6f8) |
+| Data mode stopped 64–320 ms after admission:<br>• `CMAC_ERR_ISR` 8;<br>• `0xc800` bit 31;<br>• `SER_DBG_INFO` counting the firmware's L0 recoveries, which held the BB in reset and zeroed the scheduler | The data mode kept the scan's hardware RX filter `0x03004400`, so the whole busy channel filled the packet buffer | Linux's station filter outside a scan, `0x030044b6`, for a network's filter. It applies in data mode, and in receive-only mode from the join's filter on. After it, no recovery was seen (c696adf2) |
+| — | One receive descriptor a step | 32 a step (c696adf2) |
+| — | — | A **debug mode, `OUTLAST_SER`**, waits up to 60 ms for the BB and the scheduler after such a recovery (c696adf2) |
+| The handshake's message 2 timed out: fetched, released by the RPQ, never reported by the firmware (`tx::Seen`) | The firmware reports the management queue's frames only. Linux's PCIe path takes a frame's status from the RPQ alone (`rtw89_pci_release_rpp`) | A **debug mode, `RPQ_ALONE`**: a data queue's frame is final on DMA and the RPQ (8e3913fd) |
+| Three admissions of four failed in TSSI `ConfigureB`, reading back `0x7a10`, `0x7a1c`, `0x7a2c` changed | Path B is shared with Bluetooth, as on 2026-11-06 | Path B's DAC gain table written unread, as Linux (8e3913fd) |
+
+**The result** (build `rtw89_pathb1`, 8e3913fd, 2026-11-08 ~17:20 UTC):
+- `DATAPATH ADMITTED ON CHANNEL 8`, then the WPA2 handshake;
+- `[WLAN] AUTO-JOIN CoolNet2: JOINED (TRY 1)`;
+- `[NETSTACK] DHCP 192.168.2.169/24 GATEWAY 192.168.2.1 DNS 8.8.8.8 ON CARD 2`.
+
+DHCP's exchange is data both ways over the CCMP-protected link.
+
+**Not yet shown:**
+- **Traffic over Wi-Fi alone.** The wired card 0 is the default route, so the shell's pings (0% lost to the gateway and to 8.8.8.8) went over Ethernet. The laptop's ping of 192.168.2.169 got no ARP answer: `netstack` with two cards on one subnet (NET's question). A measurement needs the cable out.
+- **The issue's acceptance:** ping and traffic during the test suites, measured over Wi-Fi.
+
+**Seen once, not explained:**
+- 320 ms after admission, with a frame pending, the BB was fully in reset (`SYS_FUNC_EN` 0xDC) and all host DMA stopped (`DMA_STOP` 0x000BFF00), with no recovery counted.
+- A passive retune of channel 7 timed out reading `0x10378`. That poisons the PHY, and the service stops.
+
+**To harden later** (the maintainer: everything runs first): `KEEP_SENDING`, `OUTLAST_SER` and `RPQ_ALONE` are constants in `service.rs`, `data_mode.rs` and `tx.rs`, each with the strict path beside it and its host cases.
+
+**What this shows:** that machine, that AP and those builds only (MC-12.1).
