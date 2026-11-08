@@ -22,6 +22,13 @@
 - **Not handed out by the kernel:** a node's clocks, resets and regulators. They belong to the drivers of the clock controller and the PMIC (100000, stage 2), reached by IPC.
 - **The explicit transition:** the fixed indices go, with no compatibility code (AGENTS.md, section 3).
 
+**Nodes that share a page (found 2026-11-08, 100000-PRT-0010).**
+- **The case.** The A64's four UARTs take 0x400 bytes each, in one 4 KiB page; on the PinePhone UART1 is the Bluetooth chip's.
+- **The rule.** A node smaller than a page is not lent by its page alone when another enabled node shares that page. The ways:
+  - the kernel keeps the device and serves it (as its console);
+  - or the node's driver gets the page only when no other enabled node lies in it.
+- **The check:** `init`'s refusal of overlapping ranges covers pages, not only the ranges' bytes.
+
 ## Acceptance criteria
 
 - **QEMU `virt,acpi=off`:**
