@@ -2638,6 +2638,18 @@ def storefs_check(vm):
     require(vm.command("rm other:x/c.txt"), "OK")
     require(vm.command("rm other:x"), "OK")
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
+    # 311-APP-0116: a redirect's file on a store volume is published at its flush. With no other writer it is. When the
+    # redirected program publishes the volume after the shell wrote its first line there (fsstep's HOLDING line, then
+    # its close 3 s later, through its own scope), storefs refuses the shell's flush with vfs.wit 2.6's `conflict`, and
+    # the shell names it; a tree with nothing unpublished would have followed the name instead.
+    require(vm.command("ls notes: > notes:list.txt"), "WRITTEN TO notes:list.txt")
+    require(vm.command("cat notes:list.txt"), "docs")
+    require(vm.command("mkdir notes:steps"), "OK")
+    out = vm.command("fsstep notes:steps/x.bin 100 3 100 > notes:out.txt", timeout=60)
+    require(out, "ERROR: > notes:out.txt: CHANGED BY ANOTHER WRITER MEANWHILE; READ IT AGAIN")
+    require(vm.command("ls notes:steps"), "1 ENTRIES, 1 FILES, 200 BYTES")  # fsstep's own file, published
+    for path in ("notes:steps/x.bin", "notes:steps", "notes:out.txt", "notes:list.txt"):
+        require(vm.command(f"rm {path}"), "OK")
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
     # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
     # scope ends with the program.
@@ -2665,7 +2677,8 @@ def storefs_check(vm):
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
           "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); find and grep read the store "
-          "volume their arguments name through a read-only scope, and no other store volume; edit on a store volume wrote "
+          "volume their arguments name through a read-only scope, and no other store volume; a redirect's file there "
+          "published, and refused as changed by another writer when its program published the volume first (311-APP-0116); edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 

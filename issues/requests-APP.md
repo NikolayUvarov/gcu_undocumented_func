@@ -53,7 +53,7 @@ Numbered on 2026-10-30 as [000-APP-0115](000-APP-0115-the-shell-reads-serial-inp
 
 ## An arm for `vfs.wit` 2.6's error `conflict` in the shell (for 311-KRN-0189)
 
-Numbered on 2026-10-30 as [311-APP-0116](311-APP-0116-the-shell-names-a-vfs-conflict.md).
+Numbered on 2026-10-30 as [311-APP-0116](../issues-done/311-APP-0116-the-shell-names-a-vfs-conflict.done).
 
 ### NRL service follow-up (2026-10-30)
 
