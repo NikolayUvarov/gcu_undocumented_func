@@ -12,7 +12,7 @@ Asked by LNK for the maintainer (`KRN/2026-11-08T1346Z-LNK-the-power-button-shut
   - `kernel/src/arch/x86_64/acpi.rs` does S5 (000-KRN-0080) and the reset register;
   - nothing reads the SCI or PM1's `PWRBTN_STS`;
   - the kernel lends no ACPI fixed-hardware port: `platform::ports` holds the platform profile's legacy ranges and the ECDT's two (211-PRT-0008).
-- **The run's mark** (000-KRN-0076) is cleared a minute past `READY`. An end before that is a safe start next time, whatever ended the run.
+- **The run's mark** (000-KRN-0076) is cleared by `init` a minute past `READY`, and by the kernel at every halt, restart and power-off asked through `REBOOT` or `HALT`. So a shutdown asked of the system never leaves it; a cut power before that minute does.
 
 **The DEXP's FADT** (`hw0008.txt`): flags `0x3C4E5`, so bit 4 (`PWR_BUTTON`) is clear: a fixed-feature power button; SCI 9.
 
@@ -46,7 +46,7 @@ Asked by LNK for the maintainer (`KRN/2026-11-08T1346Z-LNK-the-power-button-shut
    - `PWRBTN_STS` is cleared and the line acknowledged;
    - `[INIT] THE POWER BUTTON WAS PRESSED: SHUTTING DOWN`;
    - the same path as `init`'s restart for the updater: the services told and stopped in reverse start order, the volumes written;
-   - **then the run's mark is cleared** (the run ended as asked), with a line, and the machine is turned off (S5).
+   - then the machine is turned off (S5) through `REBOOT`, which `init`'s restart privilege may ask: the kernel clears the run's mark there, so the next boot is not a safe start.
    - **A second press** while it shuts down changes nothing. The 4-second hold stays the hardware's.
 4. **A check in QEMU** (x86): QEMU's monitor `system_powerdown` raises this very event.
    - With the machine up less than a minute past `READY`, a press: the lines above, QEMU ends by itself (S5).
@@ -62,7 +62,7 @@ Asked by LNK for the maintainer (`KRN/2026-11-08T1346Z-LNK-the-power-button-shut
 
 - **aarch64:** QEMU's `virt` raises its button through ACPI's GED (hardware-reduced, by AML) or a device tree's `gpio-keys`. Neither is read here.
 - **A button by control method,** and the sleep button.
-- **The shell's `shutdown` within a minute of `READY`** also leaves the run's mark set: 000-KRN-0217.
+- **A narrower safe start** after a cut power: 000-KRN-0217.
 
 ## Progress (2026-11-08)
 

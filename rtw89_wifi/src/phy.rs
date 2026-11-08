@@ -271,13 +271,14 @@ fn restore_rsv1(io: &mut impl RegisterIo, path: u8, original: u32) -> io::Result
     io.delay_us(0)
 }
 
+// As io::poll32: the time is taken before each read, so a preempted poll still reads once after its 30 us.
 fn poll_rck(io: &mut impl RegisterIo, path: u8) -> io::Result<()> {
-    let mut poll = TimedIo::new(io, 30);
-    for _ in 0..=15 {
-        let value = rf_read(&mut poll, path, 0x1c, 8)?;
-        poll.delay_us(0)?;
-        if value != 0 { return Ok(()); }
-        poll.delay_us(2)?;
+    let start = io.now_us();
+    for _ in 0..=16 {
+        let elapsed = io.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock, 0x1c, path as u32))?;
+        if rf_read(io, path, 0x1c, 8)? != 0 { return Ok(()); }
+        if elapsed >= 30 { break; }
+        io.delay_us(2)?;
     }
     Err(Fault::new(FaultKind::Timeout, 0x1c, path as u32))
 }

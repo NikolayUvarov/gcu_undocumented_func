@@ -40,12 +40,16 @@ fn unavailable_read_does_not_fall_back_to_bt_disabled() {
 fn busy_bt_times_out_without_inventing_timeout_report_override() {
     let mut d = Device::new(btc::BT_RFK_RUN, u64::MAX);
     assert_eq!(btc::wait_bt_clear(&mut d, 100).unwrap_err().kind, FaultKind::Timeout);
-    assert_eq!(d.now, 100); assert_eq!(d.reads, 3);
+    assert_eq!(d.now, 100); assert_eq!(d.reads, 4, "the last read is the one at the deadline");
 }
 #[test]
-fn slow_final_read_cannot_return_late_clear_snapshot() {
+fn slow_reads_end_one_read_past_the_deadline() {
+    // A read that completes late still tells the truth: a clear scoreboard is clear.
     let mut d = Device::new(0, 0); d.read_cost = 100;
-    assert_eq!(btc::wait_bt_clear(&mut d, 100).unwrap_err().kind, FaultKind::Timeout);
+    assert_eq!(btc::wait_bt_clear(&mut d, 100).unwrap().raw(), 0x4001); assert_eq!(d.reads, 1);
+    // Still busy: no read starts after the one past the deadline.
+    let mut d = Device::new(btc::BT_RFK_RUN, u64::MAX); d.read_cost = 100;
+    assert_eq!(btc::wait_bt_clear(&mut d, 100).unwrap_err().kind, FaultKind::Timeout); assert_eq!(d.reads, 2);
 }
 #[test]
 fn stuck_or_backward_clock_still_terminates_with_error() {

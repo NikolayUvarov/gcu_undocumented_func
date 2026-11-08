@@ -1154,3 +1154,22 @@ Details and limits are in [the service notes](../hwdocs/rtl8852be-service.md#rec
 **Next, for the second line:**
 - the channel stage run again from a tuned channel (retune);
 - on an applied country: tune that channel actively, grant, calibrate (IQK, TSSI, DPK), prepare the station and data mode, then hand over to `service.rs`'s data service, logging `DATAPATH ADMITTED ON CHANNEL n`.
+
+## The image's own service on the Ryzen: a 30 µs poll timed out unread (2026-11-06)
+
+The first boot of `fast-test` 44a1a4f1 with the maintainer at the screen was the first run of the image's own `rtw89_wifi` with `SLOT_SERVICE` lent. It stopped 9 ms after the MAC was ready:
+- **the line:** `WLANHW SERVICE STOPPED: … stage: RadioB, cause: Fault { kind: Timeout, register: 71500, value: 0 }`;
+- **the register** is 0x1174C (SWSI status);
+- **value 0** says `io::poll32` never read it. A preemption longer than the 30 µs window between the poll's start and its first read ended it with no read. The stage's 100 ms budget was not spent.
+
+**The fix:**
+- **`io::poll32`** takes the time before each read and reads once after its window, as Linux's `read_poll_timeout` does. A ready value read then counts. The clock is still checked after each read, and the iteration guard still ends a stalled clock.
+- **`poll_rck`** follows the same rule. It no longer wraps its reads in a 30 µs `TimedIo`.
+
+The rule it replaces (DRV's own, 2026-10-16) refused a ready value read after the window. Stage budgets (`TimedIo`) stay hard: they admit no read after them.
+
+**The tests now check the new rule.** Each case keeps its bound:
+- the power suite adds the Ryzen's case, a clock that jumps past a 30 µs window before the first read;
+- the MAC, DM and BTC cases that expected a late ready to fail now expect it to count once, and to time out when the ready comes after that one read.
+
+[The PHY notes](../hwdocs/rtl8852be-phy.md) say so.
