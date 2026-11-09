@@ -516,11 +516,12 @@ fi
 echo ">>> build_and_write.sh $(git log -1 --format=%h -- scripts/build_and_write.sh) runs$([[ -n $UPDATED ]] && { [[ -n $RESTORE_BRANCH ]] && echo ", the commit's own" || echo ', the version the pull brought'; })"
 # Build first, then pack: make_usb_image.py lists the programs when it starts, so packing inside its own build misses new ones.
 bash ./02_build.sh
-# With --slots: the build in slot A and an update.txt that takes releases from data/link/rel/ (scripts/link_update.py).
+# With --slots: the build in slot A and an update.txt that takes releases from data/link/rel/ (scripts/link_update.py),
+# looked for once a minute: each check reads the disk and logs two lines (800-LNK-0040).
 SLOT_ARGS=()
 if [[ $SLOTS == 1 ]]; then
     UPDATE_TXT="$(mktemp)"
-    printf 'source data/link/rel\nchannel stable\nautomatic apply\nevery 20\n' > "$UPDATE_TXT"
+    printf 'source data/link/rel\nchannel stable\nautomatic apply\nevery 60\n' > "$UPDATE_TXT"
     SLOT_ARGS=(--slots --update "$UPDATE_TXT")
     echo ">>> An image with slots; update.txt takes releases from data/link/rel/ (scripts/link_update.py after this write)"
 fi
