@@ -31,7 +31,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -100,7 +100,7 @@ impl Wire for Limit {
 }
 
 pub fn info(endpoint: Endpoint) -> Result<core::result::Result<Info, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -123,7 +123,7 @@ pub fn set_channel(endpoint: Endpoint, channel: u8) -> Result<core::result::Resu
 }
 
 pub fn set_filter(endpoint: Endpoint, filter: &Filter) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         filter.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -139,7 +139,7 @@ pub fn set_filter(endpoint: Endpoint, filter: &Filter) -> Result<core::result::R
 /// Sends one frame on the current channel at `rate` (500 kb/s units), tried at most `attempts` times (1 to 15)
 /// until acknowledged, and answers when the hardware has its status.
 pub fn send(endpoint: Endpoint, frame: &[u8], rate: u8, attempts: u8) -> Result<core::result::Result<Sent, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<2346>(frame, &mut w).ok_or(SysError::Invalid)?;
@@ -156,7 +156,7 @@ pub fn send(endpoint: Endpoint, frame: &[u8], rate: u8, attempts: u8) -> Result<
 
 /// The oldest received frame, led by its 8-byte header (above). Error empty: none is waiting.
 pub fn receive(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -200,7 +200,7 @@ pub fn kick(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
 /// left by the radio's own limits, its `supported` unchanged. `invalid`: a channel twice or not the radio's, or a code that is not two capital
 /// letters nor `00` (1.3); `failed`: the radio could not apply them, and it sends nothing until limits it can apply are set.
 pub fn set_country(endpoint: Endpoint, code: &str, dfs: u8, limits: &[Limit]) -> Result<core::result::Result<Info, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<2>(code, &mut w).ok_or(SysError::Invalid)?;

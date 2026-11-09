@@ -9,7 +9,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -123,7 +123,7 @@ pub fn close_all(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>>
 
 /// Manager: the windows from the `start`-th on, oldest first.
 pub fn list(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<Info, 16>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -167,7 +167,7 @@ pub fn waker(endpoint: Endpoint, window: u32, receive: usize) -> Result<core::re
 
 /// Manager: saves where a window is.
 pub fn place(endpoint: Endpoint, window: u32, place: &Placement) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         window.encode(&mut w).ok_or(SysError::Invalid)?;

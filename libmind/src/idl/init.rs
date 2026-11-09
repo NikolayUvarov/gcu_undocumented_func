@@ -10,7 +10,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -134,7 +134,7 @@ impl Wire for StopReason {
 /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
 /// (already running), not-found (no such service or no device), rights (cannot be started after boot).
 pub fn run(endpoint: Endpoint, name: &str) -> Result<u64> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<16>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -149,7 +149,7 @@ pub fn run(endpoint: Endpoint, name: &str) -> Result<u64> {
 /// The boot services and their further instances in boot order (1.1; up to 32 since issue 205, 64 since 1.2: a
 /// third VirtIO disk made 33, 251-KRN-0031).
 pub fn list(endpoint: Endpoint) -> Result<core::result::Result<List<Service, 64>, Error>> {
-    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -164,7 +164,7 @@ pub fn list(endpoint: Endpoint) -> Result<core::result::Result<List<Service, 64>
 /// Stops a running service; init does not restart it until it is started again, and its clients' calls fail with
 /// ERR_PEER meanwhile (1.1).
 pub fn stop(endpoint: Endpoint, name: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<16>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -179,7 +179,7 @@ pub fn stop(endpoint: Endpoint, name: &str) -> Result<core::result::Result<(), E
 
 /// Stops and starts a service; clients granted earlier reach the new instance. Returns its PID (1.1).
 pub fn restart(endpoint: Endpoint, name: &str) -> Result<core::result::Result<u64, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<16>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -213,7 +213,7 @@ pub fn reboot(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
 }
 
 pub fn boot(endpoint: Endpoint) -> Result<core::result::Result<Boot, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -227,7 +227,7 @@ pub fn boot(endpoint: Endpoint) -> Result<core::result::Result<Boot, Error>> {
 
 /// The modes; any client may ask (1.5).
 pub fn mode(endpoint: Endpoint) -> Result<core::result::Result<ModeState, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -244,7 +244,7 @@ pub fn mode(endpoint: Endpoint) -> Result<core::result::Result<ModeState, Error>
 /// either mode, and since 1.11 either permission, on or off; one badged `BADGE_MIND` may only turn the maintenance
 /// mode on and `remote-update` off (MC-12.6); others get `denied`, the Effector services' and the link's among them.
 pub fn set_mode(endpoint: Endpoint, which: Mode, on: bool, reason: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         which.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -266,7 +266,7 @@ pub fn set_mode(endpoint: Endpoint, which: Mode, on: bool, reason: &str) -> Resu
 /// carries the link or the log (vfs_server, logd, usb_serial, link) and the shell. Errors: not-found (no such
 /// service or file), failed (not an ELF, or the start failed).
 pub fn replace(endpoint: Endpoint, name: &str, path: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<16>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -291,7 +291,7 @@ pub fn link_console(endpoint: Endpoint) -> Result<core::result::Result<bool, Err
 }
 
 pub fn boot_plan(endpoint: Endpoint) -> Result<core::result::Result<List<Planned, 64>, Error>> {
-    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

@@ -14,6 +14,11 @@ mod dev {
     pub fn cap_info(slot: usize) -> (usize, usize, usize) { (crate::ipc::kind(slot), 0, 0) }
 }
 
+// libmind's `Wiped` over the stand-in `Pages` below.
+use mem::Pages;
+#[path = "../libmind/src/wiped.rs"]
+mod wiped;
+
 mod mem {
     use std::cell::RefCell;
     thread_local! {
@@ -21,6 +26,11 @@ mod mem {
         pub static SHARED: RefCell<Vec<(usize, usize, usize)>> = RefCell::new(Vec::new());
     }
     pub struct Pages(Vec<u8>);
+    // How many buffers were freed with a byte not zero in them (000-KRN-0226: a client's are wiped first).
+    thread_local! { pub static DIRTY_FREED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+    impl Drop for Pages { fn drop(&mut self) { if self.0.iter().any(|&b| b != 0) { DIRTY_FREED.with(|d| d.set(d.get() + 1)); } } }
+    // The generated clients' buffer, as libmind has it (its file is the crate's `wiped`, beside this module).
+    pub use crate::wiped::Wiped;
     impl Pages {
         pub fn new(bytes: usize) -> Option<Self> { Some(Self(vec![0; bytes])) }
         pub fn len(&self) -> usize { self.0.len() }
@@ -186,6 +196,27 @@ fn bytes_in_both_directions() {
     assert_eq!(sample::fetch(endpoint, 65, &mut out), Ok(Err(E::TooBig)));
     let mut small = [0u8; 4];
     assert_eq!(sample::fetch(endpoint, 5, &mut small), Err(sys::Error::Invalid), "the reply does not fit the caller's slice");
+}
+
+#[test]
+fn a_clients_buffer_is_wiped_before_it_is_freed() {
+    // 000-KRN-0226: what a call carried, both ways, is zeroed before the buffer goes: a request's bytes, a reply's bytes,
+    // and a reply refused as malformed.
+    let endpoint = serve(server);
+    let dirty = || mem::DIRTY_FREED.with(|d| d.get());
+    let before = dirty();
+    assert_eq!(sample::put(endpoint, &[1, 2, 3], b"secret"), Ok(Ok(())));
+    let mut out = [0u8; 64];
+    assert_eq!(sample::fetch(endpoint, 40, &mut out), Ok(Ok(40)));
+    let mut small = [0u8; 4];
+    assert_eq!(sample::fetch(endpoint, 5, &mut small), Err(sys::Error::Invalid));
+    assert_eq!(sample::find(endpoint, 4, "Документы"), Ok(Ok(40)));
+    assert_eq!(dirty(), before, "a client's buffer was freed with bytes left in it");
+    // The stand-in's count works: a buffer freed unwiped is counted.
+    let mut plain = mem::Pages::new(16).unwrap();
+    plain.as_mut_slice()[3] = 7;
+    drop(plain);
+    assert_eq!(dirty(), before + 1);
 }
 
 #[test]
