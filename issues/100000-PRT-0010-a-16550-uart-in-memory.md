@@ -33,6 +33,14 @@
 - **The loader's own lines** the same way (`bootloader/src/main.rs`, `mod line`), from the SPCR or the tree, never from a fixed address.
 - **A 16550 is not lent to the shell's console** (`platform::mmio`), which drives a PL011 only: it stays the kernel's.
 
+**Found (2026-11-08): the console's page holds three other UARTs.**
+- **The layout.** On the A64 each UART takes 0x400 bytes: UART0 at 0x01C28000, UART1 at 0x01C28400, UART2 at 0x01C28800, UART3 at 0x01C28C00, all in one 4 KiB page.
+- **What the PinePhone's tree says of them** (Linux v6.12, `tests/data/fdt/pinephone-1.2.dtb`): UART1 carries the Bluetooth chip (`realtek,rtl8723cs-bt`), and UART3 is enabled as well.
+- **Why it matters.** The kernel lends registers by whole pages, so lending UART0 to the shell's console (or to `link`) would lend the other three with it. That is more authority than the console needs (MC-2.3).
+- **What follows:**
+  - the shell's console on the A64 waits for a way that lends one UART alone. That is [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md)'s design question: the kernel as the console's only writer, or a narrower grant;
+  - until then the kernel keeps UART0, as it does now (`platform::mmio` lends no 16550).
+
 **Not done:**
 - the shell's console on a 16550 (`mind::dev::Uart`), with interrupts and the DesignWare busy-detect;
 - the host tests against a register model (shifts 0 and 2, widths 1 and 4, busy-detect);
