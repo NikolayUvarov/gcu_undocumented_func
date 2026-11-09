@@ -1,6 +1,6 @@
 # 000-NET-0063 — The Wi-Fi checks' `dmesg` waited 8 s on a loaded host (round 102)
 
-**Type:** tests (the `net` suite) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (the wait raised, on `claude/youthful-mendel-mf1soy`; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (the `net` suite) · **Owner:** `NET` · **Priority:** P2 · **Status:** open (in `main` since round 103, a927f175; a gate with the group beside another lane left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -33,6 +33,8 @@
 
 - **Made:** `DMESG_WAIT = 30` and the eight `dmesg -s wifi|wlan|wlansim` reads of the Wi-Fi checks given it.
 - **Tested:** the `net` suite passed with it on aarch64 (acc-1, the group "aarch64: network, TLS and Effector", at 1012596d). On x86 the whole suite passed with it in the kernel session's container (QEMU 8.2.2, TCG, 4 CPUs; 39 checks). Not yet beside another lane's build: that is the gate's.
+
+**Landed** in round 103 (`main` a927f175, 2026-11-09): every group of the gate passed. "x86: RAM above 4 GiB" ran on acc-1, which had no second lane, so the second criterion waits for a gate that runs the group beside another lane on one machine.
 
 ## Related
 

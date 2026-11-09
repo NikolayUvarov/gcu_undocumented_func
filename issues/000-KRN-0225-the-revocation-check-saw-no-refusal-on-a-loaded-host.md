@@ -1,0 +1,31 @@
+# 000-KRN-0225 — The revocation check saw no refused mint on a loaded host (round 103)
+
+**Type:** tests (the `isolation` suite) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (2026-11-09) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+
+## Problem
+
+- **Round 103's gate** (candidate a927f175) failed the group "x86: x2APIC" once, on x32-128's second lane (x32-2), while the first lane ran other groups there.
+  - `revocation_refusal_check` (000-KRN-0104): `REVOKED 3001 IN 12 STEPS; THE CHILD MADE 5386 MINTS AND WAS REFUSED 0 WHILE THE WALK RAN`.
+  - The check asks, with more than one CPU, for at least one of the child's mints to be refused (`ERR_REVOKING`) while app2's walk runs.
+  - The group passed when it ran again alone (186 s).
+- **What the candidate changed:** `get`, the `net` suite's checks and the shell suite's fixtures. Nothing in the kernel or `app2`.
+- **What it suggests:** in QEMU each vCPU is a host thread. While the host is loaded, the child's vCPU may not run during the whole walk of 12 steps, so the walk ends before any mint meets it. The child made its 5386 mints before or after.
+- **Not shown yet:** whether the walk or the child also behaves otherwise. The failing run's QEMU log is in the lane's logs (`land-a927f175/x32-2-*`).
+
+## Plan
+
+1. Read the failing run's log, and how `app2` times the child's mints against the walk's steps.
+2. **If it is the host's scheduling:** the check should rest on what the kernel guarantees, not on a vCPU being run in time (MC-12.2).
+   - One way: the child signals that it is minting before the walk starts, and the walk's steps are counted while it mints.
+   - Another: the refusal is required only when the child is known to have run during the walk.
+   - The kernel's behaviour does not change, and the check is not weakened to "anything goes" (MC-12.5): one mint refused while both ran stays its point.
+3. **If it is the kernel:** a fix, with the check kept.
+
+## Acceptance criteria
+
+- The cause found in the failing run's log, and written here.
+- The check passes 20 times in a row on x32-128 beside a busy lane, and on one CPU.
+
+## Related
+
+[000-KRN-0104](../issues-done/000-KRN-0104-revocation-bounded-by-the-profile.done), [000-NET-0063](000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.md) (round 102's slow `dmesg`, another check on a loaded host).

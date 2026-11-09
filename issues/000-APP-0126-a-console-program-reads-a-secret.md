@@ -1,8 +1,8 @@
 # 000-APP-0126 — A console program reads a secret typed at its console (`get -u`)
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (the shell's part made and tested on x86; `get -u` is NET's, 2026-11-09) · **Blocked by:** `get -u` ([000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md), NET's) for the last criterion; 000-KRN-0224 landed in round 99 · **Main task:** — · **Constitution:** MC-11.5, MC-11.9
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (the shell's part made and tested on x86; `get -u` is NET's, 2026-11-09) · **Blocked by:** `get -u` ([000-NET-0048](../issues-done/000-NET-0048-get-a-wget-and-curl-analog.done), NET's) for the last criterion; 000-KRN-0224 landed in round 99 · **Main task:** — · **Constitution:** MC-11.5, MC-11.9
 
-**Asked by:** NET, 2026-11-06, in [requests-APP.md](requests-APP.md), for [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md)'s `get -u user`. Numbered on 2026-11-08.
+**Asked by:** NET, 2026-11-06, in [requests-APP.md](requests-APP.md), for [000-NET-0048](../issues-done/000-NET-0048-get-a-wget-and-curl-analog.done)'s `get -u user`. Numbered on 2026-11-08.
 
 ## Problem
 
@@ -83,4 +83,4 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
 
 ## Related
 
-[000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`'s passphrase shown as dots).
+[000-NET-0048](../issues-done/000-NET-0048-get-a-wget-and-curl-analog.done), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`'s passphrase shown as dots).
