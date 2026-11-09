@@ -2714,6 +2714,13 @@ def storefs_check(vm):
     assert "other:x/c.txt" in out and "notes:docs/a.txt" not in out, out
     require(vm.command("rm other:x/c.txt"), "OK")
     require(vm.command("rm other:x"), "OK")
+    # A program given that read-only scope (storewrite asks for no file) reads the volume and is refused a write there.
+    if vm.args.storewrite_elf:
+        out = vm.command("storewrite notes:docs/z.txt")
+        assert re.search(r"STOREWRITE READ notes:docs: \d+ ENTRIES", out) and "STOREWRITE WRITE notes:docs/z.txt REFUSED: " in out, out
+        assert "z.txt" not in vm.command("ls notes:docs"), "nothing was written"
+    else:
+        print("SKIP: a write through the read-only store scope (311-APP-0121): no tests/storewrite_stub build (scripts/x86_fixtures.sh)", flush=True)
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
     # 311-APP-0116: a redirect's file on a store volume is published at its flush. With no other writer it is. When the
     # redirected program publishes the volume after the shell wrote its first line there (fsstep's HOLDING line, then
@@ -14785,6 +14792,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
     parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
@@ -14822,6 +14830,8 @@ def main():
     args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
     secret = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-secret-target/x86_64-unknown-none/release/secret_stub"
     args.secret_elf = args.secret_elf or (str(secret) if args.arch == "x86_64" and secret.exists() else None)
+    storewrite = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-storewrite-target/x86_64-unknown-none/release/storewrite_stub"
+    args.storewrite_elf = args.storewrite_elf or (str(storewrite) if args.arch == "x86_64" and storewrite.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -14928,6 +14938,8 @@ def main():
                 (disk / "data").mkdir(exist_ok=True)
                 if args.secret_elf:
                     shutil.copyfile(args.secret_elf, disk / "secretstub.elf")  # a console program's secret line (000-APP-0126)
+                if args.storewrite_elf:
+                    shutil.copyfile(args.storewrite_elf, disk / "storewrite.elf")  # a write through a read-only store scope (311-APP-0121)
                 for name, text in MSH_SCRIPTS.items():
                     (disk / "data" / name).write_text(text, encoding="utf-8")
             if suite == "bench":
