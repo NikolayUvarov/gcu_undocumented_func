@@ -24,7 +24,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -67,7 +67,7 @@ impl Wire for Counters {
 }
 
 pub fn info(endpoint: Endpoint) -> Result<core::result::Result<Info, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -82,7 +82,7 @@ pub fn info(endpoint: Endpoint) -> Result<core::result::Result<Info, Error>> {
 /// Queues one Ethernet frame (destination, source, type and payload, without the checksum). Error busy: the
 /// transmit ring is full; invalid: shorter than 14 bytes.
 pub fn send(endpoint: Endpoint, frame: &[u8]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<1514>(frame, &mut w).ok_or(SysError::Invalid)?;
@@ -97,7 +97,7 @@ pub fn send(endpoint: Endpoint, frame: &[u8]) -> Result<core::result::Result<(),
 
 /// The oldest received frame. Error empty: none is waiting.
 pub fn receive(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -118,7 +118,7 @@ pub fn wait(endpoint: Endpoint) -> Result<u32> {
 }
 
 pub fn counters(endpoint: Endpoint) -> Result<Counters> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -140,7 +140,7 @@ pub fn offloads(endpoint: Endpoint) -> Result<u32> {
 /// Like `send`, with the checksum completed by the device (1.1). Error invalid also when the device cannot do it or
 /// `start` and `offset` do not leave room for the 16-bit field inside the frame.
 pub fn send_partial(endpoint: Endpoint, frame: &[u8], start: u16, offset: u16) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<1514>(frame, &mut w).ok_or(SysError::Invalid)?;

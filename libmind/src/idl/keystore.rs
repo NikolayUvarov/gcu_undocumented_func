@@ -37,7 +37,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -114,7 +114,7 @@ impl Wire for KeyState {
 
 /// The device certificate (DER).
 pub fn certificate(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -129,7 +129,7 @@ pub fn certificate(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::R
 /// An Ed25519 signature of `data` for `purpose` (`tls-client`: the signer's badge only; `ssh-login`: the SSH
 /// service's badge only).
 pub fn sign(endpoint: Endpoint, purpose: Purpose, data: &[u8], out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         purpose.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -144,7 +144,7 @@ pub fn sign(endpoint: Endpoint, purpose: Purpose, data: &[u8], out: &mut [u8]) -
 }
 
 pub fn usage(endpoint: Endpoint) -> Result<core::result::Result<Usage, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -159,7 +159,7 @@ pub fn usage(endpoint: Endpoint) -> Result<core::result::Result<Usage, Error>> {
 /// Keeps the PMK of WPA2-PSK network `ssid`, in place of one kept for the name (station badge only; `budget` when 16
 /// others are kept, `no-key` without the device key).
 pub fn wifi_remember(endpoint: Endpoint, ssid: &[u8], pmk: &[u8]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<u8, 32>(ssid, &mut w).ok_or(SysError::Invalid)?;
@@ -175,7 +175,7 @@ pub fn wifi_remember(endpoint: Endpoint, ssid: &[u8], pmk: &[u8]) -> Result<core
 
 /// The networks kept (station badge only).
 pub fn wifi_networks(endpoint: Endpoint) -> Result<core::result::Result<List<WifiNetwork, 16>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -191,7 +191,7 @@ pub fn wifi_networks(endpoint: Endpoint) -> Result<core::result::Result<List<Wif
 /// the access point's and the station's addresses (low 48 bits, first byte in bits 40-47) and their nonces (station
 /// badge only; `invalid` when the network is not kept, `budget` past 60 a minute).
 pub fn wifi_keys(endpoint: Endpoint, ssid: &[u8], authenticator: u64, supplicant: u64, anonce: &[u8], snonce: &[u8]) -> Result<core::result::Result<List<u8, 48>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<u8, 32>(ssid, &mut w).ok_or(SysError::Invalid)?;
@@ -210,7 +210,7 @@ pub fn wifi_keys(endpoint: Endpoint, ssid: &[u8], authenticator: u64, supplicant
 
 /// Forgets network `ssid`; false when none was kept (station badge only).
 pub fn wifi_forget(endpoint: Endpoint, ssid: &[u8]) -> Result<core::result::Result<bool, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<u8, 32>(ssid, &mut w).ok_or(SysError::Invalid)?;
@@ -225,7 +225,7 @@ pub fn wifi_forget(endpoint: Endpoint, ssid: &[u8]) -> Result<core::result::Resu
 
 /// The device's Ed25519 public key (1.2), which an SSH server lists as an authorized key.
 pub fn public_key(endpoint: Endpoint) -> Result<core::result::Result<List<u8, 32>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -239,7 +239,7 @@ pub fn public_key(endpoint: Endpoint) -> Result<core::result::Result<List<u8, 32
 
 /// The station's country (1.3): two capital letters, empty when none is kept (station badge only).
 pub fn wifi_country(endpoint: Endpoint) -> Result<core::result::Result<Text<2>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -254,7 +254,7 @@ pub fn wifi_country(endpoint: Endpoint) -> Result<core::result::Result<Text<2>, 
 /// Keeps the station's country (1.3), replacing the one kept; `invalid` when `code` is not two capital letters (so
 /// never `00`), `no-key` when it could not be written (station badge only).
 pub fn wifi_keep_country(endpoint: Endpoint, code: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<2>(code, &mut w).ok_or(SysError::Invalid)?;
@@ -282,7 +282,7 @@ pub fn secrets_client(endpoint: Endpoint, receive: usize) -> Result<core::result
 /// Names the program whose secrets client `client` (its badge) reaches: 1 to 16 lowercase letters, digits, `.`, `_` or
 /// `-`, as the loader names a task. Once, before any call on it, by the loader that asked for it.
 pub fn secrets_name(endpoint: Endpoint, client: u16, program: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         client.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -309,7 +309,7 @@ pub fn secrets_adopt(endpoint: Endpoint, client: u16, task: u64) -> Result<core:
 /// in place of one kept under the name; `budget` past 16 secrets or 65536 bytes of them for one program, `no-key`
 /// without the device key or when it could not be written (a secrets client, or a boot service's (1.5), only).
 pub fn secret_put(endpoint: Endpoint, name: &str, value: &[u8]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<32>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -325,7 +325,7 @@ pub fn secret_put(endpoint: Endpoint, name: &str, value: &[u8]) -> Result<core::
 
 /// The caller's program's secret `name`; `missing` when none is kept (a secrets client, or a boot service's (1.5), only).
 pub fn secret_get(endpoint: Endpoint, name: &str, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<32>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -340,7 +340,7 @@ pub fn secret_get(endpoint: Endpoint, name: &str, out: &mut [u8]) -> Result<core
 
 /// Forgets the caller's program's secret `name`; false when none was kept (a secrets client, or a boot service's (1.5), only).
 pub fn secret_delete(endpoint: Endpoint, name: &str) -> Result<core::result::Result<bool, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<32>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -355,7 +355,7 @@ pub fn secret_delete(endpoint: Endpoint, name: &str) -> Result<core::result::Res
 
 /// The names of the caller's program's secrets, never their values (a secrets client, or a boot service's (1.5), only).
 pub fn secret_list(endpoint: Endpoint) -> Result<core::result::Result<List<Text<32>, 16>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -379,7 +379,7 @@ pub fn key_state(endpoint: Endpoint) -> Result<core::result::Result<KeyState, Er
 /// when it does not open it, `budget` when it comes, from the third wrong one in a row, before the waiting time
 /// (from 1 s, doubling to 60 s), `invalid` when nothing waits (a TPM seals the key, or it is held).
 pub fn unlock(endpoint: Endpoint, passphrase: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<128>(passphrase, &mut w).ok_or(SysError::Invalid)?;
@@ -398,7 +398,7 @@ pub fn unlock(endpoint: Endpoint, passphrase: &str) -> Result<core::result::Resu
 /// them), `invalid` with a TPM, while the key waits, or for a `new` of another length, `no-key` without the device
 /// key or when it could not be written.
 pub fn passphrase_set(endpoint: Endpoint, old: &str, new: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<128>(old, &mut w).ok_or(SysError::Invalid)?;

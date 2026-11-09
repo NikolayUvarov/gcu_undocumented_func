@@ -7,7 +7,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -64,7 +64,7 @@ impl Wire for HelperKind {
 
 /// The `*.elf` programs in the root of the boot disk (at most 128, 1.4: 64 before); services are marked.
 pub fn list(endpoint: Endpoint) -> Result<List<Program, 128>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -77,7 +77,7 @@ pub fn list(endpoint: Endpoint) -> Result<List<Program, 128>> {
 
 /// Starts program `name` (a name, or a path with `.` or `/`) with `args` in its info page; returns its PID.
 pub fn run(endpoint: Endpoint, name: &str, args: &str) -> Result<u64> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -92,7 +92,7 @@ pub fn run(endpoint: Endpoint, name: &str, args: &str) -> Result<u64> {
 
 /// Starts a launch of `name` (a program on the boot disk) with `args`; returns the session (1.1).
 pub fn begin(endpoint: Endpoint, name: &str, args: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -136,7 +136,7 @@ pub fn abort(endpoint: Endpoint, session: u32) -> Result<core::result::Result<()
 
 /// What the program `name` requests (1.1).
 pub fn inspect(endpoint: Endpoint, name: &str) -> Result<core::result::Result<Needs, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -151,7 +151,7 @@ pub fn inspect(endpoint: Endpoint, name: &str) -> Result<core::result::Result<Ne
 
 /// The raw request flags of `name` (`mind::process::REQUEST_*`), including flags `needs` has no field for (1.2).
 pub fn inspect_requests(endpoint: Endpoint, name: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;

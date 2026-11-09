@@ -5,7 +5,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -42,7 +42,7 @@ impl Wire for Order {
 /// false when the recognizer refused it — and the next order. The shell answers when it has one: at push-to-talk,
 /// or at once with its reply.
 pub fn next(endpoint: Endpoint, heard: bool, understood: bool, text: &str, intent: &str, slots: &str, confidence: u16) -> Result<Order> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         heard.encode(&mut w).ok_or(Error::Invalid)?;
