@@ -1,12 +1,12 @@
 # 351-KRN-0218 — The updater's own client of the block store
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open (`init`'s part done, below; the store's log of the first request waits for 351-UPD-0033) · **Blocked by:** — (STO's `mind::blockstore::OWNER_UPDATER` landed in round 92, 2026-11-08); the second criterion waits for [351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.3, MC-9.3
+**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open (`init`'s part done, below; the store's log of the first request waits for 351-UPD-0033) · **Blocked by:** — (STO's `mind::blockstore::OWNER_UPDATER` landed in round 92, 2026-11-08); the second criterion waits for [351-UPD-0033](../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.3, MC-9.3
 
 Numbered by the kernel track on 2026-11-08 from STO's request (recorded in `requests-KRN.md` the same day). The plan is STO's, taken as it is.
 
 ## Problem
 
-- **MC-9.3** asks that the recovery images and the objects they need be kept from ordinary cleanup. [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) keeps the running and the last-known-good release in the block store, pinned by the updater, so that collection never frees them and a damaged slot can be written again from them.
+- **MC-9.3** asks that the recovery images and the objects they need be kept from ordinary cleanup. [351-STO-0006](../issues-done/351-STO-0006-releases-pinned-in-the-store.done) keeps the running and the last-known-good release in the block store, pinned by the updater, so that collection never frees them and a damaged slot can be written again from them.
 - **The updater holds no client of the store.** `init` gives store clients to the shell and to `storefs` alone, both badged `BADGE_GET | BADGE_PUT | BADGE_PUBLISH` (7). Those two share one owner, since the store takes a client's badge as its owner.
 
 ## Plan
@@ -31,4 +31,4 @@ Numbered by the kernel track on 2026-11-08 from STO's request (recorded in `requ
 
 ## Related
 
-[351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md) (the updater's use of it), [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md).
+[351-UPD-0033](../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done) (the updater's use of it), [351-STO-0006](../issues-done/351-STO-0006-releases-pinned-in-the-store.done).

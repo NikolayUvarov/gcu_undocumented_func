@@ -5,9 +5,11 @@
 // manifest's with the boot key, and every file it stages by size and SHA-256; the parser service reads the
 // metadata (MC-11.11). It writes only the slot that did not boot and the boot records (vfs_server's update zone), and
 // confirms a trial boot on the disk once the kernel's deadline has passed without a restart. The Effector gateway may hand
-// it a release as a bundle (751-UPD-0032), which it checks as any source. Holds: its endpoint, the clock, the boot
-// disk's client badged for the update zone, the parser, init's client badged for a restart, the log, the flow grant the
-// policy gives it and the TLS client.
+// it a release as a bundle (751-UPD-0032), which it checks as any source. It keeps the running, the last known good and
+// a staged release in the block store, pinned by its own owner, and a rollback writes the last known good back into a
+// damaged slot from there (351-UPD-0033, kept.rs). Holds: its endpoint, the clock, the boot disk's client badged for the
+// update zone, the parser, init's client badged for a restart, the log, the flow grant the policy gives it, the TLS
+// client and the block store's client badged OWNER_UPDATER.
 extern crate alloc;
 
 #[allow(dead_code)]
@@ -16,8 +18,11 @@ mod slots;
 mod plan;
 mod source;
 mod bundle;
+mod kept;
+mod store;
 mod keys { include!(concat!(env!("OUT_DIR"), "/keys.rs")); }
 
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -31,9 +36,13 @@ use mind::ipc::Endpoint;
 use mind::parse::{read_channel, read_manifest, Refused, Session};
 use mind::release::{self, Channel, CHANNEL_MAX, MANIFEST_MAX};
 use mind::zip; // the names a bundle may hold (bundle.rs)
+use mind::{cid, dag, tree}; // kept.rs names them as crate::cid, crate::dag and crate::tree, as the host tests build it
+use cid::Cid;
+use dag::{Builder, CHUNK};
 use slots::{Record, RECORD};
 use plan::Kind;
 use source::{copy, sha256, Bundle, Source};
+use store::Store;
 
 #[cfg(target_arch = "x86_64")]
 const ARCH: &str = "x86_64";
@@ -56,6 +65,14 @@ const RECEIVED: usize = 9; // the buffer of an install call (update.wit 1.3) lan
 // reads, until it is staged or dropped (751-UPD-0032).
 const INSTALL: &str = "INSTALL";
 const BUNDLE_MAX: u64 = 256 << 20;
+// The blobs of kept releases read at most, to find those a release shares with them (351-UPD-0033).
+const BLOBS_MAX: u64 = 4096;
+
+// About 110 KiB: kept here rather than on the stack; only `builder` takes it, and no call of it is reentrant.
+static mut BUILDER: Builder = Builder::new();
+fn builder() -> &'static mut Builder { unsafe { &mut *core::ptr::addr_of_mut!(BUILDER) } }
+
+fn chunk() -> alloc::boxed::Box<[u8; CHUNK]> { alloc::vec![0u8; CHUNK].into_boxed_slice().try_into().unwrap() }
 
 /// What the updater does by itself, from update.txt.
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
@@ -153,6 +170,8 @@ struct Updater {
     failure: String,
     /// The bundle the gateway is handing over, and the last handle given.
     install: Option<Install>, handles: u32,
+    /// The block store, where it keeps releases (351-UPD-0033): None without one that outlives a reset.
+    store: Option<Store>,
 }
 
 /// Where the channel the updater holds came from.
@@ -298,18 +317,34 @@ impl Updater {
         match self.with_source(|u, source| u.stage(source, Held::Source)) { Ok(version) => { self.failure.clear(); Ok(version) } Err(error) => self.fail("fetch", error) }
     }
 
-    /// The newer release `source` holds, checked and staged in the other slot; `from` names the source in the log.
+    /// The newer release `source` holds, checked and staged in the other slot; `from` names the source in the log. Then
+    /// kept in the block store, and the releases it no longer keeps let go (351-UPD-0033).
     fn stage(&mut self, source: &Source, from: Held) -> Result<u64, Error> {
         self.may_stage()?;
         let step = if from == Held::Bundle { "INSTALL" } else { "FETCH" };
         let mut parser = parser();
         let (channel, channel_file) = self.read_channel(source, from, &mut parser)?;
         if channel.version <= self.running { return Err(Error::Older); }
+        let (fetched, manifest, signature, files) = self.write_slot(source, step, &channel, &channel_file, &mut parser)?;
+        drop(parser);
+        self.staged = channel.version;
+        mind::println!("[UPDATER] {}: VERSION {} STAGED IN SLOT {}: {} FILES, {} BYTES {}", step, channel.version, self.other(), files.len(), fetched,
+                       if from == Held::Bundle { "FROM THE BUNDLE" } else { "FETCHED" });
+        self.keep(self.other(), &channel, &channel_file, &manifest, &signature, &files);
+        self.trim();
+        Ok(channel.version)
+    }
+
+    /// Release `channel` as `source` holds it written into the other slot: its manifest checked against the channel and
+    /// the boot key, then every file it lists for a slot by size and SHA-256, then the manifest, its signature and the
+    /// channel. Returns the bytes `source` gave, the manifest, its signature and the files.
+    fn write_slot(&mut self, source: &Source, step: &str, channel: &Channel, channel_file: &[u8], parser: &mut Session)
+        -> Result<(u64, Vec<u8>, Vec<u8>, Vec<release::File>), Error> {
         let digest = channel.manifest(ARCH).ok_or(Error::Missing)?;
         let release = format!("releases/{}/{}", channel.version, ARCH);
-        let manifest = source.small(&format!("{}/MANIFEST", release), MANIFEST_MAX, &mut parser)?;
+        let manifest = source.small(&format!("{}/MANIFEST", release), MANIFEST_MAX, parser)?;
         if mind::sha256::digest(&manifest) != digest { return Err(Error::Digest); }
-        let signature = source.small(&format!("{}/MANIFEST.SIG", release), 64, &mut parser)?;
+        let signature = source.small(&format!("{}/MANIFEST.SIG", release), 64, parser)?;
         if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
         let files = slot_files(&manifest, parser.endpoint())?;
         let slot = self.other();
@@ -347,11 +382,11 @@ impl Updater {
             }
             let blob = format!("blobs/{}", f.digest.iter().map(|b| format!("{:02x}", b)).collect::<String>());
             let resumed = file.size() > 0;
-            fetched += source.file(&blob, &mut file, f.size, &mut parser)?;
+            fetched += source.file(&blob, &mut file, f.size, parser)?;
             // What was there before may be another file's start: fetched again whole, once.
             if !whole(&file) && resumed {
                 file.truncate(0).map_err(|_| Error::Write)?;
-                fetched += source.file(&blob, &mut file, f.size, &mut parser)?;
+                fetched += source.file(&blob, &mut file, f.size, parser)?;
             }
             if !whole(&file) {
                 // Not the file: the next fetch starts it again.
@@ -363,14 +398,11 @@ impl Updater {
             // Each file in the log, so that a slow or stalled fetch shows how far it got (351-UPD-0018).
             mind::println!("[UPDATER] {}: {} OF {}: {}, {} BYTES IN {} MS", step, index + 1, files.len(), f.path.as_str(), f.size, mind::time::uptime_ms() - started);
         }
-        for (name, data) in [("MANIFEST", &manifest), ("MANIFEST.SIG", &signature), ("CHANNEL", &channel_file)] {
+        for (name, data) in [("MANIFEST", &manifest[..]), ("MANIFEST.SIG", &signature[..]), ("CHANNEL", channel_file)] {
             let mut file = File::create(&format!("MIND/{}/{}", slot, name)).map_err(|_| Error::Write)?;
             if file.write_at(0, data) != Ok(data.len()) || file.flush().is_err() { return Err(Error::Write); }
         }
-        self.staged = channel.version;
-        mind::println!("[UPDATER] {}: VERSION {} STAGED IN SLOT {}: {} FILES, {} BYTES {}", step, channel.version, slot, files.len(), fetched,
-                       if from == Held::Bundle { "FROM THE BUNDLE" } else { "FETCHED" });
-        Ok(channel.version)
+        Ok((fetched, manifest, signature, files))
     }
 
     /// A copy of file `f` the volume holds as the manifest lists it, the running slot's or the root's, and which it is.
@@ -465,7 +497,8 @@ impl Updater {
     fn rollback(&mut self) -> Result<(), Error> {
         let result = (|| {
             self.may_stage()?;
-            let version = self.verify_other().map_err(|_| Error::NoFallback)?.version;
+            // A slot not as its manifest lists it is written again from the store's last known good (351-UPD-0033).
+            let version = match self.verify_other() { Ok(channel) => channel.version, Err(why) => self.restore(why)? };
             if version < self.minimum { return Err(Error::NoFallback); }
             let write = plan::trial_of_other(self.records(), self.slot, 1).ok_or(Error::Write)?;
             mind::println!("[UPDATER] ROLLBACK: VERSION {} IN SLOT {} ON TRIAL, FALLING BACK TO {}", version, self.other(), slot_name(self.slot));
@@ -473,6 +506,146 @@ impl Updater {
             self.restart()
         })();
         result.or_else(|error| self.fail("rollback", error))
+    }
+
+    /// The releases the block store keeps for the updater: each pin's id and root, and the version its tree holds. A pin
+    /// that holds no release is logged and left as it is.
+    fn stored(&self) -> Vec<(u32, Cid, u64)> {
+        let Some(store) = &self.store else { return Vec::new() };
+        let pins = match store.pins() { Ok(pins) => pins, Err(e) => { mind::println!("[UPDATER] STORE: ITS PINS NOT READ ({:?})", e); return Vec::new() } };
+        let mut buffer = chunk();
+        pins.into_iter().filter_map(|(id, root, _)| match kept::version(&mut Store, &root, ARCH, &mut buffer) {
+            Ok(version) => Some((id, root, version)),
+            Err(e) => { mind::println!("[UPDATER] STORE: PIN {} HOLDS NO RELEASE ({:?}): LEFT AS IT IS", id, e); None }
+        }).collect()
+    }
+
+    /// File `f` of slot `slot` put into the store as an object, checked by size and SHA-256 as it is read: the slot's
+    /// copy, else the root's (an application a slot staged before 351-UPD-0023 does not hold).
+    fn put_file(&self, slot: &str, f: &release::File) -> Result<kept::Blob, String> {
+        let mut buffer = alloc::vec![0u8; mind::fs::CHUNK];
+        for path in [format!("MIND/{}/{}", slot, plan::in_slot(f.path.as_str())), String::from(f.path.as_str())] {
+            let Ok(file) = File::open(&path) else { continue };
+            if file.size() as u64 != f.size { continue; }
+            let builder = builder();
+            builder.reset();
+            let (mut hash, mut at) = (mind::sha256::Sha256::new(), 0);
+            while at < file.size() {
+                let got = file.read_at(at, &mut buffer).map_err(|_| format!("{} NOT READ", path))?;
+                if got == 0 { return Err(format!("{} NOT READ", path)); }
+                hash.update(&buffer[..got]);
+                builder.write(&mut Store, &buffer[..got]).map_err(|e| format!("THE STORE REFUSED A BLOCK OF {} ({:?})", path, e))?;
+                at += got;
+            }
+            if hash.finish() != f.digest { continue; }
+            let (cid, size) = builder.finish(&mut Store).map_err(|e| format!("THE STORE REFUSED A BLOCK OF {} ({:?})", path, e))?;
+            return Ok(kept::Blob { digest: f.digest, size, cid });
+        }
+        Err(format!("{} IS NOT AS THE MANIFEST LISTS IT", f.path.as_str()))
+    }
+
+    /// Release `channel` of slot `slot` kept in the block store, pinned, unless it is already (351-UPD-0033): each file
+    /// its manifest lists for a slot put from the slot (`put_file`), or taken from a kept release that holds its blob.
+    /// Logged; a failure changes nothing else.
+    fn keep(&mut self, slot: &str, channel: &Channel, channel_file: &[u8], manifest: &[u8], signature: &[u8], files: &[release::File]) {
+        let Some(store) = &self.store else { return };
+        let (started, releases) = (mind::time::uptime_ms(), self.stored());
+        if releases.iter().any(|r| r.2 == channel.version) { return; }
+        let (mut buffer, mut known) = (chunk(), BTreeMap::new());
+        let mut left = BLOBS_MAX;
+        for (_, root, _) in &releases {
+            if let Err(e) = kept::blobs(&mut Store, root, &mut buffer, &mut left, |b| { known.insert(b.digest, b); }) {
+                mind::println!("[UPDATER] STORE: THE BLOBS OF {} NOT READ ({:?})", root, e);
+            }
+        }
+        let (mut blobs, mut put, mut taken) = (Vec::with_capacity(files.len()), 0u64, 0);
+        for f in files {
+            if let Some(b) = known.get(&f.digest).filter(|b: &&kept::Blob| b.size == f.size) { blobs.push(*b); taken += 1; continue; }
+            match self.put_file(slot, f) {
+                Ok(b) => { put += b.size; known.insert(b.digest, b); blobs.push(b); }
+                Err(why) => { mind::println!("[UPDATER] STORE: VERSION {} NOT KEPT: {}", channel.version, why); return; }
+            }
+        }
+        let release = kept::Release { channel: channel.name.as_str(), channel_file, version: channel.version, arch: ARCH, manifest, signature };
+        let root = match kept::put(&mut Store, builder(), &release, &blobs, &mut buffer) {
+            Ok(root) => root,
+            Err(e) => { mind::println!("[UPDATER] STORE: VERSION {} NOT KEPT: ITS TREE REFUSED ({:?})", channel.version, e); return }
+        };
+        match store.pin(&root) {
+            Ok(id) => mind::println!("[UPDATER] STORE: VERSION {} KEPT AS PIN {}, ROOT {}: {} FILES, {} BYTES PUT FROM SLOT {}, {} TAKEN FROM A KEPT RELEASE, IN {} MS",
+                                     channel.version, id, root, files.len(), put, slot, taken, mind::time::uptime_ms() - started),
+            // A block put over a minute before may have gone in a collection meanwhile: the next try puts it again.
+            Err(e) => mind::println!("[UPDATER] STORE: VERSION {} NOT KEPT: THE PIN REFUSED ({:?})", channel.version, e),
+        }
+    }
+
+    /// The running release kept in the store if it is not yet: its slot's manifest the one booted and signed by the
+    /// boot key, and its channel the release key's naming it (351-UPD-0033). Not on trial: the confirmation comes first.
+    fn keep_running(&mut self) {
+        if self.store.is_none() || self.may_stage().is_err() || self.running == 0 || self.stored().iter().any(|r| r.2 == self.running) { return; }
+        let slot = slot_name(self.slot);
+        let read = |name: &str, limit: usize| -> Option<Vec<u8>> {
+            let file = File::open(&format!("MIND/{}/{}", slot, name)).ok().filter(|f| f.size() <= limit)?;
+            let mut data = alloc::vec![0u8; file.size()];
+            (file.read_at(0, &mut data) == Ok(data.len())).then_some(data)
+        };
+        let (Some(manifest), Some(signature), Some(channel_file)) = (read("MANIFEST", MANIFEST_MAX), read("MANIFEST.SIG", 64), read("CHANNEL", CHANNEL_MAX)) else {
+            return mind::println!("[UPDATER] STORE: SLOT {} LACKS ITS MANIFEST, SIGNATURE OR CHANNEL: VERSION {} NOT KEPT", slot, self.running);
+        };
+        if mind::sha256::digest(&manifest) != self.manifest || !verified(&keys::BOOT_KEY, &manifest, &signature) {
+            return mind::println!("[UPDATER] STORE: SLOT {}'S MANIFEST IS NOT THE ONE BOOTED: VERSION {} NOT KEPT", slot, self.running);
+        }
+        let parser = parser();
+        let checked = channel_of(&channel_file, parser.endpoint()).ok().filter(|c| c.version == self.running && c.manifest(ARCH) == Some(self.manifest))
+            .map(|c| (c, slot_files(&manifest, parser.endpoint())));
+        drop(parser);
+        match checked {
+            Some((channel, Ok(files))) => self.keep(slot, &channel, &channel_file, &manifest, &signature, &files),
+            _ => mind::println!("[UPDATER] STORE: SLOT {}'S CHANNEL OR MANIFEST NOT READ: VERSION {} NOT KEPT", slot, self.running),
+        }
+    }
+
+    /// The pins of the releases the store no longer keeps ended (`plan::keeps`): the running one, the last known good
+    /// and a staged one stay. Never while the running slot is on trial, since the other one is then its fallback.
+    fn trim(&mut self) {
+        if self.store.is_none() || self.may_stage().is_err() { return; }
+        let releases = self.stored();
+        let versions: Vec<u64> = releases.iter().map(|r| r.2).collect();
+        let minimum = self.minimum.max(plan::floor(self.records()));
+        let mut held: Vec<u64> = Vec::new();
+        for &(id, _, version) in &releases {
+            if plan::keeps(version, &versions, self.running, minimum, self.staged) && !held.contains(&version) { held.push(version); continue; }
+            let Some(store) = &self.store else { return };
+            match store.unpin(id) {
+                Ok(()) => mind::println!("[UPDATER] STORE: VERSION {} LET GO (PIN {})", version, id),
+                Err(e) => mind::println!("[UPDATER] STORE: VERSION {}: PIN {} NOT ENDED ({:?})", version, id, e),
+            }
+        }
+        held.sort_unstable_by(|a, b| b.cmp(a));
+        let listed: Vec<String> = held.iter().map(|v| format!("{}", v)).collect();
+        mind::println!("[UPDATER] STORE KEEPS {}", if listed.is_empty() { String::from("NO RELEASE") } else { format!("VERSIONS {}", listed.join(", ")) });
+    }
+
+    /// The last known good release the store keeps written into the other slot, as a fetch writes a source's, since
+    /// that slot is not as its manifest lists it (`why`); its version, once the slot checks as the bootloader will
+    /// check it (351-UPD-0033). `no-fallback` without such a release.
+    fn restore(&mut self, why: Error) -> Result<u64, Error> {
+        if self.store.is_none() { return Err(Error::NoFallback); }
+        let releases = self.stored();
+        let versions: Vec<u64> = releases.iter().map(|r| r.2).collect();
+        let version = plan::last_good(&versions, self.running, self.minimum.max(plan::floor(self.records()))).ok_or(Error::NoFallback)?;
+        let root = releases.iter().find(|r| r.2 == version).map(|r| r.1).ok_or(Error::NoFallback)?;
+        mind::println!("[UPDATER] RESTORE: SLOT {} IS NOT AS ITS MANIFEST LISTS IT ({:?}): VERSION {} FROM THE STORE, ROOT {}", self.other(), why, version, root);
+        let name = kept::channel(&mut Store, &root, &mut chunk()).map_err(|_| Error::Digest)?;
+        let source = Source::Store(root);
+        let mut parser = parser();
+        let channel_file = source.small(&format!("channels/{}", name), CHANNEL_MAX, &mut parser)?;
+        let channel = channel_of(&channel_file, parser.endpoint())?;
+        if channel.version != version || channel.name.as_str() != name { return Err(Error::Digest); }
+        let (read, _, _, files) = self.write_slot(&source, "RESTORE", &channel, &channel_file, &mut parser)?;
+        drop(parser);
+        mind::println!("[UPDATER] RESTORE: VERSION {} WRITTEN INTO SLOT {} AGAIN: {} FILES, {} BYTES FROM THE STORE", version, self.other(), files.len(), read);
+        self.verify_other().map(|c| c.version)
     }
 
     fn bundle_dir(&self) -> String { format!("MIND/{}/{}", self.other(), INSTALL) }
@@ -544,7 +717,12 @@ impl Updater {
     fn confirm(&mut self, why: &str) {
         match plan::confirm(self.records(), self.slot) {
             Some(write) => match self.write_record(write) {
-                Ok(()) => { mind::println!("[UPDATER] SLOT {} CONFIRMED ON THE DISK: {}", slot_name(self.slot), why); self.raise_floor(); }
+                Ok(()) => {
+                    mind::println!("[UPDATER] SLOT {} CONFIRMED ON THE DISK: {}", slot_name(self.slot), why);
+                    self.raise_floor();
+                    self.keep_running();
+                    self.trim();
+                }
                 Err(error) => { let _ = self.fail::<()>("confirm", error); }
             },
             None => mind::println!("[UPDATER] SLOT {}: THE RECORD NEEDS NO CONFIRMATION", slot_name(self.slot)),
@@ -586,7 +764,7 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let slot = match info.boot_slot.slot { BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
     let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None,
-                                failure: String::new(), install: None, handles: 0 };
+                                failure: String::new(), install: None, handles: 0, store: None };
     if keys::RELEASE_TEST_KEY || keys::BOOT_TEST_KEY {
         mind::println!("[UPDATER] KEYS: {}{}", if keys::RELEASE_TEST_KEY { "THE TEST RELEASE KEY " } else { "" }, if keys::BOOT_TEST_KEY { "THE TEST BOOT KEY" } else { "" });
     }
@@ -614,6 +792,13 @@ fn main(info: &'static BootInfo) {
         updater.raise_floor();
         // A transfer a restart cut is not resumed: the gateway begins it again.
         updater.drop_bundle("LEFT BY A RESTART");
+        // 351-UPD-0033: releases kept in the block store, once the running slot is confirmed.
+        match Store::open() {
+            Ok(store) => { mind::println!("[UPDATER] STORE: RELEASES ARE KEPT IN THE BLOCK STORE"); updater.store = Some(store); }
+            Err(why) => mind::println!("[UPDATER] STORE: {}: NO RELEASE IS KEPT THERE", why),
+        }
+        updater.keep_running();
+        updater.trim();
         if updater.trial {
             let seconds = if info.boot_slot.deadline_s == 0 { TRIAL_DEADLINE_S } else { info.boot_slot.deadline_s } as usize;
             let at = seconds * 1000 + MARGIN_MS;

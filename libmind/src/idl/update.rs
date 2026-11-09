@@ -6,7 +6,9 @@
 //! in `update.txt` on the boot volume. A request runs to its end before the next one is read. A client badged
 //! `BADGE_UPDATE_GATEWAY` (`mind::process`: the Effector gateway's, 1.2, 751-KRN-0185) may `fetch`, `apply` and `rollback`
 //! only while init's `remote-update` counts (`init.wit` 1.11 `mode`), which the updater asks at each; else `denied`. That
-//! client alone may hand it a release as a bundle (`install-…`, 1.3, 751-UPD-0032), which it checks as any source.
+//! client alone may hand it a release as a bundle (`install-…`, 1.3, 751-UPD-0032), which it checks as any source. It
+//! keeps releases in the block store, and `rollback` writes the last known good back from there into a slot not as its
+//! manifest lists it (1.4, 351-UPD-0033).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -16,7 +18,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:update";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;
@@ -27,7 +29,7 @@ const MAJOR: usize = 1;
 /// passed, or the clock cannot be read (for `apply`, the channel kept with the staged release); `older`: the channel names the running version or an older one; `digest`:
 /// a file not as its manifest lists it; `write`: the slot or a boot record could not be written; `not-staged`: no
 /// verified newer release in the other slot; `no-fallback`: no slot to roll back to, or its version is not known or
-/// is below the minimum; `denied`: init refused the restart, or a call the client's badge or init's `remote-update` does
+/// is below the minimum (1.4: and the block store keeps no release to write there); `denied`: init refused the restart, or a call the client's badge or init's `remote-update` does
 /// not allow; `no-parser`: the parser service did not answer. For a bundle (1.3): `malformed` also a handle not begun,
 /// bytes past its size, or not a ZIP of stored entries; `digest` also a bundle not of the size or SHA-256 begun.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -113,7 +115,10 @@ pub fn apply(endpoint: Endpoint, tries: u8) -> Result<core::result::Result<(), E
 }
 
 /// Writes the boot record that boots the other slot on trial, falling back to the running one, if the channel kept
-/// there shows a version not below the minimum the updater knows; then asks init to restart the machine.
+/// there shows a version not below the minimum the updater knows; then asks init to restart the machine. A slot that
+/// is not as its manifest lists it is first written again from the last known good release the block store keeps
+/// (the newest below the running one and not below the minimum), with every check of `fetch`, but its channel's
+/// expiry (1.4).
 pub fn rollback(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
     let words = [4 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;
