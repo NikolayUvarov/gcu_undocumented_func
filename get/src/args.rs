@@ -50,6 +50,8 @@ pub struct Options {
     pub max_time: Option<u32>,
     pub fail: bool,
     pub insecure_http: bool,
+    /// -u: the user, and the password after its first ':'; without one it is asked on the console (000-NET-0048).
+    pub user: Option<(String, Option<String>)>,
 }
 
 impl Options {
@@ -110,7 +112,7 @@ fn form(text: &str) -> Result<Form, String> {
 /// The options of `words` (the program's name not among them).
 pub fn parse(words: &[String]) -> Result<Options, String> {
     let mut o = Options { url: String::new(), method: None, headers: Vec::new(), data: None, form: Vec::new(), output: Output::Console, resume: false,
-                          head: false, follow: true, max_redirs: 10, silent: false, write_out: false, max_time: None, fail: false, insecure_http: false };
+                          head: false, follow: true, max_redirs: 10, silent: false, write_out: false, max_time: None, fail: false, insecure_http: false, user: None };
     let mut url = None;
     let mut i = 0;
     while i < words.len() {
@@ -142,6 +144,12 @@ pub fn parse(words: &[String]) -> Result<Options, String> {
             "-f" | "--fail" => o.fail = true,
             "--max-time" | "-m" => o.max_time = Some(value()?.parse().ok().filter(|&s: &u32| s > 0).ok_or_else(|| "--max-time takes seconds, 1 or more".to_string())?),
             "--insecure-http" => o.insecure_http = true,
+            "-u" | "--user" => {
+                let v = value()?;
+                let (user, password) = match v.split_once(':') { Some((u, p)) => (u, Some(p.to_string())), None => (v, None) };
+                if user.is_empty() || user.bytes().any(|b| b < 0x20 || b == 0x7F) { return Err(alloc::format!("-u {:?}: no user name", user)); }
+                o.user = Some((user.to_string(), password));
+            }
             w if w.starts_with('-') && w.len() > 1 => return Err(alloc::format!("{}: no such option", w)),
             w => { if url.replace(w.to_string()).is_some() { return Err("one URL only".to_string()); } }
         }
@@ -159,4 +167,18 @@ pub fn remote_name(path: &str) -> Option<&str> {
     let path = path.split(['?', '#']).next().unwrap_or("");
     let name = path.rsplit('/').next().unwrap_or("");
     (!name.is_empty() && name != "." && name != ".." && name.bytes().all(|b| b.is_ascii_graphic() && !b"\\:*\"<>|".contains(&b))).then_some(name)
+}
+
+/// Basic authentication's value (RFC 7617): "Basic " and `user:password` in base64 (RFC 4648).
+pub fn basic(user: &str, password: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut plain = Vec::with_capacity(user.len() + 1 + password.len());
+    plain.extend_from_slice(user.as_bytes()); plain.push(b':'); plain.extend_from_slice(password);
+    let mut out = String::from("Basic ");
+    for chunk in plain.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 { out.push(if i <= chunk.len() { DIGITS[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' }); }
+    }
+    for byte in plain.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) } } // the password's copy wiped
+    out
 }

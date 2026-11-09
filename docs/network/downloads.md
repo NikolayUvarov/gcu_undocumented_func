@@ -95,6 +95,7 @@ answer to the console or a file. It is a process of its own, and `help get` list
     with another `-X` it sends that method and prints the head alone.
   - `-X GET|POST|PUT|HEAD|PATCH|DELETE`, `-H 'Name: value'` (up to 14), `-d TEXT` or `-d @FILE` (POST, `application/x-www-form-urlencoded`
     unless `-H` names a type), `-F name=value` and `-F name=@FILE` (a `multipart/form-data` POST, up to 8 parts).
+  - `-u USER:PASSWORD`: Basic authentication (RFC 7617), the `Authorization` header built from them; with `-H 'Authorization: …'` too it is refused.
   - Redirects are followed by `mind::http::redirect`'s rules (on by default; `--no-location`, `--max-redirs N` up to
     10). HTTPS to HTTP is refused. `Authorization`, `Cookie` and `Proxy-Authorization` are not sent on to another host or
     port, as `curl` without `--location-trusted`.
@@ -170,9 +171,9 @@ These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networ
 
 ## Not provided yet
 
-- **In `get`:** `-u user`, the password typed on the console: a console program does not get the keys typed at its
-  console (the shell keeps them, Esc and Ctrl+C stop it), so `get` cannot read one. Requested of APP in
-  `requests-APP.md`. A question asked at run time from a script, also requested there.
+- **In `get`:** `-u user` with the password typed on the console. A console program does not get the keys typed at its
+  console (the shell keeps them, Esc and Ctrl+C stop it), so the shell asks for the line for it (`shell.wit` 1.12
+  `secret-line`, 000-APP-0126), and `get` takes that next. `-u user:password` sends Basic authentication now.
 - **Roots covered by a release's signature:** the image ships Mozilla's roots as `tlsroots.pem` (000-NET-0046), but the boot manifest does not list the file and a slot update does not replace it. The roots are whatever the file holds, which nothing authenticates; a pin is the way to trust the update server for now.
 - **HTTPS by name with a pin from the channel:** the updater's (351-UPD-0007).
 - **In `mind::http::get` and `download`:** chunked bodies, redirects, keep-alive, several connections at once, IPv6 (the program `get` has the first two through `mind::http::Connection`). A service has chunked bodies and keep-alive through `mind::http::Connection` ([services.md](services.md), 750-NET-0019).

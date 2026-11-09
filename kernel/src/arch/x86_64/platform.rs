@@ -40,6 +40,7 @@ pub fn kernel_owns(_start: u64, _end: u64) -> bool { false }
 /// No node has a line here.
 pub fn node_line(_line: u32) -> bool { false }
 pub fn console() -> usize { usize::MAX } // the kernel's console is not MMIO here
+pub fn console_line() -> Option<usize> { None } // no channel: COM1 is lent by its ports (100000-KRN-0222)
 /// ISA lines 1..15 except the cascade (2).
 pub fn irq(line: usize) -> bool { (1..16).contains(&line) && line != 2 }
 /// A PC has ACPI: no device tree is read here (aarch64's reads one, 100000-PRT-0009).
