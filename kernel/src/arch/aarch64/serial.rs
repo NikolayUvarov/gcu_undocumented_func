@@ -44,12 +44,13 @@ pub unsafe fn console_room() -> bool {
     let uart = board::get(&board::UART);
     uart != 0 && if board::get(&board::UART_KIND) == board::UART_16550 { read_16550(uart, 5) & 0x20 != 0 } else { read_volatile((uart + 0x18) as *const u32) & 0x20 == 0 }
 }
-// Receive (and its timeout) and transmit interrupts on or off: 16550 IER bits 0 and 1, PL011 IMSC bits 4, 6 and 5; the
-// PL011's are cleared too, as QEMU's sends at once and keeps its transmit interrupt up.
+// Receive (and its timeout) and transmit interrupts on or off: 16550 IER bits 0 and 1, PL011 IMSC bits 4, 6 and 5. The
+// PL011's transmit interrupt is cleared too, as QEMU's sends at once and keeps it up; a pending receive one never is: QEMU
+// raises it again only when its FIFO goes from empty to one byte, and the bytes would stay there.
 pub unsafe fn console_interrupts(rx: bool, tx: bool) {
     let uart = board::get(&board::UART);
     if uart == 0 { return; }
     if board::get(&board::UART_KIND) == board::UART_16550 { write_16550(uart, 1, rx as u8 | (tx as u8) << 1); return; }
-    write_volatile((uart + 0x44) as *mut u32, 0x7FF);
+    write_volatile((uart + 0x44) as *mut u32, if rx { 0x20 } else { 0x7FF });
     write_volatile((uart + 0x38) as *mut u32, if rx { 0x50 } else { 0 } | if tx { 0x20 } else { 0 });
 }
