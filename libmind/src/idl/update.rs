@@ -12,7 +12,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -80,7 +80,7 @@ impl Wire for Metadata {
 /// Reads the channel and checks its signature, its form and its expiry. A version not above the running one is
 /// `older`.
 pub fn check(endpoint: Endpoint) -> Result<core::result::Result<Offer, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -129,7 +129,7 @@ pub fn rollback(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
 
 /// The updater's view (above).
 pub fn status(endpoint: Endpoint) -> Result<State> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -142,7 +142,7 @@ pub fn status(endpoint: Endpoint) -> Result<State> {
 
 /// The channel the updater holds (above); added in 1.1.
 pub fn metadata(endpoint: Endpoint) -> Result<Metadata> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -158,7 +158,7 @@ pub fn metadata(endpoint: Endpoint) -> Result<Metadata> {
 /// while `remote-update` counts. The bundle is one ZIP of stored entries holding what `scripts/release.py bundle`
 /// writes: the channel update.txt names, its manifests and their signatures, and the blobs they list. A handle.
 pub fn install_begin(endpoint: Endpoint, size: u64, sha256: &str, command: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         size.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -176,7 +176,7 @@ pub fn install_begin(endpoint: Endpoint, size: u64, sha256: &str, command: &str)
 /// The bundle's bytes at `offset`, which is at most the bytes written so far: what lay at and past it goes, so that a
 /// cut transfer resumes.
 pub fn install_write(endpoint: Endpoint, handle: u32, offset: u64, bytes: &[u8]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(36864).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(36864).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;

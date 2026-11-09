@@ -14,7 +14,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -175,7 +175,7 @@ impl Wire for Load {
 
 /// The tasks from position `start` on, at most 40 (call again with a larger `start` for the rest).
 pub fn tasks(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<Task, 40>, Error>> {
-    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -190,7 +190,7 @@ pub fn tasks(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List
 
 /// The CPUs from position `start` on, at most 64 (the kernel starts up to 256).
 pub fn cpus(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<Cpu, 64>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -204,7 +204,7 @@ pub fn cpus(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<
 }
 
 pub fn memory(endpoint: Endpoint) -> Result<core::result::Result<Memory, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -217,7 +217,7 @@ pub fn memory(endpoint: Endpoint) -> Result<core::result::Result<Memory, Error>>
 }
 
 pub fn physmap(endpoint: Endpoint) -> Result<core::result::Result<List<Range, 256>, Error>> {
-    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -231,7 +231,7 @@ pub fn physmap(endpoint: Endpoint) -> Result<core::result::Result<List<Range, 25
 
 /// Address space of task `pid`.
 pub fn vmap(endpoint: Endpoint, pid: u64) -> Result<core::result::Result<List<Region, 80>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         pid.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -246,7 +246,7 @@ pub fn vmap(endpoint: Endpoint, pid: u64) -> Result<core::result::Result<List<Re
 
 /// Capabilities of task `pid` from position `start` on, at most 64 (a table grows to 4095).
 pub fn caps(endpoint: Endpoint, pid: u64, start: u32) -> Result<core::result::Result<List<Capability, 64>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         pid.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -262,7 +262,7 @@ pub fn caps(endpoint: Endpoint, pid: u64, start: u32) -> Result<core::result::Re
 
 /// The endpoints from position `start` on, at most 128 (call again with a larger `start` for the rest).
 pub fn endpoints(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<EndpointInfo, 128>, Error>> {
-    let mut buffer = Wiped(Pages::new(12288).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(12288).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -276,7 +276,7 @@ pub fn endpoints(endpoint: Endpoint, start: u32) -> Result<core::result::Result<
 }
 
 pub fn irqs(endpoint: Endpoint) -> Result<core::result::Result<List<Irq, 16>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -289,7 +289,7 @@ pub fn irqs(endpoint: Endpoint) -> Result<core::result::Result<List<Irq, 16>, Er
 }
 
 pub fn devices(endpoint: Endpoint) -> Result<core::result::Result<List<Device, 64>, Error>> {
-    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -304,7 +304,7 @@ pub fn devices(endpoint: Endpoint) -> Result<core::result::Result<List<Device, 6
 /// The last `count` samples, oldest first: every 100 ms (`slow` false, up to 300) or every second (up to 600); a reply
 /// holds those from position `start` on, at most 150 (call again with a larger `start` for the rest).
 pub fn history(endpoint: Endpoint, slow: bool, count: u16, start: u16) -> Result<core::result::Result<List<Sample, 150>, Error>> {
-    let mut buffer = Wiped(Pages::new(12288).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(12288).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         slow.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -320,7 +320,7 @@ pub fn history(endpoint: Endpoint, slow: bool, count: u16, start: u16) -> Result
 }
 
 pub fn load(endpoint: Endpoint) -> Result<core::result::Result<Load, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -335,7 +335,7 @@ pub fn load(endpoint: Endpoint) -> Result<core::result::Result<Load, Error>> {
 /// The tasks holding a capability for endpoint `index` (2.1); error not-found for an index no endpoint has. Needs
 /// the authority badge (3.0).
 pub fn holders(endpoint: Endpoint, index: u32) -> Result<core::result::Result<List<Holder, 64>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         index.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -351,7 +351,7 @@ pub fn holders(endpoint: Endpoint, index: u32) -> Result<core::result::Result<Li
 /// The capabilities of all tasks in PID and slot order, from entry `start` on, at most 128 (call again with a larger
 /// `start` for the rest); needs the authority badge (3.0).
 pub fn authority(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<AuthorityEntry, 128>, Error>> {
-    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -366,7 +366,7 @@ pub fn authority(endpoint: Endpoint, start: u32) -> Result<core::result::Result<
 
 /// The frame pool (4.1).
 pub fn pool(endpoint: Endpoint) -> Result<core::result::Result<Pool, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -381,7 +381,7 @@ pub fn pool(endpoint: Endpoint) -> Result<core::result::Result<Pool, Error>> {
 /// The machine's name (4.2, 000-KRN-0180): the RFC 1123 label in `data/machine/name`, read at each call, or
 /// `mindcore` when the file is missing or holds no label (`sysmon` logs why). For any client.
 pub fn hostname(endpoint: Endpoint) -> Result<core::result::Result<Text<63>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

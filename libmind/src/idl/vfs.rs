@@ -8,7 +8,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -65,7 +65,7 @@ impl Wire for Report {
 
 /// The root directory of volume `name`.
 pub fn root(endpoint: Endpoint, name: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<16>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -80,7 +80,7 @@ pub fn root(endpoint: Endpoint, name: &str) -> Result<core::result::Result<u32, 
 
 /// A directory below `dir`; with `create` it is made if missing.
 pub fn open_dir(endpoint: Endpoint, dir: u32, path: &str, create: bool) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         dir.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -97,7 +97,7 @@ pub fn open_dir(endpoint: Endpoint, dir: u32, path: &str, create: bool) -> Resul
 
 /// A file below `dir`. `mode` bits (`mind::fs::MODE_*`): 1 write, 2 create, 4 truncate, 8 refuse an existing file.
 pub fn open(endpoint: Endpoint, dir: u32, path: &str, mode: u8) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         dir.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -114,7 +114,7 @@ pub fn open(endpoint: Endpoint, dir: u32, path: &str, mode: u8) -> Result<core::
 
 /// Up to `length` bytes from `offset` (fewer at the end of the file).
 pub fn read(endpoint: Endpoint, file: u32, offset: u32, length: u32, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         file.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -131,7 +131,7 @@ pub fn read(endpoint: Endpoint, file: u32, offset: u32, length: u32, out: &mut [
 
 /// Writes `data` at `offset`; the file grows (a gap reads as zeros). Returns the bytes written.
 pub fn write(endpoint: Endpoint, file: u32, offset: u32, data: &[u8]) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         file.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -157,7 +157,7 @@ pub fn truncate(endpoint: Endpoint, file: u32, size: u32) -> Result<core::result
 
 /// The entry of an open file or directory.
 pub fn stat(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Entry, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -172,7 +172,7 @@ pub fn stat(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Entr
 
 /// Entries of `dir` from index `start`, at most 16 (an empty list: the end).
 pub fn list(endpoint: Endpoint, dir: u32, start: u32) -> Result<core::result::Result<List<Entry, 16>, Error>> {
-    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         dir.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -188,7 +188,7 @@ pub fn list(endpoint: Endpoint, dir: u32, start: u32) -> Result<core::result::Re
 
 /// Removes a file or an empty directory below `dir`.
 pub fn remove(endpoint: Endpoint, dir: u32, path: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         dir.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -204,7 +204,7 @@ pub fn remove(endpoint: Endpoint, dir: u32, path: &str) -> Result<core::result::
 
 /// Renames or moves `from` (below `dir`) to `to` (below `target`, on the same volume).
 pub fn rename(endpoint: Endpoint, dir: u32, from: &str, target: u32, to: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         dir.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -222,7 +222,7 @@ pub fn rename(endpoint: Endpoint, dir: u32, from: &str, target: u32, to: &str) -
 
 /// The volume a handle is on.
 pub fn volume(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Volume, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -254,7 +254,7 @@ pub fn close(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<(),
 
 /// Checks the volume of `handle` without changing it (2.1).
 pub fn check(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Report, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -284,7 +284,7 @@ pub fn scope(endpoint: Endpoint, dir: u32, writable: bool, receive: usize) -> Re
 /// the root of `ram` opened with the user's badge. Handles below the root and scopes on the volume end; root handles
 /// stay valid. The boot disk is refused (denied) (2.3).
 pub fn format(endpoint: Endpoint, handle: u32, label: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;

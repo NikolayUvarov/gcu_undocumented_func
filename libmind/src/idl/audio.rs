@@ -7,7 +7,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -118,7 +118,7 @@ pub fn overflows(endpoint: Endpoint) -> Result<u32> {
 
 /// The levels as set; not-found without an audio device (1.2).
 pub fn levels(endpoint: Endpoint) -> Result<Levels> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -132,7 +132,7 @@ pub fn levels(endpoint: Endpoint) -> Result<Levels> {
 /// Sets the output's volume (0 to 100 %, the nearest setting) and mute, and answers the levels as set: rights for a
 /// client without the levels badge, invalid above 100 %, not-found without a device (1.2).
 pub fn set_volume(endpoint: Endpoint, percent: u8, muted: bool) -> Result<Levels> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         percent.encode(&mut w).ok_or(Error::Invalid)?;
@@ -147,7 +147,7 @@ pub fn set_volume(endpoint: Endpoint, percent: u8, muted: bool) -> Result<Levels
 
 /// Sets the capture's gain (0 to 100 %) and boost (left off where the device has none); answers as set-volume (1.2).
 pub fn set_gain(endpoint: Endpoint, percent: u8, boost: bool) -> Result<Levels> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         percent.encode(&mut w).ok_or(Error::Invalid)?;

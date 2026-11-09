@@ -29,7 +29,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -221,7 +221,7 @@ impl Wire for CountryOrigin {
 /// Starts a scan of every channel and answers when it ends (about 2 s), with the access points heard. While joining
 /// or joined it does not leave the channel and answers the list as it stands.
 pub fn scan(endpoint: Endpoint) -> Result<core::result::Result<List<Network, 32>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -238,7 +238,7 @@ pub fn scan(endpoint: Endpoint) -> Result<core::result::Result<List<Network, 32>
 /// alone holds it, and the station gets each handshake's keys from it (MC-11.9); `unsupported` when it cannot. The
 /// passphrase is never answered back. Change badge only.
 pub fn join(endpoint: Endpoint, ssid: &[u8], passphrase: &str, remember: bool) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<u8, 32>(ssid, &mut w).ok_or(SysError::Invalid)?;
@@ -254,7 +254,7 @@ pub fn join(endpoint: Endpoint, ssid: &[u8], passphrase: &str, remember: bool) -
 }
 
 pub fn status(endpoint: Endpoint) -> Result<Status> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -276,7 +276,7 @@ pub fn leave(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
 
 /// Forgets a remembered network; false when none had the name (change badge only).
 pub fn forget(endpoint: Endpoint, ssid: &[u8]) -> Result<core::result::Result<bool, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<u8, 32>(ssid, &mut w).ok_or(SysError::Invalid)?;
@@ -291,7 +291,7 @@ pub fn forget(endpoint: Endpoint, ssid: &[u8]) -> Result<core::result::Result<bo
 
 /// A page of the catalogue from index `from` (1.1). `unsupported`: no catalogue in this station.
 pub fn countries(endpoint: Endpoint, from: u16) -> Result<core::result::Result<Countries, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         from.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -308,7 +308,7 @@ pub fn countries(endpoint: Endpoint, from: u16) -> Result<core::result::Result<C
 /// `invalid`: not two capital letters, nor `00`; `not-found`: not in the catalogue; `no-device`: no radio yet;
 /// `unsupported`: no catalogue in this station.
 pub fn channels(endpoint: Endpoint, code: &str) -> Result<core::result::Result<List<Channel, 64>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<2>(code, &mut w).ok_or(SysError::Invalid)?;
@@ -323,7 +323,7 @@ pub fn channels(endpoint: Endpoint, code: &str) -> Result<core::result::Result<L
 
 /// The station's country (1.1).
 pub fn country(endpoint: Endpoint) -> Result<CountryStatus> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -339,7 +339,7 @@ pub fn country(endpoint: Endpoint) -> Result<CountryStatus> {
 /// capital letters, or `00`; `not-found`: not in the catalogue; `no-device`: no radio yet; `unsupported`: no
 /// catalogue in this station. A radio that refuses the limits is not an error: the status says `failed`.
 pub fn set_country(endpoint: Endpoint, code: &str) -> Result<core::result::Result<CountryStatus, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<2>(code, &mut w).ok_or(SysError::Invalid)?;
@@ -354,7 +354,7 @@ pub fn set_country(endpoint: Endpoint, code: &str) -> Result<core::result::Resul
 
 /// Where the applied country came from (1.2).
 pub fn country_origin(endpoint: Endpoint) -> Result<CountryOrigin> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

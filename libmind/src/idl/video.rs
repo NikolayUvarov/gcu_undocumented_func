@@ -7,7 +7,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -50,7 +50,7 @@ impl Wire for Frame {
 
 /// The cameras, in the order `open` numbers them.
 pub fn cameras(endpoint: Endpoint) -> Result<List<Camera, 4>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -83,7 +83,7 @@ pub fn read(endpoint: Endpoint, capacity: u32, pixels: usize) -> Result<core::re
 
 /// The frame `read` copied last.
 pub fn frame(endpoint: Endpoint) -> Result<core::result::Result<Frame, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
