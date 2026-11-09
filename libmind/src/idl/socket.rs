@@ -43,6 +43,12 @@
 //! and takes each connection a peer set up (`tcp-accept`) as a connected socket, used and charged as one it made. A
 //! peer outside the port's networks is reset as soon as the stack sees it, and a port nothing listens on answers a SYN
 //! with a reset.
+//!
+//! 2.11 (550-NET-0062): cards taken out of use. The policy badge, or the operator, names the cards out of use
+//! (`withdraw`), and any client may read them (`withdrawn`). A card out of use routes nothing and keeps no address, so
+//! another card takes its flows, and its TCP connections are aborted. The stack sends nothing through it, DHCP
+//! included, while its driver keeps the link; back in use, DHCP runs on it again. Of the cards whose networks hold a
+//! destination, the preferred one is taken first: preferring a card moves its network's flows too.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -52,7 +58,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 10, 0);
+pub const VERSION: (u8, u8, u8) = (2, 11, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -613,6 +619,25 @@ pub fn grant_rules(endpoint: Endpoint) -> Result<core::result::Result<List<Rule,
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Rule, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Takes the cards whose bits are set in `cards` (bit N: card N) out of use, and puts the others back (operator and
+/// policy badges, 2.11). `invalid`: a bit of a card the stack has no slot for.
+pub fn withdraw(endpoint: Endpoint, cards: u8) -> Result<core::result::Result<(), Error>> {
+    let words = [28 | MAJOR << 8 | ((cards) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
+/// The cards out of use, a bit each (2.11).
+pub fn withdrawn(endpoint: Endpoint) -> Result<core::result::Result<u8, Error>> {
+    let words = [29 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 8) as u8))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -646,6 +671,8 @@ pub enum Request<'a> {
     TcpListen { port: u16, backlog: u8 },
     TcpAccept { listener: u32 },
     GrantRules,
+    Withdraw { cards: u8 },
+    Withdrawn,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -848,6 +875,14 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::GrantRules, call))
         }
+        28 => {
+            wire::body(request, cap, [0xff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Withdraw { cards: wire::field(&words, 0, 16, 8) as u8 }, Call::words(request, cap)))
+        }
+        29 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Withdrawn, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -959,4 +994,12 @@ pub fn reply_tcp_accept(call: Call, value: core::result::Result<&Accepted, Error
 pub fn reply_grant_rules(call: Call, value: core::result::Result<&[Rule], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<Rule, 16>(value, w))
+}
+pub fn reply_withdraw(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_withdrawn(call: Call, value: core::result::Result<u8, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
 }

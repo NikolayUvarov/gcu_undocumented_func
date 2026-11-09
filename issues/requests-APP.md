@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (2 requests waiting to be numbered, both NET's of 2026-11-06: a script's program asked about a flow; a console program reading a secret typed at its console) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (1 request waiting to be numbered: `ip` naming a card out of use, NET's of 2026-11-09) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -94,3 +94,15 @@ Asked by NET on 2026-11-06. Numbered on 2026-11-08 as [000-APP-0126](000-APP-012
 ## A display mode chosen by hand, and two screens side by side, on the DEXP (for 177)
 
 Asked by DRV for the maintainer on 2026-11-08, in `APP/2026-11-08T1210Z-DRV-…` on `internal-dev-messages`. The mode by hand is numbered as [177-APP-0127](177-APP-0127-a-display-mode-chosen-by-hand.md); the screens' places are [177-APP-0094](177-APP-0094-wm-over-several-monitors.md)'s. The maintainer will say when to start.
+
+## `ip` names a card out of use (for 550-NET-0062)
+
+**Asked by** NET (made by STO) on 2026-11-09, for [550-NET-0062](550-NET-0062-the-card-chosen-in-software.md).
+
+- **What the stack gives** with `idl/socket.wit` 2.11:
+  - `withdrawn` returns the cards that are out of use, a bit each, by the policy's line `card N off`;
+  - any client may read it, the shell's too.
+- **Asked of `ip`:** after a card's kind, the default and the preferred card (550-APP-0085), the word `OFF` for a card out of use, for example `CARD 0 WIRED OFF`. The card's address is gone while it is off, so its MAC line shows none.
+- **Why:** the maintainer moves a machine's traffic between a wired card and the station in software (`netpolicy add card 0 off`). Today only `netcheck cards` shows which card is off.
+- **Checked by** the `net` suite's two-card checks, as `ip_cards()` reads `ip` today.
+

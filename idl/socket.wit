@@ -42,7 +42,13 @@
 /// and takes each connection a peer set up (`tcp-accept`) as a connected socket, used and charged as one it made. A
 /// peer outside the port's networks is reset as soon as the stack sees it, and a port nothing listens on answers a SYN
 /// with a reset.
-package mind:socket@2.10.0;
+///
+/// 2.11 (550-NET-0062): cards taken out of use. The policy badge, or the operator, names the cards out of use
+/// (`withdraw`), and any client may read them (`withdrawn`). A card out of use routes nothing and keeps no address, so
+/// another card takes its flows, and its TCP connections are aborted. The stack sends nothing through it, DHCP
+/// included, while its driver keeps the link; back in use, DHCP runs on it again. Of the cards whose networks hold a
+/// destination, the preferred one is taken first: preferring a card moves its network's flows too.
+package mind:socket@2.11.0;
 
 interface socket {
     /// Why a request failed.
@@ -163,4 +169,9 @@ interface socket {
     /// The rules of the caller's own grant (2.10, 111-NET-0057): the destinations the broker registered and the user's
     /// answers added, so that a service the policy gives its servers learns them here. `denied`: not a live grant's badge.
     grant-rules: func() -> result<list<rule, 16>, error>;
+    /// Takes the cards whose bits are set in `cards` (bit N: card N) out of use, and puts the others back (operator and
+    /// policy badges, 2.11). `invalid`: a bit of a card the stack has no slot for.
+    withdraw: func(cards: u8) -> result<_, error>;
+    /// The cards out of use, a bit each (2.11).
+    withdrawn: func() -> result<u8, error>;
 }
