@@ -14481,8 +14481,8 @@ def store_disk_check(args, disk):
             vm.expect("MIND>", timeout=60)
             time.sleep(1); vm.collect(); vm.output = ""
             require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (THE STORE'S)")
-            # 351-STO-0043: on a disk a quarter is kept for the updater's releases.
-            require(vm.command("dmesg -s blockstore", raw=True), "[BLOCKSTORE] A QUARTER OF THE MEDIUM KEPT FOR THE UPDATER'S RELEASES")
+            # 351-STO-0043: on a disk a quarter is kept for the updater's releases, said once the store has mounted.
+            require(vm.service_logs("blockstore", "KEPT FOR THE UPDATER"), "[BLOCKSTORE] A QUARTER OF THE MEDIUM KEPT FOR THE UPDATER'S RELEASES")
             stat = vm.command("blocks stat", raw=True)
             assert re.search(r"BLOCKS=[1-9]\d* .*SECTORS=\d+/65536", stat), stat
             require(vm.command(f"blocks check {put[1]} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
