@@ -1,6 +1,6 @@
 # The model service `nnd` and `idl/nn.wit` — stage 0 of 262
 
-**Version:** 1.1 (2026-11-04): sections 5 and 8 as `nnd` and the suite make them. The interface stays `mind:nn@1.0.0`.
+**Version:** 1.2 (2026-11-09): section 7's shell commands as made, with `nn unload` beside them. 1.1 (2026-11-04): sections 5 and 8 as `nnd` and the suite make them. The interface stays `mind:nn@1.0.0`.
 - **What changed.** A worker writes its charges when its job ends, not as it runs, so `usage` shows a running job's charges only after its end (section 5). The suite's cancellation therefore waits a part of the time a whole job took, not for a row in `usage` (section 8, step 4).
 - **Why.** `nrl-runtime`'s checkpoint gives the worker the clock and the cancel flag, not the rows done. A later version may add progress, with `NRL`.
 
@@ -277,7 +277,7 @@ The shared `parse` service is not used: its JSON (`parse.wit` 1.4) is bounded to
 
 ## 7. Clients
 
-**The shell's `nn`** (262, stage 2, its first commands with 1.0):
+**The shell's `nn`** (262, stage 2, its first commands with 1.0; made in 262-APP-0112, with `nn unload <id>` beside them; docs/tools says how each reads and answers):
 - `nn status`;
 - `nn load <path> <id>`;
 - `nn models`;
