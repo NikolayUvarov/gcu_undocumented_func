@@ -29,8 +29,8 @@ unsafe impl GlobalAlloc for IrqAllocator {
 mod abi;
 #[path = "../../common/fadt.rs"]
 mod fadt;
-#[path = "../../common/ticket.rs"]
-mod ticket;
+#[path = "../../common/spinlock.rs"]
+mod spinlock;
 use abi::BootInfo;
 // The processor and platform: only through these names (issue 200).
 mod arch;
