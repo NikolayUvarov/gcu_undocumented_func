@@ -1,6 +1,6 @@
 # 000-KRN-0225 — The revocation check saw no refused mint on a loaded host (round 103)
 
-**Type:** tests (the `isolation` suite) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (2026-11-09) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (the `isolation` suite) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (the check made to take up to three walks, on `claude/youthful-mendel-mf1soy`; its runs beside a busy lane left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -25,6 +25,20 @@
 
 - The cause found in the failing run's log, and written here.
 - The check passes 20 times in a row on x32-128 beside a busy lane, and on one CPU.
+
+## Progress (2026-11-09)
+
+- **The cause, from the kernel's side:**
+  - the scheduler puts a new task on a CPU with none of its family (`scheduler.rs`, the new task's CPU), so the child and `app2` run on two CPUs;
+  - between the walk's steps the lock is let go, and a waiter marked next goes first (000-KRN-0219). So a mint made while the walk runs meets it, and is refused.
+  - **The walk is short:** 3001 nodes in 12 steps, about 2 ms in that run (its own line: 1000 nodes in 595 µs).
+  - **So no refusal means** that the child's CPU did not run the child during those 2 ms: its vCPU thread was not run by the loaded host, or another task had that CPU. Neither is something the kernel promises.
+- **The change** (`tests/qemu_smoke.py`, `revocation_refusal_check`):
+  - with more than one CPU, `app2`'s case `R` runs up to three times, one after another, until a walk has refused a mint;
+  - one refusal is still required, and each walk must still remove 3001 (or 3002) in at least 11 steps, with mints made and no fault;
+  - the PASS line says which walk it was when it was not the first.
+  - With one CPU it runs once, as before.
+- **Tested** in the kernel session's container (QEMU 8.2.2, TCG): the `isolation` suite on 4 CPUs (the first walk refused 3) and on 1 CPU.
 
 ## Related
 
