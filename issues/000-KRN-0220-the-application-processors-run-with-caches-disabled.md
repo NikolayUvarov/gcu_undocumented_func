@@ -43,4 +43,4 @@
 
 ## Related
 
-[000-KRN-0219](000-KRN-0219-a-cpu-starved-of-the-schedulers-lock.md) (the record), [000-KRN-0084](000-KRN-0084-an-ipc-round-trip-between-two-cpus.md), [174](174-full-use-of-pc-hardware.md).
+[000-KRN-0219](../issues-done/000-KRN-0219-a-cpu-starved-of-the-schedulers-lock.done) (the record), [000-KRN-0084](000-KRN-0084-an-ipc-round-trip-between-two-cpus.md), [174](174-full-use-of-pc-hardware.md).
