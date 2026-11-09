@@ -14399,9 +14399,10 @@ def console_channel_check(args, disk, machine):
         vm = VM(ns, disk.relative_to(ROOT).as_posix(), extra=["-dtb", str(patched)])
         try:
             require(vm.log, "SHARING A PAGE WITH ANOTHER")
-            require(vm.log, "NOT LENT: ITS PAGES AT 9000000 HOLD NODE")
-            require(vm.log, "[INIT] SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
+            require(vm.log, "(arm,pl011) NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE")
             online = vm.command("cpus")
+            # The kernel's log no longer goes to the console once the channel stands: init's line is read from the log.
+            require(vm.service_logs("init", "SERIAL LINE"), "SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
             assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
             # More than a ring's worth back through the channel: 5000 bytes the shell prints to its serial line.
             out = vm.command("write ram:long.txt " + "0123456789" * 50, timeout=30)
