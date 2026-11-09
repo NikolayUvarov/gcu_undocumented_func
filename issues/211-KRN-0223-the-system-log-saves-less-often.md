@@ -1,6 +1,6 @@
 # 211-KRN-0223 — The system log saves less often, with fewer flushes (a USB boot disk accessed all the time)
 
-**Type:** `vfs_server` (the journal) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (made and host-tested, below; QEMU's USB image run and the gate left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track H, stage I · **Constitution:** MC-5.1, MC-10.6
+**Type:** `vfs_server` (the journal) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (made and tested on the host and in QEMU, below; the gate and the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track H, stage I · **Constitution:** MC-5.1, MC-10.6
 
 **Asked by** DRV, 2026-11-09 (`KRN/2026-11-09T0429Z-DRV-the-system-log-writes-the-boot-disk-every-11-s.md` on `internal-dev-messages`), after the maintainer saw the MacBook Pro's USB boot disk accessed all the time.
 
@@ -47,6 +47,8 @@
   - on a FAT16 volume made by `mkfs.fat`: 20 saves, the first two flushes (the dirty mark's and its own), each later one flush; `fsck.fat` finds the dirty bit between saves and the volume clean after `flush`, every byte kept.
 - **`tests/usb_image_smoke.py`:** `sync` after `logger` and after the debug-mode run, where it waited for the 2 s save; `sync` at its end, before the image is read on the host and `fsck.fat` checks it clean.
 - **docs:** `docs/profile/evidence.md`, `docs/write-disk.md` and its Russian copy state the bounds.
+- **Passed:** `x86: USB image` (`tests/usb_image_smoke.py`) twice in the kernel session's container (QEMU 8.2.2, OVMF, TCG): the log line after `sync`, the debug mode's line, the records of the time without the disk after the replug, and the image read on the host with `fsck.fat` finding the log volume clean.
+  - **One earlier run failed before any of this:** after the first `device_del`, `usb_host` logged no `DISCONNECTED`. The two runs after it passed, on the same tree. Recorded, not explained (MC-12.2).
 
 ## Related
 
