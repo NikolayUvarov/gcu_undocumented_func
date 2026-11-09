@@ -71,6 +71,11 @@ if [[ "${1:-}" == --fixtures ]]; then
     # The stand-in radio for the station (550-NET-0018).
     (cd "$ROOT/tests/wlansim" && cargo build --release --target "$TARGET")
     cp "$ROOT/tests/wlansim/target/$TARGET/release/wlansim" "$OUT/fixture-wlansim.elf"
+    # The shell suite's console programs: a secret line (000-APP-0126) and a write through a read-only store scope (311-APP-0121).
+    for stub in secret storewrite; do
+        (cd "$ROOT/tests/${stub}_stub" && cargo build --release --target "$TARGET")
+        cp "$ROOT/tests/${stub}_stub/target/$TARGET/release/${stub}_stub" "$OUT/fixture-$stub.elf"
+    done
     # The kernel that takes only the next handoff version, for a refused trial (351-KRN-0167).
     (cd "$ROOT/kernel" && cargo build --release --target "$TARGET" --features loader-abi-test --target-dir "$ROOT/kernel/target/loader-abi")
     cp "$ROOT/kernel/target/loader-abi/$TARGET/release/kernel" "$OUT/fixture-kernel-loader-abi.elf"
