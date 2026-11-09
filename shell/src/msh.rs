@@ -49,7 +49,9 @@ impl ShellHost<'_> {
         let word = line.split_whitespace().next().unwrap_or("");
         // `hostname <name>` writes data/machine/name (000-APP-0123); `hostname` alone only reads.
         let sets_name = word.eq_ignore_ascii_case("hostname") && line.split_whitespace().nth(1).is_some();
-        if let Some(need) = needs(word).or(sets_name.then_some("files")) {
+        // `nn load`, `unload`, `run` and `bench` use the model service on the shell's client (262-APP-0112); `nn` alone reads.
+        let uses_nn = word.eq_ignore_ascii_case("nn") && matches!(line.split_whitespace().nth(1), Some("load" | "unload" | "run" | "bench"));
+        if let Some(need) = needs(word).or(sets_name.then_some("files")).or(uses_nn.then_some("nn")) {
             if !self.allowed(need) { return Err(alloc::format!("{} needs `requires: {}` in the script", word, need)); }
         }
         // `>` and `>>` write a file (000-APP-0074).

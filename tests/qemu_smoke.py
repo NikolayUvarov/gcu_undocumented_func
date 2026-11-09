@@ -1552,6 +1552,7 @@ def shell_suite(vm):
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
     hostname_check(vm)
+    secret_line_check(vm)
     storefs_check(vm)
     vfs_restart_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
@@ -2627,6 +2628,61 @@ def hostname_check(vm):
           "the same name again changes nothing; my_pc and -dexp refused with the rule, the file as it was", flush=True)
 
 
+def secret_line_check(vm):
+    """000-APP-0126: a console program that asks for REQUEST_SECRET_LINE gets a copy of the shell's client badged for it
+    alone. The shell draws the prompt and the line is typed with no echo; its bytes reach the program, which says only
+    their length and SHA-256, and the line is in no serial line, log or history. Esc refuses it; another command through
+    that copy is refused; a script's program gets no such copy."""
+    if not vm.args.secret_elf:
+        print("SKIP: the secret line (000-APP-0126): no tests/secret_stub build (scripts/x86_fixtures.sh)", flush=True)
+        return
+    secret = "hunter2-\u0436 x"
+    # A copy in the background asks 3 s after its start, while the line in front is typed: its call arrives in the
+    # shell's other receiving slot, and it is refused, not the console program in front.
+    later = int(re.search(r"STARTED PID=(\d+) NAME=secretstub BACKGROUND", vm.command("run secretstub later &", raw=True))[1])
+    started = time.monotonic()
+    vm.collect()
+    since = len(vm.log)
+    vm.send("secretstub\n")
+    vm.logged("TYPED WITH NO ECHO (ENTER ENDS IT, ESC REFUSES IT): PASSWORD FOR THE STUB", since)
+    time.sleep(max(0, started + 5 - time.monotonic()))  # the background copy has asked and been answered by now
+    # Q and Backspace: the line is the secret again.
+    vm.send_bytes(secret.encode() + b"Q\x7f\r")
+    vm.expect("MIND> ", timeout=30, after="SECRET STUB: GIVEN")
+    out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+    require_all(out, "SECRET FOR secretstub (PID ", "(GIVEN)",
+                f"SECRET STUB: GIVEN {len(secret.encode())} BYTES, SHA-256 {hashlib.sha256(secret.encode()).hexdigest()}")
+    # In the history the line typed is the command, and the secret is in no line the shell or the log wrote.
+    vm.collect()
+    mark = len(vm.log)
+    vm.send_bytes(b"\x1b[A")
+    vm.logged("secretstub", mark, timeout=8)
+    time.sleep(.3)
+    vm.send_bytes(b"\x1b")
+    time.sleep(.3)
+    log = vm.command("dmesg -s shell", raw=True)
+    require(log, f"[SHELL] SECRET LINE FOR PID {later} REFUSED: NOT THE CONSOLE PROGRAM IN FRONT")  # it has ended since
+    require(log, ") ASKED ON CONSOLE 1")
+    assert re.search(r"\[SHELL\] SECRET LINE FOR secretstub \(PID \d+\) ASKED ON CONSOLE 1\n.*\[SHELL\] SECRET LINE FOR PID \d+ GIVEN", log, re.S), log[-3000:]
+    assert "hunter2" not in vm.log[since:] and "hunter2" not in log, vm.log[since:][-3000:]
+    # Esc refuses it: the program hears `declined`.
+    since = len(vm.log)
+    vm.send("secretstub\n")
+    vm.logged("PASSWORD FOR THE STUB", since)
+    vm.send_bytes(b"abc")
+    time.sleep(.3)
+    vm.send_bytes(b"\x1b")
+    vm.expect("MIND> ", timeout=30, after="SECRET STUB: DECLINED")
+    require(to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", "")), "(REFUSED)")
+    # The copy reaches secret-line alone, and a program a script starts gets none.
+    require(vm.command("secretstub other"), "SECRET STUB: HOSTNAME THROUGH THE SECRET CLIENT REFUSED")
+    require(vm.command("dmesg -s shell", raw=True), "THROUGH ITS SECRET LINE'S CLIENT FOR ANOTHER COMMAND: REFUSED")
+    require(vm.command('msh -c "secretstub"'), "SECRET STUB: NO CLIENT OF THE SHELL")
+    print("PASS: a console program's secret line (000-APP-0126): the shell's prompt, the line typed with no echo and "
+          "Backspace, its SHA-256 matched by the program, a program in the background refused meanwhile, the line in no serial line, log or history; Esc refused it; "
+          "another command through its badged copy refused; none for a script's program", flush=True)
+
+
 def storefs_check(vm):
     """311-KRN-0190: storefs runs at boot with the block store's client, and the shell reaches a store volume through the
     same mind::fs calls as a FAT one; a program without storefs's client finds no store volume, and asks nobody."""
@@ -2658,6 +2714,13 @@ def storefs_check(vm):
     assert "other:x/c.txt" in out and "notes:docs/a.txt" not in out, out
     require(vm.command("rm other:x/c.txt"), "OK")
     require(vm.command("rm other:x"), "OK")
+    # A program given that read-only scope (storewrite asks for no file) reads the volume and is refused a write there.
+    if vm.args.storewrite_elf:
+        out = vm.command("storewrite notes:docs/z.txt")
+        assert re.search(r"STOREWRITE READ notes:docs: \d+ ENTRIES", out) and "STOREWRITE WRITE notes:docs/z.txt REFUSED: " in out, out
+        assert "z.txt" not in vm.command("ls notes:docs"), "nothing was written"
+    else:
+        print("SKIP: a write through the read-only store scope (311-APP-0121): no tests/storewrite_stub build (scripts/x86_fixtures.sh)", flush=True)
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
     # 311-APP-0116: a redirect's file on a store volume is published at its flush. With no other writer it is. When the
     # redirected program publishes the volume after the shell wrote its first line there (fsstep's HOLDING line, then
@@ -3149,6 +3212,43 @@ def nn_packages():
     return packages
 
 
+def nn_rows():
+    """NRL's pinned input as `nn run` reads it, one row of 3 numbers a line, each the shortest decimal that reads back as
+    it; and the reference outputs, 2 a row."""
+    values = lambda name: list(struct.unpack(f"<{(NN_FIXTURE / name).stat().st_size // 8}d", (NN_FIXTURE / name).read_bytes()))
+    inputs, expected = values("input.f64le"), values("expected.f64le")
+    text = "# NRL's pinned input (native-conformance-v0)\n" + "".join(" ".join(repr(v) for v in inputs[i:i + 3]) + "\n" for i in range(0, len(inputs), 3))
+    return text, [expected[i:i + 2] for i in range(0, len(expected), 2)]
+
+
+def shell_nn_check(vm, ident):
+    """262-APP-0112, docs/nn/runtime.md section 7: the shell's own `nn load`, `nn models`, `nn run` of a file of rows
+    (the outputs within NRL's tolerance, as text), `nn bench` and `nn unload`; a file of the wrong width and a model not
+    loaded refused with why; a script needs `requires: nn`."""
+    out = vm.command(f"nn load data/models/conformance {ident}", raw=True, timeout=90)
+    require(out, f"LOADED ")
+    require(out, f" {ident[:16]}…: 3 IN, 2 OUT, 256 ROWS A JOB, ")
+    require(vm.command("nn models"), f"{ident[:16]}… 3 IN, 2 OUT, 256 ROWS A JOB")
+    out = vm.command(f"nn run {ident} data/nnrows.txt", raw=True, timeout=60)
+    _, expected = nn_rows()
+    got = [[float(v) for v in line.split()] for line in out.splitlines() if re.fullmatch(r"-?[0-9.e+-]+ -?[0-9.e+-]+", line.strip())]
+    assert len(got) == len(expected) and all(abs(a - r) <= 1e-12 + 1e-10 * abs(r) for row, ref in zip(got, expected) for a, r in zip(row, ref)), (got, expected, out)
+    require(out, f"{len(expected)} ROWS THROUGH ")
+    require(out, f"CHARGED {len(expected)} ROWS, {631 * len(expected)} WORK, 1 JOBS")
+    require(vm.command(f"nn run {ident} data/nnbad.txt", raw=True), "ERROR: NN RUN: LINE 2: 2 NUMBERS, THE MODEL TAKES 3")
+    out = vm.command(f"nn bench {ident}", raw=True, timeout=60)
+    bench = re.search(r"BENCH .*: (\d+) ROWS IN (\d+) JOBS OF 256 IN (\d+) MS: (\d+) ROWS A SECOND; THE SESSION HELD (\d+) KIB; THIS MACHINE ONLY", out)
+    assert bench and int(bench[1]) > 0 and int(bench[4]) > 0, out
+    # A script that declares what it needs: nn run only with `nn` among them.
+    require(vm.command("msh data/nnfiles.msh", raw=True, timeout=60), "SCRIPT FAILED: nn needs `requires: nn` in the script (LINE 3)")
+    require(vm.command("msh data/nnok.msh", raw=True, timeout=60), f"{len(expected)} ROWS THROUGH ")
+    require(vm.command(f"nn unload {ident}", raw=True), f"UNLOADED {ident[:16]}…: THE SHELL'S HOLD DROPPED")
+    require(vm.command(f"nn run {ident} data/nnrows.txt", raw=True), f"ERROR: NN: NO MODEL {ident[:16]}… IS LOADED (NN LOAD <PATH> <ID> FIRST)")
+    print(f"PASS: the shell's nn (262-APP-0112): load, models, run of a file of {len(expected)} rows within NRL's tolerance and "
+          f"charged as NRL's accounting, bench ({bench[4]} rows a second over {bench[3]} ms, this machine only), unload; a "
+          "wrong-width file and a model not loaded refused with why; a script needs requires: nn", flush=True)
+
+
 def nn_model_check(vm):
     """262-APP-0112, docs/nn/runtime.md section 8, NRL's native acceptance (nrl/specs/native-conformance-v0.md): with
     nnd's line in data/memory.conf (its workers), NRL's pinned model from data/models/ loaded through the shell's
@@ -3188,6 +3288,7 @@ def nn_model_check(vm):
                  "DEADLINE PARTWAY:", "DEADLINE PASSED BEFORE", "NUMERIC: CHARGED 1/39/1", "A NEW SESSION AFTER THE FAILURE", "MEMORY BACK TO BEFORE THE LOAD OK"):
         require(out, line)
     print(f"nnd model run: {' | '.join(l.strip() for l in out.splitlines() if 'TOOK' in l or ' TRY ' in l or 'NUMERIC:' in l)}", flush=True)
+    shell_nn_check(vm, ident)
     # Two clients, then the first one's badge taken again.
     started = vm.command(f"run nncheck share data/models/conformance {ident} 120 &", raw=True)
     holder = int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", started)[1])
@@ -5973,6 +6074,13 @@ def link_suite(args):
             ip = link(port, "sh", "ip", timeout=200)
             assert re.search(r"^CARD \d", ip, re.M), ip
             require(link(port, "sh", "ps"), "link")
+            # 000-APP-0123: the machine's name, set from the link's client in developer mode at once, as the shell's other
+            # changes are, and logged; the console reads it back, and the file goes again.
+            require(link(port, "sh", "hostname", "DEXP-LINK"), "THE MACHINE'S NAME: dexp-link, KEPT IN data/machine/name")
+            require(vm.command("hostname"), "THE MACHINE'S NAME: dexp-link (data/machine/name)")
+            require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE MACHINE'S NAME: mindcore -> dexp-link")
+            require(link(port, "sh", "hostname", "my_pc", ok=None), "A CHARACTER OTHER THAN a-z 0-9 -")
+            require(vm.command("rm data/machine/name"), "OK")
             # Never from the link, whatever the developer mode allows (800-NET-0038).
             require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
             # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
@@ -14774,6 +14882,8 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
+    parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--late-attach-elf", help="test-only virtio_net built with --features late-attach (000-NET-0036, x86); found where scripts/x86_fixtures.sh puts it")
@@ -14808,6 +14918,10 @@ def main():
     gateway = ROOT / IMAGE / "fixture-gateway.elf" if args.arch == "aarch64" else \
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-gateway-target/x86_64-unknown-none/release/gateway_stub"
     args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
+    secret = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-secret-target/x86_64-unknown-none/release/secret_stub"
+    args.secret_elf = args.secret_elf or (str(secret) if args.arch == "x86_64" and secret.exists() else None)
+    storewrite = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-storewrite-target/x86_64-unknown-none/release/storewrite_stub"
+    args.storewrite_elf = args.storewrite_elf or (str(storewrite) if args.arch == "x86_64" and storewrite.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -14912,6 +15026,10 @@ def main():
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
             if suite == "shell":
                 (disk / "data").mkdir(exist_ok=True)
+                if args.secret_elf:
+                    shutil.copyfile(args.secret_elf, disk / "secretstub.elf")  # a console program's secret line (000-APP-0126)
+                if args.storewrite_elf:
+                    shutil.copyfile(args.storewrite_elf, disk / "storewrite.elf")  # a write through a read-only store scope (311-APP-0121)
                 for name, text in MSH_SCRIPTS.items():
                     (disk / "data" / name).write_text(text, encoding="utf-8")
             if suite == "bench":
@@ -14965,6 +15083,12 @@ def main():
                     (disk / "data/models" / name).mkdir(parents=True)
                     for file, data in files.items():
                         (disk / "data/models" / name / file).write_bytes(data)
+                # The shell's `nn run` (262-APP-0112): NRL's input as rows of text, and a file of the wrong width.
+                (disk / "data/nnrows.txt").write_text(nn_rows()[0])
+                (disk / "data/nnbad.txt").write_text("1 2 3\n1 2\n")
+                ident = nn_packages()["conformance"][1]
+                for script, needs in (("nnfiles.msh", "files"), ("nnok.msh", "nn")):
+                    (disk / "data" / script).write_text(f"#!msh\nrequires: {needs}\nnn run {ident} data/nnrows.txt\n")
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite == "isolation":

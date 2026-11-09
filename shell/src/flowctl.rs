@@ -14,6 +14,9 @@ use mind::ipc::Endpoint;
 const BROKER: Endpoint = Endpoint(SLOT_NETPOLICY);
 // How long a call to the broker may take from the shell's loop, in ms.
 const CALL_MS: u32 = 200;
+// How long the answer may take: an ALWAYS writes the policy's new line first, six steps on the data volume, which a USB
+// stick or an SD card may take past a second over (KRN, round 99); the user waits on the question already.
+const ANSWER_MS: u32 = 5000;
 
 /// The question shown: its number, its program, the session it is on, when it showed, and the program the shell took
 /// the keys from.
@@ -78,7 +81,7 @@ fn respond(shell: &mut Shell, ch: Option<char>, escape: bool, enter: bool) -> bo
     if (mind::time::uptime_ms() as u64) < since + flowask::GUARD_MS { return true; }
     let Some(answer) = flowask::answer(ch, escape, enter) else { return true };
     let choice = match answer { Answer::No => netpolicy::Choice::No, Answer::Once => netpolicy::Choice::Once, Answer::Session => netpolicy::Choice::Session, Answer::Always => netpolicy::Choice::Always };
-    let line = match wire::with_timeout(CALL_MS * 5, || netpolicy::answer(BROKER, id, choice)) {
+    let line = match wire::with_timeout(ANSWER_MS, || netpolicy::answer(BROKER, id, choice)) {
         Ok(Ok(())) => alloc::format!("{}", flowask::word(answer)),
         Ok(Err(netpolicy::Error::NotFound)) => alloc::format!("{}: THE QUESTION HAD GONE (ITS PROGRAM ENDED, OR 60 S PASSED)", flowask::word(answer)),
         Ok(Err(netpolicy::Error::NoNetwork)) => alloc::format!("{}: THE HOST COULD NOT BE RESOLVED, SO THE PROGRAM WAS REFUSED", flowask::word(answer)),
@@ -110,7 +113,7 @@ fn finish(shell: &mut Shell, line: &str) {
 
 // Lines on the console itself, not into what a script running there keeps of its program's output (000-APP-0125):
 // the question is the user's, not the program's.
-fn say(shell: &mut Shell, print: impl FnOnce(&mut crate::console::Console)) {
+pub(crate) fn say(shell: &mut Shell, print: impl FnOnce(&mut crate::console::Console)) {
     let kept = shell.term.capture.take();
     print(&mut shell.term);
     shell.term.capture = kept;

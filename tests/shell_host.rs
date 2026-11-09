@@ -5,7 +5,7 @@
 //! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031); `ping`'s options and
 //! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029); the badges of
 //! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112); a program's question about a flow (shell/src/flowask.rs,
-//! 000-APP-0120).
+//! 000-APP-0120); a console program's secret line (shell/src/secret.rs, 000-APP-0126); `nn run`'s rows (shell/src/nnrows.rs, 262-APP-0112).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -40,6 +40,10 @@ mod named;
 mod hostname;
 #[path = "../shell/src/wifilend.rs"]
 mod wifilend;
+#[path = "../shell/src/secret.rs"]
+mod secret;
+#[path = "../shell/src/nnrows.rs"]
+mod nnrows;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -632,4 +636,64 @@ fn a_scripts_wait_answers_a_question_with_the_serial_lines_bytes() {
     assert_eq!([answered(0x1B), answered(b'\r'), answered(b'\n')], [Some(Answer::No); 3], "Esc and Enter: no, the default");
     assert_eq!(answered(b'x'), None, "another character: held back");
     assert_eq!(byte_key(0x03), None, "Ctrl+C is no key here: the question keeps the script from stopping");
+}
+
+#[test]
+fn a_secret_line_is_typed_with_no_echo_and_wiped() {
+    // 000-APP-0126: printable characters kept, Backspace takes off one character (UTF-8 too), Enter ends the line, Esc
+    // and Ctrl+C refuse it; other keys and control characters change nothing; past 256 bytes nothing more is kept.
+    use secret::{Line, Step, MAX};
+    let mut line = Line::new();
+    let typed = |line: &mut Line, text: &str| for c in text.chars() { assert_eq!(line.key(Some(c), false, false, false), Step::Going); };
+    typed(&mut line, "pa\u{0436}s");
+    assert_eq!(line.bytes(), "pa\u{0436}s".as_bytes());
+    assert_eq!(line.key(None, false, false, true), Step::Going);
+    assert_eq!(line.key(None, false, false, true), Step::Going, "the two bytes of \u{0436} go together");
+    assert_eq!(line.bytes(), b"pa");
+    assert_eq!(line.key(Some('\t'), false, false, false), Step::Going);
+    assert_eq!(line.key(None, false, false, false), Step::Going, "a key with no character");
+    assert_eq!(line.bytes(), b"pa", "a control character is not kept");
+    assert_eq!(line.key(None, false, true, false), Step::Done);
+    assert_eq!(line.key(None, true, false, false), Step::Refused);
+    assert_eq!(line.key(Some('\u{3}'), false, false, false), Step::Refused, "Ctrl+C");
+    for _ in 0..3 { line.key(None, false, false, true); }
+    assert!(line.bytes().is_empty(), "Backspace on an empty line does nothing");
+    typed(&mut line, &"x".repeat(MAX + 10));
+    assert_eq!(line.bytes().len(), MAX);
+    typed(&mut line, "\u{0436}");
+    assert_eq!(line.bytes().len(), MAX, "a character that does not fit whole is not kept");
+    line.wipe();
+    assert!(line.bytes().is_empty());
+    // The shell's prompt names the program and its PID, and shows the program's words made safe.
+    assert_eq!(secret::prompt("get", 42, "PASSWORD FOR bob"), "SECRET FOR get (PID 42), TYPED WITH NO ECHO (ENTER ENDS IT, ESC REFUSES IT): PASSWORD FOR bob ");
+    assert!(!secret::prompt("get", 42, "a\u{1b}[2Jb").contains('\u{1b}'), "no escape sequence of the program's reaches the console");
+}
+
+#[test]
+fn nn_run_reads_rows_and_shows_outputs() {
+    // 262-APP-0112: a model ID of 64 hex digits; a file's rows of the model's width, apart by spaces, tabs or commas,
+    // empty lines and `#` lines skipped, the first wrong line named; the rows a job carries; outputs as text.
+    use nnrows::{id, per_job, row_text, rows, run_file, short, encode, rate, CALL_BYTES};
+    let hex = "1b23aaf4baa75fa146ee8618ea1f7e0e64699c1ea2ee7cf27eeb8bc83f0c1bee";
+    let parsed = id(hex).unwrap();
+    assert_eq!((parsed[0], parsed[31]), (0x1b, 0xee));
+    assert_eq!(short(&parsed), "1b23aaf4baa75fa1…");
+    assert_eq!(id(&hex[1..]), None, "63 digits");
+    assert_eq!(id(&hex.replace('b', "g")), None, "not hex");
+    assert_eq!(run_file("run 00 rows.txt"), Some("rows.txt"));
+    assert_eq!(run_file("run 00"), None);
+    assert_eq!(run_file("load a b"), None);
+    assert_eq!(rows("# inputs\n1 2 3\n\n-0.5,\t2e-3, 4\n", 3), Ok(vec![1.0, 2.0, 3.0, -0.5, 0.002, 4.0]));
+    assert_eq!(rows("1 2\n", 3), Err(String::from("LINE 1: 2 NUMBERS, THE MODEL TAKES 3")));
+    assert_eq!(rows("1 2 3\n1 x 3\n", 3), Err(String::from("LINE 2: x IS NOT A NUMBER")));
+    assert_eq!(rows("1 inf 3\n", 3), Err(String::from("LINE 1: inf IS NOT A FINITE NUMBER")));
+    assert_eq!(rows("NaN 1 1\n", 3), Err(String::from("LINE 1: NaN IS NOT A FINITE NUMBER")));
+    assert_eq!(rows("", 3), Ok(vec![]));
+    // The model's 256 rows; a call's 60 KiB of input or of output rows, whichever holds fewer; none that fits.
+    assert_eq!(per_job(256, 3, 2), 256);
+    assert_eq!(per_job(256, 4096, 2), CALL_BYTES / (4096 * 8));
+    assert_eq!(per_job(256, 2, 8000), 0);
+    assert_eq!(row_text(&encode(&[0.1, -2.0, 1e-7])), "0.1 -2 0.0000001");
+    assert_eq!(rate(256, 100), 2560);
+    assert_eq!(rate(5, 0), 5000, "under a millisecond counts as one");
 }
