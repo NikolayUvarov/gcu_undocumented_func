@@ -1,6 +1,6 @@
-# 262-APP-0112 — The model service `nnd` and `idl/nn.wit` 1.0: stage 0 of 262, for NRL's native integration
+# 262-APP-0112 — The model service `nnd` and `idl/nn.wit` 1.0: stage 0 of 262, for NRL's native integration — done
 
-**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (the design, [docs/nn/runtime.md](../docs/nn/runtime.md), is at 1.1 (2026-11-04, sections 5 and 8 as made; 1.0 agreed on 2026-10-29 with `NRL` and `KRN`); `idl/nn.wit`, `nnd`, its checks and the shell's badged clients are written; `NRL`'s model runs through `nnd` in the `nnd` suite on x86 and aarch64 QEMU (2026-11-04); the shell's `nn load | run | bench` is left) · **Blocked by:** nothing for the native part: `nnd` as a boot service with its grants and the shell's slot ([262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md)) are in `main` since landing round 50 (2026-10-30); later, a kept worker, a wait on a shared word ([262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** tools (a service, IDL, the shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-11-09) · **Blocked by:** nothing for the native part: `nnd` as a boot service with its grants and the shell's slot ([262-KRN-0178](../issues/262-KRN-0178-nnd-as-a-boot-service.md)) are in `main` since landing round 50 (2026-10-30); later, a kept worker, a wait on a shared word ([262-KRN-0179](../issues/262-KRN-0179-a-wait-on-a-shared-word.md), planned; until then a worker per job). `nrl-runtime` is in `main` since 2026-10-28; `NRL`'s pinned test model and references (900-NRL-0025) are in its landing request · **Main task:** [262](../issues/262-model-runtime-on-the-machines-full-hardware.md) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-28, from NRL's request `issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11` on `codex/NRL-lab` (41633c21) and its messages `APP/2026-10-26T1740Z-NRL-native-nnd-interface-and-smoke-harness.md` and `APP/2026-10-26T1828Z-NRL-runtime-v0-ready-native-integration-pending.md` on `internal-dev-messages`.
 
@@ -118,10 +118,7 @@
   - after the first ended and its badge 1 was retired, badge 1 taken again reaches none of them (`not-found`), and the model it alone held is gone.
 - **Measured, not bounded:** under TCG a job's worker took about 30 to 550 ms to start, and 256 rows about 70 ms. So a cancellation landed partway within 1 to 3 tries (of 16), and a deadline within 1 to 12 (of 64), in these runs and four earlier ones of the same tries. The check prints each try.
 - **On aarch64** (QEMU `virt`, 4 CPUs, TCG, `-cpu max`), the same day: the whole suite once and the check alone twice more, every step as on x86. From its submit to its end, a 3-row job took 93 to 108 ms, most of it the worker's start, and a 256-row one 73 to 225 ms. A cancellation landed partway within 1 to 4 tries, a deadline within 2 to 11.
-- **Left:**
-  - `nn load | run | bench` in the shell;
-  - the model disk `models:` on a machine that has one;
-  - KVM and a real machine.
+- **Left then:** `nn load | run | bench` in the shell, done below; the model disk `models:` on a machine that has one; KVM and a real machine.
 
 ## Acceptance criteria
 
@@ -140,6 +137,38 @@
   - memory back after unload.
 - **900-NRL-0017's native criteria** can be ticked from that suite's output. The results name the configuration and are not called a proof (MC-12.1, MC-12.2).
 
+## Progress (2026-11-09): the shell's `nn load | unload | run | bench`
+
+- **The commands,** design section 7, on the shell's own client (badge 0):
+  - **`nn load <path> <id>` and `nn unload <id>`:** the ID is 64 hex digits, and `nnd`'s answer is said in words.
+  - **`nn run <id> <file>`:** the file of rows comes from the current directory. Numbers are apart by spaces, tabs or commas, one row a line, and `#` lines are skipped; a wrong line is named, and nothing runs. The rows go in jobs of what one call carries, through a session sized for them. Each output row is a line, the shortest decimal that reads back as each value, then the charges.
+  - **`nn bench <id>`:** rows a second and the session's memory over 2 s, for this machine only.
+- **In a script** they need `requires: nn`; `nn` alone only reads.
+- **Where:** `shell/src/nnrows.rs` (no system calls, host-tested) and `shell/src/nnctl.rs` (adcf40d71); docs/tools in both languages, and the design page at 1.2 (7ccbe1338).
+- **Its run:** the `nnd` and `shell` suites passed on QEMU x86_64, 4 CPUs, TCG (7595ce953, `main` 39351fa0f merged), 19 checks. Among them is `shell_nn_check`:
+  - NRL's pinned input, written as text, came out as the reference outputs within NRL's tolerance (the first row `0.5289660534219036 -0.06521224447542881`), charged 3 rows and 1893 work as NRL's accounting;
+  - a file of the wrong width was refused with its line;
+  - `bench` gave 1602 rows a second over 2077 ms, a measurement of that configuration only;
+  - a script with `requires: files` was refused at its `nn run` line, and one with `requires: nn` ran it;
+  - after `nn unload`, a run was refused as no model loaded.
+
+## Resolution
+
+Every criterion holds:
+- **The design:** agreed with NRL and KRN, and kept as made at 1.2.
+- **Host tests:** `nnpkg/tests/` and `tests/shell_host.rs`.
+- **The `nnd` suite:** passed on QEMU x86 and aarch64 (2026-11-04), and on x86 again on 2026-11-09 with the shell's commands.
+- **Section 7's commands:** in the shell.
+
+The service is `nnd`, `idl/nn.wit` 1.0, `nnpkg`, the shell's badged clients and `nn`. `nncheck` is the native test whose output 900-NRL-0017's criteria can be ticked from.
+
+**Not run, and not claimed** (MC-12.1, MC-12.2):
+- KVM;
+- a real machine;
+- the model disk `models:` on one.
+
+Those runs, and stage 1's families (dictation, speech), belong to the main task [262](../issues/262-model-runtime-on-the-machines-full-hardware.md).
+
 ## Related
 
-[262](262-model-runtime-on-the-machines-full-hardware.md); [900](900-neural-representation-lab.md) (NRL), T11; 262-KRN-0160 to 0165 ([0163](../issues-done/262-KRN-0163-workers-on-several-cpus.done): workers); [251](251-model-cache-and-model-disk.md) (the model disk); [178](178-models-on-every-accelerator.md) (later, the accelerators).
+[262](../issues/262-model-runtime-on-the-machines-full-hardware.md); [900](../issues/900-neural-representation-lab.md) (NRL), T11; 262-KRN-0160 to 0165 ([0163](262-KRN-0163-workers-on-several-cpus.done): workers); [251](../issues/251-model-cache-and-model-disk.md) (the model disk); [178](../issues/178-models-on-every-accelerator.md) (later, the accelerators).

@@ -8,7 +8,7 @@
 - `NRL` agreed to text object files and f64 only (questions 1 and 2), and pinned the test model, its references and the encoding vector;
 - `KRN` answered questions 3 and 4, and gave how a badge is retired before its reuse (section 1).
 
-`idl/nn.wit` 1.0, `nnd`, the shell's badged clients and `nncheck` are made after this page; [262-APP-0112](../../issues/262-APP-0112-nnd-and-nn-wit-stage-0.md) says what is built and what was tested where. **Track:** `APP`, task [262-APP-0112](../../issues/262-APP-0112-nnd-and-nn-wit-stage-0.md) of [262](../../issues/262-model-runtime-on-the-machines-full-hardware.md). **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.3, MC-12.4.
+`idl/nn.wit` 1.0, `nnd`, the shell's badged clients and `nncheck` are made after this page; [262-APP-0112](../../issues-done/262-APP-0112-nnd-and-nn-wit-stage-0.done) says what is built and what was tested where. **Track:** `APP`, task [262-APP-0112](../../issues-done/262-APP-0112-nnd-and-nn-wit-stage-0.done) of [262](../../issues/262-model-runtime-on-the-machines-full-hardware.md). **Constitution:** MC-3.1, MC-3.13, MC-5.1, MC-5.2, MC-5.5, MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.3, MC-12.4.
 
 262's stage 0 asks for this page before any code. It states:
 - how the model service holds its authority;
