@@ -53,7 +53,7 @@ The kernel has a ring and a blocking read already: a task's text input (`TEXT_QU
   - the gate;
   - a 16550 console (the A64's), which QEMU's `virt` has no model of; the phone's run;
   - `link`'s frames through the channel with `uart_serial` (100000-KRN-0221, after LNK's `uart_serial` is in `main`);
-  - the kernel's lines after the holder ends: shown only as the next shell getting a channel again, not yet by a test.
+  - the kernel's lines after the holder ends, and a restarted shell getting the channel again: not tested yet.
 
 ## Related
 
