@@ -47,6 +47,7 @@ python3 scripts/voice_tts/page.py $W voices.html
 - `page.py <work> <out.html>`: a listening page with every voice reading the four listening sentences, and the measurements.
 - [`results-2026-10-08.jsonl`](results-2026-10-08.jsonl) holds every measurement of the comparison in 252.
 - `vits_reference.py <model.onnx | vosk-model-dir> "text" <out> [--vosk SPEAKER] [--dump]`: onnxruntime's audio of a VITS voice with the noise scales at 0, and its inputs, for `vits_against_onnxruntime` in `tests/nn_host.rs` (MIND_VITS_MODEL, a voice converted with `scripts/voice_dictate/convert.py` as the graph `vits`; MIND_VITS_REFERENCE; MIND_VITS_DUMP for every value). Piper's phonemes come from piper-phonemize (espeak-ng, GPL-3.0, on the host only); Vosk TTS's from vosk-tts.
+- `formant_asr.py <tts_host> <model-dir> <out-dir> [label]`: `tts`'s formant voice (`tests/tts_host.rs`, built with `rustc --edition=2021 -O`) reads the 24 Russian sentences. Vosk's small Kaldi model (`vosk-model-small-ru-0.22`, the `vosk` package), or Vosk 0.54's transducer for a directory with `encoder.int8.onnx`, transcribes them. It prints CER, WER and the onsets that click after silence as one JSON line (252-APP-0041).
 - `dictionary.py <vosk-model-dir> <out.dic>`: Vosk TTS's Russian dictionary (2 million words, 101 MB) as a MINDDIC1 file of 13 MB for `mind::voice::russian`: per word the vowels stressed and the е that are ё, from which vosk-tts's rules give its phonemes (99 % of the words), else the phonemes; each entry checked against the dictionary.
 - `vosk_ids.py <vosk-model-dir> sentences.tsv <out.txt>`: vosk-tts's phoneme ids of the Russian sentences, for `sentences_as_vosk_tts` in `tests/russian_host.rs` (MIND_TTS_DICTIONARY, MIND_TTS_IDS).
 - The model disk with the voice: `models.py disk OUT.img tts-ru-vosk-0.7 --add tts-ru-vosk-0.7/voice.bin=<converted model> --add tts-ru-vosk-0.7/russian.dic=<dictionary>`; `speak` uses both.
@@ -56,7 +57,7 @@ python3 scripts/voice_tts/page.py $W voices.html
 - **Sentences:** the FLEURS sentences and the two reference recordings are from FLEURS (Google, CC BY 4.0); the listening sentences are this project's.
 - **Models:** each keeps its own licence, listed in 252. They are downloaded, not stored here.
 - **Python packages:**
-  - sherpa-onnx, vosk-tts, jiwer, transformers, diffusers, huggingface_hub, qwen-tts, ruaccent: Apache-2.0;
+  - sherpa-onnx, vosk, vosk-tts, jiwer, transformers, diffusers, huggingface_hub, qwen-tts, ruaccent: Apache-2.0;
   - piper-phonemize: MIT, with espeak-ng inside (GPL-3.0); used on the host only, for references;
   - f5-tts, chatterbox-tts, pocket-tts, UTMOSv2: MIT;
   - PyTorch, soundfile, numpy: BSD-3-Clause.

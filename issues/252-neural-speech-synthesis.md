@@ -128,7 +128,7 @@ All eight are in `models/manifest.toml`, and every file was fetched and matched 
    - StyleTTS 2 (Kokoro): a text encoder, a style vector per voice, a duration and prosody predictor, and an iSTFTNet decoder.
    - F5-TTS (ESpeech): a diffusion transformer over 32 steps, the Vocos vocoder and RUAccent's stress models. It runs only ahead of time on a CPU, so it is the last to port.
    - Host test: our audio equals onnxruntime's within a set tolerance on the 24 sentences.
-5. **The service.** `tts` speaks with the chosen voice from `models:` and keeps the formant synthesizer as the fallback without a model disk. The model is one read-only memory object (150), and the service holds no other authority (MC-8.1, MC-11.11).
+5. **The service.** `tts` speaks with the chosen voice from `models:` and keeps the formant synthesizer as the fallback without a model disk. Numbered as [252-APP-0128](252-APP-0128-tts-speaks-with-the-neural-voice.md) (2026-11-09), after [252-APP-0041](252-APP-0041-russian-speech-on-the-macbook.md) measured the formant voice at 40.5 % CER against the neural voice's 0.8–1.75 %. The model is one read-only memory object (150), and the service holds no other authority (MC-8.1, MC-11.11).
 6. **QEMU suite:** the system phrases spoken by the neural voice are recognized by the host recognizer as in this comparison.
 
 Tasks are numbered `252-APP-MMMM` from the tools track's next counter.
