@@ -9659,7 +9659,15 @@ def wifi_join_check(vm):
     vm.logged("SHELL RESUMED.", since)
     print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7); Settings' network "
           "page names the country the access point announced (550-APP-0082)", flush=True)
-    run("wifi leave", 30, "[WIFI] LEFT")
+    # 550-APP-0124: a program that asks only to read gets the station's reading client from the shell: the link and the
+    # country read, a leave and a country denied, the station as it was; one that asks for both gets the changing one.
+    run("wifiro status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifiro leave", 30, "[WIFI] NOT LEFT: wifi's client of the station only reads")
+    run("wifiro country US", 30, "[WIFI] COUNTRY US NOT SET: WIFI'S CLIENT OF THE STATION ONLY READS")
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifiboth leave", 30, "[WIFI] LEFT")
+    print("PASS: the shell lends the station's reading client (550-APP-0124): a program asking only to read read the link "
+          "and was denied a leave and a country, the station still joined; one asking for both left the network", flush=True)
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
     # 550-APP-0082 over 550-NET-0035 stage B: with none chosen the station runs under the country wlansim's access point
@@ -9900,6 +9908,13 @@ def net_suite(args, disk):
     elf = bytearray((disk / "netcheck.elf").read_bytes())
     elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 0x400000).to_bytes(4, "little")
     (disk / "wificheck.elf").write_bytes(elf)
+    # 550-APP-0124: copies of wifi asking for the station's reading client alone (REQUEST_WIFI_READ 1 << 28 in place of
+    # REQUEST_WIFI 1 << 22), and for both, which the shell answers with the changing one.
+    for copy, clear, add in (("wifiro", 0x400000, 0x10000000), ("wifiboth", 0, 0x10000000)):
+        elf = bytearray((disk / "wifi.elf").read_bytes())
+        at = elf.index(b"MINDREQ1") + 8
+        elf[at:at + 4] = ((int.from_bytes(elf[at:at + 4], "little") & ~clear) | add).to_bytes(4, "little")
+        (disk / f"{copy}.elf").write_bytes(elf)
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
