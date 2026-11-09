@@ -14651,8 +14651,22 @@ def console_channel_check(args, disk, machine):
             for _ in range(25):
                 out = vm.command("cat ram:long.txt", raw=True, timeout=30)
                 assert out.count("0123456789") == 20, out[-500:]
+            # The holder's end: the shell killed, the channel ends with it and the kernel's lines reach the console again
+            # (init's line of the shell's end); init asks for the channel again for the shell it restarts, which answers.
+            shell = vm.services()["shell"]
+            vm.collect()
+            since = len(vm.log)
+            vm.send(f"kill {shell}\n", raw=True)
+            vm.logged(f"[INIT] shell PID={shell} KILLED", since, timeout=60)
+            vm.expect("MIND> ", timeout=60, after="KILLED")
+            assert len(re.findall(r"ONLINE=true", vm.command("cpus"))) == vm.cpus
+            vm.service_logs("init", "RESTARTED")
+            again = vm.command(f"logs {vm.services()['init']}", raw=True)
+            assert again.count("SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL") == 2 and re.search(r"\[INIT\] shell RESTARTED PID=\d+", again), again[-2000:]
+            assert vm.services()["shell"] != shell
             print("PASS: console channel (100000-KRN-0222): virt's tree with a DesignWare UART's node in the console's page; the console's node lent to none, "
-                  "init gave the shell the kernel's channel, and the shell's commands and their output came through it", flush=True)
+                  "init gave the shell the kernel's channel, and the shell's commands and their output came through it; when the shell was killed "
+                  "the kernel's lines reached the console again, and the restarted shell got the channel back and answered through it", flush=True)
         finally:
             vm.close()
 
