@@ -7,8 +7,8 @@
 // resolved to when a grant was made (351-NET-0003). The policy can be changed while the system runs (108): the changed
 // policy is kept in the broker's private directory of the boot disk, which only its VFS client opens (`system/
 // netpolicy`), and read in place of the shipped file; the shell asks the user before it asks for a change. The policy's
-// `default card N` line names the stack's preferred card (550-NET-0025), told to the stack at start, after each change
-// and every 10 s (a restarted stack learns it again). A `browse` line gives a program any public address on its ports
+// `default card N` line names the stack's preferred card (550-NET-0025), and its `card N off` lines the cards out of use
+// (550-NET-0062), told to the stack at start, after each change and every 10 s (a restarted stack learns them again). A `browse` line gives a program any public address on its ports
 // (000-NET-0049); the stack logs each new host it reaches so. A running program may ask, through its grant, for a TCP
 // flow its grant does not name (socket.wit 2.8, netpolicy.wit 1.3): the broker names the program and its PID, the shell
 // puts the question to the user, and the answer adds the rule (once, for the run, or always as a line of the policy);
@@ -73,6 +73,20 @@ fn default_card(text: &str) -> u8 {
         }
     }
     card
+}
+
+// The cards the policy takes out of use (`card N off`, 550-NET-0062): a bit each.
+fn off_cards(text: &str) -> u8 {
+    let mut cards = 0;
+    for line in text.lines() {
+        let words: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        if let [word, number, off] = words.as_slice() {
+            if word.eq_ignore_ascii_case("card") && off.eq_ignore_ascii_case("off") {
+                if let Some(n) = number.parse::<u8>().ok().filter(|&n| n < CARDS) { cards |= 1 << n; }
+            }
+        }
+    }
+    cards
 }
 
 // A host name as DNS has it: dot-separated labels of letters, digits and hyphens, at least one letter.
@@ -160,7 +174,8 @@ fn normal(line: &str) -> String {
 }
 
 // Whether `line` is a line the broker understands: a rule, `program dns`, `resolver A.B.C.D[:PORT]` (108),
-// `default card N` (550-NET-0025), or `browse program public tcp PORTS [SECONDS [BYTES]]` (000-NET-0049).
+// `default card N` (550-NET-0025), `card N off` (550-NET-0062), or `browse program public tcp PORTS [SECONDS [BYTES]]`
+// (000-NET-0049).
 fn valid(line: &str) -> bool {
     let words: Vec<&str> = line.split_whitespace().collect();
     if line.contains('#') { return false; }
@@ -168,6 +183,7 @@ fn valid(line: &str) -> bool {
     if words.first().is_some_and(|w| w.eq_ignore_ascii_case("listen")) { return mind::network::listen_line(line).is_some(); }
     match words.as_slice() {
         [word, kind, number] if word.eq_ignore_ascii_case("default") && kind.eq_ignore_ascii_case("card") => number.parse::<u8>().is_ok_and(|n| n < CARDS),
+        [word, number, off] if word.eq_ignore_ascii_case("card") && off.eq_ignore_ascii_case("off") => number.parse::<u8>().is_ok_and(|n| n < CARDS),
         [word, server] if word.eq_ignore_ascii_case("resolver") => {
             let (address, port) = server.split_once(':').unwrap_or((server, "53"));
             parse_ip(address).is_some_and(|a| a != 0) && port.parse::<u16>().is_ok()
@@ -200,7 +216,7 @@ struct Asked { id: u32, badge: u16, pid: u64, program: Text<16>, host: Text<253>
 // A program's words in the log: printable ASCII only, so its reason cannot forge a line.
 fn printable(text: &str) -> String { text.chars().map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' }).collect() }
 
-struct Broker { grants: Vec<Grant>, next: u16, preferred: Option<u8>, told: u64, read: bool, asked: Vec<Asked> }
+struct Broker { grants: Vec<Grant>, next: u16, preferred: Option<u8>, off: Option<u8>, told: u64, read: bool, asked: Vec<Asked> }
 
 impl Broker {
     fn badge(&mut self) -> u16 {
@@ -360,13 +376,25 @@ impl Broker {
         Ok(removed)
     }
 
-    // Tells the stack the policy's preferred card: read from the policy when `read` or when the last reading failed (the
-    // boot disk not mounted yet), else the one known.
+    // Tells the stack the policy's preferred card and the cards out of use: read from the policy when `read` or when the
+    // last reading failed (the boot disk not mounted yet), else the ones known.
     fn prefer(&mut self, read: bool, now: u64) {
-        let card = match self.preferred {
-            Some(card) if !read && self.read => card,
-            _ => { let text = policy_text(); self.read = text.is_some(); default_card(&text.unwrap_or_default()) }
+        let (card, off) = match (self.preferred, self.off) {
+            (Some(card), Some(off)) if !read && self.read => (card, off),
+            _ => {
+                let text = policy_text();
+                self.read = text.is_some();
+                let text = text.unwrap_or_default();
+                (default_card(&text), off_cards(&text))
+            }
         };
+        // Said when the cards out of use change, and at start when there are any.
+        if self.off != Some(off) && (off != 0 || self.off.is_some()) {
+            mind::println!("[NETPOLICY] CARDS OUT OF USE FROM THE POLICY: {}", if off == 0 { alloc::format!("NONE") } else {
+                (0..CARDS).filter(|k| off & 1 << k != 0).map(|k| alloc::format!("{}", k)).collect::<Vec<_>>().join(", ") });
+        }
+        self.off = Some(off);
+        let _ = socket::withdraw(CONTROL, off);
         // Said when the policy names a card, or stops naming one.
         if self.preferred != Some(card) && (card != NO_CARD || self.preferred.is_some()) {
             if card == NO_CARD { mind::println!("[NETPOLICY] NO DEFAULT CARD IN THE POLICY") } else { mind::println!("[NETPOLICY] DEFAULT CARD {} FROM THE POLICY", card) }
@@ -393,7 +421,7 @@ fn denied(what: &str, pid: u64) -> Error {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut broker = Broker { grants: Vec::new(), next: 0, preferred: None, told: 0, read: false, asked: Vec::new() };
+    let mut broker = Broker { grants: Vec::new(), next: 0, preferred: None, off: None, told: 0, read: false, asked: Vec::new() };
     mind::println!("[NETPOLICY] READY: POLICY FROM {}", POLICY_FILE);
     broker.prefer(true, mind::time::uptime_ms() as u64);
     let mut checked = 0u64;

@@ -20,7 +20,7 @@ and link.conf:
     source data/link/rel
     channel stable
     automatic apply
-    every 20
+    every 60
 
 The release is signed as scripts/release.py signs one: the manifest with the build's boot key, the channel with
 $MIND_RELEASE_KEY, or the public test release key without it. Only what the updater reads goes over the cable: the

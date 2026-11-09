@@ -41,6 +41,8 @@ pub fn kernel_owns(start: u64, end: u64) -> bool {
 pub fn node_line(line: u32) -> bool { (line as usize) < super::context::MSI_FIRST }
 /// The kernel's own console (logs stop going there once it is handed out).
 pub fn console() -> usize { board::get(&board::UART) }
+// The console's line, for its channel (100000-KRN-0222).
+pub fn console_line() -> Option<usize> { (board::get(&board::UART) != 0).then(|| board::get(&board::UART_LINE)) }
 /// No line by number: a node's lines are lent through its node (PLATFORM_NODE_IRQ).
 pub fn irq(_line: usize) -> bool { false }
 /// A board without ACPI: its record from the device tree at `address` (100000-PRT-0009); false when there is none to read.

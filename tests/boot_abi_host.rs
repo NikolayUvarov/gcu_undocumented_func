@@ -54,10 +54,12 @@ fn version_read_needs_only_the_old_record() {
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
     assert_eq!(BOOT_HANDOFF_VERSION, 29);
-    // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192). It
-    // stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older, 351-KRN-0166).
+    // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192; ABI 29,
+    // 100000-KRN-0222). It stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older,
+    // 351-KRN-0166). Handoff 29 came at ABI 27 (111-KRN-0206): the next change of the handoff takes a number above ABI_VERSION.
     assert!(BOOT_HANDOFF_VERSION > 18, "a handoff is above every ABI an older loader wrote in its place");
-    assert!(BOOT_HANDOFF_VERSION > ABI_VERSION, "a handoff that changes is numbered above every ABI so far");
+    const ABI_AT_THE_HANDOFF: u32 = 27;
+    assert!(BOOT_HANDOFF_VERSION > ABI_AT_THE_HANDOFF && ABI_VERSION >= ABI_AT_THE_HANDOFF, "a handoff that changed was numbered above every ABI then");
     assert_eq!(BOOT_IMAGES, 48, "a change of the boot images is a change of the handoff");
     assert_eq!(size_of::<BootInfo>(), 1128, "a change of BootInfo is a change of the handoff");
     let at = BOOT_SERVICES.iter().position(|&name| name == "storefs").unwrap();

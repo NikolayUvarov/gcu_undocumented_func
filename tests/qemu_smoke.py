@@ -9085,6 +9085,95 @@ def _msix_only(vm):
     assert rows and all(line >= 16 for line, _ in rows) and any(count > 0 for _, count in rows), rows
 
 
+def one_network_cards_check(args, disk):
+    """550-NET-0062: two cards on one network, as a wired card and the Wi-Fi station on one LAN. Datagrams to an address
+    of that network go out through card 0 by default and through card 1 once the policy prefers it, so preferring a
+    card moves its network's flows too. `card 0 off` takes card 0 out of use: its address goes, everything takes card 1,
+    and card 0 sends nothing, DHCP included, while its link stays up; with the line removed it gets a lease again."""
+    with open(disk / "netpolicy.txt", "a") as policy:
+        policy.write("netcheck 10.0.2.2 udp 9\n")
+    one = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56",
+           "-netdev", "user,id=n1", "-device", "virtio-net-pci,netdev=n1,mac=52:54:00:12:34:57"]
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=one)
+    try:
+        log = vm.service_logs("netstack", "ON CARD 1")
+        for card in (0, 1):
+            require(log, f"[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 ON CARD {card}")
+
+        def frames():
+            found = dict((int(card), (int(sent), int(received))) for card, sent, received in re.findall(r"CARD (\d) MAC .* SENT=(\d+) RECEIVED=(\d+)", vm.command("ip")))
+            assert set(found) == {0, 1}, found
+            return found
+
+        def network_sends(card):
+            # Six datagrams to the network's gateway, an address both cards' network holds. A ping first, through the
+            # same card, so the gateway's address is known there and no datagram waits on ARP.
+            require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+            before = frames()
+            require(vm.command("netcheck " + " ".join(["udp:10.0.2.2:9"] * 6)), "NETCHECK udp:10.0.2.2:9 OK")
+            after = frames()
+            other = 1 - card
+            assert after[card][0] - before[card][0] >= 6 and after[other][0] - before[other][0] < 3, (card, before, after)
+            return after
+        network_sends(0)
+        require(policy_answer(vm, "netpolicy add default card 1", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+        require(vm.service_logs("netstack", "CARD 1 PREFERRED AS THE DEFAULT"), "[NETSTACK] CARD 1 PREFERRED AS THE DEFAULT")
+        network_sends(1)
+        require(policy_answer(vm, "netpolicy remove default card 1", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+        require(vm.service_logs("netstack", "NO CARD PREFERRED"), "[NETSTACK] NO CARD PREFERRED")
+        network_sends(0)
+        # Card 0 out of use: its address goes, flows and the default route take card 1, and it sends nothing.
+        require(policy_answer(vm, "netpolicy add card 3 off", "y"), "NETPOLICY: Invalid")
+        require(policy_answer(vm, "netpolicy add card 0 off", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
+        require(log, "[NETSTACK] CARD 0 OUT OF USE BY THE POLICY: ADDRESS DROPPED")
+        require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] CARDS OUT OF USE FROM THE POLICY: 0")
+        cards = vm.command("netcheck cards")
+        require(cards, "NETCHECK CARD 0 Wired PRESENT UP OFF")
+        require(cards, "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT")
+        # A grant may not take a card out of use; the refusal names its badge.
+        require(vm.command("netcheck withdraw:2"), "NETCHECK withdraw:2 Denied")
+        require(vm.command("dmesg -s netstack"), "WITHDRAW REFUSED FOR BADGE")
+        assert "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT" in vm.command("netcheck cards")
+        quiet = frames()[0][0]
+        network_sends(1)
+        time.sleep(12)  # past the broker's telling the stack again (10 s): still out of use
+        assert frames()[0][0] == quiet, (quiet, frames())
+        require(vm.command("netcheck cards"), "NETCHECK CARD 0 Wired PRESENT UP OFF")
+        # Every card out of use is allowed: the stack sends nothing and says the link's console is the way back.
+        require(policy_answer(vm, "netpolicy add card 1 off", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+        require(vm.service_logs("netstack", "EVERY CARD OUT OF USE"), "THE LINK'S CONSOLE (800-APP-0108) IS THE WAY BACK")
+        require(vm.command("netcheck cards"), "NETCHECK EVERY CARD OUT OF USE")
+        require(policy_answer(vm, "netpolicy remove card 1 off", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+        require(vm.service_logs("netstack", "CARD 1 IN USE AGAIN"), "[NETSTACK] CARD 1 IN USE AGAIN BY THE POLICY, WAITING FOR DHCP")
+        for _ in range(60):
+            if "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT" in vm.command("netcheck cards"):
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError(("no lease again on card 1", vm.command("dmesg -s netstack")[-3000:]))
+        # Back in use: DHCP runs on it again, and the network's flows come back to it.
+        require(policy_answer(vm, "netpolicy remove card 0 off", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+        log = vm.service_logs("netstack", "CARD 0 IN USE AGAIN")
+        require(log, "[NETSTACK] CARD 0 IN USE AGAIN BY THE POLICY, WAITING FOR DHCP")
+        for _ in range(60):
+            if "NETCHECK CARD 0 Wired PRESENT UP CONFIGURED DEFAULT" in vm.command("netcheck cards"):
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError(("no lease again on card 0", vm.command("dmesg -s netstack")[-3000:]))
+        require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] CARDS OUT OF USE FROM THE POLICY: NONE")
+        network_sends(0)
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-net-one-network-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: two cards on one network (550-NET-0062): its flows take card 0, card 1 once the policy prefers it, and "
+          "card 0 again without the line; `card 0 off` drops card 0's address, moves every flow and the default route "
+          "to card 1, and card 0 sends nothing while its link stays up; with the line removed card 0 gets a lease again "
+          "and takes the network's flows back", flush=True)
+
+
 def policy_answer(vm, command, answer):
     """A `netpolicy add|remove` command, answered at its (Y/N) question; what it printed."""
     vm.send(command + "\n")
@@ -10480,6 +10569,7 @@ def net_suite(args, disk):
     finally:
         vm.close()
         web.shutdown()
+    one_network_cards_check(args, disk)
     # A modern-only card (no legacy registers) and a legacy-only one (no modern structures, no MSI-X; x86 only: the
     # aarch64 driver has no port I/O interface).
     cards = [("virtio-net-pci,netdev=n0,disable-legacy=on", "MODERN MSI-X"), ("virtio-net-pci,netdev=n0,disable-modern=on", "LEGACY INTX")]
@@ -14465,6 +14555,63 @@ def devicetree_suite(args, disk):
               f"{nodes[1]} device nodes, {nodes[2]} sharing a page, the console's lent to the shell, the disabled PL031 not listed", flush=True)
     finally:
         vm.close()
+    console_channel_check(args, disk, machine)
+
+
+def fdt_with_node(blob, name, props):
+    """A flattened device tree with node `name` added last under the root: `props` is [(name, bytes)], each name's string
+    taken from the tree's strings block or added to it (100000-KRN-0222's test tree)."""
+    magic, total, off_struct, off_strings, off_rsvmap, version, last_comp, boot_cpu, size_strings, size_struct = struct.unpack(">10I", blob[:40])
+    assert magic == 0xD00DFEED and version >= 17, (hex(magic), version)
+    structure, strings = bytearray(blob[off_struct:off_struct + size_struct]), bytearray(blob[off_strings:off_strings + size_strings])
+    def string(prop):
+        at = strings.find(prop.encode() + b"\0")
+        while at > 0 and strings[at - 1] != 0: at = strings.find(prop.encode() + b"\0", at + 1)
+        if at < 0: at = len(strings); strings.extend(prop.encode() + b"\0")
+        return at
+    pad = lambda b: b + b"\0" * (-len(b) % 4)
+    node = struct.pack(">I", 1) + pad(name.encode() + b"\0")
+    for prop, value in props: node += struct.pack(">III", 3, len(value), string(prop)) + pad(value)
+    node += struct.pack(">I", 2)
+    # The root's end: the last END_NODE before FDT_END.
+    assert structure[-4:] == struct.pack(">I", 9) and structure[-8:-4] == struct.pack(">I", 2), structure[-8:].hex()
+    structure[-8:-8] = node
+    rsvmap = blob[off_rsvmap:off_struct]
+    out_struct = 40 + len(rsvmap); out_strings = out_struct + len(structure)
+    header = struct.pack(">10I", magic, out_strings + len(strings), out_struct, out_strings, 40, version, last_comp, boot_cpu, len(strings), len(structure))
+    return header + rsvmap + bytes(structure) + bytes(strings)
+
+
+def console_channel_check(args, disk, machine):
+    """100000-KRN-0222: virt's tree with a second UART's node in the console's page, as the A64's four UARTs share one: the
+    console's node is lent to none, init asks the kernel for the console as a byte channel, and the shell's serial line
+    runs over it (every command below came through it). The node is a DesignWare UART's, as the A64's, not a PL011's: the
+    firmware drives the first PL011 it finds, and one with nothing behind it would hang it (AAVMF on PCU, round 101)."""
+    with tempfile.TemporaryDirectory(prefix="mind-dtb-") as temp:
+        dumped, patched = Path(temp) / "virt.dtb", Path(temp) / "shared.dtb"
+        ns = argparse.Namespace(**{**vars(args), "machine": machine, "uboot": None})
+        dump = VM(argparse.Namespace(**{**vars(ns), "machine": machine + f",dumpdtb={dumped}"}), disk.relative_to(ROOT).as_posix(), prompt=False)
+        try: dump.process.wait(timeout=60)
+        finally: dump.close()
+        cells = lambda *v: struct.pack(f">{len(v)}I", *v)
+        patched.write_bytes(fdt_with_node(dumped.read_bytes(), "serial@9000800", [("compatible", b"snps,dw-apb-uart\0"), ("reg", cells(0, 0x9000800, 0, 0x100)), ("status", b"okay\0")]))
+        vm = VM(ns, disk.relative_to(ROOT).as_posix(), extra=["-dtb", str(patched)])
+        try:
+            require(vm.log, "SHARING A PAGE WITH ANOTHER")
+            require(vm.log, "(arm,pl011) NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE 35'S REGISTERS (snps,dw-apb-uart)")
+            online = vm.command("cpus")
+            # The kernel's log no longer goes to the console once the channel stands: init's line is read from the log.
+            require(vm.service_logs("init", "SERIAL LINE"), "SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
+            assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
+            # More than a ring's worth back through the channel: 25 times a line of 201 bytes the shell prints to its serial line.
+            require(vm.command("write ram:long.txt " + "0123456789" * 20, timeout=30), "WROTE 201 BYTES")
+            for _ in range(25):
+                out = vm.command("cat ram:long.txt", raw=True, timeout=30)
+                assert out.count("0123456789") == 20, out[-500:]
+            print("PASS: console channel (100000-KRN-0222): virt's tree with a DesignWare UART's node in the console's page; the console's node lent to none, "
+                  "init gave the shell the kernel's channel, and the shell's commands and their output came through it", flush=True)
+        finally:
+            vm.close()
 
 
 def bar_move_check(args, disk):

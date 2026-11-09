@@ -18,3 +18,7 @@ pub unsafe fn serial_write_byte(b: u8) {
     while !serial_is_transmit_empty() {}
     outb(COM1, b);
 }
+// No console channel here (100000-KRN-0222): COM1 is lent by its ports.
+pub unsafe fn console_take(_out: &mut [u8]) -> usize { 0 }
+pub unsafe fn console_room() -> bool { false }
+pub unsafe fn console_interrupts(_rx: bool, _tx: bool) {}
