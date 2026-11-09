@@ -3248,7 +3248,9 @@ def shell_nn_check(vm, ident):
     out = vm.command(f"nn bench {ident}", raw=True, timeout=60)
     bench = re.search(r"BENCH .*: (\d+) ROWS IN (\d+) JOBS OF 256 IN (\d+) MS: (\d+) ROWS A SECOND; THE SESSION HELD (\d+) KIB; THIS MACHINE ONLY", out)
     assert bench and int(bench[1]) > 0 and int(bench[4]) > 0, out
-    require(vm.command(f'msh -c "nn run {ident} data/nnrows.txt"', raw=True), "nn needs `requires: nn` in the script")
+    # A script that declares what it needs: nn run only with `nn` among them.
+    require(vm.command("msh data/nnfiles.msh", raw=True, timeout=60), "SCRIPT FAILED: nn needs `requires: nn` in the script (LINE 3)")
+    require(vm.command("msh data/nnok.msh", raw=True, timeout=60), f"{len(expected)} ROWS THROUGH ")
     require(vm.command(f"nn unload {ident}", raw=True), f"UNLOADED {ident[:16]}…: THE SHELL'S HOLD DROPPED")
     require(vm.command(f"nn run {ident} data/nnrows.txt", raw=True), f"ERROR: NN: NO MODEL {ident[:16]}… IS LOADED (NN LOAD <PATH> <ID> FIRST)")
     print(f"PASS: the shell's nn (262-APP-0112): load, models, run of a file of {len(expected)} rows within NRL's tolerance and "
@@ -15142,6 +15144,9 @@ def main():
                 # The shell's `nn run` (262-APP-0112): NRL's input as rows of text, and a file of the wrong width.
                 (disk / "data/nnrows.txt").write_text(nn_rows()[0])
                 (disk / "data/nnbad.txt").write_text("1 2 3\n1 2\n")
+                ident = nn_packages()["conformance"][1]
+                for script, needs in (("nnfiles.msh", "files"), ("nnok.msh", "nn")):
+                    (disk / "data" / script).write_text(f"#!msh\nrequires: {needs}\nnn run {ident} data/nnrows.txt\n")
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite in ("isolation", "giveup"):
