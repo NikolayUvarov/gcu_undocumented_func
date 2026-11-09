@@ -12,6 +12,9 @@ static LAPIC: AtomicUsize = AtomicUsize::new(0xfee00000);
 static X2APIC: AtomicBool = AtomicBool::new(false);
 pub static ONLINE: [AtomicBool; MAX] = [const { AtomicBool::new(false) }; MAX];
 pub static TICKS: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
+// Each CPU's CR0 once it started (000-KRN-0220): the hardware report shows whether CD and NW were cleared.
+pub static CR0: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
+pub fn read_cr0() -> u64 { let v: u64; unsafe { asm!("mov {}, cr0", out(reg) v, options(nomem, nostack)); } v }
 // PID and name (16 bytes) of the task running on each CPU, 0 when idle: read by the panic handler without locks.
 pub static RUNNING: [[AtomicU64; 3]; MAX] = [const { [const { AtomicU64::new(0) }; 3] }; MAX];
 
@@ -360,6 +363,7 @@ pub unsafe fn start(info: &BootInfo) {
 extern "C" fn ap_entry(index: usize) -> ! {
     unsafe {
         crate::mmu::enable_protection(false);
+        CR0[index].store(read_cr0(), Ordering::Relaxed);
         load(index);
         crate::interrupts::load();
         lapic_init(false);

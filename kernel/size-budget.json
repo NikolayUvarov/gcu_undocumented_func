@@ -1,5 +1,5 @@
 {
-  "budget": 7300,
+  "budget": 7400,
   "unit": "lines of Rust in kernel/src, without blank lines and comments, both architectures (scripts/kernel_budget.py)",
   "measured": {
     "date": "2026-10-21",
@@ -20,6 +20,11 @@
       "date": "2026-10-25",
       "to": 7300,
       "why": "000-KRN-0104: the derivation tree's index and revocation in steps (kernel/src/scheduler/tree.rs, about 200 lines): which capability derives from which is the kernel's own state (MC-3.3), so the walk that bounds a revocation (MC-5.4) cannot live in user space"
+    },
+    {
+      "date": "2026-11-09",
+      "to": 7400,
+      "why": "100000-KRN-0171 (about 70 lines in kernel/src; the table itself is common/nodes.rs, outside it): the platform nodes' table, built from the device tree or the firmware's tables, and the checks of PLATFORM_MMIO and PLATFORM_NODE_IRQ. Which registers and lines a task may hold is the kernel's grant (MC-3.1, MC-3.3), and the check that a page holds no other device's registers, no RAM and none the kernel drives needs the kernel's view of all of them, so it cannot live in user space. 000-KRN-0220 (10 lines): each CPU turning its caches on and its CR0 recorded are processor state only the kernel sets. 7320 lines after both; about 80 of room."
     }
   ]
 }

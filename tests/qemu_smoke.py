@@ -1092,12 +1092,17 @@ def normal_suite(vm):
         require(registers, "HLT=1")
     cpus = vm.hmp("info cpus")
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
+    if vm.arch != "aarch64":
+        # 000-KRN-0220: every CPU runs with its caches on, CD (bit 30) and NW (bit 29) of CR0 clear; the APs start from
+        # INIT with both set. QEMU's TCG models no cache, so only the bits say it.
+        cr0 = [int(v, 16) for v in re.findall(r"CR0=([0-9a-f]{8})", vm.hmp("info registers -a"))]
+        assert len(cr0) == vm.cpus and all(v & (3 << 29) == 0 for v in cr0), [f"{v:08X}" for v in cr0]
     vm.serial()
     # Every CPU the machine has is online in the guest (issue 171: no cap of 8).
     online = vm.command("cpus")
     assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
     assert heap_used(vm) == baseline
-    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, {idle}, {vm.cpus} CPUs", flush=True)
+    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, {idle}, {vm.cpus} CPUs{', each with its caches on (CR0)' if vm.arch != 'aarch64' else ''}", flush=True)
     if vm.cpus > 8:
         monitors_every_cpu(vm)
         clocks_on_many_cpus(vm)

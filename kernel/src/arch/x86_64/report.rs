@@ -168,6 +168,10 @@ pub fn cpu(out: &mut String) {
     let _ = write!(out, "  APIC IDs         ");
     for index in 0..crate::cpu::COUNT.load(core::sync::atomic::Ordering::Relaxed) { let _ = write!(out, " {}", crate::cpu::apic_id(index)); }
     out.push('\n');
+    // Each CPU's CR0 once it started: CD (bit 30) and NW (bit 29) clear is caching on (000-KRN-0220).
+    let _ = write!(out, "  CR0 after start  ");
+    for index in 0..crate::cpu::COUNT.load(core::sync::atomic::Ordering::Relaxed) { let _ = write!(out, " {:08X}", crate::cpu::CR0[index].load(core::sync::atomic::Ordering::Relaxed)); }
+    out.push('\n');
     if max_ext >= 0x8000_0008 { let r = cpuid(0x8000_0008, 0); let _ = writeln!(out, "  address bits      physical {} virtual {}", r.eax & 0xFF, (r.eax >> 8) & 0xFF); }
     out.push_str("Features\n");
     names(out, "leaf 1 EDX", one.edx, &LEAF1_EDX);
