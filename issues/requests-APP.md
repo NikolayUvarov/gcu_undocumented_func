@@ -77,7 +77,7 @@ Numbered on 2026-11-04 as [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-
 
 ## The machine's name as one system setting, and `hostname` (for 750-EFF-0018 and 000-KRN-0180)
 
-Asked on 2026-10-28 in `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` (EFF with LNK) and not recorded here then. Numbered on 2026-11-05 as [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.md), at P1 by the maintainer's word: the file is `data/machine/name`.
+Asked on 2026-10-28 in `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` (EFF with LNK) and not recorded here then. Numbered on 2026-11-05 as [000-APP-0123](../issues-done/000-APP-0123-the-machines-name-and-hostname.done), at P1 by the maintainer's word: the file is `data/machine/name`.
 
 ## The shell lends the station's reading client (for 550-NET-0058), once `KRN` gives the request bit
 
