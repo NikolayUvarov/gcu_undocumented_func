@@ -2637,10 +2637,15 @@ def secret_line_check(vm):
         print("SKIP: the secret line (000-APP-0126): no tests/secret_stub build (scripts/x86_fixtures.sh)", flush=True)
         return
     secret = "hunter2-\u0436 x"
+    # A copy in the background asks 3 s after its start, while the line in front is typed: its call arrives in the
+    # shell's other receiving slot, and it is refused, not the console program in front.
+    later = int(re.search(r"STARTED PID=(\d+) NAME=secretstub BACKGROUND", vm.command("run secretstub later &", raw=True))[1])
+    started = time.monotonic()
     vm.collect()
     since = len(vm.log)
     vm.send("secretstub\n")
     vm.logged("TYPED WITH NO ECHO (ENTER ENDS IT, ESC REFUSES IT): PASSWORD FOR THE STUB", since)
+    time.sleep(max(0, started + 5 - time.monotonic()))  # the background copy has asked and been answered by now
     # Q and Backspace: the line is the secret again.
     vm.send_bytes(secret.encode() + b"Q\x7f\r")
     vm.expect("MIND> ", timeout=30, after="SECRET STUB: GIVEN")
@@ -2656,6 +2661,8 @@ def secret_line_check(vm):
     vm.send_bytes(b"\x1b")
     time.sleep(.3)
     log = vm.command("dmesg -s shell", raw=True)
+    require(log, "REFUSED: NOT THE CONSOLE PROGRAM IN FRONT")
+    require(vm.program_logs(later, "SECRET STUB: "), "SECRET STUB: REFUSED")
     require(log, ") ASKED ON CONSOLE 1")
     assert re.search(r"\[SHELL\] SECRET LINE FOR secretstub \(PID \d+\) ASKED ON CONSOLE 1\n.*\[SHELL\] SECRET LINE FOR PID \d+ GIVEN", log, re.S), log[-3000:]
     assert "hunter2" not in vm.log[since:] and "hunter2" not in log, vm.log[since:][-3000:]
@@ -2673,7 +2680,7 @@ def secret_line_check(vm):
     require(vm.command("dmesg -s shell", raw=True), "THROUGH ITS SECRET LINE'S CLIENT FOR ANOTHER COMMAND: REFUSED")
     require(vm.command('msh -c "secretstub"'), "SECRET STUB: NO CLIENT OF THE SHELL")
     print("PASS: a console program's secret line (000-APP-0126): the shell's prompt, the line typed with no echo and "
-          "Backspace, its SHA-256 matched by the program, the line in no serial line, log or history; Esc refused it; "
+          "Backspace, its SHA-256 matched by the program, a program in the background refused meanwhile, the line in no serial line, log or history; Esc refused it; "
           "another command through its badged copy refused; none for a script's program", flush=True)
 
 

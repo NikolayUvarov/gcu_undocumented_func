@@ -2,8 +2,8 @@
 #![no_main]
 //! Test-only console program (QEMU `shell` suite, 000-APP-0126): asks the shell for one secret line through the copy of
 //! its client badged BADGE_SHELL_SECRET in SLOT_SHELL, and prints what came back as its length and SHA-256, never the
-//! bytes; with `other`, asks the machine's name through that copy, which the shell refuses. Never packaged into the
-//! normal OS; the program the line is for is NET's `get -u`.
+//! bytes; with `other`, asks the machine's name through that copy, which the shell refuses; with `later`, asks 3 s
+//! after its start. Never packaged into the normal OS; the program the line is for is NET's `get -u`.
 use core::fmt::Write;
 use mind::abi::*;
 use mind::idl::shell;
@@ -24,6 +24,8 @@ fn main(_info: &'static BootInfo) {
         mind::println!("SECRET STUB: HOSTNAME THROUGH THE SECRET CLIENT {}", answer);
         mind::process::exit_with(0)
     }
+    // `later`: the call 3 s after the start, for a line another program is typing meanwhile.
+    if mind::process::args_str().trim() == "later" { let _ = mind::time::sleep(3000); }
     let mut line = [0u8; 256];
     // The user types it: no time limit of the stub's own.
     match shell::secret_line(client, "PASSWORD FOR THE STUB", &mut line) {
