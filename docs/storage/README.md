@@ -288,6 +288,17 @@ A store of layout 1 to 3 is refused and left as it is (MC-4.13), with `device` o
   - Anything else is refused and left as it is: another file system, a damaged superblock, another layout version (MC-4.13), a key that does not open the superblock's check (`key`).
   - A store is scanned whole. Every frame's record is opened, and a block is checked against its CID (and a node against the schema); only intact blocks enter the index. A frame whose seal does not open is counted corrupt.
   - Non-blank sectors outside every frame are counted as damaged. The scan resynchronizes at the next frame, so a damaged frame loses only its own record.
+  - **The medium is read ahead** (307-STO-0042). Each read takes the driver's whole buffer, 128 sectors. A read inside the sectors last taken is answered from them, and a write over them drops them. Every pass and every scrub step drops them first, since those look for damage made behind the store's back.
+  - **What a whole pass costs** (x86 QEMU under TCG, a blank VirtIO disk; the times of that configuration, not of a machine):
+
+    | | 1 GiB | 4 GiB |
+    |---|---|---|
+    | first mount: the blank check, the format and the scan | 147 s | 562 s |
+    | a collection | 73 s | 117 s |
+    | a scrub | 70 s | 315 s |
+    | a mount after a reboot | 35 s | 292 s |
+
+    Before the read-ahead, 1 GiB took 391, 196, 177 and 225 s: the calls to the driver, a record's sectors each, bound it.
 - **Reading.** A get reads the record again, opens it and checks it against the CID. A block that does not open or whose bytes do not match is reported corrupt and never returned. It also leaves the index, so a put of the same bytes stores a new copy elsewhere.
 - **Limits.**
   - A block is at most 16 KiB.
