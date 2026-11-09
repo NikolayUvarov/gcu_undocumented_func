@@ -82,6 +82,7 @@ fn processors(info: &BootInfo) -> ([u32; MAX], usize) {
 }
 
 pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
+    CR0[0].store(read_cr0(), Ordering::Relaxed); // the BSP's, its boot map active (000-KRN-0220)
     let saved = crate::context::saved_state();
     let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: VECTOR STATE: {}, XCR0 {:#X}, {} BYTES A TASK\n",
         if saved == 0 { "FXSAVE" } else { "XSAVE" }, saved, crate::context::area()));
