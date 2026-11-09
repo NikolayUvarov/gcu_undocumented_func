@@ -73,12 +73,13 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97"):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio"):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
         # and line ends came in the middle of lines the guest printed.
         # `decoy`: a directory served as another FAT disk ahead of the boot disk, on the same bus (211-KRN-0012).
+        # `serial`: the console UART's chardev; "pty" gives it to a test's own tool (100000-KRN-0221), with no prompt to wait for.
         self.disk = disk
         self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
@@ -125,7 +126,7 @@ class VM:
         self.process = subprocess.Popen(
             [args.qemu, *machine, *storage,
              *(["-snapshot"] if snapshot else []), "-m", getattr(args, "memory", None) or "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
-             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
+             "-serial", serial, "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
              *(["-cpu", model] if (model := getattr(args, "cpu_model", None)) and "-cpu" not in extra else []),
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}",
                 *(["-device", "intel-hda", "-device", "hda-duplex,audiodev=snd0"] if audio_card == "HDA" else ["-device", "AC97,audiodev=snd0"])] if audio else [])],
@@ -6263,13 +6264,38 @@ def link_suite(args):
             require(link(port, "sh", "mode", ok=False), "refused")
         finally:
             vm.close()
+    # 100000-KRN-0221: `uart` in link.conf: link runs over the console UART through uart_serial, here a pseudo-terminal in
+    # place of the serial console; usb_serial is not started and the shell has no serial line.
+    with tempfile.TemporaryDirectory(prefix="smoke-link-uart-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 uart\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, prompt=False, serial="pty")
+        try:
+            port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "serial0")
+            # No prompt to wait for: the first hello is asked again until the boot has started link.
+            deadline = time.monotonic() + 180
+            while '"MIND Core link"' not in (out := link(port, "hello", ok=None)):
+                assert time.monotonic() < deadline, out
+            sent = Path(temp) / "uart.bin"
+            sent.write_bytes(os.urandom(16 * 1024))
+            require(link(port, "put", str(sent), timeout=300), "put ")
+            back = Path(temp) / "uart-back.bin"
+            require(link(port, "get", "uart.bin", str(back), timeout=300), "got uart.bin")
+            assert back.read_bytes() == sent.read_bytes(), "the file came back changed"
+            log = link(port, "log")
+            chip = "PL011" if args.arch == "aarch64" else "16550"
+            require_all(log, f"[UART] {chip} AT 115200 BIT/S, 8N1, NO FLOW CONTROL; RECEIVED AT ITS INTERRUPT AND EVERY 2 MS", "[INIT] usb_serial NOT STARTED: LINK.CONF SAYS `uart`",
+                        "[INIT] NO SERIAL LINE: THE CONSOLE UART IS THE LINK'S (LINK.CONF SAYS `uart`)", "[LINK] RECEIVED uart.bin")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-link-uart-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
           "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again; "
           "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line and no key; the shell's lines over the "
           "link answered, a policy change refused and a secret kept out of the log; with link-console a script put over the link "
-          "ran as the console's, refused without it, mode refused in both", flush=True)
+          "ran as the console's, refused without it, mode refused in both; with `uart` in link.conf, the same link over the console UART through "
+          "uart_serial (16 KiB each way), usb_serial not started and the shell without its serial line (100000-KRN-0221)", flush=True)
 
 
 def modes_suite(args):
