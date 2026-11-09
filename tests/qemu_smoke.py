@@ -935,12 +935,15 @@ def hardware_report_check(vm):
 
 
 def normal_suite(vm):
-    # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207). No ECDT either:
-    # no embedded controller, so no battery service (211-PRT-0008).
+    # No pin controller on QEMU with ACPI (virt's tables name none, issue 206): gpio is not started (issue 207). With a
+    # device tree, virt's PL061 is a platform node, and gpio drives it (100000-KRN-0171). No ECDT either: no embedded
+    # controller, so no battery service (211-PRT-0008).
     services = vm.services()
-    assert "gpio" not in services and "battery" not in services, services
+    tree = vm.arch == "aarch64" and "acpi=off" in (getattr(vm.args, "machine", None) or "")
+    assert ("gpio" in services) == tree and "battery" not in services, services
     if vm.arch == "aarch64":
-        require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
+        if not tree: require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
+        else: require(vm.log, "[GPIO] pl061 WITH 8 PINS")
         require(vm.log, "[INIT] battery NOT STARTED: NO DEVICE")
     else:
         # 211-PRT-0003: the tick from the LAPIC timer, measured on the ACPI PM timer (QEMU's chipsets have one).
@@ -1122,6 +1125,9 @@ def normal_suite(vm):
     # tree, 100000-PRT-0009) there is no DSDT to read: the policy is unknown, and a radio sends nothing.
     if "acpi=off" in (getattr(vm.args, "machine", None) or ""):
         require(log, "[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN (no-dsdt): A RADIO SENDS NOTHING")
+        # 100000-KRN-0171: U-Boot's tree keeps the PL031 enabled, and rtc gets it through its node.
+        if getattr(vm.args, "uboot", None):
+            assert re.search(r"\[INIT\] PLATFORM NODES: \d+; CONSOLE \d+, RTC \d+, PL061 \d+", log), log[-1500:]
     else:
         assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
     if vm.arch != "aarch64":
@@ -14174,8 +14180,15 @@ def devicetree_suite(args, disk):
         assert board.groups() == (version, "0x8000000", "0x9000000", "1", "27", str(vm.cpus), "HVC", "0x0", "YES"), board.groups()
         online = vm.command("cpus")
         assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
+        # 100000-KRN-0171: the tree's device nodes, the PL011 lent to the shell through its node (the commands above came
+        # through it) and AAVMF's disabled PL031 not listed, so not handed out.
+        nodes = re.search(r"MIND CORE KERNEL: DEVICE TREE: (\d+) DEVICE NODES TO LEND, (\d+) OF THEM SHARING A PAGE WITH ANOTHER", vm.log)
+        listed = re.search(r"\[INIT\] PLATFORM NODES: (\d+); CONSOLE (-?\d+), RTC (-?\d+), PL061 (-?\d+)", vm.log)
+        assert nodes and listed and nodes[1] == listed[1] and int(nodes[1]) >= 4, (nodes, listed, vm.log[-3000:])
+        assert int(listed[2]) >= 0 and listed[3] == "-1" and int(listed[4]) >= 0, listed.groups()
         print(f"PASS: devicetree: without ACPI the loader's line and the kernel's board come from the tree (GICv{version}, "
-              f"the PL011, the timer's PPI 27, {vm.cpus} CPUs through PSCI, the ECAM; AAVMF's PL031 left out as disabled); the shell with every CPU online", flush=True)
+              f"the PL011, the timer's PPI 27, {vm.cpus} CPUs through PSCI, the ECAM; AAVMF's PL031 left out as disabled); the shell with every CPU online; "
+              f"{nodes[1]} device nodes, {nodes[2]} sharing a page, the console's lent to the shell, the disabled PL031 not listed", flush=True)
     finally:
         vm.close()
 

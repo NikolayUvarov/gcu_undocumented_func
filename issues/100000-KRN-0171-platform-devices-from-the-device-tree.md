@@ -1,6 +1,6 @@
 # 100000-KRN-0171 — Platform devices from the device tree
 
-**Type:** kernel (ABI, `init`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (started 2026-11-08 at the maintainer's word, before the phone) · **Blocked by:** — ([100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done), the board from the tree, done) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.4
+**Type:** kernel (ABI, `init`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (made and tested in QEMU and on the host, below; the gate left)  · **Blocked by:** — ([100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done), the board from the tree, done) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.4
 
 ## Problem
 
@@ -36,6 +36,40 @@
   - a node with `status = "disabled"` is not handed out.
 - **Host tests** of the list's bounds.
 - **The ABI's version** and docs/api updated.
+
+## Progress (2026-11-09)
+
+- **The ABI, version 28** (`common/abi.rs`; docs/api):
+  - `PLATFORM_NODES` hands out a read-only memory object: a `PlatformNodes` header (`count`, `left_out`), then a 128-byte `PlatformNode` each. A record holds the node's first compatible string, `NODE_CONSOLE` and `NODE_MORE`, up to four register ranges as the CPU sees them, and up to four lines (SPI numbers).
+  - `PLATFORM_MMIO` takes a node and one of its ranges, and lends that range's pages.
+  - `PLATFORM_NODE_IRQ` takes a node and one of its lines.
+  - The fixed indices `PLATFORM_UART`, `_RTC`, `_PINS_*` and `_TPM` are gone, and aarch64's `PLATFORM_IRQ` takes no line. Nothing reads the old indices (AGENTS.md, section 3).
+- **The table** (`common/nodes.rs`, shared with the host tests): built once on the boot CPU before the others start (`kernel/src/platform_nodes.rs`).
+  - **From the tree** (`fdt::devices`, devicetree.rs): every node enabled with its ancestors, with a compatible string and every `reg` range translated to the CPU's bus. Left out: memory, `/reserved-memory`'s, the GIC and what it holds, and a generic ECAM host. Lines are its interrupts that go to the GIC as SPIs.
+  - **From the firmware's tables** (aarch64 with ACPI, `platform.rs`): the SPCR's UART (`arm,pl011`, the console), the PL031, the DSDT's and SSDTs' pin controllers (`arm,pl061`, `brcm,bcm2711-gpio`) and the TPM (`mind,tpm2`). On x86, only the TPM.
+  - **The kernel's line:** `MIND CORE KERNEL: DEVICE TREE: n DEVICE NODES TO LEND, k OF THEM SHARING A PAGE WITH ANOTHER: THOSE PAGES ARE LENT TO NONE`.
+- **The checks of `PLATFORM_MMIO`** (scheduler.rs), each refusal named on the kernel's line:
+  - pages another node's registers share (the shared-page rule above);
+  - RAM in the firmware's map;
+  - registers the kernel drives: the GIC's distributor, CPU interface and v2m frame (GICv2), redistributors (128 KiB for each CPU) and ITS (GICv3), and the ECAM.
+- **`PLATFORM_NODE_IRQ`** lends only lines the kernel can bind: aarch64's device lines are SPIs 0–15 (`MSI_FIRST`), and the A64's go to about 157. Widening them is the drivers' stage (100000, stage 2); the records keep the tree's numbers.
+- **`init`** (`hardware::platform_nodes`, read once at boot): finds the console if it is a PL011 (or SBSA UART), the first `arm,pl031`, `arm,pl061`, `brcm,bcm2711-gpio` and `mind,tpm2`, and gives them to the shell, `rtc`, `gpio` and `tpm`.
+  - A console of another kind (the A64's 16550) stays the kernel's: the shell starts without a serial line and says so, where its start failed before.
+  - The line: `[INIT] PLATFORM NODES: n; CONSOLE i, RTC i, PL061 i, BCM2711 GPIO i, TPM i (-1: NONE)`.
+- **What the tables hold** (`tests/nodes_host.rs`):
+  - **QEMU `virt`:** 37 nodes under U-Boot (fw-cfg, 32 virtio-mmio, the PL061, PL031 and PL011, the flash). The 32 virtio-mmio windows, 0x200 bytes each, share pages, so they are lent to none.
+  - **The PinePhone 1.2:** 53 nodes, 32 of them sharing a page with another. UART0, UART1 (Bluetooth) and UART3 share one page. So do the CCU, the pin controller, the timer and the watchdog; and the RTC with the R_INTC.
+  - **On the phone, then:** lending those devices waits on a design for each group (one driver for the page, or the kernel serving it), in stage 2.
+  - The nodes whose interrupts go through the R_INTC (the RTC, the LRADC, the pin controllers) have no lines in their records: they are not the GIC's.
+- **Found on the way** (issue 207, the porting track's): `gpio` had never started in QEMU. With the tree's PL061 it faulted on its stack's guard page (main's frame of about 80 KiB, past 64 KiB). The PL061's slot `SLOT_DEV1` is also `SLOT_VFS`, so the VFS client took its place. Both are fixed: a 256 KiB stack and the VFS client in `SLOT_MEM`.
+- **Tests:**
+  - **Host,** `tests/nodes_host.rs` in `scripts/host_tests.sh`: the lists of virt's two trees and the PinePhone's; the UARTs' shared page; the table's bounds (a long compatible string cut, more ranges and lines than a record keeps, empty and wrapping ranges, a full table counting what it leaves out); the table read back as handed out, and a short one refused.
+  - **In the kernel session's container** (QEMU 8.2.2, TCG):
+    - aarch64 `normal` under AAVMF with ACPI: the shell's console and `rtc` through their nodes;
+    - aarch64 `devicetree` (AAVMF, `acpi=off`): 35 nodes, the shell's console through its node, and AAVMF's disabled PL031 not listed, so not handed out;
+    - the U-Boot group (`normal,smp`, GICv2, Cortex-A53): the PL031 to `rtc` and the PL061 to `gpio` (`[GPIO] pl061 WITH 8 PINS`);
+    - x86 `normal` and `tls`: the TPM's CRB through its node, sealed and unsealed.
+  - QEMU's runs are evidence for QEMU only (MC-12.1): no board's tree but these has been read.
 
 ## Related
 

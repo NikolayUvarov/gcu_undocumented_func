@@ -22,13 +22,21 @@ The `pins` tool (tools track) is to list a board's pins, show each pin's functio
 
 ## Progress (2026-10-06)
 
-- **Done — service** `gpio` (`gpio/src/main.rs`): `init` gives it the first BCM2711 GPIO (`SLOT_DEV0`) and the first PL061 (`SLOT_DEV1`) by `PLATFORM_MMIO` index, and a VFS client for `hwdocs/`; not started without a controller.
+- **Done — service** `gpio` (`gpio/src/main.rs`): `init` gives it the first BCM2711 GPIO (`SLOT_DEV0`) and the first PL061 (`SLOT_DEV1`), by their platform nodes since 100000-KRN-0171 (by `PLATFORM_MMIO` index before), and a VFS client for `hwdocs/` (in `SLOT_MEM` since 2026-11-09, below); not started without a controller.
 - **Done — model** `mind::gpio` (`libmind/src/gpio.rs`): both controllers' registers (BCM2711 FSEL codes, GPSET/GPCLR/GPLEV, GPIO_PUP_PDN_CNTRL; PL061 DIR and masked DATA), `may_change` (control badge for pins the board does not reserve, platform badge for reserved ones), the hwdocs parsers.
 - **Done — interface** `idl/gpio.wit` 1.0: `controllers`, `pins`, `functions` (names from hwdocs), `set-function`, `write`, `set-pull`; every change is logged with the caller's PID, the function and the level before and after.
 - **Done — clients**: the shell holds a control-badged client in `SLOT_GPIO` (23; `SLOT_DYNAMIC` is now 24) and lends it for `REQUEST_GPIO` (and the script word `gpio`), only where `gpio` runs. The `pins` tool ([u015](u015-pins.md)) can use these.
 - **Done — hwdocs**: `hwdocs/socs/bcm2711.pins` (BCM2711 ARM Peripherals, table 94, checked against the document's text by a script: all 58 rows and pulls), `hwdocs/socs/pl061.pins`, `hwdocs/boards/rpi4b.board` (the reduced schematics' J8; 0–1, 14–15 and 28–57 reserved); `make_usb_image.py --hwdocs` puts them on the disk; sources in THIRD_PARTY.md.
 - **Done — tests**: `tests/gpio_host.rs` (register models, policy, the real hwdocs files, malformed tables); the `normal` suite checks that `gpio` does not start on QEMU.
 - **Open — hardware**: a Raspberry Pi 4 run (with 205). **Open — pin masks** per client (the plan's "pins 17–27 only"): one control badge for every pin the board does not reserve for now. **Open — the board's identity**: the first board file for the controller's SoC is used.
+
+## Progress (2026-11-09): its first start, on QEMU's PL061
+
+- **With a device tree, QEMU `virt`'s PL061 is a platform node** ([100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md)), and `init` gives it to `gpio`. Until then `gpio` had never started in QEMU.
+- **Two faults its first start found, both fixed:**
+  - `main`'s frame, which holds two controllers' hwdocs tables, is about 80 KiB on aarch64, past the default 64 KiB stack. Its stack probe faulted on the guard page (vector 36 at `main`'s first page), and `init` quarantined it after three restarts. `gpio/linker.ld` now asks 256 KiB (`PT_GNU_STACK`, 262-KRN-0164).
+  - `SLOT_DEV1`, the PL061's, is slot 3, and so is `SLOT_VFS`: the VFS client `init` granted after it took its place, and `gpio` said `NO PIN CONTROLLER`. The VFS client is now in `SLOT_MEM` (5), and `gpio` sends its file calls there (`mind::fs::use_endpoint`).
+- **Now:** under U-Boot's tree `gpio` drives the PL061 (`[GPIO] pl061 WITH 8 PINS`), and the `normal` suite expects it to run there, and not to start under ACPI.
 
 ## Acceptance criteria
 

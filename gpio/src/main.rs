@@ -1,11 +1,11 @@
 #![no_std]
 #![no_main]
-// Ring 3 pin controller driver (issue 207): the BCM2711's GPIO (SLOT_DEV0) and a PL061 (SLOT_DEV1), as init found them
-// in the firmware's tables (PLATFORM_PINS_*), behind idl/gpio.wit. Names of functions and the board's header come from
-// hwdocs/ on the boot disk when it is there (mind::gpio parses them). Reading is open; a change needs the control
+// Ring 3 pin controller driver (issue 207): the BCM2711's GPIO (SLOT_DEV0) and a PL061 (SLOT_DEV1), as init found their
+// platform nodes (100000-KRN-0171), behind idl/gpio.wit. Names of functions and the board's header come from hwdocs/ on
+// the boot disk when it is there (mind::gpio parses them). Reading is open; a change needs the control
 // badge, a reserved pin the platform badge (MC-3.3, MC-8.3), and every change goes to the system log with who asked
 // (MC-10.2). The driver never drives a pin on its own, and after a restart it leaves the pins as they are (MC-8.4).
-use mind::abi::{BootInfo, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1};
+use mind::abi::{BootInfo, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1, SLOT_MEM};
 use mind::dev::{cap_info, Mmio};
 use mind::gpio::{may_change, Board, Controller, Kind, Pins, Pull, Refusal, Registers, MAX_PINS};
 use mind::idl::codec::Text;
@@ -121,6 +121,8 @@ fn serve(units: &[Unit], badge: u16, sender: u64, request: idl::Request, call: w
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    // hwdocs/'s client is in SLOT_MEM: SLOT_VFS is SLOT_DEV1, the PL061's.
+    mind::fs::use_endpoint(mind::ipc::Endpoint(SLOT_MEM));
     let mut units: [Option<Unit>; 2] = [None, None];
     for (n, (slot, kind)) in [(SLOT_DEV0, Kind::Bcm2711), (SLOT_DEV1, Kind::Pl061)].into_iter().enumerate() {
         if cap_info(slot).0 != CAP_KIND_MMIO { continue; }
