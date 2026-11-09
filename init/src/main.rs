@@ -978,8 +978,9 @@ impl Init {
                 if self.present("nnd") { grants.copy(SLOT_NN, self.shell_nn()?, CLIENT | CAP_BADGE); }
                 // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
                 grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
-                // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148).
-                grants.add(SLOT_COMMANDS, self.server(&mut minted, "shell")?, ALL);
+                // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148); with the
+                // right to badge, for the BADGE_SHELL_SECRET copy it lends for REQUEST_SECRET_LINE (000-KRN-0224).
+                grants.add(SLOT_COMMANDS, self.server(&mut minted, "shell")?, ALL | CAP_BADGE);
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
                 if self.present("blockstore") {
