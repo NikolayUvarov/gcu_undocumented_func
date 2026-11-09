@@ -1,6 +1,6 @@
 # 252-APP-0041 — Russian speech from `tts` on the MacBook Pro: measured, a cleaner upsampler
 
-**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [252](252-neural-speech-synthesis.md) · **Roadmap:** track G (voice) · **Constitution:** MC-11.5, MC-12.2
+**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (the source measured, nothing kept; the neural voice is the fix, 252-APP-0128; the Mac's run left, 2026-11-09) · **Blocked by:** — · **Main task:** [252](252-neural-speech-synthesis.md) · **Roadmap:** track G (voice) · **Constitution:** MC-11.5, MC-12.2
 
 Numbered from the kernel track's request in `requests-APP.md` (2026-10-09), after the maintainer's run on the MacBook Pro: "Russian audio output is barely understandable, very poor, with clicks". The task is to find out whether it can be fixed.
 
@@ -33,7 +33,38 @@ Numbered from the kernel track's request in `requests-APP.md` (2026-10-09), afte
   | the same, and a nasal after a pause taking the 25 ms attack (not kept) | 35.8 % | 83.6 % | 0 |
 
   The small model makes a coarse yardstick: these differences in CER are about one sentence's errors. The command recognizer trained on this synthesizer still recognizes every phrase of its grammar (`tests/voice_host.rs`).
-- **Still to do:** the voice source (a return phase at the glottal closure, the source's tilt) and the Russian rules, measured the same way; the comparison with `speak` (252's neural voice); the run on the Mac.
+- **Still to do then:** the voice source (a return phase at the glottal closure, the source's tilt) and the Russian rules, measured the same way; the comparison with `speak` (252's neural voice); the run on the Mac.
+
+## Progress (2026-11-09): the source measured with two recognizers, and the comparison with `speak`
+
+- **The measurement is a script now:** `scripts/voice_tts/formant_asr.py`. It builds the audio with `tests/tts_host.rs` and transcribes it with one of two recognizers:
+  - **Vosk's small Kaldi model** (`vosk-model-small-ru-0.22`), as above. It gives the table's line again: CER 35.6 %, WER 84.2 %, no clicks.
+  - **Vosk 0.54's transducer** (`alphacep/vosk-model-ru`, int8, through sherpa-onnx), the recognizer 250 and 252 measured with. On the same voice: CER 40.5 %, WER 50.5 %.
+- **The source,** each variant against the same 24 sentences. The bold lines were measured with both recognizers.
+
+  | Variant | Small model CER / WER | Transducer CER / WER |
+  |---|---|---|
+  | **as in `main`** (tilt pole 3/4, open phase 60 %) | **35.6 / 84.2** | **40.5 / 50.5** |
+  | less tilt: pole 1/2, 1/4, none | 39.0–39.5 / 89.3–90.7 | — |
+  | **more tilt: pole 7/8** | **32.9 / 77.0** | **40.7 / 50.5** |
+  | **pole 15/16** | **32.1 / 69.4** | **39.9 / 49.5** |
+  | open phase 50 %, 70 % (pole 3/4) | 35.3 / 79.5, 35.9 / 84.4 | — |
+  | pole 7/8 with open phase 50 %, 40 % | 33.1 / 75.7, 33.9 / 79.5 | — |
+  | **voicing at 0.4 of its gain** (pole 3/4) | **34.0 / 71.3** | **41.1 / 50.0** |
+  | voicing at 0.6, 0.25 | 34.8 / 80.1, 33.5 / 59.6 | — |
+  | **rate 90 %, 80 %** | **41.5 / 97.0, 46.6 / 110.7** | **33.5 / 42.6, 30.1 / 42.6** |
+
+- **What the two recognizers say together:**
+  - **The source.** More tilt and less voicing look better to the small model only. Both turn the voicing down beside the noise sources, which are not tilted: the voiced level falls 1.5 to 8 dB. The transducer sees no change beyond one sentence's errors (39.9–41.1 % CER). None of them is kept.
+  - **The rate.** The two disagree. The transducer gains about 8 WER points from a slower rate, and the small model loses 13 to 26. The default stays at 100 %. `say -r 85` slows it for a listener who wants it.
+- **The comparison with `speak`,** 252's neural voice (Vosk TTS 0.7 through `mind::nn`, from the model disk): the same transducer on the same 24 sentences gave CER 0.80–1.75 % and WER 3.5–7.1 % (252's run of 2026-10-08, `scripts/voice_tts/results-2026-10-08.jsonl`), against 40.5 % and 50.5 % for the formant voice. These are two runs, with the same recognizer and the same sentences.
+- **So,** to the task's question:
+  - The formant voice's clicks are fixed.
+  - Its intelligibility is not near usable, by either recognizer, and the cheap changes do not move it measurably.
+  - **The fix is the neural voice where the model disk has it,** 252's step 5: `tts` speaks with it and keeps the formant synthesizer as the fallback. It is numbered as [252-APP-0128](252-APP-0128-tts-speaks-with-the-neural-voice.md).
+- **Left:**
+  - the Mac run, of `speak` beside `say`, with and without `-r 85`;
+  - the Russian rules of the formant voice, for the machine without a model disk: measured with the transducer, the yardstick these runs show to be the steadier one.
 
 ## Related
 
