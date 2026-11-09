@@ -7811,10 +7811,10 @@ def update_releases(temp, arch, changed=None, minimum6=None, gateway=None):
     return volume, newer, server, kept, good, forged, manifest6, boot_files, channel
 
 
-def trial_confirmed(vm, since, timeout):
-    """The console from position `since` of its log, once init's confirmation of the trial boot follows `BOOT: SLOT B
-    LOADED ON TRIAL` there. Read from the log, not from what expect() left: a command whose prompt the new boot answered
-    took those lines with it (000-KRN-0210)."""
+def trial_confirmed(vm, since, timeout, slot="B"):
+    """The console from position `since` of its log, once init's confirmation of the trial boot follows `BOOT: SLOT
+    <slot> LOADED ON TRIAL` there. Read from the log, not from what expect() left: a command whose prompt the new boot
+    answered took those lines with it (000-KRN-0210)."""
     deadline, clean = time.monotonic() + timeout, ""
     while time.monotonic() < deadline:
         vm.collect()
@@ -7822,7 +7822,7 @@ def trial_confirmed(vm, since, timeout):
             clean = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
             if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
                 raise AssertionError(clean[-3000:])
-            if "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED" in clean.partition("BOOT: SLOT B LOADED ON TRIAL")[2]:
+            if "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED" in clean.partition(f"BOOT: SLOT {slot} LOADED ON TRIAL")[2]:
                 vm.output = ""
                 return clean
         if vm.process.poll() is not None:
@@ -8058,6 +8058,157 @@ def update_suite(args):
           "check's refusal, asks before a rollback and an apply, which declined write nothing, and is refused to a script "
           "without requires: lifecycle (351-APP-0029); "
           "the file system is consistent", flush=True)
+
+
+def update_store_suite(args):
+    """351-UPD-0033 (MC-9.3): the updater keeps its releases in the block store. A raw image with release 5 in slot A,
+    confirmed, a blank disk for the store, and update.txt naming the test release server, which offers release 6 (one
+    application and the loader changed), with nothing automatic. At its start the updater keeps release 5 in the store,
+    pinned by its own owner; `update fetch` stages release 6 and keeps it too, putting only the two files it changes and
+    taking the others from release 5's tree; the store logs each pin with the updater's badge (0x17, 351-KRN-0218).
+    Applied and confirmed, the store keeps both: the shell's client is refused
+    their pins, and after a collection both trees read back whole, every block checked. With the machine off, slot A's
+    kernel and loader are damaged on the disk: `update rollback` writes release 5 back into slot A from the store,
+    checked as a fetch, and slot A boots on trial and is confirmed, as published."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: updatestore suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-updatestore-"))
+    arch = args.arch
+    volume, newer, server, kept, good, _, manifest6, _, _ = update_releases(temp, arch, changed="uptime.elf")
+    manifest5 = (volume / "MANIFEST").read_bytes()
+    certificates = temp / "tls"
+    certificates.mkdir()
+    _certificates(certificates)
+    https = serve_release.serve(server, certificates / "server.pem", certificates / "server.key")
+    port = https.server_address[1]
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    (layout / "update.txt").write_text(f"# the test release server (351-UPD-0033)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
+                                       "channel stable\nautomatic none\n")
+    image = boot_slots.Image.create(temp / "updatestore.img", layout)
+    store = temp / "store.img"
+    with store.open("wb") as f:
+        f.truncate(96 << 20)
+    # What a kept tree holds: the blobs of the files a slot holds, each digest once, the channel, the manifest and its
+    # signature.
+    def tree_of(directory, manifest, channel):
+        blobs = {digest: size for name, size, digest in release_tool.manifest_files(manifest) if (name.endswith(".elf") and "/" not in name) or name == BOOT_EFI}
+        return len(blobs) + 3, sum(blobs.values()) + len(channel) + len(manifest) + len((directory / "MANIFEST.SIG").read_bytes())
+    cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+    disks = ["-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
+    network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+
+    def logged(vm, line, timeout):
+        # The updater's lines, read with dmesg: the shell holds the serial line.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            try:
+                log = vm.command("dmesg -s updater", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            if line in log:
+                return log
+            # Without the store, or without its client (351-KRN-0218), it says so at its start.
+            assert "NO RELEASE IS KEPT THERE" not in log, log[-3000:]
+            time.sleep(2)
+        raise AssertionError((line, log[-3000:]))
+
+    def pinned(log, version):
+        found = re.search(rf"\[UPDATER\] STORE: VERSION {version} KEPT AS PIN (\d+), ROOT (\S+): (\d+) FILES, (\d+) BYTES PUT FROM SLOT ([AB]), (\d+) TAKEN FROM A KEPT RELEASE", log)
+        assert found, log[-3000:]
+        return int(found[1]), found[2], int(found[3]), int(found[4]), found[5], int(found[6])
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network, *disks])
+    try:
+        require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (BLANK)")
+        log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 5", 900)
+        require(log, "[UPDATER] STORE: RELEASES ARE KEPT IN THE BLOCK STORE")
+        pin5, root5, files5, put5, slot5, taken5 = pinned(log, 5)
+        assert (slot5, taken5) == ("A", 0), log
+        out = vm.command("update fetch", raw=True, timeout=1500)
+        require(out, "UPDATE: VERSION 6 STAGED IN THE OTHER SLOT")
+        log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 60)
+        pin6, root6, files6, put6, slot6, taken6 = pinned(log, 6)
+        # Only what release 6 changes is put: its uptime and its loader.
+        assert slot6 == "B" and put6 == (newer / "uptime.elf").stat().st_size + (newer / BOOT_EFI).stat().st_size and taken6 == files6 - 2, log
+        # The store names the updater's badge at its pins: OWNER_UPDATER with get, put and publish (351-KRN-0218).
+        stored = vm.command("dmesg -s blockstore", raw=True)
+        for pin, root in ((pin5, root5), (pin6, root6)):
+            assert re.search(rf"\[BLOCKSTORE\] PINNED {root} AS {pin} BY PID \d+ \(BADGE 23\)", stored), stored[-3000:]
+        # The updater's pins are its own owner's: the shell's client has none and ends neither.
+        require(vm.command("blocks pins", raw=True), "0 PINS")
+        for pin in (pin5, pin6):
+            require(vm.command(f"blocks unpin {pin}", raw=True), f"blocks: unpin {pin}: Rights")
+        vm.collect(); vm.output = ""
+        since = len(vm.log)
+        vm.send("update apply 3\n")
+        require(vm.expect("(Y/N)", timeout=60), "APPLY VERSION 6 (RUNNING 5)?")
+        vm.send_bytes(b"y")
+        trial_confirmed(vm, since, 1500)
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        # Once the trial is confirmed, the store keeps both: the running release and the last known good.
+        log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
+        require(log, "[UPDATER] SLOT B CONFIRMED ON THE DISK")
+        assert "LET GO" not in log, log
+        # An object nothing retains, so the collection has something to free once its lease (60 s) has ended.
+        loose = re.search(r"PUT (\S+) SIZE 40000", vm.command("blocks pattern 40000", raw=True))[1]
+        time.sleep(62)
+        collected = re.search(r"COLLECTED (\d+) BLOCKS", vm.command("blocks collect", raw=True, timeout=120))
+        assert collected and int(collected[1]) >= 4, vm.output
+        require(vm.command(f"blocks check {loose}", raw=True), "blocks: check: NotFound")
+        for root, directory, manifest, channel in ((root5, volume, manifest5, kept), (root6, newer, manifest6, good)):
+            files, size = tree_of(directory, manifest, channel)
+            require(vm.command(f"blocks check {root} tree", raw=True, timeout=600), f"CHECKED TREE {root}: {files} FILES, {size} BYTES")
+        require(vm.command(f"blocks unpin {pin5}", raw=True), f"blocks: unpin {pin5}: Rights")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-{args.cpus}cpu.log").write_text(vm.log)
+    # Slot A damaged on the disk: a byte of its kernel and of its loader changed.
+    damaged = ["kernel.elf", boot_slots.LOADERS[BOOT_EFI]]
+    for name in damaged:
+        data = bytearray(image.read(f"MIND/A/{name}"))
+        data[len(data) // 2] ^= 1
+        image.write(f"MIND/A/{name}", bytes(data))
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none", *disks])
+    try:
+        log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
+        require(log, "[UPDATER] SLOT B, VERSION 6")
+        vm.collect(); vm.output = ""
+        since = len(vm.log)
+        vm.send("update rollback\n")
+        require(vm.expect("(Y/N)", timeout=60), "ROLL BACK TO SLOT A? ")
+        vm.send_bytes(b"y")
+        out = trial_confirmed(vm, since, 1500, slot="A")
+        require(out, f"BOOT: MANIFEST {hashlib.sha256(manifest5).hexdigest()[:16]}")
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        # Release 5 runs again; the store keeps it, and release 6 that slot B holds above it.
+        log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
+        require(log, "[UPDATER] SLOT A CONFIRMED ON THE DISK")
+        require(log, "[UPDATER] SLOT A ON TRIAL, VERSION 5")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-back-{args.cpus}cpu.log").write_text(vm.log)
+    # Slot A is release 5 as published: the damaged files written back from the store.
+    for name, size, digest in release_tool.manifest_files(manifest5):
+        if name == "kernel.elf" or name == BOOT_EFI:
+            assert hashlib.sha256(image.read(f"MIND/A/{boot_slots.LOADERS.get(name, name)}")).hexdigest() == digest, name
+    assert image.read("MIND/A/MANIFEST") == manifest5 and image.read("MIND/A/CHANNEL") == kept
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print(f"PASS: updatestore: release 5 kept in the block store at the updater's start ({files5} files, {put5} bytes), "
+          f"release 6 kept once staged with {taken6} of its {files6} files taken from release 5's tree; applied and "
+          "confirmed, the store keeps both, the shell's client is refused their pins, and after a collection both trees "
+          "read back whole; slot A's kernel and loader damaged on the disk, `update rollback` writes release 5 back from "
+          "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033)", flush=True)
 
 
 def install_suite(args, stub_elf):
@@ -14493,7 +14644,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -14553,6 +14704,10 @@ def main():
             updater_suite(args, args.updater_elf)
             update_suite(args)
             install_suite(args, args.updater_elf)
+            update_store_suite(args)
+            continue
+        if suite == "updatestore":
+            update_store_suite(args)
             continue
         if suite == "install":
             install_suite(args, args.updater_elf)

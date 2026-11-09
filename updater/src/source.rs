@@ -1,7 +1,8 @@
 // Where releases come from (351-UPD-0007): an HTTPS server, trusted by its pinned key or the system's roots, over the
-// flow grant the network policy gives the updater; a directory on a mounted volume (a USB stick); or a bundle the
-// Effector gateway handed over (751-UPD-0032). All read the layout of scripts/release.py, and nothing read here is
-// trusted until the updater has checked it.
+// flow grant the network policy gives the updater; a directory on a mounted volume (a USB stick); a bundle the
+// Effector gateway handed over (751-UPD-0032); or a release the block store keeps for the updater (351-UPD-0033,
+// kept.rs). All read the layout of scripts/release.py, and nothing read here is trusted until the updater has checked
+// it.
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -12,7 +13,9 @@ use mind::idl::{socket, tls, wire};
 use mind::ipc::Endpoint;
 use mind::parse::Session as Parser;
 use mind::idl::update::Error;
-use crate::bundle;
+use mind::cid::Cid;
+use mind::dag::{self, CHUNK};
+use crate::{bundle, kept, store::Store};
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
@@ -23,7 +26,18 @@ const STAGE: usize = 64 * 1024; // a file is written to the slot in pieces of th
 // error rather than a silence (351-UPD-0018, as download does since 351-NET-0029). Above the services' own 10 s.
 const CALL_MS: u32 = 60_000;
 
-pub enum Source { Https { base: String, pin: Option<[u8; 32]> }, Directory(String), Bundle(Bundle) }
+pub enum Source { Https { base: String, pin: Option<[u8; 32]> }, Directory(String), Bundle(Bundle), Store(Cid) }
+
+// A block the store could not give as its CID names, a directory out of shape: not the file listed. A store that did
+// not answer: no answer.
+fn unstored(e: dag::Error) -> Error { if e == dag::Error::Store { Error::Network } else { Error::Digest } }
+
+// A kept release's file at `path` of the layout: its object and size.
+fn kept_file(root: &Cid, path: &str, buffer: &mut [u8; CHUNK]) -> Result<(Cid, u64), Error> {
+    kept::find(&mut Store, root, path, buffer).map_err(unstored)?.ok_or(Error::Missing)
+}
+
+fn chunk() -> alloc::boxed::Box<[u8; CHUNK]> { alloc::vec![0u8; CHUNK].into_boxed_slice().try_into().unwrap() }
 
 /// A bundle in the updater's staging: its file, and each entry's name, start and size in it.
 pub struct Bundle { file: File, entries: Vec<(String, u64, u64)> }
@@ -255,6 +269,19 @@ impl Source {
                 if bundle.file.read_at(start as usize, &mut data) != Ok(data.len()) { return Err(Error::Write); }
                 Ok(data)
             }
+            Source::Store(root) => {
+                let mut buffer = chunk();
+                let (cid, size) = kept_file(root, path, &mut buffer)?;
+                if size > limit as u64 { return Err(Error::Digest); }
+                let mut data = alloc::vec![0u8; size as usize];
+                let mut at = 0;
+                while at < data.len() {
+                    let got = dag::read_at(&mut Store, &cid, at as u64, &mut data[at..], &mut buffer).map_err(unstored)?;
+                    if got == 0 { return Err(Error::Digest); }
+                    at += got;
+                }
+                Ok(data)
+            }
         }
     }
 
@@ -283,6 +310,20 @@ impl Source {
                 let (start, length) = bundle.find(path)?;
                 if length != size { return Err(Error::Digest); }
                 copy_from(&bundle.file, start as usize, file, have as usize, size as usize)?;
+                Ok(size - have)
+            }
+            Source::Store(root) => {
+                let mut buffer = chunk();
+                let (cid, length) = kept_file(root, path, &mut buffer)?;
+                if length != size { return Err(Error::Digest); }
+                let mut stage = alloc::vec![0u8; STAGE];
+                let mut at = have;
+                while at < size {
+                    let got = dag::read_at(&mut Store, &cid, at, &mut stage[..STAGE.min((size - at) as usize)], &mut buffer).map_err(unstored)?;
+                    if got == 0 { return Err(Error::Digest); }
+                    if file.write_at(at as usize, &stage[..got]) != Ok(got) { return Err(Error::Write); }
+                    at += got as u64;
+                }
                 Ok(size - have)
             }
         }

@@ -4,7 +4,7 @@
 
 ## Problem
 
-From the storage track's request ("A durable disk for the block store", for [351-STO-0006](../issues/351-STO-0006-releases-pinned-in-the-store.md)).
+From the storage track's request ("A durable disk for the block store", for [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.done)).
 
 `init` started `blockstore` over `ramdisk#1`, so nothing the store held outlived a reset. No disk was set aside for it, and `vfs_server` got a write client of every running block driver. The store must not share a medium with a file system (Appendix B.6).
 
@@ -38,4 +38,4 @@ From the storage track's request ("A durable disk for the block store", for [351
 
 ## Related
 
-[351-STO-0006](../issues/351-STO-0006-releases-pinned-in-the-store.md), [300-KRN-0001](300-KRN-0001-blockstore-at-boot.done), [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).
+[351-STO-0006](351-STO-0006-releases-pinned-in-the-store.done), [300-KRN-0001](300-KRN-0001-blockstore-at-boot.done), [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).
