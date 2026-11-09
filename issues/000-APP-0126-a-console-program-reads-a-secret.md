@@ -50,11 +50,26 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
     - the copy wiped where it is kept before the state goes, and the session's line says `(GIVEN)`, `(REFUSED)` or why it went.
   - **The system log** names the program, its PID and the outcome: never the words or the bytes.
 - **Tests:** host, `tests/shell_host.rs` (the keys, the limit, the wiping, the prompt).
-- **Left:**
-  - the lending, for KRN's bit;
-  - the QEMU check with NET's `get -u`;
-  - docs/tools in both languages.
+- **Left:** see the lending's progress below.
 - **Not covered:** a script's wait serves no calls of the shell's commands, so a program a script runs gets no line until it ends.
+
+## Progress (2026-11-09): the lending and its check
+
+- **KRN's part:** 000-KRN-0224 made `REQUEST_SECRET_LINE` (`1 << 29`), `BADGE_SHELL_SECRET` (2) and `init`'s right to badge on `SLOT_COMMANDS`, on KRN's branch (f91333db). Until that commit is on `main`, this branch carries its two code hunks unchanged, at KRN's offer.
+- **The lending** (`shell/src/main.rs`): a console program that declares the bit gets, in `SLOT_SHELL`, a copy of the shell's client badged `BADGE_SHELL_SECRET`, without the right to badge.
+  - It gets none from a script, whose wait serves no calls.
+  - It gets none when it gets the plain client (`REQUEST_SHELL`), which takes the same slot.
+- **`tests/secret_stub`:** a test-only console program, built by `scripts/x86_fixtures.sh`. It asks for the line and prints only its length and SHA-256; with `other`, it asks the machine's name through the badged copy.
+- **The `shell` suite's `secret_line_check`** (x86, with the stub):
+  - the prompt;
+  - the line typed with no echo and a Backspace, its SHA-256 matched;
+  - the secret in no serial line, log or history;
+  - Esc refusing it;
+  - another command through the copy refused;
+  - no copy for a script's program.
+- **docs/tools** in both languages.
+- **Its run:** pending.
+- **Left:** `get -u`, NET's program, uses it (000-NET-0048).
 
 ## Related
 

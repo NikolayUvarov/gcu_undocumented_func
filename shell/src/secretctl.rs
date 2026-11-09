@@ -10,9 +10,8 @@ use mind::idl::shell as commands;
 use mind::idl::wire::Call;
 use mind::input::{Code, Key};
 
-/// The badge of the copy of the shell's client through which alone `secret-line` is answered: the value proposed to KRN
-/// as `BADGE_SHELL_SECRET` (issues/requests-KRN.md); until that lands no copy carries it, and every call is refused.
-pub const BADGE: u16 = 2;
+/// The badge of the copy of the shell's client through which alone `secret-line` is answered (000-KRN-0224).
+pub const BADGE: u16 = mind::process::BADGE_SHELL_SECRET;
 
 /// The line being typed: the call held, its program, the session it is typed on, the slot its buffer came in, the bytes.
 pub struct Typing { call: Option<Call>, pid: u64, pub session: usize, slot: usize, line: Line }
