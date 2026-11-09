@@ -2,7 +2,7 @@
 
 **Type:** tools (`shell`, `msh`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.11, MC-11.5
 
-**Asked by:** NET, 2026-11-06, in [requests-APP.md](../issues/requests-APP.md), for [000-NET-0048](../issues/000-NET-0048-get-a-wget-and-curl-analog.md) (`get`). Numbered on 2026-11-08.
+**Asked by:** NET, 2026-11-06, in [requests-APP.md](../issues/requests-APP.md), for [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.done) (`get`). Numbered on 2026-11-08.
 
 ## Problem
 
@@ -42,4 +42,4 @@ Done in e79e513e0 on `claude/wizardly-franklin-kec1a9`:
 
 ## Related
 
-[000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done), [000-NET-0048](../issues/000-NET-0048-get-a-wget-and-curl-analog.md).
+[000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.done).

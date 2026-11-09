@@ -136,4 +136,4 @@ Left: the same run on aarch64, and landing.
 
 ## Related
 
-[351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done), [000-NET-0048](../issues/000-NET-0048-get-a-wget-and-curl-analog.md), [260](../issues/260-ai-agents-on-the-platform.md).
+[351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.done), [260](../issues/260-ai-agents-on-the-platform.md).
