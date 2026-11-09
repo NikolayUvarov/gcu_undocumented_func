@@ -44,8 +44,9 @@ The kernel has a ring and a blocking read already: a task's text input (`TEXT_QU
 - **The plan changed in one point:** the channel's receive ring is the console's own, not a task's text input. `init` grants the capability at the shell's start, before it knows the shell's PID, and the channel ends when no live task holds it.
 - **Found on the way:** the receiver stalled after 16 bytes in QEMU. Every send cleared all of the PL011's interrupts, a pending receive one among them, and QEMU raises that one again only when its FIFO goes from empty to one byte. Only the transmit interrupt is cleared now.
 - **Tested** in the kernel session's container (QEMU 8.2.2, TCG, AAVMF, `acpi=off`):
-  - the `devicetree` suite: virt's own tree, dumped by QEMU, with a second `arm,pl011` node in the console's page (`-dtb`);
-  - the kernel lends the console's node to none (`NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE 35'S REGISTERS`), and `init` gives the shell the channel;
+  - the `devicetree` suite: virt's own tree, dumped by QEMU, with a second UART's node in the console's page (`-dtb`);
+    - **The node's kind:** first a PL011's. Round 101's gate showed that AAVMF on PCU drove that one as its console and hung on its empty registers, so it is a DesignWare UART's now (`snps,dw-apb-uart`, as the A64's UART1), which the firmware leaves alone.
+  - the kernel lends the console's node to none (`NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE 35'S REGISTERS (snps,dw-apb-uart)`), and `init` gives the shell the channel;
   - every command of the check came through it: `cpus`, a write of 219 bytes typed in one go, and 25 reads of a line of 201 bytes, more than a ring's worth back.
   - The host tests: `text_ring`, `runtime` (ABI 29).
 - **The kernel's size:** 7394 lines of its budget of 7400.

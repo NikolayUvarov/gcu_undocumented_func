@@ -14385,9 +14385,10 @@ def fdt_with_node(blob, name, props):
 
 
 def console_channel_check(args, disk, machine):
-    """100000-KRN-0222: virt's tree with a second PL011 node in the console's page, as the A64's four UARTs share one: the
+    """100000-KRN-0222: virt's tree with a second UART's node in the console's page, as the A64's four UARTs share one: the
     console's node is lent to none, init asks the kernel for the console as a byte channel, and the shell's serial line
-    runs over it (every command below came through it)."""
+    runs over it (every command below came through it). The node is a DesignWare UART's, as the A64's, not a PL011's: the
+    firmware drives the first PL011 it finds, and one with nothing behind it would hang it (AAVMF on PCU, round 101)."""
     with tempfile.TemporaryDirectory(prefix="mind-dtb-") as temp:
         dumped, patched = Path(temp) / "virt.dtb", Path(temp) / "shared.dtb"
         ns = argparse.Namespace(**{**vars(args), "machine": machine, "uboot": None})
@@ -14395,11 +14396,11 @@ def console_channel_check(args, disk, machine):
         try: dump.process.wait(timeout=60)
         finally: dump.close()
         cells = lambda *v: struct.pack(f">{len(v)}I", *v)
-        patched.write_bytes(fdt_with_node(dumped.read_bytes(), "pl011@9000800", [("compatible", b"arm,pl011\0arm,primecell\0"), ("reg", cells(0, 0x9000800, 0, 0x100)), ("status", b"okay\0")]))
+        patched.write_bytes(fdt_with_node(dumped.read_bytes(), "serial@9000800", [("compatible", b"snps,dw-apb-uart\0"), ("reg", cells(0, 0x9000800, 0, 0x100)), ("status", b"okay\0")]))
         vm = VM(ns, disk.relative_to(ROOT).as_posix(), extra=["-dtb", str(patched)])
         try:
             require(vm.log, "SHARING A PAGE WITH ANOTHER")
-            require(vm.log, "(arm,pl011) NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE")
+            require(vm.log, "(arm,pl011) NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE 35'S REGISTERS (snps,dw-apb-uart)")
             online = vm.command("cpus")
             # The kernel's log no longer goes to the console once the channel stands: init's line is read from the log.
             require(vm.service_logs("init", "SERIAL LINE"), "SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
@@ -14409,7 +14410,7 @@ def console_channel_check(args, disk, machine):
             for _ in range(25):
                 out = vm.command("cat ram:long.txt", raw=True, timeout=30)
                 assert out.count("0123456789") == 20, out[-500:]
-            print("PASS: console channel (100000-KRN-0222): virt's tree with a second PL011 in the console's page; the console's node lent to none, "
+            print("PASS: console channel (100000-KRN-0222): virt's tree with a DesignWare UART's node in the console's page; the console's node lent to none, "
                   "init gave the shell the kernel's channel, and the shell's commands and their output came through it", flush=True)
         finally:
             vm.close()
