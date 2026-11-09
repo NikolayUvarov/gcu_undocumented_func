@@ -4,6 +4,7 @@
 //! other commands are its client. A lease holds the machine for one session (800-LNK-0021). Several machines may share
 //! the cable, each at its address (800-LNK-0026). docs/link/effector485.md says how to use it.
 mod bus;
+mod console;
 mod feed;
 mod http;
 mod json;
@@ -19,7 +20,7 @@ mod port;
 mod port;
 
 use json::{obj, s, Value};
-use ops::{now, utc, State, Submitted, FINAL, KINDS, LEASE_MINUTES_MAX};
+use ops::{now, utc, State, Submitted, FINAL, KINDS, LEASE_MINUTES_MAX, READS};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -27,14 +28,23 @@ use std::time::Duration;
 
 const AT: &str = "127.0.0.1:8485";
 
+/// The API's version (800-LNK-0039): a change of its fields makes a new one (MC-12.4), and CHANGES says what each brought.
+const API_VERSION: &str = "1.1";
+const CHANGES: [(&str, &str); 2] = [
+    ("1.0", "operations, endpoints, terminal reservations, the page's stream (800-LNK-0011 to 0033)"),
+    ("1.1", "GET /api/v1/version; the console: GET /api/v1/console, POST /api/v1/console/input; daemon --supervised (800-LNK-0039)"),
+];
+
 const USAGE: &str = "usage: effector485 daemon <port> [--baud <rate>] [--payload <bytes>] [--timeout <ms>] [--tries <n>]
-                          [--addresses <n>[,<n>...]] [--listen <host:port>] [--state <dir>] [--key-file <file>]
+                          [--addresses <n>[,<n>...]] [--listen <host:port>] [--state <dir>] [--key-file <file>] [--supervised]
        effector485 [--at <host:port>] [--key-file <file>] [--agent <machine>] <command>
 
 The daemon holds the cable (<port> as for mindlink: COM22, /dev/ttyUSB0, tcp:HOST:PORT) and serves operations on
 --listen (default 127.0.0.1:8485). Its state, the queue and the results, is kept in --state (default: .effector485 in
 the home directory). With --key-file, every call must carry that file's text in the X-API-Key header.
 A browser on this machine shows the operations live and starts the usual ones at http://<listen>/.
+--supervised: started by another program (the Effector agent, docs/remote-serial.md): only on a loopback address and
+with --key-file, no page, and it ends when its standard input closes, as it does when that program ends.
 
 --addresses: the machines sharing one RS-485 cable, each at the address in its link.conf (address=<n>, 1 to 247), and
 0 for one machine without an address. They are the API's link-<n> (link for 0), each with its own queue and lease.
@@ -118,8 +128,9 @@ fn main() {
         let addresses = take(&mut args, "--addresses").map_or(vec![0], |list| addresses(&list).unwrap_or_else(|e| die(e)));
         let listen = take(&mut args, "--listen").unwrap_or_else(|| AT.to_string());
         let dir = take(&mut args, "--state").map(PathBuf::from).unwrap_or_else(home_state);
+        let supervised = args.iter().position(|a| a == "--supervised").map(|i| args.remove(i)).is_some();
         let [_, spec] = &args[..] else { die(USAGE) };
-        return daemon(spec.clone(), o, &addresses, &listen, &dir, read_key(&key_file));
+        return daemon(spec.clone(), o, &addresses, &listen, &dir, read_key(&key_file), supervised);
     }
     let at = take(&mut args, "--at").or_else(|| std::env::var("EFFECTOR485_AT").ok()).unwrap_or_else(|| AT.to_string());
     let key = read_key(&key_file);
@@ -138,11 +149,17 @@ fn addresses(list: &str) -> Result<Vec<u8>, String> {
     Ok(v)
 }
 
-fn daemon(spec: String, o: worker::Options, addresses: &[u8], listen: &str, dir: &std::path::Path, key: Option<String>) {
+fn daemon(spec: String, o: worker::Options, addresses: &[u8], listen: &str, dir: &std::path::Path, key: Option<String>, supervised: bool) {
     let state = State::load(dir, &spec, addresses).unwrap_or_else(|e| die(e));
     let listener = TcpListener::bind(listen).unwrap_or_else(|e| die(format!("{listen}: {e}")));
     let bound = listener.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| listen.to_string());
-    if !bound.starts_with("127.") && !bound.starts_with("[::1]") && key.is_none() { die(format!("{bound} is reachable from other machines: give --key-file")); }
+    let loopback = bound.starts_with("127.") || bound.starts_with("[::1]");
+    if !loopback && key.is_none() { die(format!("{bound} is reachable from other machines: give --key-file")); }
+    if supervised && (!loopback || key.is_none()) { die("--supervised listens only on a loopback address, with --key-file"); }
+    // Supervised, it ends with the program that started it: that one holds its standard input, which closes when it ends.
+    if supervised {
+        std::thread::spawn(|| { let mut sink = [0u8; 256]; while std::io::Read::read(&mut std::io::stdin(), &mut sink).is_ok_and(|n| n > 0) {} std::process::exit(0) });
+    }
     // The first line says where it listens (the tests read it).
     println!("effector485 listening on {bound}, the cable on {spec}, the state in {}", dir.display());
     if addresses.len() > 1 || addresses[0] != 0 { eprintln!("effector485: {spec}: the machines {}", state.agents()); }
@@ -154,6 +171,20 @@ fn daemon(spec: String, o: worker::Options, addresses: &[u8], listen: &str, dir:
         let (state, bus) = (state.clone(), bus.clone());
         std::thread::spawn(move || worker::work(state, index, bus, o));
     }
+    // The bytes outside frames, read between exchanges: a boot's lines appear as they come (800-LNK-0039).
+    {
+        let (state, bus) = (state.clone(), bus.clone());
+        std::thread::spawn(move || loop {
+            let found = bus.drain();
+            if !found.is_empty() {
+                let mut st = worker::lock(&state);
+                let at = st.stray_console();
+                for (time, bytes) in found { st.consoles[at].push(&bytes, time); }
+                st.changed();
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        });
+    }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let (state, key, changes) = (state.clone(), key.clone(), changes.clone());
@@ -162,7 +193,7 @@ fn daemon(spec: String, o: worker::Options, addresses: &[u8], listen: &str, dir:
             let request = match http::read_request(&mut stream) { Ok(r) => r, Err(e) => return http::respond(&mut stream, 400, "text/plain", &e) };
             if let Err(why) = same_site(&request, &bound) { return http::respond(&mut stream, 403, "application/json", &error(why).text()); }
             // The page itself is static and holds nothing: it asks the API, which the key guards.
-            if request.method == "GET" && request.path == "/" { return http::respond(&mut stream, 200, "text/html; charset=utf-8", PAGE); }
+            if request.method == "GET" && request.path == "/" && !supervised { return http::respond(&mut stream, 200, "text/html; charset=utf-8", PAGE); }
             // The page's live feed: a browser sends no X-API-Key on a WebSocket, so the feed asks for the key itself.
             if request.method == "GET" && request.path == "/api/v1/stream" {
                 let Some(websocket) = &request.websocket else { return http::respond(&mut stream, 400, "application/json", &error("a WebSocket is expected here").text()) };
@@ -315,6 +346,48 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
             }
             let minutes = match minutes(&request) { Ok(m) => m, Err(e) => return (400, error(&e)) };
             match st.renew(&session, &pin, minutes, t) { Ok(l) => (200, obj(vec![("reservation", l.json(t))])), Err(e) => (409, not_held(&e)) }
+        }
+        ("GET", "/api/v1/version") => {
+            let kinds = KINDS.iter().map(|(kind, required)| obj(vec![
+                ("kind", s(kind)), ("required", Value::Arr(required.iter().map(|f| s(f)).collect())), ("reads", Value::Bool(READS.contains(kind))),
+            ])).collect();
+            let changes = CHANGES.iter().map(|(version, what)| obj(vec![("version", s(version)), ("changes", s(what))])).collect();
+            (200, obj(vec![("api_version", s(API_VERSION)), ("program", s(&format!("effector485 {}", env!("CARGO_PKG_VERSION")))),
+                           ("kinds", Value::Arr(kinds)), ("changes", Value::Arr(changes))]))
+        }
+        ("GET", "/api/v1/console") => {
+            let agent = r.param("agent_id").map(str::to_string).or_else(|| (st.links.len() == 1).then(|| st.links[0].agent.clone()));
+            let Some(i) = agent.as_deref().and_then(|a| st.console_of(a)) else { return (404, error(&format!("no console {:?} on this cable: {}", agent.unwrap_or_default(), st.agents()))) };
+            let from = r.param("from").and_then(|f| f.parse::<u64>().ok()).unwrap_or(0);
+            let max = r.param("max_bytes").and_then(|m| m.parse::<usize>().ok()).unwrap_or(65536).clamp(1, console::KEPT);
+            let console = &st.consoles[i];
+            let read = console.read(from, max);
+            let pieces = read.pieces.iter().map(|&(offset, time)| obj(vec![("offset", Value::Num(offset as f64)), ("time_ms", Value::Num(time as f64))])).collect();
+            (200, obj(vec![("agent_id", s(agent.as_deref().unwrap_or(""))), ("from", Value::Num(read.from as f64)), ("next", Value::Num(read.next as f64)),
+                           ("gap", Value::Num(read.gap as f64)), ("offered", Value::Bool(console.offered || i >= st.links.len())),
+                           ("input_seq", console.seq().map_or(Value::Null, |n| Value::Num(n as f64))), ("data", s(&ws::base64(&read.data))),
+                           ("text", s(&String::from_utf8_lossy(&read.data))), ("pieces", Value::Arr(pieces))]))
+        }
+        ("POST", "/api/v1/console/input") => {
+            let request = match json::parse(&r.body) { Ok(v) => v, Err(e) => return (400, error(&e)) };
+            let agent = match st.agent_of(&request) { Ok(a) => a, Err(e) => return (400, error(&e)) };
+            let Some(seq) = request.num("seq").filter(|n| n.fract() == 0.0 && *n >= 0.0).map(|n| n as u64) else { return (400, error("an input needs \"seq\", a whole number that grows")) };
+            let bytes = match (request.str("text"), request.str("data")) {
+                (Some(text), None) => text.as_bytes().to_vec(),
+                (None, Some(data)) => match console::base64_decode(data) { Some(b) => b, None => return (400, error("\"data\" is not base64")) },
+                _ => return (400, error("an input carries \"text\" or \"data\" (base64), one of them")),
+            };
+            // As an operation that changes the machine: a lease that is not the caller's holds it back.
+            if let Some(lease) = st.lease_at(&agent, t) {
+                let held = credentials(r, &request).is_some_and(|(session, pin)| st.holds(&agent, &session, &pin, t).is_ok());
+                if !held { return (409, not_held(&format!("{agent} is reserved by {} ({}): its console takes the holder's input only", lease.session, lease.reason))); }
+            }
+            let i = st.console_of(&agent).unwrap_or(0);
+            if !st.consoles[i].offered { return (409, error(&format!("{agent} does not offer its console on the link (on MIND Core: link-console, 800-LNK-0019)"))); }
+            match st.consoles[i].input(seq, &bytes) {
+                Ok(written) => (200, obj(vec![("agent_id", s(&agent)), ("seq", Value::Num(seq as f64)), ("written", Value::Bool(written))])),
+                Err(e) => (400, error(&e)),
+            }
         }
         _ => (404, error(&format!("no route {} {}", r.method, r.path))),
     }

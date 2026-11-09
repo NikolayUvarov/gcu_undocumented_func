@@ -13,8 +13,11 @@ pub const CRC: usize = 4;
 /// The largest payload a frame carries; slow lines agree on less in their hello.
 pub const MAX_PAYLOAD: usize = 1024;
 pub const MAX_FRAME: usize = HEADER_ADDRESSED + MAX_PAYLOAD + CRC;
-/// The most bytes a frame takes on the line, its separating zero included.
-pub const MAX_WIRE: usize = cobs::max_encoded(MAX_FRAME) + 1;
+/// The most bytes a run between zeros holds that can still be a frame: the frame COBS-encoded.
+pub const MAX_RUN: usize = cobs::max_encoded(MAX_FRAME);
+/// The most bytes a frame takes on the line: a zero before it, which ends whatever came before (a console's line on the
+/// same UART, noise, 800-LNK-0039), and the separating zero after it.
+pub const MAX_WIRE: usize = MAX_RUN + 2;
 /// The addresses a slave may have on a shared line; 0 is none, a version 1 frame.
 pub const ADDRESS_MAX: u8 = 247;
 
@@ -23,7 +26,8 @@ pub const ADDRESS_MAX: u8 = 247;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header { pub address: u8, pub channel: u8, pub kind: u8, pub flags: u8, pub seq: u16 }
 
-/// `payload` framed into `out`, the separating zero last; the bytes to send, or None when it does not fit.
+/// `payload` framed into `out`, between a zero before and the separating zero after; the bytes to send, or None when it
+/// does not fit.
 pub fn encode(h: &Header, payload: &[u8], out: &mut [u8]) -> Option<usize> {
     if payload.len() > MAX_PAYLOAD || h.address > ADDRESS_MAX { return None; }
     let mut raw = [0u8; MAX_FRAME];
@@ -41,24 +45,25 @@ pub fn encode(h: &Header, payload: &[u8], out: &mut [u8]) -> Option<usize> {
     let end = header + payload.len();
     let crc = crc::crc32c(&raw[..end]);
     raw[end..end + CRC].copy_from_slice(&crc.to_le_bytes());
-    let n = cobs::encode(&raw[..end + CRC], out)?;
-    *out.get_mut(n)? = 0;
-    Some(n + 1)
+    *out.first_mut()? = 0;
+    let n = cobs::encode(&raw[..end + CRC], out.get_mut(1..)?)?;
+    *out.get_mut(n + 1)? = 0;
+    Some(n + 2)
 }
 
 /// Frames gathered from the line's bytes. A frame that is malformed, too long or fails its CRC is counted and dropped;
 /// the next zero byte starts afresh.
-pub struct Decoder { wire: [u8; MAX_WIRE], len: usize, overflow: bool, raw: [u8; MAX_FRAME], header: usize, payload_len: usize, pub dropped: u32 }
+pub struct Decoder { wire: [u8; MAX_RUN + 1], len: usize, overflow: bool, raw: [u8; MAX_FRAME], header: usize, payload_len: usize, pub dropped: u32 }
 
 impl Default for Decoder { fn default() -> Self { Self::new() } }
 
 impl Decoder {
-    pub const fn new() -> Self { Self { wire: [0; MAX_WIRE], len: 0, overflow: false, raw: [0; MAX_FRAME], header: HEADER, payload_len: 0, dropped: 0 } }
+    pub const fn new() -> Self { Self { wire: [0; MAX_RUN + 1], len: 0, overflow: false, raw: [0; MAX_FRAME], header: HEADER, payload_len: 0, dropped: 0 } }
 
     /// One byte from the line; a frame's header when it completes one, its payload then in `payload`.
     pub fn push(&mut self, byte: u8) -> Option<Header> {
         if byte != 0 {
-            if self.len < MAX_WIRE { self.wire[self.len] = byte; self.len += 1; } else { self.overflow = true; }
+            if self.len < MAX_RUN + 1 { self.wire[self.len] = byte; self.len += 1; } else { self.overflow = true; }
             return None;
         }
         let (len, overflow) = (self.len, self.overflow);
