@@ -3,7 +3,8 @@
 //! authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
 //! (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
 //! asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3),
-//! the keyboard's layout (1.10) and the machine's name (1.11).
+//! the keyboard's layout (1.10) and the machine's name (1.11). A console program's secret line (1.12) comes through a
+//! copy of the client badged for that alone.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,7 +14,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 11, 0);
+pub const VERSION: (u8, u8, u8) = (1, 12, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -262,6 +263,26 @@ pub fn set_hostname(endpoint: Endpoint, name: &str) -> Result<core::result::Resu
     Ok(Ok(()))
 }
 
+/// One secret line typed at the caller's console (1.12, 000-APP-0126), for a console program in front of one: a
+/// password `get -u` sends, say. The shell draws the prompt itself, naming the program, with `prompt` as the
+/// program's own words, and the line is typed with no echo: Enter ends it, Esc refuses it (`declined`). Its bytes come
+/// back in this call's buffer, and are never shown, logged or kept in the history. Answered only through a copy of the
+/// client badged for this call alone; `refused` for any other client, and for a program that is not the console
+/// program in front of its session; `busy` while another line is being typed.
+pub fn secret_line(endpoint: Endpoint, prompt: &str, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<80>(prompt, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 14 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 258, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<256>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -278,6 +299,7 @@ pub enum Request {
     SetKeymap { keymap: Keymap },
     Hostname,
     SetHostname { name: Text<63> },
+    SecretLine { prompt: Text<80> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -363,6 +385,14 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::SetHostname { name }, call))
         }
+        14 => {
+            let mut copy = [0u8; 82];
+            let (call, length) = wire::take_buffer(request, cap, 258, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let prompt = <Text<80> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SecretLine { prompt }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -420,4 +450,8 @@ pub fn reply_hostname(call: Call, value: core::result::Result<&str, Error>) -> R
 pub fn reply_set_hostname(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_secret_line(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_bytes::<256>(value, w))
 }

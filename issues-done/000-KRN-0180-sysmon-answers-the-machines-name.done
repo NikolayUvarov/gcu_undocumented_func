@@ -38,7 +38,7 @@
 
 ## The file (2026-11-05)
 
-APP chose it in [000-APP-0123](../issues/000-APP-0123-the-machines-name-and-hostname.md): `data/machine/name`, a directory of its own, as point 2 asks.
+APP chose it in [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.done): `data/machine/name`, a directory of its own, as point 2 asks.
 - **What it holds:** one RFC 1123 label, with an optional line end.
 - **Capital letters** are taken as small ones when the name is set. A file that holds capitals was not written by the shell, so `sysmon` reads it as holding no name, as APP's `read` does.
 - **A missing file, or one that is not a label,** gives `mindcore`.
@@ -98,4 +98,4 @@ All four criteria are met on those runs. The task closes once it lands.
 
 ## Related
 
-[000-NET-0050](../issues/000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, [000-APP-0123](../issues/000-APP-0123-the-machines-name-and-hostname.md) (the setting and `hostname`).
+[000-NET-0050](../issues/000-NET-0050-dhcp-sends-the-machines-name.md), 750-EFF-0018, 800-LNK-0028, [000-APP-0123](000-APP-0123-the-machines-name-and-hostname.done) (the setting and `hostname`).

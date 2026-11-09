@@ -1,12 +1,12 @@
-# 311-APP-0121 — The shell lends programs a `storefs` client that does not write, and a scope for `REQUEST_FILE`
+# 311-APP-0121 — The shell lends programs a `storefs` client that does not write, and a scope for `REQUEST_FILE` — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`REQUEST_FILE`'s scope and the read-only scope of a named volume written; returned from round 56dc414c for a hang on aarch64, fixed 2026-11-05; KRN's routing is in `main`, 311-KRN-0203) · **Blocked by:** nothing · **Main task:** [311](311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-3.1, MC-3.4
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** nothing · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-3.1, MC-3.4
 
 **Recorded by:** the tools track, 2026-10-31, from KRN's request in `issues/requests-APP.md` (2026-10-30, for the storage track's 311-STO-0032).
 
 ## Problem
 
-- **What is in place** with [311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done):
+- **What is in place** with [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.done):
   - `init` gives the shell a `storefs` client badged `mind::fs::BADGE_USER` in `SLOT_STOREFS` (42, a launch slot);
   - `mind::fs` asks it for every volume but `vfs_server`'s, so the shell's own `ls`, `cat`, `write`, `mkdir` and `rm` reach a store volume such as `notes:`.
 - **That client must not be lent as it is:** a copy keeps its badge, and `storefs` lets `BADGE_USER` write.
@@ -69,10 +69,27 @@ Once the storage track's part is there:
 ## Acceptance criteria
 
 - **The `shell` suite's `storefs_check`:**
-  - `find notes:` lists what the shell wrote there;
-  - a program given the read-only client is refused a write;
+  - [x] `find notes:` lists what the shell wrote there (2026-11-04);
+  - [x] a program given the read-only client is refused a write (2026-11-09);
   - [x] `edit notes:x.txt` writes through its scope (`notes:docs/b.txt`, 2026-11-03). That it reaches nothing beside it rests on `storefs`'s scope rules and their host tests; it is not run here.
+
+## Resolution
+
+- **The code:** fc09e7600, a1efa2d2e, 51d1eabf0 and 8ecdb1b2f, in `main` through the landing queue. It lives in `shell/src/named.rs`, `storescope.rs` and `main.rs`.
+  - A program that asks for no file, and whose arguments name a written store volume, gets a read-only scope of that volume in `SLOT_STOREFS`.
+  - `REQUEST_FILE` on a store volume gets its directory's scope, writable where the user may write.
+  - `REQUEST_FILES` gets a copy of the shell's client, which `mind::fs` routes since 311-KRN-0203.
+- **The last criterion,** 07863d3bd: `tests/storewrite_stub`, a test-only console program that asks for no file, ran `storewrite notes:docs/z.txt` in the `shell` suite's `storefs_check` (QEMU x86, 4 CPUs, TCG, 15 checks passed).
+  - Through its read-only scope, the listing of `notes:docs` answered.
+  - The write was refused (`Denied`).
+  - `ls notes:docs` showed no `z.txt`.
+- **The other criteria,** in the same check:
+  - `find notes:` lists what the shell wrote;
+  - `grep -r` reads `other:` alone through its scope;
+  - `edit notes:docs/b.txt` writes through its directory's scope.
+- **On aarch64** (QEMU `virt`, 4 CPUs, TCG), at 03aa61ee0, with the stub built as `fixture-storewrite.elf`: the same `storefs_check` passed in the `shell` suite.
+- **Not run here:** that a scope reaches nothing beside its root. It rests on `storefs`'s scope rules and their host tests (311-STO-0037).
 
 ## Related
 
-[311-KRN-0190](../issues-done/311-KRN-0190-storefs-at-boot-and-its-clients.done), [311-STO-0032](../issues-done/311-STO-0032-storefs-a-vfs-view-of-a-named-root.done), [311-STO-0037](../issues-done/311-STO-0037-a-scope-of-a-store-volume.done), [311-APP-0116](../issues-done/311-APP-0116-the-shell-names-a-vfs-conflict.done).
+[311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.done), [311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.done), [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.done), [311-APP-0116](311-APP-0116-the-shell-names-a-vfs-conflict.done).

@@ -31,6 +31,8 @@ mod abi;
 mod fadt;
 #[path = "../../common/spinlock.rs"]
 mod spinlock;
+#[path = "../../common/text_ring.rs"]
+mod text_ring;
 #[path = "../../common/nodes.rs"]
 mod nodes;
 use abi::BootInfo;

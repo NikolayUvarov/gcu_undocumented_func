@@ -1,8 +1,8 @@
-# 000-APP-0123 — The machine's name: one setting in `data/machine/name`, `hostname` in the shell, a field in `wm`'s Settings
+# 000-APP-0123 — The machine's name: one setting in `data/machine/name`, `hostname` in the shell, a field in `wm`'s Settings — done
 
-**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (raised by the maintainer, 2026-11-05) · **Status:** in progress (the shell's part in a landing request, `wm`'s field written, 2026-11-05) · **Blocked by:** nothing; the readers are [000-KRN-0180](../issues-done/000-KRN-0180-sysmon-answers-the-machines-name.done)'s · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-11.5
+**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (raised by the maintainer, 2026-11-05) · **Status:** done (2026-11-09) · **Blocked by:** nothing; the readers are [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.done)'s · **Main task:** — · **Constitution:** MC-3.1, MC-10.2, MC-11.5
 
-**Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, items 1 and 2, after the maintainer's word of 2026-10-28. It was not recorded in `requests-APP.md` then, and so went unnumbered until 2026-11-05. **Blocks:** [750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](../issues-done/000-KRN-0180-sysmon-answers-the-machines-name.done) (which waits for the file's choice), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md) and [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), through it.
+**Asked by:** EFF with LNK, `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` on `internal-dev-messages`, items 1 and 2, after the maintainer's word of 2026-10-28. It was not recorded in `requests-APP.md` then, and so went unnumbered until 2026-11-05. **Blocks:** [750-EFF-0018](../issues/750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.done) (which waits for the file's choice), [000-NET-0050](../issues/000-NET-0050-dhcp-sends-the-machines-name.md) and [800-LNK-0028](../issues/800-LNK-0028-the-machines-name-on-the-link.md), through it.
 
 ## Problem
 
@@ -62,8 +62,27 @@ MIND Core has no name for the machine:
 - **The shell** serves both through the same code as `hostname <name>` (`set_machine_name`).
 - **`wm`'s Settings, Network:** a last row, `Name`, after Policy. It shows the name the shell answers and the one being typed; Enter sets it through the shell; ↑ goes back to the rows. Its line says what the shell answered.
 - **Tests:** host, `tests/wm_host.rs`; the `wm` suite types `dexp` there and waits for the shell's answer.
-- **Left:** the link suite's `hostname` at once.
+
+## Resolution
+
+Done on `claude/wizardly-franklin-kec1a9`:
+- **The shell's part:** d06de5cb3, landed with its landing request of 2026-11-05.
+- **`wm`'s field through `shell.wit` 1.11:** 1620ecd7c.
+- **The link suite's check:** 015eaec46.
+
+Every criterion holds:
+- **Host tests:** `tests/shell_host.rs`: the label rule, the capitals, the file's line, and who may set it.
+- **The `shell` suite** (`hostname_check`, QEMU x86, 4 CPUs, TCG): `mindcore` and why with none set; `DEXP` kept as `dexp` and logged once; the same name again changes nothing; names that are no label refused, the file as it was. It passed again on 2026-11-09 in every run of the suite.
+- **From a program's client** it is asked (`clients.rs`, host-tested).
+- **From the link's client in developer mode** it is set at once: the `link` suite, QEMU x86, 4 CPUs, TCG, at 015eaec46 with `main` 39351fa0f merged.
+  - `hostname DEXP-LINK` over the link answered `THE MACHINE'S NAME: dexp-link, KEPT IN data/machine/name`.
+  - The console read it back, and the change was logged.
+  - `my_pc` was refused with the rule.
+- **`wm`'s field:** in the `wm` suite, which types `dexp` on the Network page and waits for the shell's answer.
+- **docs/tools,** English and Russian.
+
+**What reads the name:** `sysmon` and `netstack` read it through 000-KRN-0180's read-only scope. EFF's agent (750-EFF-0018), DHCP (000-NET-0050) and the link's hello (800-LNK-0028) are their tracks'.
 
 ## Related
 
-[750-EFF-0018](750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](../issues-done/000-KRN-0180-sysmon-answers-the-machines-name.done), [000-NET-0050](000-NET-0050-dhcp-sends-the-machines-name.md), [800-LNK-0028](800-LNK-0028-the-machines-name-on-the-link.md), [000-APP-0099](000-APP-0099-clocks-show-the-time-zone.md) (`data/clock.conf`, set the same way).
+[750-EFF-0018](../issues/750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.done), [000-NET-0050](../issues/000-NET-0050-dhcp-sends-the-machines-name.md), [800-LNK-0028](../issues/800-LNK-0028-the-machines-name-on-the-link.md), [000-APP-0099](../issues/000-APP-0099-clocks-show-the-time-zone.md) (`data/clock.conf`, set the same way).

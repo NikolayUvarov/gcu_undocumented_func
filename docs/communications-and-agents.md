@@ -54,7 +54,7 @@ The maintainer, 2026-10-25:
 | [000-NET-0045](../issues-done/000-NET-0045-secrets-per-program-in-keystore.done) | Secrets per program in `keystore`: a token, a password or an API key that only its program reads, never logged | `mail`, `tgtxt`, `agent` |
 | [000-NET-0046](../issues/000-NET-0046-public-root-certificates.md) | Public root certificates in the image (Mozilla's set, MPL-2.0) | every client of a public service |
 | [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done) | HTTP for API clients in `libmind`: bodies and headers, multipart, redirects, gzip, a streaming body, Server-Sent Events, Retry-After | `get`, `tgtxt`, `agent`, `www` |
-| [000-NET-0048](../issues/000-NET-0048-get-a-wget-and-curl-analog.md) | `get`, the analog of `wget` and `curl` | — (a console utility of stage 1) |
+| [000-NET-0048](../issues-done/000-NET-0048-get-a-wget-and-curl-analog.done) | `get`, the analog of `wget` and `curl` | — (a console utility of stage 1) |
 | [000-NET-0049](../issues-done/000-NET-0049-a-flow-grant-asked-at-run-time.done) | A flow grant asked of the user at run time, and the browsing grant `www` needs | `get`, `www`, `mail` with a server the user names |
 
 ### 1. Console utilities

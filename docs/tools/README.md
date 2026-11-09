@@ -338,6 +338,22 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - **From a script's program too** (000-APP-0125): while a script waits on a program it started, its wait puts the question, on the script's console, as the shell's loop does. The key answers it and is not the script's: Esc is `N` there and does not stop the script. The question's lines are the console's, not in what the script keeps of its program's output.
 - **Its end:** the answer is named (`ALWAYS: ALLOWED FOR THIS RUN, BUT THE LINE COULD NOT BE KEPT IN THE POLICY` when the policy cannot be written). A question whose program ended, or that no one answered in 60 s (the broker then refuses it), is taken down with a line saying so.
 
+**A console program's secret line** (000-APP-0126, `shell.wit` 1.12, for `get -u`, 000-NET-0048): a console program reads a password typed at its console, never from its command line.
+- **Who may ask:** a console program that declares `REQUEST_SECRET_LINE` (000-KRN-0224). The shell lends it, in `SLOT_SHELL`, a copy of its client badged `BADGE_SHELL_SECRET`, without the right to badge. Through that copy the shell answers `secret-line` alone, and refuses and logs any other call.
+  - A program a script starts gets no copy: the script's wait serves no call of the shell's commands.
+  - A program that gets the shell's plain client (`REQUEST_SHELL`) gets no copy either: both take the same slot.
+- **When it answers:** only for the console program of an open console or shell's window, the caller itself. Any other caller is `refused`, and a second line while one is typed is `busy`.
+- **What it shows:** `SECRET FOR get (PID 57), TYPED WITH NO ECHO (ENTER ENDS IT, ESC REFUSES IT): `, then the program's words as its own, with control characters shown as `?`, as in the flow question.
+- **The line:** typed on that console, from the keyboard, the serial line or the shell's window, with nothing echoed.
+  - Backspace takes a character back. Enter gives the line, and Esc or Ctrl+C refuses it (`declined`).
+  - 256 bytes at most; a character that does not fit whole is left out.
+  - A flow question on the same console takes the keys first.
+- **The answer:**
+  - the bytes go back in the call's buffer, and never into a serial line, the system log or the history;
+  - the shell's copy is wiped where it is kept, before its state goes, by writes the compiler keeps;
+  - a program that ended or stopped waiting gets nothing written;
+  - the console says `(GIVEN)`, `(REFUSED)` or why the line went, and the system log names the program, its PID and that outcome alone.
+
 **Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
 - Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.
 - Showing a console shows its foreground program, which gets the keyboard, or else its text and prompt. A program in a console not shown keeps running. Its output goes to that console's text, and an ended foreground program is reported there.
@@ -497,6 +513,12 @@ The design is [docs/nn/runtime.md](../nn/runtime.md) 1.0; the interface is `idl/
   - with no badge free, the start is refused (`EVERY CLIENT OF THE MODEL SERVICE IS IN USE`);
   - at its start the shell retires every badge an earlier shell lent, and lends none before `nnd` has answered.
 - **`nn [status]`, `nn models`** in the shell: `nnd`'s memory, workers, models, sessions and badges, then each badge the shell lent and to which PID.
+- **`nn load`, `unload`, `run` and `bench`** in the shell (262-APP-0112), on its own client (badge 0). In a script they need `requires: nn`, and `nn` alone only reads.
+  - `nn load <path> <id>`: a model on `models:` or under `data/models/`, its ID 64 hex digits. The shell says its widths, rows a job and size, or `nnd`'s refusal in words. `nn unload <id>` drops the shell's hold.
+  - `nn run <id> <file>`: the file, from the current directory, holds the rows, one a line, the model's input width of numbers apart by spaces, tabs or commas; an empty line and a `#` line are skipped.
+    - A wrong line is named (`LINE 2: 2 NUMBERS, THE MODEL TAKES 3`, a word that is no finite number), and nothing runs.
+    - The rows go in jobs of what one call carries, through a session sized for them. Each output row is a line of its values, the shortest decimal that reads back as each, then the rows, work and jobs charged.
+  - `nn bench <id>`: rows of zeros, a job of the most a call carries after another, for 2 s. It gives rows a second and the session's memory, for this machine alone (MC-12.1), with `nnd`'s workers named.
 - **`nncheck`**, the test program, with `NRL`'s inputs and references built in (docs/nn/runtime.md section 8):
   - `nncheck [hold SECONDS]`: its client's badge and rights, `nnd`'s status, and its `retire` and `retire-all` refused (`owner`);
   - `nncheck load PATH ID`: one load and its answer;

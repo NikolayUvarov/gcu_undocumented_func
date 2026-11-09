@@ -3,6 +3,7 @@ use crate::input::{Events, Queue};
 use crate::memory::{Frames, Region};
 use crate::task_state::{self, State};
 use crate::task_table::Table;
+use crate::text_ring::Text;
 use crate::{context, cpu, elf, interrupts, paging, pci, platform, port, serial_write_byte};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -56,7 +57,7 @@ impl Accounting {
 struct Orphan { region: Region, owner: Option<(usize, u64)> }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8, u16), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart, Observe, Escrow(u8), Firmware, Text(usize, u64) }
+pub enum Capability { Endpoint(usize, u8, u16), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart, Observe, Escrow(u8), Firmware, Text(usize, u64), Console }
 
 // Task name (for ps and spawn requests); application images are not indexed by a kernel table.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,24 +66,8 @@ impl Name {
     pub fn new(text: &[u8]) -> Self { let len = text.len().min(NAME_MAX); let mut bytes = [0; NAME_MAX]; bytes[..len].copy_from_slice(&text[..len]); Self { bytes, len: len as u8 } }
 }
 
-// A task's text input (SPAWN_TEXT, 000-KRN-0094): bytes its writer queued, whether it was closed, and whether the task
-// waits in TEXT_READ (only then does a write wake it).
-struct Text { bytes: [u8; TEXT_QUEUE], head: usize, len: usize, closed: bool, waiting: bool }
-impl Text {
-    const fn new() -> Self { Self { bytes: [0; TEXT_QUEUE], head: 0, len: 0, closed: false, waiting: false } }
-    // Appends what fits of `data`; how much.
-    fn push(&mut self, data: &[u8]) -> usize {
-        let n = data.len().min(TEXT_QUEUE - self.len);
-        for (i, &byte) in data[..n].iter().enumerate() { self.bytes[(self.head + self.len + i) % TEXT_QUEUE] = byte; }
-        self.len += n; n
-    }
-    // Takes up to `out.len()` bytes from the front; how many.
-    fn pop(&mut self, out: &mut [u8]) -> usize {
-        let n = out.len().min(self.len);
-        for (i, byte) in out[..n].iter_mut().enumerate() { *byte = self.bytes[(self.head + i) % TEXT_QUEUE]; }
-        self.head = (self.head + n) % TEXT_QUEUE; self.len -= n; n
-    }
-}
+// The console as a byte channel (100000-KRN-0222): what came in and what waits to go out, and the task waiting to read.
+struct Console { rx: alloc::boxed::Box<Text, Frames>, tx: alloc::boxed::Box<Text, Frames>, reader: Option<(usize, u64)> }
 
 // Where the ELF comes from: a boot image from the UEFI bootloader or a buffer passed by the spawner.
 #[derive(Clone, Copy)]
@@ -194,6 +179,7 @@ struct Scheduler {
     wanted: Option<(usize, u64, usize)>, // (slot, PID, the compositor's slot): the focused task found drawing, held at its next wait
     zeroing: [Option<Zeroing>; cpu::MAX], // each CPU's large block to zero once it lets go of the lock (262-KRN-0160)
     storms: [Storm; MSI_VECTORS],
+    console: Option<Console>, // the console as a byte channel (100000-KRN-0222)
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
@@ -254,7 +240,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS] }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None }); }
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
@@ -460,6 +446,10 @@ impl Scheduler {
     // Common exit path (exit, kill, exception): wakes clients waiting for a reply from the task.
     fn terminate(&mut self, slot: usize, notify: bool, reason: usize) {
         let task = self.tasks[slot].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited; let send = task.pending_cap.take(); task.exit_reason = reason;
+        // The console's channel ends with the last live task that holds it: the kernel's line and log are its own again.
+        if self.console.is_some() && !self.tasks.iter().flatten().any(|t| t.state != State::Exited && (t.cspace.contains(&Some(Capability::Console)) || t.pending_cap.as_ref().is_some_and(|p| p.cap == Capability::Console))) {
+            self.console = None; MIRROR_LOGS.store(true, Ordering::Relaxed); unsafe { crate::arch::serial::console_interrupts(false, false); }
+        }
         self.forget_send(send); let task = self.tasks[slot].as_ref().unwrap();
         self.ended[self.ended_next] = (pid, reason, task.parent.map_or(0, |p| p.1)); self.ended_next = (self.ended_next + 1) % EXIT_STATUSES;
         // Final recovery boundary (MC-6.8): without init no policy or bootstrap authority is left, so the system stops.
@@ -799,6 +789,7 @@ impl Scheduler {
                     return Err(ERR_RIGHTS);
                 }
                 let console = platform::console() as u64;
+                if console >= base && console < end && self.console.is_some() { return Err(ERR_BUSY); } // its channel stands
                 if console >= base && console < end { MIRROR_LOGS.store(false, Ordering::Relaxed); } // its driver shows the logs now
                 Ok(Capability::Mmio(base as usize, bytes as usize))
             }
@@ -806,7 +797,17 @@ impl Scheduler {
             PLATFORM_NODE_IRQ => {
                 let line = crate::platform_nodes::table().line(a, b).ok_or(ERR_NOT_FOUND)?;
                 if !platform::node_line(line) { return Err(ERR_NOT_FOUND); }
+                if self.console.is_some() && platform::console_line() == Some(line as usize) { return Err(ERR_BUSY); }
                 Ok(Capability::Interrupt(line as u8))
+            }
+            PLATFORM_CONSOLE => {
+                let line = platform::console_line().ok_or(ERR_NOT_FOUND)?;
+                if self.console.is_some() || !MIRROR_LOGS.load(Ordering::Relaxed) { return Err(ERR_BUSY); } // a channel, or the console lent
+                let ring = || alloc::boxed::Box::try_new_in(Text::new(), Frames).map_err(|_| ERR_NO_MEMORY);
+                self.console = Some(Console { rx: ring()?, tx: ring()?, reader: None });
+                MIRROR_LOGS.store(false, Ordering::Relaxed);
+                unsafe { crate::arch::serial::console_interrupts(true, false); interrupts::set_irq_masked(line as u8, false); }
+                Ok(Capability::Console)
             }
             PLATFORM_DEVICE_BAR | PLATFORM_DEVICE_BAR_IDLE => {
                 let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let mut bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
@@ -1058,6 +1059,17 @@ impl Scheduler {
     // Line interrupt: already masked; wakes the driver or records the event.
     unsafe fn raise_irq(&mut self, irq: usize) {
         self.accounting.irqs[irq] += 1;
+        if let Some(console) = self.console.as_mut().filter(|_| platform::console_line() == Some(irq)) {
+            // The console's channel: what came in (beyond TEXT_QUEUE it is lost), its reader woken, more sent.
+            let mut bytes = [0u8; 64];
+            loop { let n = crate::arch::serial::console_take(&mut bytes); if n == 0 { break; } console.rx.push(&bytes[..n]); }
+            if let Some((slot, pid)) = console.reader.filter(|_| console.rx.len > 0) {
+                console.reader = None;
+                if let Some(task) = self.tasks[slot].as_mut().filter(|t| t.pid == pid && matches!(t.state, State::Sleeping(_))) { task.state = State::Ready; self.readied.mark(task.cpu); }
+            }
+            self.console_send(); interrupts::set_irq_masked(irq as u8, false);
+            return;
+        }
         // Every driver on a shared line hears it; the line stays masked until each has acknowledged.
         if self.irq_bind[irq].iter().any(Option::is_some) {
             let mut taken = false; // by a binder: received now, or the first it has pending
@@ -1073,6 +1085,14 @@ impl Scheduler {
         let mut woken = false;
         for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedIrq(irq as u8) { task.state = State::Ready; woken = true; self.readied.mark(task.cpu); } }
         if !woken { if self.irq_pending[irq] { self.storm(irq); } self.irq_pending[irq] = true; }
+    }
+
+    // Sends what the console's UART takes of the channel's bytes; its transmit interrupt stays on while some wait.
+    fn console_send(&mut self) {
+        let Some(tx) = self.console.as_mut().map(|c| &mut c.tx) else { return };
+        let mut byte = [0u8; 1];
+        while tx.len > 0 && unsafe { crate::arch::serial::console_room() } { tx.pop(&mut byte); unsafe { serial_write_byte(byte[0]); } }
+        unsafe { crate::arch::serial::console_interrupts(true, tx.len > 0); }
     }
 
     // An MSI that came while the last one was not taken. STORM_LOST of them within STORM_MS mask the vector at the
@@ -1455,6 +1475,35 @@ impl Scheduler {
                     }
                 }
                 Some(Capability::Text(..)) => Err(ERR_PEER),
+                Some(Capability::Console) if self.console.is_some() => {
+                    let length = request.msg[1].min(TEXT_QUEUE);
+                    if !task.space.validate_read(request.msg[0], length) { Err(ERR_INVALID) } else {
+                        let mut buffer = [0u8; TEXT_QUEUE];
+                        for (i, byte) in buffer[..length].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.msg[0] + i).unwrap() as *const u8); }
+                        let taken = self.console.as_mut().unwrap().tx.push(&buffer[..length]);
+                        self.console_send(); Ok(taken)
+                    }
+                }
+                Some(Capability::Console) => Err(ERR_PEER),
+                _ => Err(ERR_RIGHTS),
+            },
+            SYSCALL_TEXT_READ if request.msg[0] != 0 => match self.cap(slot, request.msg[0]) {
+                Some(Capability::Console) if self.console.is_some() => {
+                    let (pid, capacity) = (task.pid, request.arg2.min(TEXT_QUEUE));
+                    let console = self.console.as_mut().unwrap();
+                    if capacity == 0 { Err(ERR_INVALID) }
+                    else if console.rx.len > 0 { let mut buffer = [0u8; TEXT_QUEUE]; let n = console.rx.pop(&mut buffer[..capacity]); if copy_out(&task.space, request.arg1, &buffer[..n]) { Ok(n) } else { Err(ERR_INVALID) } }
+                    else if request.msg[1] & TEXT_NOWAIT != 0 { Err(ERR_BUSY) }
+                    else {
+                        // Nothing yet: wait for bytes at most TEXT_WAIT_MS, as for a text input; asked again then.
+                        console.reader = Some((slot, pid));
+                        core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), ERR_BUSY);
+                        let deadline = crate::clock::now_ns() + TEXT_WAIT_MS * 1_000_000;
+                        let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
+                        task.state = State::Sleeping(deadline); task.dirty = true; self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
+                    }
+                }
+                Some(Capability::Console) => Err(ERR_PEER),
                 _ => Err(ERR_RIGHTS),
             },
             SYSCALL_TEXT_READ => {
@@ -1787,6 +1836,7 @@ impl Scheduler {
                     Some(Capability::Restart) => (CAP_KIND_RESTART, 0, 0),
                     Some(Capability::Observe) => (CAP_KIND_OBSERVE, 0, 0),
                     Some(Capability::Firmware) => (CAP_KIND_FIRMWARE, 0, 0),
+                    Some(Capability::Console) => (CAP_KIND_CONSOLE, 0, 0),
                     Some(Capability::Text(_, pid)) => (CAP_KIND_TEXT, pid as usize, 0),
                     Some(Capability::Escrow(kind)) => (CAP_KIND_ESCROW, kind as usize, 0),
                 };

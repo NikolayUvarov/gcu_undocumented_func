@@ -1,6 +1,6 @@
 # 311-STO-0032 — `storefs`: files and directories of a named root, through `vfs.wit` — done
 
-**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** none ([311-APP-0121](../issues/311-APP-0121-the-shell-lends-a-storefs-client.md)'s lending of a scope for `REQUEST_FILE`, [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.done)'s scope, [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.done) and [311-KRN-0189](311-KRN-0189-a-conflict-error-in-vfs-wit.done) are in `main`) · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
+**Type:** storage (a new service `storefs`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** none ([311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.done)'s lending of a scope for `REQUEST_FILE`, [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.done)'s scope, [311-KRN-0190](311-KRN-0190-storefs-at-boot-and-its-clients.done) and [311-KRN-0189](311-KRN-0189-a-conflict-error-in-vfs-wit.done) are in `main`) · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.1, MC-4.7, MC-4.9, MC-11.10, MC-12.4
 
 Split from [311](../issues/311-storefs-a-file-face.md) (2026-10-30), its third step, after [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
 

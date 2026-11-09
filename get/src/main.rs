@@ -7,7 +7,8 @@
 // as the device); plain HTTP only with --insecure-http, said on the console. It reaches what its flow grant names (a
 // line of the network policy for `get`, or a browsing grant); a host it does not name is asked of the user at run time
 // through the grant (socket.wit 2.8), on the console `get` was started from. It writes only the user's files its
-// launcher lends (REQUEST_FILES).
+// launcher lends (REQUEST_FILES). `-u USER` without a password has it typed at that console with no echo, through the
+// shell's secret line (REQUEST_SECRET_LINE, shell.wit 1.12).
 extern crate alloc;
 
 mod args;
@@ -16,14 +17,14 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use args::{Data, Form, Options, Output};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_SHELL, SLOT_TLS};
 use mind::fs::File;
 use mind::http::{self, Connection, Method, Source, Transport, Url};
-use mind::idl::{socket, tls};
+use mind::idl::{shell, socket, tls};
 use mind::ipc::Endpoint;
 use mind::multipart::{Multipart, Part};
 
-mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_FILES);
+mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_FILES | REQUEST_SECRET_LINE);
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
@@ -384,12 +385,48 @@ fn head_text(h: &http::Head) -> String {
     text
 }
 
+// -u (000-NET-0048): Basic authentication's header from the user and the password, sent to the host the user named and
+// not after a redirect to another (CREDENTIALS). A password not on the command line is typed at the console.
+fn authorize(o: &mut args::Options) -> Result<(), Fail> {
+    let Some((user, password)) = o.user.take() else { return Ok(()) };
+    if o.headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("authorization")) { return Err(Fail(args::USAGE, "-u and an Authorization header: give one of them".into())); }
+    let header = match password {
+        Some(password) => args::basic(&user, password.as_bytes()),
+        None => {
+            let mut line = [0u8; 256];
+            let header = typed(&user, &o.url, &mut line).map(|n| args::basic(&user, &line[..n]));
+            for byte in line.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) } } // the typed copy wiped
+            header?
+        }
+    };
+    o.headers.push(("Authorization".into(), header));
+    Ok(())
+}
+
+// The password for `user` typed with no echo at the console get runs in front of, through the copy of the shell's client
+// it lends for that alone (000-APP-0126): its length in `line`. A script's get gets no such copy.
+fn typed(user: &str, url: &str, line: &mut [u8]) -> Result<usize, Fail> {
+    if mind::dev::cap_info(SLOT_SHELL).0 != CAP_KIND_ENDPOINT {
+        return Err(Fail(args::USAGE, format!("-u {}: NO PASSWORD, AND NO CONSOLE TO TYPE IT AT (A SCRIPT): GIVE {}:PASSWORD", user, user)));
+    }
+    let mut prompt = format!("PASSWORD FOR {} AT {}", user, Url::parse(url).map_or("", |u| u.host));
+    let mut cut = prompt.len().min(80); // the shell takes 80 bytes of the program's words
+    while !prompt.is_char_boundary(cut) { cut -= 1; }
+    prompt.truncate(cut);
+    match shell::secret_line(Endpoint(SLOT_SHELL), &prompt, line) {
+        Ok(Ok(length)) => Ok(length),
+        Ok(Err(shell::Error::Declined)) => Err(Fail(args::USAGE, format!("-u {}: NO PASSWORD TYPED (REFUSED AT THE CONSOLE)", user))),
+        Ok(Err(error)) => Err(Fail(args::USAGE, format!("-u {}: THE SHELL TOOK NO PASSWORD ({:?})", user, error))),
+        Err(error) => Err(Fail(args::USAGE, format!("-u {}: THE SHELL'S SECRET LINE FAILED ({:?})", user, error))),
+    }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("get — an HTTP request from the console or a script, as wget and curl make them (000-NET-0048).\nUsage: get [options] URL\n  -o FILE  save the body (the user's files: ram:, data/, log:)   -O  save it in ram: under the URL's last name\n  -c  resume a saved file   -I  the head alone (HEAD)   -X GET|POST|PUT|HEAD|PATCH|DELETE   -H 'Name: value' (up to 14)\n  -d TEXT | -d @FILE  a body (POST)   -F name=value | -F name=@FILE  a multipart form (POST, up to 8)\n  -L  follow redirects (the default; --no-location stops, --max-redirs N, 10 at most)   -s  silent   -w  the status, bytes and time\n  -f  exit 22 on an HTTP error   -m, --max-time S   --insecure-http  plain http:// (not encrypted)\nExit statuses as curl's: 0, 1 not https, 2 usage, 3 URL, 6 host, 7 connection or refused, 22 HTTP error (-f), 23 write,\n26 read, 28 time, 35 TLS, 47 redirects, 56 receive, 60 certificate.\nIt reaches what the network policy gives `get` (a line naming the host and port, or a browsing grant); for another host\nit asks you on its console (N, O, S or A), not yet when a script runs it.");
+    mind::about!("get — an HTTP request from the console or a script, as wget and curl make them (000-NET-0048).\nUsage: get [options] URL\n  -o FILE  save the body (the user's files: ram:, data/, log:)   -O  save it in ram: under the URL's last name\n  -c  resume a saved file   -I  the head alone (HEAD)   -X GET|POST|PUT|HEAD|PATCH|DELETE   -H 'Name: value' (up to 14)\n  -d TEXT | -d @FILE  a body (POST)   -F name=value | -F name=@FILE  a multipart form (POST, up to 8)\n  -L  follow redirects (the default; --no-location stops, --max-redirs N, 10 at most)   -s  silent   -w  the status, bytes and time\n  -f  exit 22 on an HTTP error   -m, --max-time S   --insecure-http  plain http:// (not encrypted)\n  -u USER[:PASSWORD]  Basic authentication (not sent on after a redirect to another host); without the password it is\n     typed at the console with no echo (Esc refuses it), never in a script\nExit statuses as curl's: 0, 1 not https, 2 usage, 3 URL, 6 host, 7 connection or refused, 22 HTTP error (-f), 23 write,\n26 read, 28 time, 35 TLS, 47 redirects, 56 receive, 60 certificate.\nIt reaches what the network policy gives `get` (a line naming the host and port, or a browsing grant); for another host\nit asks you on its console (N, O, S or A), a script's console too.");
     let code = match args::split(mind::process::args_str()).and_then(|words| args::parse(&words)) {
         Err(why) => { mind::println!("GET: {} (help get)", why); args::USAGE }
-        Ok(options) => match run(&options) {
+        Ok(mut options) => match authorize(&mut options).and_then(|()| run(&options)) {
             Ok(()) => args::OK,
             Err(Fail(code, why)) => { if !options.silent { mind::println!("GET: {}", why); } code }
         },

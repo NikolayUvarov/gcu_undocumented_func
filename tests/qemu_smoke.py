@@ -1552,6 +1552,7 @@ def shell_suite(vm):
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
     hostname_check(vm)
+    secret_line_check(vm)
     storefs_check(vm)
     vfs_restart_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
@@ -2627,6 +2628,61 @@ def hostname_check(vm):
           "the same name again changes nothing; my_pc and -dexp refused with the rule, the file as it was", flush=True)
 
 
+def secret_line_check(vm):
+    """000-APP-0126: a console program that asks for REQUEST_SECRET_LINE gets a copy of the shell's client badged for it
+    alone. The shell draws the prompt and the line is typed with no echo; its bytes reach the program, which says only
+    their length and SHA-256, and the line is in no serial line, log or history. Esc refuses it; another command through
+    that copy is refused; a script's program gets no such copy."""
+    if not vm.args.secret_elf:
+        print("SKIP: the secret line (000-APP-0126): no tests/secret_stub build (scripts/x86_fixtures.sh)", flush=True)
+        return
+    secret = "hunter2-\u0436 x"
+    # A copy in the background asks 3 s after its start, while the line in front is typed: its call arrives in the
+    # shell's other receiving slot, and it is refused, not the console program in front.
+    later = int(re.search(r"STARTED PID=(\d+) NAME=secretstub BACKGROUND", vm.command("run secretstub later &", raw=True))[1])
+    started = time.monotonic()
+    vm.collect()
+    since = len(vm.log)
+    vm.send("secretstub\n")
+    vm.logged("TYPED WITH NO ECHO (ENTER ENDS IT, ESC REFUSES IT): PASSWORD FOR THE STUB", since)
+    time.sleep(max(0, started + 5 - time.monotonic()))  # the background copy has asked and been answered by now
+    # Q and Backspace: the line is the secret again.
+    vm.send_bytes(secret.encode() + b"Q\x7f\r")
+    vm.expect("MIND> ", timeout=30, after="SECRET STUB: GIVEN")
+    out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+    require_all(out, "SECRET FOR secretstub (PID ", "(GIVEN)",
+                f"SECRET STUB: GIVEN {len(secret.encode())} BYTES, SHA-256 {hashlib.sha256(secret.encode()).hexdigest()}")
+    # In the history the line typed is the command, and the secret is in no line the shell or the log wrote.
+    vm.collect()
+    mark = len(vm.log)
+    vm.send_bytes(b"\x1b[A")
+    vm.logged("secretstub", mark, timeout=8)
+    time.sleep(.3)
+    vm.send_bytes(b"\x1b")
+    time.sleep(.3)
+    log = vm.command("dmesg -s shell", raw=True)
+    require(log, f"[SHELL] SECRET LINE FOR PID {later} REFUSED: NOT THE CONSOLE PROGRAM IN FRONT")  # it has ended since
+    require(log, ") ASKED ON CONSOLE 1")
+    assert re.search(r"\[SHELL\] SECRET LINE FOR secretstub \(PID \d+\) ASKED ON CONSOLE 1\n.*\[SHELL\] SECRET LINE FOR PID \d+ GIVEN", log, re.S), log[-3000:]
+    assert "hunter2" not in vm.log[since:] and "hunter2" not in log, vm.log[since:][-3000:]
+    # Esc refuses it: the program hears `declined`.
+    since = len(vm.log)
+    vm.send("secretstub\n")
+    vm.logged("PASSWORD FOR THE STUB", since)
+    vm.send_bytes(b"abc")
+    time.sleep(.3)
+    vm.send_bytes(b"\x1b")
+    vm.expect("MIND> ", timeout=30, after="SECRET STUB: DECLINED")
+    require(to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", "")), "(REFUSED)")
+    # The copy reaches secret-line alone, and a program a script starts gets none.
+    require(vm.command("secretstub other"), "SECRET STUB: HOSTNAME THROUGH THE SECRET CLIENT REFUSED")
+    require(vm.command("dmesg -s shell", raw=True), "THROUGH ITS SECRET LINE'S CLIENT FOR ANOTHER COMMAND: REFUSED")
+    require(vm.command('msh -c "secretstub"'), "SECRET STUB: NO CLIENT OF THE SHELL")
+    print("PASS: a console program's secret line (000-APP-0126): the shell's prompt, the line typed with no echo and "
+          "Backspace, its SHA-256 matched by the program, a program in the background refused meanwhile, the line in no serial line, log or history; Esc refused it; "
+          "another command through its badged copy refused; none for a script's program", flush=True)
+
+
 def storefs_check(vm):
     """311-KRN-0190: storefs runs at boot with the block store's client, and the shell reaches a store volume through the
     same mind::fs calls as a FAT one; a program without storefs's client finds no store volume, and asks nobody."""
@@ -2658,6 +2714,13 @@ def storefs_check(vm):
     assert "other:x/c.txt" in out and "notes:docs/a.txt" not in out, out
     require(vm.command("rm other:x/c.txt"), "OK")
     require(vm.command("rm other:x"), "OK")
+    # A program given that read-only scope (storewrite asks for no file) reads the volume and is refused a write there.
+    if vm.args.storewrite_elf:
+        out = vm.command("storewrite notes:docs/z.txt")
+        assert re.search(r"STOREWRITE READ notes:docs: \d+ ENTRIES", out) and "STOREWRITE WRITE notes:docs/z.txt REFUSED: " in out, out
+        assert "z.txt" not in vm.command("ls notes:docs"), "nothing was written"
+    else:
+        print("SKIP: a write through the read-only store scope (311-APP-0121): no tests/storewrite_stub build (scripts/x86_fixtures.sh)", flush=True)
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
     # 311-APP-0116: a redirect's file on a store volume is published at its flush. With no other writer it is. When the
     # redirected program publishes the volume after the shell wrote its first line there (fsstep's HOLDING line, then
@@ -3149,6 +3212,43 @@ def nn_packages():
     return packages
 
 
+def nn_rows():
+    """NRL's pinned input as `nn run` reads it, one row of 3 numbers a line, each the shortest decimal that reads back as
+    it; and the reference outputs, 2 a row."""
+    values = lambda name: list(struct.unpack(f"<{(NN_FIXTURE / name).stat().st_size // 8}d", (NN_FIXTURE / name).read_bytes()))
+    inputs, expected = values("input.f64le"), values("expected.f64le")
+    text = "# NRL's pinned input (native-conformance-v0)\n" + "".join(" ".join(repr(v) for v in inputs[i:i + 3]) + "\n" for i in range(0, len(inputs), 3))
+    return text, [expected[i:i + 2] for i in range(0, len(expected), 2)]
+
+
+def shell_nn_check(vm, ident):
+    """262-APP-0112, docs/nn/runtime.md section 7: the shell's own `nn load`, `nn models`, `nn run` of a file of rows
+    (the outputs within NRL's tolerance, as text), `nn bench` and `nn unload`; a file of the wrong width and a model not
+    loaded refused with why; a script needs `requires: nn`."""
+    out = vm.command(f"nn load data/models/conformance {ident}", raw=True, timeout=90)
+    require(out, f"LOADED ")
+    require(out, f" {ident[:16]}…: 3 IN, 2 OUT, 256 ROWS A JOB, ")
+    require(vm.command("nn models"), f"{ident[:16]}… 3 IN, 2 OUT, 256 ROWS A JOB")
+    out = vm.command(f"nn run {ident} data/nnrows.txt", raw=True, timeout=60)
+    _, expected = nn_rows()
+    got = [[float(v) for v in line.split()] for line in out.splitlines() if re.fullmatch(r"-?[0-9.e+-]+ -?[0-9.e+-]+", line.strip())]
+    assert len(got) == len(expected) and all(abs(a - r) <= 1e-12 + 1e-10 * abs(r) for row, ref in zip(got, expected) for a, r in zip(row, ref)), (got, expected, out)
+    require(out, f"{len(expected)} ROWS THROUGH ")
+    require(out, f"CHARGED {len(expected)} ROWS, {631 * len(expected)} WORK, 1 JOBS")
+    require(vm.command(f"nn run {ident} data/nnbad.txt", raw=True), "ERROR: NN RUN: LINE 2: 2 NUMBERS, THE MODEL TAKES 3")
+    out = vm.command(f"nn bench {ident}", raw=True, timeout=60)
+    bench = re.search(r"BENCH .*: (\d+) ROWS IN (\d+) JOBS OF 256 IN (\d+) MS: (\d+) ROWS A SECOND; THE SESSION HELD (\d+) KIB; THIS MACHINE ONLY", out)
+    assert bench and int(bench[1]) > 0 and int(bench[4]) > 0, out
+    # A script that declares what it needs: nn run only with `nn` among them.
+    require(vm.command("msh data/nnfiles.msh", raw=True, timeout=60), "SCRIPT FAILED: nn needs `requires: nn` in the script (LINE 3)")
+    require(vm.command("msh data/nnok.msh", raw=True, timeout=60), f"{len(expected)} ROWS THROUGH ")
+    require(vm.command(f"nn unload {ident}", raw=True), f"UNLOADED {ident[:16]}…: THE SHELL'S HOLD DROPPED")
+    require(vm.command(f"nn run {ident} data/nnrows.txt", raw=True), f"ERROR: NN: NO MODEL {ident[:16]}… IS LOADED (NN LOAD <PATH> <ID> FIRST)")
+    print(f"PASS: the shell's nn (262-APP-0112): load, models, run of a file of {len(expected)} rows within NRL's tolerance and "
+          f"charged as NRL's accounting, bench ({bench[4]} rows a second over {bench[3]} ms, this machine only), unload; a "
+          "wrong-width file and a model not loaded refused with why; a script needs requires: nn", flush=True)
+
+
 def nn_model_check(vm):
     """262-APP-0112, docs/nn/runtime.md section 8, NRL's native acceptance (nrl/specs/native-conformance-v0.md): with
     nnd's line in data/memory.conf (its workers), NRL's pinned model from data/models/ loaded through the shell's
@@ -3188,6 +3288,7 @@ def nn_model_check(vm):
                  "DEADLINE PARTWAY:", "DEADLINE PASSED BEFORE", "NUMERIC: CHARGED 1/39/1", "A NEW SESSION AFTER THE FAILURE", "MEMORY BACK TO BEFORE THE LOAD OK"):
         require(out, line)
     print(f"nnd model run: {' | '.join(l.strip() for l in out.splitlines() if 'TOOK' in l or ' TRY ' in l or 'NUMERIC:' in l)}", flush=True)
+    shell_nn_check(vm, ident)
     # Two clients, then the first one's badge taken again.
     started = vm.command(f"run nncheck share data/models/conformance {ident} 120 &", raw=True)
     holder = int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", started)[1])
@@ -3354,20 +3455,31 @@ def isolation_suite(vm):
 def revocation_refusal_check(vm):
     """000-KRN-0104: app2's child mints from its copy of an endpoint while app2 revokes the endpoint's 3001 children in
     steps: with more than one CPU some of those mints are refused with ERR_REVOKING while the walk runs, and once the
-    child's copy is gone a mint finds nothing. With one CPU the child runs only between the call's ends."""
-    vm.send("run app2\n")
-    pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
-    vm.send("R\n")
-    output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=60)
-    done = re.search(r"REVOKED (\d+) IN (\d+) STEPS; THE CHILD MADE (\d+) MINTS AND WAS REFUSED (\d+) WHILE THE WALK RAN", output)
-    assert done, output[-2000:]
-    removed, steps, made, refused = map(int, done.groups())
-    # 3002 when the walk began while the child held a copy it had just made and not yet dropped.
-    assert removed in (3001, 3002) and steps >= 3001 // 256 and made > 0 and (vm.cpus == 1 or refused > 0), done[0]
-    faults = vm.command("faults")
-    assert f"FAULT PID={pid} " not in faults and f"FAULT PID={pid + 1} " not in faults, faults
-    time.sleep(.1); vm.collect(); vm.output = ""
-    return f"a revocation of {removed} in {steps} steps refused {refused} mints from under it while it ran"
+    child's copy is gone a mint finds nothing. With one CPU the child runs only between the call's ends.
+    The kernel refuses a mint made during the walk; it does not promise that the child's CPU runs in the walk's 2 ms,
+    which QEMU's vCPU threads on a loaded host may not (000-KRN-0225). So up to three walks are made, one at a time,
+    and one of them must have refused a mint."""
+    tries = []
+    for _ in range(1 if vm.cpus == 1 else 3):
+        vm.send("run app2\n")
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+        vm.send("R\n")
+        output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=60)
+        done = re.search(r"REVOKED (\d+) IN (\d+) STEPS; THE CHILD MADE (\d+) MINTS AND WAS REFUSED (\d+) WHILE THE WALK RAN", output)
+        assert done, output[-2000:]
+        removed, steps, made, refused = map(int, done.groups())
+        # 3002 when the walk began while the child held a copy it had just made and not yet dropped.
+        assert removed in (3001, 3002) and steps >= 3001 // 256 and made > 0, done[0]
+        faults = vm.command("faults")
+        assert f"FAULT PID={pid} " not in faults and f"FAULT PID={pid + 1} " not in faults, faults
+        time.sleep(.1); vm.collect(); vm.output = ""
+        tries.append((removed, steps, refused))
+        if refused > 0:
+            break
+    assert vm.cpus == 1 or tries[-1][2] > 0, f"no mint refused in {len(tries)} walks: {tries}"
+    removed, steps, refused = tries[-1]
+    return (f"a revocation of {removed} in {steps} steps refused {refused} mints from under it while it ran"
+            + (f" (walk {len(tries)} of up to 3; the earlier ones refused none)" if len(tries) > 1 else ""))
 
 
 def protection_check(vm):
@@ -5975,6 +6087,13 @@ def link_suite(args):
             ip = link(port, "sh", "ip", timeout=200)
             assert re.search(r"^CARD \d", ip, re.M), ip
             require(link(port, "sh", "ps"), "link")
+            # 000-APP-0123: the machine's name, set from the link's client in developer mode at once, as the shell's other
+            # changes are, and logged; the console reads it back, and the file goes again.
+            require(link(port, "sh", "hostname", "DEXP-LINK"), "THE MACHINE'S NAME: dexp-link, KEPT IN data/machine/name")
+            require(vm.command("hostname"), "THE MACHINE'S NAME: dexp-link (data/machine/name)")
+            require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE MACHINE'S NAME: mindcore -> dexp-link")
+            require(link(port, "sh", "hostname", "my_pc", ok=None), "A CHARACTER OTHER THAN a-z 0-9 -")
+            require(vm.command("rm data/machine/name"), "OK")
             # Never from the link, whatever the developer mode allows (800-NET-0038).
             require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
             # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
@@ -9352,9 +9471,10 @@ def api_runs(vm, port):
 def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, plain_port, files):
     """000-NET-0048: `get`, the console's wget and curl, against tests/http_api_stub.py and the release server over HTTPS:
     a body to the console and to files (-o, -O), a download cut short and resumed with -c, a JSON POST, a multipart form
-    and a PUT of a file, redirects by their rules (--max-redirs, HTTPS to HTTP, credentials kept from another host), -f,
-    -I, -w, --max-time, plain HTTP only when asked, curl's exit statuses for each failure, and a host its grant does not
-    name asked of the user at run time (refused, then allowed once)."""
+    and a PUT of a file, redirects by their rules (--max-redirs, HTTPS to HTTP, credentials kept from another host), -u
+    with the password given or typed at the console, -f, -I, -w, --max-time, plain HTTP only when asked, curl's exit
+    statuses for each failure, and a host its grant does not name asked of the user at run time (refused, then allowed
+    once)."""
     api = f"https://10.0.2.2:{port}/api"
     data = (files / "get.bin").read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -9411,6 +9531,31 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
     # Credentials go on to the same host only.
     assert echo(get(f"-H 'Authorization: Bearer t0k' {api}/hop"))["authorization"] == "Bearer t0k"
     assert echo(get(f"-H 'Authorization: Bearer t0k' {api}/elsewhere?{other_port}"))["authorization"] is None
+    # -u (000-NET-0048): Basic authentication from the command line, or with the password typed at the console with no
+    # echo through the shell's secret line (000-APP-0126); Esc refuses it, and a script's get has no console to ask at.
+    def basic(user, password):
+        return "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+    assert echo(get(f"-u alice:s3:cr {api}/echo"))["authorization"] == basic("alice", "s3:cr")
+    assert echo(get(f"-u alice:s3:cr {api}/elsewhere?{other_port}"))["authorization"] is None
+    password = "pa55-\u0436 w0rd"
+
+    def typed(keys, after):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(f"get -u alice {api}/echo\n")
+        vm.logged("PASSWORD FOR alice AT 10.0.2.2", since, timeout=30)
+        vm.send_bytes(keys)
+        vm.expect("MIND> ", timeout=60, after=after)
+        return to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", "")), vm.log[since:]
+    out, raw = typed(password.encode() + b"\r", '"authorization"')
+    require_all(out, "SECRET FOR get (PID ", "(GIVEN)")
+    assert echo(out)["authorization"] == basic("alice", password) and "pa55" not in raw, raw[-3000:]
+    out, _ = typed(b"x\x1b", "NO PASSWORD TYPED")
+    require_all(out, "(REFUSED)", "GET: -u alice: NO PASSWORD TYPED (REFUSED AT THE CONSOLE)")
+    assert '"authorization"' not in out, out
+    code, out = status(f"-u alice {api}/echo")
+    assert code == 2 and "NO CONSOLE TO TYPE IT AT (A SCRIPT)" in out, out
+    assert "pa55" not in vm.command("dmesg -s shell", raw=True)
     # -f, -I, -w, a coded body saved decoded.
     require(get(f"{api}/busy"), "busy")
     code, out = status(f"-f {api}/busy")
@@ -9480,7 +9625,8 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
 
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
-          "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
+          "HTTP refused, 303 after a POST, credentials not sent on to another host), -u's Basic authentication with the password "
+          "given or typed with no echo at the console (Esc refusing it, none in a script), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
           "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's; a host not in its grant asked at run "
           "time, refused and allowed once, from a script too (Esc answering no without stopping the script)", flush=True)
 
@@ -9830,6 +9976,11 @@ def ping_options_check(vm):
     assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]
 
 
+# How long a check waits for `dmesg -s NAME` (000-NET-0063): it reads the whole ring, 16 records to a call, which took
+# more than 8 s on a host loaded by another gate lane (round 102).
+DMESG_WAIT = 30
+
+
 def wifi_join_check(vm):
     """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
     MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
@@ -9855,11 +10006,11 @@ def wifi_join_check(vm):
     # before it (the gates of ASR and NET, 2026-10-20), so the line may come in logd's record of wifi instead, once more
     # than it was there before the command.
     def run(text, timeout, line):  # as vm.command, with a join's wait (60 s at most in wifi)
-        before = vm.command("dmesg -s wifi", raw=True).count(line)
+        before = vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT).count(line)
         vm.send(text + "\n")
         out = vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
         for _ in range(20):
-            if line in out or vm.command("dmesg -s wifi", raw=True).count(line) > before:
+            if line in out or vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT).count(line) > before:
                 return out
             time.sleep(.5)
         raise AssertionError((line, out))
@@ -9869,7 +10020,7 @@ def wifi_join_check(vm):
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # 550-APP-0117 (for 550-DRV-0042, 0045): the networks as text, the joined one marked, then their count.
     scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
-    scanned += vm.command("dmesg -s wifi", raw=True)
+    scanned += vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT)
     assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 -\d+ DBM WPA2( REMEMBERED)? JOINED', scanned), scanned[-2000:]
     assert re.search(r"\[WIFI\] SCAN: \d+ NETWORKS?", scanned), scanned[-2000:]
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
@@ -10028,10 +10179,10 @@ def wifi_join_check(vm):
     # 550-NET-0035, stage B (the maintainer's decision of 2026-11-04): with no country chosen the first scan sent nothing,
     # and the station ran under the country wlansim's access point announces (UZ, every channel to send on). Then the
     # user's US, kept by keystore across a restart of the station, under which it joins again on channel 6.
-    log = vm.command("dmesg -s wlan", raw=True)
+    log = vm.command("dmesg -s wlan", raw=True, timeout=DMESG_WAIT)
     require_all(log, "[WLAN] NO COUNTRY CHOSEN: THE FIRST SCAN SENDS NOTHING",
                 "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
-    radio = vm.command("dmesg -s wlansim", raw=True)
+    radio = vm.command("dmesg -s wlansim", raw=True, timeout=DMESG_WAIT)
     require(radio, "[WLANSIM] COUNTRY UZ: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, "the first scan sent a probe request"
     run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")
@@ -10058,7 +10209,7 @@ def wifi_join_check(vm):
     ru = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30)
     # Planned over the radio's own channels, not the 11 US left it: RU, as UZ, sends on all 13 (550-NET-0059).
     require(ru, "[WLAN] COUNTRY RU (CHOSEN BY THE USER, KEPT BY KEYSTORE): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
-    require(vm.command("dmesg -s wlansim", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    require(vm.command("dmesg -s wlansim", raw=True, timeout=DMESG_WAIT), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     after = ru.partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
     if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
         after += wlan_until("[WLAN] Off", 30)
@@ -10850,7 +11001,7 @@ def world_country_check(args):
             for _ in range(20):
                 if "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6" in out:
                     break
-                out += vm.command("dmesg -s wifi", raw=True)
+                out += vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT)
                 time.sleep(.5)
             require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS")
@@ -10915,7 +11066,7 @@ def slow_radio_check(args):
             joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
             require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
-                             joined + vm.command("dmesg -s wifi", raw=True))
+                             joined + vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT))
             assert scan is None or scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
@@ -14451,6 +14602,79 @@ def devicetree_suite(args, disk):
               f"{nodes[1]} device nodes, {nodes[2]} sharing a page, the console's lent to the shell, the disabled PL031 not listed", flush=True)
     finally:
         vm.close()
+    console_channel_check(args, disk, machine)
+
+
+def fdt_with_node(blob, name, props):
+    """A flattened device tree with node `name` added last under the root: `props` is [(name, bytes)], each name's string
+    taken from the tree's strings block or added to it (100000-KRN-0222's test tree)."""
+    magic, total, off_struct, off_strings, off_rsvmap, version, last_comp, boot_cpu, size_strings, size_struct = struct.unpack(">10I", blob[:40])
+    assert magic == 0xD00DFEED and version >= 17, (hex(magic), version)
+    structure, strings = bytearray(blob[off_struct:off_struct + size_struct]), bytearray(blob[off_strings:off_strings + size_strings])
+    def string(prop):
+        at = strings.find(prop.encode() + b"\0")
+        while at > 0 and strings[at - 1] != 0: at = strings.find(prop.encode() + b"\0", at + 1)
+        if at < 0: at = len(strings); strings.extend(prop.encode() + b"\0")
+        return at
+    pad = lambda b: b + b"\0" * (-len(b) % 4)
+    node = struct.pack(">I", 1) + pad(name.encode() + b"\0")
+    for prop, value in props: node += struct.pack(">III", 3, len(value), string(prop)) + pad(value)
+    node += struct.pack(">I", 2)
+    # The root's end: the last END_NODE before FDT_END.
+    assert structure[-4:] == struct.pack(">I", 9) and structure[-8:-4] == struct.pack(">I", 2), structure[-8:].hex()
+    structure[-8:-8] = node
+    rsvmap = blob[off_rsvmap:off_struct]
+    out_struct = 40 + len(rsvmap); out_strings = out_struct + len(structure)
+    header = struct.pack(">10I", magic, out_strings + len(strings), out_struct, out_strings, 40, version, last_comp, boot_cpu, len(strings), len(structure))
+    return header + rsvmap + bytes(structure) + bytes(strings)
+
+
+def console_channel_check(args, disk, machine):
+    """100000-KRN-0222: virt's tree with a second UART's node in the console's page, as the A64's four UARTs share one: the
+    console's node is lent to none, init asks the kernel for the console as a byte channel, and the shell's serial line
+    runs over it (every command below came through it). The node is a DesignWare UART's, as the A64's, not a PL011's: the
+    firmware drives the first PL011 it finds, and one with nothing behind it would hang it (AAVMF on PCU, round 101)."""
+    with tempfile.TemporaryDirectory(prefix="mind-dtb-") as temp:
+        dumped, patched = Path(temp) / "virt.dtb", Path(temp) / "shared.dtb"
+        ns = argparse.Namespace(**{**vars(args), "machine": machine, "uboot": None})
+        dump = VM(argparse.Namespace(**{**vars(ns), "machine": machine + f",dumpdtb={dumped}"}), disk.relative_to(ROOT).as_posix(), prompt=False)
+        try: dump.process.wait(timeout=60)
+        finally: dump.close()
+        cells = lambda *v: struct.pack(f">{len(v)}I", *v)
+        patched.write_bytes(fdt_with_node(dumped.read_bytes(), "serial@9000800", [("compatible", b"snps,dw-apb-uart\0"), ("reg", cells(0, 0x9000800, 0, 0x100)), ("status", b"okay\0")]))
+        vm = VM(ns, disk.relative_to(ROOT).as_posix(), extra=["-dtb", str(patched)])
+        try:
+            require(vm.log, "SHARING A PAGE WITH ANOTHER")
+            require(vm.log, "(arm,pl011) NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE 35'S REGISTERS (snps,dw-apb-uart)")
+            online = vm.command("cpus")
+            # The kernel's log no longer goes to the console once the channel stands: init's line is read from the log.
+            require(vm.service_logs("init", "SERIAL LINE"), "SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
+            assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
+            # More than a ring's worth back through the channel: 25 times a line of 201 bytes the shell prints to its serial line.
+            require(vm.command("write ram:long.txt " + "0123456789" * 20, timeout=30), "WROTE 201 BYTES")
+            for _ in range(25):
+                out = vm.command("cat ram:long.txt", raw=True, timeout=30)
+                assert out.count("0123456789") == 20, out[-500:]
+            # A restarted shell: init keeps what it minted for the shell's restarts, the channel among them, so the channel
+            # stands, the shell init starts again gets it and answers through it, and init's lines stay in the log.
+            shell = vm.services()["shell"]
+            vm.collect()
+            since = len(vm.log)
+            vm.send(f"kill {shell}\n", raw=True)
+            vm.expect("MIND> ", timeout=60, after=f"kill {shell}")
+            restart = vm.log[since:]  # from the kill to the new shell's prompt: no line of init's reached the console
+            assert "[INIT]" not in restart and "MIND CORE v" in restart, restart[-2000:]
+            assert len(re.findall(r"ONLINE=true", vm.command("cpus"))) == vm.cpus
+            # `logs` drains: what init logged since its line above was read, which asks for no second channel.
+            again = vm.service_logs("init", "RESTARTED")
+            assert f"[INIT] shell PID={shell} KILLED" in again and re.search(r"\[INIT\] shell RESTARTED PID=\d+", again), again[-2000:]
+            assert "SERIAL LINE" not in again, again[-2000:]
+            assert vm.services()["shell"] != shell
+            print("PASS: console channel (100000-KRN-0222): virt's tree with a DesignWare UART's node in the console's page; the console's node lent to none, "
+                  "init gave the shell the kernel's channel, and the shell's commands and their output came through it; a killed shell's successor "
+                  "got the same channel, which init keeps for restarts, and answered through it, init's lines staying in the log", flush=True)
+        finally:
+            vm.close()
 
 
 def bar_move_check(args, disk):
@@ -14778,6 +15002,8 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
+    parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--late-attach-elf", help="test-only virtio_net built with --features late-attach (000-NET-0036, x86); found where scripts/x86_fixtures.sh puts it")
@@ -14812,6 +15038,11 @@ def main():
     gateway = ROOT / IMAGE / "fixture-gateway.elf" if args.arch == "aarch64" else \
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-gateway-target/x86_64-unknown-none/release/gateway_stub"
     args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
+    # The shell suite's console programs (000-APP-0126, 311-APP-0121): aarch64 beside the image, x86 in MIND_TEST_OUT.
+    for name in ("secret", "storewrite"):
+        built = ROOT / IMAGE / f"fixture-{name}.elf" if args.arch == "aarch64" else \
+            Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / f"mind-{name}-target/x86_64-unknown-none/release/{name}_stub"
+        setattr(args, f"{name}_elf", getattr(args, f"{name}_elf") or (str(built) if built.exists() else None))
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -14916,6 +15147,10 @@ def main():
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
             if suite == "shell":
                 (disk / "data").mkdir(exist_ok=True)
+                if args.secret_elf:
+                    shutil.copyfile(args.secret_elf, disk / "secretstub.elf")  # a console program's secret line (000-APP-0126)
+                if args.storewrite_elf:
+                    shutil.copyfile(args.storewrite_elf, disk / "storewrite.elf")  # a write through a read-only store scope (311-APP-0121)
                 for name, text in MSH_SCRIPTS.items():
                     (disk / "data" / name).write_text(text, encoding="utf-8")
             if suite == "bench":
@@ -14969,6 +15204,12 @@ def main():
                     (disk / "data/models" / name).mkdir(parents=True)
                     for file, data in files.items():
                         (disk / "data/models" / name / file).write_bytes(data)
+                # The shell's `nn run` (262-APP-0112): NRL's input as rows of text, and a file of the wrong width.
+                (disk / "data/nnrows.txt").write_text(nn_rows()[0])
+                (disk / "data/nnbad.txt").write_text("1 2 3\n1 2\n")
+                ident = nn_packages()["conformance"][1]
+                for script, needs in (("nnfiles.msh", "files"), ("nnok.msh", "nn")):
+                    (disk / "data" / script).write_text(f"#!msh\nrequires: {needs}\nnn run {ident} data/nnrows.txt\n")
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite == "isolation":

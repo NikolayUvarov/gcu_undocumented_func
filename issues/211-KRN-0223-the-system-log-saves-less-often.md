@@ -52,6 +52,22 @@
 
 **Landed** in round 99 (`main` c92256a3, 2026-11-09): every group of the gate passed with it, the `boot` suite's log check and `x86: USB image` among them. **Left:** the MacBook Pro's run over the link (DRV): the disk quiet between saves.
 
+## Round 99's gate (2026-11-09): a file's flush waited for the log's save
+
+- **Where:** `aarch64: network above 4 GiB` on x32-128, candidate c92256a3, the `net` suite's `browse_check`.
+- **What happened:**
+  - the user's answer `ALWAYS` to a program's network question came back `THE BROKER DID NOT ANSWER`;
+  - the shell gives the broker 1 s for that call (`CALL_MS * 5` in `shell/src/flowctl.rs`);
+  - the group passed when the gate ran it again alone (655 s), and in rounds 94 to 98.
+- **The reading, from the code** (MC-12.2):
+  - **What the broker does in the call:** for `ALWAYS`, `netpolicy` stores the policy's new line, and the store ends with the file's `flush`.
+  - **What that flush did since this task:** `vfs_server` answered every `flush` by saving the system log's journal at once and flushing the log volume, then the file's own volume.
+  - **What that adds:** up to 30 s of ordinary records and a second volume's flush, inside a call with a 1 s limit.
+  - **The plan's intent:** "everything at a flush" was meant for the shell's `sync` and `init`'s flush before a restart. Both flush volume roots.
+- **Fixed:** only a volume root's flush saves the journal now and flushes the log volume too. A file's flush writes its own volume only, as before this task.
+- **For APP** (the shell's 1 s for an answer that writes a file): told in a message; the broker's store on a slow disk may take longer than that whatever the log does.
+- **Landed** in round 100 (`main` 9c79dcc3, 2026-11-09): every group of the gate passed, `aarch64: network above 4 GiB` among them. APP gives the broker's answer 5 s (in its request for round 101).
+
 ## Related
 
 [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the journal), 211-KRN-0050 (a drive that is gone), 211-DRV-0053.

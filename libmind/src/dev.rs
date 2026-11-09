@@ -83,9 +83,10 @@ pub fn device_config(slot: usize, offset: usize) -> Result<u32> { check(call(SYS
 /// The same for device `index`, through the platform privilege in `slot` (init).
 pub fn device_config_at(slot: usize, index: usize, offset: usize) -> Result<u32> { check(syscall(SYSCALL_DEVICE_CONFIG, slot, offset, [index, 0, 0, 0]).result).map(|v| v as u32) }
 
-/// A serial line in a capability slot, by what the slot holds: a 16550 (port range) or a PL011 (registers). The
-/// firmware or the kernel has set its rate; bytes are sent and taken by polling.
-pub enum Uart { Ns16550(Ports, u16), Pl011(Mmio) }
+/// A serial line in a capability slot, by what the slot holds: a 16550 (port range), a PL011 (registers), or the kernel's
+/// console as a byte channel where its registers share a page with another device's (100000-KRN-0222). The firmware or
+/// the kernel has set its rate; bytes are sent and taken by polling.
+pub enum Uart { Ns16550(Ports, u16), Pl011(Mmio), Channel(usize) }
 
 impl Uart {
     /// The line in `slot`; None where no 16550 answers at its ports (a PC without COM1, 213-KRN-0098).
@@ -93,6 +94,7 @@ impl Uart {
         match cap_info(slot) {
             (CAP_KIND_PORTS, base, count) if count >= 8 => Some(Self::Ns16550(Ports(slot), base as u16)).filter(Self::answers),
             (CAP_KIND_MMIO, _, _) => Mmio::map(slot).ok().map(Self::Pl011),
+            (CAP_KIND_CONSOLE, _, _) => Some(Self::Channel(slot)),
             _ => None,
         }
     }
@@ -100,6 +102,8 @@ impl Uart {
         match self {
             Self::Ns16550(ports, base) => { while ports.in8(base + 5) & 0x20 == 0 {} ports.out8(*base, byte); }
             Self::Pl011(registers) => { while registers.read32(0x18) & 1 << 5 != 0 {} registers.write32(0, byte as u32); } // FR.TXFF, DR
+            // Queued for the kernel to send; while its TEXT_QUEUE bytes wait, again a millisecond later.
+            Self::Channel(slot) => while syscall(SYSCALL_TEXT_WRITE, *slot, 0, [&byte as *const u8 as usize, 1, 0, 0]).result == 0 { call(SYSCALL_WAIT, 1, 0); },
         }
     }
     // A 16550 keeps what is written to its scratch register, and its line status is never all ones: ports that nothing
@@ -113,6 +117,7 @@ impl Uart {
         match self {
             Self::Ns16550(ports, base) => { let status = ports.in8(base + 5); (status != 0xFF && status & 1 != 0).then(|| ports.in8(*base)) }
             Self::Pl011(registers) => (registers.read32(0x18) & 1 << 4 == 0).then(|| registers.read32(0) as u8), // FR.RXFE
+            Self::Channel(slot) => { let mut byte = 0u8; (syscall(SYSCALL_TEXT_READ, &mut byte as *mut u8 as usize, 1, [*slot, TEXT_NOWAIT, 0, 0]).result == 1).then_some(byte) }
         }
     }
 }

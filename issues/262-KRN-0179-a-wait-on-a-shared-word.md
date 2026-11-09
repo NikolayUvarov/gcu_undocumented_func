@@ -35,4 +35,4 @@
 
 ## Related
 
-[262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md), 000-KRN-0065.
+[262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), [262-APP-0112](../issues-done/262-APP-0112-nnd-and-nn-wit-stage-0.done), 000-KRN-0065.

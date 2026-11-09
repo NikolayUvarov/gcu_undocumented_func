@@ -1,6 +1,6 @@
-# 000-NET-0048 — `get`, an analog of `wget` and `curl`
+# 000-NET-0048 — `get`, an analog of `wget` and `curl` — done
 
-**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (a host asked at run time, and a script's question since round 99, 000-APP-0125; `-u` waits for 000-APP-0126, the shell's secret line, on 000-KRN-0224, in `main` since round 99) · **Blocked by:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md) for `-u`, [000-APP-0125](../issues-done/000-APP-0125-a-scripts-program-asks-about-a-flow.done) for a script's question (the rest it waited on is done) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
+**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md), at the maintainer's request: "an analog of wget/curl".
 
@@ -99,10 +99,10 @@ from 000-APP-0120):
   console; refused with `N`, allowed with `O` and its body fetched.
 
 **What waits for the shell (APP), numbered by APP on 2026-11-08:**
-- **`-u user`:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md). `get` is a console program: the shell keeps the keys typed while it runs (Esc and Ctrl+C stop it,
+- **`-u user`:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.done). `get` is a console program: the shell keeps the keys typed while it runs (Esc and Ctrl+C stop it,
   `Shell::key`), so it cannot read a password from the console. A first version read the keys itself and was taken
   out when the `get_runs` check showed that none arrived.
-- **A question from a script:** [000-APP-0125](../issues-done/000-APP-0125-a-scripts-program-asks-about-a-flow.done). `msh`'s wait on its program (`ShellHost::run`) does not put the question, so a
+- **A question from a script:** [000-APP-0125](000-APP-0125-a-scripts-program-asks-about-a-flow.done). `msh`'s wait on its program (`ShellHost::run`) does not put the question, so a
   script's `get` to a host its grant does not name is refused at 60 s (exit 7).
 
 **Left:** those two, once the shell gives them.
@@ -110,6 +110,42 @@ from 000-APP-0120):
 **Landed (2026-11-06).** Round 89 (`main` 5ef99d16): the gate was green on every group, the `net` suite's `get_runs`
 with the question among them, on x86 and aarch64.
 
+## Progress (2026-11-09)
+
+**`-u USER` without a password,** on `claude/youthful-mendel-mf1soy`, through the shell's secret line (`shell.wit` 1.12, 000-APP-0126, in `main` since round 102):
+- `get` asks for `REQUEST_SECRET_LINE`. The shell lends a console program in front of a console a copy of its client badged for that call alone, in `SLOT_SHELL`.
+- **The prompt** is `PASSWORD FOR USER AT HOST`, cut to the 80 bytes the shell takes. The shell names the program and its PID before it, and the line is typed with no echo.
+- **The answer:**
+  - the bytes are built into the `Authorization` header, and `get`'s copy is wiped;
+  - Esc: exit 2, `NO PASSWORD TYPED (REFUSED AT THE CONSOLE)`;
+  - a script's `get`, which gets no such copy: exit 2, `NO CONSOLE TO TYPE IT AT (A SCRIPT): GIVE USER:PASSWORD`.
+- **`help get`** says so, and no longer says a script's `get` is not asked about a host (000-APP-0125 did that).
+- **Tested** in QEMU, the `net` suite's `get_runs`: x86 in the kernel session's container (QEMU 8.2.2, TCG, 4 CPUs; the whole suite, 39 checks), aarch64 on acc-1 through Effector (the group "aarch64: network, TLS and Effector", at 1012596d):
+  - `-u alice:s3:cr` sent as Basic authentication, and not sent on to another port;
+  - `-u alice` with a password typed at the serial console (a space and a non-ASCII letter in it): sent as Basic authentication, and in no line of the serial console or of the shell's log;
+  - Esc refused it (2), and a script's `get -u alice` was refused (2).
+  - The host tests: `get_host` (6).
+
+**Left:** the gate. With it, the issue's criteria are met but for the plan's VFS scope of the current directory, which the shell's client of the user's files replaced (Progress of 2026-10-28).
+
+## Resolution
+
+**All criteria are met. Its last item, `-u USER` with the password typed at the console, landed in round 103 (`main` a927f175, 2026-11-09).**
+- **`get`** (`get/`), a process of its own:
+  - `-o`, `-O`, `-c`, `-I`, `-X` (GET, POST, PUT, HEAD, PATCH, DELETE), `-H`, `-d`, `-F`, `-L` and `--max-redirs`, `-s`, `-w`, `-f`, `--max-time`, `--insecure-http`;
+  - `-u USER:PASSWORD`, or `-u USER` with the password typed at its console with no echo through the shell's secret line (000-APP-0126);
+  - curl's exit statuses.
+- **Its authority:**
+  - the hosts its flow grant names, and a host it does not name asked of the user at run time (000-NET-0049), from a script too (000-APP-0125);
+  - the user's files through the shell's client (`REQUEST_FILES`), in place of the plan's scope of the current directory (the reason is in the Progress of 2026-10-28).
+- **Evidence:**
+  - the host tests (`tests/get_host.rs`, 6);
+  - the `net` suite's `get_runs` on x86 and aarch64, against `tests/http_api_stub.py` and the release server: every case of the criteria, and `-u` typed, refused with Esc and refused in a script;
+  - every group of round 103's gate.
+
+  QEMU's runs say nothing of a machine's network (MC-12.1).
+- **Not done:** nothing the issue asked for. One remark for the core of `libmind`: the generated binding's buffer that carried the typed line (`mind::idl::shell::secret_line`) is freed when the call returns, not wiped first; `get` wipes only its own copy.
+
 ## Related
 
-[000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done), [000-NET-0049](../issues-done/000-NET-0049-a-flow-grant-asked-at-run-time.done), [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done).
+[000-NET-0047](000-NET-0047-http-for-api-clients.done), [000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.done), [351-NET-0001](351-NET-0001-http-downloads.done).
