@@ -6,6 +6,8 @@ use crate::{c2h,download,fwcmd,h2c,io::{self,Fault,FaultKind,RegisterIo},phy::Ph
 pub use inbox::Inbox;
 #[allow(dead_code)]
 #[path="data_mode.rs"] pub(crate) mod data_mode;
+#[allow(unused_imports)]
+pub use data_mode::Snapshot;
 #[allow(dead_code)]
 #[path="connection.rs"] pub(crate) mod connection;
 #[path="listen.rs"] pub mod listen;
@@ -81,6 +83,12 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         firmware:download::Ready,scratch:&'a mut[u8],inbox:&'a mut Inbox)->Result<Self,Error> {
         if !inbox.bind(queue.session()){return Err(Error::Session)}
         let mut session=Self::new(bus,queue,rings,receiving,firmware,scratch)?;session.inbox=Some(inbox);Ok(session)
+    }
+    /// Gives a startup session its packet inbox just before the data mode (receive_service's admission): until then the
+    /// receive-only service takes every packet itself, and a calibration's own polls retain none.
+    pub fn attach_inbox(&mut self,inbox:&'a mut Inbox)->Result<(),Error> {
+        if self.inbox.is_some()||!inbox.bind(self.queue.session()){return Err(Error::Session)}
+        self.inbox=Some(inbox);Ok(())
     }
     pub fn retains_packets(&self)->bool { self.inbox.is_some() }
     pub fn pending_packets(&self)->usize { self.inbox.as_ref().map_or(0,|inbox|inbox.pending()) }

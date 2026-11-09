@@ -58,7 +58,12 @@ fn complete_channel_transaction_orders_mac_bb_rf_power_and_retains_zero_packet_t
         assert_eq!(d.get(0x149c0,4)&127,108);assert_eq!(d.rf[0][0xb1],0x54321);
         for value in [d.rf[0][0x18],d.rf[1][0x18],d.get(0x1e060,4),d.get(0x1f060,4)]{assert_eq!(value&(0x30000|0xffff),0x1c06);}
         for path in 0..2{assert_eq!(d.rf[path][0xee]&4,0);assert_eq!(d.rf[path][0x33]&31,0x12);assert_eq!(d.rf[path][0x3f]&63,0x1b);}
-        let n=d.events.len();assert!(channel::run(p,&board(),&prefix,&configured,&tables,&Policy::resolve(&board(),rule(),platform()).unwrap()).is_err());assert_eq!(p.bus_between_stages().events.len(),n);
+        // A tuned channel is tuned again on request, as Linux's set_channel: here to channel 11, passive.
+        let mut r=rule();r.center_mhz=2462;r.access=Access::PassiveOnly;
+        let again=channel::run(p,&board(),&prefix,&configured,&tables,&Policy::resolve(&board(),r,platform()).unwrap()).unwrap();
+        assert_eq!((again.channel,again.access),(11,Access::PassiveOnly));assert_eq!(p.state(),State::ChannelTuned);
+        let d=p.bus_between_stages();assert_eq!(d.scheduler_calls.len(),4);assert_eq!(d.get(0x10734,4)>>16&255,11);
+        assert_eq!(d.get(0xc348,4),0);assert_eq!(d.get(0x1010,4),0xb0f00);
     });
 }
 #[test]

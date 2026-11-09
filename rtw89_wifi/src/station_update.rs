@@ -1,6 +1,6 @@
 //! Active CAM/filter update through the sealed packet-mode owner; no standalone transport callback.
 
-use super::{cam,field,Filter,Prepared,Stage,RX_FILTER,RX_FILTER_HOST,RX_FILTER_MASK};
+use super::{cam,field,rx_filter,Filter,Prepared,Stage,RX_FILTER,RX_FILTER_MASK};
 use crate::{btc_session::{DeviceIo,data_mode::{Cause,FilterChange}},io::Fault};
 
 #[derive(Debug)]
@@ -18,9 +18,9 @@ impl Prepared{
         let result=(||{
             update.command_cam(&cam(filter.own(),filter.bssid()))?;
             stage=Stage::Filter;
-            update.registers(|bus|field(bus,RX_FILTER,RX_FILTER_MASK,RX_FILTER_HOST))?;
+            update.registers(|bus|field(bus,RX_FILTER,RX_FILTER_MASK,rx_filter(&filter)))?;
             stage=Stage::Verify;let mut check_failure=None;
-            update.registers(|bus|self.check_registers(bus).map_err(|e|{
+            update.registers(|bus|self.check_registers_for(bus,Some(filter)).map_err(|e|{
                 selector_restore=e.selector_restore;check_failure=Some(e);e.cause
             })).map_err(|cause|check_failure.map_or(cause,Cause::Station))?;
             update.finish()?;Ok(())

@@ -259,11 +259,12 @@ fn cleanup(bus:&mut impl RegisterIo,saved:&Cleanup)->io::Result<()>{
 
 /// Private initial 2 GHz managed-channel stage; the same-band DM prefix and real platform policy are mandatory.
 /// It leaves ordinary DMA TX and the MAC scheduler stopped; RXDCK/IQK/TSSI/DPK and BTC channel work remain.
+/// A tuned channel may be tuned again (another channel, or the same one under a new policy), as Linux's set_channel.
 pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefix,configured:&tail::Configured,
     provenance:&DefaultTables,policy:&Policy)->Result<Tuned,Failure>{
     let fail=|cause|Failure{stage:Stage::Guard,cause,scheduler_restore:None,radio_cleanup:None,radio_stop:None};
     let session=phy.bus.command_session();let attempt=phy.attempt();
-    if phy.state!=State::PathsConfigured||attempt==0||configured.attempt!=attempt||prefix.attempt()!=attempt
+    if !matches!(phy.state,State::PathsConfigured|State::ChannelTuned)||attempt==0||configured.attempt!=attempt||prefix.attempt()!=attempt
         ||prefix.band!=crate::dack::Band::Ghz2||session==0||configured.session!=session||provenance.session()!=session
         ||board.identity!=phy.identity||policy.country!=board.identity.country||policy.plan!=board.identity.channel_plan
         ||!(1..=3).contains(&configured.rx_path){return Err(fail(fault(0,phy.state as u32)));}
@@ -288,7 +289,8 @@ pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefi
             let kept=if (0xd2c0..0xd36c).contains(&w.at){0x7f7f_7f7f}else{u32::MAX};
             if value&w.mask&kept!=w.bits&kept{return Err(fault(w.at,value));}}
         stage=Stage::Finish;timed.write32(0xce40,0x2b)?;
-        let actual=io::read32(&mut timed,0xce40)?;if actual!=0x2b{return Err(fault(0xce40,actual));}
+        // Bits 0-8 are the PPDU report's (Linux's); bit 24 is the hardware's own (the Ryzen, 2026-11-06).
+        let actual=io::read32(&mut timed,0xce40)?;if actual&0x1ff!=0x2b{return Err(fault(0xce40,actual));}
         field(&mut timed,0x9c18,3,1)?;
         bb(&mut timed,0x20fc,0xff000000,0)?;tssi(&mut timed,false)?;reset(&mut timed,true)?;timed.delay_us(0)?;
         stage=Stage::Restore;let timeout=left(phy.bus,start)?.min(1_000_000)as u32;restore_attempted=true;scheduler(phy.bus,timeout)?;

@@ -80,3 +80,17 @@ fn encoder_uses_production_h2c_ack_distinction_and_never_consumes_full_sequence(
     w.now=3; let t=p.driver_init().submit(&mut e,&mut w,100).unwrap();
     assert_eq!(&w.packets[1][..8], &[0x42,5,0,1,22,0,0,0]); assert_eq!(e.take(3,t).unwrap(),Some(Outcome::Submitted));
 }
+
+// 213-DRV-0052: a station connected on channel 8, against the pinned Linux's worked bodies (rtw89_fw_h2c_cxdrv_role_v2,
+// _set_bt_afh_info_v0, and rtw89_btc_set_policy_v1's delta from NoLink to OFF_BWB1).
+#[test]
+fn connected_station_role_afh_and_policy_match_linux() {
+    let p=profile(); let role=p.driver_station(8);
+    assert_eq!(role.bytes().len(),66); assert_eq!(&role.bytes()[..10], &[1,64,1,1,2,0,1,0,1,8]);
+    assert!(role.bytes()[10..].iter().all(|b|*b==0));
+    assert_eq!(role.command(),h2c::Command{category:2,class:16,function:5}); assert!(!role.acks().done);
+    let afh=p.afh_station(8); assert_eq!(afh.bytes(), &[1,8,32]); assert_eq!(afh.command(),h2c::Command{category:2,class:16,function:10}); assert!(afh.acks().done);
+    let policy=p.policy(Policy::NoLink,Policy::Station).unwrap();
+    assert_eq!(policy.bytes(), &[1,10,1,0,100,0,0x5a,0x5a,0x5a,0xea,0,0]); assert_eq!(policy.command().function,3);
+    assert_eq!(Policy::Station.tdma(),[0;8]); assert!(p.policy(Policy::Station,Policy::Station).is_none());
+}

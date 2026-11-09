@@ -53,7 +53,7 @@ impl<B:DeviceIo> DataSession<'_,'_,'_,'_,'_,'_,B>{
     pub(crate) fn set_filter(&mut self,all_beacons:bool,bssid:[u8;6],own:[u8;6],timeout_us:u32)->Result<(),Failure>{
         Self::request(timeout_us)?;
         if self.queue.pending_request(){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Busy),shutdown:None})}
-        let deadline=match self.deadline(timeout_us).and_then(|d|{self.live(d)?;self.reconcile(d)?;self.drain_previous_epoch(d)?;Ok(d)}){
+        let deadline=match self.deadline(timeout_us).and_then(|d|{let d=self.live(d)?;self.reconcile(d)?;self.drain_previous_epoch(d)?;Ok(d)}){
             Ok(deadline)=>deadline,Err(cause)=>return Err(self.runtime_failure(cause)),
         };
         let filter=self.prepared.station.filter(all_beacons,bssid,own);

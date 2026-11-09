@@ -1,6 +1,6 @@
 # 100000-KRN-0171 — Platform devices from the device tree
 
-**Type:** kernel (ABI, `init`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** an intention · **Blocked by:** a PinePhone at hand (the maintainer, 2026-10-25: the port starts then); [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.4
+**Type:** kernel (ABI, `init`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (started 2026-11-08 at the maintainer's word, before the phone) · **Blocked by:** — ([100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done), the board from the tree, done) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.4
 
 ## Problem
 
@@ -22,6 +22,13 @@
 - **Not handed out by the kernel:** a node's clocks, resets and regulators. They belong to the drivers of the clock controller and the PMIC (100000, stage 2), reached by IPC.
 - **The explicit transition:** the fixed indices go, with no compatibility code (AGENTS.md, section 3).
 
+**Nodes that share a page (found 2026-11-08, 100000-PRT-0010).**
+- **The case.** The A64's four UARTs take 0x400 bytes each, in one 4 KiB page; on the PinePhone UART1 is the Bluetooth chip's.
+- **The rule.** A node smaller than a page is not lent by its page alone when another enabled node shares that page. The ways:
+  - the kernel keeps the device and serves it (as its console);
+  - or the node's driver gets the page only when no other enabled node lies in it.
+- **The check:** `init`'s refusal of overlapping ranges covers pages, not only the ranges' bytes.
+
 ## Acceptance criteria
 
 - **QEMU `virt,acpi=off`:**
@@ -32,4 +39,4 @@
 
 ## Related
 
-[100000](100000-a-phone-the-pinephone-first.md), [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md), [205](205-aarch64-boards.md).
+[100000](100000-a-phone-the-pinephone-first.md), [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done), [205](205-aarch64-boards.md).

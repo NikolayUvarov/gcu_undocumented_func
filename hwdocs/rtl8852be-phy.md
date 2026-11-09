@@ -185,7 +185,7 @@ chip `bb_sethw` (sound bits, all 128 MACID power-limit words and signed gain
 baselines), CCX/IFS bins, all 15 AX PHYSTS pages, initial DIG, board XO/XI
 and DCFO, EDCCA collision distance and UL-TB bandedge snapshot. XTAL operations
 retain their finite 50 ms ceilings and never replace an outstanding command.
-Readback mismatch and reads after the 300 ms deadline fail; an XTAL poll's own 50 ms ceiling ends with one read after it. Modified failure poisons `Phy`
+Readback mismatch and reads after the 300 ms deadline fail; an XTAL poll's own 50 ms ceiling ends with one read after it. RF registers that a calibration saved and writes back (IQK, DPK, DACK) are written unread, as Linux's `_rfk_restore_rf_reg`, and so is TSSI's thermal-offset table: on the Ryzen RF0's gain field is the AGC's, and path B's registers changed while Bluetooth was active (2026-11-06). Modified failure poisons `Phy`
 and independently attempts chip BB/RF disable under 400 ms, retaining DMA.
 A successful result contains observations and initial nonzero software settings;
 it does not advance the public PHY pipeline or enable periodic tracking.

@@ -11,13 +11,21 @@ pub(super) struct Device {
     pub(super) drck_stuck: bool, pub(super) fail_write: Option<usize>,
     // RXQ Wi-Fi payloads (MPDU and FCS) delivered when the beacon check at 0xce20 is opened.
     pub(super) on_scan: Vec<Vec<u8>>,
+    // The Ryzen's RF controller: in RX mode its AGC sets RF0's gain field (bits 4-13) itself, so each read of RF0 may
+    // differ from what was written (2026-11-06).
+    pub(super) agc_live: bool, agc: u32,
+    // Bluetooth coexistence on path B, as the Ryzen showed it (2026-11-06): RF 0x85 and TSSI's offset table there read back
+    // otherwise than written.
+    pub(super) bt_path_b: bool,
 }
 impl Device {
     pub(super) fn new(inner: model::Device) -> Self {
         Self { channel: None, inner, rf: [[0; 256]; 2], rf_read: None, lte: [0; 2], lte_pending: None, bt: 0,
             drck: false, addck: [false; 2], msbk: [[false; 2]; 2], dadck: [[false; 2]; 2],
-            nctl_stuck: false, rck_stuck: false, drck_stuck: false, fail_write: None, on_scan: Vec::new() }
+            nctl_stuck: false, rck_stuck: false, drck_stuck: false, fail_write: None, on_scan: Vec::new(),
+            agc_live: false, agc: 0, bt_path_b: false }
     }
+    pub(super) fn agc_live(&mut self) { self.agc_live = true; }
     fn write(&mut self, at: usize, width: usize, value: u32) -> io::Result<()> {
         self.inner.now += 1;
         let previous = self.inner.get(at, width);
@@ -71,9 +79,20 @@ impl RegisterIo for Device {
         if matches!(at, 0x1e060 | 0x1f060) { return Ok(self.inner.get(at, 4) & 0xff); }
         // Its MAC power tables keep seven bits of each byte.
         if (0xd2c0..0xd36c).contains(&at) { return Ok(self.inner.get(at, 4) & 0x7f7f_7f7f); }
+        // Bit 24 of the PPDU report register (0xCE43) is the hardware's own: it reads back set (2026-11-06).
+        if at == 0xce40 { return Ok(self.inner.get(at, 4) | 1 << 24); }
+        if self.bt_path_b && (0x17c00..0x17c40).contains(&at) { return Ok(self.inner.get(at, 4) ^ 1); }
+        // Path B's TSSI DAC gain table, as the Ryzen read it back while Bluetooth was active (2026-11-08).
+        if self.bt_path_b && (0x17a00..0x17ad0).contains(&at) { return Ok(!self.inner.get(at, 4)); }
         if at == 0xac { return Ok(self.bt); }
         if at == 0xdaf8 { let command = self.lte_pending.unwrap(); assert_eq!(command >> 30, 2); return Ok(self.lte[usize::from(command & 255 == 0x3c)]); }
-        if at == 0x1174c { return Ok(self.rf_read.map_or(0, |(path, reg)| 1 << 26 | self.rf[path][reg])); }
+        if at == 0x1174c {
+            let Some((path, reg)) = self.rf_read else { return Ok(0) };
+            let mut value = self.rf[path][reg];
+            if reg == 0 && self.agc_live && value >> 16 & 15 == 3 { self.agc = self.agc.wrapping_add(1); value = (value & !0x3ff0) | (self.agc & 0x3ff) << 4; }
+            if path == 1 && reg == 0x85 && self.bt_path_b { value ^= 2; }
+            return Ok(1 << 26 | value);
+        }
         if at == 0x18080 && self.nctl_stuck { return Ok(0); }
         if at == 0x1c0d0 { return Ok(if self.drck && !self.drck_stuck { 17 << 15 | 8 } else { 0 }); }
         for path in 0..2 {

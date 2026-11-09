@@ -66,8 +66,17 @@ pub fn without<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
+// GICv2 under a device tree, which names no interface numbers: CPU `index`'s own, as the distributor's banked
+// GICD_ITARGETSR0 reads on that CPU (zero on a GIC of one interface: the number stays).
+unsafe fn own_interface(index: usize) {
+    if !v2() || !super::board::INTERFACE_FROM_GIC.load(Ordering::Relaxed) { return; }
+    let mask = read32(gicd() + 0x800) & 0xFF;
+    if mask != 0 { super::board::set(&super::board::INTERFACE[index], mask.trailing_zeros() as usize); }
+}
+
 /// The distributor, this CPU's redistributor and CPU interface, and the tick.
 pub unsafe fn init() {
+    own_interface(0);
     let lines = ((read32(gicd() + 4) & 0x1F) as usize + 1) * 32;
     if v2() {
         // Device lines (SPIs) to the boot CPU's interface (GICD_ITARGETSR, a byte each); the non-secure group.
@@ -83,7 +92,7 @@ pub unsafe fn init() {
     load();
     let frequency: u64; asm!("mrs {}, cntfrq_el0", out(reg) frequency);
     TIMER_STEP.store(frequency * TICK_MS / 1000, Ordering::Release);
-    let now: u64; asm!("isb", "mrs {}, cntvct_el0", out(reg) now);
+    let now = super::clock::count();
     NEXT_TICK.store(now, Ordering::Relaxed);
     rearm();
     asm!("msr cntv_ctl_el0, {}", in(reg) 1u64); // enabled, not masked
@@ -106,6 +115,7 @@ pub fn redistributor() -> usize {
 // This CPU's redistributor and CPU interface.
 pub unsafe fn load() {
     if v2() {
+        own_interface(crate::cpu::id());
         // SGIs and PPIs are banked per CPU in the distributor; the CPU interface takes every priority.
         write32(gicd() + 0x100, 1 << timer_ppi() | 1 << SGI_STOP | 1 << SGI_TICK | 1 << SGI_WAKE);
         write32(gicc() + 0x4, 0xFF); // GICC_PMR
@@ -126,7 +136,7 @@ pub unsafe fn load() {
 
 // The next tick a step after the last one, not after now; returns how many ticks passed (more than one when taken late).
 unsafe fn rearm() -> u64 {
-    let (step, now): (u64, u64) = (TIMER_STEP.load(Ordering::Relaxed).max(1), { let c: u64; asm!("isb", "mrs {}, cntvct_el0", out(reg) c); c });
+    let (step, now): (u64, u64) = (TIMER_STEP.load(Ordering::Relaxed).max(1), super::clock::count());
     let next = NEXT_TICK.load(Ordering::Relaxed);
     let passed = if now >= next { (now - next) / step + 1 } else { 0 };
     let next = next + passed * step;

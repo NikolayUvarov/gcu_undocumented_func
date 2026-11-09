@@ -47,8 +47,9 @@ pub(crate) fn frame(bytes:&[u8],rate:u8,max_submissions:u8)->Result<Frame,Error>
 
 fn put(out:&mut[u8;WD_BYTES],at:usize,value:u32){out[at..at+4].copy_from_slice(&value.to_le_bytes());}
 
-/// Selected hardware limit one, fixed legacy rate, no RTS, aggregation or hardware sequence substitution.
-pub(crate) fn descriptor(meta:Frame,mac_id:u8,wp_sequence:u16,payload:u64)->Result<[u8;WD_BYTES],Error>{
+/// Selected hardware limit one, fixed legacy rate, no RTS, aggregation or hardware sequence substitution; `report` asks
+/// the firmware for its final report (SPE_RPT).
+pub(crate) fn descriptor(meta:Frame,mac_id:u8,wp_sequence:u16,payload:u64,report:bool)->Result<[u8;WD_BYTES],Error>{
     if mac_id>127||wp_sequence>0x7fff{return Err(Error::Address);}
     if payload==0||payload.checked_add(meta.length as u64).is_none_or(|end|end>1u64<<32){return Err(Error::Address);}
     let mut out=[0;WD_BYTES];let channel=if meta.queue==4{8}else{meta.queue as u32};
@@ -57,7 +58,7 @@ pub(crate) fn descriptor(meta:Frame,mac_id:u8,wp_sequence:u16,payload:u64)->Resu
     put(&mut out,12,u32::from(meta.sequence));
     put(&mut out,24,1<<30|u32::from(meta.rate)<<16|1<<10);
     put(&mut out,28,1<<31|u32::from(SELECTED_LIMIT)<<25|u32::from(meta.rate)<<16);
-    put(&mut out,36,1<<10);put(&mut out,40,u32::from(wp_sequence&15));
+    put(&mut out,36,u32::from(report)<<10);put(&mut out,40,u32::from(wp_sequence&15));
     out[48..50].copy_from_slice(&(wp_sequence|0x8000).to_le_bytes());
     out[56..58].copy_from_slice(&(meta.length as u16).to_le_bytes());
     out[58..60].copy_from_slice(&0x8001u16.to_le_bytes());

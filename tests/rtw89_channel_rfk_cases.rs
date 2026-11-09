@@ -59,6 +59,14 @@ fn one_cold_device_runs_channel_rxdck_iqk_tssi_dpk_and_final_mcc_in_order(){for 
     assert!(d.inner.now<15_000_000);
 });}}
 #[test]
+fn a_live_agc_gain_in_rf0_does_not_fail_the_restores_of_iqk_and_dpk(){run(2,|d|{d.agc_live();},0,|_,result,state|{
+    let done=result.unwrap();assert_eq!(state,State::ChannelTuned);assert_eq!(done.dpk.data.paths.map(|p|p.txagc),[0x35;2]);
+});}
+#[test]
+fn bluetooth_on_path_b_does_not_fail_the_restores_of_the_calibrations(){run(2,|d|{d.bt_path_b=true;},0,|_,result,state|{
+    let done=result.unwrap();assert_eq!(state,State::ChannelTuned);assert_eq!(done.tssi.reports,[[160,100],[200,142]]);
+});}
+#[test]
 fn all_three_policy_bound_authorities_are_checked_before_any_rfk_or_mcc(){for invalid in 1..=3{run(2, |_|{},invalid,|d,result,state|{
     assert_eq!(result.unwrap_err().stage,Stage::Guard);assert_eq!(state,State::ChannelTuned);
     assert!(d.channel.as_ref().unwrap().commands.is_empty()&&d.channel.as_ref().unwrap().shots.is_empty());

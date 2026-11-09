@@ -120,6 +120,18 @@ fn decode(out: &mut String, t: &[u8]) {
             let profile = ["unspecified", "desktop", "mobile", "workstation", "enterprise server", "SOHO server", "appliance PC", "performance server", "tablet"];
             let _ = writeln!(out, "       profile {}, flags {:#X}, PM timer port {:#X}, SCI {}, reset register {:#X} value {:#X}, ARM boot flags {:#X}",
                 profile.get(t.get(45).copied().unwrap_or(0) as usize).unwrap_or(&"?"), u32_at(t, 112), u32_at(t, 76), u16_at(t, 46), u64_at(t, 120), t.get(128).copied().unwrap_or(0), u16_at(t, 129));
+            // The power button and the PM1 events (000-KRN-0216); SCI_EN as the firmware left it.
+            if let Some(f) = crate::fadt::parse(t) {
+                #[cfg(target_arch = "x86_64")]
+                let sci_en = match crate::acpi::sci_found() { Some(true) => "set", Some(false) => "clear", None => "not read" };
+                #[cfg(not(target_arch = "x86_64"))]
+                let sci_en = "not read";
+                let button = if f.hardware_reduced() { "none (hardware-reduced)" } else if f.fixed_power_button() { "fixed" } else { "by a control method" };
+                let _ = write!(out, "       power button {}, SCI_EN {}", button, sci_en);
+                match f.pm1a_evt { Some(b) => { let _ = write!(out, ", PM1a events {:#X} ({} bytes)", b.port, b.len); } None => { let _ = write!(out, ", no PM1a events in I/O space"); } }
+                if let Some(b) = f.pm1b_evt { let _ = write!(out, ", PM1b events {:#X} ({} bytes)", b.port, b.len); }
+                let _ = writeln!(out);
+            }
         }
         b"MCFG" => for at in (44..t.len().saturating_sub(15)).step_by(16) {
             let _ = writeln!(out, "       ECAM {:#X} segment {} buses {}-{}", u64_at(t, at), u16_at(t, at + 8), t[at + 10], t[at + 11]);

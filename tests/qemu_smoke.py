@@ -108,12 +108,18 @@ class VM:
         if self.arch == "aarch64":
             # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
             # GOP framebuffer, a VirtIO keyboard (sendkey) and tablet; the boot disk is a VirtIO block device.
-            variables = Path(tempfile.mkdtemp(prefix="mind-vars-")) / "vars.fd"
-            self.temporary.append(variables.parent)  # 64 MiB a boot: removed in close
-            shutil.copyfile(args.aavmf_vars, variables)
-            machine = ["-machine", getattr(args, "machine", None) or "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra else ["-cpu", "max"]),
-                       "-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}",
-                       "-device", "ramfb", *([] if usb_input else ["-device", "virtio-keyboard-pci"]), *([] if "virtio-tablet-pci" in extra or usb_input else ["-device", "virtio-tablet-pci"])]
+            # With --uboot (100000-PRT-0009): U-Boot's UEFI and no AAVMF, as Tow-Boot gives the PinePhone; its GOP is a
+            # bochs-display, as U-Boot drives no ramfb.
+            if uboot := getattr(args, "uboot", None):
+                firmware, display = ["-bios", uboot], "bochs-display"
+            else:
+                variables = Path(tempfile.mkdtemp(prefix="mind-vars-")) / "vars.fd"
+                self.temporary.append(variables.parent)  # 64 MiB a boot: removed in close
+                shutil.copyfile(args.aavmf_vars, variables)
+                firmware = ["-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}"]
+                display = "ramfb"
+            machine = ["-machine", getattr(args, "machine", None) or "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra or getattr(args, "cpu_model", None) else ["-cpu", "max"]),
+                       *firmware, "-device", display, *([] if usb_input else ["-device", "virtio-keyboard-pci"]), *([] if "virtio-tablet-pci" in extra or usb_input else ["-device", "virtio-tablet-pci"])]
         else:
             machine = ["-bios", args.firmware, *(["-machine", "pc,i8042=off"] if usb_input else []), *(["-machine", m] if (m := getattr(args, "machine", None)) else [])]
         self.process = subprocess.Popen(
@@ -1112,8 +1118,12 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
-    # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked.
-    assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
+    # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked. Without ACPI (a device
+    # tree, 100000-PRT-0009) there is no DSDT to read: the policy is unknown, and a radio sends nothing.
+    if "acpi=off" in (getattr(vm.args, "machine", None) or ""):
+        require(log, "[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN (no-dsdt): A RADIO SENDS NOTHING")
+    else:
+        assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
     if vm.arch != "aarch64":
         # 550-KRN-0061, 213-KRN-0114: QEMU has no Broadcom or Realtek card, so init starts none of their drivers.
         for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
@@ -2638,6 +2648,18 @@ def storefs_check(vm):
     require(vm.command("rm other:x/c.txt"), "OK")
     require(vm.command("rm other:x"), "OK")
     assert re.search(r"\[STOREFS\] SCOPE 0x[0-9a-f]+ FOR notes:/? \(READ-ONLY\)", vm.command("dmesg -s storefs", raw=True)), vm.command("dmesg -s storefs", raw=True)[-1500:]
+    # 311-APP-0116: a redirect's file on a store volume is published at its flush. With no other writer it is. When the
+    # redirected program publishes the volume after the shell wrote its first line there (fsstep's HOLDING line, then
+    # its close 3 s later, through its own scope), storefs refuses the shell's flush with vfs.wit 2.6's `conflict`, and
+    # the shell names it; a tree with nothing unpublished would have followed the name instead.
+    require(vm.command("ls notes: > notes:list.txt"), "WRITTEN TO notes:list.txt")
+    require(vm.command("cat notes:list.txt"), "docs")
+    require(vm.command("mkdir notes:steps"), "OK")
+    out = vm.command("fsstep notes:steps/x.bin 100 3 100 > notes:out.txt", timeout=60)
+    require(out, "ERROR: > notes:out.txt: CHANGED BY ANOTHER WRITER MEANWHILE; READ IT AGAIN")
+    require(vm.command("ls notes:steps"), "1 ENTRIES, 1 FILES, 200 BYTES")  # fsstep's own file, published
+    for path in ("notes:steps/x.bin", "notes:steps", "notes:out.txt", "notes:list.txt"):
+        require(vm.command(f"rm {path}"), "OK")
     # 311-APP-0121: a program that asks for its file (edit, REQUEST_FILE) on a store volume gets a writable scope of the
     # file's directory, which the shell makes through the same mind::fs call as on a FAT volume and storefs serves; the
     # scope ends with the program.
@@ -2665,7 +2687,8 @@ def storefs_check(vm):
     require(vm.command("ls ram:"), "ENTRIES")
     print("PASS: storefs: at boot with the store's client; mkdir, write, cat, ls and rm on a store volume through mind::fs, "
           "vfs_server's volumes as before; ls and cat again after storefs restarted (311-KRN-0207); find and grep read the store "
-          "volume their arguments name through a read-only scope, and no other store volume; edit on a store volume wrote "
+          "volume their arguments name through a read-only scope, and no other store volume; a redirect's file there "
+          "published, and refused as changed by another writer when its program published the volume first (311-APP-0116); edit on a store volume wrote "
           "through a writable scope of its directory, ended after it at the next one's making (311-APP-0121)", flush=True)
 
 
@@ -3343,7 +3366,8 @@ def protection_check(vm):
     assert line, vm.log[-2000:]
     names, model = line[1].split(), getattr(vm.args, "cpu_model", None)
     if vm.arch == "aarch64":
-        assert names == ["PXN", "PAN"], line[0]  # -cpu max has PAN (ARMv8.1)
+        # -cpu max has PAN (ARMv8.1); the ARMv8.0 cores (the PinePhone's Cortex-A53) have none, so PXN alone.
+        assert names == (["PXN"] if model in ("cortex-a53", "cortex-a57", "cortex-a72") else ["PXN", "PAN"]), line[0]
     elif model in (None, "max"):
         assert names == (["SMEP", "SMAP", "UMIP"] if model == "max" else ["NONE"]), line[0]
     if "protection" in (getattr(vm.args, "kernel", None) or ""):
@@ -7677,10 +7701,14 @@ def updater_suite(args, updater_elf):
         try:
             report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
             # Its own endpoint, the clock, the file system, the loader's client for helpers only (109-KRN-0117), init
-            # (badged for reboot), the log every service has, the flow grant, TLS, the firmware privilege, the parser;
-            # nothing else.
+            # (badged for reboot), the log every service has, the flow grant, TLS, its own client of the block store while
+            # the store runs (351-KRN-0218), the firmware privilege, the parser; nothing else.
             held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
-            assert held and held[1] == " 1:1 2:1 3:1 5:1 11:1 12:1 18:1 20:1 27:16 28:1", report
+            store = " 25:1" if "blockstore" in vm.services() else ""
+            assert held and held[1] == f" 1:1 2:1 3:1 5:1 11:1 12:1 18:1 20:1{store} 27:16 28:1", report
+            if store:  # the owner's badge, OWNER_UPDATER with get, put and publish (0x17 = 23)
+                caps = vm.command(f"stat caps {vm.services()['updater']}", raw=True)
+                assert re.search(r"^SLOT=25 GEN=\d+ KIND=1 .*BADGE=23 ", caps, re.M), caps
             require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
             for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
                 require(vm.command(command), answer)
@@ -9313,7 +9341,7 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
         vm.logged("ALWAYS? ", since, timeout=30)
         time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
         vm.send_bytes(key)
-        # The prompt once get has ended (the shell took the keys for the question, so it says no EXITED line).
+        # The prompt once get has ended (a console program's end is the prompt alone, no EXITED line).
         vm.expect("MIND> ", timeout=60, after={b"n": "REFUSED BY THE USER", b"o": "the end asked=1"}[key])
         out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
         require_all(out, f"GET: 10.0.2.2:{asked_port} IS NOT IN ITS GRANT: THE USER IS ASKED", "NETWORK: get (PID ",
@@ -9910,6 +9938,23 @@ def wifi_join_check(vm):
           "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it; a change to RU "
           "while joined left the access point, and the station joined again under RU. After the restart the radio named its own "
           "13 channels apart from US's 11, and RU and the world domain were planned over all 13 (550-NET-0059)", flush=True)
+    # 550-NET-0061: a radio that restarted (init starts wlansim again, as it starts rtw89_wifi again after its data mode
+    # failed) has no channel set and no country, and sends nothing. Once the network is lost the station notices within
+    # wlan's RESTART_CHECK_MS, gives the radio the country it ran under, and the automatic join joins again by itself.
+    # The network forgotten above is remembered again first: the automatic join joins only a remembered one.
+    run("wifi leave", 30, "[WIFI] LEFT")
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    radio = vm.services()["wlansim"]
+    require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
+    restarted, joined = "[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY RU AGAIN", "[WLAN] AUTO-JOIN MIND-TEST: JOINED"
+    after = wlan_until(restarted, 150).rpartition(restarted)[2]  # `logs` drains: each read holds what came since the last
+    if joined not in after:
+        after += wlan_until(joined, 120)
+    assert vm.services()["wlansim"] != radio, vm.services()
+    require(vm.command(f"logs {vm.services()['wlansim']}", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    print("PASS: a restarted radio (wlansim started again by init, no channel and no country): the station noticed, gave it "
+          "RU again and joined MIND-TEST by itself (550-NET-0061)", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -13693,6 +13738,65 @@ def clock_suite(args, disk):
     print(f"PASS: the TSC measured 9% high at boot is measured again on the PM timer ({was} -> {measured} MHz); "
           f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
 
+def power_button_check(args, disk):
+    """000-KRN-0216 (x86): QEMU's power button (`system_powerdown`, the chipset's fixed-feature event) shuts the machine
+    down as asked, on pc (PIIX4's PM) and q35 (ICH9's): init stops the services, writes the volumes and turns it off (S5),
+    and the next boot is no safe start. QEMU keeps the firmware's variables across a reset of the same process
+    (`-no-shutdown`), so a reset first, before a minute past READY, stands for a cut power: that boot is a safe start, which
+    shows the run's mark is kept. init's own lines go to the system log, which the off machine cannot show: the kernel names
+    who asked for the power-off, and a file written just before the press is there after it, its volume not left dirty
+    (vfs_server writes its cache only when told)."""
+    if args.arch != "x86_64":
+        print("SKIP: the power button: aarch64's is ACPI's GED or the device tree's gpio-keys, not read yet", flush=True)
+        return
+    safe = "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED"
+    taken = "[INIT] THE POWER BUTTON SHUTS THE MACHINE DOWN (SCI 9, PM1 EVENTS AT 0x"
+    (disk / "data").mkdir(exist_ok=True)
+    seen = []
+    for machine in ("pc", "q35"):
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", machine, "-no-shutdown"))
+
+        def booted():
+            vm.expect("MIND> ", timeout=180)
+            return vm.command("dmesg -s init", raw=True, timeout=30)
+        try:
+            log = booted()
+            require(log, taken)
+            assert safe not in log, log[-2000:]
+            assert "THE PM1 EVENTS LENT" in vm.log, vm.log[-3000:]
+            # A cut power before a minute past READY: the next boot is a safe start.
+            vm.hmp("system_reset")
+            require(booted(), safe)
+            # The button, in that boot, a file just written: a clean end, S5, and the boot after it a normal one.
+            require(vm.command(f"write data/power-{machine}.txt kept by the button"), f"WROTE 19 BYTES TO data/power-{machine}.txt")
+            since = len(vm.log)
+            pressed = time.monotonic()
+            vm.hmp("system_powerdown")
+            deadline = pressed + 90
+            while vm.qmp("query-status")["status"] != "shutdown":
+                assert time.monotonic() < deadline, vm.log[-3000:]
+                time.sleep(.5)
+            took = time.monotonic() - pressed
+            vm.collect()
+            down = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+            require_all(down, "MIND CORE KERNEL: init (PID 1) ASKED TO TURN THE MACHINE OFF", "MIND CORE KERNEL: POWER OFF VIA ACPI S5")
+            vm.hmp("system_reset")
+            if vm.qmp("query-status")["status"] != "running":
+                vm.hmp("cont")
+            log = booted()
+            require(log, taken)
+            assert safe not in log, log[-2000:]
+            require(vm.command(f"cat data/power-{machine}.txt"), "kept by the button")
+            assert "WAS LEFT DIRTY" not in vm.command("dmesg -s vfs_server", raw=True, timeout=30)
+        finally:
+            vm.close()
+        seen.append(f"{took:.1f} s on {machine}")
+    print(f"PASS: the power button (000-KRN-0216), on QEMU's pc and q35: a press shut the machine down as asked (init asked "
+          f"for S5 {' and '.join(seen)} after it; a file written just before it was there next time, its volume not left "
+          f"dirty), and the boot after it was no safe start; a reset before a minute past READY, standing for a cut power, "
+          f"was followed by one", flush=True)
+
+
 def watchdog_suite(args, disk):
     """000-KRN-0076, with the test kernel `watchdog-test`, which stops every CPU for good 20 s after the machine's first
     boot. On q35 the kernel arms the ICH9's TCO timer and feeds it from the boot CPU's tick: the chipset resets the frozen
@@ -14172,37 +14276,32 @@ def efivar_check(args, disk):
 
 
 def devicetree_suite(args, disk):
-    """210-KRN-0029, for 210-APL-0002: QEMU virt without ACPI, where the firmware hands over a device tree instead; the
-    bootloader passes its address in BootInfo and the kernel checks its header. The kernel has no console there until
-    it reads the board from the tree, and init's services soon write over its lines on the screen, so the machine is
-    stopped once the bootloader names the tree and run on in 10 ms steps until the kernel's line is on the screen. The
-    steps go through QMP itself: through the monitor's typing pace each let the machine run 110 ms, and a slow runner
-    passed the line between two looks (210-KRN-0055)."""
+    """210-KRN-0029, 100000-PRT-0009: QEMU virt without ACPI, where AAVMF hands over a device tree instead. The bootloader
+    passes its address in BootInfo and writes its own lines to the PL011 the tree's stdout-path names; the kernel checks
+    the header, reads the board from the tree (the GIC, the virtual timer, the CPUs through PSCI, the PL011 and the ECAM)
+    and boots to the shell with every CPU online. U-Boot's UEFI with GICv2 is its own group (--uboot), with the PL031."""
     if args.arch != "aarch64":
         print("SKIP: devicetree: OVMF on x86 hands over no device tree", flush=True)
         return
     machine = (args.machine or "virt,gic-version=3,highmem=off") + ",acpi=off"
-    vm = VM(argparse.Namespace(**{**vars(args), "machine": machine}), disk.relative_to(ROOT).as_posix(), prompt=False)
+    vm = VM(argparse.Namespace(**{**vars(args), "machine": machine, "uboot": None}), disk.relative_to(ROOT).as_posix())
     try:
-        deadline = time.monotonic() + 90
-        while not (loader := re.search(r"BOOT: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES", vm.log)) and time.monotonic() < deadline and vm.process.poll() is None:
-            time.sleep(0.02)
-            vm.collect()
-        vm.qmp("stop")
-        assert loader, vm.log[-3000:]
-        kernel = None
-        for _ in range(500):
-            kernel = next((m for line in screen_text(vm) if (m := re.search(r"MIND CORE KERNEL: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES, VERSION (\d+)", line))), None)
-            if kernel:
-                break
-            vm.qmp("cont")
-            time.sleep(0.01)
-            vm.qmp("stop")
-        assert kernel and kernel[1] == loader[1] and kernel[2] == loader[2] and int(kernel[3]) >= 16, (loader, kernel)
+        vm.collect()
+        require(vm.log, "BOOT: THE LINE: PL011 AT 0x9000000, FROM THE DEVICE TREE")
+        loader = re.search(r"BOOT: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES", vm.log)
+        kernel = re.search(r"MIND CORE KERNEL: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES, VERSION (\d+)", vm.log)
+        assert loader and kernel and kernel[1] == loader[1] and kernel[2] == loader[2] and int(kernel[3]) >= 16, (loader, kernel, vm.log[-3000:])
+        board = re.search(r"MIND CORE KERNEL: BOARD FROM THE DEVICE TREE: GICV(\d) GICD=(0x[0-9a-f]+) .*UART=(0x[0-9a-f]+) PL011 .*LINE (\d+) TIMER PPI (\d+) CPUS (\d+) PSCI (\w+) RTC=(0x[0-9a-f]+) ECAM (\w+)", vm.log)
+        assert board, vm.log[-3000:]
+        version = "2" if "gic-version=2" in machine else "3"
+        # AAVMF keeps the PL031 for its own GetTime and hands on a tree where it is not enabled: no RTC is read from it.
+        assert board.groups() == (version, "0x8000000", "0x9000000", "1", "27", str(vm.cpus), "HVC", "0x0", "YES"), board.groups()
+        online = vm.command("cpus")
+        assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
+        print(f"PASS: devicetree: without ACPI the loader's line and the kernel's board come from the tree (GICv{version}, "
+              f"the PL011, the timer's PPI 27, {vm.cpus} CPUs through PSCI, the ECAM; AAVMF's PL031 left out as disabled); the shell with every CPU online", flush=True)
     finally:
         vm.close()
-    print(f"PASS: devicetree: on virt without ACPI the bootloader passes the device tree at {loader[1]} ({loader[2]} bytes) "
-          f"and the kernel finds an FDT header there (version {kernel[3]})", flush=True)
 
 
 def bar_move_check(args, disk):
@@ -14521,6 +14620,7 @@ def main():
     parser.add_argument("--memory", help="QEMU -m (default 512; e.g. 6G: RAM above 4 GiB)")
     parser.add_argument("--disk", choices=("default", "nvme"), default="default", help="the boot disk's bus: nvme puts it on an NVMe controller (issue 205)")
     parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")
+    parser.add_argument("--uboot", help="aarch64: U-Boot's qemu_arm64 u-boot.bin as the firmware in place of AAVMF, no ACPI with --machine virt,acpi=off (100000-PRT-0009)")
     parser.add_argument("--aavmf-vars", default="/usr/share/AAVMF/AAVMF_VARS.fd")
     parser.add_argument("--cpu-model", help="QEMU -cpu model, e.g. max: AVX state saved with XSAVE (issue 153)")
     parser.add_argument("--firmware", default="OVMF.fd")
@@ -14539,7 +14639,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -14740,6 +14840,9 @@ def main():
                 continue
             if suite == "watchdog":
                 watchdog_suite(args, disk)
+                continue
+            if suite == "power":  # its own machine, booted three times (000-KRN-0216)
+                power_button_check(args, disk)
                 continue
             if suite == "net":
                 net_suite(args, disk)

@@ -29,10 +29,14 @@ impl<B:DeviceIo> Transport for Session<'_,'_,'_,B>{
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum Progress{Stable,DeferredAntenna,DeferredEvents}
 impl Context {
-    pub(crate) fn runtime<T:Transport>(&mut self,transport:&mut T,attempt:u64,session:u64,deadline:u64)->Result<Progress,Error>{
+    /// The data mode's station on `channel` is told to the coexistence at the first run (213-DRV-0052).
+    pub(crate) fn runtime<T:Transport>(&mut self,transport:&mut T,attempt:u64,session:u64,channel:u8,deadline:u64)->Result<Progress,Error>{
+        use crate::btc_codec::Policy;
         if attempt==0||session==0||self.attempt!=attempt||self.session!=session||self.rfk.is_some()
-            ||self.connection!=Connection::Reported||self.policy!=crate::btc_codec::Policy::NoLink{return Err(Error::Order)}
+            ||self.connection!=Connection::Reported||!matches!(self.policy,Policy::NoLink|Policy::Station)
+            ||self.station.is_some_and(|c|c!=channel){return Err(Error::Order)}
         Self::radio_active(transport,deadline)?;self.events(transport,deadline)?;
+        if self.station.is_none(){self.connect(transport,channel,deadline)?;}
         let raw=transport.registers(deadline,|b|io::read32(b,SCOREBOARD))?;
         self.dirty|=self.bt.update_score(raw);if self.bt.raw&4!=0{return Err(Error::Whql)}
         if !self.dirty{

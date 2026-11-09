@@ -278,5 +278,33 @@ reboot
 - На ПК с Intel сторожевой таймер чипсета перезапускает машину в пределах 30 с, и этот перезапуск — загрузка Linux.
 - На Ryzen то же делает сторожевой таймер AMD FCH ([213-KRN-0125](../issues/213-KRN-0125-the-amd-fch-watchdog.md)). Он проверен только на модели своих регистров, поэтому первые прогоны покажут, работает ли он: строка загрузки `WATCHDOG: AMD FCH, A RESET AFTER 30 S ...` говорит, что он взведён. Если там `WATCHDOG: NONE`, зависание ждёт кнопки питания.
 
+**Выключение без экрана и клавиатуры.** На машине x86, прошивка которой называет кнопку питания фиксированной функцией ACPI, короткое нажатие выключает MIND Core так же, как `poweroff`: службы остановлены, диски записаны, затем питание выключено. Следующая загрузка обычная. Удержание кнопки 4 с по-прежнему обрезает питание в обход MIND Core; если это случилось в первую минуту после `READY`, следующая загрузка будет безопасным стартом ([000-KRN-0216](../issues/000-KRN-0216-the-power-button-shuts-down-cleanly.md)). Журнал загрузки говорит, что из этого верно: `[INIT] THE POWER BUTTON SHUTS THE MACHINE DOWN` или `[INIT] THE POWER BUTTON IS NOT READ: …` с причиной.
+
 **Машины Effector.** На машине, где работает Effector (Ryzen — одна из них), `once --reboot` запускает только сопровождающий, убедившись, что активных операций нет ([docs/effector_RU.md](effector_RU.md)).
 
+
+## 11. Одна загрузка MIND Core из Windows и обратно
+
+То же переключение из Windows 10 или 11, для ПК вроде DEXP N100, где Windows стоит на собственном диске ([800-LNK-0037](../issues/800-LNK-0037-boot-switch-from-windows.md)). В PowerShell от администратора:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\boot_switch.ps1 status      # записи загрузки, Windows первой, и диск MIND Core
+powershell -ExecutionPolicy Bypass -File scripts\boot_switch.ps1 once -Reboot  # следующая загрузка, одна, — с флешки
+# ... прогон в MIND Core; его перезагрузка, паника, сторожевой таймер или отключение питания возвращают Windows ...
+powershell -ExecutionPolicy Bypass -File scripts\boot_switch.ps1 logs C:\mind-runs   # том MIND LOG скопирован, метка загрузчика прочитана
+```
+
+**Что он делает** — то же, что описано в разделе 10, но через сами переменные прошивки:
+- читает и пишет `Boot####` и `BootNext` через `Get/SetFirmwareEnvironmentVariableEx`; для этого нужен администратор (`SeSystemEnvironmentPrivilege`);
+- находит запись флешки по её первому разделу (`HD(1,MBR,сигнатура,начало,размер)`, сигнатура и раздел прочитаны из MBR диска);
+- если записи нет, создаёт её — `MIND Core` с `\EFI\BOOT\BOOTX64.EFI` — под наименьшим свободным номером от `Boot0000` до `Boot00FF`;
+- `-Disk N` называет диск по номеру в «Управлении дисками» Windows, если MIND Core есть на нескольких.
+
+Отказывает он в том же, в чём `boot_switch.py`, только вместо Linux — Windows. `BootOrder` он не пишет никогда. `-Reboot` просит Windows перезагрузиться через 5 с (`shutdown /r /t 5`). Состояние хранится в `%ProgramData%\mind-boot-switch.json`.
+
+**Windows пишет на флешку.** Она монтирует FAT-тома флешки и может писать на них: `System Volume Information`, а при удалении файла — `$RECYCLE.BIN`. Такие записи, оборванные аппаратным сбросом, однажды повредили FAT флешки (2026-11-05). Поэтому:
+- пока работает Windows, перезагружайтесь через `shutdown /r` или `-Reboot`, никогда кнопкой питания;
+- ничего не удаляйте на флешке из Windows;
+- `logs` не копирует эти две папки Windows.
+
+**Проверено** на модели прошивки и дисков тестом `tests/boot_switch_ps1_test.ps1` (Windows PowerShell 5.1 или PowerShell 7: `powershell -ExecutionPolicy Bypass -File tests\boot_switch_ps1_test.ps1`). Сами вызовы прошивки на настоящей машине ещё не выполнялись.

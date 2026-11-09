@@ -1,6 +1,6 @@
 # 351-KRN-0218 — The updater's own client of the block store
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open · **Blocked by:** STO's `mind::blockstore::OWNER_UPDATER`, part of [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) on `claude/relaxed-meitner-5bmhpz` · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.3, MC-9.3
+**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open (`init`'s part done, below; the store's log of the first request waits for 351-UPD-0033) · **Blocked by:** — (STO's `mind::blockstore::OWNER_UPDATER` landed in round 92, 2026-11-08); the second criterion waits for [351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.3, MC-9.3
 
 Numbered by the kernel track on 2026-11-08 from STO's request (recorded in `requests-KRN.md` the same day). The plan is STO's, taken as it is.
 
@@ -19,6 +19,15 @@ Numbered by the kernel track on 2026-11-08 from STO's request (recorded in `requ
 
 - **Builds** x86 and aarch64. `stat caps` of the updater shows the client, and the store's log names its badge at its first request.
 - **The updater's own checks** (UPD's part, `requests-UPD.md`) pass in the `update` suite once that part lands.
+
+## Progress (2026-11-08)
+
+- **`init`** gives the updater, when `blockstore` runs, its own client of the store in slot 25 (`SLOT_BLOCKSTORE`), badged `OWNER_UPDATER | BADGE_GET | BADGE_PUT | BADGE_PUBLISH` (`0x17`).
+  - The updater already starts after `blockstore` in `init`'s order.
+  - Without the store, it gets none and runs as before.
+- **`docs/profile/bootstrap.md`'s row** for the updater names it.
+- **The `updater` suite** checks that the updater holds slot 25, and that the slot's badge is 23 (`0x17`), whenever `blockstore` runs.
+- **Left:** the store's log naming that badge at the updater's first request comes with STO's 351-UPD-0033, which makes the requests.
 
 ## Related
 
