@@ -1,7 +1,8 @@
 //! effector485 against `mindlink serve --run` over a pseudo-terminal (800-LNK-0011): a batch of put, mkdir, move, list,
 //! run with output and log; an idempotency key that repeats does the work once; cancel stops a running program; the
 //! queue and the results outlive the daemon; a lease holds the machine for one session (800-LNK-0021); two machines
-//! share one cable, each with its own queue and lease (800-LNK-0026).
+//! share one cable, each with its own queue and lease (800-LNK-0026); the API's version, the console stream and a
+//! supervised daemon (800-LNK-0039).
 mod common;
 
 use std::io::{BufRead, BufReader};
@@ -402,5 +403,88 @@ fn two_machines_on_one_cable() {
     assert!(d.join("srv1/held").is_dir() && !d.join("srv2/held").exists());
     let ones = ok(&["--agent", "link-1", "list"]);
     assert!(ones.lines().count() == 2 && ones.contains("B-") == false && ones.contains("test: put to 1") && ones.contains("test: waits"), "{ones}");
+    std::fs::remove_dir_all(&d).ok();
+}
+
+/// A JSON body for `raw`, as a POST carries it.
+fn post(at: &str, path: &str, body: &str) -> (String, String) {
+    raw(at, &format!("POST {path} HTTP/1.1\r\nHost: {at}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()))
+}
+
+/// The console's text from `from`, waited for until it holds `want` (or 10 s).
+fn console_until(at: &str, from: u64, want: &str) -> String {
+    let mut body = String::new();
+    for _ in 0..100 {
+        body = raw(at, &format!("GET /api/v1/console?agent_id=link&from={from} HTTP/1.1\r\nHost: {at}")).1;
+        if body.contains(want) { break; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    body
+}
+
+#[test]
+fn the_console_the_version_and_a_supervised_daemon() {
+    let d = std::env::temp_dir().join(format!("effector485-console-{}", std::process::id()));
+    std::fs::remove_dir_all(&d).ok();
+    for sub in ["srv", "state", "state2", "state3"] { std::fs::create_dir_all(d.join(sub)).unwrap(); }
+    // The other end's console is `cat`, and it prints two boot lines outside frames after its first answer.
+    let (_serve, line) = start(MINDLINK, &["pty", "serve", d.join("srv").to_str().unwrap(), "--console", "cat", "--banner", "U-Boot 2025.10\\nMIND Core loader\\n"]);
+    let pty = line.split_whitespace().nth(1).unwrap().to_string();
+    let (_daemon, at) = daemon(&pty, &d.join("state"));
+
+    // The version, the kinds and what each version brought.
+    let (head, body) = raw(&at, &format!("GET /api/v1/version HTTP/1.1\r\nHost: {at}"));
+    assert!(head.starts_with("HTTP/1.1 200") && body.contains("\"api_version\":\"1.1\"") && body.contains("\"kind\":\"shell\",\"required\":[\"line\"]"), "{body}");
+    assert!(body.contains("\"version\":\"1.0\"") && body.contains("/api/v1/console"), "{body}");
+
+    // The boot's lines, outside frames, are the console's first text.
+    let body = console_until(&at, 0, "MIND Core loader");
+    assert!(body.contains("\"text\":\"U-Boot 2025.10\\r\\nMIND Core loader\\r\\n\"") && body.contains("\"gap\":0"), "{body}");
+    assert!(body.contains("\"offered\":true") && body.contains("\"pieces\":[{\"offset\":0,"), "{body}");
+
+    // An input, sent twice under one number, is written once; `cat` gives it back.
+    let (head, body) = post(&at, "/api/v1/console/input", r#"{"agent_id":"link","seq":1,"text":"hello\n"}"#);
+    assert!(head.starts_with("HTTP/1.1 200") && body.contains("\"written\":true"), "{head} {body}");
+    let (_, body) = post(&at, "/api/v1/console/input", r#"{"agent_id":"link","seq":1,"text":"hello\n"}"#);
+    assert!(body.contains("\"written\":false"), "{body}");
+    let (_, body) = post(&at, "/api/v1/console/input", r#"{"agent_id":"link","seq":2,"data":"d29ybGQK"}"#);
+    assert!(body.contains("\"written\":true"), "{body}");
+    let body = console_until(&at, 0, "world");
+    assert!(body.contains("loader\\r\\nhello\\nworld\\n\"") && body.contains("\"input_seq\":2"), "{body}");
+    // From an offset: the bytes after it, and nothing past the end.
+    let body = console_until(&at, 4, "world");
+    assert!(body.contains("\"from\":4") && body.contains("\"text\":\"ot 2025.10") && body.contains("\"pieces\":[{\"offset\":4,"), "{body}");
+    let end = body.split("\"next\":").nth(1).unwrap().split(',').next().unwrap().to_string();
+    let (_, body) = raw(&at, &format!("GET /api/v1/console?agent_id=link&from={end} HTTP/1.1\r\nHost: {at}"));
+    assert!(body.contains("\"text\":\"\""), "{body}");
+    let (head, _) = post(&at, "/api/v1/console/input", r#"{"agent_id":"link","seq":3}"#);
+    assert!(head.starts_with("HTTP/1.1 400"), "{head}");
+
+    // Supervised: refused on a wide address, or without a key.
+    std::fs::write(d.join("key"), "a-test-key\n").unwrap();
+    let key = d.join("key");
+    let refused = |args: &[&str]| Command::new(EFFECTOR).args(args).output().unwrap();
+    let out = refused(&["daemon", "tcp:127.0.0.1:9", "--listen", "0.0.0.0:0", "--state", d.join("state2").to_str().unwrap(), "--key-file", key.to_str().unwrap(), "--supervised"]);
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("--supervised listens only on a loopback address"), "{out:?}");
+    let out = refused(&["daemon", "tcp:127.0.0.1:9", "--listen", "127.0.0.1:0", "--state", d.join("state2").to_str().unwrap(), "--supervised"]);
+    assert!(!out.status.success(), "{out:?}");
+    // On the loopback with a key: no page, the API behind the key, and it ends when its standard input closes.
+    let mut child = Command::new(EFFECTOR).args(["daemon", "tcp:127.0.0.1:9", "--listen", "127.0.0.1:0", "--state", d.join("state3").to_str().unwrap(),
+                                                 "--key-file", key.to_str().unwrap(), "--supervised"])
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut first = String::new();
+    BufReader::new(child.stdout.take().unwrap()).read_line(&mut first).unwrap();
+    let sup = first.split_whitespace().nth(3).unwrap().trim_end_matches(',').to_string();
+    let (head, _) = raw(&sup, &format!("GET / HTTP/1.1\r\nHost: {sup}\r\nX-API-Key: a-test-key"));
+    assert!(head.starts_with("HTTP/1.1 404"), "{head}");
+    let (head, _) = raw(&sup, &format!("GET /api/v1/version HTTP/1.1\r\nHost: {sup}"));
+    assert!(head.starts_with("HTTP/1.1 401"), "{head}");
+    let (head, _) = raw(&sup, &format!("GET /api/v1/version HTTP/1.1\r\nHost: {sup}\r\nX-API-Key: a-test-key"));
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    drop(child.stdin.take());
+    let ended = (0..50).any(|_| { std::thread::sleep(std::time::Duration::from_millis(100)); child.try_wait().unwrap().is_some() });
+    if !ended { child.kill().ok(); }
+    child.wait().ok();
+    assert!(ended, "a supervised daemon outlived its standard input");
     std::fs::remove_dir_all(&d).ok();
 }

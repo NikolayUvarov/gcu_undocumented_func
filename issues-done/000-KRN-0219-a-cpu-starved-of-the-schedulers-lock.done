@@ -1,6 +1,6 @@
-# 000-KRN-0219 — A CPU starved of the scheduler's lock while another takes it again and again (round 91's record)
+# 000-KRN-0219 — A CPU starved of the scheduler's lock while another takes it again and again (round 91's record) — done
 
-**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (the ticket lock refused by round 95's gate; a test-and-set lock with a turn for a CPU that waited long made and tested on the host, in QEMU and on acc-2, and in `main` since round 96, 5bc2ce6e; the 10 runs beside a busy lane left) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
+**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-11-09) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
 
 ## Problem
 
@@ -156,6 +156,34 @@
 - **Landed** in round 96 (`main` 5bc2ce6e, 2026-11-09): the gate passed, 55 groups on acc-1, acc-2, PCU and x32-128's two lanes, `aarch64: 16 CPUs` among them (186 s on x32-128).
 - **Left:** the 10 runs of `x86: network, TLS and Effector` on x32-128 beside a busy lane, started on 5bc2ce6e.
 
+## Resolution
+
+**All three criteria are met; the cause is a reading, not a proof (MC-12.2).**
+- **The host tests** (`tests/spinlock_host.rs`, run by `scripts/host_tests.sh`): a marked waiter is let in before the holder takes the lock again, and the three locks are printed beside each other.
+- **The gate** passed with the lock in round 96 (`main` 5bc2ce6e): 55 groups, `aarch64: 16 CPUs` among them.
+- **`kbench syscall ipc caps timer --quick` before and after,** in the kernel session's container (4 CPUs, QEMU 8.2.2, TCG), 2026-11-09:
+  - three runs of each image, one after the other: `main` dc715b7b (the old test-and-set lock, the last `main` without this one) and `main` 5bf2fc85 (this lock);
+  - each cell is the lowest to the highest of the three runs' medians.
+
+  | Row | 4 CPUs, old lock | 4 CPUs, this lock | 16 CPUs, old lock | 16 CPUs, this lock |
+  |---|---|---|---|---|
+  | uptime (empty call) | 2.56–8.43 µs | 1.98–8.63 µs | 2.43–5.32 µs | 2.12–6.48 µs |
+  | call and reply | 190–206 µs | 248–342 µs | 183–240 µs | 180–231 µs |
+  | mint and drop | 6.77–8.82 µs | 7.21–14.7 µs | 6.94–11.5 µs | 7.57–8.09 µs |
+  | revoke 1000 nodes | 1.91–2.96 ms | 688–916 µs | 1.75–2.55 ms | 613 µs–1.16 ms |
+  | revoke 10000 nodes | 17.9–24.2 ms | 5.57–7.41 ms | 16.3–18.5 ms | 7.35–11.2 ms |
+  | sleep 10 ms | 10.9–11.0 ms | 10.7–11.0 ms | 10.8–10.9 ms | 10.8–11.0 ms |
+
+  - **The revocations** are two to three times faster: their steps no longer spin `LET_GO_SPINS` before taking the lock again.
+  - **Call and reply on 4 CPUs** was slower in all three runs with this lock. On 16 CPUs the ranges overlap.
+    - Not explained. QEMU's times are not a machine's (MC-12.1).
+    - A machine's `kbench` before and after (000-KRN-0220's step 4) is where it would show, and that step names the row.
+- **10 runs in a row** of `x86: network, TLS and Effector` passed on x32-128 (`main` 5bc2ce6e, lane `KRN`), each in 1080 to 1105 s.
+  - **Beside them,** lane `KRN-2` ran `x86: files and block writes` 13 times, all passed (831 to 840 s).
+  - **Effector operations:** `20261109032835.031219122_003009` (the first) to `20261109061459.416415471_003031` (the last), with the build groups in each.
+- **What these runs show:** the stop of round 91 did not happen in them, on that machine and tree, not that its cause is gone (MC-12.2). The reading (a CPU losing every race for the old lock) fits what was seen and is not proven.
+- **If it happens again,** the record (000-KRN-0214) names the CPU and the task, and plan step 4 holds: the reading was wrong. A new issue starts from that record.
+
 ## Related
 
-[000-KRN-0214](../issues-done/000-KRN-0214-the-shell-stopped-answering-during-the-effector-screenshot.done) (the record), [000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md), 000-KRN-0104 (the revocation's steps), 000-KRN-0011 (calls answered without the lock), [000-KRN-0220](000-KRN-0220-the-application-processors-run-with-caches-disabled.md) (seen in the same record).
+[000-KRN-0214](000-KRN-0214-the-shell-stopped-answering-during-the-effector-screenshot.done) (the record), [000-KRN-0208](../issues/000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md), 000-KRN-0104 (the revocation's steps), 000-KRN-0011 (calls answered without the lock), [000-KRN-0220](../issues/000-KRN-0220-the-application-processors-run-with-caches-disabled.md) (seen in the same record).

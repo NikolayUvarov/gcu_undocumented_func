@@ -15,13 +15,16 @@ pub struct Bus {
     turn: Mutex<(u64, u64)>,
     next: Condvar,
     start: Instant,
+    /// What was read that is no frame (800-LNK-0039), for the console it belongs to.
+    pub stray: Mutex<crate::console::Stray>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
 impl Bus {
     pub fn new(spec: &str, baud: u32) -> Arc<Bus> {
-        Arc::new(Bus { spec: spec.into(), baud, port: Mutex::new((None, String::new())), turn: Mutex::new((0, 0)), next: Condvar::new(), start: Instant::now() })
+        Arc::new(Bus { spec: spec.into(), baud, port: Mutex::new((None, String::new())), turn: Mutex::new((0, 0)), next: Condvar::new(), start: Instant::now(),
+                       stray: Mutex::new(crate::console::Stray::new()) })
     }
 
     /// A serial port, rather than TCP: its wait for an answer comes from its rate.
@@ -33,6 +36,20 @@ impl Bus {
     pub fn error(&self) -> String { lock(&self.port).1.clone() }
 
     pub fn line(self: &Arc<Self>) -> BusLine { BusLine { bus: self.clone(), held: false } }
+
+    /// Between exchanges: what the line holds, read so that a boot's lines are seen as they come; the bytes outside
+    /// frames found so far, with the times they came.
+    pub fn drain(self: &Arc<Self>) -> Vec<(u64, Vec<u8>)> {
+        let mut line = self.line();
+        line.claim();
+        let mut buf = [0u8; 1024];
+        let mut quiet = true;
+        loop { let n = line.read(&mut buf, 0); if n == 0 { break; } quiet = false; }
+        line.release();
+        let mut stray = lock(&self.stray);
+        if quiet { stray.idle(); }
+        std::mem::take(&mut stray.found)
+    }
 
     /// The port opened when it is not, or failed.
     fn ready(&self) {
@@ -66,7 +83,7 @@ impl Line for BusLine {
     fn read(&mut self, out: &mut [u8], timeout_ms: u32) -> usize {
         let mut p = lock(&self.bus.port);
         match p.0.as_mut() {
-            Some(port) => port.read(out, timeout_ms),
+            Some(port) => { let n = port.read(out, timeout_ms); lock(&self.bus.stray).feed(&out[..n]); n }
             None => { drop(p); std::thread::sleep(Duration::from_millis(timeout_ms.min(100) as u64)); 0 }
         }
     }

@@ -43,7 +43,7 @@
 
 ## Related
 
-[100000](../issues/100000-a-phone-the-pinephone-first.md), [210-APL-0002](../issues/210-APL-0002-board-from-the-device-tree.md), [100000-KRN-0171](../issues/100000-KRN-0171-platform-devices-from-the-device-tree.md), [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md), [100000-PRT-0012](../issues/100000-PRT-0012-the-a64s-counter-erratum.md), [205](../issues/205-aarch64-boards.md) (the board from ACPI).
+[100000](../issues/100000-a-phone-the-pinephone-first.md), [210-APL-0002](../issues/210-APL-0002-board-from-the-device-tree.md), [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.done), [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md), [100000-PRT-0012](../issues/100000-PRT-0012-the-a64s-counter-erratum.md), [205](../issues/205-aarch64-boards.md) (the board from ACPI).
 
 ## Resolution
 
@@ -100,7 +100,7 @@
 **Left to other tasks:**
 - the shell's console on a 16550 and any run of a 16550 ([100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md));
 - the A64's counter erratum ([100000-PRT-0012](../issues/100000-PRT-0012-the-a64s-counter-erratum.md));
-- platform devices by node ([100000-KRN-0171](../issues/100000-KRN-0171-platform-devices-from-the-device-tree.md));
+- platform devices by node ([100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.done));
 - the simple framebuffer as the screen;
 - the kernel's version-refusal message on a board without ACPI, which still finds its console from the SPCR only (`acpi::early`);
 - a device key on a core without RNDR, such as the A64's: noted in 100000.

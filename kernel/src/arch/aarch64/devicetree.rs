@@ -1,7 +1,8 @@
 // The board from the device tree (100000-PRT-0009), when the firmware gives no ACPI (U-Boot's UEFI; Tow-Boot on the
 // PinePhone): the GIC, the virtual timer's interrupt, the CPUs PSCI starts and its conduit, the console `stdout-path`
 // names, a PL031, a generic ECAM and the reserved ranges, read by common/fdt.rs into board.rs's one record, as acpi.rs
-// fills it from the MADT, GTDT, FADT, SPCR and MCFG. The tree is untrusted: what lies outside the identity map is not used.
+// fills it from the MADT, GTDT, FADT, SPCR and MCFG; and the device nodes init may lend (100000-KRN-0171). The tree is
+// untrusted: what lies outside the identity map is not used, and a node is lent only by its own pages (scheduler.rs).
 use super::{acpi, board, fdt};
 use core::fmt::Write;
 use core::sync::atomic::Ordering;
@@ -63,6 +64,13 @@ pub unsafe fn init(address: u64) -> bool {
     acpi::CPU_COUNT.store(count, Ordering::Release);
     let mut reserved = 0;
     fdt::reserved(&tree, |start, size| { if board::reserve(start, size) { reserved += 1; } });
+    // The devices init may lend, the console flagged (100000-KRN-0171).
+    crate::platform_nodes::build(|table| fdt::devices(&tree, |d| {
+        let flags = if d.console { crate::abi::NODE_CONSOLE } else { 0 } | if d.more { crate::abi::NODE_MORE } else { 0 };
+        table.add(d.compatible, flags, &d.regs[..d.reg_count], &d.lines[..d.line_count]);
+    }));
+    let nodes = crate::platform_nodes::table();
+    let shared = (0..nodes.count()).filter(|&i| (0..nodes.get(i).map_or(0, |n| n.reg_count as usize)).any(|r| nodes.sharer(i, r).is_some())).count();
     let mut out = crate::PanicSerial;
     let uart = match (board::get(&board::UART_KIND), board::get(&board::UART_SHIFT), board::get(&board::UART_WIDTH)) {
         (board::UART_16550, shift, width) => ("16550", shift, width), _ => ("PL011", 0, 4),
@@ -72,6 +80,8 @@ pub unsafe fn init(address: u64) -> bool {
         board::get(&board::UART), uart.0, uart.1, uart.2, board::get(&board::UART_LINE), board::get(&board::TIMER_PPI), started,
         match b.psci { Some(fdt::Conduit::Smc) => "SMC", Some(fdt::Conduit::Hvc) => "HVC", None => "NONE" }, board::get(&board::RTC),
         if b.ecam.is_some() { "YES" } else { "NONE" }, reserved);
+    let _ = writeln!(out, "MIND CORE KERNEL: DEVICE TREE: {} DEVICE NODES TO LEND{}, {} OF THEM SHARING A PAGE WITH ANOTHER: THOSE PAGES ARE LENT TO NONE\r",
+        nodes.count(), if nodes.left_out() > 0 { " (MORE LEFT OUT)" } else { "" }, shared);
     if b.console.is_none() { crate::serial_print("MIND CORE KERNEL: DEVICE TREE: NO CONSOLE THIS KERNEL DRIVES IN stdout-path\n"); }
     if b.gic.is_none() { crate::serial_print("MIND CORE KERNEL: DEVICE TREE: NO GIC OF A KNOWN KIND\n"); }
     if left > 0 { let _ = writeln!(out, "MIND CORE KERNEL: DEVICE TREE: {} CPUS LEFT OUT (NOT STARTED THROUGH PSCI)\r", left); }

@@ -934,7 +934,7 @@ Appendix B.4 asks that the bootstrap and recovery set be available without a wor
   - a tool that repairs or re-creates an unmountable store (on the RAM disk a reset gives a blank medium, and with it every block is lost);
   - a whole store rebuilt from its copy on a second medium (MC-4.8): the names that had a copy are brought back one by one, `blocks rebuild` (309-STO-0041, above), and nothing else of the store;
   - recovery of the store from another store.
-- **Later:** when releases are kept in the store for self-update ([351-STO-0006](../../issues/351-STO-0006-releases-pinned-in-the-store.md)), the boot slots stay on the boot volume. The store holds a copy that can rebuild a slot, not the only source a boot needs.
+- **Releases kept for self-update** ([351-STO-0006](../../issues-done/351-STO-0006-releases-pinned-in-the-store.done), [351-UPD-0033](../../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done)): the boot slots stay on the boot volume. The store holds a copy that a rollback writes a damaged slot again from ([docs/update/updater.md](../update/updater.md#releases-kept-in-the-block-store-351-upd-0033)), not the only source a boot needs.
 
 Evidence: the QEMU `storefaults` suite (x86 and aarch64):
 - the store is killed: `init` restarts it (one more start in `svc`), and the new instance mounts the medium with its names and damage counts;
@@ -959,8 +959,8 @@ The quota is fixed: three quarters of the medium for every owner. Nobody grants 
 
 **Owners apart from rights (351-STO-0006).** The owner is the whole badge, below the domain clients' badges (`FIRST_DOMAIN_CLIENT`). Its bits 4 to 7 (`mind::blockstore::OWNER_BITS`) grant nothing, and bits 0 to 3 are the rights. So two clients with the same rights and other owner bits keep their names' charges, their pins and their accounts apart, and neither ends the other's pins.
 - `OWNER_UPDATER` (`0x10`) is the updater's owner. With get, put and publish its badge is `0x17`, beside the shell's `7`.
-- `init` does not give that client yet (requests-KRN.md). The updater does not put, pin or rebuild from releases yet (requests-UPD.md).
-- So on the platform nothing holds an owner apart from the shell's and `storefs`'s shared one.
+- `init` gives that client to the updater ([351-KRN-0218](../../issues-done/351-KRN-0218-the-updaters-store-client.done)), which keeps its releases as trees pinned by it, and names none ([351-UPD-0033](../../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done)).
+- Its account counts each release whole, though the blocks two releases share are stored once. The running, the last known good and a staged release are three, so the store's medium must be at least four times a release for the quota to hold them.
 
 A collection:
 - **Mark.** It walks every retained object (`tree::walk`, a file with `dag::walk`, a journal entry after entry): each node is read, checked against its CID and the shape, and marked, and each chunk is marked. If an object lacks a block or holds a corrupt node, the collection refuses (`incomplete`, `corrupt`) and frees nothing. A block the object still needs is never freed because another went missing.

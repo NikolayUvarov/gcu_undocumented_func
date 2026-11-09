@@ -1,0 +1,72 @@
+# 351-UPD-0033 — The updater keeps the running and the last-known-good release in the block store — done
+
+**Type:** `updater` · **Owner:** `STO`, by agreement with the update track's owner (the kernel session, 2026-11-08) · **Priority:** P3 · **Status:** done (2026-11-09) · **Blocked by:** — (`init`'s store client, [351-KRN-0218](351-KRN-0218-the-updaters-store-client.done), is in `main`) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.3, MC-12.1
+
+**Numbered by the update track's owner** at STO's offer (`requests-UPD.md`, 2026-11-08): STO makes it with the track's code and counter (AGENTS.md, section 2), in `updater/` and its tests, on its own branch. The plan is STO's, taken as it is; the update track's owner reviews the landing request.
+
+## Problem
+
+- **MC-9.3:** the recovery images and the objects they need are kept from ordinary cleanup. Today the last-known-good release lives only in the slot that booted, so a damaged slot can only be fetched again from a source.
+- **The block store** keeps what an owner pins until that owner ends the pin, and its collection never frees it. It holds files and directories as objects (`mind::dag`, `mind::tree`) and reads them back with every block checked against its CID.
+
+## Plan
+
+1. **Put each release in the store** (`init`'s client is requested of KRN in `requests-KRN.md`):
+   - when a fetch or an install has staged a release and its files have passed their checks, each file goes in as an object (`dag::Builder`), and the directory as a `mind::tree` root (`mind::worktree`);
+   - the root is pinned, and named `release/<version>` for people. Names are anyone's to change, so the updater never trusts one.
+2. **Keep two, after each confirmed boot** (351-KRN-0014): the pins of the running and of the last-known-good release stay; older ones end. The updater finds its releases by its own pins (`pins`) and the manifest each holds.
+3. **Rebuild a slot from the store** as from any other source (`source.rs`, beside `Https`, `Directory` and `Bundle`): the manifest is checked against the boot key and every file by size and SHA-256, so the store's copy can stage nothing the signatures do not allow. A minor version of `update.wit` asks for it, and `status` says which releases the store keeps.
+4. **Without the store,** or with a store too small, the updater runs as now and logs why it kept nothing.
+
+## Acceptance criteria
+
+- **QEMU, the `update` suite, x86 and aarch64,** with a store disk:
+  - after a confirmed update and a collection (`blocks collect`), the store holds both pinned releases whole;
+  - a slot damaged from the host is rebuilt from the store, and boots;
+  - the shell's store client cannot end the updater's pins.
+
+## Resolution
+
+Made by STO for the update track on `claude/relaxed-meitner-5bmhpz`, with `init`'s client from 351-KRN-0218 (in `main`). The plan above, as it stands, with these choices:
+
+- **A kept release** is a tree of the release layout (`updater/src/kept.rs`): `channels/<name>`, `releases/<version>/<processor>/MANIFEST` and `MANIFEST.SIG`, and each blob a slot holds under the first two digits of its name (`blobs/ab/ab…`), since about 143 blobs of 64-digit names fill a directory's block. It is pinned by `OWNER_UPDATER` through the updater's own client (`updater/src/store.rs`). **No name** points at it: a name keeps its versions, which would hold a release past its pin, so the plan's `release/<version>` was left out.
+- **When it is kept** (`main.rs`, `keep`):
+  - the running release, at start and once a trial is confirmed, if its slot's manifest is the one booted and signed by the boot key, and its channel the release key's naming it;
+  - a staged one, once `fetch` or `install-commit` has written it.
+  - Each file is read from the slot, or for an application the slot does not hold from the root, and checked by size and SHA-256 as it is put. A blob a kept release holds is taken from its tree.
+  - Not while a trial waits for its confirmation. Not without a store whose medium outlives a reset (said at start).
+- **Which stay** (`plan::keeps`, `plan::last_good`): the running release, the last known good (the newest below it and not below the minimum or the records' floor), and a staged one above it. The other pins end after a confirmed boot and after a staging, never on trial.
+- **A damaged slot written again** (`update.wit` 1.4): `rollback` first checks the other slot. If it is not as its manifest lists it, the last known good is written there from the store (`Source::Store`), with every check of `fetch` but the channel's expiry, then checked as the bootloader will check it.
+- **`blocks check <cid> tree`** (STO's program) reads every file of a tree whole.
+- **Docs:** [docs/update/updater.md](../docs/update/updater.md#releases-kept-in-the-block-store-351-upd-0033) 0.9 and its Russian version, [docs/idl](../docs/idl/README.md), [docs/storage](../docs/storage/README.md), the profile's Article 9 row.
+
+**Tested** in this session's container (4 CPUs, QEMU 8.2.2 under TCG), on `0d58f4c2 (the commits after it change only text)`, `main` with 351-KRN-0218 merged in:
+- **The `updatestore` suite** (run with `updater`, and alone), x86 and aarch64, with a blank store disk:
+  - release 5 is kept at the updater's start;
+  - `update fetch` stages release 6 and keeps it, putting only its changed `uptime.elf` and loader and taking the rest from release 5's tree;
+  - the store logs both pins with the updater's badge (23);
+  - the shell's client holds no pins and is refused the updater's (`Rights`);
+  - applied and confirmed, the store keeps both;
+  - a collection frees an object nothing retains, and both trees read back whole (`blocks check <cid> tree`);
+  - with the machine off, slot A's kernel and loader are damaged on the disk; `update rollback` writes release 5 back from the store, and slot A boots on trial with release 5's manifest and is confirmed;
+  - its files are then as published.
+  - The numbers, x86: release 5 put whole, 106 files and 26 032 232 bytes; release 6 with 104 of its 106 files taken from release 5's tree. aarch64: release 5 put whole, 109 files and 25 787 840 bytes in 70 s; release 6 with 107 of its 109 files taken, 220 897 bytes put, in 9 s.
+- **Also passed on both:** `updater` (the stub, with 351-KRN-0218's slot 25), `update`, `install`, `linkupdate`, `effector-update` and `store`.
+- **Host tests** (`tests/updater_host.rs`):
+  - which releases stay;
+  - a kept tree read back by the layout's paths;
+  - two releases sharing their blobs, with 400 blobs under their prefixes;
+  - trees out of shape or damaged, refused.
+  - Of ten faults put in by hand, eight were caught. The other two were checks another check already made, and they were dropped (9c4ce7b2).
+- Not run on real hardware.
+
+**Not done:**
+- **The acceptance criteria name the `update` suite.** The checks are in a suite of their own, `updatestore`, which runs with `updater` in the same groups.
+- **The shell's `update`** does not show the kept releases (APP's, if wanted); the log does.
+- **`apply`** does not write a damaged staged slot again from the store: `fetch` writes it again from the source.
+- **A collection in the minute between a block's put and the tree's pin** may free the block. The pin is then refused (`incomplete`), and the next start keeps the release.
+- **A quota of the updater's own** (303-STO-0002's "not done"). The account counts each release whole, so the medium must be at least four times a release for three.
+
+## Related
+
+[351-KRN-0218](351-KRN-0218-the-updaters-store-client.done), [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.done), 351-UPD-0007 (the updater's sources, STO's).

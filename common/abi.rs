@@ -60,12 +60,15 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // Bluetooth controller's driver `bt_hci` after `rtw88_wifi` (700-KRN-0176). ABI 26: COMPOSITOR_PULL returns in arg2 the
 // PID of the task whose screen is in front (750-KRN-0192). ABI 27 moves SLOT_DYNAMIC to 43 for SLOT_STOREFS, the shell's
 // client of `storefs`, a boot image after `keystore`, and lets a spawn carry SPAWN_GRANTS_MAX grants, one for each fixed
-// slot (32 before), as the shell's are 33 where `wlan` runs (311-KRN-0190).
+// slot (32 before), as the shell's are 33 where `wlan` runs (311-KRN-0190). ABI 28: devices outside PCI are platform
+// nodes (100000-KRN-0171): PLATFORM_NODES lists them, PLATFORM_MMIO takes a node's index and one of its register ranges,
+// PLATFORM_NODE_IRQ one of its lines; the fixed indices PLATFORM_UART, _RTC, _PINS_* and _TPM are gone, and aarch64's
+// PLATFORM_IRQ takes no line.
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 27;
+pub const ABI_VERSION: u32 = 28;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -515,7 +518,7 @@ pub const GRANT_MOVE: u16 = 1; // move the capability into the child instead of 
 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.
 pub const PLATFORM_PORTS: usize = 2; // base, count: only legacy ranges from the platform profile
-pub const PLATFORM_IRQ: usize = 3; // line of a platform device: ISA 1..15 except the cascade (2); aarch64 virt: 1 UART, 2 RTC
+pub const PLATFORM_IRQ: usize = 3; // line of a platform device: x86's ISA 1..15 except the cascade (2); none on aarch64 (a node's: PLATFORM_NODE_IRQ)
 pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port range or MMIO
 pub const PLATFORM_DEVICE_IRQ: usize = 5; // device index
 pub const PLATFORM_FRAMEBUFFER: usize = 6;
@@ -527,15 +530,35 @@ pub const PLATFORM_REPORT: usize = 11; // a read-only memory object with the har
 pub const PLATFORM_ACPI_TABLE: usize = 12; // index: a read-only copy of the n-th ACPI table of the report's list, ERR_NOT_FOUND past the last
 pub const PLATFORM_DEVICE_MSI: usize = 13; // device index: its MSI (one message), aimed by the kernel at an interrupt line 16..31 (550-KRN-0091)
 pub const PLATFORM_DEVICE_BAR_IDLE: usize = 14; // device index, memory BAR: MEM decode only, no I/O or DMA; verified readback
-pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
-pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
-pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
-pub const PLATFORM_PINS_PL061: usize = 0x10; // + n: the n-th PL061 pin controller the firmware's tables name (issue 206)
-pub const PLATFORM_PINS_BCM2711: usize = 0x20; // + n: the n-th BCM2711 GPIO (Raspberry Pi 4)
-pub const PLATFORM_PINS_MAX: usize = 4; // controllers of one kind
-// The TPM 2.0's registers of locality 0 (4 KiB) (351-KRN-0043): the CRB the ACPI TPM2 table names, or the FIFO. NOT_FOUND
-// until the kernel reads their place from the firmware's tables (issues/requests-KRN.md).
-pub const PLATFORM_TPM: usize = 0x30;
+pub const PLATFORM_MMIO: usize = 10; // node index, register range n: that range's pages (ERR_RIGHTS when another node, RAM or the kernel's own device shares them)
+pub const PLATFORM_NODES: usize = 15; // a read-only memory object: PlatformNodes, then its `count` PlatformNode records
+pub const PLATFORM_NODE_IRQ: usize = 16; // node index, line n: an interrupt line the kernel can bind (ERR_NOT_FOUND past its lines or beyond the kernel's)
+// The platform's devices outside PCI (100000-KRN-0171): the device tree's enabled nodes that have registers on the CPU's
+// bus (not the memory, the interrupt controller and the PCI host the kernel drives), or on a board without a tree the
+// same records the kernel makes from the ACPI tables (its UART, PL031, pin controllers and TPM).
+pub const NODE_REGS: usize = 4; // register ranges a record keeps
+pub const NODE_LINES: usize = 4; // interrupt lines a record keeps
+pub const NODE_COMPATIBLE: usize = 40; // bytes of its first compatible string, NUL-padded; a longer one is cut
+pub const PLATFORM_NODES_MAX: usize = 128;
+pub const NODE_CONSOLE: u32 = 1; // the console (`stdout-path`, the SPCR): the kernel's lines go there until it is lent
+pub const NODE_MORE: u32 = 2; // it has more register ranges or lines than the record keeps
+#[derive(Clone, Copy)] #[repr(C)]
+pub struct PlatformNode {
+    pub compatible: [u8; NODE_COMPATIBLE],
+    pub flags: u32,
+    pub reg_count: u8,
+    pub line_count: u8,
+    pub reserved: u16,
+    pub regs: [[u64; 2]; NODE_REGS], // base and size, as the CPU sees them
+    pub lines: [u32; NODE_LINES], // aarch64: SPI numbers (line n is GIC interrupt 32 + n)
+}
+impl PlatformNode {
+    pub const EMPTY: PlatformNode = PlatformNode { compatible: [0; NODE_COMPATIBLE], flags: 0, reg_count: 0, line_count: 0, reserved: 0, regs: [[0; 2]; NODE_REGS], lines: [0; NODE_LINES] };
+    /// Its first compatible string, without the padding.
+    pub fn compatible(&self) -> &[u8] { &self.compatible[..self.compatible.iter().position(|&b| b == 0).unwrap_or(NODE_COMPATIBLE)] }
+}
+#[derive(Clone, Copy)] #[repr(C)]
+pub struct PlatformNodes { pub count: u32, pub left_out: u32 } // left_out: nodes past PLATFORM_NODES_MAX
 // DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match, msg[1] = PCI
 // vendor | device << 16 to match as well (0: any); result = device index.
 

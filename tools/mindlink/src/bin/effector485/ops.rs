@@ -223,8 +223,13 @@ pub struct Link { pub agent: String, pub address: u8, pub port: String, pub onli
 
 /// `changes` counts the changes, so that the page's feeds see one without taking the lock. `links` are the machines
 /// on the cable, one for each address the daemon serves; `leases` at most one for each, kept in reservation.json (the
-/// machine `link`'s) or reservation-<agent>.json beside the operations.
-pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub links: Vec<Link>, dirty: bool, pub changes: Arc<AtomicU64>, pub leases: Vec<Lease> }
+/// machine `link`'s) or reservation-<agent>.json beside the operations. `consoles`: one for each machine, kept only in
+/// memory, and on a cable of several one more, `line`, for the bytes outside frames (800-LNK-0039).
+pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub links: Vec<Link>, dirty: bool, pub changes: Arc<AtomicU64>, pub leases: Vec<Lease>,
+                   pub consoles: Vec<crate::console::Console> }
+
+/// The console of the bytes outside frames on a cable of several machines.
+pub const LINE: &str = "line";
 
 /// Where a machine's lease is kept.
 fn lease_file(dir: &Path, agent: &str) -> PathBuf {
@@ -269,7 +274,8 @@ impl State {
             l.agent = link.agent.clone();
             leases.push(l);
         }
-        Ok(State { ops, next, file, links, dirty: false, changes: Arc::default(), leases })
+        let consoles = (0..links.len() + usize::from(links.len() > 1)).map(|_| crate::console::Console::new()).collect();
+        Ok(State { ops, next, file, links, dirty: false, changes: Arc::default(), leases, consoles })
     }
 
     /// Writes the state file when something changed: a new file renamed over the old, so a crash leaves one whole.
@@ -375,6 +381,15 @@ impl State {
 
     /// A machine's lease, while its time lasts.
     pub fn lease_at(&self, agent: &str, now: u64) -> Option<&Lease> { self.leases.iter().find(|l| l.agent == agent && l.expires > now) }
+
+    /// The console `agent` names: a machine's, or `line` on a cable of several.
+    pub fn console_of(&self, agent: &str) -> Option<usize> {
+        if agent == LINE && self.links.len() > 1 { return Some(self.links.len()); }
+        self.links.iter().position(|l| l.agent == agent)
+    }
+
+    /// Where the bytes outside frames go: the machine's console on a cable of one, else `line`'s.
+    pub fn stray_console(&self) -> usize { if self.links.len() > 1 { self.links.len() } else { 0 } }
 
     /// The machines as the API and the page show them: whether each answers, its queue and its lease.
     pub fn endpoints(&self, now: u64) -> Vec<Value> {

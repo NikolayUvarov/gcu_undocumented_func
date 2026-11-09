@@ -4,6 +4,7 @@ PHDRS {
     rodata PT_LOAD FLAGS(4);
     data PT_LOAD FLAGS(6);
     dynamic PT_DYNAMIC FLAGS(6);
+    stack PT_GNU_STACK FLAGS(6);
 }
 SECTIONS {
     . = 0;
@@ -21,5 +22,8 @@ SECTIONS {
     .data : { *(.data .data.*) *(.got .got.*) } :data
     .dynamic : { *(.dynamic) } :data :dynamic
     .bss (NOLOAD) : { *(.bss .bss.*) } :data
+    /* The stack it asks for (PT_GNU_STACK, 262-KRN-0164): main's frame holds two controllers' hwdocs tables, about 80 KiB
+       on aarch64, past the default 64 KiB (100000-KRN-0171 found it, gpio's first start in QEMU). */
+    .stack (NOLOAD) : { . = . + 0x40000; } :stack
     /DISCARD/ : { *(.eh_frame) }
 }

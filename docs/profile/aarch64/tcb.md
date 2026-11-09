@@ -11,9 +11,9 @@ Listed as differences from the [x86-64 TCB](../tcb.md); a guarantee not named he
 | CPU start, reset and power off | PSCI as implemented by the platform (QEMU, through HVC; firmware through SMC on hardware): `CPU_ON` starts a CPU at the kernel's trampoline, `SYSTEM_RESET` and `SYSTEM_OFF` end the machine. Only the holder of process control (the shell) may reset or power off. |
 | Keyboard input reaches only the focused task | Kernel; `virtio_input`, `usb_hid` and `shell` (they hold the input privilege); `usb_host` (it hands `usb_hid` the keyboard's reports). |
 | Screen shows the focused task | Kernel; `compositor`; the firmware's `ramfb` framebuffer as reported by GOP. |
-| Calendar time | `rtc` with the PL031's registers (`PLATFORM_MMIO`), the only holder. |
+| Calendar time | `rtc` with the PL031's registers (its platform node, `PLATFORM_MMIO`), the only holder. |
 | Secrecy of the device key; TLS key exchange | As on x86, with RNDR in place of RDRAND (no RNDR: no key and no TLS). |
-| The console | The kernel's PL011 lines; the shell holds the PL011's registers once it runs (`PLATFORM_MMIO`) and then is the only writer besides the kernel's panic and boot lines. |
+| The console | The kernel's PL011 lines; the shell holds the PL011's registers once it runs (the console's platform node, `PLATFORM_MMIO`; a 16550 console, the A64's, stays the kernel's) and then is the only writer besides the kernel's panic and boot lines. |
 
 ## Notes
 

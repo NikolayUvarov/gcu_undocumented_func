@@ -12,7 +12,7 @@ mod port;
 use linkproto::app::{Client, FileService};
 use linkproto::endpoint::code;
 use linkproto::frame::MAX_WIRE;
-use linkproto::{Error, Slave};
+use linkproto::{Error, Line, Slave};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -52,9 +52,10 @@ commands: hello                       the other end's name and version
           sniff [<seconds>]           the line's raw bytes as they come, in hex, for a check of the wiring (default 10 s)
           board <line>                a MIND Link board's control port: one command (hello, status, type <text>,
                                       key <chord>, move <dx> <dy>, click, abs <x> <y>; docs/link/multi-device.md)
-          serve <dir> [--log <file>] [--console <command>] [--run]
+          serve <dir> [--log <file>] [--console <command>] [--run] [--banner <text>]
                                       be the slave: files in <dir>, the log from <file>, a console running <command>;
-                                      --run lets the master start programs in <dir>, as this user
+                                      --run lets the master start programs in <dir>, as this user; --banner writes
+                                      <text> (\n a line's end) to the line after the first answer, outside frames
 names:    a path below the other end's directory, its parts joined by / (a/b/c.txt); no part . or ..
 options:  (before the command) --baud <rate>  serial rate (default 115200)
           --timeout <ms>              how long one try waits for an answer (default from the rate)
@@ -477,13 +478,14 @@ fn board(mut port: port::Port, line: &str) {
 
 fn serve(mut port: port::Port, args: &[String], o: &Options) {
     let mut dir = None;
-    let (mut log, mut cmd, mut runs) = (None, None, false);
+    let (mut log, mut cmd, mut runs, mut banner) = (None, None, false, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--run" => runs = true,
             "--log" => log = Some(PathBuf::from(it.next().unwrap_or_else(|| die("--log takes a file")))),
             "--console" => cmd = Some(it.next().unwrap_or_else(|| die("--console takes a command")).clone()),
+            "--banner" => banner = Some(it.next().unwrap_or_else(|| die("--banner takes a text")).replace("\\n", "\r\n")),
             d if dir.is_none() => dir = Some(PathBuf::from(d)),
             _ => { eprintln!("{USAGE}"); std::process::exit(2); }
         }
@@ -500,7 +502,9 @@ fn serve(mut port: port::Port, args: &[String], o: &Options) {
     slave.address = o.address;
     eprintln!("serving {} on {name}{}", dir.display(), if o.address != 0 { format!(", address {} on a shared line", o.address) } else { String::new() });
     loop {
-        if let Err(e) = slave.serve(&mut service, 1000) { die(explain(e)); }
+        let answered = slave.serve(&mut service, 1000).unwrap_or_else(|e| die(explain(e)));
+        // After the first answer, a text outside frames, as a console sharing the line prints (800-LNK-0039).
+        if answered > 0 { if let Some(text) = banner.take() { slave.line.write(text.as_bytes()); } }
         if slave.line.failed() {
             eprintln!("{name}: the line closed");
             return;
