@@ -1,5 +1,7 @@
-// The system log on the log volume (211-KRN-0019): each boot's records from logd are appended to log:/bootNNNN.log
-// and flushed every SAVE_MS, so a machine without a serial port leaves its log where any computer can read it.
+// The system log on the log volume (211-KRN-0019): each boot's records from logd are appended to log:/bootNNNN.log, so a
+// machine without a serial port leaves its log where any computer can read it. Saved as cadence.rs says (211-KRN-0223):
+// warnings within SAVE_MS, other records within ORDINARY_MS, everything at a flush; each save flushes the medium once
+// and leaves the volume marked dirty, which a flush (sync, a restart) clears.
 use crate::fat::{Node, Sectors, Volume};
 use alloc::format;
 use alloc::string::String;
@@ -7,14 +9,15 @@ use core::fmt::Write;
 use mind::idl::log;
 use mind::ipc::Endpoint;
 
-pub const SAVE_MS: u64 = 2000;
+pub use crate::cadence::SAVE_MS;
+use crate::cadence::Cadence;
 pub const RETRY_MS: u64 = 30_000; // after a save failed (the drive gone, 211-KRN-0050)
 const KEEP: u32 = 50; // boot logs kept on the volume; older ones are removed
 const CHUNK: usize = 16 * 1024; // written per save at most; the rest goes with the next one
 const LOW: u64 = 4 * 1024 * 1024; // free space kept: older boot logs make room, then this one stops
 
 // `failing`: the last save could not write; its records are written again by the next one, while logd keeps them.
-pub struct Journal { pub name: String, next: u64, pub due: u64, full: bool, pub failing: bool }
+pub struct Journal { pub name: String, next: u64, pub due: u64, full: bool, pub failing: bool, cadence: Cadence }
 
 // The number of a boot log's name (`boot0012.log`, a short name every FAT reader shows the same).
 fn number(name: &str) -> Option<u32> {
@@ -33,13 +36,29 @@ impl Journal {
         let mut node = volume.create(&root, &name, false, stamp).ok()?;
         volume.write(&mut node, 0, header.as_bytes(), stamp).ok()?;
         volume.flush().ok()?;
-        Some(Self { name, next: 0, due: 0, full: false, failing: false })
+        Some(Self { name, next: 0, due: 0, full: false, failing: false, cadence: Cadence::new() })
+    }
+
+    /// Whether a save is due now (cadence.rs): logd's records not looked at yet are read, without the disk.
+    pub fn wanted(&mut self, logd: Endpoint, now_ms: u64) -> bool {
+        if self.full { return false; }
+        let mut records = alloc::vec::Vec::new();
+        let mut from = self.cadence.seen(self.next);
+        // At most CHUNK's worth a look: a busy log is saved by its size soon anyway.
+        while records.len() < 256 {
+            let Ok(Ok(list)) = log::read(logd, from) else { break };
+            if list.is_empty() { break; }
+            for entry in list.as_slice() { records.push((entry.seq, entry.level)); from = entry.seq + 1; }
+            if records.iter().any(|&(_, level)| level >= crate::cadence::WARNING) { break; }
+        }
+        self.cadence.wanted(self.next, now_ms, records)
     }
 
     /// Appends the records logd has received since the last save, at the file's end as it is now; the file's node
     /// afterwards, for the handles open on it.
-    pub fn save<S: Sectors>(&mut self, volume: &mut Volume<S>, logd: Endpoint, stamp: u32) -> Option<Node> {
+    pub fn save<S: Sectors>(&mut self, volume: &mut Volume<S>, logd: Endpoint, stamp: u32, now_ms: u64) -> Option<Node> {
         if self.full { return None; }
+        self.cadence.saved(now_ms);
         let before = self.next;
         let saved = self.append(volume, logd, stamp);
         self.failing = saved.is_err();
@@ -73,7 +92,8 @@ impl Journal {
         };
         let end = node.size;
         volume.write(&mut node, end, text.as_bytes(), stamp).map_err(|_| ())?;
-        volume.flush().map_err(|_| ())?;
+        // One flush, the volume left marked dirty while the journal appends: a flush request marks it clean.
+        volume.flush_open().map_err(|_| ())?;
         Ok(Some(node))
     }
 
