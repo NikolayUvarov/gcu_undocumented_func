@@ -6045,6 +6045,13 @@ def link_suite(args):
             ip = link(port, "sh", "ip", timeout=200)
             assert re.search(r"^CARD \d", ip, re.M), ip
             require(link(port, "sh", "ps"), "link")
+            # 000-APP-0123: the machine's name, set from the link's client in developer mode at once, as the shell's other
+            # changes are, and logged; the console reads it back, and the file goes again.
+            require(link(port, "sh", "hostname", "DEXP-LINK"), "THE MACHINE'S NAME: dexp-link, KEPT IN data/machine/name")
+            require(vm.command("hostname"), "THE MACHINE'S NAME: dexp-link (data/machine/name)")
+            require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE MACHINE'S NAME: mindcore -> dexp-link")
+            require(link(port, "sh", "hostname", "my_pc", ok=None), "A CHARACTER OTHER THAN a-z 0-9 -")
+            require(vm.command("rm data/machine/name"), "OK")
             # Never from the link, whatever the developer mode allows (800-NET-0038).
             require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
             # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.

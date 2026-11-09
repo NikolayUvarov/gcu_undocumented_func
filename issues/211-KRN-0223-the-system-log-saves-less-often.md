@@ -66,6 +66,7 @@
   - **The plan's intent:** "everything at a flush" was meant for the shell's `sync` and `init`'s flush before a restart. Both flush volume roots.
 - **Fixed:** only a volume root's flush saves the journal now and flushes the log volume too. A file's flush writes its own volume only, as before this task.
 - **For APP** (the shell's 1 s for an answer that writes a file): told in a message; the broker's store on a slow disk may take longer than that whatever the log does.
+- **Landed** in round 100 (`main` 9c79dcc3, 2026-11-09): every group of the gate passed, `aarch64: network above 4 GiB` among them. APP gives the broker's answer 5 s (in its request for round 101).
 
 ## Related
 
