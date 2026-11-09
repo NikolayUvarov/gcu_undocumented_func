@@ -11,6 +11,8 @@ pub mod fadt;
 pub mod font;
 #[path = "../../common/font16.rs"]
 pub mod font16;
+#[path = "../../common/nodes.rs"]
+pub mod nodes; // the platform's nodes as PLATFORM_NODES hands them out (100000-KRN-0171)
 
 pub mod assertion;
 pub mod audio;

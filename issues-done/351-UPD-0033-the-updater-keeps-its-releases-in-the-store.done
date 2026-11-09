@@ -1,6 +1,6 @@
 # 351-UPD-0033 — The updater keeps the running and the last-known-good release in the block store — done
 
-**Type:** `updater` · **Owner:** `STO`, by agreement with the update track's owner (the kernel session, 2026-11-08) · **Priority:** P3 · **Status:** done (2026-11-09) · **Blocked by:** — (`init`'s store client, [351-KRN-0218](../issues/351-KRN-0218-the-updaters-store-client.md), is in `main`) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.3, MC-12.1
+**Type:** `updater` · **Owner:** `STO`, by agreement with the update track's owner (the kernel session, 2026-11-08) · **Priority:** P3 · **Status:** done (2026-11-09) · **Blocked by:** — (`init`'s store client, [351-KRN-0218](351-KRN-0218-the-updaters-store-client.done), is in `main`) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.3, MC-12.1
 
 **Numbered by the update track's owner** at STO's offer (`requests-UPD.md`, 2026-11-08): STO makes it with the track's code and counter (AGENTS.md, section 2), in `updater/` and its tests, on its own branch. The plan is STO's, taken as it is; the update track's owner reviews the landing request.
 
@@ -69,4 +69,4 @@ Made by STO for the update track on `claude/relaxed-meitner-5bmhpz`, with `init`
 
 ## Related
 
-[351-KRN-0218](../issues/351-KRN-0218-the-updaters-store-client.md), [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.done), 351-UPD-0007 (the updater's sources, STO's).
+[351-KRN-0218](351-KRN-0218-the-updaters-store-client.done), [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.done), 351-UPD-0007 (the updater's sources, STO's).

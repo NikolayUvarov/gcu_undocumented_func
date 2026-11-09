@@ -38,6 +38,8 @@ mod flowask;
 mod named;
 #[path = "../shell/src/hostname.rs"]
 mod hostname;
+#[path = "../shell/src/wifilend.rs"]
+mod wifilend;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -603,4 +605,31 @@ fn the_machines_name_is_one_label_and_mindcore_when_none() {
     assert_eq!(taken_by("hostname dexp", Client::Program), Taken::Asked);
     assert_eq!(taken_by("hostname dexp", Client::Link), Taken::Now);
     assert_eq!(taken_by("hostname dexp", Client::LinkConsole), Taken::Now);
+}
+
+#[test]
+fn a_start_gets_the_wifi_client_its_bits_ask_for() {
+    // 550-APP-0124: the reading client for REQUEST_WIFI_READ alone, the changing one for REQUEST_WIFI (with or without
+    // the other bit); none without a station or without `wifi` declared in a script.
+    use wifilend::{lend, Lend};
+    assert_eq!(lend(false, true, true, true), Lend::Reading);
+    assert_eq!(lend(true, false, true, true), Lend::Changing);
+    assert_eq!(lend(true, true, true, true), Lend::Changing, "both bits: the changing one");
+    assert_eq!(lend(false, false, true, true), Lend::None);
+    for (change, read) in [(true, false), (false, true), (true, true)] {
+        assert_eq!(lend(change, read, false, true), Lend::None, "no station");
+        assert_eq!(lend(change, read, true, false), Lend::None, "a script without `wifi`");
+    }
+}
+
+#[test]
+fn a_scripts_wait_answers_a_question_with_the_serial_lines_bytes() {
+    // 000-APP-0125: in a script's wait the shell's decoder does not run, so the question reads bytes: N, O, S, A in
+    // either case, Esc and Enter as no; a control byte is no key, and is held back.
+    use flowask::{answer, byte_key, Answer};
+    let answered = |byte: u8| byte_key(byte).and_then(|(ch, escape, enter)| answer(ch, escape, enter));
+    assert_eq!([answered(b'n'), answered(b'O'), answered(b's'), answered(b'A')], [Some(Answer::No), Some(Answer::Once), Some(Answer::Session), Some(Answer::Always)]);
+    assert_eq!([answered(0x1B), answered(b'\r'), answered(b'\n')], [Some(Answer::No); 3], "Esc and Enter: no, the default");
+    assert_eq!(answered(b'x'), None, "another character: held back");
+    assert_eq!(byte_key(0x03), None, "Ctrl+C is no key here: the question keeps the script from stopping");
 }

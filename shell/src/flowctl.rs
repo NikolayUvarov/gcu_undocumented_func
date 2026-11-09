@@ -49,9 +49,8 @@ pub fn tend(shell: &mut Shell, now: u64) {
     };
     let back = shell.active;
     shell.activate(session);
-    if shell.term.position().col != 0 { shell.term.print_char(b'\n'); }
     let text = flowask::question(q.program.as_str(), q.pid, q.host.as_str(), q.port, q.why.as_str());
-    let _ = write!(shell.term, "{}", text);
+    say(shell, |term| { if term.position().col != 0 { term.print_char(b'\n'); } let _ = write!(term, "{}", text); });
     shell.term.render(None);
     // A program in front of the console shown has the keys: the shell takes them for the answer and gives them back.
     let held = shell.focused.filter(|_| session == shell.shown && !is_window(session));
@@ -65,11 +64,19 @@ pub fn tend(shell: &mut Shell, now: u64) {
 /// A key on the session the question is on: N, O, S, A, or Esc and Enter for no, answer it, and any other is held
 /// back while it shows; true. False when its program has ended meanwhile: the question is taken down and the key is
 /// the shell's as before.
-pub fn key(shell: &mut Shell, key: Key) -> bool {
+pub fn key(shell: &mut Shell, key: Key) -> bool { respond(shell, key.char(), key.is_escape(), key.code() == mind::input::Code::Enter) }
+
+/// A byte of the serial line, in a script's wait (000-APP-0125): as `key`, a byte no key gives held back.
+pub fn byte(shell: &mut Shell, byte: u8) -> bool {
+    match flowask::byte_key(byte) { Some((ch, escape, enter)) => respond(shell, ch, escape, enter), None => !gone(shell) && shell.asking.is_some() }
+}
+
+// The key's character, or Esc or Enter, given to the question: `key`'s answer.
+fn respond(shell: &mut Shell, ch: Option<char>, escape: bool, enter: bool) -> bool {
     if gone(shell) { finish(shell, "(GONE: ITS PROGRAM ENDED)"); return false; }
     let Some((id, since)) = shell.asking.as_ref().map(|a| (a.id, a.since)) else { return false };
     if (mind::time::uptime_ms() as u64) < since + flowask::GUARD_MS { return true; }
-    let Some(answer) = flowask::answer(key.char(), key.is_escape(), key.code() == mind::input::Code::Enter) else { return true };
+    let Some(answer) = flowask::answer(ch, escape, enter) else { return true };
     let choice = match answer { Answer::No => netpolicy::Choice::No, Answer::Once => netpolicy::Choice::Once, Answer::Session => netpolicy::Choice::Session, Answer::Always => netpolicy::Choice::Always };
     let line = match wire::with_timeout(CALL_MS * 5, || netpolicy::answer(BROKER, id, choice)) {
         Ok(Ok(())) => alloc::format!("{}", flowask::word(answer)),
@@ -94,11 +101,19 @@ fn finish(shell: &mut Shell, line: &str) {
     let Some(asking) = shell.asking.take() else { return };
     let back = shell.active;
     shell.activate(asking.session);
-    let _ = writeln!(shell.term, "{}", line);
+    say(shell, |term| { let _ = writeln!(term, "{}", line); });
     if let Some(pid) = asking.held.filter(|&pid| mind::process::alive(pid) && asking.session == shell.shown) { let _ = control::focus(pid, true); }
     if shell.focused.is_none() && shell.console.is_none() { shell.prompt(); }
     shell.term.render(None);
     shell.activate(back);
+}
+
+// Lines on the console itself, not into what a script running there keeps of its program's output (000-APP-0125):
+// the question is the user's, not the program's.
+fn say(shell: &mut Shell, print: impl FnOnce(&mut crate::console::Console)) {
+    let kept = shell.term.capture.take();
+    print(&mut shell.term);
+    shell.term.capture = kept;
 }
 
 fn where_(session: usize) -> String {

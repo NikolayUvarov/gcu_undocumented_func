@@ -40,6 +40,7 @@ mod storescope;
 mod tpm;
 mod updatectl;
 mod updates;
+mod wifilend;
 mod voicectl;
 
 use alloc::string::String;
@@ -67,6 +68,8 @@ const NAMES: usize = 128; // as many as the loader lists (loader.wit 1.4)
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
 const SCOPE_RECEIVE: usize = 11;
+// How long a start waits for the Wi-Fi station's reading client, in ms (550-APP-0124).
+const WIFI_MS: u32 = 1000;
 // Where a capability sent with a request of the shell's commands (idl/shell.wit) would arrive, to be dropped: a fixed
 // slot the shell holds nothing in.
 const COMMANDS_RECEIVE: usize = SLOT_SHELL;
@@ -822,7 +825,11 @@ impl Shell {
         let battery = requests & mind::process::REQUEST_BATTERY != 0 && mind::dev::cap_info(SLOT_BATTERY).0 != 0 && granted("battery");
         // The Wi-Fi station's configuration client (550-APP-0033, ABI 10), held while a radio runs: starting `wifi` is the
         // user's request to choose a network.
-        let wifi = requests & mind::process::REQUEST_WIFI != 0 && mind::dev::cap_info(SLOT_WIFI).0 != 0 && granted("wifi");
+        // Its reading client (550-APP-0124, wifi.wit 1.3): for a program that asks only to read (REQUEST_WIFI_READ), the
+        // one the station mints, which changes nothing, so starting the program is enough; with both bits, the one above.
+        let wifi_lend = wifilend::lend(requests & mind::process::REQUEST_WIFI != 0, requests & mind::process::REQUEST_WIFI_READ != 0,
+                                       mind::dev::cap_info(SLOT_WIFI).0 != 0, granted("wifi"));
+        let (wifi, wifi_read) = (wifi_lend == wifilend::Lend::Changing, wifi_lend == wifilend::Lend::Reading);
         // A network card's counters (000-APP-0049, ABI 10): a copy of the shell's card client with BADGE_COUNTERS, which
         // only reads the card; it reaches nothing on the network, so a script's `network` covers it.
         let counters = requests & mind::process::REQUEST_NET_COUNTERS != 0 && mind::dev::cap_info(SLOT_NET).0 != 0 && granted("network");
@@ -882,6 +889,14 @@ impl Shell {
             if storescope::make(volume, SCOPE_RECEIVE) {
                 let _ = lend(SLOT_STOREFS, SCOPE_RECEIVE);
                 let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); // the loader holds its copy
+            }
+        }
+        // Not needed to start either: without it the program runs as without a radio, and the serial line says why.
+        if wifi_read {
+            match mind::idl::wire::with_timeout(WIFI_MS, || mind::idl::wifi::reader(Endpoint(SLOT_WIFI), SCOPE_RECEIVE)) {
+                Ok(Ok(())) => { let _ = lend(SLOT_WIFI, SCOPE_RECEIVE); let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy
+                Ok(Err(error)) => mind::println!("[SHELL] {}: THE STATION GAVE NO READING CLIENT ({:?}); IT RUNS WITHOUT ONE", name.to_ascii_uppercase(), error),
+                Err(error) => mind::println!("[SHELL] {}: THE STATION DID NOT ANSWER FOR A READING CLIENT ({:?}); IT RUNS WITHOUT ONE", name.to_ascii_uppercase(), error),
             }
         }
         // A program that asks for the network gets what the policy broker grants it, or runs without (issue 102).

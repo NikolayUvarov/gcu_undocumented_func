@@ -31,6 +31,8 @@ mod abi;
 mod fadt;
 #[path = "../../common/spinlock.rs"]
 mod spinlock;
+#[path = "../../common/nodes.rs"]
+mod nodes;
 use abi::BootInfo;
 // The processor and platform: only through these names (issue 200).
 mod arch;
@@ -47,6 +49,7 @@ mod report;
 mod memory;
 mod paging;
 mod pci;
+mod platform_nodes;
 mod scheduler;
 mod screen;
 mod task_state;
@@ -117,6 +120,8 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         let info = &*raw_info;
         // The board from ACPI, else from the device tree a board without ACPI gives (100000-PRT-0009).
         if info.acpi_rsdp != 0 || !platform::board_from_tree(info.device_tree) { acpi::init(info.acpi_rsdp); }
+        // The devices outside PCI that init may lend, from the tree or else from the firmware's tables (100000-KRN-0171).
+        platform::nodes();
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         // The identity map first: the frame pool writes its lists into RAM above 4 GiB, which only it maps (issue 171).
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");

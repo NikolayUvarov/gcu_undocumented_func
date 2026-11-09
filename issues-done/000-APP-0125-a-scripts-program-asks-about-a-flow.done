@@ -1,0 +1,45 @@
+# 000-APP-0125 — A program a script runs puts its question about a flow to the user — done
+
+**Type:** tools (`shell`, `msh`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.11, MC-11.5
+
+**Asked by:** NET, 2026-11-06, in [requests-APP.md](../issues/requests-APP.md), for [000-NET-0048](../issues/000-NET-0048-get-a-wget-and-curl-analog.md) (`get`). Numbered on 2026-11-08.
+
+## Problem
+
+`get` asks through its grant for a host the grant does not name (`socket.wit` 2.8). The shell's question (000-APP-0120) shows it when `get` is in front of a console. Started from a script (`msh -c "get …"`, `msh file`), it is not shown:
+- `ShellHost::run` (`shell/src/msh.rs`) waits on the program with a loop of its own, which does not call `flowctl::tend`;
+- so the broker refuses the question at 60 s, and `get` ends with 7.
+
+The same holds for any program a script runs that asks.
+
+## Plan
+
+- The script's wait puts the question to the user as the shell's loop does: on the script's console, with the program's keys taken for the answer and given back.
+- The answer's key is not read as the script's Esc or Ctrl+C.
+- Until then `docs/network/downloads.md` says that a script's `get` is refused after 60 s (NET's text).
+
+## Acceptance criteria
+
+- **QEMU, the `net` suite:** a script's `get` to a host its grant does not name shows the question; N refuses it and O lets it through. The script goes on after either, and Esc still stops the script when no question shows.
+- **Host tests** for the keys while a question shows in a script's wait.
+
+## Resolution
+
+Done in e79e513e0 on `claude/wizardly-franklin-kec1a9`:
+- **The script's wait** (`ShellHost::run`, `shell/src/msh.rs`) tends `flowctl` as the shell's loop does. While a question shows on the script's console, its keys answer it:
+  - from the keyboard as keys, and from the serial line as bytes (`flowask::byte_key`);
+  - Esc and Enter answer no, and none of them stops the script.
+- **The question's lines** bypass the script's capture of its program's output.
+- **docs/tools** in both languages, and NET's `docs/network/downloads.md`, say so.
+
+**Tests:**
+- **Host** (`tests/shell_host.rs`): the serial line's bytes N, O, S and A in either case, Esc and Enter as no, another byte held back, and Ctrl+C no key while a question shows.
+- **QEMU, x86, 4 CPUs, TCG, the `net` suite** (e79e513e0): `get_runs` asks from `msh -c "get …; print(4000 + 321)"`.
+  - Esc answers no and `get` is refused, and the script goes on and prints 4321.
+  - O lets `get` through once.
+  - N as the answer was run on QEMU outside a script, and is host-tested in the script's byte path.
+- **The `shell` suite** passed in the same run. Its `msh` check stops a script in an endless loop with Ctrl+Z (0x1A), which the same `interrupted` reads as it reads Esc when no question shows.
+
+## Related
+
+[000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done), [000-NET-0048](../issues/000-NET-0048-get-a-wget-and-curl-analog.md).

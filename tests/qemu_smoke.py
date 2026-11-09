@@ -935,12 +935,15 @@ def hardware_report_check(vm):
 
 
 def normal_suite(vm):
-    # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207). No ECDT either:
-    # no embedded controller, so no battery service (211-PRT-0008).
+    # No pin controller on QEMU with ACPI (virt's tables name none, issue 206): gpio is not started (issue 207). With a
+    # device tree, virt's PL061 is a platform node, and gpio drives it (100000-KRN-0171). No ECDT either: no embedded
+    # controller, so no battery service (211-PRT-0008).
     services = vm.services()
-    assert "gpio" not in services and "battery" not in services, services
+    tree = vm.arch == "aarch64" and "acpi=off" in (getattr(vm.args, "machine", None) or "")
+    assert ("gpio" in services) == tree and "battery" not in services, services
     if vm.arch == "aarch64":
-        require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
+        if not tree: require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
+        else: require(vm.log, "[GPIO] pl061 WITH 8 PINS")
         require(vm.log, "[INIT] battery NOT STARTED: NO DEVICE")
     else:
         # 211-PRT-0003: the tick from the LAPIC timer, measured on the ACPI PM timer (QEMU's chipsets have one).
@@ -1089,12 +1092,17 @@ def normal_suite(vm):
         require(registers, "HLT=1")
     cpus = vm.hmp("info cpus")
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
+    if vm.arch != "aarch64":
+        # 000-KRN-0220: every CPU runs with its caches on, CD (bit 30) and NW (bit 29) of CR0 clear; the APs start from
+        # INIT with both set. QEMU's TCG models no cache, so only the bits say it.
+        cr0 = [int(v, 16) for v in re.findall(r"CR0=([0-9a-f]{8})", vm.hmp("info registers -a"))]
+        assert len(cr0) == vm.cpus and all(v & (3 << 29) == 0 for v in cr0), [f"{v:08X}" for v in cr0]
     vm.serial()
     # Every CPU the machine has is online in the guest (issue 171: no cap of 8).
     online = vm.command("cpus")
     assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
     assert heap_used(vm) == baseline
-    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, {idle}, {vm.cpus} CPUs", flush=True)
+    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, {idle}, {vm.cpus} CPUs{', each with its caches on (CR0)' if vm.arch != 'aarch64' else ''}", flush=True)
     if vm.cpus > 8:
         monitors_every_cpu(vm)
         clocks_on_many_cpus(vm)
@@ -1122,6 +1130,9 @@ def normal_suite(vm):
     # tree, 100000-PRT-0009) there is no DSDT to read: the policy is unknown, and a radio sends nothing.
     if "acpi=off" in (getattr(vm.args, "machine", None) or ""):
         require(log, "[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN (no-dsdt): A RADIO SENDS NOTHING")
+        # 100000-KRN-0171: U-Boot's tree keeps the PL031 enabled, and rtc gets it through its node.
+        if getattr(vm.args, "uboot", None):
+            assert re.search(r"\[INIT\] PLATFORM NODES: \d+; CONSOLE \d+, RTC \d+, PL061 \d+", log), log[-1500:]
     else:
         assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
     if vm.arch != "aarch64":
@@ -9425,7 +9436,7 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
         assert code == expected, (arguments, out)
 
     # A host its grant does not name: asked of the user at run time (socket.wit 2.8), on the console get runs in front
-    # of. A script's program is not asked yet: msh's wait on it does not put the question (requests-APP.md).
+    # of, and from a script (000-APP-0125, below).
     asked = f"https://10.0.2.2:{asked_port}/api/final?asked=1"
 
     def answered(key):
@@ -9446,13 +9457,30 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
     assert f"GET: 10.0.2.2:{asked_port}: REFUSED BY THE USER" in out and "the end asked=1" not in out, out
     out = answered(b"o")
     assert "the end asked=1" in out and "REFUSED" not in out, out
+    # 000-APP-0125: a script's get is asked too. msh's wait on its program puts the question on the script's console and
+    # gives it the key: Esc answers no and leaves the script going (it prints 4321 after get); O lets it through once.
+    def in_script(key):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(f'msh -c "get {asked} or {{ print(error) }}; print(4000 + 321)"\n')
+        vm.logged("ALWAYS? ", since, timeout=30)
+        time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
+        vm.send_bytes(key)
+        vm.expect("MIND> ", timeout=60, after="4321")
+        out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+        require_all(out, "NETWORK: get (PID ", f") ASKS TO REACH 10.0.2.2:{asked_port}", {b"\x1b": "NO\n", b"o": "ONCE\n"}[key])
+        return out
+    out = in_script(b"\x1b")
+    assert f"GET: 10.0.2.2:{asked_port}: REFUSED BY THE USER" in out and "the end asked=1" not in out, out
+    out = in_script(b"o")
+    assert "the end asked=1" in out and "REFUSED" not in out, out
     require(vm.service_logs("netpolicy", "ASKS FOR"), f"ASKS FOR 10.0.2.2:{asked_port} TCP")
 
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
           "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
           "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's; a host not in its grant asked at run "
-          "time, refused and allowed once", flush=True)
+          "time, refused and allowed once, from a script too (Esc answering no without stopping the script)", flush=True)
 
 
 def pinned_runs(vm, certificates, port, rogue_port, expired_port):
@@ -9899,7 +9927,15 @@ def wifi_join_check(vm):
     vm.logged("SHELL RESUMED.", since)
     print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7); Settings' network "
           "page names the country the access point announced (550-APP-0082)", flush=True)
-    run("wifi leave", 30, "[WIFI] LEFT")
+    # 550-APP-0124: a program that asks only to read gets the station's reading client from the shell: the link and the
+    # country read, a leave and a country denied, the station as it was; one that asks for both gets the changing one.
+    run("wifiro status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifiro leave", 30, "[WIFI] NOT LEFT: wifi's client of the station only reads")
+    run("wifiro country US", 30, "[WIFI] COUNTRY US NOT SET: WIFI'S CLIENT OF THE STATION ONLY READS")
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifiboth leave", 30, "[WIFI] LEFT")
+    print("PASS: the shell lends the station's reading client (550-APP-0124): a program asking only to read read the link "
+          "and was denied a leave and a country, the station still joined; one asking for both left the network", flush=True)
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
     # 550-APP-0082 over 550-NET-0035 stage B: with none chosen the station runs under the country wlansim's access point
@@ -10140,6 +10176,13 @@ def net_suite(args, disk):
     elf = bytearray((disk / "netcheck.elf").read_bytes())
     elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 0x400000).to_bytes(4, "little")
     (disk / "wificheck.elf").write_bytes(elf)
+    # 550-APP-0124: copies of wifi asking for the station's reading client alone (REQUEST_WIFI_READ 1 << 28 in place of
+    # REQUEST_WIFI 1 << 22), and for both, which the shell answers with the changing one.
+    for copy, clear, add in (("wifiro", 0x400000, 0x10000000), ("wifiboth", 0, 0x10000000)):
+        elf = bytearray((disk / "wifi.elf").read_bytes())
+        at = elf.index(b"MINDREQ1") + 8
+        elf[at:at + 4] = ((int.from_bytes(elf[at:at + 4], "little") & ~clear) | add).to_bytes(4, "little")
+        (disk / f"{copy}.elf").write_bytes(elf)
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
@@ -14393,8 +14436,15 @@ def devicetree_suite(args, disk):
         assert board.groups() == (version, "0x8000000", "0x9000000", "1", "27", str(vm.cpus), "HVC", "0x0", "YES"), board.groups()
         online = vm.command("cpus")
         assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
+        # 100000-KRN-0171: the tree's device nodes, the PL011 lent to the shell through its node (the commands above came
+        # through it) and AAVMF's disabled PL031 not listed, so not handed out.
+        nodes = re.search(r"MIND CORE KERNEL: DEVICE TREE: (\d+) DEVICE NODES TO LEND, (\d+) OF THEM SHARING A PAGE WITH ANOTHER", vm.log)
+        listed = re.search(r"\[INIT\] PLATFORM NODES: (\d+); CONSOLE (-?\d+), RTC (-?\d+), PL061 (-?\d+)", vm.log)
+        assert nodes and listed and nodes[1] == listed[1] and int(nodes[1]) >= 4, (nodes, listed, vm.log[-3000:])
+        assert int(listed[2]) >= 0 and listed[3] == "-1" and int(listed[4]) >= 0, listed.groups()
         print(f"PASS: devicetree: without ACPI the loader's line and the kernel's board come from the tree (GICv{version}, "
-              f"the PL011, the timer's PPI 27, {vm.cpus} CPUs through PSCI, the ECAM; AAVMF's PL031 left out as disabled); the shell with every CPU online", flush=True)
+              f"the PL011, the timer's PPI 27, {vm.cpus} CPUs through PSCI, the ECAM; AAVMF's PL031 left out as disabled); the shell with every CPU online; "
+              f"{nodes[1]} device nodes, {nodes[2]} sharing a page, the console's lent to the shell, the disabled PL031 not listed", flush=True)
     finally:
         vm.close()
 

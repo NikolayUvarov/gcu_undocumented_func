@@ -413,3 +413,54 @@ pub fn reserved(tree: &Tree, mut each: impl FnMut(u64, u64)) {
     let Some(parent) = tree.at_path(b"/reserved-memory") else { return };
     tree.walk(|n| { if n.is_child_of(&parent) && n.enabled() { if let Some(reg) = n.reg() { for (a, s) in reg { each(a, s); } } } true });
 }
+
+/// A device node the kernel may lend (100000-KRN-0171): enabled with its ancestors, with a compatible string and every
+/// `reg` range on the CPU's bus; not memory, `/reserved-memory`'s, the GIC and what it holds, nor a generic ECAM host,
+/// which the kernel drives. Its first DEVICE_MAX ranges and SPIs; `more` when it has others.
+pub const DEVICE_MAX: usize = 8;
+pub struct Device<'a> {
+    pub compatible: &'a [u8],
+    pub regs: [(u64, u64); DEVICE_MAX],
+    pub reg_count: usize,
+    /// Its interrupts that go to the GIC as SPIs, by number (line n is interrupt 32 + n).
+    pub lines: [u32; DEVICE_MAX],
+    pub line_count: usize,
+    pub more: bool,
+    /// The console `stdout-path` names.
+    pub console: bool,
+}
+
+/// Calls `each` with every device node, in the tree's order.
+pub fn devices(tree: &Tree, mut each: impl FnMut(&Device)) {
+    let gic_node = tree.find(|n| n.enabled() && n.has("interrupt-controller") && (n.compatible(&["arm,gic-v3"]) || n.compatible(&GIC_V2)));
+    let gic = gic(tree);
+    let console = tree.stdout().map(|(n, _)| n.at);
+    let reserved = tree.at_path(b"/reserved-memory");
+    tree.walk(|n| {
+        if n.depth == 0 { return true; }
+        let within = |other: &Option<Node>| other.as_ref().is_some_and(|o| n.at == o.at || (o.depth < n.depth && n.up[o.depth] == o.at));
+        let kernels = within(&gic_node) || within(&reserved) || (1..=n.depth).any(|d| n.ancestor(d).is_some_and(|a| a.compatible(&["pci-host-ecam-generic"])));
+        if kernels || n.string("device_type") == Some(b"memory") || !(1..=n.depth).all(|d| n.ancestor(d).is_some_and(|a| a.enabled())) { return true; }
+        let Some(compatible) = n.prop("compatible").and_then(|v| v.split(|&b| b == 0).next()).filter(|c| !c.is_empty()) else { return true };
+        let Some(reg) = n.reg() else { return true };
+        let step = 4 * (reg.address + reg.size) as usize;
+        let total = if step == 0 { 0 } else { reg.value.len() / step };
+        let mut device = Device { compatible, regs: [(0, 0); DEVICE_MAX], reg_count: 0, lines: [0; DEVICE_MAX], line_count: 0, more: false, console: console == Some(n.at) };
+        let mut translated = 0;
+        for range in reg {
+            if translated < DEVICE_MAX { device.regs[translated] = range; } else { device.more = true; }
+            translated += 1;
+        }
+        // A range that does not reach the CPU's bus (behind an I2C or SPI controller, a bus without `ranges`): not ours.
+        if total == 0 || translated != total { return true; }
+        device.reg_count = translated.min(DEVICE_MAX);
+        if let Some(g) = gic.as_ref() {
+            for index in 0..n.prop("interrupts").map_or(0, |v| v.len() / 12) {
+                let Some((0, number)) = interrupt(n, g, index) else { continue };
+                if device.line_count < DEVICE_MAX { device.lines[device.line_count] = number; device.line_count += 1; } else { device.more = true; }
+            }
+        }
+        each(&device);
+        true
+    });
+}

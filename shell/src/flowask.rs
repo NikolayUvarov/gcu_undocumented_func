@@ -29,6 +29,18 @@ pub fn answer(ch: Option<char>, escape: bool, enter: bool) -> Option<Answer> {
     }
 }
 
+/// A byte of the serial line as a question takes it where the shell's own decoder does not run, a script's wait
+/// (000-APP-0125): a printable character, Enter (CR or LF) or Esc, as `answer`'s character, Esc and Enter; None for
+/// any other byte.
+pub fn byte_key(byte: u8) -> Option<(Option<char>, bool, bool)> {
+    match byte {
+        b'\r' | b'\n' => Some((None, false, true)),
+        0x1B => Some((None, true, false)),
+        0x20..=0x7E => Some((Some(byte as char), false, false)),
+        _ => None,
+    }
+}
+
 /// The answer's words, as the shell says what it gave.
 pub fn word(answer: Answer) -> &'static str {
     match answer { Answer::No => "NO", Answer::Once => "ONCE", Answer::Session => "FOR THIS RUN", Answer::Always => "ALWAYS (A LINE OF THE POLICY)" }

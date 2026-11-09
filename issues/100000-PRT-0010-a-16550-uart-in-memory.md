@@ -38,7 +38,7 @@
 - **What the PinePhone's tree says of them** (Linux v6.12, `tests/data/fdt/pinephone-1.2.dtb`): UART1 carries the Bluetooth chip (`realtek,rtl8723cs-bt`), and UART3 is enabled as well.
 - **Why it matters.** The kernel lends registers by whole pages, so lending UART0 to the shell's console (or to `link`) would lend the other three with it. That is more authority than the console needs (MC-2.3).
 - **What follows:**
-  - the shell's console on the A64 waits for a way that lends one UART alone. That is [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md)'s design question: the kernel as the console's only writer, or a narrower grant;
+  - the shell's console on the A64 waits for a way that lends one UART alone. That is [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done)'s design question: the kernel as the console's only writer, or a narrower grant;
   - until then the kernel keeps UART0, as it does now (`platform::mmio` lends no 16550).
 
 **Not done:**

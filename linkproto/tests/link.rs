@@ -345,7 +345,8 @@ fn decoder_survives_noise() {
     let mut wire = [0u8; MAX_WIRE];
     let h = Header { address: 0, channel: 1, kind: 2, flags: 0, seq: 3 };
     let n = frame::encode(&h, b"after the noise", &mut wire).unwrap();
-    assert_eq!(wire[..n].iter().filter_map(|&b| d.push(b)).last(), None, "the overlong run ends with the frame's zero");
+    // The frame's leading zero ends the overlong run, so the frame itself is found (800-LNK-0039).
+    assert_eq!(wire[0], 0);
     let got: Vec<Header> = wire[..n].iter().filter_map(|&b| d.push(b)).collect();
     assert_eq!(got, vec![h]);
     assert_eq!(d.payload(), b"after the noise");

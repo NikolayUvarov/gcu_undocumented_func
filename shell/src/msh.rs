@@ -57,9 +57,11 @@ impl ShellHost<'_> {
         let shell = &mut *self.shell;
         let outer = shell.term.capture.replace(Vec::new());
         shell.command(line.as_bytes());
-        // A program it started runs to its end (a console program) or until it leaves the foreground.
+        // A program it started runs to its end (a console program) or until it leaves the foreground. The shell's loop
+        // waits meanwhile, so this one puts a program's question about a flow to the user, as that loop does (000-APP-0125).
         let program = shell.console.or(shell.focused);
         loop {
+            crate::flowctl::tend(shell, mind::time::uptime_ms() as u64);
             if let Some(pid) = shell.console {
                 shell.pump_console(pid);
                 if shell.console.is_none() { continue; }
@@ -68,6 +70,8 @@ impl ShellHost<'_> {
                 continue;
             }
             if let Some(pid) = shell.focused {
+                // A question shown took the keys from the program in front: they answer it.
+                if crate::flowctl::waits_on(shell, shell.active) { let _ = interrupted(shell); }
                 shell.mirror(pid);
                 shell.mirror_fronts();
                 match control::notice() {
@@ -94,13 +98,21 @@ impl ShellHost<'_> {
 }
 
 // Esc or Ctrl+C on either keyboard, Ctrl+Z on the serial line (the kernel keeps PS/2 Ctrl+Z for the focus): a
-// script stops. What else was typed meanwhile is dropped.
+// script stops. What else was typed meanwhile is dropped. While a question about a flow shows on this console, its
+// keys answer it instead, Esc and Enter as no, and none of them stops the script (000-APP-0125).
 pub fn interrupted(shell: &mut Shell) -> bool {
     let mut stop = false;
-    while let Some(byte) = shell.term.serial.as_ref().and_then(mind::dev::Uart::read) { if matches!(byte, 0x1A | 0x03 | 0x1B) { stop = true; } }
-    while let Some(key) = shell.next_key() { if key.is_escape() || key.is_ctrl('c') || key.is_ctrl('z') { stop = true; } }
+    while let Some(byte) = shell.term.serial.as_ref().and_then(mind::dev::Uart::read) {
+        if crate::flowctl::waits_on(shell, shell.active) && crate::flowctl::byte(shell, byte) { continue; }
+        if matches!(byte, 0x1A | 0x03 | 0x1B) { stop = true; }
+    }
+    while let Some(key) = shell.next_key() {
+        if crate::flowctl::waits_on(shell, shell.active) && crate::flowctl::key(shell, key) { continue; }
+        if key.is_escape() || key.is_ctrl('c') || key.is_ctrl('z') { stop = true; }
+    }
     stop
 }
+
 
 impl Host for ShellHost<'_> {
     fn command(&mut self, words: &[String]) -> Value {
