@@ -1,7 +1,8 @@
 //! Host tests of the scheduler's lock (common/spinlock.rs, 000-KRN-0219): mutual exclusion; a waiter marked next is let in
-//! before the holder takes the lock again; and beside it the two locks it was measured against, printed: the test-and-set
-//! lock, under which a busy thread can take it many times while another waits (round 91's starved CPU), and a ticket
-//! lock, whose turns wait for the host to run the one thread next when there are more threads than CPUs (round 95's).
+//! before the holder takes the lock again; a mark whose waiter does not run holds a free lock up for ABSENT turns only.
+//! Beside it, printed, the two locks it was measured against: the test-and-set lock, under which a busy thread can take it
+//! many times while another waits (round 91's starved CPU), and a ticket lock, whose turns wait for the host to run the
+//! one thread next when there are more threads than CPUs (round 95's).
 #[path = "../common/spinlock.rs"]
 mod spinlock;
 
@@ -97,7 +98,7 @@ fn the_lock_excludes() {
     let lock = Arc::new(SpinLock::new());
     let count = Arc::new(AtomicU64::new(0));
     let threads: Vec<_> = (0..4).map(|_| { let (lock, count) = (lock.clone(), count.clone()); thread::spawn(move || {
-        for _ in 0..20_000 { lock.lock_after(8); count.store(count.load(Ordering::Relaxed) + 1, Ordering::Relaxed); lock.unlock(); }
+        for _ in 0..20_000 { lock.lock_with(8, spinlock::ABSENT); count.store(count.load(Ordering::Relaxed) + 1, Ordering::Relaxed); lock.unlock(); }
     }) }).collect();
     for t in threads { t.join().unwrap(); }
     assert_eq!(count.load(Ordering::Relaxed), 80_000);
@@ -110,20 +111,31 @@ fn a_marked_waiter_is_let_in_before_the_holder_takes_it_again() {
     let order = Arc::new(Mutex::new(Vec::new()));
     lock.lock();
     let waiter = { let (lock, order) = (lock.clone(), order.clone()); thread::spawn(move || {
-        let turns = lock.lock_after(16);
+        let turns = lock.lock_with(16, u32::MAX);
         order.lock().unwrap().push("waiter");
         lock.unlock();
         turns
     }) };
     while !lock.marked() { thread::yield_now(); }
-    // The holder lets go and asks again at once, without ever marking itself: the marked waiter is let in first.
+    // The holder lets go and asks again at once, never marking itself nor passing the mark: the marked waiter goes first.
     lock.unlock();
-    lock.lock_after(u32::MAX);
+    lock.lock_with(u32::MAX, u32::MAX);
     order.lock().unwrap().push("holder");
     lock.unlock();
     assert!(waiter.join().unwrap() >= 16);
     assert_eq!(*order.lock().unwrap(), ["waiter", "holder"]);
     assert!(!lock.marked());
+}
+
+#[test]
+fn a_mark_whose_waiter_does_not_run_holds_a_free_lock_up_for_a_while_only() {
+    let lock = SpinLock::new();
+    lock.mark_absent();
+    // The lock is free and marked for a waiter that never comes: another takes it after ABSENT turns, the mark left.
+    let turns = lock.lock();
+    assert!(turns >= spinlock::ABSENT - 1 && turns < spinlock::ABSENT + 2, "{turns} turns");
+    assert!(lock.marked());
+    lock.unlock();
 }
 
 #[test]
