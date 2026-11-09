@@ -32,6 +32,7 @@
 ## Progress (2026-11-09)
 
 - **Made:** `DMESG_WAIT = 30` and the eight `dmesg -s wifi|wlan|wlansim` reads of the Wi-Fi checks given it.
+- **Tested:** the `net` suite passed with it on aarch64 (acc-1, the group "aarch64: network, TLS and Effector", at 1012596d). The x86 run with it is under way in the kernel session's container. Not yet beside another lane's build: that is the gate's.
 
 ## Related
 
