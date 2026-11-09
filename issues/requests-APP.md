@@ -65,7 +65,7 @@ Numbered on 2026-10-31 as [000-APP-0119](../issues-done/000-APP-0119-net-arp-wai
 
 ## The shell lends a `storefs` client to programs (for 311-KRN-0190), once `storefs` can make one that does not write
 
-Numbered on 2026-10-31 as [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.md).
+Numbered on 2026-10-31 as [311-APP-0121](../issues-done/311-APP-0121-the-shell-lends-a-storefs-client.done).
 
 ## The shell puts a running program's question about a flow to the user (for 000-NET-0049)
 
