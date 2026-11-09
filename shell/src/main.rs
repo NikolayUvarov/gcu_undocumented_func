@@ -77,8 +77,8 @@ const WIFI_MS: u32 = 1000;
 // slot the shell holds nothing in.
 const COMMANDS_RECEIVE: usize = SLOT_SHELL;
 // Where they arrive while a secret line's call holds COMMANDS_RECEIVE with its buffer (000-APP-0126): another slot
-// the shell holds nothing in.
-const COMMANDS_ASIDE: usize = SLOT_CLIPBOARD;
+// the shell holds nothing in, the Effector gateway's scope of data/apps/, which init gives no other task (750-KRN-0169).
+const COMMANDS_ASIDE: usize = SLOT_APPS;
 // The longest program path `run` passes on: `loader.wit`'s `string<64>`, as the loader's path buffer holds it (750-APP-0109).
 const PROGRAM_PATH_MAX: usize = 63;
 // What `<` gives a program at most (000-APP-0074): the shell reads the file whole first.
