@@ -291,16 +291,6 @@ This request does not replace the preceding H12 deadline correction.
 - The `net` suite's `TIME: download's … check` lines on aarch64 show reads well under a tick each.
 - The `vfs` and `store` suites pass.
 
-## A block client bounded to a range, and what a flush reaches (for 307)
-
-Recorded by the storage track (STO), 2026-10-27, for [307](307-the-stores-own-partition.md).
-
-- **A client bounded to a range of sectors.** Each block driver (`nvme`, `ahci`, `usb_storage`, `virtio_blk`) serves a client limited to one partition's sectors. A request outside them is refused. `init` gives `blockstore` such a client for the `MIND STORE` partition (`requests-KRN.md`, same date).
-- **What a flush reaches, stated per driver:**
-  - NVMe FLUSH, ATA FLUSH CACHE EXT and SCSI SYNCHRONIZE CACHE sent when the client asks for one;
-  - a device that reports no write cache, or ignores a flush, named as such in the answer and the log (MC-12.1).
-- **Why.** The store reports `flushed` only when a device said its flush was done, and says so per machine in the profile.
-
 ## `audio_gw`: the AC97 capture ring overflows in the listen suite on x86 TCG (for 000-APP-0114)
 
 **Recorded by:** the tools track (APP), 2026-10-30.
