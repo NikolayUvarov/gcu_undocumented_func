@@ -62,9 +62,9 @@ impl core::fmt::Display for Tag {
 /// Busy-poll, then sleep: QEMU completes commands at once, transfers asynchronously; about 30 s in all.
 pub fn wait(done: impl FnMut() -> bool) -> bool { wait_for(4_000, done) }
 
-// Polls `done`: without pause for the first 20 ms (most transfers end within a few frames, and a sleep is a 10 ms tick:
-// the MacBook Pro's mouse moved once a second, 211-DRV-0017), then every 10 ms; `attempts` 1500 is about 5 s, 4000
-// about 30 s.
+// Polls `done`: without pause for the first 20 ms (most transfers end within a few frames; when each wait began with a
+// sleep, the MacBook Pro's mouse moved once a second, 211-DRV-0017), then every 10 ms; `attempts` 1500 is about 5 s,
+// 4000 about 30 s.
 pub(crate) fn wait_for(attempts: usize, mut done: impl FnMut() -> bool) -> bool {
     let start = mind::time::monotonic_ns();
     while mind::time::monotonic_ns().saturating_sub(start) < SPIN_NS { if done() { return true; } core::hint::spin_loop(); }
