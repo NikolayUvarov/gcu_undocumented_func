@@ -81,7 +81,7 @@ Asked on 2026-10-28 in `ALL/2026-10-28T0407Z-EFF-the-machines-name.md` (EFF with
 
 ## The shell lends the station's reading client (for 550-NET-0058), once `KRN` gives the request bit
 
-Asked by NET on 2026-11-05. Numbered the same day as [550-APP-0124](550-APP-0124-the-shell-lends-a-reading-wifi-client.md), its plan taken from this request; blocked by KRN's bit.
+Asked by NET on 2026-11-05. Numbered the same day as [550-APP-0124](../issues-done/550-APP-0124-the-shell-lends-a-reading-wifi-client.done), its plan taken from this request; done on 2026-11-09.
 
 ## A script's program asked about a flow while the script waits on it (for 000-NET-0048)
 

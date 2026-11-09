@@ -38,6 +38,8 @@ mod flowask;
 mod named;
 #[path = "../shell/src/hostname.rs"]
 mod hostname;
+#[path = "../shell/src/wifilend.rs"]
+mod wifilend;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -603,4 +605,19 @@ fn the_machines_name_is_one_label_and_mindcore_when_none() {
     assert_eq!(taken_by("hostname dexp", Client::Program), Taken::Asked);
     assert_eq!(taken_by("hostname dexp", Client::Link), Taken::Now);
     assert_eq!(taken_by("hostname dexp", Client::LinkConsole), Taken::Now);
+}
+
+#[test]
+fn a_start_gets_the_wifi_client_its_bits_ask_for() {
+    // 550-APP-0124: the reading client for REQUEST_WIFI_READ alone, the changing one for REQUEST_WIFI (with or without
+    // the other bit); none without a station or without `wifi` declared in a script.
+    use wifilend::{lend, Lend};
+    assert_eq!(lend(false, true, true, true), Lend::Reading);
+    assert_eq!(lend(true, false, true, true), Lend::Changing);
+    assert_eq!(lend(true, true, true, true), Lend::Changing, "both bits: the changing one");
+    assert_eq!(lend(false, false, true, true), Lend::None);
+    for (change, read) in [(true, false), (false, true), (true, true)] {
+        assert_eq!(lend(change, read, false, true), Lend::None, "no station");
+        assert_eq!(lend(change, read, true, false), Lend::None, "a script without `wifi`");
+    }
 }
