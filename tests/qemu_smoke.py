@@ -9336,7 +9336,7 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
         assert code == expected, (arguments, out)
 
     # A host its grant does not name: asked of the user at run time (socket.wit 2.8), on the console get runs in front
-    # of. A script's program is not asked yet: msh's wait on it does not put the question (requests-APP.md).
+    # of, and from a script (000-APP-0125, below).
     asked = f"https://10.0.2.2:{asked_port}/api/final?asked=1"
 
     def answered(key):
@@ -9357,13 +9357,30 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
     assert f"GET: 10.0.2.2:{asked_port}: REFUSED BY THE USER" in out and "the end asked=1" not in out, out
     out = answered(b"o")
     assert "the end asked=1" in out and "REFUSED" not in out, out
+    # 000-APP-0125: a script's get is asked too. msh's wait on its program puts the question on the script's console and
+    # gives it the key: Esc answers no and leaves the script going (it prints 4321 after get); O lets it through once.
+    def in_script(key):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(f'msh -c "get {asked} or {{ print(error) }}; print(4000 + 321)"\n')
+        vm.logged("ALWAYS? ", since, timeout=30)
+        time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
+        vm.send_bytes(key)
+        vm.expect("MIND> ", timeout=60, after="4321")
+        out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+        require_all(out, "NETWORK: get (PID ", f") ASKS TO REACH 10.0.2.2:{asked_port}", {b"\x1b": "NO\n", b"o": "ONCE\n"}[key])
+        return out
+    out = in_script(b"\x1b")
+    assert f"GET: 10.0.2.2:{asked_port}: REFUSED BY THE USER" in out and "the end asked=1" not in out, out
+    out = in_script(b"o")
+    assert "the end asked=1" in out and "REFUSED" not in out, out
     require(vm.service_logs("netpolicy", "ASKS FOR"), f"ASKS FOR 10.0.2.2:{asked_port} TCP")
 
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
           "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
           "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's; a host not in its grant asked at run "
-          "time, refused and allowed once", flush=True)
+          "time, refused and allowed once, from a script too (Esc answering no without stopping the script)", flush=True)
 
 
 def pinned_runs(vm, certificates, port, rogue_port, expired_port):
@@ -9810,7 +9827,15 @@ def wifi_join_check(vm):
     vm.logged("SHELL RESUMED.", since)
     print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7); Settings' network "
           "page names the country the access point announced (550-APP-0082)", flush=True)
-    run("wifi leave", 30, "[WIFI] LEFT")
+    # 550-APP-0124: a program that asks only to read gets the station's reading client from the shell: the link and the
+    # country read, a leave and a country denied, the station as it was; one that asks for both gets the changing one.
+    run("wifiro status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifiro leave", 30, "[WIFI] NOT LEFT: wifi's client of the station only reads")
+    run("wifiro country US", 30, "[WIFI] COUNTRY US NOT SET: WIFI'S CLIENT OF THE STATION ONLY READS")
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifiboth leave", 30, "[WIFI] LEFT")
+    print("PASS: the shell lends the station's reading client (550-APP-0124): a program asking only to read read the link "
+          "and was denied a leave and a country, the station still joined; one asking for both left the network", flush=True)
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
     # 550-APP-0082 over 550-NET-0035 stage B: with none chosen the station runs under the country wlansim's access point
@@ -10051,6 +10076,13 @@ def net_suite(args, disk):
     elf = bytearray((disk / "netcheck.elf").read_bytes())
     elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 0x400000).to_bytes(4, "little")
     (disk / "wificheck.elf").write_bytes(elf)
+    # 550-APP-0124: copies of wifi asking for the station's reading client alone (REQUEST_WIFI_READ 1 << 28 in place of
+    # REQUEST_WIFI 1 << 22), and for both, which the shell answers with the changing one.
+    for copy, clear, add in (("wifiro", 0x400000, 0x10000000), ("wifiboth", 0, 0x10000000)):
+        elf = bytearray((disk / "wifi.elf").read_bytes())
+        at = elf.index(b"MINDREQ1") + 8
+        elf[at:at + 4] = ((int.from_bytes(elf[at:at + 4], "little") & ~clear) | add).to_bytes(4, "little")
+        (disk / f"{copy}.elf").write_bytes(elf)
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
