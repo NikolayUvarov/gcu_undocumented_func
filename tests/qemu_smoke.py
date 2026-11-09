@@ -9012,11 +9012,27 @@ def one_network_cards_check(args, disk):
         cards = vm.command("netcheck cards")
         require(cards, "NETCHECK CARD 0 Wired PRESENT UP OFF")
         require(cards, "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT")
+        # A grant may not take a card out of use; the refusal names its badge.
+        require(vm.command("netcheck withdraw:2"), "NETCHECK withdraw:2 Denied")
+        require(vm.command("dmesg -s netstack"), "WITHDRAW REFUSED FOR BADGE")
+        assert "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT" in vm.command("netcheck cards")
         quiet = frames()[0][0]
         network_sends(1)
         time.sleep(12)  # past the broker's telling the stack again (10 s): still out of use
         assert frames()[0][0] == quiet, (quiet, frames())
         require(vm.command("netcheck cards"), "NETCHECK CARD 0 Wired PRESENT UP OFF")
+        # Every card out of use is allowed: the stack sends nothing and says the link's console is the way back.
+        require(policy_answer(vm, "netpolicy add card 1 off", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+        require(vm.service_logs("netstack", "EVERY CARD OUT OF USE"), "THE LINK'S CONSOLE (800-APP-0108) IS THE WAY BACK")
+        require(vm.command("netcheck cards"), "NETCHECK EVERY CARD OUT OF USE")
+        require(policy_answer(vm, "netpolicy remove card 1 off", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+        require(vm.service_logs("netstack", "CARD 1 IN USE AGAIN"), "[NETSTACK] CARD 1 IN USE AGAIN BY THE POLICY, WAITING FOR DHCP")
+        for _ in range(60):
+            if "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT" in vm.command("netcheck cards"):
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError(("no lease again on card 1", vm.command("dmesg -s netstack")[-3000:]))
         # Back in use: DHCP runs on it again, and the network's flows come back to it.
         require(policy_answer(vm, "netpolicy remove card 0 off", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
         log = vm.service_logs("netstack", "CARD 0 IN USE AGAIN")

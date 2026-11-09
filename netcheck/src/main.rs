@@ -5,7 +5,8 @@
 // datagram), ping:A.B.C.D, dns:NAME, hold:A.B.C.D:PORT:SECONDS (keep a connection and send once a second until it
 // fails or the time is up), open:A.B.C.D:PORT (connect and keep the connection until the program ends), sockets (the
 // stack's list of this grant's open sockets, socket.wit 2.4), cards (each card's kind and state, which one is preferred
-// and which is the default, socket.wit 2.5, and which are out of use, 2.11), card (the card client in SLOT_NET, which a launcher lends read-only for
+// and which is the default, socket.wit 2.5, and which are out of use, 2.11), withdraw:MASK (asks to take cards out of
+// use, which a grant may not, 2.11), card (the card client in SLOT_NET, which a launcher lends read-only for
 // REQUEST_NET_COUNTERS: its info and counters read, a frame sent or received and a ring lent each refused, 000-NET-0015),
 // sessions (ten parser sessions in a row, each with a helper of its own, with one endpoint left in the quota, 109-KRN-0133),
 // echo:A.B.C.D:SIZE:HEX (an echo of SIZE data bytes of the pattern HEX, its reply's size and data checked, socket.wit 2.6),
@@ -81,6 +82,8 @@ fn cards() -> mind::sys::Result<Result<(), socket::Error>> {
         mind::println!("NETCHECK CARD {} {:?}{}{}{}{}{}{}", c.card, c.kind, flag(c.present, " PRESENT"), flag(c.up, " UP"), flag(c.configured, " CONFIGURED"),
                        flag(c.preferred, " PREFERRED"), flag(c.default, " DEFAULT"), flag(off & 1 << c.card != 0, " OFF"));
     }
+    let present = list.as_slice().iter().filter(|c| c.present).fold(0u8, |m, c| m | 1 << c.card);
+    if present != 0 && off & present == present { mind::println!("NETCHECK EVERY CARD OUT OF USE"); }
     Ok(Ok(()))
 }
 
@@ -225,6 +228,8 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
         "open" => socket::tcp_connect(STACK, address, port, 3000)?.map(|handle| { let _ = socket::tcp_send(STACK, handle, b"GET / HTTP/1.0\r\n"); }),
         "sockets" => return sockets(),
         "cards" => return cards(),
+        // A grant asking to take cards out of use (socket.wit 2.11): refused, as only the policy and the operator may.
+        "withdraw" => socket::withdraw(STACK, a.parse().unwrap_or(0))?,
         "card" => return card(),
         "wifi" => return wifi_reader(),
         "sessions" => return sessions(),

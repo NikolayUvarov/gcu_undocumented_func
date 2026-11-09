@@ -361,15 +361,18 @@ impl Stack {
 
     fn link(&mut self, index: usize) -> &mut Link { self.links[index].as_mut().expect("sockets live only on present links") }
 
-    // The card a flow to `address` goes out through (0: the default card), among the cards up and in use: one whose
-    // network holds it, the preferred one first (550-NET-0062); else the preferred card if it has a gateway; else the
-    // first, wired before the station, that has (550-NET-0025); else any card with an address.
+    // The card a flow to `address` goes out through (0: the default card), among the cards up and in use: the card
+    // whose own address it is; else one whose network holds it, the preferred one first, then the lowest (550-NET-0062);
+    // else the preferred card if it has a gateway; else the first, wired before the station, that has (550-NET-0025);
+    // else any card with an address. The stack keeps no host routes.
     fn route(&self, address: u32) -> Option<usize> {
         let target = Ipv4Address::from(address);
         let configured = |l: &Option<Link>| l.as_ref().filter(|l| l.up && !l.off).and_then(|l| l.address.map(|cidr| (cidr, l.gateway)));
         let gateway = |card: usize| configured(&self.links[card]).is_some_and(|(_, gateway)| gateway.is_some());
         let holds = |card: usize| configured(&self.links[card]).is_some_and(|(cidr, _)| address != 0 && cidr.contains_addr(&target));
-        self.preferred.filter(|&card| holds(card))
+        let own = |card: usize| configured(&self.links[card]).is_some_and(|(cidr, _)| address != 0 && cidr.address() == target);
+        (0..CARDS).find(|&card| own(card))
+            .or_else(|| self.preferred.filter(|&card| holds(card)))
             .or_else(|| (0..CARDS).find(|&card| holds(card)))
             .or_else(|| self.preferred.filter(|&card| gateway(card)))
             .or_else(|| (0..CARDS).find(|&card| gateway(card)))
@@ -411,6 +414,11 @@ impl Stack {
                 if let Some(link) = self.links[index].as_mut() { link.off = false; link.restart(now_ms()); }
                 mind::println!("[NETSTACK] CARD {} IN USE AGAIN BY {}, WAITING FOR DHCP", index, by);
             }
+        }
+        // Allowed, as the operator decides; but Effector reaches the machine over the network.
+        let present = (0..CARDS).filter(|&k| self.links[k].is_some()).fold(0u8, |m, k| m | 1 << k);
+        if changed != 0 && present != 0 && cards & present == present {
+            mind::println!("[NETSTACK] EVERY CARD OUT OF USE BY {}: NOTHING IS SENT; THE LINK'S CONSOLE (800-APP-0108) IS THE WAY BACK", by);
         }
         Ok(())
     }
@@ -1049,7 +1057,12 @@ fn main(_info: &'static BootInfo) {
             },
         };
         match allowed {
-            Err(error) => { if matches!(error, Error::Denied) && matches!(policy::access(badge), Access::Grant(_)) { mind::println!("[NETSTACK] DENIED FOR GRANT {}", badge); } let _ = refuse(decoded, call, error); }
+            Err(error) => {
+                if matches!(decoded, socket::Request::Withdraw { .. }) {
+                    mind::println!("[NETSTACK] WITHDRAW REFUSED FOR BADGE {} (PID {}): ONLY THE POLICY AND THE OPERATOR TAKE CARDS OUT OF USE", badge, owner.0);
+                } else if matches!(error, Error::Denied) && matches!(policy::access(badge), Access::Grant(_)) { mind::println!("[NETSTACK] DENIED FOR GRANT {}", badge); }
+                let _ = refuse(decoded, call, error);
+            }
             Ok(()) => {
                 let grant = match policy::access(badge) { Access::Grant(grant) => Some(grant), _ => None };
                 if let (Some(grant), socket::Request::TcpConnect { address, port, .. }) = (grant, &decoded) { policy.audit(grant, *address, *port); policy.spend(grant, *address, *port); }
