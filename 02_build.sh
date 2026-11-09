@@ -82,6 +82,7 @@ USER_CRATES=(
     "ramdisk:ramdisk:ramdisk.elf"
     "vfs_server:vfs_server:vfs_server.elf"
     "usb_serial:usb_serial:usb_serial.elf"
+    "uart_serial:uart_serial:uart_serial.elf"
     "link:link:link.elf"
     "blockstore:blockstore:blockstore.elf"
     "blocks:blocks:blocks.elf"

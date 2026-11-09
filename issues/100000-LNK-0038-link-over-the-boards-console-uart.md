@@ -1,6 +1,6 @@
 # 100000-LNK-0038 — `link` over the board's console UART, so that `effector485` reaches the PinePhone
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open · **Blocked by:** `init`'s lending of the UART (KRN, asked 2026-11-09); on the A64, 100000-KRN-0171's answer for the UART's page · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.3, MC-12.4
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-11-09) · **Blocked by:** [100000-KRN-0221](100000-KRN-0221-init-starts-uart-serial-for-link.md), `init`'s part, for the QEMU runs · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.3, MC-12.4
 
 Numbered from the kernel session's request of 2026-11-08 in `requests-LNK.md`.
 
@@ -36,6 +36,33 @@ Numbered from the kernel session's request of 2026-11-08 in `requests-LNK.md`.
 
 - The QEMU runs of plan step 6 pass in a suite of their own, x86 and aarch64.
 - On the PinePhone, once stage 0 boots: `effector485 hello` and `log` over the headphone jack's UART at 115200.
+
+## Progress (2026-11-09)
+
+**The shape agreed** with the kernel session (`LNK/2026-11-09T0504Z-KRN-agreed-…`): `uart_serial` serves `serial.wit`, and `init`'s part is 100000-KRN-0221. On the A64 the line is the kernel's console channel, 100000-KRN-0222, in `main` since round 102.
+
+**Made** on `claude/LNK-link` (plan steps 1 and 2):
+- **`uart_serial`:** the line in `SLOT_DEV0` through `mind::dev::Uart`.
+  - **What it drives:** a 16550 at ports (chip 3), a PL011 (chip 4), or the kernel's console channel (chip 5).
+  - **Receiving:**
+    - with a line in `SLOT_IRQ` (a 16550's or a PL011's), it is bound to the service endpoint and armed on the chip, and the chip is also read every 2 ms;
+    - without one, every 2 ms;
+    - the channel's bytes are read in pieces of 256 without waiting.
+  - **The queue:** 64 KiB; bytes not taken in time and the chip's overruns are counted and logged.
+  - **Writes:** a 16550 or a PL011 is sent to byte by byte, its receive FIFO emptied while it waits. The channel is written in whole calls, waiting 1 ms while the kernel's queue is full.
+  - **The rate:**
+    - `configure` sets a 16550's divisor of 1.8432 MHz within 3 % (`ns16550.rs`);
+    - a PL011 and the channel keep 115200, the rate the firmware leaves, and refuse another (`invalid`).
+- **`serial.wit` 1.1:** the UART chips named, nothing else changed (the bindings regenerated; `usb_serial` and `link` unchanged).
+- **The build:** `uart_serial` in `02_build.sh`'s list, so x86 and aarch64 build it. It is not in `BOOT_FILES`, which with `init`'s start is 100000-KRN-0221's.
+- **The test:** `tests/serial_host.rs` checks the 16550's divisor.
+- **The docs:** [docs/link/mindlink.md](../docs/link/mindlink.md), "On a board's UART".
+
+**What waits for 100000-KRN-0221:**
+- plan step 3, `init`'s word and lending;
+- step 6's QEMU runs: x86 with COM1 on a pty, `virt` with its PL011, then the channel on a tree whose console shares its page.
+
+Until then `uart_serial` has not run on any machine or emulator (MC-12.3).
 
 ## Related
 
