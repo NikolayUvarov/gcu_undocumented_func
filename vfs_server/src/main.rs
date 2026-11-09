@@ -12,6 +12,7 @@
 extern crate alloc;
 mod disk;
 mod fat;
+mod cadence;
 mod journal;
 mod zone;
 
@@ -78,13 +79,16 @@ fn now() -> u32 {
 }
 
 impl Server {
-    // The system log's new records to this boot's file, when due; open handles of the file see its new size.
-    fn save_journal(&mut self) {
+    // The system log's new records to this boot's file, when due (or `now`, at a flush); open handles of the file see
+    // its new size.
+    fn save_journal(&mut self, now: bool) {
         let now_ms = mind::time::uptime_ms() as u64;
         let Some((index, journal)) = self.journal.as_mut() else { return };
-        if now_ms < journal.due { return; }
+        if !now && now_ms < journal.due { return; }
         let index = *index;
-        let saved = journal.save(&mut self.volumes[index].volume, Endpoint(SLOT_LOG), now());
+        // Looked at every SAVE_MS, saved as cadence.rs says (211-KRN-0223); a save that failed is tried at RETRY_MS.
+        if !now && !journal.failing && !journal.wanted(Endpoint(SLOT_LOG), now_ms) { journal.due = now_ms + journal::SAVE_MS; return; }
+        let saved = journal.save(&mut self.volumes[index].volume, Endpoint(SLOT_LOG), self::now(), now_ms);
         // A drive that is gone is not asked every SAVE_MS: requests would wait behind each try (211-KRN-0050).
         journal.due = now_ms + if journal.failing { journal::RETRY_MS } else { journal::SAVE_MS };
         if let Some(node) = saved { self.refresh(index, node); }
@@ -429,7 +433,13 @@ impl Server {
                 vfs::reply_fill(call, result)
             }
             Request::Flush { handle } => {
-                let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.flush().map_err(error));
+                // A flush (the shell's sync, init's before a restart) saves the system log first and leaves its volume
+                // clean too (211-KRN-0223).
+                let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| {
+                    self.save_journal(true);
+                    if let Some(log) = self.journal.as_ref().map(|(index, _)| *index).filter(|&log| log != volume) { let _ = self.volumes[log].volume.flush(); }
+                    self.volumes[volume].volume.flush().map_err(error)
+                });
                 vfs::reply_flush(call, result)
             }
             Request::Close { handle } => {
@@ -595,7 +605,7 @@ fn main(info: &'static BootInfo) {
             Some((_, journal)) => Endpoint::SERVICE.recv_timeout(RECEIVED, journal.due.saturating_sub(mind::time::uptime_ms() as u64).clamp(1, journal::RETRY_MS) as u32),
             None => Endpoint::SERVICE.recv(RECEIVED),
         };
-        server.save_journal();
+        server.save_journal(false);
         let Ok(request) = request else { continue };
         let _ = match vfs::decode(&request, RECEIVED, &mut scratch) {
             Ok((decoded, call)) => server.serve(decoded, call, request.sender, request.badge),

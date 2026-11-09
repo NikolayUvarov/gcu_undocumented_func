@@ -106,6 +106,7 @@ def debug_mode(vm, name):
     require(vm.command("run uptime"), "up ")
     require(vm.command("write log:debug.txt on"), "WROTE")
     require(vm.command("run uptime"), "up ")
+    require(vm.command("sync"), "OK")  # ordinary records wait up to 30 s; a flush saves them (211-KRN-0223)
     for _ in range(20):
         saved = vm.command(f"cat log:{name}", raw=True)
         if re.search(r"uptime\(\d+\) up \d", saved):
@@ -148,7 +149,9 @@ def unplugged(vm, booted, name):
             break
         time.sleep(1)
     require(saved, "DRIVE DOES NOT ANSWER")
-    time.sleep(3)  # the journal's save after the replug, flushed
+    # The journal leaves the log volume marked dirty between its saves (211-KRN-0223): a flush marks it clean, as
+    # before a stick is taken out; the image is read on the host as this leaves it.
+    require(vm.command("sync"), "OK")
     # 000-KRN-0079: another medium in its place, as a stick rewritten with another build elsewhere and put back: the
     # same partition table and disk signature, another commit in the boot manifests. vfs_server, which saw the drive
     # not answer, finds it is not the stick it mounted: nothing it cached is written to it, its volumes fail. The new
@@ -235,6 +238,7 @@ def run(args, booted):
         require(vfs, "[VFS] MOUNTED FAT16 AT LBA ")
         name = re.search(r"GOES TO LOG:(boot\d{4}\.log)", vfs)[1]
         require(vm.command("logger LOG-PARTITION-CHECK"), "LOGGED")
+        require(vm.command("sync"), "OK")  # an ordinary record waits up to 30 s; a flush saves it (211-KRN-0223)
         for _ in range(20):
             saved = vm.command(f"cat log:{name}", raw=True)
             if "LOG-PARTITION-CHECK" in saved:

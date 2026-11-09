@@ -370,6 +370,10 @@ impl<S: Sectors> Volume<S> {
         Err(Error::Io)
     }
 
+    /// Writes everything to the medium and leaves the volume marked dirty, as for a file kept open for appending (the
+    /// system log's saves, 211-KRN-0223): one flush, and a later change needs no new mark; `flush` marks it clean.
+    pub fn flush_open(&mut self) -> Result<()> { if self.disk.flush() { Ok(()) } else { Err(Error::Io) } }
+
     /// Free clusters (counted once, then kept up to date).
     pub fn free_clusters(&mut self) -> Result<u32> {
         if let Some(free) = self.free { return Ok(free); }
