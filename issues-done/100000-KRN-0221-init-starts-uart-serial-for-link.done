@@ -1,6 +1,6 @@
-# 100000-KRN-0221 — `init` starts `uart_serial` on the console UART for `link` (the word `uart`)
+# 100000-KRN-0221 — `init` starts `uart_serial` on the console UART for `link` (the word `uart`) — done
 
-**Type:** `init` · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** in progress (made and tested in QEMU, x86 and aarch64, 2026-11-09; the gate left) · **Blocked by:** — (LNK's `uart_serial`, 100000-LNK-0038, in round 105's candidate) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H, the link · **Constitution:** MC-2.3, MC-3.1, MC-3.3, MC-7.1
+**Type:** `init` · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — (LNK's `uart_serial`, 100000-LNK-0038, in round 105's candidate) · **Main task:** [100000](../issues/100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H, the link · **Constitution:** MC-2.3, MC-3.1, MC-3.3, MC-7.1
 
 **Agreed with** LNK, 2026-11-09 (`KRN/2026-11-09T0445Z-LNK-your-two-requests-are-100000-lnk-0038-and-800-lnk-0039.md` on `internal-dev-messages`), on the kernel session's proposal of 2026-11-08.
 
@@ -50,6 +50,23 @@
 - **The window manager's menu:** round 105 found `uart_serial` under "Other", started with no window, while it was only a program on the disk (LNK's request alone). As a boot image the loader marks it a service, and it is in no list. The `wm` suite passed on this branch on x86 (17 checks).
 - **Not tested:** the A64's case, where `uart_serial` gets the kernel's console channel (100000-KRN-0222), and the phone.
 
+## Resolution
+
+**Its criteria are met in QEMU, on x86 and aarch64 `virt`.** Landed in round 106 (`main` 7415c9a1, 2026-11-09), with LNK's `uart_serial` (100000-LNK-0038), which round 105 had returned for `wm`'s menu.
+- **Handoff 30:** `uart_serial` is a boot image after `usb_serial`. The loader marks it a service, so no list or menu offers it.
+- **With `uart` in link.conf, `init`:**
+  - starts `uart_serial` with the console UART (COM1's ports, the console's node, or the kernel's channel) and its line;
+  - gives `link` its client in place of `usb_serial`'s;
+  - leaves `usb_serial` and the shell's serial line out, and says so.
+- **Without the word,** nothing changed: every other suite.
+- **Evidence:**
+  - the `link` suite's check over the console UART on a pseudo-terminal: `mindlink` put and got 16 KiB through it, `uart_serial` received at its interrupt (16550 on x86, PL011 on `virt`), `usb_serial` was not started, and the shell had no serial line;
+  - the `wm` suite with `uart_serial` off the menu;
+  - every group of round 106's gate.
+
+  QEMU's runs say nothing of the phone (MC-12.1).
+- **Not done:** the A64's case, where `uart_serial` gets the kernel's console channel (100000-KRN-0222), and the phone itself.
+
 ## Related
 
-[100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done) (the console's node), [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) (the A64), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md), [docs/remote-serial.md](../docs/remote-serial.md).
+[100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.done) (the console's node), [100000-KRN-0222](../issues/100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) (the A64), [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md), [docs/remote-serial.md](../docs/remote-serial.md).

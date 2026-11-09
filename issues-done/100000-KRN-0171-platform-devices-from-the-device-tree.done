@@ -90,7 +90,7 @@
   QEMU's runs say nothing of a board but QEMU's (MC-12.1).
 - **Not done:**
   - **No board's tree has been booted** but QEMU's. The PinePhone 1.2's is read only by the host test.
-  - **The A64's console shares its page** with two other enabled UARTs, so it is lent to none: [100000-KRN-0222](../issues/100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) gives it as a byte channel, and [100000-KRN-0221](../issues/100000-KRN-0221-init-starts-uart-serial-for-link.md) starts `uart_serial` for `link`.
+  - **The A64's console shares its page** with two other enabled UARTs, so it is lent to none: [100000-KRN-0222](../issues/100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) gives it as a byte channel, and [100000-KRN-0221](100000-KRN-0221-init-starts-uart-serial-for-link.done) starts `uart_serial` for `link`.
 
 ## Related
 
