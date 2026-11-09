@@ -2661,8 +2661,7 @@ def secret_line_check(vm):
     vm.send_bytes(b"\x1b")
     time.sleep(.3)
     log = vm.command("dmesg -s shell", raw=True)
-    require(log, "REFUSED: NOT THE CONSOLE PROGRAM IN FRONT")
-    require(vm.program_logs(later, "SECRET STUB: "), "SECRET STUB: REFUSED")
+    require(log, f"[SHELL] SECRET LINE FOR PID {later} REFUSED: NOT THE CONSOLE PROGRAM IN FRONT")  # it has ended since
     require(log, ") ASKED ON CONSOLE 1")
     assert re.search(r"\[SHELL\] SECRET LINE FOR secretstub \(PID \d+\) ASKED ON CONSOLE 1\n.*\[SHELL\] SECRET LINE FOR PID \d+ GIVEN", log, re.S), log[-3000:]
     assert "hunter2" not in vm.log[since:] and "hunter2" not in log, vm.log[since:][-3000:]
