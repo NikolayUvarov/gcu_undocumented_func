@@ -105,8 +105,12 @@ impl Minted {
     fn ports(&mut self, base: usize, count: usize) -> Result<usize> { self.mint(PLATFORM_PORTS, base, count) }
     // The real-time clock: CMOS ports (LEGACY) on x86, a PL031's node on aarch64 (100000-KRN-0171).
     fn clock(&mut self, node: Option<usize>) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, node.ok_or(Error::NotFound)?, 0) } else { self.ports(0x70, 2) } }
-    // The platform's serial line: COM1 (LEGACY) on x86, the console's node on aarch64 when it is a PL011.
-    fn serial(&mut self, node: Option<usize>) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, node.ok_or(Error::NotFound)?, 0) } else { self.ports(0x3F8, 8) } }
+    // The platform's serial line: COM1 (LEGACY) on x86; on aarch64 the console's node when it is a PL011 lent by its page,
+    // else the console as the kernel's byte channel (a 16550, or a page another device shares, 100000-KRN-0222).
+    fn serial(&mut self, node: Option<usize>) -> Result<usize> {
+        if !cfg!(target_arch = "aarch64") { return self.ports(0x3F8, 8); }
+        node.ok_or(Error::NotFound).and_then(|node| self.mint(PLATFORM_MMIO, node, 0)).or_else(|_| self.mint(PLATFORM_CONSOLE, 0, 0))
+    }
     // Kept in escrow: init grants it to the service and cannot use it itself (issue 170).
     fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, PRIVILEGE_ESCROW) }
 }
@@ -956,7 +960,10 @@ impl Init {
                 // A PC without COM1 lends none: its ports read all ones, and a shell reading them would never draw (213-KRN-0098).
                 // A board whose console is no PL011 (the A64's 16550) lends none either: the kernel keeps it (100000-KRN-0171).
                 match minted.serial(self.nodes.console) {
-                    Ok(serial) if mind::dev::Uart::open(serial).is_some() => grants.add(SLOT_SERIAL, serial, 0),
+                    Ok(serial) if mind::dev::Uart::open(serial).is_some() => {
+                        if mind::dev::cap_info(serial).0 == CAP_KIND_CONSOLE { mind::println!("[INIT] SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE"); }
+                        grants.add(SLOT_SERIAL, serial, 0)
+                    }
                     _ if cfg!(target_arch = "aarch64") => mind::println!("[INIT] NO SERIAL LINE: NO PL011 CONSOLE TO LEND, THE SHELL GETS NONE"),
                     _ => mind::println!("[INIT] NO SERIAL LINE: NO 16550 ANSWERS AT COM1 (3F8), THE SHELL GETS NONE"),
                 }

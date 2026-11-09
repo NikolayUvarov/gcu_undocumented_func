@@ -10,13 +10,20 @@
 
 ## Plan
 
-- **A capability over the kernel's console line:** `init` asks for it where the console's node cannot be lent by its page; a new ABI version.
-- **What it gives:**
-  - **reading:** a receive ring of at least 4 KiB in the kernel, filled from UART0's line (SPI 0 on the A64, within the lines the kernel binds), and a read that blocks until bytes come or a timeout passes, so that nothing polls;
-  - **writing:** a write that returns once the bytes are queued, sent by the kernel as the line drains.
-- **While it is lent,** the kernel's own lines stop going there, as when the PL011 is lent; the panic and stop lines still go.
-- **`uart_serial`** serves `serial.wit` over the channel on the A64, and `link` does not change.
-- **UART1 and UART3 stay the kernel's** (MC-2.3): no one drives Bluetooth's UART by sharing the console's page.
+The kernel has a ring and a blocking read already: a task's text input (`TEXT_QUEUE`, 4 KiB; `TEXT_READ` waits up to `TEXT_WAIT_MS` for bytes and answers `ERR_BUSY`, to be asked again; 000-KRN-0094). The channel feeds that input from the console's line, so the kernel grows by the console's interrupt and one call, not by a second ring and a second wait (MC-1.2). The owner revised the plan's first draft (its own ring and read) so, on 2026-11-09.
+
+1. **The ring to `common/`** (`common/text_ring.rs`): the text input's ring as it is, shared by the kernel and a host test.
+2. **`PLATFORM_CONSOLE`** (a platform call; ABI 29): `init` asks for the console as a channel for a task it started, by PID, where the console's node cannot be lent by its page.
+   - **What the kernel does:**
+     - it gives that task a text input if it has none, and feeds it from the console's receive interrupt;
+     - it returns a `CAP_KIND_CONSOLE` capability, the channel's writer, for `init` to grant to that task;
+     - it keeps the console's line itself (not lent while the channel stands) and turns the UART's receive interrupt on: 16550 `IER.ERBFI`, PL011 `IMSC.RXIM | RTIM`.
+   - **Refused:** where the kernel drives no console it can read (x86's COM1 is lent by its ports), and while another channel stands.
+3. **Writing:** `TEXT_WRITE` with the console capability queues the bytes in a second ring, and returns the count queued (0 when it is full). The kernel drains that ring from the transmit interrupt: 16550 `IER.ETBEI`, PL011 `IMSC.TXIM`.
+4. **While the channel stands,** the kernel's own lines stop going to the console, as when the PL011 is lent (`MIRROR_LOGS`). The panic and stop lines still go, polled.
+5. **When the holder ends,** the interrupts go off, and the line and the console's lines are the kernel's again.
+6. **UART1 and UART3 stay the kernel's** (MC-2.3): no one drives Bluetooth's UART by sharing the console's page. Their nodes are lent to none, as now.
+7. **Users:** `uart_serial` serves `serial.wit` over the channel on the A64 (100000-KRN-0221, after LNK's `uart_serial` is in `main`), and `link` does not change. Until then a test program echoes through it.
 
 ## Acceptance criteria
 

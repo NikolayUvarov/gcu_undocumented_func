@@ -28,3 +28,28 @@ pub unsafe fn serial_write_byte(b: u8) {
     while read_volatile((uart + 0x18) as *const u32) & 0x20 != 0 {} // TXFF
     write_volatile(uart as *mut u32, b as u32);
 }
+
+// The console as a byte channel (100000-KRN-0222): its received bytes, room to send one, and its interrupts.
+pub unsafe fn console_take(out: &mut [u8]) -> usize {
+    let (uart, is16550) = (board::get(&board::UART), board::get(&board::UART_KIND) == board::UART_16550);
+    let mut n = 0;
+    // 16550: LSR bit 0, data ready; PL011: FR bit 4, the receiver is empty.
+    while uart != 0 && n < out.len() && if is16550 { read_16550(uart, 5) & 1 != 0 } else { read_volatile((uart + 0x18) as *const u32) & 0x10 == 0 } {
+        out[n] = if is16550 { read_16550(uart, 0) } else { read_volatile(uart as *const u32) as u8 }; n += 1;
+    }
+    n
+}
+// 16550: LSR bit 5, the holding register is empty; PL011: FR bit 5, the transmit FIFO is full.
+pub unsafe fn console_room() -> bool {
+    let uart = board::get(&board::UART);
+    uart != 0 && if board::get(&board::UART_KIND) == board::UART_16550 { read_16550(uart, 5) & 0x20 != 0 } else { read_volatile((uart + 0x18) as *const u32) & 0x20 == 0 }
+}
+// Receive (and its timeout) and transmit interrupts on or off: 16550 IER bits 0 and 1, PL011 IMSC bits 4, 6 and 5; the
+// PL011's are cleared too, as QEMU's sends at once and keeps its transmit interrupt up.
+pub unsafe fn console_interrupts(rx: bool, tx: bool) {
+    let uart = board::get(&board::UART);
+    if uart == 0 { return; }
+    if board::get(&board::UART_KIND) == board::UART_16550 { write_16550(uart, 1, rx as u8 | (tx as u8) << 1); return; }
+    write_volatile((uart + 0x44) as *mut u32, 0x7FF);
+    write_volatile((uart + 0x38) as *mut u32, if rx { 0x50 } else { 0 } | if tx { 0x20 } else { 0 });
+}
