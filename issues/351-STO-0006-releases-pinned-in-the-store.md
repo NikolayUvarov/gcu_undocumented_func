@@ -1,6 +1,6 @@
 # 351-STO-0006 — Releases as objects in the block store, the running and last-known-good ones pinned
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** in progress (2026-11-08) · **Blocked by:** `init`'s store client for the updater ([351-KRN-0218](351-KRN-0218-the-updaters-store-client.md)); the updater's part ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md)) · the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater, done) · **Main task:** [351](351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** in progress (2026-11-08) · **Blocked by:** the updater's part ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md)); `init`'s store client is done ([351-KRN-0218](351-KRN-0218-the-updaters-store-client.md), its `init` part) · the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater, done) · **Main task:** [351](351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
 
 Numbered by the storage track from the kernel track's request in `requests-STO.md` (recorded 2026-10-08 for main task 351, phase 4, at the maintainer's request).
 
@@ -49,7 +49,7 @@ After collection runs, the last-known-good release is still complete in the stor
 
 ## Progress (2026-11-08)
 
-**Part 1, the store's, is made** on `claude/relaxed-meitner-5bmhpz`, in a landing request:
+**Part 1, the store's, is in `main`** (round 92, 85471bfe, from `claude/relaxed-meitner-5bmhpz` a5683a50):
 - **`mind::blockstore`** (`libmind/src/blockstore.rs`): `OWNER_BITS` (`0xf0`) grant nothing, so `allowed` decides by the rights below them alone; `OWNER_UPDATER` is `0x10`. The store's code is unchanged, as it already takes the whole badge as the owner.
 - **`mind::tree::files`** lists a tree's files with their paths, each directory checked against its CID and its count, bounded by depth, path and steps. The updater will rebuild a slot from it.
 - **Host tests:**
@@ -63,7 +63,9 @@ After collection runs, the last-known-good release is still complete in the stor
 - **Run in this container** on 60d5a943: `scripts/host_tests.sh`, and the `store` and `storefaults` suites on x86 (32 PASS) and aarch64 (33 PASS). Not run on real hardware.
 - **Docs:** `docs/storage/README.md` (Retention, Directories, Authority) and the profile's line on owners.
 
-**Not done:** `init`'s client (351-KRN-0218) and the updater's part (351-UPD-0033). No client is badged with an owner yet, so no release is kept in the store yet.
+**Part 2, `init`'s client, is in `main`** (351-KRN-0218): the updater holds a client badged `0x17` in `SLOT_BLOCKSTORE`.
+
+**Part 3, the updater's,** is made on the same branch (351-UPD-0033): it keeps its releases in the store and a rollback rewrites a damaged slot from there. This task closes once that part lands, with its criteria shown in QEMU on x86 and aarch64.
 
 ## Related
 
