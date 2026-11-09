@@ -23,7 +23,7 @@ APP answered the native request in 262-APP-0112 and docs/nn/runtime.md 0.2. It n
 ## Related
 
 - [900-NRL-0017](../issues/900-NRL-0017-native-runtime-and-nnd-integration.md), [900](../issues/900-neural-representation-lab.md).
-- [262-APP-0112](../issues/262-APP-0112-nnd-and-nn-wit-stage-0.md), [262-KRN-0178](../issues/262-KRN-0178-nnd-as-a-boot-service.md), [262-KRN-0179](../issues/262-KRN-0179-a-wait-on-a-shared-word.md).
+- [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.done), [262-KRN-0178](../issues/262-KRN-0178-nnd-as-a-boot-service.md), [262-KRN-0179](../issues/262-KRN-0179-a-wait-on-a-shared-word.md).
 - [APP design](../docs/nn/runtime.md) 0.2, [portable boundary](../nrl/specs/native-boundary-v0.md).
 
 ## Progress (2026-10-29)

@@ -1,6 +1,6 @@
 # 900-NRL-0017 — Native runtime boundary and nnd integration
 
-**Type:** implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** blocked (native APP client/scopes and target evidence; service exists) · **Blocked by:** [262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md) and the remaining APP client-lifecycle criteria of [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), for native scopes/client integration and named-target evidence; KRN boot grants landed in round 50 · **Roadmap:** G; 900 T11 · **Constitution:** MC-3.13, MC-5.1, MC-5.2, MC-8.1, MC-9.1, MC-11.1, MC-11.11, MC-12.1, MC-12.2, MC-12.3
+**Type:** implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** blocked (native APP client/scopes and target evidence; service exists) · **Blocked by:** [262-APP-0112](../issues-done/262-APP-0112-nnd-and-nn-wit-stage-0.done) and the remaining APP client-lifecycle criteria of [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md), for native scopes/client integration and named-target evidence; KRN boot grants landed in round 50 · **Roadmap:** G; 900 T11 · **Constitution:** MC-3.13, MC-5.1, MC-5.2, MC-8.1, MC-9.1, MC-11.1, MC-11.11, MC-12.1, MC-12.2, MC-12.3
 
 ## Problem
 

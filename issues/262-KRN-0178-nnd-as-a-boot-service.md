@@ -115,4 +115,4 @@ In `main` since landing round 50 (8e2b16e0, 2026-10-30), with ABI 25 and handoff
 
 ## Related
 
-[262-APP-0112](262-APP-0112-nnd-and-nn-wit-stage-0.md), [262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), 262-KRN-0160, 262-KRN-0161, 262-KRN-0163, 000-KRN-0073, 900-NRL-0017.
+[262-APP-0112](../issues-done/262-APP-0112-nnd-and-nn-wit-stage-0.done), [262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md), 262-KRN-0160, 262-KRN-0161, 262-KRN-0163, 000-KRN-0073, 900-NRL-0017.
