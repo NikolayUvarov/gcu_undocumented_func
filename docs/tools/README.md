@@ -513,6 +513,12 @@ The design is [docs/nn/runtime.md](../nn/runtime.md) 1.0; the interface is `idl/
   - with no badge free, the start is refused (`EVERY CLIENT OF THE MODEL SERVICE IS IN USE`);
   - at its start the shell retires every badge an earlier shell lent, and lends none before `nnd` has answered.
 - **`nn [status]`, `nn models`** in the shell: `nnd`'s memory, workers, models, sessions and badges, then each badge the shell lent and to which PID.
+- **`nn load`, `unload`, `run` and `bench`** in the shell (262-APP-0112), on its own client (badge 0). In a script they need `requires: nn`, and `nn` alone only reads.
+  - `nn load <path> <id>`: a model on `models:` or under `data/models/`, its ID 64 hex digits. The shell says its widths, rows a job and size, or `nnd`'s refusal in words. `nn unload <id>` drops the shell's hold.
+  - `nn run <id> <file>`: the file, from the current directory, holds the rows, one a line, the model's input width of numbers apart by spaces, tabs or commas; an empty line and a `#` line are skipped.
+    - A wrong line is named (`LINE 2: 2 NUMBERS, THE MODEL TAKES 3`, a word that is no finite number), and nothing runs.
+    - The rows go in jobs of what one call carries, through a session sized for them. Each output row is a line of its values, the shortest decimal that reads back as each, then the rows, work and jobs charged.
+  - `nn bench <id>`: rows of zeros, a job of the most a call carries after another, for 2 s. It gives rows a second and the session's memory, for this machine alone (MC-12.1), with `nnd`'s workers named.
 - **`nncheck`**, the test program, with `NRL`'s inputs and references built in (docs/nn/runtime.md section 8):
   - `nncheck [hold SECONDS]`: its client's badge and rights, `nnd`'s status, and its `retire` and `retire-all` refused (`owner`);
   - `nncheck load PATH ID`: one load and its answer;
