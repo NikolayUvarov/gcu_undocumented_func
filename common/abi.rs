@@ -63,12 +63,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // slot (32 before), as the shell's are 33 where `wlan` runs (311-KRN-0190). ABI 28: devices outside PCI are platform
 // nodes (100000-KRN-0171): PLATFORM_NODES lists them, PLATFORM_MMIO takes a node's index and one of its register ranges,
 // PLATFORM_NODE_IRQ one of its lines; the fixed indices PLATFORM_UART, _RTC, _PINS_* and _TPM are gone, and aarch64's
-// PLATFORM_IRQ takes no line.
+// PLATFORM_IRQ takes no line. ABI 29: PLATFORM_CONSOLE gives the kernel's console as a byte channel (CAP_KIND_CONSOLE,
+// written with TEXT_WRITE, read as the holder's text input) where its node cannot be lent by its page (100000-KRN-0222).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 28;
+pub const ABI_VERSION: u32 = 29;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -286,6 +287,8 @@ pub const CAP_KIND_ESCROW: usize = 15;
 pub const CAP_KIND_FIRMWARE: usize = 16;
 // The writer of one task's text input (SPAWN_TEXT, TEXT_WRITE; ABI 9, 000-KRN-0094): CAP_INFO's arg2 is that task's PID.
 pub const CAP_KIND_TEXT: usize = 17;
+// The writer of the console channel (PLATFORM_CONSOLE, TEXT_WRITE; ABI 29, 100000-KRN-0222).
+pub const CAP_KIND_CONSOLE: usize = 18;
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -533,6 +536,11 @@ pub const PLATFORM_DEVICE_BAR_IDLE: usize = 14; // device index, memory BAR: MEM
 pub const PLATFORM_MMIO: usize = 10; // node index, register range n: that range's pages (ERR_RIGHTS when another node, RAM or the kernel's own device shares them)
 pub const PLATFORM_NODES: usize = 15; // a read-only memory object: PlatformNodes, then its `count` PlatformNode records
 pub const PLATFORM_NODE_IRQ: usize = 16; // node index, line n: an interrupt line the kernel can bind (ERR_NOT_FOUND past its lines or beyond the kernel's)
+// The console as a byte channel (100000-KRN-0222): a CAP_KIND_CONSOLE capability; TEXT_READ with it in msg[0] takes what
+// the console received (TEXT_QUEUE kept), TEXT_WRITE with it queues bytes to send. The kernel keeps the console's line,
+// and its log stops going there, until no live task holds the capability. ERR_NOT_FOUND where the kernel reads no console
+// (x86's COM1 is lent by its ports); ERR_BUSY while the console is lent or another channel stands.
+pub const PLATFORM_CONSOLE: usize = 17;
 // The platform's devices outside PCI (100000-KRN-0171): the device tree's enabled nodes that have registers on the CPU's
 // bus (not the memory, the interrupt controller and the PCI host the kernel drives), or on a board without a tree the
 // same records the kernel makes from the ACPI tables (its UART, PL031, pin controllers and TPM).
@@ -698,7 +706,8 @@ pub const FIRMWARE_HEADER: usize = 26;
 pub const RUN_MARK_GUID: [u8; 16] = [0x4D, 0x49, 0x4E, 0x44, 0x43, 0x4F, 0x52, 0x45, 0x80, 0x76, 0x52, 0x55, 0x4E, 0x4D, 0x41, 0x52];
 pub const RUN_MARK_NAME: &str = "MindCoreRun";
 // TEXT_WRITE (a CAP_KIND_TEXT writer in arg1; ABI 9, 000-KRN-0094): msg[0] = bytes, msg[1] = their length; appends what
-// fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With
+// fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With the
+// CAP_KIND_CONSOLE writer (ABI 29) the bytes queue for the console instead, ERR_PEER once its channel ended. With
 // TEXT_CLOSE in arg2 and every byte taken, the input ends after them. ERR_PEER when the task ended, ERR_INVALID once
 // closed, ERR_RIGHTS without the writer.
 pub const SYSCALL_TEXT_WRITE: usize = 62;
@@ -706,6 +715,9 @@ pub const SYSCALL_TEXT_WRITE: usize = 62;
 // once the input was closed or no writer is left. With nothing queued yet it waits up to TEXT_WAIT_MS for bytes, a
 // close or any input event and answers ERR_BUSY: the caller asks again. ERR_NOT_FOUND for a task started without one.
 pub const SYSCALL_TEXT_READ: usize = 63;
+// TEXT_READ of the console channel (ABI 29, 100000-KRN-0222): msg[0] = its CAP_KIND_CONSOLE handle (0: the task's own
+// input), the same wait and answers; with TEXT_NOWAIT in msg[1], ERR_BUSY at once when nothing came.
+pub const TEXT_NOWAIT: usize = 1;
 // WORKER_START (262-KRN-0163, ABI 18): arg1 = the worker's argument word, arg2 = its stack in bytes (0: what the
 // program's ELF asks; more than STACK_MAX_BYTES: ERR_INVALID), msg[2] = address of a Grant array, msg[3] = grant count
 // -> PID. The worker runs the caller's own program in an address space of its own, with exactly the granted

@@ -13,7 +13,7 @@ Listed as differences from the [x86-64 TCB](../tcb.md); a guarantee not named he
 | Screen shows the focused task | Kernel; `compositor`; the firmware's `ramfb` framebuffer as reported by GOP. |
 | Calendar time | `rtc` with the PL031's registers (its platform node, `PLATFORM_MMIO`), the only holder. |
 | Secrecy of the device key; TLS key exchange | As on x86, with RNDR in place of RDRAND (no RNDR: no key and no TLS). |
-| The console | The kernel's PL011 lines; the shell holds the PL011's registers once it runs (the console's platform node, `PLATFORM_MMIO`; a 16550 console, the A64's, stays the kernel's) and then is the only writer besides the kernel's panic and boot lines. |
+| The console | The kernel's PL011 lines; the shell holds the PL011's registers once it runs (the console's platform node, `PLATFORM_MMIO`) and then is the only writer besides the kernel's panic and boot lines. Where the console's node cannot be lent (a 16550, the A64's; a page another device's registers share, the A64's four UARTs), the shell's serial line is the kernel's byte channel instead (`PLATFORM_CONSOLE`, 100000-KRN-0222): the kernel drives the UART by its receive and transmit interrupts, keeps 4 KiB each way, and stops its log there while the shell runs; the kernel's UART code (`kernel/src/arch/aarch64/serial.rs`) is then in the TCB of the shell's serial line, tested in QEMU only with a PL011 (a test tree), not yet with a 16550. |
 
 ## Notes
 

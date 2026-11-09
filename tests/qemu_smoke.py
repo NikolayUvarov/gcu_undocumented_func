@@ -14357,6 +14357,60 @@ def devicetree_suite(args, disk):
               f"{nodes[1]} device nodes, {nodes[2]} sharing a page, the console's lent to the shell, the disabled PL031 not listed", flush=True)
     finally:
         vm.close()
+    console_channel_check(args, disk, machine)
+
+
+def fdt_with_node(blob, name, props):
+    """A flattened device tree with node `name` added last under the root: `props` is [(name, bytes)], each name's string
+    taken from the tree's strings block or added to it (100000-KRN-0222's test tree)."""
+    magic, total, off_struct, off_strings, off_rsvmap, version, last_comp, boot_cpu, size_strings, size_struct = struct.unpack(">10I", blob[:40])
+    assert magic == 0xD00DFEED and version >= 17, (hex(magic), version)
+    structure, strings = bytearray(blob[off_struct:off_struct + size_struct]), bytearray(blob[off_strings:off_strings + size_strings])
+    def string(prop):
+        at = strings.find(prop.encode() + b"\0")
+        while at > 0 and strings[at - 1] != 0: at = strings.find(prop.encode() + b"\0", at + 1)
+        if at < 0: at = len(strings); strings.extend(prop.encode() + b"\0")
+        return at
+    pad = lambda b: b + b"\0" * (-len(b) % 4)
+    node = struct.pack(">I", 1) + pad(name.encode() + b"\0")
+    for prop, value in props: node += struct.pack(">III", 3, len(value), string(prop)) + pad(value)
+    node += struct.pack(">I", 2)
+    # The root's end: the last END_NODE before FDT_END.
+    assert structure[-4:] == struct.pack(">I", 9) and structure[-8:-4] == struct.pack(">I", 2), structure[-8:].hex()
+    structure[-8:-8] = node
+    rsvmap = blob[off_rsvmap:off_struct]
+    out_struct = 40 + len(rsvmap); out_strings = out_struct + len(structure)
+    header = struct.pack(">10I", magic, out_strings + len(strings), out_struct, out_strings, 40, version, last_comp, boot_cpu, len(strings), len(structure))
+    return header + rsvmap + bytes(structure) + bytes(strings)
+
+
+def console_channel_check(args, disk, machine):
+    """100000-KRN-0222: virt's tree with a second PL011 node in the console's page, as the A64's four UARTs share one: the
+    console's node is lent to none, init asks the kernel for the console as a byte channel, and the shell's serial line
+    runs over it (every command below came through it)."""
+    with tempfile.TemporaryDirectory(prefix="mind-dtb-") as temp:
+        dumped, patched = Path(temp) / "virt.dtb", Path(temp) / "shared.dtb"
+        ns = argparse.Namespace(**{**vars(args), "machine": machine, "uboot": None})
+        dump = VM(argparse.Namespace(**{**vars(ns), "machine": machine + f",dumpdtb={dumped}"}), disk.relative_to(ROOT).as_posix(), prompt=False)
+        try: dump.process.wait(timeout=60)
+        finally: dump.close()
+        cells = lambda *v: struct.pack(f">{len(v)}I", *v)
+        patched.write_bytes(fdt_with_node(dumped.read_bytes(), "pl011@9000800", [("compatible", b"arm,pl011\0arm,primecell\0"), ("reg", cells(0, 0x9000800, 0, 0x100)), ("status", b"okay\0")]))
+        vm = VM(ns, disk.relative_to(ROOT).as_posix(), extra=["-dtb", str(patched)])
+        try:
+            require(vm.log, "SHARING A PAGE WITH ANOTHER")
+            require(vm.log, "NOT LENT: ITS PAGES AT 9000000 HOLD NODE")
+            require(vm.log, "[INIT] SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
+            online = vm.command("cpus")
+            assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
+            # More than a ring's worth back through the channel: 5000 bytes the shell prints to its serial line.
+            out = vm.command("write ram:long.txt " + "0123456789" * 50, timeout=30)
+            for _ in range(10): out = vm.command("cat ram:long.txt", raw=True, timeout=30)
+            assert out.count("0123456789") >= 50, out[-500:]
+            print("PASS: console channel (100000-KRN-0222): virt's tree with a second PL011 in the console's page; the console's node lent to none, "
+                  "init gave the shell the kernel's channel, and the shell's commands and their output came through it", flush=True)
+        finally:
+            vm.close()
 
 
 def bar_move_check(args, disk):
