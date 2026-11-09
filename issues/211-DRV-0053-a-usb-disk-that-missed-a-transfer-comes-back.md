@@ -66,6 +66,25 @@
 
 `usb_host` and `usb_storage` reach the Mac only with a slot update: `usb_host` serves the boot disk, so it cannot be replaced while the machine runs.
 
+## The stick lost again, seen whole (2026-11-09, 13:13 UTC)
+
+**The Mac** still ran its old boot image (101b4f47, without this fix), 13 h after the morning's reboot. This time the log ring held the moment:
+- **47497 s:** the updater's check, the last one that read the disk (`REFUSED: Older`).
+- **47521 to 47581 s:** a minute with nothing in the log. In it `usb_host` waited on a bulk transfer of the stick's that never ended. `usb_host` serves every USB client in turn, so the link's converter went silent too: `effector485` got "no answer".
+- **47583 s:** `[USB] STORAGE: NO ANSWER TO READ: THE DEVICE IS GONE OR WAS RESET; CLAIMING IT AGAIN`.
+- **47585 s:** `[USB] STORAGE: THE DEVICE IS GONE`, 2 s later. That is `claim`'s 20 tries 100 ms apart, while its old claim was still held.
+- **From 47652 s:**
+  - `[VFS] THE USB DRIVE DOES NOT ANSWER: REQUESTS FAIL AT ONCE, IT IS ASKED AGAIN EVERY 10 S`;
+  - every file request refused (`Loader(Unreadable)`, link's code 3).
+
+This is the sequence plan steps 1 and 2 fix:
+- the stuck TRB is stepped past;
+- the interface is reset and released before the claim.
+
+Why the stick did not answer is not known. It has happened twice, 13 to 15 h into a boot. Saved: scratchpad `mac-lost2-1309.log`, session 4c527436.
+
+The Mac was rebooted over the link at 18:48 UTC, and its slot is being updated to `main` (ABI 29) with this fix.
+
 ## Related
 
 [211-DRV-0019](../issues-done/211-DRV-0019-usb-storage-refusals-and-resets.done), [211-DRV-0021](211-DRV-0021-a-gone-device-fails-at-once.md), [550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md), [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done), [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md).
