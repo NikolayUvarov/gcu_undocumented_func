@@ -72,6 +72,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [100000-KRN-0221](100000-KRN-0221-init-starts-uart-serial-for-link.md) | `init` starts `uart_serial` on the console UART for `link` (the word `uart`; LNK's 100000-LNK-0038 shape) | `KRN` | P2 | LNK's `uart_serial` in `main`; on the A64, 100000-KRN-0222 | H / 100000 |
 | [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) | The kernel's console as a byte channel (the A64's page of four UARTs, for `link`) (ABI) | `KRN` | P2 | 100000-KRN-0171 in `main` | H / 100000 |
 | [550-NET-0061](550-NET-0061-a-restarted-radio-gets-its-country-again.md) | A restarted radio gets its country again, and the station joins by itself (`wlan` asks `info` while not joined; no channel set means restarted) | `NET` | P1 | the Ryzen's check: DRV's `rtw89_wifi` exit | D / 550 |
+| [550-NET-0062](550-NET-0062-the-card-chosen-in-software.md) | The card a machine's traffic takes, chosen in software: the preferred card first within its network, and a policy line `card N off` that takes a card out of use (`socket.wit` 2.11; made by STO) | `NET` / `STO` | P1 | — | D / 550 |
 | [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md) | A 16550 UART in memory (the A64's DesignWare UART) as the kernel's and the shell's console (the kernel's and the loader's lines done) | `PRT` | P2 | a PinePhone at hand | H / 100000 |
 | [100000-PRT-0012](100000-PRT-0012-the-a64s-counter-erratum.md) | The A64's counter erratum (`allwinner,erratum-unknown1`): a stable read of the generic timer (the kernel's retry in `main`; the phone's run left) | `PRT` | P2 | a PinePhone at hand to show it | H / 100000 |
 | [100000-LNK-0038](100000-LNK-0038-link-over-the-boards-console-uart.md) | `link` over the board's console UART, so that `effector485` reaches the PinePhone: `uart_serial` serving `serial.wit`, `link.conf`'s word `uart`, the console as channel 1 | `LNK` | P1 | `init`'s lending of the UART (KRN); on the A64, 100000-KRN-0171 | H / 100000 |
@@ -98,8 +99,12 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [211](211-intel-pc-from-a-sata-ssd.md) | An Intel PC booted from a SATA SSD (the maintainer's Samsung 860 PRO): the first real x86 machine | main task, `PRT` | P1 | — | track H |
 | [213](213-amd-ryzen-pc.md) | An AMD Ryzen PC (the maintainer's Ryzen 9 5900HX, Radeon iGPU): the first run booted every service; the screen, sound, Ethernet, the second xHCI and NVMe remain | main task, `PRT` | P1 | — | track H |
 | [351-KRN-0218](351-KRN-0218-the-updaters-store-client.md) | The updater's own client of the block store, badged `OWNER_UPDATER` (STO's request, for 351-STO-0006) | `KRN` | P3 | — (`init`'s part done; the store's log of the first request waits for 351-UPD-0033) | 351 |
+<<<<<<< HEAD
 | [000-KRN-0220](000-KRN-0220-the-application-processors-run-with-caches-disabled.md) | The application processors run with their caches disabled (CR0.CD and NW left set by the AP start); invisible under TCG (made and tested in QEMU; the machine's run left) | `KRN` | P1 | — | track A |
 | [000-KRN-0224](000-KRN-0224-a-console-programs-secret-line-request-bit.md) | A request bit for a console program's secret line (`REQUEST_SECRET_LINE`), the shell's badge for it (`BADGE_SHELL_SECRET`) and the right to badge on its command endpoint (APP's request, for 000-APP-0126) | `KRN` | P2 | — | tools |
+=======
+| [000-KRN-0220](000-KRN-0220-the-application-processors-run-with-caches-disabled.md) | The application processors run with their caches disabled (CR0.CD and NW left set by the AP start); invisible under TCG | `KRN` | P1 | — | track A |
+>>>>>>> origin/claude/relaxed-meitner-5bmhpz
 | [000-KRN-0216](000-KRN-0216-the-power-button-shuts-down-cleanly.md) | A short press of the power button shuts the machine down cleanly (x86, a fixed-feature button; LNK for the maintainer) | `KRN` | P1 | — | track A |
 | [000-KRN-0217](000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md) | A safe start that leaves out only what it suspects, and brings it back by itself (LNK for the maintainer, 000-KRN-0076's steps 2–3 refined) | `KRN` | P1 | — | track A |
 | [000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) | A `run` right after forty `kill`s waited past 8 s for the shell (round 79's gate, seen once) | `KRN` | P2 | — | gate |
@@ -333,8 +338,11 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+<<<<<<< HEAD
 | [000-APP-0125](../issues-done/000-APP-0125-a-scripts-program-asks-about-a-flow.done) | A program a script runs puts its question about a flow to the user | The script's wait tends the flow question as the shell's loop does, its keys answering it (bytes from the serial line), none stopping the script; the `net` suite's `get` from `msh -c` refused with Esc and let through with O, the script going on |
 | [550-APP-0124](../issues-done/550-APP-0124-the-shell-lends-a-reading-wifi-client.done) | The shell lends the Wi-Fi station's reading client for `REQUEST_WIFI_READ` | `wifi.wit` 1.3 `reader` lent in `SLOT_WIFI` for the read bit alone, the changing client for both; the `net` suite's `wifiro` read the link and was denied a leave and a country (QEMU x86, 2026-11-09) |
+=======
+>>>>>>> origin/claude/relaxed-meitner-5bmhpz
 | [351-UPD-0033](../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done) | The updater keeps the running, the last known good and a staged release in the block store, pinned by its own owner, and a rollback writes a damaged slot again from there (`update.wit` 1.4; made by STO) | done (2026-11-09) |
 | [351-STO-0006](../issues-done/351-STO-0006-releases-pinned-in-the-store.done) | Releases as objects in the block store, pinned by the updater (MC-9.3): the store's owner for it, `init`'s client (351-KRN-0218) and the updater's part (351-UPD-0033) | done (2026-11-09) |
 | [000-KRN-0219](../issues-done/000-KRN-0219-a-cpu-starved-of-the-schedulers-lock.done) | A CPU starved of the scheduler's lock while another takes it again and again (round 91's record) | A test-and-set lock with a turn for a CPU that waited `PATIENCE` turns, passed by others after `ABSENT` when that CPU's vCPU is not running (`common/spinlock.rs`); the ticket lock refused by round 95; 10 runs in a row passed on x32-128 beside a busy lane; in QEMU the revocations 2 to 3 times faster, call and reply on 4 CPUs slower; round 96 (5bc2ce6e) |

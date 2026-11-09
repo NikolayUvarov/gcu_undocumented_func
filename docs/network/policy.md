@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.7 (2026-11-04: the time servers of `timed`, 111-NET-0057; 0.6: 2026-10-31, a question at run time, the stack's and the broker's part, 000-NET-0049; 0.5: 2026-10-28, the browsing grant; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.8 (2026-11-09: a card out of use, and the preferred card within its network, 550-NET-0062; 0.7: 2026-11-04, the time servers of `timed`, 111-NET-0057; 0.6: 2026-10-31, a question at run time, the stack's and the broker's part, 000-NET-0049; 0.5: 2026-10-28, the browsing grant; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 
@@ -19,7 +19,8 @@ One line per rule, `#` starts a comment:
 | `program address tcp\|udp\|icmp [port [seconds [bytes]]]` | `program` may reach `address` (an IPv4 address or a host name) over the protocol, on `port` (0 or none: any), for a term of `seconds` (default 3600) and a volume of `bytes` (default 16 MiB); a grant takes the shortest term and the smallest volume its lines give |
 | `program dns` | `program` may ask the stack's DNS server (UDP port 53) |
 | `resolver A.B.C.D[:PORT]` | host names in this file are looked up at this server (default: the stack's DNS server) |
-| `default card N` | card `N` (0 or 1: the wired cards, 2: the Wi-Fi station) is the default while its link is up and it has an address and a gateway; the last such line counts (550-NET-0025) |
+| `default card N` | card `N` (0 or 1: the wired cards, 2: the Wi-Fi station) is the default while its link is up and it has an address and a gateway, and is taken first for its own network's flows too; the last such line counts (550-NET-0025, 550-NET-0062) |
+| `card N off` | card `N` is out of use: no flow goes through it and it keeps no address, while its driver keeps the link; removing the line puts it back (550-NET-0062, below) |
 | `browse program public tcp PORT[,PORT…] [seconds [bytes]]` | `program` may reach **any public address** over TCP on these ports (at most 4, none 0): a browsing grant (000-NET-0049, below) |
 | `listen program tcp PORT from A.B.C.D/BITS[,A.B.C.D/BITS…] [seconds [bytes]]` | `program` may **listen** on TCP `PORT` and take connections from peers in these networks (at most 4 a port, host bits 0; `0.0.0.0/0`: anywhere): a listening grant (110-NET-0052, below) |
 
@@ -106,10 +107,23 @@ A program that reaches a host the user names only when it runs (`get URL`, a mai
 
 ### The default card
 
-- **The rule.** A flow goes out through the card whose network holds its destination. Any other flow, and the stack's DNS server, go through the default card: the preferred card while its link is up and it has an address and a gateway, else the first card that has, wired cards (0, 1) before the Wi-Fi station (2), else any card with an address.
+- **The rule.** A flow goes out through a card whose network holds its destination: the preferred card first, when its network holds it too (550-NET-0062), so two cards on one LAN, a wired card and the station, take the LAN's flows through the preferred one. Any other flow, and the stack's DNS server, go through the default card: the preferred card while its link is up and it has an address and a gateway, else the first card that has, wired cards (0, 1) before the Wi-Fi station (2), else any card with an address. A card out of use is none of these.
 - **The preferred card** is the policy's `default card N` line. The broker tells the stack at start, after each change and every 10 seconds, so a restarted stack learns it again. Without the line no card is preferred.
 - **Logged:** `[NETPOLICY] DEFAULT CARD N FROM THE POLICY`, `[NETSTACK] CARD N PREFERRED AS THE DEFAULT`, and each move of the default, `[NETSTACK] DEFAULT ROUTE: CARD N`.
 - **`idl/socket.wit` 2.5** `cards` tells each card's kind (wired or wireless), whether it is there, up and configured, and which one is preferred and which is the default; `netcheck cards` prints them.
+
+### A card out of use (550-NET-0062)
+
+- **`card N off`** takes card `N` out of use without touching its cable, so the traffic can be moved between a wired card and the station in software:
+  - no flow goes through it, and the default route moves to another card;
+  - its address is dropped, and its TCP connections are aborted, as at its link going down;
+  - the stack sends nothing through it, DHCP included. Its driver keeps the link, and the stack still asks it whether the link is up.
+- **Removing the line** puts the card back. DHCP runs on it again, and it takes its flows back.
+- **The broker tells the stack** the cards out of use as it tells the preferred card: at start, after each change and every 10 seconds (`idl/socket.wit` 2.11 `withdraw`, for the policy's badge and the operator's). A card that appears while its line stands starts out of use.
+- **Logged:** `[NETPOLICY] CARDS OUT OF USE FROM THE POLICY: 0`, `[NETSTACK] CARD 0 OUT OF USE BY THE POLICY: ADDRESS DROPPED, n CONNECTIONS ABORTED, NOTHING SENT THERE`, and `[NETSTACK] CARD 0 IN USE AGAIN BY THE POLICY, WAITING FOR DHCP`. `netcheck cards` adds `OFF` (`withdrawn`, any client).
+- **To move all traffic to the station** while the cable stays in: `netpolicy add card 0 off`, and `netpolicy remove card 0 off` to bring it back. `netpolicy add default card 2` instead keeps card 0's address and moves only the flows.
+- **On a machine without a screen** the shell asks at the console as for any change. In the owner's `link-console` mode (800-APP-0108) the link's console runs `netpolicy add` and `remove` at once.
+- **Not shown by `ip` yet**, which is the tools track's (requests-APP.md).
 
 A host name is looked up when the grant is made (351-NET-0003). The grant keeps the address it got, and the log names both. The answer is plain DNS: the grant reaches whatever address the resolver gave.
 
