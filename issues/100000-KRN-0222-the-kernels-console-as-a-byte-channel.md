@@ -1,6 +1,6 @@
 # 100000-KRN-0222 — The kernel's console as a byte channel (the A64's page of four UARTs)
 
-**Type:** kernel (ABI) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (made and tested in QEMU with a PL011, below; the gate, a 16550 and `link` left) · **Blocked by:** — (100000-KRN-0171 in `main` since round 99) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.1, MC-2.3, MC-3.1, MC-12.4
+**Type:** kernel (ABI) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (in `main` since round 102, c6931ded, ABI 29; a 16550, `link` and the holder's end left) · **Blocked by:** — (100000-KRN-0171 in `main` since round 99) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.1, MC-2.3, MC-3.1, MC-12.4
 
 ## Problem
 
@@ -55,6 +55,8 @@ The kernel has a ring and a blocking read already: a task's text input (`TEXT_QU
   - a 16550 console (the A64's), which QEMU's `virt` has no model of; the phone's run;
   - `link`'s frames through the channel with `uart_serial` (100000-KRN-0221, after LNK's `uart_serial` is in `main`);
   - the kernel's lines after the holder ends, and a restarted shell getting the channel again: not tested yet.
+
+**Landed** in round 102 (`main` c6931ded, 2026-11-09), after round 101 returned it for two of its tests (the handoff's host test, 200acdc5; the test tree's PL011 node that PCU's AAVMF hung on, 9c9529ab). Every group of the gate passed with it, PCU's `devicetree` suite with the channel check among them.
 
 ## Related
 
