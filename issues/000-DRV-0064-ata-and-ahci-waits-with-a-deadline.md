@@ -57,7 +57,7 @@ No real machine is needed.
   - **The handoff:** OOS set, BOS awaited 25 ms, and while BB is set 2 s more.
     - Taken: logged with its time.
     - Silent (BOS kept, BB clear): taken, as AHCI 10.6.3 allows, and said so.
-    - Still busy: left to the firmware, which the log says, and no disk.
+    - Still busy after 2 s: taken anyway, and said so. Before 000-DRV-0064 the controller was always taken; leaving it to a slow firmware would cost the boot disk, and the i5 PC boots from SATA.
   - **Every wait** is to a deadline, sleeping 1 ms:
 
     | Wait | Deadline |

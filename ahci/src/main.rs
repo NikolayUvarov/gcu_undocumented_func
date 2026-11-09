@@ -50,12 +50,13 @@ impl Ahci {
         let (hba, dma) = (Mmio::map(SLOT_DEV0).ok()?, Dma::map(SLOT_MEM).ok()?);
         if dma.len() < DATA + 512 { mind::println!("[AHCI] THE DMA REGION ({} BYTES) HOLDS NO DATA AREA", dma.len()); return None; }
         hba.write32(GHC, hba.read32(GHC) | 1 << 31); // AHCI mode
-        // Taken from the firmware where it offers the handoff (CAP2.BOH), and left to it while it stays busy.
+        // Taken from the firmware where it offers the handoff (CAP2.BOH); one still busy after 2 s is taken too, as before
+        // the handoff was checked, so that a slow firmware does not cost the boot disk (the i5 PC boots from SATA).
         if hba.read32(CAP2) & 1 != 0 {
             match checks::handoff(&Owner(&hba)) {
                 Handoff::Taken(ms) => mind::println!("[AHCI] TAKEN FROM THE FIRMWARE IN {} MS", ms),
                 Handoff::Silent(ms) => mind::println!("[AHCI] THE FIRMWARE DID NOT LET GO IN {} MS AND IS NOT BUSY: TAKEN, AS AHCI 10.6.3 ALLOWS", ms),
-                Handoff::Kept(ms) => { mind::println!("[AHCI] THE FIRMWARE KEEPS THE CONTROLLER, BUSY AFTER {} MS: LEFT TO IT", ms); return None; }
+                Handoff::Kept(ms) => mind::println!("[AHCI] THE FIRMWARE STILL SAYS IT IS BUSY AFTER {} MS: TAKEN ANYWAY", ms),
             }
         }
         let implemented = hba.read32(PI);
