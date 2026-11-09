@@ -1,6 +1,6 @@
-# 351-STO-0043 — A reserve for the updater's releases: the other owners together within three quarters of the medium
+# 351-STO-0043 — A reserve for the updater's releases: the other owners together within three quarters of the medium — done
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (2026-11-09) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.11
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.11
 
 ## Problem
 
@@ -29,6 +29,23 @@
 - **QEMU:**
   - the `store` suite, x86 and aarch64: no reserve on the RAM disk;
   - the `boot` suite's check of a store disk, x86, where `boot` runs: the reserve on a disk.
+
+## Resolution
+
+- **Built** in `blockstore/src/store.rs`:
+  - `reserve_for` names the owner a reserve is kept for;
+  - `within_quota` checks a publication, a commit and a pin against the owner's quota and, for any other owner, against every such owner's roots together (`retained_where`, each root counted once);
+  - `usage` gives what is left.
+- **In `blockstore/src/main.rs`:** the store keeps the reserve for `OWNER_UPDATER`'s owner on a medium that is not a RAM disk, and logs it.
+- **Docs:** [docs/storage](../docs/storage/README.md), [docs/update/updater.md](../docs/update/updater.md) and its Russian version, the profile's Article 4 row.
+- **Tested** in this session's container (QEMU 8.2.2 under TCG, 4 CPUs):
+  - `tests/blockstore_host.rs` `a_quarter_of_the_medium_is_kept_for_the_updater` passes. Five faults put in by hand were each caught.
+  - On 9edb41a7: `store`, `storefaults` and the `updater` group passed, x86 38 and aarch64 39. The RAM disk keeps no reserve.
+  - On 53e5bcc3: `boot` passed on x86 (24), its store-disk check seeing the reserve's line.
+- **Not done:**
+  - a quota granted per owner by whoever grants the clients;
+  - the reserve's size other than a quarter;
+  - sectors, rather than accounts: blocks put and not yet retained are outside it.
 
 ## Related
 
