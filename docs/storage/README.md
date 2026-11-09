@@ -288,6 +288,17 @@ A store of layout 1 to 3 is refused and left as it is (MC-4.13), with `device` o
   - Anything else is refused and left as it is: another file system, a damaged superblock, another layout version (MC-4.13), a key that does not open the superblock's check (`key`).
   - A store is scanned whole. Every frame's record is opened, and a block is checked against its CID (and a node against the schema); only intact blocks enter the index. A frame whose seal does not open is counted corrupt.
   - Non-blank sectors outside every frame are counted as damaged. The scan resynchronizes at the next frame, so a damaged frame loses only its own record.
+  - **The medium is read ahead** (307-STO-0042). Each read takes the driver's whole buffer, 128 sectors. A read inside the sectors last taken is answered from them, and a write over them drops them. Every pass and every scrub step drops them first, since those look for damage made behind the store's back.
+  - **What a whole pass costs** (x86 QEMU under TCG, a blank VirtIO disk; the times of that configuration, not of a machine):
+
+    | | 1 GiB | 4 GiB |
+    |---|---|---|
+    | first mount: the blank check, the format and the scan | 147 s | 562 s |
+    | a collection | 73 s | 117 s |
+    | a scrub | 70 s | 315 s |
+    | a mount after a reboot | 35 s | 292 s |
+
+    Before the read-ahead, 1 GiB took 391, 196, 177 and 225 s: the calls to the driver, a record's sectors each, bound it.
 - **Reading.** A get reads the record again, opens it and checks it against the CID. A block that does not open or whose bytes do not match is reported corrupt and never returned. It also leaves the index, so a put of the same bytes stores a new copy elsewhere.
 - **Limits.**
   - A block is at most 16 KiB.
@@ -955,7 +966,14 @@ The policy (MC-4.5, MC-4.11, Appendix B.3):
 
 **Accounts and quotas (303-STO-0002, MC-4.11).** What a name's version or a pin retains is charged to an owner: the badge of the client that published or pinned it. The account is the bytes of the distinct roots the owner retains, through the kept versions of names and through its pins, each root counted once however many names and pins hold it. A root's bytes are its object's size (a directory's: the bytes of the files under it); blocks shared between different objects are counted in each. A publication or a pin that would take the account past the owner's quota is refused with `quota`, and nothing is written. `usage` reports the caller's account, quota, names and pins; `pins` lists the first 32 of its pins. The store holds 64 pins in all (the service's static table); a pin past them is refused with `full`.
 
-The quota is fixed: three quarters of the medium for every owner. Nobody grants it yet, so it bounds what one owner can take, not what several can take together.
+The quota is fixed: three quarters of the medium for every owner. Nobody grants it yet.
+
+**A reserve for the updater (351-STO-0043, MC-9.3).** On a medium that outlives a reset, a quarter is kept for the updater's owner (`OWNER_UPDATER`), whose pins hold the running, the last known good and a staged release.
+- **Every other owner together** retains at most three quarters, each root counted once across them all. A publication, a commit or a pin past that is refused with `quota`, with nothing written, even when the owner is within its own quota.
+- **`usage`** gives such an owner, as its quota, what the others together leave it.
+- **The updater's own quota** stays three quarters, so it may use free room beyond its quarter.
+- **On the RAM disk** nothing is set aside. The store says which at mount (`[BLOCKSTORE] A QUARTER OF THE MEDIUM KEPT FOR THE UPDATER'S RELEASES: …`).
+- **What the reserve does not cover:** blocks put and not retained yet, and the records' own room. The reserve bounds accounts, not sectors.
 
 **Owners apart from rights (351-STO-0006).** The owner is the whole badge, below the domain clients' badges (`FIRST_DOMAIN_CLIENT`). Its bits 4 to 7 (`mind::blockstore::OWNER_BITS`) grant nothing, and bits 0 to 3 are the rights. So two clients with the same rights and other owner bits keep their names' charges, their pins and their accounts apart, and neither ends the other's pins.
 - `OWNER_UPDATER` (`0x10`) is the updater's owner. With get, put and publish its badge is `0x17`, beside the shell's `7`.

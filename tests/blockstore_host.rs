@@ -1329,6 +1329,48 @@ fn an_owner_retains_no_more_than_its_quota() {
     assert_eq!(store.usage(OWNER + 1).retained, 20_000);
 }
 
+// The updater's owner, as blockstore/src/main.rs keeps a reserve for it (351-STO-0043).
+fn updater_owner(owner: u16) -> bool { owner < rights::FIRST_DOMAIN_CLIENT && owner & rights::OWNER_BITS == rights::OWNER_UPDATER }
+
+#[test]
+fn a_quarter_of_the_medium_is_kept_for_the_updater() {
+    // A medium of 1024 sectors, 512 KiB: each owner may retain 393 216 bytes, and every owner but the updater together
+    // as much, so a quarter stays for the updater.
+    let mut medium = Memory::new(1024);
+    let mut room = Room::new(256);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    store.reserve_for(Some(updater_owner));
+    let quota = 1024 * 512 / 4 * 3;
+    let (shell, other, updater) = (OWNER, 3, rights::OWNER_UPDATER | OWNER);
+    let (shells, others, more, release) = (object(&mut store, 1, 250_000), object(&mut store, 2, 140_000), object(&mut store, 3, 10_000), object(&mut store, 4, 60_000));
+    assert_eq!(store.publish(b"shell", 0, &shells, shell), Ok(1));
+    assert_eq!(store.publish(b"other", 0, &others, other), Ok(1));
+    // Another owner's quota is what the others together leave it.
+    assert_eq!(store.usage(other).quota, quota - 250_000);
+    assert_eq!(store.usage(shell).quota, quota - 140_000);
+    // 400 000 together would pass the quota, though each owner is within its own: refused, nothing written.
+    assert!(140_000 + 10_000 < quota && 250_000 + 140_000 + 10_000 > quota);
+    assert_eq!(store.publish(b"more", 0, &more, other), Err(Error::Quota));
+    assert_eq!(store.pin(&more, shell), Err(Error::Quota));
+    assert_eq!(store.commit(&[Update { name: b"more", expected: 0, root: Some(more) }], other).map(drop), Err(Error::Quota));
+    assert_eq!(store.resolve(b"more"), Err(Error::NotFound));
+    // A root another owner retains already is counted once across them: it costs the others nothing more.
+    assert_eq!(store.publish(b"shell-too", 0, &shells, other), Ok(1));
+    // The updater pins its release in the quarter kept for it, and its own quota is the whole three quarters.
+    assert!(store.pin(&release, updater).is_ok());
+    assert_eq!(store.usage(updater).quota, quota);
+    assert_eq!(store.usage(updater).retained, 60_000);
+    // A domain's client is another owner, whatever its low bits.
+    assert!(!updater_owner(rights::FIRST_DOMAIN_CLIENT | rights::OWNER_UPDATER));
+    assert_eq!(store.publish(b"domain", 0, &more, rights::FIRST_DOMAIN_CLIENT | rights::OWNER_UPDATER), Err(Error::Quota));
+    // A new owner, 10 000 bytes of its own: past the others' bound under the reserve; without one (a RAM disk) each owner
+    // is bounded by its own quota alone, as before.
+    assert_eq!(store.publish(b"more", 0, &more, 5), Err(Error::Quota));
+    store.reserve_for(None);
+    assert_eq!(store.usage(other).quota, quota);
+    assert_eq!(store.publish(b"more", 0, &more, 5), Ok(1));
+}
+
 #[test]
 fn each_version_links_the_one_before() {
     // MC-4.5: the history's links are explicit on the medium, from each version's record to the root before it.

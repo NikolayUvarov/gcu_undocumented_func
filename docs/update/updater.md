@@ -164,7 +164,7 @@ tries 3                                   # tries of a trial boot for an automat
   - The shell's `update` does not show which releases the store keeps; the log does.
   - `apply` does not write a damaged staged slot again from the store: `fetch` writes it again from the source.
   - A collection in the minute between a block's put and the tree's pin may free the block. The pin is then refused (`incomplete`), and the next start keeps the release.
-  - The updater has no quota of its own. Its account counts each release whole, so the store's medium must be at least four times a release to hold three.
+  - The updater's account counts each release whole, so three releases need three quarters of a medium four times a release. A quarter is kept for it whatever other owners retain (351-STO-0043); past that it uses the room the others leave.
   - None of it has run on real hardware.
 - **SSH** (351-NET-0004).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).

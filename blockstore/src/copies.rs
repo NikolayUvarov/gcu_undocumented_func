@@ -26,6 +26,7 @@ impl<C: Device> Device for Gate<C> {
     fn read(&mut self, lba: u64, out: &mut [u8]) -> bool { self.medium.read(lba, out) }
     fn write(&mut self, lba: u64, data: &[u8]) -> bool { self.open && self.medium.write(lba, data) }
     fn flush(&mut self) -> bool { self.open && self.medium.flush() }
+    fn forget(&mut self) { self.medium.forget() }
 }
 // The tests reach the simulated medium through the gate.
 #[cfg(test)]

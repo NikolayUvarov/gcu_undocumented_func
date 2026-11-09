@@ -25,6 +25,13 @@ On a real machine the store lives on a RAM disk. `init` gives `blockstore` a dis
   - It is granted as the store's own partition is, and the store says when its copy shares a disk with it.
 - **Durability classes (MC-4.4, B.3).** Each write says what it reached: `volatile` (a RAM disk), `flushed` (one device's flush), `copied` (two media, [309](../issues-done/309-copies-scrub-and-repair.done)). `publish`, `unpublish`, `commit` and `pin` reply with it, and `stat` gives the medium's; a `put` is retained only by its lease until a name or a pin retains its object (MC-4.11), so its class is the medium's ([307-STO-0019](../issues-done/307-STO-0019-how-far-a-write-reached.done)). This changes the interface: `blockstore.wit` 2.0, with 1.x refused. Before the first release a new layout or interface replaces the old one, which is refused by name; no conversion code (AGENTS.md section 3, the maintainer's decision of 2026-10-25).
 
+### The partition's size (2026-11-09, 307-STO-0042)
+
+A mount, a collection and a scrub read the whole medium.
+- **Under TCG on x86** a mount after a reboot took 35 s at 1 GiB and 292 s at 4 GiB, with each pass reading 128 sectors per call to the driver ([307-STO-0042](../issues-done/307-STO-0042-a-pass-over-the-medium-reads-ahead.done)).
+- **The index** reaches its most, 2^20 slots, at 4 GiB, and indexes 16 GiB of blocks at most.
+- **So the stick's partition** starts at about 1 GiB until a real machine's times are measured and 310 brings the index onto the medium.
+
 ## Acceptance criteria
 
 - The tasks: [307-STO-0019](../issues-done/307-STO-0019-how-far-a-write-reached.done) (durability classes), [307-STO-0020](../issues-done/307-STO-0020-the-stores-partition-on-the-stick.done) (the partition on the stick); `KRN`'s and `DRV`'s parts get their numbers from their requests.
