@@ -85,7 +85,7 @@ On `claude/youthful-mendel-mf1soy`:
 
 **Landed (2026-11-08).** Round 91 (`main` 31decbba): the gate was green, the `power` suite in `x86: boot, display, shell, memory, clock` with it.
 - Two groups failed once and passed alone, as the gate allows:
-  - `x86: network, TLS and Effector`: a hang, the record of which became [000-KRN-0219](000-KRN-0219-a-cpu-starved-of-the-schedulers-lock.md);
+  - `x86: network, TLS and Effector`: a hang, the record of which became [000-KRN-0219](../issues-done/000-KRN-0219-a-cpu-starved-of-the-schedulers-lock.done);
   - `x86: keys, shell, tools`: `kbench`'s `sleep 10 ms` at 42 ms against 40, on a loaded acc-2.
 
 **Left:** the DEXP's run, a short press with no screen or keyboard. That is evidence for that machine and build only (MC-12.1).
