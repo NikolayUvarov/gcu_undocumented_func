@@ -105,6 +105,9 @@ pub trait Device {
     /// Writes `data.len() / SECTOR` sectors at `lba`.
     fn write(&mut self, lba: u64, data: &[u8]) -> bool;
     fn flush(&mut self) -> bool;
+    /// Drops what the device read ahead, so the next read reaches the medium: called where a pass or a scrub starts,
+    /// which look for damage made behind the store's back.
+    fn forget(&mut self) {}
 }
 
 /// The cipher records are sealed with: ChaCha20-Poly1305 (RFC 8439) on the platform, a stand-in in the host tests.
@@ -790,6 +793,7 @@ impl<'a, D: Device> Store<'a, D> {
     // does not retain at that place, the name records that are not current and the records that do not open; nothing
     // else is written.
     fn pass(&mut self, sweep: bool) -> Result<Collected, Error> {
+        self.dev.forget();
         let sectors = self.dev.sectors();
         let mut freed = Collected::default();
         let (mut lba, mut run) = (1u64, None::<u64>);
@@ -1686,6 +1690,7 @@ impl<'a, D: Device> Store<'a, D> {
     /// of each record that does not open or is not whole: its sector, and the block the index holds there. The pass
     /// that reaches the medium's end returns what it found, and the next call starts another.
     pub fn scrub(&mut self, budget: u64, found: &mut dyn FnMut(u64, Option<Cid>)) -> Result<Option<Scrubbed>, Error> {
+        self.dev.forget();
         let sectors = self.dev.sectors();
         if self.scrub_at == 0 { (self.scrub_at, self.scrubbing) = (1, Scrubbed::default()); }
         let mut read = 0;

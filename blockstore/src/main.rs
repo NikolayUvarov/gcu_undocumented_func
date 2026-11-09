@@ -28,7 +28,7 @@ use mind::{cid, dag, journal, sha256, tree};
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use cid::Cid;
-use mind::abi::{BootInfo, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_SERVICE};
+use mind::abi::{BootInfo, BLOCK_MAX_SECTORS, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_SERVICE};
 use mind::block::Device as Client;
 use mind::blockstore::{allowed, recovery_parse, recovery_text, Operation, FIRST_DOMAIN_CLIENT};
 use copies::{Copies, Event, Gate, Medium as Side, Standing, Step};
@@ -76,19 +76,50 @@ static mut COPY_WALK: [u8; dag::CHUNK] = [0; dag::CHUNK];
 static mut COPY_RECORD: [u8; BUFFER] = [0; BUFFER];
 static mut COPY_BLOCK: [u8; BLOCK_MAX] = [0; BLOCK_MAX];
 
-/// The block client as the store's medium.
-struct Medium(Client);
-impl Device for Medium {
-    fn sectors(&self) -> u64 { self.0.sectors() }
-    fn writable(&self) -> bool { !self.0.read_only() }
-    fn read(&mut self, lba: u64, out: &mut [u8]) -> bool {
-        match self.0.read(lba, out.len() / SECTOR) {
+// What a read takes from the driver at once: its whole transfer buffer, so a pass over the medium, which reads a record's
+// sectors at a time, asks the driver a quarter as often.
+const AHEAD: usize = BLOCK_MAX_SECTORS * SECTOR;
+static mut READ_AHEAD: [u8; AHEAD] = [0; AHEAD];
+static mut COPY_READ_AHEAD: [u8; AHEAD] = [0; AHEAD];
+
+/// The block client as the store's medium, with the sectors last read ahead: a read inside them is answered from
+/// there, a write over them drops them, and `forget` drops them where a pass or a scrub starts.
+struct Medium { client: Client, ahead: &'static mut [u8; AHEAD], at: u64, held: usize }
+impl Medium {
+    fn new(client: Client, ahead: &'static mut [u8; AHEAD]) -> Self { Medium { client, ahead, at: 0, held: 0 } }
+    // Sectors `count` from `lba` as the driver gives them, `out` filled exactly.
+    fn direct(&mut self, lba: u64, out: &mut [u8]) -> bool {
+        match self.client.read(lba, out.len() / SECTOR) {
             Ok(data) if data.len() == out.len() => { out.copy_from_slice(data); true }
             _ => false,
         }
     }
-    fn write(&mut self, lba: u64, data: &[u8]) -> bool { self.0.write(lba, data) == Ok(data.len() / SECTOR) }
-    fn flush(&mut self) -> bool { self.0.flush().is_ok() }
+}
+impl Device for Medium {
+    fn sectors(&self) -> u64 { self.client.sectors() }
+    fn writable(&self) -> bool { !self.client.read_only() }
+    fn read(&mut self, lba: u64, out: &mut [u8]) -> bool {
+        let count = (out.len() / SECTOR) as u64;
+        if lba < self.at || lba + count > self.at + self.held as u64 {
+            self.held = 0;
+            let ahead = self.client.sectors().saturating_sub(lba).min(BLOCK_MAX_SECTORS as u64) as usize;
+            // A read past what was asked that fails (a bad sector further on) leaves the read as asked.
+            if (ahead as u64) < count { return self.direct(lba, out); }
+            match self.client.read(lba, ahead) {
+                Ok(data) if data.len() >= out.len() => { self.ahead[..data.len()].copy_from_slice(data); (self.at, self.held) = (lba, data.len() / SECTOR); }
+                _ => return self.direct(lba, out),
+            }
+        }
+        let from = (lba - self.at) as usize * SECTOR;
+        out.copy_from_slice(&self.ahead[from..from + out.len()]);
+        true
+    }
+    fn write(&mut self, lba: u64, data: &[u8]) -> bool {
+        if lba < self.at + self.held as u64 && lba + (data.len() / SECTOR) as u64 > self.at { self.held = 0; }
+        self.client.write(lba, data) == Ok(data.len() / SECTOR)
+    }
+    fn flush(&mut self) -> bool { self.client.flush().is_ok() }
+    fn forget(&mut self) { self.held = 0; }
 }
 
 /// ChaCha20-Poly1305 (RFC 8439) of the RustCrypto crate, and the processor's random source.
@@ -302,7 +333,8 @@ fn mount_copy(main: Option<&mut Store<'static, Medium>>, ram: bool, secrets: &mu
     };
     let beside = main.is_some();
     let keeper = lent.then_some(secrets as &mut dyn Keeper);
-    match Store::mount(Gate::new(Medium(client), beside), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()) {
+    let ahead = unsafe { &mut *core::ptr::addr_of_mut!(COPY_READ_AHEAD) };
+    match Store::mount(Gate::new(Medium::new(client, ahead), beside), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()) {
         Ok(mut copy) => {
             copy.renew(mind::time::monotonic_ns());
             let kept = copy.key_source() == KEY_KEPT;
@@ -338,7 +370,8 @@ fn mount(index: &mut Option<*mut [Entry]>, secrets: &mut Secrets, lent: bool) ->
          &mut *core::ptr::addr_of_mut!(RECORD), &mut *core::ptr::addr_of_mut!(WALK), &mut *slots)
     };
     let keeper = (!ram && lent).then_some(secrets as &mut dyn Keeper);
-    (Store::mount(Medium(client), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()), ram)
+    let ahead = unsafe { &mut *core::ptr::addr_of_mut!(READ_AHEAD) };
+    (Store::mount(Medium::new(client, ahead), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()), ram)
 }
 
 // What a mount gave, logged: the store, or the reason every request is answered with.
@@ -398,8 +431,9 @@ fn recover(key: &str, index: &mut Option<*mut [Entry]>, secrets: &mut Secrets, l
     if !lent { wipe(&mut recovery); return Err(Error::Key); }
     let found = match Client::open(Endpoint(BLOCK)) {
         Ok(client) => {
-            let buffer = unsafe { &mut *core::ptr::addr_of_mut!(RECORD) };
-            store::recover(&mut Medium(client), &Sealing, secrets, &recovery, buffer).map_err(error)
+            // No store is mounted: its buffers are free.
+            let (buffer, ahead) = unsafe { (&mut *core::ptr::addr_of_mut!(RECORD), &mut *core::ptr::addr_of_mut!(READ_AHEAD)) };
+            store::recover(&mut Medium::new(client, ahead), &Sealing, secrets, &recovery, buffer).map_err(error)
         }
         Err(_) => Err(Error::Device),
     };
