@@ -47,6 +47,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DIR = "rel"  # below data/link/: update.txt's `source data/link/rel`
 DONE = re.compile(r"\[UPDATER\] SLOT ([AB]) CONFIRMED ON THE DISK")
 FAILED = re.compile(r"\[UPDATER\] [^\n]*(REFUSED|ROLLBACK)[^\n]*")
+CHECKED = re.compile(r"\[UPDATER\] CHECK \S+: VERSION (\d+)")
 ANCHOR = 8  # lines that mark where the last read of the log ended
 BOOT_S = 60  # a log whose first line is this young is a new boot's
 
@@ -142,10 +143,12 @@ def fresh(lines, anchor, last=None):
     return [line for line in lines if (stamp(line) or 0) > last or (stamp(line) == last and line not in seen)], True
 
 
-def follow(link, timeout, say=print, pause=5, before=""):
+def follow(link, timeout, say=print, pause=5, before="", version=None):
     """The updater's lines after `before` (the log as it was), across the trial restart, until the new slot is
-    confirmed on the disk (its line returned) or a step is refused (an error)."""
-    deadline, anchor, trial = time.monotonic() + timeout, before.splitlines()[-ANCHOR:], False
+    confirmed on the disk (its line returned) or a step is refused (an error). With `version`, an Older refusal of a
+    check that read another version is not this update's: the channel as it was before the put (the MacBook Pro,
+    2026-11-09)."""
+    deadline, anchor, trial, checked = time.monotonic() + timeout, before.splitlines()[-ANCHOR:], False, None
     last = latest(before.splitlines())
     while time.monotonic() < deadline:
         text = link.log()
@@ -160,6 +163,10 @@ def follow(link, timeout, say=print, pause=5, before=""):
             if DONE.search(line):
                 return line
             trial = trial or "ON TRIAL, VERSION" in line
+            seen = CHECKED.search(line)
+            checked = int(seen.group(1)) if seen else checked
+            if "REFUSED: Older" in line and version is not None and checked is not None and checked != version:
+                continue
             # A check that ran before the channel was whole finds it missing; once the new slot runs on trial, a check
             # finds nothing newer. Neither refusal is the update's.
             if FAILED.search(line) and "REFUSED: Missing" not in line and not (trial and "REFUSED: Older" in line):
@@ -183,7 +190,7 @@ def update(link, server, manifest, arch, version, timeout, say=print):
     if before is None:
         raise RuntimeError("the other end's log could not be read")
     link.put(Path(server) / "channels/stable", "channels/stable")
-    return follow(link, timeout, say, before=before)
+    return follow(link, timeout, say, before=before, version=version)
 
 
 def main(argv=None):
