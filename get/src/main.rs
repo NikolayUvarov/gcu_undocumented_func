@@ -384,12 +384,22 @@ fn head_text(h: &http::Head) -> String {
     text
 }
 
+// -u (000-NET-0048): Basic authentication's header from the user and the password, sent to the host the user named and
+// not after a redirect to another (CREDENTIALS).
+fn authorize(o: &mut args::Options) -> Result<(), Fail> {
+    let Some((user, password)) = o.user.take() else { return Ok(()) };
+    if o.headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("authorization")) { return Err(Fail(args::USAGE, "-u and an Authorization header: give one of them".into())); }
+    let Some(password) = password else { return Err(Fail(args::USAGE, alloc::format!("-u {}: no password; give {}:PASSWORD", user, user))) };
+    o.headers.push(("Authorization".into(), args::basic(&user, password.as_bytes())));
+    Ok(())
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("get — an HTTP request from the console or a script, as wget and curl make them (000-NET-0048).\nUsage: get [options] URL\n  -o FILE  save the body (the user's files: ram:, data/, log:)   -O  save it in ram: under the URL's last name\n  -c  resume a saved file   -I  the head alone (HEAD)   -X GET|POST|PUT|HEAD|PATCH|DELETE   -H 'Name: value' (up to 14)\n  -d TEXT | -d @FILE  a body (POST)   -F name=value | -F name=@FILE  a multipart form (POST, up to 8)\n  -L  follow redirects (the default; --no-location stops, --max-redirs N, 10 at most)   -s  silent   -w  the status, bytes and time\n  -f  exit 22 on an HTTP error   -m, --max-time S   --insecure-http  plain http:// (not encrypted)\nExit statuses as curl's: 0, 1 not https, 2 usage, 3 URL, 6 host, 7 connection or refused, 22 HTTP error (-f), 23 write,\n26 read, 28 time, 35 TLS, 47 redirects, 56 receive, 60 certificate.\nIt reaches what the network policy gives `get` (a line naming the host and port, or a browsing grant); for another host\nit asks you on its console (N, O, S or A), not yet when a script runs it.");
+    mind::about!("get — an HTTP request from the console or a script, as wget and curl make them (000-NET-0048).\nUsage: get [options] URL\n  -o FILE  save the body (the user's files: ram:, data/, log:)   -O  save it in ram: under the URL's last name\n  -c  resume a saved file   -I  the head alone (HEAD)   -X GET|POST|PUT|HEAD|PATCH|DELETE   -H 'Name: value' (up to 14)\n  -d TEXT | -d @FILE  a body (POST)   -F name=value | -F name=@FILE  a multipart form (POST, up to 8)\n  -L  follow redirects (the default; --no-location stops, --max-redirs N, 10 at most)   -s  silent   -w  the status, bytes and time\n  -f  exit 22 on an HTTP error   -m, --max-time S   --insecure-http  plain http:// (not encrypted)\n  -u USER:PASSWORD  Basic authentication (not sent on after a redirect to another host)\nExit statuses as curl's: 0, 1 not https, 2 usage, 3 URL, 6 host, 7 connection or refused, 22 HTTP error (-f), 23 write,\n26 read, 28 time, 35 TLS, 47 redirects, 56 receive, 60 certificate.\nIt reaches what the network policy gives `get` (a line naming the host and port, or a browsing grant); for another host\nit asks you on its console (N, O, S or A), not yet when a script runs it.");
     let code = match args::split(mind::process::args_str()).and_then(|words| args::parse(&words)) {
         Err(why) => { mind::println!("GET: {} (help get)", why); args::USAGE }
-        Ok(options) => match run(&options) {
+        Ok(mut options) => match authorize(&mut options).and_then(|()| run(&options)) {
             Ok(()) => args::OK,
             Err(Fail(code, why)) => { if !options.silent { mind::println!("GET: {}", why); } code }
         },

@@ -39,13 +39,27 @@ fn every_option() {
     assert_eq!(parse(&words("-X PATCH -d {} https://h/")).unwrap().method(), "PATCH");
     let o = parse(&words("-X DELETE https://h/")).unwrap();
     assert_eq!((o.head, o.method()), (false, "DELETE"));
+    // -u (000-NET-0048): a password after the first ':', or none, to be asked.
+    assert_eq!(parse(&words("-u alice:s3:cr https://h/")).unwrap().user, Some(("alice".into(), Some("s3:cr".into()))));
+    assert_eq!(parse(&words("--user bob https://h/")).unwrap().user, Some(("bob".into(), None)));
+    assert_eq!(parse(&words("-u carol: https://h/")).unwrap().user, Some(("carol".into(), Some(String::new()))));
+}
+
+#[test]
+fn basic_authentication_is_rfc_7617s() {
+    // RFC 7617's own example, and the padding of each length.
+    assert_eq!(args::basic("Aladdin", b"open sesame"), "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+    assert_eq!(args::basic("a", b""), "Basic YTo=");
+    assert_eq!(args::basic("ab", b"c"), "Basic YWI6Yw==");
+    assert_eq!(args::basic("ab", b"cd"), "Basic YWI6Y2Q=");
+    assert_eq!(args::basic("user", b"pass"), "Basic dXNlcjpwYXNz");
 }
 
 #[test]
 fn what_is_refused() {
     for bad in ["", "-o", "-x https://h/", "https://a/ https://b/", "-X TRACE https://h/", "-X HEAD -d a https://h/", "-H nocolon https://h/", "-H 'bad name: v' https://h/",
                 "-d a -F b=c https://h/", "-I -d a https://h/", "-c https://h/", "--max-redirs many https://h/", "--max-redirs 11 https://h/", "-m 0 https://h/", "-F =v https://h/",
-                "-F novalue https://h/"] {
+                "-F novalue https://h/", "-u https://h/", "-u :pw https://h/"] {
         assert!(parse(&words(bad)).is_err(), "{:?}", bad);
     }
     let many = (0..15).map(|i| format!("-H 'H{}: v'", i)).collect::<Vec<_>>().join(" ");
