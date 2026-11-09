@@ -1,6 +1,6 @@
 # 000-KRN-0226 — An IDL client's call buffer is wiped before it is freed
 
-**Type:** libmind (the IDL generator's clients) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (made and host-tested on the kernel session's branch, 2026-11-09; QEMU and the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.8, MC-11.9
+**Type:** libmind (the IDL generator's clients) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (made and tested on the host and in QEMU, x86 and aarch64, 2026-11-09; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.8, MC-11.9
 
 **Asked by:** APP, 2026-11-09, in `requests-KRN.md` ("The generated binding's buffer of `shell.wit` `secret-line` wiped before it is freed"), from NET's remark in [000-NET-0048](../issues-done/000-NET-0048-get-a-wget-and-curl-analog.done)'s resolution.
 
@@ -36,6 +36,9 @@
   - `tests/idl_host.rs`, `a_clients_buffer_is_wiped_before_it_is_freed`: its stand-in `Pages` counts buffers freed with a byte not zero. None was, after `put`, `fetch`, a refused `fetch` and `find`.
   - With the sample regenerated without `Wiped`, the test failed.
   - `tests/idl_fuzz_host.rs` passed, and `mind_idl.py --check` found every file up to date.
+- **Tested in QEMU** (the kernel session's container, QEMU 8.2.2, TCG, 4 CPUs), after fresh builds of the tree:
+  - x86: the `shell` and `net` suites, 54 checks, none skipped. The secret line's check (`secret_line_check`) and `get_runs` with `-u` typed are among them;
+  - aarch64 `virt`: the same suites, 51 checks. The 3 skipped need x86's test programs, as on every aarch64 run.
 
 ## Related
 
