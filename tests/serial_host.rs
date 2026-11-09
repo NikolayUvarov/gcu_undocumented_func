@@ -1,11 +1,14 @@
 //! usb_serial's chip logic on the host (800-LNK-0002): the FTDI baud rate divisor as AN232B-05 codes it and the two
-//! status bytes stripped from each packet; the CH340's rate registers.
+//! status bytes stripped from each packet; the CH340's rate registers. uart_serial's 16550 divisor (100000-LNK-0038).
 #[path = "../usb_serial/src/ftdi.rs"]
 #[allow(dead_code)]
 mod ftdi;
 #[path = "../usb_serial/src/ch340.rs"]
 #[allow(dead_code)]
 mod ch340;
+#[path = "../uart_serial/src/ns16550.rs"]
+#[allow(dead_code)]
+mod ns16550;
 
 /// The rate a divisor gives, decoded the other way: 3 MHz over the integer part and eighths.
 fn rate_of(value: u16, index: u16) -> u32 {
@@ -106,4 +109,25 @@ fn ch340_every_rate_within_three_percent_or_refused() {
         assert!(ch340::divisor(baud).is_some(), "{baud} refused");
     }
     assert_eq!(ch340::DTR_RTS_ON, 0x9F);
+}
+
+#[test]
+fn the_16550_divisor_of_its_1_8432_mhz_clock() {
+    assert_eq!(ns16550::divisor(115_200), Some((1, 115_200)));
+    assert_eq!(ns16550::divisor(57_600), Some((2, 57_600)));
+    assert_eq!(ns16550::divisor(9_600), Some((12, 9_600)));
+    assert_eq!(ns16550::divisor(50), Some((2304, 50)));
+    // 56000 is 115200 / 2.06: the divisor 2 makes 57600, 2.9 % over, still taken; 100000 makes 115200, 15 % over.
+    assert_eq!(ns16550::divisor(56_000), Some((2, 57_600)));
+    assert_eq!(ns16550::divisor(100_000), None);
+    // Above its base, or none at all, the chip cannot.
+    assert_eq!(ns16550::divisor(230_400), None);
+    assert_eq!(ns16550::divisor(460_800), None);
+    assert_eq!(ns16550::divisor(0), None);
+    // Rates down to a few bits a second come within 3 % of what was asked for.
+    for d in [1u32, 3, 7, 96, 1047, 4096] {
+        let baud = 115_200 / d;
+        let (got, actual) = ns16550::divisor(baud).unwrap();
+        assert!((actual as i64 - baud as i64).abs() * 100 <= baud as i64 * 3, "{baud}: {got} {actual}");
+    }
 }

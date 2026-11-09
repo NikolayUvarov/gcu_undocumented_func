@@ -18,10 +18,10 @@ class Scripted:
         return self.reads.pop(0) if len(self.reads) > 1 else self.reads[0]
 
 
-def follow(reads, before=""):
+def follow(reads, before="", version=None):
     said = []
     try:
-        return lu.follow(Scripted(reads), 5, said.append, pause=0, before=before), said
+        return lu.follow(Scripted(reads), 5, said.append, pause=0, before=before, version=version), said
     except RuntimeError as e:
         return f"error: {e}", said
 
@@ -53,6 +53,14 @@ def test_follow():
     # Older before any trial: the machine runs a newer version.
     line, _ = follow([boot1 + "3 [UPDATER] CHECK: REFUSED: Older\n"], before=boot1)
     assert line == "error: 3 [UPDATER] CHECK: REFUSED: Older", line
+    # A check of the channel as it was before the put, the running version's, refuses Older: not this update's, which
+    # the next check fetches (the MacBook Pro, 2026-11-09). One that read this version and refuses Older ends it.
+    racing = boot1 + "3 [UPDATER] CHECK stable: VERSION 6, MINIMUM 1; RUNNING 6\n4 [UPDATER] CHECK: REFUSED: Older\n"
+    fetching = racing + "5 [UPDATER] CHECK stable: VERSION 7, MINIMUM 1; RUNNING 6\n6 [UPDATER] SLOT B CONFIRMED ON THE DISK\n"
+    line, said = follow([racing, fetching], before=boot1, version=7)
+    assert line.startswith("6 [UPDATER] SLOT B CONFIRMED"), (line, said)
+    line, _ = follow([boot1 + "3 [UPDATER] CHECK stable: VERSION 7; RUNNING 8\n4 [UPDATER] CHECK: REFUSED: Older\n"], before=boot1, version=7)
+    assert line == "error: 4 [UPDATER] CHECK: REFUSED: Older", line
     # Lines read once are not read again.
     line, said = follow([boot1 + "3 a\n", boot1 + "3 a\n4 b\n", boot1 + "3 a\n4 b\n5 [UPDATER] SLOT A CONFIRMED ON THE DISK\n"], before=boot1)
     assert line.startswith("5 ") and said.count("5 [UPDATER] SLOT A CONFIRMED ON THE DISK") == 1, said
