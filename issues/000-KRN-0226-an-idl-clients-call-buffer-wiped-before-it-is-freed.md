@@ -40,6 +40,20 @@
   - x86: the `shell` and `net` suites, 54 checks, none skipped. The secret line's check (`secret_line_check`) and `get_runs` with `-u` typed are among them;
   - aarch64 `virt`: the same suites, 51 checks. The 3 skipped need x86's test programs, as on every aarch64 run.
 
+## Round 105 returned it (2026-11-09)
+
+- **The failure:** the gate's host tests on x32-2. `tests/rtw89_service_ipc.rs`, DRV's stand-ins for the rtw89 service, compiles the generated `wlanhw.rs` with a `mem` module of its own, which had no `Wiped`: `unresolved import crate::mem::Wiped`.
+- **Missed here:** the kernel session ran `idl_host` and `idl_fuzz_host` alone before its request, not the whole `scripts/host_tests.sh`.
+- **The fix** (1cdb9926):
+  - `Wiped` moved into `libmind/src/idl/wire.rs`, which every such test compiles as it is, and which needs of a stand-in `Pages` nothing but `as_mut_slice`;
+  - `libmind/src/wiped.rs` and `mem.rs`'s re-export are gone, so DRV's file is not touched;
+  - it wipes by words where the buffer is aligned to them, as pages are, and by bytes elsewhere;
+  - the interfaces and the sample are regenerated.
+- **Tested** in the kernel session's container:
+  - `scripts/host_tests.sh`: every Rust test, 192 sets, `idl_host` (7), `idl_fuzz_host` (3) and `rtw89_service_host` (306) among them;
+  - `manifest_test.py` failed on this container's `cryptography` (`_cffi_backend`), as it does on `main` here;
+  - the steps after it, run on: no failure.
+
 ## Related
 
 [000-APP-0126](../issues-done/000-APP-0126-a-console-program-reads-a-secret.done), [000-NET-0048](../issues-done/000-NET-0048-get-a-wget-and-curl-analog.done), [docs/idl/README.md](../docs/idl/README.md).
