@@ -1,6 +1,6 @@
 # 550-NET-0062 — The card a machine's traffic takes, chosen in software: the preferred card within its network, and a card out of use
 
-**Type:** network (service, interface) · **Owner:** `NET` track, made by STO by agreement with the track's owner (the kernel session, 2026-11-09) · **Priority:** P1 · **Status:** in progress (2026-11-09) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track, made by STO by agreement with the track's owner (the kernel session, 2026-11-09) · **Priority:** P1 · **Status:** in progress (landed in round 102, `main` c6931ded; DRV's Ryzen check left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.4, Appendix B.6
 
 Numbered by the network track's owner on 2026-11-09 (`STO/2026-11-09T0744Z-KRN-the-card-chosen-in-software-is-550-net-0062-yours-to-make.md`) from STO's request in `requests-NET.md`, which came from DRV's message of 2026-11-08 for the maintainer.
 
@@ -72,6 +72,10 @@ Numbered by the network track's owner on 2026-11-09 (`STO/2026-11-09T0744Z-KRN-t
 - **DRV's check on the Ryzen.**
 - **`ip` naming a card out of use** (APP).
 - **A card's own address first** is not shown in QEMU: there both cards hold 10.0.2.15, so it takes card 0.
+
+## Landed (2026-11-09)
+
+Round 102 (`main` c6931ded, STO's request d4b16f6b): the gate was green on every group, the `net` suite on x86 and aarch64 among them. One group failed once and passed alone: "x86: RAM above 4 GiB", in the Wi-Fi country check's `dmesg` (000-NET-0063), not in this task's checks. Left: DRV's check on the Ryzen.
 
 ## Related
 
