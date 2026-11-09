@@ -14404,8 +14404,8 @@ def console_channel_check(args, disk, machine):
             # The kernel's log no longer goes to the console once the channel stands: init's line is read from the log.
             require(vm.service_logs("init", "SERIAL LINE"), "SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
             assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
-            # More than a ring's worth back through the channel: 25 times a line of 200 bytes the shell prints to its serial line.
-            require(vm.command("write ram:long.txt " + "0123456789" * 20, timeout=30), "WROTE 200 BYTES")
+            # More than a ring's worth back through the channel: 25 times a line of 201 bytes the shell prints to its serial line.
+            require(vm.command("write ram:long.txt " + "0123456789" * 20, timeout=30), "WROTE 201 BYTES")
             for _ in range(25):
                 out = vm.command("cat ram:long.txt", raw=True, timeout=30)
                 assert out.count("0123456789") == 20, out[-500:]
