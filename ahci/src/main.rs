@@ -2,6 +2,11 @@
 #![no_main]
 // Ring 3 AHCI (SATA) driver: HBA registers via an MMIO capability, commands and data in its own DMA region. READ DMA
 // EXT, WRITE DMA EXT and FLUSH CACHE EXT (writes only for clients with the write badge, see mind::block_protocol).
+// Every wait ends at a deadline; a request is checked against the DMA region here; a failed command restarts the port,
+// and the log names a run of failures once (000-DRV-0064, checks.rs).
+mod checks;
+
+use checks::{Bohc, Clock, Handoff, COMMAND_NS, FLUSH_NS, READY_NS, STOP_NS};
 use mind::abi::{BootInfo, BLOCK_KIND_AHCI, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver};
 use mind::dev::{Dma, Mmio};
@@ -14,13 +19,28 @@ const IS_TFES: u32 = 1 << 30;
 // DMA region layout: command list, received FIS, command table, data buffer (64 KiB aligned).
 const LIST: usize = 0; const FIS: usize = 0x400; const TABLE: usize = 0x1000; const DATA: usize = 0x10000;
 
-struct Ahci { hba: Mmio, dma: Dma, port: usize, sectors: u64 }
-
-// Waits for a condition, busy-polling first, then sleeping (QEMU completes DMA asynchronously).
-fn wait(mut done: impl FnMut() -> bool) -> bool {
-    for attempt in 0..2_000 { if done() { return true; } if attempt > 1_000 { mind::time::sleep(10); } else { core::hint::spin_loop(); } }
-    false
+// The system's clock: polled without pause for checks::SPIN_NS, then 1 ms sleeps (x86's tick, 000-KRN-0083).
+struct Time;
+impl Clock for Time {
+    fn now_ns(&self) -> u64 { mind::time::monotonic_ns() }
+    fn sleep(&self) { mind::time::sleep(1); }
 }
+fn wait(deadline_ns: u64, done: impl FnMut() -> bool) -> bool { checks::wait(&Time, deadline_ns, done) }
+
+// The HBA's BOHC for the handoff.
+struct Owner<'a>(&'a Mmio);
+impl Clock for Owner<'_> {
+    fn now_ns(&self) -> u64 { Time.now_ns() }
+    fn sleep(&self) { Time.sleep() }
+}
+impl Bohc for Owner<'_> {
+    fn bohc(&self) -> u32 { self.0.read32(BOHC) }
+    fn set_bohc(&self, value: u32) { self.0.write32(BOHC, value) }
+}
+
+// `room`: the data area's bytes in the DMA region; `failing`: whether the last command failed, so that a run of
+// failures is logged once.
+struct Ahci { hba: Mmio, dma: Dma, port: usize, sectors: u64, room: usize, failing: bool }
 
 impl Ahci {
     fn reg(&self, offset: usize) -> u32 { self.hba.read32(0x100 + self.port * 0x80 + offset) }
@@ -28,14 +48,24 @@ impl Ahci {
 
     fn probe() -> Option<Self> {
         let (hba, dma) = (Mmio::map(SLOT_DEV0).ok()?, Dma::map(SLOT_MEM).ok()?);
+        if dma.len() < DATA + 512 { mind::println!("[AHCI] THE DMA REGION ({} BYTES) HOLDS NO DATA AREA", dma.len()); return None; }
         hba.write32(GHC, hba.read32(GHC) | 1 << 31); // AHCI mode
-        if hba.read32(CAP2) & 1 != 0 { hba.write32(BOHC, hba.read32(BOHC) | 2); wait(|| hba.read32(BOHC) & 1 == 0); } // take the controller from the BIOS
+        // Taken from the firmware where it offers the handoff (CAP2.BOH); one still busy after 2 s is taken too, as before
+        // the handoff was checked, so that a slow firmware does not cost the boot disk (the i5 PC boots from SATA).
+        if hba.read32(CAP2) & 1 != 0 {
+            match checks::handoff(&Owner(&hba)) {
+                Handoff::Taken(ms) => mind::println!("[AHCI] TAKEN FROM THE FIRMWARE IN {} MS", ms),
+                Handoff::Silent(ms) => mind::println!("[AHCI] THE FIRMWARE DID NOT LET GO IN {} MS AND IS NOT BUSY: TAKEN, AS AHCI 10.6.3 ALLOWS", ms),
+                Handoff::Kept(ms) => mind::println!("[AHCI] THE FIRMWARE STILL SAYS IT IS BUSY AFTER {} MS: TAKEN ANYWAY", ms),
+            }
+        }
         let implemented = hba.read32(PI);
         let port = (0..32).find(|&p| implemented & 1 << p != 0 && hba.read32(0x100 + p * 0x80 + SSTS) & 0xF == 3 && hba.read32(0x100 + p * 0x80 + SIG) == 0x0000_0101)?;
-        let mut device = Self { hba, dma, port, sectors: 0 };
+        let room = dma.len() - DATA;
+        let mut device = Self { hba, dma, port, sectors: 0, room, failing: false };
         device.start()?;
         let mut identify = [0u8; 512];
-        device.command(0xEC, 0, 0, &mut identify)?;
+        device.command(0xEC, 0, 0, &mut identify, COMMAND_NS)?;
         let word = |i: usize| u16::from_le_bytes([identify[i * 2], identify[i * 2 + 1]]) as u64;
         let lba48 = word(100) | word(101) << 16 | word(102) << 32 | word(103) << 48;
         device.sectors = if lba48 != 0 { lba48 } else { word(60) | word(61) << 16 };
@@ -44,20 +74,21 @@ impl Ahci {
 
     fn start(&mut self) -> Option<()> {
         self.set(CMD, self.reg(CMD) & !CMD_ST);
-        if !wait(|| self.reg(CMD) & CMD_CR == 0) { return None; }
+        if !wait(STOP_NS, || self.reg(CMD) & CMD_CR == 0) { return None; }
         self.set(CMD, self.reg(CMD) & !CMD_FRE);
-        if !wait(|| self.reg(CMD) & CMD_FR == 0) { return None; }
+        if !wait(STOP_NS, || self.reg(CMD) & CMD_FR == 0) { return None; }
         self.dma.zero(0, DATA);
         self.set(CLB, self.dma.physical(LIST) as u32); self.set(CLB + 4, (self.dma.physical(LIST) >> 32) as u32);
         self.set(FB, self.dma.physical(FIS) as u32); self.set(FB + 4, (self.dma.physical(FIS) >> 32) as u32);
         self.set(SERR, u32::MAX); self.set(IS, u32::MAX);
         self.set(CMD, self.reg(CMD) | CMD_FRE | CMD_SUD | CMD_POD);
         self.set(CMD, self.reg(CMD) | CMD_ST);
-        wait(|| self.reg(TFD) & 0x88 == 0).then_some(())
+        wait(READY_NS, || self.reg(TFD) & 0x88 == 0).then_some(())
     }
 
-    // One command in slot 0: H2D FIS and, with data, one PRDT entry for the data buffer; `write` sends the buffer.
-    fn issue(&mut self, command: u8, lba: u64, count: usize, bytes: usize, write: bool) -> Option<()> {
+    // One command in slot 0: H2D FIS and, with data, one PRDT entry for `bytes` of the data area (checked by the
+    // caller against `room`); `write` sends them.
+    fn issue(&mut self, command: u8, lba: u64, count: usize, bytes: usize, write: bool, deadline_ns: u64) -> Option<()> {
         let table = self.dma.physical(TABLE); let data = self.dma.physical(DATA);
         self.dma.zero(TABLE, 0x100);
         let fis = self.dma.bytes(TABLE, 20);
@@ -69,28 +100,47 @@ impl Ahci {
         self.dma.write32(LIST, 5 | if write { 1 << 6 } else { 0 } | entries << 16); self.dma.write32(LIST + 4, 0); self.dma.write64(LIST + 8, table);
         self.set(IS, u32::MAX);
         self.set(CI, 1);
-        let finished = wait(|| self.reg(CI) & 1 == 0 || self.reg(IS) & IS_TFES != 0);
-        (finished && self.reg(IS) & IS_TFES == 0 && self.reg(TFD) & 1 == 0).then_some(())
+        let finished = wait(deadline_ns, || self.reg(CI) & 1 == 0 || self.reg(IS) & IS_TFES != 0);
+        let ok = finished && self.reg(IS) & IS_TFES == 0 && self.reg(TFD) & 1 == 0;
+        if ok { if core::mem::take(&mut self.failing) { mind::println!("[AHCI] PORT {}: THE DRIVE ANSWERS AGAIN", self.port); } return Some(()); }
+        // The slot stays issued, or the port halted on the error: it is stopped and started again (AHCI 6.2.2).
+        if !core::mem::replace(&mut self.failing, true) {
+            mind::println!("[AHCI] PORT {}: COMMAND {:02X} AT {} {} (TFD {:02X}); THE PORT IS RESTARTED", self.port, command, lba,
+                           if finished { "ENDED WITH AN ERROR" } else { "DID NOT END BY ITS DEADLINE" }, self.reg(TFD) & 0xFF);
+        }
+        if self.start().is_none() { mind::println!("[AHCI] PORT {}: IT DID NOT START AGAIN", self.port); }
+        None
     }
 
-    // A command that reads into `out`.
-    fn command(&mut self, command: u8, lba: u64, count: usize, out: &mut [u8]) -> Option<()> {
+    // A command that reads `out.len()` bytes (checked by the caller against `room`) into `out`.
+    fn command(&mut self, command: u8, lba: u64, count: usize, out: &mut [u8], deadline_ns: u64) -> Option<()> {
         let bytes = out.len();
-        self.issue(command, lba, count, bytes, false)?;
+        self.issue(command, lba, count, bytes, false, deadline_ns)?;
         out.copy_from_slice(self.dma.bytes(DATA, bytes));
         Some(())
+    }
+
+    // A request of `count` sectors at `lba`, checked here: one command, the drive, the buffer and the data area.
+    fn checked(&self, what: &str, lba: u64, count: usize, buffer: usize) -> Option<usize> {
+        let inside = lba.checked_add(count as u64).is_some_and(|end| end <= self.sectors);
+        let bytes = checks::data_bytes(count, buffer, self.room).filter(|_| inside);
+        if bytes.is_none() { mind::println!("[AHCI] {} OF {} SECTORS AT {} REFUSED: OUTSIDE ONE COMMAND, THE DRIVE, THE BUFFER OR THE DMA REGION", what, count, lba); }
+        bytes
     }
 }
 
 impl Driver for Ahci {
     fn sectors(&self) -> u64 { self.sectors }
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool { self.command(0x25, lba, count, &mut out[..count * 512]).is_some() } // READ DMA EXT
-    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool { // WRITE DMA EXT
-        let bytes = count * 512;
-        self.dma.bytes(DATA, bytes).copy_from_slice(&data[..bytes]);
-        self.issue(0x35, lba, count, bytes, true).is_some()
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool { // READ DMA EXT
+        let Some(bytes) = self.checked("READ", lba, count, out.len()) else { return false };
+        self.command(0x25, lba, count, &mut out[..bytes], COMMAND_NS).is_some()
     }
-    fn flush(&mut self) -> bool { self.issue(0xEA, 0, 0, 0, false).is_some() } // FLUSH CACHE EXT
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool { // WRITE DMA EXT
+        let Some(bytes) = self.checked("WRITE", lba, count, data.len()) else { return false };
+        self.dma.bytes(DATA, bytes).copy_from_slice(&data[..bytes]);
+        self.issue(0x35, lba, count, bytes, true, COMMAND_NS).is_some()
+    }
+    fn flush(&mut self) -> bool { self.issue(0xEA, 0, 0, 0, false, FLUSH_NS).is_some() } // FLUSH CACHE EXT
     fn read_only(&self) -> bool { false }
 }
 

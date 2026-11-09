@@ -2,103 +2,59 @@
 #![no_main]
 // LEGACY: the whole driver: primary IDE channel by PIO on ISA ports (docs/legacy.md).
 // Ring 3 primary-channel ATA driver: PIO LBA28 without interrupts (nIEN), block protocol for vfs_server: READ SECTORS,
-// WRITE SECTORS and FLUSH CACHE (writes only for clients with the write badge, see mind::block_protocol).
+// WRITE SECTORS and FLUSH CACHE (writes only for clients with the write badge, see mind::block_protocol). Every wait
+// ends at a deadline and fails the request, which the log names once (000-DRV-0064, ide.rs).
+mod ide;
+
+use ide::{Bus, Fault, Ide};
 use mind::abi::{BootInfo, BLOCK_KIND_ATA, SLOT_DEV0, SLOT_DEV1};
 use mind::block::{self, Driver};
 use mind::dev::Ports;
 
-const DATA: u16 = 0x1F0; const COUNT: u16 = 0x1F2; const LBA0: u16 = 0x1F3; const LBA1: u16 = 0x1F4; const LBA2: u16 = 0x1F5;
-const DRIVE: u16 = 0x1F6; const COMMAND: u16 = 0x1F7; const CONTROL: u16 = 0x3F6;
-const BSY: u8 = 0x80; const DRQ: u8 = 0x08; const ERR: u8 = 0x01;
+// The command block's ports and the control port, each its own grant.
+struct Channel { io: Ports, control: Ports }
 
-struct Ata { io: Ports, control: Ports, sectors: u64 }
+impl Bus for Channel {
+    fn in8(&self, port: u16) -> u8 { if port == ide::CONTROL { self.control.in8(port) } else { self.io.in8(port) } }
+    fn out8(&self, port: u16, value: u8) { if port == ide::CONTROL { self.control.out8(port, value) } else { self.io.out8(port, value) } }
+    fn read_words(&self, port: u16, words: &mut [u16]) -> bool { self.io.read_words(port, words).is_ok() }
+    fn write_words(&self, port: u16, words: &[u16]) -> bool { self.io.write_words(port, words).is_ok() }
+    fn now_ns(&self) -> u64 { mind::time::monotonic_ns() }
+    fn sleep(&self) { mind::time::sleep(1); }
+}
+
+// `failing`: the fault the last request ended with, so that a run of them is logged once, and the drive's return.
+struct Ata { ide: Ide<Channel>, failing: Option<Fault> }
 
 impl Ata {
-    fn probe() -> Option<Self> {
-        let (io, control) = (Ports(SLOT_DEV0), Ports(SLOT_DEV1));
-        control.out8(CONTROL, 0x02);
-        io.out8(DRIVE, 0xA0);
-        if matches!(io.in8(COMMAND), 0xFF | 0x00) { return None; } // floating bus or no device
-        for port in [COUNT, LBA0, LBA1, LBA2] { io.out8(port, 0); }
-        io.out8(COMMAND, 0xEC);
-        if io.in8(COMMAND) == 0 { return None; }
-        let mut disk = Self { io, control, sectors: 0 };
-        let mut spins = 0; while io.in8(COMMAND) & BSY != 0 { spins += 1; if spins > 1_000_000 { return None; } }
-        if io.in8(LBA1) != 0 || io.in8(LBA2) != 0 { return None; } // ATAPI/SATA signature: not our case
-        disk.wait_data()?;
-        let mut identify = [0u16; 256];
-        io.read_words(DATA, &mut identify).ok()?;
-        disk.sectors = (identify[60] as u64 | (identify[61] as u64) << 16).min(1 << 28);
-        (disk.sectors != 0).then_some(disk)
-    }
-
-    // Not busy: the command finished (or the drive is ready for the next); false on an error.
-    fn wait_ready(&self) -> bool {
-        for _ in 0..4 { self.control.in8(CONTROL); }
-        for _ in 0..10_000_000 {
-            let status = self.io.in8(COMMAND);
-            if status & BSY == 0 { return status & ERR == 0; }
+    fn done(&mut self, what: &str, lba: u64, count: usize, result: Result<(), Fault>) -> bool {
+        match result {
+            Ok(()) => { if self.failing.take().is_some() { mind::println!("[ATA] THE DRIVE ANSWERS AGAIN"); } true }
+            Err(Fault::Refused) => { mind::println!("[ATA] {} OF {} SECTORS AT {} REFUSED: OUTSIDE ONE COMMAND, THE DRIVE OR THE BUFFER", what, count, lba); false }
+            Err(fault) => {
+                if self.failing.replace(fault) != Some(fault) {
+                    mind::println!("[ATA] {} AT {} FAILED: {}", what, lba, match fault {
+                        Fault::Busy => "THE DRIVE STAYED BUSY PAST ITS DEADLINE", Fault::NoData => "NO DATA CAME IN TIME", _ => "THE DRIVE REPORTED AN ERROR" });
+                }
+                false
+            }
         }
-        false
-    }
-
-    fn command(&self, lba: u64, count: usize, command: u8) {
-        while self.io.in8(COMMAND) & BSY != 0 {}
-        self.io.out8(DRIVE, 0xE0 | ((lba >> 24) & 0x0F) as u8);
-        self.io.out8(COUNT, count as u8);
-        self.io.out8(LBA0, lba as u8); self.io.out8(LBA1, (lba >> 8) as u8); self.io.out8(LBA2, (lba >> 16) as u8);
-        self.io.out8(COMMAND, command);
-    }
-
-    fn wait_data(&self) -> Option<()> {
-        for _ in 0..4 { self.control.in8(CONTROL); } // 400 ns delay via the alternate status register
-        for _ in 0..1_000_000 {
-            let status = self.io.in8(COMMAND);
-            if status & BSY != 0 { continue; }
-            if status & ERR != 0 { return None; }
-            if status & DRQ != 0 { return Some(()); }
-        }
-        None
     }
 }
 
 impl Driver for Ata {
-    fn sectors(&self) -> u64 { self.sectors }
-    // Batches of up to 256 sectors per READ SECTORS command; each sector is a separate DRQ.
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool {
-        self.command(lba, count, 0x20);
-        let mut words = [0u16; 256];
-        for sector in out.chunks_exact_mut(512).take(count) {
-            if self.wait_data().is_none() || self.io.read_words(DATA, &mut words).is_err() { return false; }
-            for (i, word) in words.iter().enumerate() { sector[i * 2..i * 2 + 2].copy_from_slice(&word.to_le_bytes()); }
-        }
-        true
-    }
-    // WRITE SECTORS: each sector is a DRQ block; the drive is done when BSY clears after the last one.
-    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool {
-        self.command(lba, count, 0x30);
-        let mut words = [0u16; 256];
-        for sector in data.chunks_exact(512).take(count) {
-            for (i, word) in words.iter_mut().enumerate() { *word = u16::from_le_bytes([sector[i * 2], sector[i * 2 + 1]]); }
-            if self.wait_data().is_none() || self.io.write_words(DATA, &words).is_err() { return false; }
-        }
-        self.wait_ready()
-    }
-    // FLUSH CACHE.
-    fn flush(&mut self) -> bool {
-        while self.io.in8(COMMAND) & BSY != 0 {}
-        self.io.out8(DRIVE, 0xE0);
-        self.io.out8(COMMAND, 0xE7);
-        self.wait_ready()
-    }
+    fn sectors(&self) -> u64 { self.ide.sectors }
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool { let r = self.ide.read(lba, count, out); self.done("READ", lba, count, r) }
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool { let r = self.ide.write(lba, count, data); self.done("WRITE", lba, count, r) }
+    fn flush(&mut self) -> bool { let r = self.ide.flush(); self.done("FLUSH", 0, 0, r) }
     fn read_only(&self) -> bool { false }
 }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut disk = Ata::probe();
+    let mut disk = Ide::probe(Channel { io: Ports(SLOT_DEV0), control: Ports(SLOT_DEV1) }).map(|ide| Ata { ide, failing: None });
     match &disk {
-        Some(d) => mind::println!("[ATA] PRIMARY MASTER: {} SECTORS", d.sectors),
+        Some(d) => mind::println!("[ATA] PRIMARY MASTER: {} SECTORS", d.ide.sectors),
         None => mind::println!("[ATA] NO DISK ON PRIMARY CHANNEL"),
     }
     block::serve(BLOCK_KIND_ATA, disk.as_mut().map(|d| d as &mut dyn Driver));
