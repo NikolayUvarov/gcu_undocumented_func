@@ -1,6 +1,6 @@
-# 307-STO-0042 — A pass over the store's medium reads ahead: what a mount, a collection and a scrub cost by the medium's size
+# 307-STO-0042 — A pass over the store's medium reads ahead: what a mount, a collection and a scrub cost by the medium's size — done
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (2026-11-09) · **Blocked by:** — · **Main task:** [307](307-the-stores-own-partition.md) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-12.1
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — · **Main task:** [307](../issues/307-the-stores-own-partition.md) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-12.1
 
 ## Problem
 
@@ -47,6 +47,16 @@ x86 QEMU 8.2.2 under TCG, 4 CPUs, this session's container; a blank VirtIO disk 
 - **The `store` and `storefaults` suites pass on x86 and aarch64** with the read-ahead.
 - **The measurement** is recorded here and in `docs/storage`.
 
+## Resolution
+
+- **Built:** the read-ahead in `blockstore/src/main.rs` (`Medium`), `Device::forget` in `store.rs`, called where every pass and scrub step starts, and its pass-through in `copies.rs` (`Gate`).
+- **Measured:** the table and the 4 GiB lines above, also in [docs/storage](../docs/storage/README.md). [307](../issues/307-the-stores-own-partition.md) records the partition's size they ask for.
+- **Tested** in this session's container (QEMU 8.2.2 under TCG, 4 CPUs):
+  - `store` and `storefaults` passed on x86 (32) and aarch64 (33) on 33b7b033, `storefaults` damaging the medium while the store runs;
+  - again on 9edb41a7 with 351-STO-0043, together with the `updater` group: x86 38, aarch64 39.
+  - `tests/blockstore_host.rs` passes.
+- **Not done:** a real machine's times; a mount that reads an index instead of every record (310).
+
 ## Related
 
-[307](307-the-stores-own-partition.md), [310](310-the-index-on-the-medium.md), [309-STO-0025](../issues-done/309-STO-0025-scrub.done).
+[307](../issues/307-the-stores-own-partition.md), [310](../issues/310-the-index-on-the-medium.md), [309-STO-0025](../issues-done/309-STO-0025-scrub.done).
