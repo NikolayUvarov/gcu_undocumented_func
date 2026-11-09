@@ -24,6 +24,7 @@ effector485 daemon /dev/ttyUSB0 --baud 460800             # Linux
 | `--state <dir>` | `.effector485` in the home directory: the queue and the results, kept across restarts |
 | `--key-file <file>` | none. With it, every call must carry the file's text in the `X-API-Key` header. An address other machines reach is refused without it |
 | `--addresses <n>[,<n>...]` | `0`: one machine, without an address. Several machines on one cable (below) |
+| `--supervised` | off. Started by another program, the Effector agent's link mode ([remote-serial.md](../remote-serial.md), section 4.4): only on a loopback address and with `--key-file`, no page (`GET /` answers 404), and it ends when its standard input closes, as it does when that program ends, on Linux and Windows alike |
 
 **Its first line** says where it listens. It then names each operation it starts, with its whole command (only the secret a shell line's `tpm seal` takes is left out), and says when the cable's other end comes or goes. While more than 512 bytes move in 5 s, it says every 5 s what the cable carried since it started, the speed each way, and how busy the line was: `the cable: sent 2.9 MiB (41.2 KiB/s), received 40.5 KiB (1.1 KiB/s); the line 92% busy` (800-LNK-0018). The line's share is reckoned at ten bits a byte at `--baud`.
 
@@ -37,6 +38,7 @@ effector485 daemon /dev/ttyUSB0 --baud 460800             # Linux
 - **It is not opened** to sessions on other machines, through the Effector server or otherwise.
 - **A session elsewhere** that needs a run on the cable asks the `LNK` track on `internal-dev-messages`. LNK runs it and posts the output.
 - **`--key-file`** is for the maintainer's own other machines.
+- **The maintainer's addition** (2026-11-08): local, and also reached through Effector's host agent under that host owner's policy, the agent running the daemon `--supervised` on its own loopback. Sessions still never reach the daemon's port directly.
 
 ## Several machines on one cable
 
@@ -118,10 +120,22 @@ JSON over HTTP, as Effector's:
 | `GET /api/v1/endpoints` | each machine on the cable: `agent_id`, `address`, `online`, `name`, `last_seen`, `error`, `queued`, `running`; the cable's bytes since the daemon started, `sent_bytes` and `received_bytes`; its lease, `reservation` (`null` when there is none) |
 | `GET`, `POST`, `PATCH`, `DELETE /api/v1/terminal-reservations` | the lease on the machine (below) |
 | `GET /api/v1/api-key` | `valid`: the key is right |
+| `GET /api/v1/version` | `api_version`, `program`; `kinds`, each with its `required` fields and whether it only `reads`; `changes`, what each version brought |
+| `GET /api/v1/console?agent_id=<machine>&from=<offset>&max_bytes=<n>` | the machine's console from that offset (below): `from`, `next`, `gap`, `data` (base64), `text`, `pieces`, `offered`, `input_seq` |
+| `POST /api/v1/console/input` with `agent_id`, `seq` and `text` or `data` (base64) | `written`: true, or false when that `seq` was taken already |
 | `GET /` | the page (below) |
 | `GET /api/v1/stream` | the page's live feed, a WebSocket (below) |
 
 **The output** keeps the last 256 KiB of each operation.
+
+**The API's version** is 1.1 (800-LNK-0039). A change of its fields makes a new one (MC-12.4), and `GET /api/v1/version` lists what each version brought: 1.0 is the operations, the endpoints, the reservations and the page's feed; 1.1 adds the version, the console and `--supervised`.
+
+**The console** (800-LNK-0039), for an agent's console session ([remote-serial.md](../remote-serial.md), section 4.3):
+- **What it holds:** for each machine, a ring of 1 MiB with absolute byte offsets, the oldest dropped first, each piece with the time it came (`pieces`: `offset`, `time_ms` on the host's clock). It is kept in memory only.
+  - **Channel 1's output:** read from the machine between operations, every 250 ms while it offers its console. A machine that refuses channel 1, as MIND Core does outside `link-console` (800-LNK-0019), is not asked again until it says hello again: `offered` is then false.
+  - **The bytes outside frames:** a boot's lines before `link` answers, or a console beside the link on one UART. They are read between exchanges too. On a cable of several machines they go to a console of their own, `line`.
+- **Reading:** from any offset. One already dropped answers from the oldest kept, with `gap` the bytes lost.
+- **Input:** up to 4 KiB a call. A `seq` that is not higher than the last taken is not written again (MC-7.5), and the answer says `written: false`. While a lease holds the machine, only its holder's input is taken (`reservation_not_held`).
 
 **Cancel** stops a put or a get between frames. It stops a running program with STOP, where the other end can: MIND Core's `link` does, through the loader (800-KRN-0138). Where it cannot, the cancel is recorded as `cancel_error` and the program goes on.
 

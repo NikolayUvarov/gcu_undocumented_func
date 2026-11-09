@@ -1,6 +1,6 @@
 # 800-LNK-0039 — `effector485` as the engine of the Effector agent's link mode
 
-**Type:** tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [800](800-mind-link.md), for [100000](100000-a-phone-the-pinephone-first.md) · **Constitution:** MC-2.3, MC-7.5, MC-12.3, MC-12.4
+**Type:** tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-11-09) · **Blocked by:** — · **Main task:** [800](800-mind-link.md), for [100000](100000-a-phone-the-pinephone-first.md) · **Constitution:** MC-2.3, MC-7.5, MC-12.3, MC-12.4
 
 Numbered from the kernel session's request of 2026-11-08 in `requests-LNK.md`, for [docs/remote-serial.md](../docs/remote-serial.md) section 5.1 (version 0.1, a proposal).
 
@@ -46,6 +46,25 @@ Numbered from the kernel session's request of 2026-11-08 in `requests-LNK.md`, f
 ## Acceptance criteria
 
 The tests of plan step 6 pass on Linux. `--supervised` ends with its parent on Windows too, checked on the maintainer's PC.
+
+## Progress (2026-11-09)
+
+**Plan steps 1 to 5 made** on `claude/LNK-link`; the page (step 3's last point) is left:
+- **The version:** `GET /api/v1/version`, API 1.1, with the kinds, their required fields and whether each only reads, and the changes since 1.0.
+- **`--supervised`:** refused off the loopback and without a key; no page; it ends when its standard input closes.
+- **The console** (`console.rs`):
+  - a ring of 1 MiB a machine with absolute offsets, a `gap`, and each piece's time;
+  - channel 1 read every 250 ms between operations while the machine offers it;
+  - input numbered, a number taken already not written again, and a lease's holder's alone.
+- **The bytes outside frames:** each run between zeros that is no frame, a run longer than any frame, and one the line left idle. They are read between exchanges as well, and go to the machine's console, or to `line` on a cable of several.
+- **A zero before each frame** (`linkproto` `frame::encode`, both ends): it ends a console's line or noise that came before, which spoiled the frame after it. [protocol.md](../docs/link/protocol.md) already let a sender do so, and every receiver takes it as nothing.
+- **`mindlink serve --banner`** writes a text outside frames after the first answer, for the test.
+
+**Tested on Linux** (`cargo test` in `tools/mindlink` and `linkproto`):
+- `the_console_the_version_and_a_supervised_daemon`: the boot's lines before the console's output, offsets and pieces, an input sent twice written once, base64 input, `--supervised` refused twice, then its page, key and end;
+- the other four effector485 tests, `bus.rs`, `mindlink.rs` and `linkproto`'s 24.
+
+`tools/mindlink/build.sh` builds both for Windows; `--supervised` ending with its parent there is not checked yet.
 
 ## Related
 

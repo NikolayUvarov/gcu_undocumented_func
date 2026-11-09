@@ -48,6 +48,29 @@ pub fn explain(e: Error) -> String {
 /// finds a lost line before the next request does. The other end does not log it, as it logs a hello.
 const KEEP_WARM: Duration = Duration::from_secs(2);
 
+/// How often an idle machine's console is read while it offers one, and the most input one read carries (800-LNK-0039).
+const CONSOLE_POLL: Duration = Duration::from_millis(250);
+const CONSOLE_INPUT: usize = 512;
+
+/// Channel 1 once: the input waiting, as much as a frame carries, and what the console printed since. A machine that
+/// refuses is not asked again until it says hello again.
+fn read_console(c: &mut Client<BusLine>, state: &Shared, index: usize) -> Result<(), Error> {
+    let input: Vec<u8> = lock(state).consoles[index].pending.iter().take(CONSOLE_INPUT).copied().collect();
+    let mut out = [0u8; MAX_PAYLOAD];
+    match c.console(&input, &mut out) {
+        Ok(n) => {
+            let mut st = lock(state);
+            let console = &mut st.consoles[index];
+            console.pending.drain(..input.len());
+            console.push(&out[..n], crate::console::now_ms());
+            if n > 0 { st.changed(); }
+            Ok(())
+        }
+        Err(Error::Refused(_)) => { lock(state).consoles[index].offered = false; Ok(()) }
+        Err(e) => Err(e),
+    }
+}
+
 /// The line is gone or silent: the daemon says hello again before the next request.
 fn line_lost(e: Error) -> bool { matches!(e, Error::Timeout | Error::Line) }
 
@@ -92,6 +115,7 @@ pub fn work(state: Shared, index: usize, bus: Arc<Bus>, o: Options) {
     let mut c = client(&bus, address, &o);
     let mut online = false;
     let mut spoke = Instant::now();
+    let mut console_at = Instant::now();
     loop {
         if !online {
             // On a shared cable a machine that is not there is asked once each time, so it takes little of the others' line.
@@ -101,6 +125,7 @@ pub fn work(state: Shared, index: usize, bus: Arc<Bus>, o: Options) {
                     let mut st = lock(&state);
                     let l = &mut st.links[index];
                     (l.online, l.name, l.last_seen, l.error) = (true, name, now(), String::new());
+                    st.consoles[index].offered = true;
                     st.changed();
                     online = true;
                     spoke = Instant::now();
@@ -149,6 +174,12 @@ pub fn work(state: Shared, index: usize, bus: Arc<Bus>, o: Options) {
                         if line_lost(e) || c.master.line.failed() { lost = Some(e); }
                     }
                     spoke = Instant::now();
+                }
+                None if runs.is_empty() && { let st = lock(&state); let k = &st.consoles[index]; k.offered && (!k.pending.is_empty() || console_at.elapsed() >= CONSOLE_POLL) } => {
+                    if let Err(e) = read_console(c, &state, index) {
+                        if line_lost(e) || c.master.line.failed() { lost = Some(e); }
+                    }
+                    (console_at, spoke) = (Instant::now(), Instant::now());
                 }
                 None if runs.is_empty() && spoke.elapsed() >= KEEP_WARM => {
                     let mut answer = [0u8; 16];

@@ -61,7 +61,7 @@ A frame is:
 
 **CRC-32C** is the Castagnoli CRC: reflected polynomial 0x82F63B78, initial value 0xFFFFFFFF, final XOR 0xFFFFFFFF. The CRC of the ASCII string `123456789` is 0xE3069283.
 
-**On the line**, the whole frame is COBS-encoded (Consistent Overhead Byte Stuffing), so it holds no zero byte, and a single zero byte follows it.
+**On the line**, the whole frame is COBS-encoded (Consistent Overhead Byte Stuffing), so it holds no zero byte. A zero byte goes before it and one after it. The one before (since 800-LNK-0039) ends whatever came before the frame: noise, or a console's line on the same UART, which would otherwise spoil the frame.
 
 A receiver:
 - collects bytes up to a zero byte, then decodes them;
