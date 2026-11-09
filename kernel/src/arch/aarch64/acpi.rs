@@ -179,7 +179,7 @@ unsafe fn pins(aml: &[u8]) {
         if kind == Known::Tpm { if let Some((base, _)) = window { if board::get(&board::TPM) == 0 { board::set(&board::TPM, base as usize); } } return; }
         let Some((base, size)) = window else { serial_print("MIND CORE KERNEL: ACPI: A PIN CONTROLLER WITHOUT A READABLE WINDOW, NOT USED\n"); return };
         let first = if kind == Known::Bcm2711 { board::PINS_BCM2711 } else { 0 };
-        let slots = &board::PINS[first..first + crate::abi::PLATFORM_PINS_MAX];
+        let slots = &board::PINS[first..first + board::PINS_MAX];
         if slots.iter().any(|s| board::get(&s[0]) == base as usize) { return; } // named in two blocks
         if let Some(slot) = slots.iter().find(|s| board::get(&s[0]) == 0) { board::set(&slot[0], base as usize); board::set(&slot[1], size as usize); }
     });

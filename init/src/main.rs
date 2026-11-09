@@ -103,10 +103,10 @@ impl Minted {
         Ok(slot)
     }
     fn ports(&mut self, base: usize, count: usize) -> Result<usize> { self.mint(PLATFORM_PORTS, base, count) }
-    // The real-time clock: CMOS ports (LEGACY) on x86, the board's PL031 on aarch64.
-    fn clock(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, PLATFORM_RTC, 0) } else { self.ports(0x70, 2) } }
-    // The platform's serial line: COM1 (LEGACY) on x86, the board's UART on aarch64.
-    fn serial(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, PLATFORM_UART, 0) } else { self.ports(0x3F8, 8) } }
+    // The real-time clock: CMOS ports (LEGACY) on x86, a PL031's node on aarch64 (100000-KRN-0171).
+    fn clock(&mut self, node: Option<usize>) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, node.ok_or(Error::NotFound)?, 0) } else { self.ports(0x70, 2) } }
+    // The platform's serial line: COM1 (LEGACY) on x86, the console's node on aarch64 when it is a PL011.
+    fn serial(&mut self, node: Option<usize>) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, node.ok_or(Error::NotFound)?, 0) } else { self.ports(0x3F8, 8) } }
     // Kept in escrow: init grants it to the service and cannot use it itself (issue 170).
     fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, PRIVILEGE_ESCROW) }
 }
@@ -137,6 +137,8 @@ enum Off { #[default] No, Disabled, Needs(usize), NoDevice, NoImage, Safe, Mode,
 // missing at boot.
 struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<(Option<&'static str>, Option<&'static str>)>,
               link: Option<[u8; LINK_WORDS_MAX]>,
+              // The platform's nodes init gives drivers, read once at boot (100000-KRN-0171).
+              nodes: hardware::Nodes,
               boot: idl_init::Boot, modes: idl_init::ModeState, link_console: bool,
               // What a service runs in place of its boot image until the next boot, in developer mode (800-KRN-0144): a
               // memory object init holds unmapped, and the image's length.
@@ -451,7 +453,7 @@ impl Init {
         let mut args = mind::util::FixedBuf::<ARGS_KEPT>::new();
         match BOOT_SERVICES[image] {
             // LEGACY: CMOS RTC (ISA ports), PS/2 keyboard controller and primary IDE channel below (docs/legacy.md).
-            "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.clock()?, 0); }
+            "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.clock(self.nodes.rtc)?, 0); }
             "ps2_kbd" => {
                 // No controller (Intel Macs, many newer machines): its status port reads all ones (issue 164).
                 let status = minted.ports(0x64, 1)?;
@@ -700,15 +702,16 @@ impl Init {
                 if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
                 self.lend(&mut grants, SLOT_VFS_RTC, "rtc")?;
             }
-            // Pin controllers the firmware's tables name (issue 207): the first BCM2711 GPIO and the first PL061.
+            // Pin controllers the firmware's tables name (issue 207): the first BCM2711 GPIO and the first PL061, as nodes.
             "gpio" => {
-                let bcm2711 = minted.mint(PLATFORM_MMIO, PLATFORM_PINS_BCM2711, 0).ok();
-                let pl061 = minted.mint(PLATFORM_MMIO, PLATFORM_PINS_PL061, 0).ok();
+                let bcm2711 = self.nodes.bcm2711.and_then(|node| minted.mint(PLATFORM_MMIO, node, 0).ok());
+                let pl061 = self.nodes.pl061.and_then(|node| minted.mint(PLATFORM_MMIO, node, 0).ok());
                 if bcm2711.is_none() && pl061.is_none() { return Err(Error::NotFound); }
                 if let Some(slot) = bcm2711 { grants.add(SLOT_DEV0, slot, 0); }
                 if let Some(slot) = pl061 { grants.add(SLOT_DEV1, slot, 0); }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
-                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); // hwdocs/ on the boot disk
+                // hwdocs/ on the boot disk, in SLOT_MEM: SLOT_VFS is SLOT_DEV1, the PL061's (100000-KRN-0171 found them on one slot).
+                grants.add(SLOT_MEM, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
             }
             "loader" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "loader")?, ALL);
@@ -800,7 +803,7 @@ impl Init {
             "nnd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "nnd")?, ALL); }
             // The TPM service alone holds the TPM's registers (351-KRN-0043); without a TPM it runs and says so.
             "tpm" => {
-                if let Ok(slot) = minted.mint(PLATFORM_MMIO, PLATFORM_TPM, 0) { grants.add(SLOT_DEV0, slot, 0); }
+                if let Some(slot) = self.nodes.tpm.and_then(|node| minted.mint(PLATFORM_MMIO, node, 0).ok()) { grants.add(SLOT_DEV0, slot, 0); }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tpm")?, ALL);
             }
             // The Smart Battery System behind the embedded controller the ECDT names (211-PRT-0008): its two ports; the
@@ -951,9 +954,12 @@ impl Init {
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 // A PC without COM1 lends none: its ports read all ones, and a shell reading them would never draw (213-KRN-0098).
-                let serial = minted.serial()?;
-                if mind::dev::Uart::open(serial).is_some() { grants.add(SLOT_SERIAL, serial, 0); }
-                else { mind::println!("[INIT] NO SERIAL LINE: NO 16550 ANSWERS AT COM1 (3F8), THE SHELL GETS NONE"); }
+                // A board whose console is no PL011 (the A64's 16550) lends none either: the kernel keeps it (100000-KRN-0171).
+                match minted.serial(self.nodes.console) {
+                    Ok(serial) if mind::dev::Uart::open(serial).is_some() => grants.add(SLOT_SERIAL, serial, 0),
+                    _ if cfg!(target_arch = "aarch64") => mind::println!("[INIT] NO SERIAL LINE: NO PL011 CONSOLE TO LEND, THE SHELL GETS NONE"),
+                    _ => mind::println!("[INIT] NO SERIAL LINE: NO 16550 ANSWERS AT COM1 (3F8), THE SHELL GETS NONE"),
+                }
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 grants.add(SLOT_AUTHORITY, self.badged(&mut minted, "sysmon", mind::stat::BADGE_AUTHORITY)?, CLIENT);
                 let keyboard = self.keyboard(); self.lend(&mut grants, SLOT_KEYBOARD, keyboard)?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
@@ -1916,7 +1922,7 @@ fn boot(info: &'static BootInfo) {
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
                          configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
-                         power: hardware::power_policy() };
+                         power: hardware::power_policy(), nodes: hardware::Nodes::default() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122).
@@ -1924,6 +1930,8 @@ fn boot(info: &'static BootInfo) {
         mind::platform_power::Policy::Absent { tables } => mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: ABSENT ({} AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG)", tables),
         policy => { let mut word = [0u8; 48]; let n = policy.word(&mut word); mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN ({}): A RADIO SENDS NOTHING", core::str::from_utf8(&word[17.min(n)..n]).unwrap_or("?")); }
     }
+    // The devices outside PCI init may lend, by their compatible strings (100000-KRN-0171).
+    init.nodes = hardware::platform_nodes();
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
     {
         let (launch, slot) = (&info.launch, &info.boot_slot);

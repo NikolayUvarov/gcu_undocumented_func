@@ -778,10 +778,35 @@ impl Scheduler {
                 Ok(Capability::IoPorts(a as u16, b as u16))
             }
             PLATFORM_IRQ if platform::irq(a) => Ok(Capability::Interrupt(a as u8)),
+            // A platform node's register range, by its pages (100000-KRN-0171): never pages another node's registers share
+            // (the A64's four UARTs share one), nor RAM, nor the registers the kernel drives itself.
             PLATFORM_MMIO => {
-                let (base, bytes) = platform::mmio(a).ok_or(ERR_NOT_FOUND)?;
-                if base == platform::console() { MIRROR_LOGS.store(false, Ordering::Relaxed); } // its driver shows the logs now
-                Ok(Capability::Mmio(base, bytes))
+                let nodes = crate::platform_nodes::table();
+                let (base, bytes) = nodes.pages(a, b).ok_or(ERR_NOT_FOUND)?;
+                let end = base + bytes;
+                if let Some(other) = nodes.sharer(a, b) {
+                    let name = |i: usize| nodes.get(i).map_or(&[][..], |n| n.compatible());
+                    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PLATFORM NODE {} ({}) NOT LENT: ITS PAGES AT {:#X} HOLD NODE {}'S REGISTERS ({})\n",
+                        a, core::str::from_utf8(name(a)).unwrap_or("?"), base, other, core::str::from_utf8(name(other)).unwrap_or("?")));
+                    return Err(ERR_RIGHTS);
+                }
+                let ram = (0..self.boot.memory_map_len).map(|i| unsafe { *self.boot.memory_map.add(i) })
+                    .any(|r| !matches!(r.kind, 11 | 12) && r.start < end && r.start + r.pages * 4096 > base);
+                if ram || platform::kernel_owns(base, end) {
+                    let name = nodes.get(a).map_or(&[][..], |n| n.compatible());
+                    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PLATFORM NODE {} ({}) NOT LENT: ITS PAGES AT {:#X} HOLD {}\n",
+                        a, core::str::from_utf8(name).unwrap_or("?"), base, if ram { "RAM" } else { "REGISTERS THE KERNEL DRIVES" }));
+                    return Err(ERR_RIGHTS);
+                }
+                let console = platform::console() as u64;
+                if console >= base && console < end { MIRROR_LOGS.store(false, Ordering::Relaxed); } // its driver shows the logs now
+                Ok(Capability::Mmio(base as usize, bytes as usize))
+            }
+            PLATFORM_NODES => Self::copy_out(crate::platform_nodes::table().as_bytes()),
+            PLATFORM_NODE_IRQ => {
+                let line = crate::platform_nodes::table().line(a, b).ok_or(ERR_NOT_FOUND)?;
+                if !platform::node_line(line) { return Err(ERR_NOT_FOUND); }
+                Ok(Capability::Interrupt(line as u8))
             }
             PLATFORM_DEVICE_BAR | PLATFORM_DEVICE_BAR_IDLE => {
                 let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let mut bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
