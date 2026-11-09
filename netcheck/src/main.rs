@@ -5,7 +5,7 @@
 // datagram), ping:A.B.C.D, dns:NAME, hold:A.B.C.D:PORT:SECONDS (keep a connection and send once a second until it
 // fails or the time is up), open:A.B.C.D:PORT (connect and keep the connection until the program ends), sockets (the
 // stack's list of this grant's open sockets, socket.wit 2.4), cards (each card's kind and state, which one is preferred
-// and which is the default, socket.wit 2.5), card (the card client in SLOT_NET, which a launcher lends read-only for
+// and which is the default, socket.wit 2.5, and which are out of use, 2.11), card (the card client in SLOT_NET, which a launcher lends read-only for
 // REQUEST_NET_COUNTERS: its info and counters read, a frame sent or received and a ring lent each refused, 000-NET-0015),
 // sessions (ten parser sessions in a row, each with a helper of its own, with one endpoint left in the quota, 109-KRN-0133),
 // echo:A.B.C.D:SIZE:HEX (an echo of SIZE data bytes of the pattern HEX, its reply's size and data checked, socket.wit 2.6),
@@ -75,10 +75,11 @@ fn sockets() -> mind::sys::Result<Result<(), socket::Error>> {
 
 fn cards() -> mind::sys::Result<Result<(), socket::Error>> {
     let list = match socket::cards(STACK)? { Ok(list) => list, Err(error) => return Ok(Err(error)) };
+    let off = match socket::withdrawn(STACK)? { Ok(off) => off, Err(error) => return Ok(Err(error)) };
     for c in list.as_slice() {
         let flag = |on: bool, word: &'static str| if on { word } else { "" };
-        mind::println!("NETCHECK CARD {} {:?}{}{}{}{}{}", c.card, c.kind, flag(c.present, " PRESENT"), flag(c.up, " UP"), flag(c.configured, " CONFIGURED"),
-                       flag(c.preferred, " PREFERRED"), flag(c.default, " DEFAULT"));
+        mind::println!("NETCHECK CARD {} {:?}{}{}{}{}{}{}", c.card, c.kind, flag(c.present, " PRESENT"), flag(c.up, " UP"), flag(c.configured, " CONFIGURED"),
+                       flag(c.preferred, " PREFERRED"), flag(c.default, " DEFAULT"), flag(off & 1 << c.card != 0, " OFF"));
     }
     Ok(Ok(()))
 }

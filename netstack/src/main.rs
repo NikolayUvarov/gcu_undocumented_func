@@ -1,11 +1,11 @@
 #![no_std]
 #![no_main]
 // Network stack: IPv4 with DHCP (static QEMU fallback), ARP, ICMP echo, a DNS resolver, UDP and TCP (smoltcp) over the
-// network card drivers' frames. Serves idl/socket.wit 2.8. Holds clients of up to CARDS card drivers (slots 2 and 3,
+// network card drivers' frames. Serves idl/socket.wit 2.11. Holds clients of up to CARDS card drivers (slots 2 and 3,
 // and the Wi-Fi station `wlan` in slot 4) and nothing of the devices themselves (Appendix B.6: packet and flow
 // endpoints with quotas, no power over the device); each card is an interface of its own (issue 105) and a flow goes
 // out through the one its route names. What each client may reach comes from the badge of its capability (policy.rs,
-// MC-11.6).
+// MC-11.6). The policy takes cards out of use and puts them back (socket.wit 2.11, 550-NET-0062).
 extern crate alloc;
 
 mod dns;
@@ -258,6 +258,8 @@ struct Link {
     mac: u64, address: Option<Ipv4Cidr>, gateway: Option<Ipv4Address>, dns: Option<Ipv4Address>, leased: bool, started: u64,
     // Whether the card says its link is up, and when that was last asked (550-NET-0023).
     up: bool, checked: u64,
+    // Out of use (socket.wit 2.11): no route, no address, nothing sent, DHCP included; its link is still watched.
+    off: bool,
 }
 
 struct Stack {
@@ -266,6 +268,8 @@ struct Stack {
     sequence: u16, next_port: u16,
     // The card the default route goes out through, as last logged.
     default: Option<usize>,
+    // The cards out of use, a bit each (socket.wit 2.11, 550-NET-0062).
+    off: u8,
     // The card the operator or the policy prefers as the default (socket.wit 2.5, 550-NET-0025).
     preferred: Option<usize>,
     // The listening sockets, by their slot's index (socket.wit 2.9).
@@ -298,7 +302,7 @@ impl Link {
         let ring = match card.ring.as_ref() { Some(shared) if shared.answered => " (FRAME RING)", Some(_) => " (FRAME RING LENT, NO ANSWER YET)", None => "" };
         mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, ring, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
         Some(Self { card, iface, sockets, dhcp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms(),
-                    up: info.link, checked: now_ms() })
+                    up: info.link, checked: now_ms(), off: false })
     }
 
     fn configure(&mut self, address: Ipv4Cidr, gateway: Option<Ipv4Address>, dns: Option<Ipv4Address>, leased: bool) {
@@ -315,8 +319,9 @@ impl Link {
         }
     }
 
-    // Runs the interface and applies DHCP results.
+    // Runs the interface and applies DHCP results; nothing while the card is out of use.
     fn poll(&mut self) {
+        if self.off { return; }
         let deadline = self.card.deadline;
         poll::interface(&mut self.iface, &mut self.card, &mut self.sockets, instant(), || deadline.remaining(now_ms()).is_some());
         self.card.kick();
@@ -335,6 +340,12 @@ impl Link {
         }
     }
 
+    // DHCP from the start: the link came up, or the card came back in use.
+    fn restart(&mut self, now: u64) {
+        self.sockets.get_mut::<dhcpv4::Socket>(self.dhcp).reset();
+        self.started = now;
+    }
+
     fn describe(&self) -> socket::Interface {
         socket::Interface { card: self.card.index as u8, address: self.address.map_or(0, |c| u32::from(c.address())), prefix: self.address.map_or(0, |c| c.prefix_len()),
                             gateway: self.gateway.map_or(0, u32::from), dns: self.dns.map_or(0, u32::from), mac: self.mac, dhcp: self.leased,
@@ -345,21 +356,21 @@ impl Link {
 impl Stack {
     fn new() -> Self {
         Self { links: [const { None }; CARDS], tried: [0; CARDS], turn: turn::Turn::new(), slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
-               sequence: 0, next_port: EPHEMERAL, default: None, preferred: None, listeners: [const { None }; SOCKETS], name: name::Name::new() }
+               sequence: 0, next_port: EPHEMERAL, default: None, off: 0, preferred: None, listeners: [const { None }; SOCKETS], name: name::Name::new() }
     }
 
     fn link(&mut self, index: usize) -> &mut Link { self.links[index].as_mut().expect("sockets live only on present links") }
 
-    // The interface a flow to `address` goes out through, among the cards whose link is up: the one whose network holds
-    // it, else the first with a gateway (the default route: the lowest card), else the first configured one.
-    // The card a flow to `address` goes out through (0: the default card): the one whose network holds it; else the
-    // preferred card if it is up with a gateway; else the first, wired before the station, that is (550-NET-0025); else
-    // any card with an address.
+    // The card a flow to `address` goes out through (0: the default card), among the cards up and in use: one whose
+    // network holds it, the preferred one first (550-NET-0062); else the preferred card if it has a gateway; else the
+    // first, wired before the station, that has (550-NET-0025); else any card with an address.
     fn route(&self, address: u32) -> Option<usize> {
         let target = Ipv4Address::from(address);
-        let configured = |l: &Option<Link>| l.as_ref().filter(|l| l.up).and_then(|l| l.address.map(|cidr| (cidr, l.gateway)));
+        let configured = |l: &Option<Link>| l.as_ref().filter(|l| l.up && !l.off).and_then(|l| l.address.map(|cidr| (cidr, l.gateway)));
         let gateway = |card: usize| configured(&self.links[card]).is_some_and(|(_, gateway)| gateway.is_some());
-        self.links.iter().position(|l| configured(l).is_some_and(|(cidr, _)| address != 0 && cidr.contains_addr(&target)))
+        let holds = |card: usize| configured(&self.links[card]).is_some_and(|(cidr, _)| address != 0 && cidr.contains_addr(&target));
+        self.preferred.filter(|&card| holds(card))
+            .or_else(|| (0..CARDS).find(|&card| holds(card)))
             .or_else(|| self.preferred.filter(|&card| gateway(card)))
             .or_else(|| (0..CARDS).find(|&card| gateway(card)))
             .or_else(|| self.links.iter().position(|l| configured(l).is_some()))
@@ -371,7 +382,7 @@ impl Stack {
         for card in 0..CARDS {
             let link = self.links[card].as_ref();
             let up = link.is_some_and(|l| l.up);
-            let configured = up && link.is_some_and(|l| l.address.is_some() && l.gateway.is_some());
+            let configured = up && link.is_some_and(|l| !l.off && l.address.is_some() && l.gateway.is_some());
             list.push(socket::Card { card: card as u8, kind: KINDS[card], present: link.is_some(), up, configured,
                                      preferred: self.preferred == Some(card), default: self.default == Some(card) });
         }
@@ -385,6 +396,42 @@ impl Stack {
             match preferred { Some(card) => mind::println!("[NETSTACK] CARD {} PREFERRED AS THE DEFAULT", card), None => mind::println!("[NETSTACK] NO CARD PREFERRED") }
         }
         Ok(())
+    }
+
+    // Takes the cards of `cards` out of use and puts the others back (socket.wit 2.11, 550-NET-0062); `by` names who.
+    fn withdraw(&mut self, cards: u8, by: &str) -> Result<(), Error> {
+        if cards >> CARDS != 0 { return Err(Error::Invalid); }
+        let changed = cards ^ self.off;
+        self.off = cards;
+        for index in (0..CARDS).filter(|&k| changed & 1 << k != 0) {
+            if cards & 1 << index != 0 {
+                let aborted = self.take_out(index);
+                mind::println!("[NETSTACK] CARD {} OUT OF USE BY {}: ADDRESS DROPPED, {} CONNECTIONS ABORTED, NOTHING SENT THERE", index, by, aborted);
+            } else {
+                if let Some(link) = self.links[index].as_mut() { link.off = false; link.restart(now_ms()); }
+                mind::println!("[NETSTACK] CARD {} IN USE AGAIN BY {}, WAITING FOR DHCP", index, by);
+            }
+        }
+        Ok(())
+    }
+
+    // Card `index`'s address and routes dropped and its TCP connections aborted, as at its link going down; marked out
+    // of use if `self.off` says so. How many connections were aborted.
+    fn take_out(&mut self, index: usize) -> usize {
+        let off = self.off & 1 << index != 0;
+        let Some(link) = self.links[index].as_mut() else { return 0 };
+        link.off = off;
+        link.address = None;
+        link.gateway = None;
+        link.leased = false;
+        link.iface.update_ip_addrs(|addrs| addrs.clear());
+        link.iface.routes_mut().remove_default_ipv4_route();
+        let mut aborted = 0;
+        for slot in self.slots.iter().flatten().filter(|s| s.link == index && matches!(s.kind, Kind::Tcp)) {
+            let tcp = link.sockets.get_mut::<tcp::Socket>(slot.handle);
+            if tcp.state() != tcp::State::Closed { tcp.abort(); aborted += 1; }
+        }
+        aborted
     }
 
     // Asks card `index` once a second whether its link is up (550-NET-0023). Down: its address and routes go, so new flows
@@ -402,23 +449,14 @@ impl Stack {
         if up == link.up { return; }
         link.up = up;
         if up {
+            if link.off { return mind::println!("[NETSTACK] CARD {} LINK UP, OUT OF USE", index); }
             mind::println!("[NETSTACK] CARD {} LINK UP, WAITING FOR DHCP", index);
-            link.sockets.get_mut::<dhcpv4::Socket>(link.dhcp).reset();
-            link.started = now;
+            link.restart(now);
             // A name changed since the last read goes out with the new lease (000-NET-0050).
             if self.name.refresh(now) { self.apply_name(); }
             return;
         }
-        link.address = None;
-        link.gateway = None;
-        link.leased = false;
-        link.iface.update_ip_addrs(|addrs| addrs.clear());
-        link.iface.routes_mut().remove_default_ipv4_route();
-        let mut aborted = 0;
-        for slot in self.slots.iter().flatten().filter(|s| s.link == index && matches!(s.kind, Kind::Tcp)) {
-            let tcp = link.sockets.get_mut::<tcp::Socket>(slot.handle);
-            if tcp.state() != tcp::State::Closed { tcp.abort(); aborted += 1; }
-        }
+        let aborted = self.take_out(index);
         mind::println!("[NETSTACK] CARD {} LINK DOWN: ADDRESS DROPPED, {} CONNECTIONS ABORTED", index, aborted);
     }
 
@@ -442,6 +480,10 @@ impl Stack {
             let deadline = Deadline::after(now, visit.remaining_ms);
             if self.links[index].is_none() && now.saturating_sub(self.tried[index]) >= 1000 {
                 self.tried[index] = now; self.links[index] = Link::new(index, deadline, self.name.options());
+                if self.off & 1 << index != 0 && self.links[index].is_some() {
+                    self.take_out(index);
+                    mind::println!("[NETSTACK] CARD {} OUT OF USE FROM ITS START", index);
+                }
             }
             if let Some(link) = self.links[index].as_mut() { link.card.deadline = deadline; }
             // Check link state before a busy receive queue can consume the remaining turn.
@@ -730,6 +772,11 @@ impl Stack {
                 socket::reply_interfaces(call, Ok(list.as_slice()))
             }
             socket::Request::Prefer { card } => socket::reply_prefer(call, self.prefer(card)),
+            socket::Request::Withdraw { cards } => {
+                let by = if matches!(policy::access(owner.1), Access::Operator) { "THE OPERATOR" } else { "THE POLICY" };
+                socket::reply_withdraw(call, self.withdraw(cards, by))
+            }
+            socket::Request::Withdrawn => socket::reply_withdrawn(call, Ok(self.off)),
             socket::Request::Cards => socket::reply_cards(call, Ok(self.cards().as_slice())),
             socket::Request::Offload { enable } => {
                 OFFLOAD.store(enable, Ordering::Relaxed);
@@ -982,9 +1029,11 @@ fn main(_info: &'static BootInfo) {
             Access::Operator => Ok(()),
             // The broker reads the DNS server and looks up the host names of the policy (socket.wit 2.3).
             // It also applies the policy's preferred card (socket.wit 2.5).
-            Access::Policy => if matches!(decoded, socket::Request::Config | socket::Request::Resolve { .. } | socket::Request::Prefer { .. } | socket::Request::Cards) { Ok(()) } else { Err(Error::Denied) },
-            Access::Grant(_) if matches!(decoded, socket::Request::Interfaces | socket::Request::Cards) => Ok(()),
-            Access::Grant(_) if matches!(decoded, socket::Request::Prefer { .. }) => Err(Error::Denied),
+            // And it takes the cards its `card N off` lines name out of use (socket.wit 2.11).
+            Access::Policy => if matches!(decoded, socket::Request::Config | socket::Request::Resolve { .. } | socket::Request::Prefer { .. } | socket::Request::Cards
+                                          | socket::Request::Withdraw { .. } | socket::Request::Withdrawn) { Ok(()) } else { Err(Error::Denied) },
+            Access::Grant(_) if matches!(decoded, socket::Request::Interfaces | socket::Request::Cards | socket::Request::Withdrawn) => Ok(()),
+            Access::Grant(_) if matches!(decoded, socket::Request::Prefer { .. } | socket::Request::Withdraw { .. }) => Err(Error::Denied),
             Access::Grant(_) if matches!(decoded, socket::Request::Offload { .. }) => Err(Error::Denied),
             Access::Nothing => Err(Error::Denied),
             Access::Grant(grant) => match &decoded {
@@ -1042,6 +1091,8 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::TcpListen { .. } => socket::reply_tcp_listen(call, Err(error)),
         socket::Request::TcpAccept { .. } => socket::reply_tcp_accept(call, Err(error)),
         socket::Request::GrantRules => socket::reply_grant_rules(call, Err(error)),
+        socket::Request::Withdraw { .. } => socket::reply_withdraw(call, Err(error)),
+        socket::Request::Withdrawn => socket::reply_withdrawn(call, Err(error)),
     }
 }
 
