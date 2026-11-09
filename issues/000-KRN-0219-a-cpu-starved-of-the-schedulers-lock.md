@@ -1,6 +1,6 @@
 # 000-KRN-0219 — A CPU starved of the scheduler's lock while another takes it again and again (round 91's record)
 
-**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (the ticket lock refused by round 95's gate; a test-and-set lock with a turn for a CPU that waited long made and tested on the host and in QEMU, below; the gate and the 10 runs beside a busy lane left) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
+**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (the ticket lock refused by round 95's gate; a test-and-set lock with a turn for a CPU that waited long made and tested on the host, in QEMU and on acc-2, below; the gate and the 10 runs beside a busy lane left) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
 
 ## Problem
 
@@ -142,6 +142,16 @@
     | sleep 10 ms | 10.9 ms | 10.9 ms |
 
     The revocations stay as fast as under the ticket lock; the old lock's were two to three times slower (the table above).
+- **In QEMU, on 02cbda5f** (with the `ABSENT` rule):
+  - **The kernel session's container,** `aarch64 --cpus 16 --suites normal`: passed in 4 min 23 s, against 13 min 41 s on 811b634d in the same container.
+  - **On acc-2, alone,** `aarch64: 16 CPUs` three times on each, one operation after the other (logs `/home/un/mind-core/KRN/logs/k219-new-02cbda5f9/` and `k219-main-dc715b7ba/`):
+
+    | Lock | Run 1 | Run 2 | Run 3 |
+    |---|---|---|---|
+    | this one (02cbda5f) | 216 s | 215 s | 211 s |
+    | the old test-and-set (main dc715b7b) | 210 s | 213 s | 598 s |
+
+    All six passed. A QEMU run says nothing of a machine's lock (MC-12.1); this one is no slower than the old lock where the ticket lock crawled.
 
 ## Related
 
