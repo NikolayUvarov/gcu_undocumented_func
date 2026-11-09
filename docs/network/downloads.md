@@ -81,8 +81,8 @@ answer to the console or a file. It is a process of its own, and `help get` list
 
     `get` says `GET: host:port IS NOT IN ITS GRANT: THE USER IS ASKED` first, unless `-s`.
 
-    **Not from a script yet.** A script's `get` (`msh -c "get …"`) is not asked: the shell's wait on a script's program
-    does not put the question, so the broker refuses it at 60 s and `get` ends with 7 (`requests-APP.md`).
+    **From a script too** (000-APP-0125): a script's `get` (`msh -c "get …"`) is asked on the script's console while the
+    script waits on it, and the key answers the question, Esc as `N`, without stopping the script.
   - `REQUEST_FILES`: the shell's own client of the user's files (`ram:`, `data/`, `log:`), for `-o`, `-O`, `-d @FILE` and
     `-F name=@FILE`. A client confined to one directory (`REQUEST_FILE`) would hold only the first argument's.
   - `REQUEST_PARSE`: the parser service reads each response head (109-NET-0009).

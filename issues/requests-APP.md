@@ -85,7 +85,7 @@ Asked by NET on 2026-11-05. Numbered the same day as [550-APP-0124](../issues-do
 
 ## A script's program asked about a flow while the script waits on it (for 000-NET-0048)
 
-Asked by NET on 2026-11-06. Numbered on 2026-11-08 as [000-APP-0125](000-APP-0125-a-scripts-program-asks-about-a-flow.md).
+Asked by NET on 2026-11-06. Numbered on 2026-11-08 as [000-APP-0125](../issues-done/000-APP-0125-a-scripts-program-asks-about-a-flow.done).
 
 ## A console program reads a secret typed at its console (for 000-NET-0048's `get -u`)
 

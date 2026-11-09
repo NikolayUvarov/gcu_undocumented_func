@@ -621,3 +621,15 @@ fn a_start_gets_the_wifi_client_its_bits_ask_for() {
         assert_eq!(lend(change, read, true, false), Lend::None, "a script without `wifi`");
     }
 }
+
+#[test]
+fn a_scripts_wait_answers_a_question_with_the_serial_lines_bytes() {
+    // 000-APP-0125: in a script's wait the shell's decoder does not run, so the question reads bytes: N, O, S, A in
+    // either case, Esc and Enter as no; a control byte is no key, and is held back.
+    use flowask::{answer, byte_key, Answer};
+    let answered = |byte: u8| byte_key(byte).and_then(|(ch, escape, enter)| answer(ch, escape, enter));
+    assert_eq!([answered(b'n'), answered(b'O'), answered(b's'), answered(b'A')], [Some(Answer::No), Some(Answer::Once), Some(Answer::Session), Some(Answer::Always)]);
+    assert_eq!([answered(0x1B), answered(b'\r'), answered(b'\n')], [Some(Answer::No); 3], "Esc and Enter: no, the default");
+    assert_eq!(answered(b'x'), None, "another character: held back");
+    assert_eq!(byte_key(0x03), None, "Ctrl+C is no key here: the question keeps the script from stopping");
+}

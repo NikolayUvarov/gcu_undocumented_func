@@ -9369,7 +9369,7 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
         assert code == expected, (arguments, out)
 
     # A host its grant does not name: asked of the user at run time (socket.wit 2.8), on the console get runs in front
-    # of. A script's program is not asked yet: msh's wait on it does not put the question (requests-APP.md).
+    # of, and from a script (000-APP-0125, below).
     asked = f"https://10.0.2.2:{asked_port}/api/final?asked=1"
 
     def answered(key):
@@ -9390,13 +9390,30 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
     assert f"GET: 10.0.2.2:{asked_port}: REFUSED BY THE USER" in out and "the end asked=1" not in out, out
     out = answered(b"o")
     assert "the end asked=1" in out and "REFUSED" not in out, out
+    # 000-APP-0125: a script's get is asked too. msh's wait on its program puts the question on the script's console and
+    # gives it the key: Esc answers no and leaves the script going (it prints 4321 after get); O lets it through once.
+    def in_script(key):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(f'msh -c "get {asked} or {{ print(error) }}; print(4000 + 321)"\n')
+        vm.logged("ALWAYS? ", since, timeout=30)
+        time.sleep(.6)  # a key in the first 500 ms does not answer it (flowask::GUARD_MS)
+        vm.send_bytes(key)
+        vm.expect("MIND> ", timeout=60, after="4321")
+        out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+        require_all(out, "NETWORK: get (PID ", f") ASKS TO REACH 10.0.2.2:{asked_port}", {b"\x1b": "NO\n", b"o": "ONCE\n"}[key])
+        return out
+    out = in_script(b"\x1b")
+    assert f"GET: 10.0.2.2:{asked_port}: REFUSED BY THE USER" in out and "the end asked=1" not in out, out
+    out = in_script(b"o")
+    assert "the end asked=1" in out and "REFUSED" not in out, out
     require(vm.service_logs("netpolicy", "ASKS FOR"), f"ASKS FOR 10.0.2.2:{asked_port} TCP")
 
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
           "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
           "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's; a host not in its grant asked at run "
-          "time, refused and allowed once", flush=True)
+          "time, refused and allowed once, from a script too (Esc answering no without stopping the script)", flush=True)
 
 
 def pinned_runs(vm, certificates, port, rogue_port, expired_port):
