@@ -138,6 +138,7 @@ pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
     core::mem::forget(root);
     enable_protection(true);
     activate_boot_map(kernel_root());
+    crate::cpu::CR0[0].store(crate::cpu::read_cr0(), Ordering::Relaxed);
     protect_from_programs();
     Ok(())
 }
@@ -223,6 +224,12 @@ pub unsafe fn enable_protection(bsp: bool) {
     asm!("mov {}, cr0", out(reg) cr0);
     cr0 = (cr0 | (1 << 16) | 2) & !12; // WP, MP; clear EM/TS for FXSAVE.
     asm!("mov cr0, {}", in(reg) cr0);
+    // An AP starts from INIT with CD and NW set (caches off) and keeps them through the trampoline; its PAT is written
+    // above while they are set (Intel SDM 12.12.4). Its caches go on now, after a write-back and a TLB flush, under the
+    // firmware's MTRRs as on the BSP (000-KRN-0220). The BSP's go on in activate_boot_map.
+    if !bsp && cr0 & ((1 << 30) | (1 << 29)) != 0 {
+        asm!("wbinvd", "mov {t}, cr3", "mov cr3, {t}", "mov cr0, {cr0}", t = out(reg) _, cr0 = in(reg) cr0 & !((1 << 30) | (1 << 29)), options(nostack));
+    }
     let mut cr4: usize;
     asm!("mov {}, cr4", out(reg) cr4);
     cr4 |= (1 << 9) | (1 << 10);

@@ -1,6 +1,6 @@
 # 000-KRN-0220 — The application processors run with their caches disabled (CR0.CD and CR0.NW left set)
 
-**Type:** kernel (`arch/x86_64/cpu.rs`'s AP start, `mmu.rs`) · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** track A, main task [174](174-full-use-of-pc-hardware.md) · **Constitution:** MC-12.1, MC-12.2
+**Type:** kernel (`arch/x86_64/cpu.rs`'s AP start, `mmu.rs`) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (made and tested in QEMU, below; the run on a machine left) · **Blocked by:** — · **Roadmap:** track A, main task [174](174-full-use-of-pc-hardware.md) · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -40,6 +40,18 @@
 - Every CPU's `CR0` in the hardware report has CD and NW clear, in QEMU (x86, 4 and 16 CPUs) and on one real machine.
 - The gate passes.
 - `kbench` on that machine before and after, recorded in this issue and in 000-KRN-0084.
+
+## Progress (2026-11-09)
+
+- **`mmu::enable_protection(false)`:** an AP writes its PAT while CD and NW are still set, as before; then `wbinvd`, a `CR3` reload, and CD and NW cleared. The MTRRs stay the firmware's. The trampoline keeps CD set until then, as plan step 2 asks.
+- **The hardware report** gives each CPU's `CR0` as the kernel read it once that CPU started (`cpu::CR0`): the line `CR0 after start` under `CPU`, the BSP's read after `activate_boot_map`.
+- **Tests:**
+  - **The `normal` suite on x86** reads every CPU's `CR0` from QEMU's monitor (`info registers -a`) and asks CD and NW clear.
+    - **Without the change** it fails: `['80010033', 'E0010013', 'E0010013', 'E0010013']`, the APs' CD and NW set, as round 91's record showed.
+    - **With it,** it passed on 4 and on 16 CPUs.
+  - **`tests/usb_image_smoke.py`** reads the line from the report on the image, every CPU's bits clear; it passed.
+  - All in the kernel session's container (QEMU 8.2.2, OVMF, TCG). TCG models no cache, so these show the bits, not a speed (MC-12.1).
+- **Left:** the run on a machine, `kbench` before and after (plan step 4). It waits for a build with this on the MacBook Pro or the DEXP.
 
 ## Related
 

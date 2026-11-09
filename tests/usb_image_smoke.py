@@ -274,6 +274,9 @@ def run(args, booted):
         # 000-KRN-0081: the firmware's MTRRs and the PAT the kernel set, entry 1 write-combining for the framebuffer.
         assert re.search(r"\n  MTRR {14}\d+ variable ranges", report), report[:3000]
         require(report, "\n  PAT               0007040600070106\n")
+        # 000-KRN-0220: each CPU's CR0 once it started, CD (bit 30) and NW (bit 29) clear: caching on.
+        cr0 = re.search(r"\n  CR0 after start  ((?: [0-9A-F]{8})+)\n", report)
+        assert cr0 and all(int(v, 16) & (3 << 29) == 0 for v in cr0[1].split()), report[:3000]
     # 550-KRN-0070: no function a driver was not granted masters the bus, bridges and display controllers aside.
     functions = re.findall(r"class ([0-9A-F]{6}) .*? command ([0-9A-F]{4}) status [0-9A-F]{4}(.*)", report)
     assert functions, report[:3000]
