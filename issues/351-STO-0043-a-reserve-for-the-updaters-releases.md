@@ -26,7 +26,9 @@
   - the updater pins within the quarter, with its own quota whole;
   - a domain's client is another owner, whatever its low bits;
   - without the reserve, as before.
-- **QEMU** (`store` suite, x86 and aarch64): the store keeps the reserve on a disk and not on the RAM disk.
+- **QEMU:**
+  - the `store` suite, x86 and aarch64: no reserve on the RAM disk;
+  - the `boot` suite's check of a store disk, x86, where `boot` runs: the reserve on a disk.
 
 ## Related
 
