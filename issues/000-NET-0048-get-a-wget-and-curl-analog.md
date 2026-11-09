@@ -1,6 +1,6 @@
 # 000-NET-0048 — `get`, an analog of `wget` and `curl`
 
-**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (a host asked at run time in `main`; `-u` and a script's question wait for APP) · **Blocked by:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md) for `-u`, [000-APP-0125](../issues-done/000-APP-0125-a-scripts-program-asks-about-a-flow.done) for a script's question (the rest it waited on is done) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
+**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (a host asked at run time, and a script's question since round 99, 000-APP-0125; `-u` waits for 000-APP-0126, the shell's secret line, on 000-KRN-0224, in `main` since round 99) · **Blocked by:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md) for `-u`, [000-APP-0125](../issues-done/000-APP-0125-a-scripts-program-asks-about-a-flow.done) for a script's question (the rest it waited on is done) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md), at the maintainer's request: "an analog of wget/curl".
 

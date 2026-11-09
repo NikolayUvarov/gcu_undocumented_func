@@ -1,6 +1,6 @@
 # 000-KRN-0224 — A request bit for a console program's secret line, and the shell's badge for it
 
-**Type:** `init`, `libmind` (`mind::process`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (made and tested in QEMU; the lending is APP's) · **Blocked by:** — · **Roadmap:** the tools track · **Constitution:** MC-3.1, MC-3.4
+**Type:** `init`, `libmind` (`mind::process`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (in `main` since round 99, c92256a3; the lending is APP's, 000-APP-0126) · **Blocked by:** — · **Roadmap:** the tools track · **Constitution:** MC-3.1, MC-3.4
 
 From APP's request of 2026-11-09 for [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md), which NET's [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md) (`get -u user`) waits for (`issues/requests-KRN.md`, and `KRN/2026-11-09T0729Z-APP-a-request-bit-for-a-console-programs-secret-line.md` on `internal-dev-messages`).
 
@@ -29,6 +29,13 @@ No ABI change: the request bits and the shell's badges are `libmind`'s, and `CAP
 - The constants are in `mind::process`, and `init` grants the shell's endpoint `ALL | CAP_BADGE`.
 - **In QEMU, x86 and aarch64:** the shell starts and answers with it. The `shell` suite (a program's commands client, `link`'s badged client in developer mode) and `normal` pass.
 - **APP's part** (000-APP-0126): the shell mints the `BADGE_SHELL_SECRET` copy for `REQUEST_SECRET_LINE`, answers only `secret-line` through it, and its QEMU check shows it.
+
+## Progress (2026-11-09)
+
+- **Made** in f91333db: the constants, `init`'s grant and the docs.
+- **Tested** in the kernel session's container (QEMU 8.2.2, TCG): `x86: keys, shell, tools` and `aarch64: programs, shell and four CPUs` passed.
+- **Landed** in round 99 (`main` c92256a3): every group of the gate passed with it.
+- **Left:** APP's lending and its check (000-APP-0126, on `claude/wizardly-franklin-kec1a9`).
 
 ## Related
 

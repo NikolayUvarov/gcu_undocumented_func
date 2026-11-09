@@ -1,6 +1,6 @@
 # 207 — `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061)
 
-**Type:** porting (driver service) · **Owner:** porting track · **Priority:** P2 · **Status:** open (done except the run on hardware, 2026-10-06) · **Blocked by:** — ([206](../issues-done/206-pin-controllers-from-firmware.done) done) · **Roadmap:** track H (with track F for physical control) · **Constitution:** MC-2.3, MC-3.1, MC-3.3, MC-3.7, MC-6.1, MC-8.2, MC-8.3, MC-10.2
+**Type:** porting (driver service) · **Owner:** porting track · **Priority:** P2 · **Status:** open (done except the run on hardware; its first start on QEMU's PL061 in `main` since round 99, 2026-11-09) · **Blocked by:** — ([206](../issues-done/206-pin-controllers-from-firmware.done) done) · **Roadmap:** track H (with track F for physical control) · **Constitution:** MC-2.3, MC-3.1, MC-3.3, MC-3.7, MC-6.1, MC-8.2, MC-8.3, MC-10.2
 
 ## Problem
 
@@ -32,7 +32,7 @@ The `pins` tool (tools track) is to list a board's pins, show each pin's functio
 
 ## Progress (2026-11-09): its first start, on QEMU's PL061
 
-- **With a device tree, QEMU `virt`'s PL061 is a platform node** ([100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md)), and `init` gives it to `gpio`. Until then `gpio` had never started in QEMU.
+- **With a device tree, QEMU `virt`'s PL061 is a platform node** ([100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done)), and `init` gives it to `gpio`. Until then `gpio` had never started in QEMU.
 - **Two faults its first start found, both fixed:**
   - `main`'s frame, which holds two controllers' hwdocs tables, is about 80 KiB on aarch64, past the default 64 KiB stack. Its stack probe faulted on the guard page (vector 36 at `main`'s first page), and `init` quarantined it after three restarts. `gpio/linker.ld` now asks 256 KiB (`PT_GNU_STACK`, 262-KRN-0164).
   - `SLOT_DEV1`, the PL061's, is slot 3, and so is `SLOT_VFS`: the VFS client `init` granted after it took its place, and `gpio` said `NO PIN CONTROLLER`. The VFS client is now in `SLOT_MEM` (5), and `gpio` sends its file calls there (`mind::fs::use_endpoint`).

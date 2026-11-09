@@ -1,6 +1,6 @@
 # 211-KRN-0223 — The system log saves less often, with fewer flushes (a USB boot disk accessed all the time)
 
-**Type:** `vfs_server` (the journal) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (made and tested on the host and in QEMU, below; the gate and the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track H, stage I · **Constitution:** MC-5.1, MC-10.6
+**Type:** `vfs_server` (the journal) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (in `main` since round 99, c92256a3; the MacBook Pro's run, DRV's, left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track H, stage I · **Constitution:** MC-5.1, MC-10.6
 
 **Asked by** DRV, 2026-11-09 (`KRN/2026-11-09T0429Z-DRV-the-system-log-writes-the-boot-disk-every-11-s.md` on `internal-dev-messages`), after the maintainer saw the MacBook Pro's USB boot disk accessed all the time.
 
@@ -49,6 +49,8 @@
 - **docs:** `docs/profile/evidence.md`, `docs/write-disk.md` and its Russian copy state the bounds.
 - **Passed:** `x86: USB image` (`tests/usb_image_smoke.py`) twice in the kernel session's container (QEMU 8.2.2, OVMF, TCG): the log line after `sync`, the debug mode's line, the records of the time without the disk after the replug, and the image read on the host with `fsck.fat` finding the log volume clean.
   - **One earlier run failed before any of this:** after the first `device_del`, `usb_host` logged no `DISCONNECTED`. The two runs after it passed, on the same tree. Recorded, not explained (MC-12.2).
+
+**Landed** in round 99 (`main` c92256a3, 2026-11-09): every group of the gate passed with it, the `boot` suite's log check and `x86: USB image` among them. **Left:** the MacBook Pro's run over the link (DRV): the disk quiet between saves.
 
 ## Related
 
