@@ -1,6 +1,6 @@
 # 100000-KRN-0222 — The kernel's console as a byte channel (the A64's page of four UARTs)
 
-**Type:** kernel (ABI) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (in `main` since round 102, c6931ded, ABI 29; a 16550, `link` and the holder's end left) · **Blocked by:** — (100000-KRN-0171 in `main` since round 99) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.1, MC-2.3, MC-3.1, MC-12.4
+**Type:** kernel (ABI) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (in `main` since round 102; the restarted shell's check in round 104, 9a0b0c8e; the end criterion's choice with 100000-KRN-0221, a 16550 and `link` left) · **Blocked by:** — (100000-KRN-0171 in `main` since round 99) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.1, MC-2.3, MC-3.1, MC-12.4
 
 ## Problem
 
@@ -57,6 +57,27 @@ The kernel has a ring and a blocking read already: a task's text input (`TEXT_QU
   - the kernel's lines after the holder ends, and a restarted shell getting the channel again: not tested yet.
 
 **Landed** in round 102 (`main` c6931ded, 2026-11-09), after round 101 returned it for two of its tests (the handoff's host test, 200acdc5; the test tree's PL011 node that PCU's AAVMF hung on, 9c9529ab). Every group of the gate passed with it, PCU's `devicetree` suite with the channel check among them.
+
+## Progress (2026-11-09, after round 102)
+
+- **A restarted shell,** in the `devicetree` suite's channel check (`tests/qemu_smoke.py`, `console_channel_check`):
+  - the shell is killed (`kill`), and init starts it again;
+  - the new shell gets the same channel and answers through it (`cpus`);
+  - between the kill and the new shell's prompt no line of init's reached the console;
+  - init's log has the shell's end and restart, and no second request for the channel.
+  - **Tested** in the kernel session's container (QEMU 8.2.2, TCG, AAVMF), the `devicetree` suite on aarch64: passed.
+- **Found: the channel does not end when the shell ends.** init keeps what it minted for a service's first start, to give it again at a restart (`init/src/main.rs`, `Minted`), and the channel is among it. So:
+  - a restarted shell gets the same channel, which is what a restart wants;
+  - the channel stands for the whole boot, and the kernel's lines do not come back to the console when the shell ends.
+- **The criterion "the kernel's lines resume when the holder ends"** cannot be met as written while init keeps a copy: the last holder is init, which never ends.
+  - The kernel's end of the channel (`terminate`: no live task holds it) is in place but not reached in this system.
+  - **The owner's choice, left open until 100000-KRN-0221:**
+    - (a) the criterion becomes "a restarted holder gets the same channel" (tested above), and the kernel's end path stays for a holder init does not keep;
+    - (b) init drops its copy, so the kernel's lines come back between a holder's end and its restart, and a restart asks for the channel again.
+  - (a) keeps the console's bytes in one place across a restart. (b) shows the restart's lines on the console.
+  - Until 0221 decides, the criterion is not counted as met.
+
+**Landed** in round 104 (`main` 9a0b0c8e, 2026-11-09): the restarted shell's check. Every group of the gate passed with it, PCU's `devicetree` suite among them.
 
 ## Related
 
