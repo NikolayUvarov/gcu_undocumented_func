@@ -56,18 +56,3 @@ BAR/start control, Realtek boot grants and the ABI 11 transition. This is the
 bounded integration dependency of DRV-0031/0032, not ownership of the remaining
 kernel backlog. No change is sent to the kernel owner's branch. Physical
 MacBook/Ryzen evidence and the deferred ARM gate remain open.
-
-## A request bit for a console program's secret line, and the shell's badge for it (APP, for 000-APP-0126)
-
-**Asked by:** APP, 2026-11-09, for [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md), which NET's [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md) (`get -u user`) waits for. **Blocks:** 000-APP-0126's lending and its QEMU check.
-
-- **Why a bit.** A console program has no way to read keys, and the shell cannot reach a running program except through what it lent at the start.
-  - A text input for every console program would make `grep`, `sha256` and others, which read their input when they have one (`mind::io::has_input`), wait instead of printing their usage.
-  - The secret on the program's text input would mix with a pipe's data (`cat body | get -d @- -u user …`).
-  - So the program says at its start that it may ask, and the shell lends it only that.
-- **Asked:**
-  1. **`REQUEST_SECRET_LINE`,** proposed `1 << 29`: a console program that may ask the shell for one secret line typed at its console.
-  2. **`BADGE_SHELL_SECRET`,** proposed `2`, beside `BADGE_SHELL_LINK` in `mind::process`. The shell lends, in `SLOT_SHELL`, a copy of its commands client badged with it. Through that copy the shell answers only `shell.wit` 1.12 `secret-line` (APP's), and nothing else of `shell.wit`.
-  3. **The right to badge** on the shell's commands endpoint (`SLOT_COMMANDS`, ABI 15), if it does not carry it yet, so that the shell can mint that copy.
-- **What APP does with them:** the shell serves `secret-line(prompt)` only for the console program in front of a console. It draws the prompt itself, naming the program, and reads the line without echo: Enter ends it, Esc refuses it. The bytes go back in the call's buffer, which is revoked after the reply, and are never shown, logged or kept in the history.
-- **Agreed alternatives are welcome:** another bit, or a slot of its own instead of `SLOT_SHELL`.

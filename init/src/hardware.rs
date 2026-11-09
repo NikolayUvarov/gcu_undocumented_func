@@ -154,3 +154,40 @@ fn tables(files: Endpoint, root: u32) {
     let _ = vfs::close(files, dir);
     mind::println!("[INIT] ACPI TABLES: {} IN log:acpi/", count);
 }
+
+/// The platform's nodes init gives drivers (100000-KRN-0171), found once by their first compatible string.
+#[derive(Clone, Copy, Default)]
+pub struct Nodes {
+    /// The console, when it is a PL011 the shell's serial console drives.
+    pub console: Option<usize>,
+    pub rtc: Option<usize>,
+    pub pl061: Option<usize>,
+    pub bcm2711: Option<usize>,
+    pub tpm: Option<usize>,
+}
+
+/// Reads the kernel's table and names what was found on the boot log.
+pub fn platform_nodes() -> Nodes {
+    let mut found = Nodes::default();
+    let Some(table) = object(PLATFORM_NODES, 0) else { mind::println!("[INIT] PLATFORM NODES NOT READ"); return found };
+    let Some((header, records)) = mind::nodes::read(table.1.as_slice()) else { mind::println!("[INIT] PLATFORM NODES: A SHORT TABLE, NOT READ"); done(table); return found };
+    let mut other_console = FixedBuf::<{ NODE_COMPATIBLE }>::new();
+    for (index, node) in records.enumerate() {
+        let first = |at: &mut Option<usize>| { if at.is_none() { *at = Some(index); } };
+        match node.compatible() {
+            b"arm,pl011" | b"arm,sbsa-uart" if node.flags & NODE_CONSOLE != 0 => first(&mut found.console),
+            b"arm,pl031" => first(&mut found.rtc),
+            b"arm,pl061" => first(&mut found.pl061),
+            b"brcm,bcm2711-gpio" => first(&mut found.bcm2711),
+            b"mind,tpm2" => first(&mut found.tpm),
+            name if node.flags & NODE_CONSOLE != 0 => { let _ = core::fmt::Write::write_str(&mut other_console, core::str::from_utf8(name).unwrap_or("?")); }
+            _ => {}
+        }
+    }
+    done(table);
+    let at = |n: Option<usize>| n.map_or(-1, |i| i as i64);
+    mind::println!("[INIT] PLATFORM NODES: {}{}; CONSOLE {}, RTC {}, PL061 {}, BCM2711 GPIO {}, TPM {} (-1: NONE)", header.count, if header.left_out > 0 { " AND MORE LEFT OUT" } else { "" },
+        at(found.console), at(found.rtc), at(found.pl061), at(found.bcm2711), at(found.tpm));
+    if !other_console.as_str().is_empty() { mind::println!("[INIT] THE CONSOLE ({}) STAYS THE KERNEL'S: THE SHELL'S SERIAL CONSOLE DRIVES A PL011 ONLY", other_console.as_str()); }
+    found
+}
