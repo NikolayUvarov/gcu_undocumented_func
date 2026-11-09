@@ -16,7 +16,7 @@ const PROBE: usize = 512; // probes and sense data: never where a write's data w
 const CLAIM_TRIES: usize = 20; // usb_host may still be setting the device up
 
 // The claimed interface and its Bulk-Only Transport state.
-struct Bot { handle: u32, out: u8, input: u8, tag: u32, vendor: u16, product: u16 }
+struct Bot { handle: u32, number: u8, out: u8, input: u8, tag: u32, vendor: u16, product: u16 }
 
 // `lost`: the device stopped answering and was not claimed again; `seen`: refusals already logged.
 struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool, seen: [(u8, Sense); SEEN], seen_count: usize }
@@ -79,7 +79,7 @@ fn claim(host: &mut Host) -> Option<Bot> {
             Ok((handle, info)) => {
                 let out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
                 let input = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).map(|e| e.address);
-                if let (6, 0x50, Some(out), Some(input)) = (info.subclass, info.protocol, out, input) { return Some(Bot { handle, out, input, tag: 0, vendor: info.vendor, product: info.product }); }
+                if let (6, 0x50, Some(out), Some(input)) = (info.subclass, info.protocol, out, input) { return Some(Bot { handle, number: info.number, out, input, tag: 0, vendor: info.vendor, product: info.product }); }
                 let _ = host.release(handle);
             }
             Err(_) => if attempt + 1 < CLAIM_TRIES { mind::time::sleep(100); },
@@ -149,6 +149,10 @@ impl Storage {
             Cycle::Gone => {}
         }
         if !self.lost { mind::println!("[USB] STORAGE: NO ANSWER TO {}: THE DEVICE IS GONE OR WAS RESET; CLAIMING IT AGAIN", name(command[0])); }
+        // The interface is reset and given back before it is claimed again: kept, it could not be claimed, and a device
+        // that only missed a transfer was lost until the next boot (211-DRV-0053). A gone device refuses both.
+        let _ = self.host.control(self.bot.handle, 0x21, 0xFF, 0, self.bot.number as u16, 0); // Bulk-Only Mass Storage Reset
+        let _ = self.host.release(self.bot.handle);
         // Every request gets the tries: a device plugged in again or reset may still be set up by usb_host (211-DRV-0021).
         let found = claim(&mut self.host).and_then(|mut bot| capacity(&mut self.host, &mut bot).map(|c| (bot, c)));
         let Some((bot, (sectors, reset))) = found else {

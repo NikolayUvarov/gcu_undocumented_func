@@ -496,14 +496,17 @@ impl Host {
                 if endpoint.is_in() { buffer[offset..offset + got].copy_from_slice(root.xhci.dma.bytes(DATA, got)); }
                 Ok(got as u32)
             }
-            Err(STALL) => {
-                // The endpoint halted: reset it on both sides, so the next transfer can run (BOT recovery).
+            // No answer: the endpoint is stopped and its TRB left behind, or every later transfer waits behind it (the
+            // MacBook Pro's stick, 211-DRV-0053).
+            Err(0) => { root.xhci.restart(device.slot, target, &ring, false); Err(Error::Other(ERR_TIMEOUT)) }
+            Err(code) => {
+                // A stall or another error halted the endpoint on the controller: reset it on both sides, so the next
+                // transfer can run (BOT recovery; a transaction error halts it too, 211-DRV-0053).
                 root.xhci.recover(device.slot, target, &ring);
                 let _ = root.control(index, 0x02, 1, 0, address as u16, 0); // CLEAR_FEATURE ENDPOINT_HALT
+                if code != STALL { mind::println!("[USB] SLOT {} ENDPOINT {:02X}: COMPLETION {}; THE ENDPOINT IS RESET", device.slot, address, code); }
                 Err(Error::Invalid)
             }
-            Err(0) => Err(Error::Other(ERR_TIMEOUT)),
-            Err(_) => Err(Error::Invalid),
         }
     }
 

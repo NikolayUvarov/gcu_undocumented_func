@@ -32,14 +32,23 @@ fn channel_list(c: Option<Country>) -> List<u8, 64> {
     channels
 }
 
-/// The radio's traffic over a period (550-DRV-0036), logged when unicast data went out in it, so a ping's loss can be
-/// placed: the data frames sent to the access point, acknowledged or not and after how many tries, by rate; and what
-/// came in meanwhile, by modulation and outcome.
-struct Tally { start: u64, sent: u32, acked: u32, retried: u32, tries: u32, rates: [(u8, u16, u16); 8], seen: Counts }
+/// The radio's traffic over a period (550-DRV-0036), logged when unicast data went out in it and something was lost, so
+/// a ping's loss can be placed: the data frames sent to the access point, acknowledged or not and after how many tries,
+/// by rate; and what came in meanwhile, by modulation and outcome. Periods without a loss are summed in one line every
+/// QUIET_MS: each line logged is a save of the system log to the boot disk (211-DRV-0053).
+struct Tally { start: u64, sent: u32, acked: u32, retried: u32, tries: u32, rates: [(u8, u16, u16); 8], seen: Counts, quiet: Quiet }
 const TALLY_MS: u64 = 10_000;
+const QUIET_MS: u64 = 600_000;
+
+// The periods with data sent and nothing lost since `since`: how many, their data frames and those retried.
+#[derive(Clone, Copy)]
+struct Quiet { since: u64, periods: u32, sent: u32, retried: u32 }
 
 impl Tally {
-    fn new(radio: &Radio) -> Self { Tally { start: mind::time::uptime_ms() as u64, sent: 0, acked: 0, retried: 0, tries: 0, rates: [(0, 0, 0); 8], seen: radio.counts } }
+    fn new(radio: &Radio) -> Self {
+        let now = mind::time::uptime_ms() as u64;
+        Tally { start: now, sent: 0, acked: 0, retried: 0, tries: 0, rates: [(0, 0, 0); 8], seen: radio.counts, quiet: Quiet { since: now, periods: 0, sent: 0, retried: 0 } }
+    }
 
     fn sent(&mut self, frame: &[u8], rate: u8, s: &Sent) {
         // Unicast data only: a ping and its kin, not management frames or broadcasts.
@@ -55,11 +64,19 @@ impl Tally {
     }
 
     fn tick(&mut self, radio: &Radio) {
-        if (mind::time::uptime_ms() as u64) < self.start + TALLY_MS { return; }
+        let now = mind::time::uptime_ms() as u64;
+        if now < self.start + TALLY_MS { return; }
         // In the 802.11g test the receiving side is logged even when nothing was sent.
         let test = OFDM.load(Ordering::Relaxed);
-        if self.sent > 0 || test {
-            let (k, b) = (radio.counts, self.seen);
+        let (k, b) = (radio.counts, self.seen);
+        // A loss: a frame not acknowledged, a DMA error, the ring full, or five beacons or more missed in a row (half a
+        // second deaf). Runs of two to four come every few periods on the MacBook Pro with nothing lost (211-DRV-0053).
+        let lost = self.sent > self.acked || k.dma_errors != b.dma_errors || k.ring_full != b.ring_full || k.missed_runs[2] != b.missed_runs[2];
+        if self.sent > 0 && !lost && !test {
+            self.quiet.periods += 1;
+            self.quiet.sent += self.sent;
+            self.quiet.retried += self.retried;
+        } else if self.sent > 0 || test {
             let f = |kind: usize, outcome: usize| k.frames[kind][outcome].wrapping_sub(b.frames[kind][outcome]);
             let mut rates = [0u8; 96];
             let mut w = Text { buf: &mut rates, len: 0 };
@@ -80,7 +97,15 @@ impl Tally {
             beacon_line(seconds, (mind::time::uptime_ms() as u64 - self.start) as u32, &k, &b);
             if test { ofdm_lines(seconds, &k, &b); }
         }
-        *self = Tally::new(radio);
+        if now >= self.quiet.since + QUIET_MS {
+            let q = self.quiet;
+            if q.periods > 0 {
+                mind::println!("[BCM] {} S: {} PERIODS OF {} S WITH DATA SENT AND NOTHING LOST ({} DATA, {} RETRIED); THEIRS NOT LOGGED ONE BY ONE",
+                               (now - q.since) / 1000, q.periods, TALLY_MS / 1000, q.sent, q.retried);
+            }
+            self.quiet = Quiet { since: now, periods: 0, sent: 0, retried: 0 };
+        }
+        *self = Tally { quiet: self.quiet, ..Tally::new(radio) };
     }
 }
 
