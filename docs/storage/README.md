@@ -955,7 +955,14 @@ The policy (MC-4.5, MC-4.11, Appendix B.3):
 
 **Accounts and quotas (303-STO-0002, MC-4.11).** What a name's version or a pin retains is charged to an owner: the badge of the client that published or pinned it. The account is the bytes of the distinct roots the owner retains, through the kept versions of names and through its pins, each root counted once however many names and pins hold it. A root's bytes are its object's size (a directory's: the bytes of the files under it); blocks shared between different objects are counted in each. A publication or a pin that would take the account past the owner's quota is refused with `quota`, and nothing is written. `usage` reports the caller's account, quota, names and pins; `pins` lists the first 32 of its pins. The store holds 64 pins in all (the service's static table); a pin past them is refused with `full`.
 
-The quota is fixed: three quarters of the medium for every owner. Nobody grants it yet, so it bounds what one owner can take, not what several can take together.
+The quota is fixed: three quarters of the medium for every owner. Nobody grants it yet.
+
+**A reserve for the updater (351-STO-0043, MC-9.3).** On a medium that outlives a reset, a quarter is kept for the updater's owner (`OWNER_UPDATER`), whose pins hold the running, the last known good and a staged release.
+- **Every other owner together** retains at most three quarters, each root counted once across them all. A publication, a commit or a pin past that is refused with `quota`, with nothing written, even when the owner is within its own quota.
+- **`usage`** gives such an owner, as its quota, what the others together leave it.
+- **The updater's own quota** stays three quarters, so it may use free room beyond its quarter.
+- **On the RAM disk** nothing is set aside. The store says which at mount (`[BLOCKSTORE] A QUARTER OF THE MEDIUM KEPT FOR THE UPDATER'S RELEASES: …`).
+- **What the reserve does not cover:** blocks put and not retained yet, and the records' own room. The reserve bounds accounts, not sectors.
 
 **Owners apart from rights (351-STO-0006).** The owner is the whole badge, below the domain clients' badges (`FIRST_DOMAIN_CLIENT`). Its bits 4 to 7 (`mind::blockstore::OWNER_BITS`) grant nothing, and bits 0 to 3 are the rights. So two clients with the same rights and other owner bits keep their names' charges, their pins and their accounts apart, and neither ends the other's pins.
 - `OWNER_UPDATER` (`0x10`) is the updater's owner. With get, put and publish its badge is `0x17`, beside the shell's `7`.

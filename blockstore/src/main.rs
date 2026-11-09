@@ -30,7 +30,7 @@ use chacha20poly1305::ChaCha20Poly1305;
 use cid::Cid;
 use mind::abi::{BootInfo, BLOCK_MAX_SECTORS, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_SERVICE};
 use mind::block::Device as Client;
-use mind::blockstore::{allowed, recovery_parse, recovery_text, Operation, FIRST_DOMAIN_CLIENT};
+use mind::blockstore::{allowed, recovery_parse, recovery_text, Operation, FIRST_DOMAIN_CLIENT, OWNER_BITS, OWNER_UPDATER};
 use copies::{Copies, Event, Gate, Medium as Side, Standing, Step};
 use mind::idl::blockstore::{self, Collected, Committed, CopyName, CopyStats, Durability, Error, Head as Current, Kept, Named, PinTaken, Pinned, Published, Request, Stats, Usage, Walked};
 use mind::idl::codec::{List, Text};
@@ -374,12 +374,20 @@ fn mount(index: &mut Option<*mut [Entry]>, secrets: &mut Secrets, lent: bool) ->
     (Store::mount(Medium::new(client, ahead), &Sealing, keeper, index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()), ram)
 }
 
+// The updater's owner, whose releases a quarter of a lasting medium is kept for (351-STO-0043, MC-9.3).
+fn updater(owner: u16) -> bool { owner < FIRST_DOMAIN_CLIENT && owner & OWNER_BITS == OWNER_UPDATER }
+
 // What a mount gave, logged: the store, or the reason every request is answered with.
 fn ready(mounted: Result<Store<'static, Medium>, store::Error>, ram: bool, lent: bool) -> Result<Store<'static, Medium>, Error> {
     let durability = if ram { Durability::Volatile } else { Durability::Flushed };
     match mounted {
         Ok(mut store) => {
             store.renew(mind::time::monotonic_ns());
+            // On a RAM disk nothing is kept for later, so nothing is set aside.
+            if !ram {
+                store.reserve_for(Some(updater));
+                mind::println!("[BLOCKSTORE] A QUARTER OF THE MEDIUM KEPT FOR THE UPDATER'S RELEASES: THE OTHER OWNERS TOGETHER RETAIN AT MOST THREE QUARTERS");
+            }
             let s = store.stats();
             // Where a key made now went, and why not off the medium.
             let kept = store.key_source() == KEY_KEPT;
