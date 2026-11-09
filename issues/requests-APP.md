@@ -89,7 +89,7 @@ Asked by NET on 2026-11-06. Numbered on 2026-11-08 as [000-APP-0125](../issues-d
 
 ## A console program reads a secret typed at its console (for 000-NET-0048's `get -u`)
 
-Asked by NET on 2026-11-06. Numbered on 2026-11-08 as [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md): the shell reads one secret line for the program.
+Asked by NET on 2026-11-06. Numbered on 2026-11-08 as [000-APP-0126](../issues-done/000-APP-0126-a-console-program-reads-a-secret.done): the shell reads one secret line for the program.
 
 ## A display mode chosen by hand, and two screens side by side, on the DEXP (for 177)
 
