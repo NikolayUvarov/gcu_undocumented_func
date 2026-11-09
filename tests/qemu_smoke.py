@@ -8987,7 +8987,9 @@ def one_network_cards_check(args, disk):
             return found
 
         def network_sends(card):
-            # Six datagrams to the network's gateway, an address both cards' network holds.
+            # Six datagrams to the network's gateway, an address both cards' network holds. A ping first, through the
+            # same card, so the gateway's address is known there and no datagram waits on ARP.
+            require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
             before = frames()
             require(vm.command("netcheck " + " ".join(["udp:10.0.2.2:9"] * 6)), "NETCHECK udp:10.0.2.2:9 OK")
             after = frames()
@@ -9012,7 +9014,6 @@ def one_network_cards_check(args, disk):
         require(cards, "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT")
         quiet = frames()[0][0]
         network_sends(1)
-        require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
         time.sleep(12)  # past the broker's telling the stack again (10 s): still out of use
         assert frames()[0][0] == quiet, (quiet, frames())
         require(vm.command("netcheck cards"), "NETCHECK CARD 0 Wired PRESENT UP OFF")
