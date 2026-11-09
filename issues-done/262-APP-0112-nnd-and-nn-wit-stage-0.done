@@ -152,6 +152,8 @@
   - a script with `requires: files` was refused at its `nn run` line, and one with `requires: nn` ran it;
   - after `nn unload`, a run was refused as no model loaded.
 
+- **On aarch64** (QEMU `virt`, 4 CPUs, TCG), at 03aa61ee0: the `nnd` and `shell` suites passed in one run, 19 checks, `shell_nn_check` among them; `bench` gave 1910 rows a second there, for that configuration alone.
+
 ## Resolution
 
 Every criterion holds:
