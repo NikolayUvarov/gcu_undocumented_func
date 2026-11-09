@@ -95,6 +95,15 @@ answer to the console or a file. It is a process of its own, and `help get` list
     with another `-X` it sends that method and prints the head alone.
   - `-X GET|POST|PUT|HEAD|PATCH|DELETE`, `-H 'Name: value'` (up to 14), `-d TEXT` or `-d @FILE` (POST, `application/x-www-form-urlencoded`
     unless `-H` names a type), `-F name=value` and `-F name=@FILE` (a `multipart/form-data` POST, up to 8 parts).
+  - `-u USER:PASSWORD`: Basic authentication (RFC 7617), the `Authorization` header built from them; with `-H 'Authorization: …'` too it is refused.
+  - `-u USER` without a password: the password is typed at the console `get` runs in front of, through the shell's secret
+    line (`shell.wit` 1.12 `secret-line`, 000-APP-0126).
+    - The shell draws the prompt (`SECRET FOR get (PID n), TYPED WITH NO ECHO …: PASSWORD FOR USER AT HOST`), and the
+      line is typed with no echo; Enter ends it, Esc refuses it (exit 2, `NO PASSWORD TYPED`).
+    - The bytes reach `get` in the call's buffer, and `get` wipes its copy once the header is built. They are not shown,
+      logged or kept in the history.
+    - A script's `get` has no console to type at, so the shell lends it no secret line: `-u USER` alone is refused there
+      (exit 2), and a script gives `USER:PASSWORD`.
   - Redirects are followed by `mind::http::redirect`'s rules (on by default; `--no-location`, `--max-redirs N` up to
     10). HTTPS to HTTP is refused. `Authorization`, `Cookie` and `Proxy-Authorization` are not sent on to another host or
     port, as `curl` without `--location-trusted`.
@@ -167,12 +176,12 @@ These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networ
   - **A host its grant does not name,** asked at run time with `get` in front of the serial console: the shell's
     question with `get`'s reason; `N` refused it (`REFUSED BY THE USER`, the body not fetched); `O` let it through, and
     the body came.
+  - **`-u`:** `alice:s3:cr` sent as Basic authentication, and not sent on to another port; `-u alice` with the password
+    typed at the serial console with no echo (a space and a non-ASCII letter in it), sent as Basic authentication and in
+    no line of the serial console or the shell's log; Esc refused it (2); a script's `get -u alice` refused (2).
 
 ## Not provided yet
 
-- **In `get`:** `-u user`, the password typed on the console: a console program does not get the keys typed at its
-  console (the shell keeps them, Esc and Ctrl+C stop it), so `get` cannot read one. Requested of APP in
-  `requests-APP.md`. A question asked at run time from a script, also requested there.
 - **Roots covered by a release's signature:** the image ships Mozilla's roots as `tlsroots.pem` (000-NET-0046), but the boot manifest does not list the file and a slot update does not replace it. The roots are whatever the file holds, which nothing authenticates; a pin is the way to trust the update server for now.
 - **HTTPS by name with a pin from the channel:** the updater's (351-UPD-0007).
 - **In `mind::http::get` and `download`:** chunked bodies, redirects, keep-alive, several connections at once, IPv6 (the program `get` has the first two through `mind::http::Connection`). A service has chunked bodies and keep-alive through `mind::http::Connection` ([services.md](services.md), 750-NET-0019).

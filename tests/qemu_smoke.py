@@ -9480,9 +9480,10 @@ def api_runs(vm, port):
 def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, plain_port, files):
     """000-NET-0048: `get`, the console's wget and curl, against tests/http_api_stub.py and the release server over HTTPS:
     a body to the console and to files (-o, -O), a download cut short and resumed with -c, a JSON POST, a multipart form
-    and a PUT of a file, redirects by their rules (--max-redirs, HTTPS to HTTP, credentials kept from another host), -f,
-    -I, -w, --max-time, plain HTTP only when asked, curl's exit statuses for each failure, and a host its grant does not
-    name asked of the user at run time (refused, then allowed once)."""
+    and a PUT of a file, redirects by their rules (--max-redirs, HTTPS to HTTP, credentials kept from another host), -u
+    with the password given or typed at the console, -f, -I, -w, --max-time, plain HTTP only when asked, curl's exit
+    statuses for each failure, and a host its grant does not name asked of the user at run time (refused, then allowed
+    once)."""
     api = f"https://10.0.2.2:{port}/api"
     data = (files / "get.bin").read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -9539,6 +9540,31 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
     # Credentials go on to the same host only.
     assert echo(get(f"-H 'Authorization: Bearer t0k' {api}/hop"))["authorization"] == "Bearer t0k"
     assert echo(get(f"-H 'Authorization: Bearer t0k' {api}/elsewhere?{other_port}"))["authorization"] is None
+    # -u (000-NET-0048): Basic authentication from the command line, or with the password typed at the console with no
+    # echo through the shell's secret line (000-APP-0126); Esc refuses it, and a script's get has no console to ask at.
+    def basic(user, password):
+        return "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+    assert echo(get(f"-u alice:s3:cr {api}/echo"))["authorization"] == basic("alice", "s3:cr")
+    assert echo(get(f"-u alice:s3:cr {api}/elsewhere?{other_port}"))["authorization"] is None
+    password = "pa55-\u0436 w0rd"
+
+    def typed(keys, after):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(f"get -u alice {api}/echo\n")
+        vm.logged("PASSWORD FOR alice AT 10.0.2.2", since, timeout=30)
+        vm.send_bytes(keys)
+        vm.expect("MIND> ", timeout=60, after=after)
+        return to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", "")), vm.log[since:]
+    out, raw = typed(password.encode() + b"\r", '"authorization"')
+    require_all(out, "SECRET FOR get (PID ", "(GIVEN)")
+    assert echo(out)["authorization"] == basic("alice", password) and "pa55" not in raw, raw[-3000:]
+    out, _ = typed(b"x\x1b", "NO PASSWORD TYPED")
+    require_all(out, "(REFUSED)", "GET: -u alice: NO PASSWORD TYPED (REFUSED AT THE CONSOLE)")
+    assert '"authorization"' not in out, out
+    code, out = status(f"-u alice {api}/echo")
+    assert code == 2 and "NO CONSOLE TO TYPE IT AT (A SCRIPT)" in out, out
+    assert "pa55" not in vm.command("dmesg -s shell", raw=True)
     # -f, -I, -w, a coded body saved decoded.
     require(get(f"{api}/busy"), "busy")
     code, out = status(f"-f {api}/busy")
@@ -9608,7 +9634,8 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
 
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
-          "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
+          "HTTP refused, 303 after a POST, credentials not sent on to another host), -u's Basic authentication with the password "
+          "given or typed with no echo at the console (Esc refusing it, none in a script), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
           "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's; a host not in its grant asked at run "
           "time, refused and allowed once, from a script too (Esc answering no without stopping the script)", flush=True)
 
@@ -9958,6 +9985,11 @@ def ping_options_check(vm):
     assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]
 
 
+# How long a check waits for `dmesg -s NAME` (000-NET-0063): it reads the whole ring, 16 records to a call, which took
+# more than 8 s on a host loaded by another gate lane (round 102).
+DMESG_WAIT = 30
+
+
 def wifi_join_check(vm):
     """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
     MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
@@ -9983,11 +10015,11 @@ def wifi_join_check(vm):
     # before it (the gates of ASR and NET, 2026-10-20), so the line may come in logd's record of wifi instead, once more
     # than it was there before the command.
     def run(text, timeout, line):  # as vm.command, with a join's wait (60 s at most in wifi)
-        before = vm.command("dmesg -s wifi", raw=True).count(line)
+        before = vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT).count(line)
         vm.send(text + "\n")
         out = vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
         for _ in range(20):
-            if line in out or vm.command("dmesg -s wifi", raw=True).count(line) > before:
+            if line in out or vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT).count(line) > before:
                 return out
             time.sleep(.5)
         raise AssertionError((line, out))
@@ -9997,7 +10029,7 @@ def wifi_join_check(vm):
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # 550-APP-0117 (for 550-DRV-0042, 0045): the networks as text, the joined one marked, then their count.
     scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
-    scanned += vm.command("dmesg -s wifi", raw=True)
+    scanned += vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT)
     assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 -\d+ DBM WPA2( REMEMBERED)? JOINED', scanned), scanned[-2000:]
     assert re.search(r"\[WIFI\] SCAN: \d+ NETWORKS?", scanned), scanned[-2000:]
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
@@ -10156,10 +10188,10 @@ def wifi_join_check(vm):
     # 550-NET-0035, stage B (the maintainer's decision of 2026-11-04): with no country chosen the first scan sent nothing,
     # and the station ran under the country wlansim's access point announces (UZ, every channel to send on). Then the
     # user's US, kept by keystore across a restart of the station, under which it joins again on channel 6.
-    log = vm.command("dmesg -s wlan", raw=True)
+    log = vm.command("dmesg -s wlan", raw=True, timeout=DMESG_WAIT)
     require_all(log, "[WLAN] NO COUNTRY CHOSEN: THE FIRST SCAN SENDS NOTHING",
                 "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
-    radio = vm.command("dmesg -s wlansim", raw=True)
+    radio = vm.command("dmesg -s wlansim", raw=True, timeout=DMESG_WAIT)
     require(radio, "[WLANSIM] COUNTRY UZ: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, "the first scan sent a probe request"
     run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")
@@ -10186,7 +10218,7 @@ def wifi_join_check(vm):
     ru = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30)
     # Planned over the radio's own channels, not the 11 US left it: RU, as UZ, sends on all 13 (550-NET-0059).
     require(ru, "[WLAN] COUNTRY RU (CHOSEN BY THE USER, KEPT BY KEYSTORE): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
-    require(vm.command("dmesg -s wlansim", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    require(vm.command("dmesg -s wlansim", raw=True, timeout=DMESG_WAIT), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     after = ru.partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
     if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
         after += wlan_until("[WLAN] Off", 30)
@@ -10978,7 +11010,7 @@ def world_country_check(args):
             for _ in range(20):
                 if "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6" in out:
                     break
-                out += vm.command("dmesg -s wifi", raw=True)
+                out += vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT)
                 time.sleep(.5)
             require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS")
@@ -11043,7 +11075,7 @@ def slow_radio_check(args):
             joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
             require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
-                             joined + vm.command("dmesg -s wifi", raw=True))
+                             joined + vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT))
             assert scan is None or scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
@@ -14605,9 +14637,10 @@ def fdt_with_node(blob, name, props):
 
 
 def console_channel_check(args, disk, machine):
-    """100000-KRN-0222: virt's tree with a second PL011 node in the console's page, as the A64's four UARTs share one: the
+    """100000-KRN-0222: virt's tree with a second UART's node in the console's page, as the A64's four UARTs share one: the
     console's node is lent to none, init asks the kernel for the console as a byte channel, and the shell's serial line
-    runs over it (every command below came through it)."""
+    runs over it (every command below came through it). The node is a DesignWare UART's, as the A64's, not a PL011's: the
+    firmware drives the first PL011 it finds, and one with nothing behind it would hang it (AAVMF on PCU, round 101)."""
     with tempfile.TemporaryDirectory(prefix="mind-dtb-") as temp:
         dumped, patched = Path(temp) / "virt.dtb", Path(temp) / "shared.dtb"
         ns = argparse.Namespace(**{**vars(args), "machine": machine, "uboot": None})
@@ -14615,19 +14648,21 @@ def console_channel_check(args, disk, machine):
         try: dump.process.wait(timeout=60)
         finally: dump.close()
         cells = lambda *v: struct.pack(f">{len(v)}I", *v)
-        patched.write_bytes(fdt_with_node(dumped.read_bytes(), "pl011@9000800", [("compatible", b"arm,pl011\0arm,primecell\0"), ("reg", cells(0, 0x9000800, 0, 0x100)), ("status", b"okay\0")]))
+        patched.write_bytes(fdt_with_node(dumped.read_bytes(), "serial@9000800", [("compatible", b"snps,dw-apb-uart\0"), ("reg", cells(0, 0x9000800, 0, 0x100)), ("status", b"okay\0")]))
         vm = VM(ns, disk.relative_to(ROOT).as_posix(), extra=["-dtb", str(patched)])
         try:
             require(vm.log, "SHARING A PAGE WITH ANOTHER")
-            require(vm.log, "NOT LENT: ITS PAGES AT 9000000 HOLD NODE")
-            require(vm.log, "[INIT] SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
+            require(vm.log, "(arm,pl011) NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE 35'S REGISTERS (snps,dw-apb-uart)")
             online = vm.command("cpus")
+            # The kernel's log no longer goes to the console once the channel stands: init's line is read from the log.
+            require(vm.service_logs("init", "SERIAL LINE"), "SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE")
             assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
-            # More than a ring's worth back through the channel: 5000 bytes the shell prints to its serial line.
-            out = vm.command("write ram:long.txt " + "0123456789" * 50, timeout=30)
-            for _ in range(10): out = vm.command("cat ram:long.txt", raw=True, timeout=30)
-            assert out.count("0123456789") >= 50, out[-500:]
-            print("PASS: console channel (100000-KRN-0222): virt's tree with a second PL011 in the console's page; the console's node lent to none, "
+            # More than a ring's worth back through the channel: 25 times a line of 201 bytes the shell prints to its serial line.
+            require(vm.command("write ram:long.txt " + "0123456789" * 20, timeout=30), "WROTE 201 BYTES")
+            for _ in range(25):
+                out = vm.command("cat ram:long.txt", raw=True, timeout=30)
+                assert out.count("0123456789") == 20, out[-500:]
+            print("PASS: console channel (100000-KRN-0222): virt's tree with a DesignWare UART's node in the console's page; the console's node lent to none, "
                   "init gave the shell the kernel's channel, and the shell's commands and their output came through it", flush=True)
         finally:
             vm.close()
