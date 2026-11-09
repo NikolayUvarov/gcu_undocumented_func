@@ -25,7 +25,13 @@ x86 QEMU 8.2.2 under TCG, 4 CPUs, this session's container; a blank VirtIO disk 
 | the mount after a reboot | 225 s | 35 s |
 
 - **The calls bound it, not the bytes.** About 5 MB/s at a record's sectors per call; about 2.5 times faster at the driver's whole buffer per call.
-- **4 GiB:** not measured yet.
+- **4 GiB, reading ahead:**
+  - first boot 562 s, about four times 1 GiB's;
+  - `blocks collect` 117 s;
+  - `blocks scrub` 315 s;
+  - the mount after a reboot 292 s.
+- **The index takes its most at 4 GiB:** 2^20 slots, 56 MiB of the store's 64 MiB (`BLOCKSTORE_MEMORY_MIB`). So 16 GiB of blocks is the most the store indexes today.
+- **What it means for 307,** under TCG: a mount scans the whole medium, about 75 s a GiB, and so does a collection that a put starts. Programs do not wait for the store at boot, but its clients do. A real machine reads faster, and how much faster is not measured. Until it is, and until 310 lets a mount read an index instead of every record, a store's partition of about 1 GiB keeps a mount under a minute here.
 
 ## Plan
 
