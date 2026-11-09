@@ -14828,10 +14828,11 @@ def main():
     gateway = ROOT / IMAGE / "fixture-gateway.elf" if args.arch == "aarch64" else \
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-gateway-target/x86_64-unknown-none/release/gateway_stub"
     args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
-    secret = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-secret-target/x86_64-unknown-none/release/secret_stub"
-    args.secret_elf = args.secret_elf or (str(secret) if args.arch == "x86_64" and secret.exists() else None)
-    storewrite = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-storewrite-target/x86_64-unknown-none/release/storewrite_stub"
-    args.storewrite_elf = args.storewrite_elf or (str(storewrite) if args.arch == "x86_64" and storewrite.exists() else None)
+    # The shell suite's console programs (000-APP-0126, 311-APP-0121): aarch64 beside the image, x86 in MIND_TEST_OUT.
+    for name in ("secret", "storewrite"):
+        built = ROOT / IMAGE / f"fixture-{name}.elf" if args.arch == "aarch64" else \
+            Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / f"mind-{name}-target/x86_64-unknown-none/release/{name}_stub"
+        setattr(args, f"{name}_elf", getattr(args, f"{name}_elf") or (str(built) if built.exists() else None))
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
