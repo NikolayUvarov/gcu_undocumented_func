@@ -8065,7 +8065,8 @@ def update_store_suite(args):
     confirmed, a blank disk for the store, and update.txt naming the test release server, which offers release 6 (one
     application and the loader changed), with nothing automatic. At its start the updater keeps release 5 in the store,
     pinned by its own owner; `update fetch` stages release 6 and keeps it too, putting only the two files it changes and
-    taking the others from release 5's tree. Applied and confirmed, the store keeps both: the shell's client is refused
+    taking the others from release 5's tree; the store logs each pin with the updater's badge (0x17, 351-KRN-0218).
+    Applied and confirmed, the store keeps both: the shell's client is refused
     their pins, and after a collection both trees read back whole, every block checked. With the machine off, slot A's
     kernel and loader are damaged on the disk: `update rollback` writes release 5 back into slot A from the store,
     checked as a fetch, and slot A boots on trial and is confirmed, as published."""
@@ -8134,6 +8135,10 @@ def update_store_suite(args):
         pin6, root6, files6, put6, slot6, taken6 = pinned(log, 6)
         # Only what release 6 changes is put: its uptime and its loader.
         assert slot6 == "B" and put6 == (newer / "uptime.elf").stat().st_size + (newer / BOOT_EFI).stat().st_size and taken6 == files6 - 2, log
+        # The store names the updater's badge at its pins: OWNER_UPDATER with get, put and publish (351-KRN-0218).
+        stored = vm.command("dmesg -s blockstore", raw=True)
+        for pin, root in ((pin5, root5), (pin6, root6)):
+            assert re.search(rf"\[BLOCKSTORE\] PINNED {root} AS {pin} BY PID \d+ \(BADGE 23\)", stored), stored[-3000:]
         # The updater's pins are its own owner's: the shell's client has none and ends neither.
         require(vm.command("blocks pins", raw=True), "0 PINS")
         for pin in (pin5, pin6):
