@@ -35,6 +35,8 @@ mod release;
 mod ring;
 mod safe;
 mod screenshot;
+mod secret;
+mod secretctl;
 mod start;
 mod storescope;
 mod tpm;
@@ -73,6 +75,9 @@ const WIFI_MS: u32 = 1000;
 // Where a capability sent with a request of the shell's commands (idl/shell.wit) would arrive, to be dropped: a fixed
 // slot the shell holds nothing in.
 const COMMANDS_RECEIVE: usize = SLOT_SHELL;
+// Where they arrive while a secret line's call holds COMMANDS_RECEIVE with its buffer (000-APP-0126): another slot
+// the shell holds nothing in.
+const COMMANDS_ASIDE: usize = SLOT_CLIPBOARD;
 // The longest program path `run` passes on: `loader.wit`'s `string<64>`, as the loader's path buffer holds it (750-APP-0109).
 const PROGRAM_PATH_MAX: usize = 63;
 // What `<` gives a program at most (000-APP-0074): the shell reads the file whole first.
@@ -170,6 +175,7 @@ struct Shell {
     shot: Option<(u64, String)>, // a screenshot `-d` asked for: when, and its file (empty: a free name) (000-APP-0089)
     nn: nnclients::Badges, nn_due: u64, // the badged clients of `nnd` lent, and when their retirements are next tended (262-APP-0112)
     asking: Option<flowctl::Asking>, flow_due: u64, // a program's question about a flow shown, and when the broker is next asked (000-APP-0120)
+    secret: Option<secretctl::Typing>, // a console program's secret line being typed (000-APP-0126)
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -309,9 +315,11 @@ impl Shell {
     fn serve_commands(&mut self, wait_ms: u32) {
         let Some(endpoint) = self.commands else { return };
         let mut wait = wait_ms;
-        while let Ok(message) = endpoint.recv_timeout(COMMANDS_RECEIVE, wait.max(1)) {
+        loop {
+            let slot = secretctl::receive_slot(self);
+            let Ok(message) = endpoint.recv_timeout(slot, wait.max(1)) else { break };
             wait = 1;
-            let (request, call) = match commands::decode(&message, COMMANDS_RECEIVE) { Ok(decoded) => decoded, Err(reason) => { let _ = mind::idl::wire::reject(reason); continue; } };
+            let (request, call) = match commands::decode(&message, slot) { Ok(decoded) => decoded, Err(reason) => { let _ = mind::idl::wire::reject(reason); continue; } };
             match request {
                 commands::Request::Window => {
                     let result = self.open_window(false).map(|(_, id)| id);
@@ -430,14 +438,14 @@ impl Shell {
                     let notice = self.safe.notice().unwrap_or_default();
                     let mut end = notice.len().min(240);
                     while !notice.is_char_boundary(end) { end -= 1; }
-                    if self.caller_waits("BOOT-NOTICE") { let _ = commands::reply_boot_notice(call, Ok(&notice[..end])); }
+                    if self.caller_waits(slot, "BOOT-NOTICE") { let _ = commands::reply_boot_notice(call, Ok(&notice[..end])); }
                 }
                 commands::Request::NetCounters => {
                     // Every card's frames as the stack counts them (shell.wit 1.7, 000-APP-0096), the Wi-Fi station's
                     // too, which the card client wm may be lent does not reach: for the window manager the shell started.
                     let manager = self.managers.contains(&message.sender);
                     let counters = if manager { net::card_counters() } else { Err(commands::Error::Refused) };
-                    if self.caller_waits("NET-COUNTERS") { let _ = commands::reply_net_counters(call, counters.as_ref().map(|list| list.as_slice()).map_err(|e| *e)); }
+                    if self.caller_waits(slot, "NET-COUNTERS") { let _ = commands::reply_net_counters(call, counters.as_ref().map(|list| list.as_slice()).map_err(|e| *e)); }
                 }
                 commands::Request::Run { line } => {
                     // The link's client in developer mode (800-APP-0102) is told by its badge, which no lent client can set.
@@ -455,7 +463,12 @@ impl Shell {
                         self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));
                     }
                     let answer = result.as_ref().map(|bytes| { let mut from = bytes.len().saturating_sub(ANSWER_MAX); while from < bytes.len() && bytes[from] & 0xC0 == 0x80 { from += 1; } &bytes[from..] });
-                    if self.caller_waits("RUN") { let _ = commands::reply_run(call, answer.map_err(|e| *e)); }
+                    if self.caller_waits(slot, "RUN") { let _ = commands::reply_run(call, answer.map_err(|e| *e)); }
+                }
+                commands::Request::SecretLine { prompt } => {
+                    // A console program's secret line (shell.wit 1.12, 000-APP-0126): only through the badged copy, held
+                    // while the user types it.
+                    secretctl::ask(self, call, message.sender, message.badge, slot, prompt.as_str());
                 }
             }
         }
@@ -495,8 +508,8 @@ impl Shell {
     // after `with_timeout`), and the kernel cleared our copy and its mapping: a write there faulted the shell on the MacBook
     // Pro (LNK's and EFF's reports, 2026-10-22). The call is then dropped unanswered. The rule that closes the moment left
     // between this check and the write is the kernel track's (ASR's request to KRN, 2026-10-22).
-    fn caller_waits(&mut self, what: &str) -> bool {
-        if mind::dev::cap_info(COMMANDS_RECEIVE).0 != CAP_KIND_NONE { return true; }
+    fn caller_waits(&mut self, slot: usize, what: &str) -> bool {
+        if mind::dev::cap_info(slot).0 != CAP_KIND_NONE { return true; }
         self.gave_up += 1;
         if self.gave_up.is_power_of_two() { mind::println!("[SHELL] A CALLER GAVE UP ON {} BEFORE ITS ANSWER: NOT WRITTEN ({} SO FAR)", what, self.gave_up); }
         false
@@ -562,7 +575,7 @@ impl Shell {
                 let wheel = mind::abi::pointer_absolute_fields(word).map_or(0, |(_, _, _, wheel)| wheel);
                 if wheel != 0 { self.term.scroll(wheel < 0); } // away from the user: back
             } else if let Some(key) = Key::from_event(word) {
-                if flowctl::waits_on(self, session) && flowctl::key(self, key) {} else if self.focused.is_none() { self.key(key); }
+                if flowctl::waits_on(self, session) && flowctl::key(self, key) {} else if secretctl::waits_on(self, session) && secretctl::key(self, key) {} else if self.focused.is_none() { self.key(key); }
             }
         }
         let cursor = (self.focused.is_none() && self.console.is_none()).then(|| self.cursor());
@@ -1572,6 +1585,8 @@ impl Shell {
         let shown = self.shown == self.active;
         // A question about a flow on this console takes its keys, from the program in front too (000-APP-0120).
         if let Event::Key(word) = event { if flowctl::waits_on(self, self.active) && flowctl::key(self, Key(word)) { return; } }
+        // A secret line typed there takes them next, never shown (000-APP-0126).
+        if let Event::Key(word) = event { if secretctl::waits_on(self, self.active) && secretctl::key(self, Key(word)) { return; } }
         match event {
             Event::Key(word) if self.focused.is_some() => { if shown { let _ = input_key(word, word, false); } }
             Event::Key(word) => self.key(Key(word)),
@@ -1619,7 +1634,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), gave_up: 0, managers: alloc::vec::Vec::new(), unasked: false, console_link: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0 })
+                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None })
 }
 
 mind::entry!(main);
@@ -1708,6 +1723,7 @@ fn main(info: &'static BootInfo) {
                 Code::F(6) if key.ctrl() && key.alt() => shell.screenshot_now(String::new(), "CTRL+ALT+F6"),
                 _ if mind::abi::event_key(key.0) == KEY_PRINT_SCREEN && !key.ctrl() && !key.alt() => shell.screenshot_now(String::new(), "PRINTSCREEN"),
                 _ if flowctl::waits_on(&shell, shell.shown) && flowctl::key(&mut shell, key) => {}
+                _ if secretctl::waits_on(&shell, shell.shown) && secretctl::key(&mut shell, key) => {}
                 _ if shell.focused.is_none() => shell.key(key),
                 Code::F(12) => { shell.voice_key(key); }
                 _ => {}
@@ -1740,6 +1756,8 @@ fn main(info: &'static BootInfo) {
         if now >= shell.nn_due { shell.nn_due = now + if nnctl::tend(&mut shell.nn) { 100 } else { 1000 }; }
         // A running program's question about a flow, for the user (000-APP-0120).
         flowctl::tend(&mut shell, now);
+        // A secret line whose program ended or stopped waiting (000-APP-0126).
+        secretctl::tend(&mut shell);
         // Wait for the next tick, or for the voice program's call or the window manager's.
         match shell.voice.endpoint {
             Some(endpoint) => {

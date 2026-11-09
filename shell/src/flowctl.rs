@@ -110,7 +110,7 @@ fn finish(shell: &mut Shell, line: &str) {
 
 // Lines on the console itself, not into what a script running there keeps of its program's output (000-APP-0125):
 // the question is the user's, not the program's.
-fn say(shell: &mut Shell, print: impl FnOnce(&mut crate::console::Console)) {
+pub(crate) fn say(shell: &mut Shell, print: impl FnOnce(&mut crate::console::Console)) {
     let kept = shell.term.capture.take();
     print(&mut shell.term);
     shell.term.capture = kept;

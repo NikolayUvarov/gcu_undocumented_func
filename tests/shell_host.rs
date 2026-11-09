@@ -5,7 +5,7 @@
 //! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031); `ping`'s options and
 //! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029); the badges of
 //! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112); a program's question about a flow (shell/src/flowask.rs,
-//! 000-APP-0120).
+//! 000-APP-0120); a console program's secret line (shell/src/secret.rs, 000-APP-0126).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -40,6 +40,8 @@ mod named;
 mod hostname;
 #[path = "../shell/src/wifilend.rs"]
 mod wifilend;
+#[path = "../shell/src/secret.rs"]
+mod secret;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -632,4 +634,35 @@ fn a_scripts_wait_answers_a_question_with_the_serial_lines_bytes() {
     assert_eq!([answered(0x1B), answered(b'\r'), answered(b'\n')], [Some(Answer::No); 3], "Esc and Enter: no, the default");
     assert_eq!(answered(b'x'), None, "another character: held back");
     assert_eq!(byte_key(0x03), None, "Ctrl+C is no key here: the question keeps the script from stopping");
+}
+
+#[test]
+fn a_secret_line_is_typed_with_no_echo_and_wiped() {
+    // 000-APP-0126: printable characters kept, Backspace takes off one character (UTF-8 too), Enter ends the line, Esc
+    // and Ctrl+C refuse it; other keys and control characters change nothing; past 256 bytes nothing more is kept.
+    use secret::{Line, Step, MAX};
+    let mut line = Line::new();
+    let typed = |line: &mut Line, text: &str| for c in text.chars() { assert_eq!(line.key(Some(c), false, false, false), Step::Going); };
+    typed(&mut line, "pa\u{0436}s");
+    assert_eq!(line.bytes(), "pa\u{0436}s".as_bytes());
+    assert_eq!(line.key(None, false, false, true), Step::Going);
+    assert_eq!(line.key(None, false, false, true), Step::Going, "the two bytes of \u{0436} go together");
+    assert_eq!(line.bytes(), b"pa");
+    assert_eq!(line.key(Some('\t'), false, false, false), Step::Going);
+    assert_eq!(line.key(None, false, false, false), Step::Going, "a key with no character");
+    assert_eq!(line.bytes(), b"pa", "a control character is not kept");
+    assert_eq!(line.key(None, false, true, false), Step::Done);
+    assert_eq!(line.key(None, true, false, false), Step::Refused);
+    assert_eq!(line.key(Some('\u{3}'), false, false, false), Step::Refused, "Ctrl+C");
+    for _ in 0..3 { line.key(None, false, false, true); }
+    assert!(line.bytes().is_empty(), "Backspace on an empty line does nothing");
+    typed(&mut line, &"x".repeat(MAX + 10));
+    assert_eq!(line.bytes().len(), MAX);
+    typed(&mut line, "\u{0436}");
+    assert_eq!(line.bytes().len(), MAX, "a character that does not fit whole is not kept");
+    line.wipe();
+    assert!(line.bytes().is_empty());
+    // The shell's prompt names the program and its PID, and shows the program's words made safe.
+    assert_eq!(secret::prompt("get", 42, "PASSWORD FOR bob"), "SECRET FOR get (PID 42), TYPED WITH NO ECHO (ENTER ENDS IT, ESC REFUSES IT): PASSWORD FOR bob ");
+    assert!(!secret::prompt("get", 42, "a\u{1b}[2Jb").contains('\u{1b}'), "no escape sequence of the program's reaches the console");
 }
