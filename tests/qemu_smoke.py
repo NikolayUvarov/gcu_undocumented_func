@@ -1552,6 +1552,7 @@ def shell_suite(vm):
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
     hostname_check(vm)
+    secret_line_check(vm)
     storefs_check(vm)
     vfs_restart_check(vm)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
@@ -2625,6 +2626,54 @@ def hostname_check(vm):
     require(vm.command("rm data/machine"), "OK")
     print("PASS: hostname (000-APP-0123): mindcore with none set; DEXP kept as dexp in data/machine/name and logged once; "
           "the same name again changes nothing; my_pc and -dexp refused with the rule, the file as it was", flush=True)
+
+
+def secret_line_check(vm):
+    """000-APP-0126: a console program that asks for REQUEST_SECRET_LINE gets a copy of the shell's client badged for it
+    alone. The shell draws the prompt and the line is typed with no echo; its bytes reach the program, which says only
+    their length and SHA-256, and the line is in no serial line, log or history. Esc refuses it; another command through
+    that copy is refused; a script's program gets no such copy."""
+    if not vm.args.secret_elf:
+        print("SKIP: the secret line (000-APP-0126): no tests/secret_stub build (scripts/x86_fixtures.sh)", flush=True)
+        return
+    secret = "hunter2-\u0436 x"
+    vm.collect()
+    since = len(vm.log)
+    vm.send("secretstub\n")
+    vm.logged("TYPED WITH NO ECHO (ENTER ENDS IT, ESC REFUSES IT): PASSWORD FOR THE STUB", since)
+    # Q and Backspace: the line is the secret again.
+    vm.send_bytes(secret.encode() + b"Q\x7f\r")
+    vm.expect("MIND> ", timeout=30, after="SECRET STUB: GIVEN")
+    out = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+    require_all(out, "SECRET FOR secretstub (PID ", "(GIVEN)",
+                f"SECRET STUB: GIVEN {len(secret.encode())} BYTES, SHA-256 {hashlib.sha256(secret.encode()).hexdigest()}")
+    # In the history the line typed is the command, and the secret is in no line the shell or the log wrote.
+    vm.collect()
+    mark = len(vm.log)
+    vm.send_bytes(b"\x1b[A")
+    vm.logged("secretstub", mark, timeout=8)
+    time.sleep(.3)
+    vm.send_bytes(b"\x1b")
+    time.sleep(.3)
+    log = vm.command("dmesg -s shell", raw=True)
+    require_all(log, "[SHELL] SECRET LINE FOR secretstub (PID ", ") ASKED ON CONSOLE 1", ") GIVEN")
+    assert "hunter2" not in vm.log[since:] and "hunter2" not in log, vm.log[since:][-3000:]
+    # Esc refuses it: the program hears `declined`.
+    since = len(vm.log)
+    vm.send("secretstub\n")
+    vm.logged("PASSWORD FOR THE STUB", since)
+    vm.send_bytes(b"abc")
+    time.sleep(.3)
+    vm.send_bytes(b"\x1b")
+    vm.expect("MIND> ", timeout=30, after="SECRET STUB: DECLINED")
+    require(to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", "")), "(REFUSED)")
+    # The copy reaches secret-line alone, and a program a script starts gets none.
+    require(vm.command("secretstub other"), "SECRET STUB: HOSTNAME THROUGH THE SECRET CLIENT REFUSED")
+    require(vm.command("dmesg -s shell", raw=True), "THROUGH ITS SECRET LINE'S CLIENT FOR ANOTHER COMMAND: REFUSED")
+    require(vm.command('msh -c "secretstub"'), "SECRET STUB: NO CLIENT OF THE SHELL")
+    print("PASS: a console program's secret line (000-APP-0126): the shell's prompt, the line typed with no echo and "
+          "Backspace, its SHA-256 matched by the program, the line in no serial line, log or history; Esc refused it; "
+          "another command through its badged copy refused; none for a script's program", flush=True)
 
 
 def storefs_check(vm):
@@ -14706,6 +14755,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--late-attach-elf", help="test-only virtio_net built with --features late-attach (000-NET-0036, x86); found where scripts/x86_fixtures.sh puts it")
@@ -14740,6 +14790,8 @@ def main():
     gateway = ROOT / IMAGE / "fixture-gateway.elf" if args.arch == "aarch64" else \
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-gateway-target/x86_64-unknown-none/release/gateway_stub"
     args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
+    secret = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-secret-target/x86_64-unknown-none/release/secret_stub"
+    args.secret_elf = args.secret_elf or (str(secret) if args.arch == "x86_64" and secret.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -14844,6 +14896,8 @@ def main():
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
             if suite == "shell":
                 (disk / "data").mkdir(exist_ok=True)
+                if args.secret_elf:
+                    shutil.copyfile(args.secret_elf, disk / "secretstub.elf")  # a console program's secret line (000-APP-0126)
                 for name, text in MSH_SCRIPTS.items():
                     (disk / "data" / name).write_text(text, encoding="utf-8")
             if suite == "bench":

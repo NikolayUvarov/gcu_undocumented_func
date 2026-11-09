@@ -311,6 +311,13 @@ impl Shell {
         mind::ipc::mint(endpoint.0, CAP_WRITE | CAP_GRANT, 0, 0) // grant: `run`'s buffer travels with the call
     }
 
+    // The copy for a console program that asks for a secret line (000-APP-0126): badged BADGE_SHELL_SECRET, without the
+    // right to badge, so the program can make no other copy of it.
+    fn secret_client(&mut self) -> Result<usize, Error> {
+        let endpoint = match self.commands { Some(endpoint) => endpoint, None => { let endpoint = Endpoint::create()?; self.commands = Some(endpoint); endpoint } };
+        mind::ipc::mint_badged(endpoint.0, CAP_WRITE | CAP_GRANT, mind::process::BADGE_SHELL_SECRET)
+    }
+
     // The requests to the shell's commands that came (idl/shell.wit 1.0: the window), answered at once.
     fn serve_commands(&mut self, wait_ms: u32) {
         let Some(endpoint) = self.commands else { return };
@@ -835,6 +842,10 @@ impl Shell {
         // menu and passes them on to console, and for what the shell's window starts; that is, where the shell's window
         // can ask before a command that changes the machine.
         let commands = requests & mind::process::REQUEST_SHELL != 0 && (window_manager || is_window(self.active)) && granted("shell");
+        // A console program's secret line (000-APP-0126, 000-KRN-0224): a copy of the shell's client badged
+        // BADGE_SHELL_SECRET, through which it answers `secret-line` alone. Not in a script, whose wait serves no call of
+        // the shell's commands, and not beside the plain client, which takes the same slot.
+        let secret_line = requests & mind::process::REQUEST_SECRET_LINE != 0 && mind::process::console_run(requests, args) && self.script.is_none() && !commands;
         // The block store client (300-KRN-0001), where the store runs.
         let blockstore = requests & mind::process::REQUEST_BLOCKSTORE != 0 && mind::dev::cap_info(SLOT_BLOCKSTORE).0 != 0 && granted("blockstore");
         // A program that asks only to read gets the client with the get badge alone, in the same slot (300-KRN-0024).
@@ -946,6 +957,12 @@ impl Shell {
         // runs, as from a console.
         if commands {
             if let Ok(client) = self.commands_client() { let _ = lend(SLOT_SHELL, client); let _ = mind::ipc::drop_cap(client); } // the loader holds its copy
+        }
+        if secret_line {
+            match self.secret_client() {
+                Ok(client) => { let _ = lend(SLOT_SHELL, client); let _ = mind::ipc::drop_cap(client); }
+                Err(error) => mind::println!("[SHELL] {} RUNS WITHOUT ITS SECRET LINE'S CLIENT: {:?}", name, error),
+            }
         }
         // The battery after them, where there is room: a window manager without it asks the shell (shell.wit 1.4).
         if battery { let _ = lend(SLOT_BATTERY, SLOT_BATTERY); }
