@@ -3455,20 +3455,31 @@ def isolation_suite(vm):
 def revocation_refusal_check(vm):
     """000-KRN-0104: app2's child mints from its copy of an endpoint while app2 revokes the endpoint's 3001 children in
     steps: with more than one CPU some of those mints are refused with ERR_REVOKING while the walk runs, and once the
-    child's copy is gone a mint finds nothing. With one CPU the child runs only between the call's ends."""
-    vm.send("run app2\n")
-    pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
-    vm.send("R\n")
-    output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=60)
-    done = re.search(r"REVOKED (\d+) IN (\d+) STEPS; THE CHILD MADE (\d+) MINTS AND WAS REFUSED (\d+) WHILE THE WALK RAN", output)
-    assert done, output[-2000:]
-    removed, steps, made, refused = map(int, done.groups())
-    # 3002 when the walk began while the child held a copy it had just made and not yet dropped.
-    assert removed in (3001, 3002) and steps >= 3001 // 256 and made > 0 and (vm.cpus == 1 or refused > 0), done[0]
-    faults = vm.command("faults")
-    assert f"FAULT PID={pid} " not in faults and f"FAULT PID={pid + 1} " not in faults, faults
-    time.sleep(.1); vm.collect(); vm.output = ""
-    return f"a revocation of {removed} in {steps} steps refused {refused} mints from under it while it ran"
+    child's copy is gone a mint finds nothing. With one CPU the child runs only between the call's ends.
+    The kernel refuses a mint made during the walk; it does not promise that the child's CPU runs in the walk's 2 ms,
+    which QEMU's vCPU threads on a loaded host may not (000-KRN-0225). So up to three walks are made, one at a time,
+    and one of them must have refused a mint."""
+    tries = []
+    for _ in range(1 if vm.cpus == 1 else 3):
+        vm.send("run app2\n")
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+        vm.send("R\n")
+        output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=60)
+        done = re.search(r"REVOKED (\d+) IN (\d+) STEPS; THE CHILD MADE (\d+) MINTS AND WAS REFUSED (\d+) WHILE THE WALK RAN", output)
+        assert done, output[-2000:]
+        removed, steps, made, refused = map(int, done.groups())
+        # 3002 when the walk began while the child held a copy it had just made and not yet dropped.
+        assert removed in (3001, 3002) and steps >= 3001 // 256 and made > 0, done[0]
+        faults = vm.command("faults")
+        assert f"FAULT PID={pid} " not in faults and f"FAULT PID={pid + 1} " not in faults, faults
+        time.sleep(.1); vm.collect(); vm.output = ""
+        tries.append((removed, steps, refused))
+        if refused > 0:
+            break
+    assert vm.cpus == 1 or tries[-1][2] > 0, f"no mint refused in {len(tries)} walks: {tries}"
+    removed, steps, refused = tries[-1]
+    return (f"a revocation of {removed} in {steps} steps refused {refused} mints from under it while it ran"
+            + (f" (walk {len(tries)} of up to 3; the earlier ones refused none)" if len(tries) > 1 else ""))
 
 
 def protection_check(vm):
@@ -14640,8 +14651,24 @@ def console_channel_check(args, disk, machine):
             for _ in range(25):
                 out = vm.command("cat ram:long.txt", raw=True, timeout=30)
                 assert out.count("0123456789") == 20, out[-500:]
+            # A restarted shell: init keeps what it minted for the shell's restarts, the channel among them, so the channel
+            # stands, the shell init starts again gets it and answers through it, and init's lines stay in the log.
+            shell = vm.services()["shell"]
+            vm.collect()
+            since = len(vm.log)
+            vm.send(f"kill {shell}\n", raw=True)
+            vm.expect("MIND> ", timeout=60, after=f"kill {shell}")
+            restart = vm.log[since:]  # from the kill to the new shell's prompt: no line of init's reached the console
+            assert "[INIT]" not in restart and "MIND CORE v" in restart, restart[-2000:]
+            assert len(re.findall(r"ONLINE=true", vm.command("cpus"))) == vm.cpus
+            # `logs` drains: what init logged since its line above was read, which asks for no second channel.
+            again = vm.service_logs("init", "RESTARTED")
+            assert f"[INIT] shell PID={shell} KILLED" in again and re.search(r"\[INIT\] shell RESTARTED PID=\d+", again), again[-2000:]
+            assert "SERIAL LINE" not in again, again[-2000:]
+            assert vm.services()["shell"] != shell
             print("PASS: console channel (100000-KRN-0222): virt's tree with a DesignWare UART's node in the console's page; the console's node lent to none, "
-                  "init gave the shell the kernel's channel, and the shell's commands and their output came through it", flush=True)
+                  "init gave the shell the kernel's channel, and the shell's commands and their output came through it; a killed shell's successor "
+                  "got the same channel, which init keeps for restarts, and answered through it, init's lines staying in the log", flush=True)
         finally:
             vm.close()
 
