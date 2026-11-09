@@ -49,13 +49,14 @@ The tests of plan step 6 pass on Linux. `--supervised` ends with its parent on W
 
 ## Progress (2026-11-09)
 
-**Plan steps 1 to 5 made** on `claude/LNK-link`; the page (step 3's last point) is left:
+**Plan steps 1 to 5 made** on `claude/LNK-link`:
 - **The version:** `GET /api/v1/version`, API 1.1, with the kinds, their required fields and whether each only reads, and the changes since 1.0.
 - **`--supervised`:** refused off the loopback and without a key; no page; it ends when its standard input closes.
 - **The console** (`console.rs`):
   - a ring of 1 MiB a machine with absolute offsets, a `gap`, and each piece's time;
   - channel 1 read every 250 ms between operations while the machine offers it;
-  - input numbered, a number taken already not written again, and a lease's holder's alone.
+  - input numbered, a number taken already not written again, and a lease's holder's alone;
+  - the page shows it in its output pane and sends a line typed beside it.
 - **The bytes outside frames:** each run between zeros that is no frame, a run longer than any frame, and one the line left idle. They are read between exchanges as well, and go to the machine's console, or to `line` on a cable of several.
 - **A zero before each frame** (`linkproto` `frame::encode`, both ends): it ends a console's line or noise that came before, which spoiled the frame after it. [protocol.md](../docs/link/protocol.md) already let a sender do so, and every receiver takes it as nothing.
 - **`mindlink serve --banner`** writes a text outside frames after the first answer, for the test.

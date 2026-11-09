@@ -102,6 +102,10 @@ small { color: var(--dim); }
       <div class="row"><input id="line" placeholder="ip, ps, netstat -i, …"><button id="shellgo">sh</button></div>
     </div>
     <div>
+      <h2>Console</h2>
+      <div class="row"><button id="consolego" title="the machine's console in the pane below: channel 1 and the lines outside frames (800-LNK-0039)">show</button><input id="cline" placeholder="a line for its console (Enter sends it)"><button id="csend">send</button></div>
+    </div>
+    <div>
       <h2>Program</h2>
       <div class="row"><input id="prog" placeholder="name (netcheck, wifi, …)"></div>
       <div class="row"><input id="args" placeholder="arguments"><input id="ptime" placeholder="limit, s" style="flex:0 1 80px"><button id="rungo">run</button></div>
@@ -172,7 +176,7 @@ const on = {
     if (m.key_needed && !key) { $("#keybox").style.display = "block"; setFeed("wait", "the key is needed"); return; }
     if (m.key_needed) ws.send(JSON.stringify({ key }));
     setFeed("on", "live");
-    if (following) ws.send(JSON.stringify({ follow: following, from: outAt }));
+    if (following && !following.startsWith("console:")) ws.send(JSON.stringify({ follow: following, from: outAt }));
   },
   error(m) { toast(m.error); $("#keybox").style.display = "block"; key = ""; },
   links(m) { links = m.links || []; showLinks(); },
@@ -290,6 +294,7 @@ function render() {
   showOutState();
 }
 function showOutState() {
+  if (following && following.startsWith("console:")) return;
   const o = ops.find(o => o.id === following);
   $("#outid").textContent = following ? `${following}${o ? " (" + o.kind + ")" : ""}` : "—";
   $("#outstate").textContent = o ? `${o.status}${outcome(o) ? " · " + outcome(o) : ""} · ${o.output_bytes} bytes` : "";
@@ -349,6 +354,38 @@ $("#keyset").onclick = () => {
   $("#keybox").style.display = "none";
   if (ws) ws.close();
 };
+// The console (800-LNK-0039): read from the API every half second while it is the pane's; each line sent gets a number
+// that grows across reloads, so a line sent twice is written once.
+let consoleAt = 0, consoleSeq = Date.now();
+async function readConsole(who) {
+  if (following !== "console:" + who) return;
+  try {
+    const r = await fetch(`/api/v1/console?agent_id=${encodeURIComponent(who)}&from=${consoleAt}`, { headers: headers() });
+    const v = await r.json();
+    if (r.status === 401) $("#keybox").style.display = "block";
+    if (r.ok && following === "console:" + who) {
+      if (v.gap > 0) outText += `\n[${v.gap} bytes of the console were no longer held]\n`;
+      outText += v.text || "";
+      if (outText.length > OUT_KEPT) outText = outText.slice(outText.length - OUT_KEPT);
+      consoleAt = v.next;
+      $("#out").textContent = outText;
+      if ($("#follow").checked) $("#out").scrollTop = $("#out").scrollHeight;
+      $("#outstate").textContent = `${v.next} bytes` + (v.offered ? "" : " · it does not offer its console on the link");
+    }
+  } catch (e) {}
+  setTimeout(() => readConsole(who), 500);
+}
+$("#consolego").onclick = () => {
+  const who = agent || "link";
+  following = "console:" + who; consoleAt = 0; outText = ""; $("#out").textContent = "";
+  $("#outid").textContent = `the console of ${who}`; $("#outstate").textContent = "";
+  readConsole(who);
+};
+$("#csend").onclick = async () => {
+  const text = $("#cline").value; if (!text) return;
+  if (await post("/api/v1/console/input", { agent_id: agent || "link", seq: ++consoleSeq, text: text + "\r" })) $("#cline").value = "";
+};
+$("#cline").onkeydown = e => { if (e.key === "Enter") $("#csend").click(); };
 $("#outcopy").onclick = () => navigator.clipboard && navigator.clipboard.writeText(outText);
 if (location.hash.length > 1) follow(decodeURIComponent(location.hash.slice(1)));
 connect();
