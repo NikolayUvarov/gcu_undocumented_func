@@ -138,7 +138,6 @@ pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
     core::mem::forget(root);
     enable_protection(true);
     activate_boot_map(kernel_root());
-    crate::cpu::CR0[0].store(crate::cpu::read_cr0(), Ordering::Relaxed);
     protect_from_programs();
     Ok(())
 }

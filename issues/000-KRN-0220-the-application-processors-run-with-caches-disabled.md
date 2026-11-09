@@ -44,7 +44,7 @@
 ## Progress (2026-11-09)
 
 - **`mmu::enable_protection(false)`:** an AP writes its PAT while CD and NW are still set, as before; then `wbinvd`, a `CR3` reload, and CD and NW cleared. The MTRRs stay the firmware's. The trampoline keeps CD set until then, as plan step 2 asks.
-- **The hardware report** gives each CPU's `CR0` as the kernel read it once that CPU started (`cpu::CR0`): the line `CR0 after start` under `CPU`, the BSP's read after `activate_boot_map`.
+- **The hardware report** gives each CPU's `CR0` as the kernel read it once that CPU started (`cpu::CR0`): the line `CR0 after start` under `CPU`, the BSP's read in `cpu::prepare`, once the kernel's page tables are active. Round 98's gate refused it read in `mmu.rs`, which `tests/runtime.rs` compiles without `cpu` (host tests did not build).
 - **Tests:**
   - **The `normal` suite on x86** reads every CPU's `CR0` from QEMU's monitor (`info registers -a`) and asks CD and NW clear.
     - **Without the change** it fails: `['80010033', 'E0010013', 'E0010013', 'E0010013']`, the APs' CD and NW set, as round 91's record showed.
