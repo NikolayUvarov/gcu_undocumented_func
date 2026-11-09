@@ -4,6 +4,7 @@
 // and the play position is read from LPIB, by the interrupt or by the gateway's polling.
 use mind::dev::Mmio;
 use mind::mem::Mapping;
+use crate::levels::{self, Amp};
 
 pub const BUFFERS: usize = 32;
 pub const BUFFER_BYTES: usize = 4096;
@@ -41,7 +42,14 @@ pub struct Hda {
     // Capture: the next buffer to read, buffers ready, the last position seen; whether it overflowed.
     capture: bool, tail: usize, ready: usize, captured: usize, lost: bool,
     pub interrupts: usize, pub has_input: bool, pub summary: [u8; SUMMARY], pub summary_len: usize,
+    // The levels (000-DRV-0057): the amplifier each side's level sets, if the paths have one, and the samples' factors
+    // where they do not (Q15).
+    pub out_amp: Option<Control>, pub in_amp: Option<Control>, pub boost_amp: Option<Control>, pub out_factor: u32, pub in_factor: u32,
 }
+
+/// An amplifier a level sets: its widget, output or input (and the connection), its range, whether it mutes.
+#[derive(Clone, Copy)]
+pub struct Control { pub nid: u8, pub output: bool, pub index: u8, pub amp: Amp, pub mute: bool }
 
 fn put(summary: &mut [u8; SUMMARY], len: &mut usize, args: core::fmt::Arguments) {
     let mut text = mind::util::FixedBuf::<SUMMARY>::new();
@@ -70,7 +78,8 @@ impl Hda {
         mind::println!("[AUDIO] HDA: VERSION {}.{}, {} INPUT AND {} OUTPUT STREAMS, CODECS {:#06b}, 64-BIT {}", regs.read8(0x03), regs.read8(0x02), inputs, outputs, codecs, gcap & 1);
         let mut hda = Self { regs, ring, physical, codec: codecs.trailing_zeros(), afg: 1, rirb_read: 0, corb_entries: 256, rirb_entries: 256,
             out_sd: 0x80 + inputs * 0x20, in_sd: 0x80, head: 0, queued: 0, played: 0, started: false,
-            capture: false, tail: 0, ready: 0, captured: 0, lost: false, interrupts: 0, has_input: inputs > 0, summary: [0; SUMMARY], summary_len: 0 };
+            capture: false, tail: 0, ready: 0, captured: 0, lost: false, interrupts: 0, has_input: inputs > 0, summary: [0; SUMMARY], summary_len: 0,
+            out_amp: None, in_amp: None, boost_amp: None, out_factor: 1 << 15, in_factor: 1 << 15 };
         hda.ring.as_mut_slice()[CAPTURE_AT..DMA_BYTES].fill(0);
         hda.ring.as_mut_slice()[..CAPTURE_AT].fill(0);
         hda.start_corb();
@@ -206,15 +215,29 @@ impl Hda {
         None
     }
 
+    // An amplifier's capabilities (0x12 output, 0xD input): the widget's own when it overrides them, else the function
+    // group's.
+    fn amp_caps(&mut self, w: &Widget, parameter: u32) -> u32 {
+        let from = if w.caps & (1 << 3) != 0 { w.nid } else { self.afg };
+        self.parameter(from, parameter).unwrap_or(0)
+    }
+
+    // The amplifier of `w` a level can set: its output one, or its input one on connection `index`; none if fixed.
+    fn control(&mut self, w: &Widget, output: bool, index: u8) -> Option<Control> {
+        if w.caps & if output { 1 << 2 } else { 1 << 1 } == 0 { return None; }
+        let caps = self.amp_caps(w, if output { 0x12 } else { 0xD });
+        levels::hda_amp(caps).map(|(amp, mute)| Control { nid: w.nid, output, index, amp, mute })
+    }
+
     // Unmutes a node's output amplifier at 0 dB, and its input amplifier on connection `index`.
     fn unmute(&mut self, w: &Widget, index: u8) {
         let _ = self.verb(w.nid, 0x705, 0);
         if w.caps & (1 << 2) != 0 {
-            let caps = self.parameter(w.nid, 0x12).unwrap_or(0);
+            let caps = self.amp_caps(w, 0x12);
             let _ = self.verb(w.nid, 0x3, 0xB000 | (caps & 0x7F));
         }
         if w.caps & (1 << 1) != 0 {
-            let caps = self.parameter(w.nid, 0xD).unwrap_or(0);
+            let caps = self.amp_caps(w, 0xD);
             let _ = self.verb(w.nid, 0x3, 0x7000 | (index as u32) << 8 | (caps & 0x7F));
         }
         if w.count > 1 && w.kind != MIXER { let _ = self.verb(w.nid, 0x701, index as u32); }
@@ -271,6 +294,11 @@ impl Hda {
         }
         let Some((pin, path, depth)) = output else { return false };
         for &(nid, index) in &path[..depth] { let w = *list.iter().find(|w| w.nid == nid).unwrap(); self.unmute(&w, index); }
+        // The volume: the output amplifier nearest the DAC that has settings.
+        for &(nid, _) in path[..depth].iter().rev() {
+            let w = *list.iter().find(|w| w.nid == nid).unwrap();
+            if let Some(c) = self.control(&w, true, 0) { self.out_amp = Some(c); break; }
+        }
         let dac = path[depth - 1].0;
         let _ = self.verb(dac, 0x706, OUT_TAG << 4);
         let _ = self.verb(dac, 0x2, FORMAT as u32);
@@ -293,6 +321,15 @@ impl Hda {
         match input {
             Some((pin, path, depth)) if self.has_input => {
                 for &(nid, index) in &path[..depth] { let w = *list.iter().find(|w| w.nid == nid).unwrap(); self.unmute(&w, index); }
+                // The gain: the input amplifier nearest the ADC that has settings, the pin's apart; the pin's own one
+                // is the boost where it raises the level, else the gain.
+                for &(nid, index) in &path[..depth - 1] {
+                    let w = *list.iter().find(|w| w.nid == nid).unwrap();
+                    if let Some(c) = self.control(&w, false, index) { self.in_amp = Some(c); break; }
+                }
+                if let Some(c) = self.control(&pin, false, 0) {
+                    if self.in_amp.is_some() && c.amp.zero + 1 < c.amp.steps { self.boost_amp = Some(c); } else if self.in_amp.is_none() { self.in_amp = Some(c); }
+                }
                 let adc = path[0].0;
                 let _ = self.verb(adc, 0x706, IN_TAG << 4);
                 let _ = self.verb(adc, 0x2, FORMAT as u32);
@@ -372,6 +409,8 @@ impl Hda {
     fn submit(&mut self, fill: impl FnOnce(&mut [u8]) -> usize) {
         let at = self.head * BUFFER_BYTES;
         let bytes = fill(&mut self.ring.as_mut_slice()[at..at + BUFFER_BYTES]);
+        let factor = self.out_factor;
+        levels::scale_bytes(&mut self.ring.as_mut_slice()[at..at + bytes], factor);
         self.dma()[at + bytes..at + BUFFER_BYTES].fill(0);
         self.head = (self.head + 1) % BUFFERS; self.queued += 1;
         if !self.started { self.played = 0; self.run(self.out_sd, true); self.started = true; }
@@ -426,8 +465,12 @@ impl Hda {
             out[i * BUFFER_BYTES..(i + 1) * BUFFER_BYTES].copy_from_slice(&self.ring.as_slice()[at..at + BUFFER_BYTES]);
         }
         self.tail = (self.tail + take) % CAPTURE_BUFFERS; self.ready -= take;
+        levels::scale_bytes(&mut out[..take * BUFFER_BYTES], self.in_factor);
         (take * BUFFER_BYTES, core::mem::take(&mut self.lost))
     }
+
+    /// Sets an amplifier a level controls.
+    pub fn set_amp(&mut self, c: Control, setting: u8, mute: bool) { let _ = self.verb(c.nid, 0x3, levels::hda_gain(c.output, c.index, setting, mute && c.mute)); }
     // Clears the streams' status flags and the controller's.
     pub fn clear_status(&mut self) {
         for sd in [self.out_sd, self.in_sd] { let status = self.regs.read8(sd + SD_STS); if status != 0 { self.regs.write8(sd + SD_STS, status); } }
