@@ -3221,6 +3221,41 @@ def nn_packages():
     return packages
 
 
+def nn_rows():
+    """NRL's pinned input as `nn run` reads it, one row of 3 numbers a line, each the shortest decimal that reads back as
+    it; and the reference outputs, 2 a row."""
+    values = lambda name: list(struct.unpack(f"<{(NN_FIXTURE / name).stat().st_size // 8}d", (NN_FIXTURE / name).read_bytes()))
+    inputs, expected = values("input.f64le"), values("expected.f64le")
+    text = "# NRL's pinned input (native-conformance-v0)\n" + "".join(" ".join(repr(v) for v in inputs[i:i + 3]) + "\n" for i in range(0, len(inputs), 3))
+    return text, [expected[i:i + 2] for i in range(0, len(expected), 2)]
+
+
+def shell_nn_check(vm, ident):
+    """262-APP-0112, docs/nn/runtime.md section 7: the shell's own `nn load`, `nn models`, `nn run` of a file of rows
+    (the outputs within NRL's tolerance, as text), `nn bench` and `nn unload`; a file of the wrong width and a model not
+    loaded refused with why; a script needs `requires: nn`."""
+    out = vm.command(f"nn load data/models/conformance {ident}", raw=True, timeout=90)
+    require(out, f"LOADED ")
+    require(out, f" {ident[:16]}…: 3 IN, 2 OUT, 256 ROWS A JOB, ")
+    require(vm.command("nn models"), f"{ident[:16]}… 3 IN, 2 OUT, 256 ROWS A JOB")
+    out = vm.command(f"nn run {ident} data/nnrows.txt", raw=True, timeout=60)
+    _, expected = nn_rows()
+    got = [[float(v) for v in line.split()] for line in out.splitlines() if re.fullmatch(r"-?[0-9.e+-]+ -?[0-9.e+-]+", line.strip())]
+    assert len(got) == len(expected) and all(abs(a - r) <= 1e-12 + 1e-10 * abs(r) for row, ref in zip(got, expected) for a, r in zip(row, ref)), (got, expected, out)
+    require(out, f"{len(expected)} ROWS THROUGH ")
+    require(out, f"CHARGED {len(expected)} ROWS, {631 * len(expected)} WORK, 1 JOBS")
+    require(vm.command(f"nn run {ident} data/nnbad.txt", raw=True), "ERROR: NN RUN: LINE 2: 2 NUMBERS, THE MODEL TAKES 3")
+    out = vm.command(f"nn bench {ident}", raw=True, timeout=60)
+    bench = re.search(r"BENCH .*: (\d+) ROWS IN (\d+) JOBS OF 256 IN (\d+) MS: (\d+) ROWS A SECOND; THE SESSION HELD (\d+) KIB; THIS MACHINE ONLY", out)
+    assert bench and int(bench[1]) > 0 and int(bench[4]) > 0, out
+    require(vm.command(f'msh -c "nn run {ident} data/nnrows.txt"', raw=True), "nn needs `requires: nn` in the script")
+    require(vm.command(f"nn unload {ident}", raw=True), f"UNLOADED {ident[:16]}…: THE SHELL'S HOLD DROPPED")
+    require(vm.command(f"nn run {ident} data/nnrows.txt", raw=True), f"ERROR: NN: NO MODEL {ident[:16]}… IS LOADED (NN LOAD <PATH> <ID> FIRST)")
+    print(f"PASS: the shell's nn (262-APP-0112): load, models, run of a file of {len(expected)} rows within NRL's tolerance and "
+          f"charged as NRL's accounting, bench ({bench[4]} rows a second over {bench[3]} ms, this machine only), unload; a "
+          "wrong-width file and a model not loaded refused with why; a script needs requires: nn", flush=True)
+
+
 def nn_model_check(vm):
     """262-APP-0112, docs/nn/runtime.md section 8, NRL's native acceptance (nrl/specs/native-conformance-v0.md): with
     nnd's line in data/memory.conf (its workers), NRL's pinned model from data/models/ loaded through the shell's
@@ -3260,6 +3295,7 @@ def nn_model_check(vm):
                  "DEADLINE PARTWAY:", "DEADLINE PASSED BEFORE", "NUMERIC: CHARGED 1/39/1", "A NEW SESSION AFTER THE FAILURE", "MEMORY BACK TO BEFORE THE LOAD OK"):
         require(out, line)
     print(f"nnd model run: {' | '.join(l.strip() for l in out.splitlines() if 'TOOK' in l or ' TRY ' in l or 'NUMERIC:' in l)}", flush=True)
+    shell_nn_check(vm, ident)
     # Two clients, then the first one's badge taken again.
     started = vm.command(f"run nncheck share data/models/conformance {ident} 120 &", raw=True)
     holder = int(re.search(r"STARTED PID=(\d+) NAME=nncheck BACKGROUND", started)[1])
@@ -15103,6 +15139,9 @@ def main():
                     (disk / "data/models" / name).mkdir(parents=True)
                     for file, data in files.items():
                         (disk / "data/models" / name / file).write_bytes(data)
+                # The shell's `nn run` (262-APP-0112): NRL's input as rows of text, and a file of the wrong width.
+                (disk / "data/nnrows.txt").write_text(nn_rows()[0])
+                (disk / "data/nnbad.txt").write_text("1 2 3\n1 2\n")
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite in ("isolation", "giveup"):
