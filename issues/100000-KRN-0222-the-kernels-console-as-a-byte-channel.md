@@ -1,6 +1,6 @@
 # 100000-KRN-0222 — The kernel's console as a byte channel (the A64's page of four UARTs)
 
-**Type:** kernel (ABI) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open · **Blocked by:** — (100000-KRN-0171 in `main` since round 99) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.1, MC-2.3, MC-3.1, MC-12.4
+**Type:** kernel (ABI) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (made and tested in QEMU with a PL011, below; the gate, a 16550 and `link` left) · **Blocked by:** — (100000-KRN-0171 in `main` since round 99) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.1, MC-2.3, MC-3.1, MC-12.4
 
 ## Problem
 
@@ -33,6 +33,27 @@ The kernel has a ring and a blocking read already: a task's text input (`TEXT_QU
   - the channel carries `link`'s frames at 115200;
   - the kernel's lines resume when the holder ends.
 - **docs/api** names the capability, and the ABI's version is raised.
+
+## Progress (2026-11-09)
+
+- **Made** (dbad7079, d9bd4d90; ABI 29):
+  - `common/text_ring.rs`: the text input's ring, out of `scheduler.rs`; `tests/text_ring_host.rs` (a full ring, the order across its end, empty buffers).
+  - `PLATFORM_CONSOLE` and `CAP_KIND_CONSOLE`; `TEXT_READ` with the channel's handle in `msg[0]` (`TEXT_NOWAIT` in `msg[1]`); `TEXT_WRITE` with it.
+  - `kernel/src/arch/aarch64/serial.rs`: the console's receive, room to send, and the interrupts of a PL011 or a 16550.
+  - `init` asks for the channel when the console's node is no PL011 it can lend; `mind::dev::Uart` drives it as a third kind, so the shell's serial line runs over it unchanged.
+- **The plan changed in one point:** the channel's receive ring is the console's own, not a task's text input. `init` grants the capability at the shell's start, before it knows the shell's PID, and the channel ends when no live task holds it.
+- **Found on the way:** the receiver stalled after 16 bytes in QEMU. Every send cleared all of the PL011's interrupts, a pending receive one among them, and QEMU raises that one again only when its FIFO goes from empty to one byte. Only the transmit interrupt is cleared now.
+- **Tested** in the kernel session's container (QEMU 8.2.2, TCG, AAVMF, `acpi=off`):
+  - the `devicetree` suite: virt's own tree, dumped by QEMU, with a second `arm,pl011` node in the console's page (`-dtb`);
+  - the kernel lends the console's node to none (`NOT LENT: ITS PAGES AT 0x9000000 HOLD NODE 35'S REGISTERS`), and `init` gives the shell the channel;
+  - every command of the check came through it: `cpus`, a write of 219 bytes typed in one go, and 25 reads of a line of 201 bytes, more than a ring's worth back.
+  - The host tests: `text_ring`, `runtime` (ABI 29).
+- **The kernel's size:** 7394 lines of its budget of 7400.
+- **Left:**
+  - the gate;
+  - a 16550 console (the A64's), which QEMU's `virt` has no model of; the phone's run;
+  - `link`'s frames through the channel with `uart_serial` (100000-KRN-0221, after LNK's `uart_serial` is in `main`);
+  - the kernel's lines after the holder ends: shown only as the next shell getting a channel again, not yet by a test.
 
 ## Related
 
