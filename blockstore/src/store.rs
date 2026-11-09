@@ -105,6 +105,9 @@ pub trait Device {
     /// Writes `data.len() / SECTOR` sectors at `lba`.
     fn write(&mut self, lba: u64, data: &[u8]) -> bool;
     fn flush(&mut self) -> bool;
+    /// Drops what the device read ahead, so the next read reaches the medium: called where a pass or a scrub starts,
+    /// which look for damage made behind the store's back.
+    fn forget(&mut self) {}
 }
 
 /// The cipher records are sealed with: ChaCha20-Poly1305 (RFC 8439) on the platform, a stand-in in the host tests.
@@ -535,6 +538,9 @@ pub struct Store<'a, D: Device> {
     next_pin: u32,
     // What each owner may retain: three quarters of the medium, until whoever grants the clients sets quotas.
     quota: u64,
+    // The owner a reserve is kept for (351-STO-0043): every other owner together retains at most `quota`, so a quarter
+    // of the medium stays for it. None: no reserve (a RAM disk, where nothing is kept for later).
+    reserve: Option<fn(u16) -> bool>,
     // Blank runs, sorted; runs past its length are not used until the next scan.
     holes: &'a mut [Extent],
     runs: usize,
@@ -759,7 +765,7 @@ impl<'a, D: Device> Store<'a, D> {
         // Every slot starts empty: what a slice held before is not this medium's.
         index.fill(Entry::EMPTY);
         let mut store = Store {
-            dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
+            dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, reserve: None, holes, runs: 0, buffer,
             scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made, kept,
             recoveries: [0; RECOVERIES], remembered: 0, recovered: 0, domain: VOLUME, domains: [None; DOMAINS],
             deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0, scrubbing: Scrubbed::default(), unread: None,
@@ -790,6 +796,7 @@ impl<'a, D: Device> Store<'a, D> {
     // does not retain at that place, the name records that are not current and the records that do not open; nothing
     // else is written.
     fn pass(&mut self, sweep: bool) -> Result<Collected, Error> {
+        self.dev.forget();
         let sectors = self.dev.sectors();
         let mut freed = Collected::default();
         let (mut lba, mut run) = (1u64, None::<u64>);
@@ -1281,30 +1288,55 @@ impl<'a, D: Device> Store<'a, D> {
 
     // The roots `owner` retains through its names' kept versions and its pins, each with its domain, with their
     // objects' sizes.
-    fn owned(&self, owner: u16) -> impl Iterator<Item = (Root, u64)> + '_ {
+    // The roots the owners `of` takes retain, through their names' kept versions and their pins.
+    fn owned_where(&self, of: impl Fn(u16) -> bool + Copy + 'static) -> impl Iterator<Item = (Root, u64)> + '_ {
         self.heads[..self.names].iter().flat_map(|h| { let d = h.domain; h.retains().map(move |v| (d, v)) })
-            .filter(move |(_, v)| v.owner == owner).map(|(d, v)| ((v.root, d), v.size))
-            .chain(self.pins[..self.pinned].iter().filter(move |p| p.owner == owner).map(|p| ((p.root, p.domain), p.size)))
+            .filter(move |(_, v)| of(v.owner)).map(|(d, v)| ((v.root, d), v.size))
+            .chain(self.pins[..self.pinned].iter().filter(move |p| of(p.owner)).map(|p| ((p.root, p.domain), p.size)))
     }
 
     // The bytes `owner` retains, each root counted once however many names and pins retain it; with the roots of
     // `extra` added unless it holds them already.
-    fn retained_by(&self, owner: u16, extra: &[(Root, u64)]) -> u64 {
+    fn retained_by(&self, owner: u16, extra: &[(Root, u64)]) -> u64 { self.retained_where(move |o| o == owner, extra) }
+
+    // The bytes the owners `of` takes retain together, each root counted once across them all, with `extra`'s roots.
+    fn retained_where(&self, of: impl Fn(u16) -> bool + Copy + 'static, extra: &[(Root, u64)]) -> u64 {
         let mut total = 0;
-        for (k, (root, size)) in self.owned(owner).enumerate() {
-            if !self.owned(owner).take(k).any(|(r, _)| r == root) { total += size; }
+        for (k, (root, size)) in self.owned_where(of).enumerate() {
+            if !self.owned_where(of).take(k).any(|(r, _)| r == root) { total += size; }
         }
         for (k, (root, size)) in extra.iter().enumerate() {
-            if !self.owned(owner).any(|(r, _)| r == *root) && !extra[..k].iter().any(|(r, _)| r == root) { total += size; }
+            if !self.owned_where(of).any(|(r, _)| r == *root) && !extra[..k].iter().any(|(r, _)| r == root) { total += size; }
         }
         total
+    }
+
+    /// Keeps a quarter of the medium for the owners `kept_for` takes (351-STO-0043): every other owner together then
+    /// retains at most three quarters, each root counted once across them; None keeps nothing aside.
+    pub fn reserve_for(&mut self, kept_for: Option<fn(u16) -> bool>) { self.reserve = kept_for; }
+
+    // Whether `owner` may retain `extra` too: within its own quota, and, when a reserve is kept for another, with every
+    // owner the reserve is not for, together, within the same quota.
+    fn within_quota(&self, owner: u16, extra: &[(Root, u64)]) -> bool {
+        if self.retained_by(owner, extra) > self.quota { return false; }
+        match self.reserve {
+            Some(kept_for) if !kept_for(owner) => self.retained_where(move |o| !kept_for(o), extra) <= self.quota,
+            _ => true,
+        }
     }
 
     /// What `owner` retains and may retain.
     pub fn usage(&self, owner: u16) -> Usage {
         Usage {
             retained: self.retained_by(owner, &[]),
-            quota: self.quota,
+            // Under a reserve another owner's quota is what the others together leave it.
+            quota: match self.reserve {
+                Some(kept_for) if !kept_for(owner) => {
+                    let (own, together) = (self.retained_by(owner, &[]), self.retained_where(move |o| !kept_for(o), &[]));
+                    self.quota.saturating_sub(together.saturating_sub(own))
+                }
+                _ => self.quota,
+            },
             names: self.heads[..self.names].iter().filter(|h| !h.removed() && h.latest().owner == owner).count() as u32,
             pins: self.pins[..self.pinned].iter().filter(|p| p.owner == owner).count() as u32,
         }
@@ -1323,7 +1355,7 @@ impl<'a, D: Device> Store<'a, D> {
         // Room first: a collection it starts may free blocks of `root` whose lease ended, and the check below sees it.
         let lba = self.room(1)?;
         let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
-        if self.retained_by(owner, &[((root.to_bytes(), self.domain), size)]) > self.quota { return Err(Error::Quota); }
+        if !self.within_quota(owner, &[((root.to_bytes(), self.domain), size)]) { return Err(Error::Quota); }
         let previous = self.find(name).ok().and_then(|i| self.heads[i].latest().root());
         let v = Version { version: current + 1, owner, root: root.to_bytes(), points: true, size };
         self.claim(lba, 1);
@@ -1383,7 +1415,7 @@ impl<'a, D: Device> Store<'a, D> {
             }
         }
         // A removal adds a zero root of no size: it changes nothing.
-        if self.retained_by(owner, &extra[..n]) > self.quota { return Err(Error::Quota); }
+        if !self.within_quota(owner, &extra[..n]) { return Err(Error::Quota); }
         let mut versions = [0u64; COMMIT_MAX];
         let domain = self.domain;
         let record = &mut self.buffer[FRAME..FRAME + size];
@@ -1425,7 +1457,7 @@ impl<'a, D: Device> Store<'a, D> {
         if self.pinned == self.pins.len() { return Err(Error::Full); }
         let lba = self.room(1)?;
         let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
-        if self.retained_by(owner, &[((root.to_bytes(), self.domain), size)]) > self.quota { return Err(Error::Quota); }
+        if !self.within_quota(owner, &[((root.to_bytes(), self.domain), size)]) { return Err(Error::Quota); }
         let pin = Pin { id: self.next_pin, owner, root: root.to_bytes(), lba, size, domain: self.domain };
         self.claim(lba, 1);
         self.write_record(lba, &pin_record(&pin)[..PIN_RECORD], self.domain)?;
@@ -1686,6 +1718,7 @@ impl<'a, D: Device> Store<'a, D> {
     /// of each record that does not open or is not whole: its sector, and the block the index holds there. The pass
     /// that reaches the medium's end returns what it found, and the next call starts another.
     pub fn scrub(&mut self, budget: u64, found: &mut dyn FnMut(u64, Option<Cid>)) -> Result<Option<Scrubbed>, Error> {
+        self.dev.forget();
         let sectors = self.dev.sectors();
         if self.scrub_at == 0 { (self.scrub_at, self.scrubbing) = (1, Scrubbed::default()); }
         let mut read = 0;

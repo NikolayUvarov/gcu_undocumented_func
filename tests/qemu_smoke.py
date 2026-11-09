@@ -4193,6 +4193,8 @@ def store_suite(vm):
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
     logs = vm.service_logs("blockstore", ready)
     require(logs, ready)
+    # 351-STO-0043: on the RAM disk nothing is kept for later, so nothing is set aside for the updater.
+    assert "KEPT FOR THE UPDATER" not in logs, logs
     # 251-STO-0013: the index sized from the medium, its capacity what stat gives.
     require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
@@ -14548,6 +14550,8 @@ def store_disk_check(args, disk):
             vm.expect("MIND>", timeout=60)
             time.sleep(1); vm.collect(); vm.output = ""
             require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (THE STORE'S)")
+            # 351-STO-0043: on a disk a quarter is kept for the updater's releases, said once the store has mounted.
+            require(vm.service_logs("blockstore", "KEPT FOR THE UPDATER"), "[BLOCKSTORE] A QUARTER OF THE MEDIUM KEPT FOR THE UPDATER'S RELEASES")
             stat = vm.command("blocks stat", raw=True)
             assert re.search(r"BLOCKS=[1-9]\d* .*SECTORS=\d+/65536", stat), stat
             require(vm.command(f"blocks check {put[1]} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
