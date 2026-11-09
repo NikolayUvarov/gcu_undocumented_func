@@ -50,6 +50,7 @@
     - **Without the change** it fails: `['80010033', 'E0010013', 'E0010013', 'E0010013']`, the APs' CD and NW set, as round 91's record showed.
     - **With it,** it passed on 4 and on 16 CPUs.
   - **`tests/usb_image_smoke.py`** reads the line from the report on the image, every CPU's bits clear; it passed.
+  - **The groups on one CPU and the scheduler's,** on 9baf987b (with 100000-KRN-0171 and the kernel's budget at 7400): `x86: services, storage, audio` (785 s), `x86: scheduling, isolation, heap` (146 s), `x86: one CPU` (142 s) and `x86: AVX state, one CPU` (48 s), through `scripts/ci_local.sh`; all passed.
   - All in the kernel session's container (QEMU 8.2.2, OVMF, TCG). TCG models no cache, so these show the bits, not a speed (MC-12.1).
 - **Left:** the run on a machine, `kbench` before and after (plan step 4). It waits for a build with this on the MacBook Pro or the DEXP.
 
