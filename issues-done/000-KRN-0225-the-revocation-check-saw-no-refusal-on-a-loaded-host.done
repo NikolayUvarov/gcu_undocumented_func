@@ -1,6 +1,6 @@
-# 000-KRN-0225 — The revocation check saw no refused mint on a loaded host (round 103)
+# 000-KRN-0225 — The revocation check saw no refused mint on a loaded host (round 103) — done
 
-**Type:** tests (the `isolation` suite) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (the check takes up to three walks, on `claude/youthful-mendel-mf1soy`; 20 runs beside a busy host passed; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (the `isolation` suite) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -44,6 +44,20 @@
   - 5 times on 1 CPU: 5 passed.
   - **So round 103's failure was not reproduced:** under that load the child's CPU ran during every walk. The cause above is inferred from the kernel's code and the walk's length, not seen again. With up to three walks, a failure means three walks in a row without the child running, or a fault in the kernel's refusal.
 
+## Resolution
+
+**Closed; its first criterion is met only as far as the log can show.** Landed in round 104 (`main` 9a0b0c8e, 2026-11-09).
+- **The failing run's log** (round 103, `land-a927f175/x32-2-08/mind-core-isolation-4cpu.log`) shows nothing but the refusal missing:
+  - no fault of `app2` (PID 70) or of its child, the earlier faults being the suite's own cases;
+  - the walk was whole: 3001 in 12 steps;
+  - the child made 5386 mints.
+- **So the cause written in the Progress is inferred, not observed.** The child's CPU did not run the child during the walk's 2 ms. The kernel puts the child on a CPU apart from `app2`, and refuses a mint made during the walk, but it does not promise that the child's CPU runs in that time on a loaded host.
+- **The change:** `revocation_refusal_check` makes up to three walks, until one refuses a mint. A refusal, the count, the steps and no fault are still required.
+- **Evidence:**
+  - x32-128, beside 24 busy threads: 20 runs on 4 CPUs, each passing at its first walk (8 to 16 refused); 5 runs on 1 CPU;
+  - the kernel session's container: 4 CPUs and 1 CPU;
+  - every group of round 104's gate, "x86: x2APIC" among them.
+
 ## Related
 
-[000-KRN-0104](../issues-done/000-KRN-0104-revocation-bounded-by-the-profile.done), [000-NET-0063](000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.md) (round 102's slow `dmesg`, another check on a loaded host).
+[000-KRN-0104](000-KRN-0104-revocation-bounded-by-the-profile.done), [000-NET-0063](../issues/000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.md) (round 102's slow `dmesg`, another check on a loaded host).

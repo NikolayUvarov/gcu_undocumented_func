@@ -10,7 +10,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -48,7 +48,7 @@ pub fn attach(endpoint: Endpoint, flow: usize) -> Result<core::result::Result<u3
 /// TCP to `address`:`port`, the key exchange with the server whose host key blob has SHA-256 `pin` (32 bytes), the
 /// login as `user` with the device key, and SFTP version 3.
 pub fn connect(endpoint: Endpoint, session: u32, address: u32, port: u16, user: &str, pin: &[u8], timeout_ms: u32) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -68,7 +68,7 @@ pub fn connect(endpoint: Endpoint, session: u32, address: u32, port: u16, user: 
 
 /// Opens `path` for reading: a file number of the session. `not-found`: no such file.
 pub fn open(endpoint: Endpoint, session: u32, path: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -93,7 +93,7 @@ pub fn size(endpoint: Endpoint, session: u32, file: u32) -> Result<core::result:
 
 /// Up to `length` bytes (at most 32768) from `offset`; none at the end of the file.
 pub fn read(endpoint: Endpoint, session: u32, file: u32, offset: u64, length: u32, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(36864).ok_or(SysError::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(36864).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;

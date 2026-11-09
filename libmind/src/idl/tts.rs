@@ -3,7 +3,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::Pages;
+use crate::mem::{Pages, Wiped};
 use crate::sys::{Error, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -15,7 +15,7 @@ const MAJOR: usize = 1;
 /// Speaks `text` with `pitch` (Hz, 0: 112) and `rate` (%, 0: 100); returns the speech duration in ms once it is
 /// queued. Error not-found without an audio device, invalid for empty text.
 pub fn say(endpoint: Endpoint, text: &str, pitch: u16, rate: u16) -> Result<u32> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<4000>(text, &mut w).ok_or(Error::Invalid)?;

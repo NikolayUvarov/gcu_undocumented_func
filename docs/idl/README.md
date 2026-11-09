@@ -48,6 +48,7 @@ A word call waits for its reply. A client that calls a server which may be busy 
 A function with a string, list or record anywhere is a **buffer call**:
 - The client encodes the parameters into a buffer of its own, at least as large as the declared maxima of request and reply. It sends `method | major << 8 | request length << 16` in word 0 and 0 in word 1, with the buffer as a (copied) memory capability.
 - The server writes the result into the same buffer and replies `status | reply length << 16`.
+- **After the reply** the client copies out what it returns, then overwrites the whole buffer with zeros before it frees it (`mind::mem::Wiped`, 000-KRN-0226): a passphrase, a key or a typed secret line it carried is not left in freed frames. The wire does not change.
 - Before reading the reply, the client revokes the server's copy, which unmaps it everywhere (MC-2.6). The server cannot change the reply while it is being decoded.
 
 Encoding in the buffer, in declaration order, byte-packed, little-endian: integers in their size (`bool` one byte, 0 or 1), an enum as one byte, a string or `bytes<N>` as a u16 byte length and the bytes, a list as a u16 count and the items, a record as its fields. In a word call an enum is an 8-bit field.
