@@ -1,0 +1,46 @@
+# 307-STO-0042 — A pass over the store's medium reads ahead: what a mount, a collection and a scrub cost by the medium's size
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (2026-11-09) · **Blocked by:** — · **Main task:** [307](307-the-stores-own-partition.md) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-12.1
+
+## Problem
+
+- **The store's partition on a real machine** (307) is larger than the QEMU suites' disks of 32 to 96 MiB. A stick or a disk partition is gigabytes.
+- **What reads the whole medium:**
+  - a mount (`pass`: every record opened and checked, the index built);
+  - the first mount of a blank medium (`blank`: every sector checked to be zero before it is formatted);
+  - a collection (the sweep);
+  - a scrub (309-STO-0025).
+- **How long that takes** was not known. Nor was what bounds it: the driver's calls or the work on each byte.
+- **Before 307 picks a partition's size,** and before 310 (the index on the medium) is given a date, the cost by size is wanted.
+
+## Measured (2026-11-09)
+
+x86 QEMU 8.2.2 under TCG, 4 CPUs, this session's container; a blank VirtIO disk (a sparse file), one object of 1 MB published between the first mount and the reboot. These are times of this configuration, not of a real machine (MC-12.1).
+
+| 1 GiB medium | Each pass reading one record's sectors (about 17 KiB) per call | Reading ahead 128 sectors (64 KiB) per call |
+|---|---|---|
+| first boot: the blank check, the format and the mount | 391 s | 147 s |
+| `blocks collect` | 196 s | 73 s |
+| `blocks scrub` | 177 s | 70 s |
+| the mount after a reboot | 225 s | 35 s |
+
+- **The calls bound it, not the bytes.** About 5 MB/s at a record's sectors per call; about 2.5 times faster at the driver's whole buffer per call.
+- **4 GiB:** not measured yet.
+
+## Plan
+
+1. **Read ahead in the store's medium** (`blockstore/src/main.rs`, `Medium`):
+   - each read takes the driver's whole buffer, 128 sectors, and a read inside the sectors last taken is answered from them;
+   - a write over them drops them;
+   - so does `Device::forget`, which every pass and every scrub step calls, since they look for damage made behind the store's back (the `storefaults` suite injects it into the medium while the store runs);
+   - a read ahead that fails, as a bad sector further on would make it, falls back to the read as asked.
+2. **Say in 307** what a partition's size costs at boot. The store is not in the boot path, so programs start meanwhile and the store answers once it is mounted. Name 310 as the way past a full scan at each mount.
+
+## Acceptance criteria
+
+- **The `store` and `storefaults` suites pass on x86 and aarch64** with the read-ahead.
+- **The measurement** is recorded here and in `docs/storage`.
+
+## Related
+
+[307](307-the-stores-own-partition.md), [310](310-the-index-on-the-medium.md), [309-STO-0025](../issues-done/309-STO-0025-scrub.done).
