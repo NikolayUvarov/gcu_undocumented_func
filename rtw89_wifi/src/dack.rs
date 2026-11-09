@@ -149,9 +149,8 @@ pub(crate) fn notify(bus:&mut impl DackIo,notice:BtcNotice,timeout_us:u32)->io::
 }
 fn notice(band:Band,state:RfkState)->BtcNotice {BtcNotice{calibration:Calibration::Dack,state,phy_map:0x10|((band as u8)<<6)}}
 fn restore(bus:&mut impl RegisterIo,path:u8,at:u32,value:u32)->io::Result<()> {
-    phy::rf_write_masked(bus,path,at,RF_MASK,value)?;
-    let actual=phy::rf_read(bus,path,at,RF_MASK)?;
-    if actual!=value {return Err(Fault::new(FaultKind::PowerState,at as usize,actual));} bus.delay_us(0)
+    // Written back unread, as Linux's _rfk_restore_rf_reg (see iqk::restore_registers).
+    phy::rf_write_masked(bus,path,at,RF_MASK,value)?; bus.delay_us(0)
 }
 
 pub(crate) fn run(bus:&mut impl DackIo,band:Band,start:u64)->core::result::Result<ResultData,Failure> {

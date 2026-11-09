@@ -56,11 +56,24 @@ impl<B:DeviceIo> Transport for Runtime<'_,'_,'_,'_,'_,B>{
 }
 impl<B:DeviceIo> DataSession<'_,'_,'_,'_,'_,'_,B>{
     pub(super) fn reconcile(&mut self,deadline:u64)->Result<Progress,Cause>{
+        match self.reconcile_once(deadline){
+            // OUTLAST_SER: a recovery that began after the operation's checks fails the reconcile (the Ryzen, 2026-11-08: the
+            // radio off 60 ms after two recoveries; SYS_FUNC_EN 0xDE); if one is found, it is outlasted and the reconcile
+            // made once more. Without one the error stands.
+            Err(Cause::Coexistence(error)) if super::OUTLAST_SER=>{
+                let before=self.recoveries;let deadline=self.outlast_ser(deadline,true)?;
+                if self.recoveries==before{return Err(Cause::Coexistence(error))}
+                self.reconcile_once(deadline)
+            },
+            other=>other,
+        }
+    }
+    fn reconcile_once(&mut self,deadline:u64)->Result<Progress,Cause>{
         let filter=self.prepared.station.current_filter().ok_or(Cause::State)?;
         let mut context=self.session.btc.take().ok_or(Cause::State)?;
         let mut transport=Runtime{session:&mut self.session,queue:self.queue,counts:&mut self.counts,
             filter,channel:self.prepared.tuned.channel,deadline,error:None};
-        let result=context.runtime(&mut transport,self.prepared.tuned.attempt,self.prepared.command,deadline);
+        let result=context.runtime(&mut transport,self.prepared.tuned.attempt,self.prepared.command,self.prepared.tuned.channel,deadline);
         let transmit=transport.error;self.session.btc=Some(context);
         if result.is_ok_and(|v|v!=Progress::Stable){self.counts.btc_deferred=self.counts.btc_deferred.saturating_add(1)}
         result.map_err(|cause|transmit.map_or(Cause::Coexistence(cause),Cause::Tx))

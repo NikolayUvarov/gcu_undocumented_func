@@ -21,6 +21,8 @@ struct Device {
     now: u64, freeze: bool, oversleep: u64, stuck_xtal: Option<usize>, xtal_count: usize,
     stuck_efuse: bool, minimum_delay: u32,
     late_ready: bool, backwards: bool,
+    // Time that passes before each now_us reading, in turn: a preemption between two readings.
+    jumps: Vec<u64>,
     off_state: u32,
 }
 
@@ -30,7 +32,7 @@ impl Device {
             registers: vec![0; 0x10000], xtal: [0; 256], otp: [0xff; 0x800], dav: [0xff; 96],
             writes: Vec::new(), attempted: 0, fail_writes: Vec::new(), now: 0, freeze: false,
             oversleep: 0, stuck_xtal: None, xtal_count: 0, stuck_efuse: false, minimum_delay: 0,
-            late_ready: false, backwards: false,
+            late_ready: false, backwards: false, jumps: Vec::new(),
             off_state: 0,
         };
         value.put(SYS_CFG1, 4, 1 << 12);
@@ -100,7 +102,7 @@ impl RegisterIo for Device {
     fn write8(&mut self, at: usize, value: u8) -> Result<()> { self.write(1, at, value as u32) }
     fn write16(&mut self, at: usize, value: u16) -> Result<()> { self.write(2, at, value as u32) }
     fn write32(&mut self, at: usize, value: u32) -> Result<()> { self.write(4, at, value) }
-    fn now_us(&mut self) -> u64 { self.now }
+    fn now_us(&mut self) -> u64 { if !self.jumps.is_empty() { self.now += self.jumps.remove(0); } self.now }
     fn delay_us(&mut self, us: u32) -> Result<()> {
         if !self.freeze { self.now += us.max(self.minimum_delay) as u64 + self.oversleep; }
         if self.backwards { self.now = 0; }
@@ -136,6 +138,26 @@ fn unknown_cut_unavailable_or_already_active_mac_get_no_writes() {
         assert_eq!(board::read(&mut d).err().unwrap().cause.kind, FaultKind::PowerState);
         assert!(d.writes.is_empty());
     }
+}
+
+#[test]
+fn a_mac_left_on_is_powered_off_before_the_board_read() {
+    // Off already: nothing is written.
+    let mut d = Device::new();
+    assert!(!board::power_off_left_on(&mut d).unwrap()); assert!(d.writes.is_empty());
+    // Left on by a replaced instance: powered off, and the board read then succeeds.
+    for state in 1..=3 {
+        let mut d = Device::new(); d.put(R_AX_IC_PWR_STATE, 4, state << 8);
+        assert!(board::power_off_left_on(&mut d).unwrap());
+        assert_eq!(d.get(R_AX_IC_PWR_STATE, 4) & B_AX_WLMAC_PWR_STE_MASK, 0);
+        assert!(d.writes.iter().any(|w| w.at == R_AX_SYS_PW_CTRL && w.value & B_AX_APFM_OFFMAC != 0));
+        assert_eq!(board::read(&mut d).ok().unwrap().identity.mac, [2, 3, 4, 5, 6, 7]);
+    }
+    // A MAC that stays on is refused, and an unknown chip gets no write.
+    let mut d = Device::new(); d.put(R_AX_IC_PWR_STATE, 4, 1 << 8); d.off_state = 1 << 8;
+    assert_eq!(board::power_off_left_on(&mut d).unwrap_err().kind, FaultKind::PowerState);
+    let mut d = Device::new(); d.put(SYS_CFG1, 4, 0); d.put(R_AX_IC_PWR_STATE, 4, 1 << 8);
+    assert!(board::power_off_left_on(&mut d).is_err()); assert!(d.writes.is_empty());
 }
 
 #[test]
@@ -216,11 +238,20 @@ fn completed_pending_xtal_allows_a_fresh_command_within_the_callers_budget() {
 }
 
 #[test]
-fn expired_or_frozen_poll_has_finite_reads_and_rejects_late_ready() {
+fn expired_or_frozen_poll_has_finite_reads_and_reads_once_after_its_deadline() {
     let mut d = Device::new(); d.freeze = true;
     assert_eq!(io::poll32(&mut d, R_AX_WLAN_XTAL_SI_CTRL, 1, 1, 50, 500).unwrap_err().kind, FaultKind::Timeout);
+    // A delay that overslept the deadline: the read after it still counts, as Linux's read_poll_timeout.
     d.freeze = false; d.oversleep = 1_000; d.late_ready = true;
-    assert_eq!(io::poll32(&mut d, R_AX_WLAN_XTAL_SI_CTRL, 1, 1, 50, 500).unwrap_err().kind, FaultKind::Timeout);
+    assert_eq!(io::poll32(&mut d, R_AX_WLAN_XTAL_SI_CTRL, 1, 1, 50, 500).unwrap(), 1);
+    // Never ready: one read after the deadline, then the timeout with what it read.
+    let mut d = Device::new(); d.oversleep = 1_000;
+    let fault = io::poll32(&mut d, R_AX_WLAN_XTAL_SI_CTRL, 1, 1, 50, 500).unwrap_err();
+    assert_eq!((fault.kind, d.now), (FaultKind::Timeout, 1_050));
+    // Preempted past a 30 us deadline before its first read (the Ryzen's SWSI poll, 2026-11-06): the ready value is read.
+    let mut d = Device::new(); d.put(R_AX_WLAN_XTAL_SI_CTRL, 4, 1); d.jumps = vec![0, 1_000];
+    assert_eq!(io::poll32(&mut d, R_AX_WLAN_XTAL_SI_CTRL, 1, 1, 1, 30).unwrap(), 1);
+    let mut d = Device::new();
     let mut timed = io::TimedIo::new(&mut d, 50);
     assert_eq!(timed.delay_us(51).unwrap_err().kind, FaultKind::Timeout);
     let mut d = Device::new(); d.now = 10_000; d.backwards = true;

@@ -65,7 +65,11 @@ impl Receiving{
             if let Some(layout)=layout{
                 require(&mut timed,fwcmd::DMA_STOP,STOP_MASK,crate::btc_session::data_mode::STOPPED_UNUSED)?;
                 require(&mut timed,fwcmd::DMA_BUSY,1<<17,0)?;
-                require(&mut timed,0xc348,0xffff,u32::from(crate::btc_session::data_mode::SCHEDULER))?;
+                // OUTLAST_SER: a scheduler the firmware's L0 recovery zeroed is the next operation's to outlast, not a broken
+                // permit (the Ryzen, 2026-11-08: the permit check found it at zero after 42 minutes).
+                let scheduler=io::read32(&mut timed,0xc348)?&0xffff;
+                if scheduler!=u32::from(crate::btc_session::data_mode::SCHEDULER)&&!(crate::btc_session::data_mode::OUTLAST_SER&&scheduler==0){
+                    return Err(Fault::new(FaultKind::PowerState,0xc348,scheduler).into())}
                 layout.check_registers(&mut timed)?;
             }else{
                 require(&mut timed,fwcmd::DMA_STOP,STOP_MASK,RECEIVING)?;
@@ -150,10 +154,14 @@ fn guard(bus:&mut impl Bus,queue:&mut Queue<'_>,rings:&rx::Rings<'_>,board:&Boar
     rings.installed(bus)?;
     Ok(())
 }
+// DEBUG (the Ryzen, 2026-11-08: everything runs first, hardening later): a release report per frame. Linux batches 30
+// with many frames in flight; with one in flight each try waited the batch's timeout, about 10 ms, so wlan's 15 tries
+// outran a send's time. False: Linux's 30.
+const REPORT_EACH:bool=true;
 fn host_reports(bus:&mut impl RegisterIo)->io::Result<()>{
     modify(bus,R_AX_WDRLS_CFG,B_AX_WDRLS_MODE_MASK,0,0)?;
     modify(bus,R_AX_RLSRPT0_CFG0,0,B_AX_RLSRPT0_FLTR_MAP_MASK,0)?;
-    modify(bus,R_AX_RLSRPT0_CFG1,B_AX_RLSRPT0_AGGNUM_MASK,30,0)?;
+    modify(bus,R_AX_RLSRPT0_CFG1,B_AX_RLSRPT0_AGGNUM_MASK,if REPORT_EACH{1}else{30},0)?;
     modify(bus,R_AX_RLSRPT0_CFG1,B_AX_RLSRPT0_TO_MASK,255<<16,0)
 }
 fn pcie(bus:&mut impl RegisterIo)->io::Result<()>{

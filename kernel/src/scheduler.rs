@@ -197,9 +197,12 @@ struct Scheduler {
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
-static LOCK: AtomicBool = AtomicBool::new(false);
-struct Guard; impl Drop for Guard { fn drop(&mut self) { LOCK.store(false, Ordering::Release); } }
-fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { while LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { while LOCK.load(Ordering::Relaxed) { core::hint::spin_loop(); } } let _guard = Guard; f() }) }
+// Test-and-set, with a turn for a CPU that waited long (000-KRN-0219): none waits behind one that takes it again and again,
+// as CPU 0 did in round 91's gate, nor for the host to run one vCPU, as a ticket lock did in round 95's. Taken with
+// interrupts off, never twice by one CPU.
+static LOCK: crate::spinlock::SpinLock = crate::spinlock::SpinLock::new();
+struct Guard; impl Drop for Guard { fn drop(&mut self) { LOCK.unlock(); } }
+fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { LOCK.lock(); let _guard = Guard; f() }) }
 
 // The mailbox of the task each CPU runs (0: idle), and the system calls answered there without the lock since the
 // CPU last selected: they are added to the task and the CPU at the next select (000-KRN-0011).
@@ -1265,6 +1268,13 @@ impl Scheduler {
         Ok(pid as usize)
     }
 
+    // Who asked for the machine's end, on the console (000-KRN-0216): the evidence after the system log is gone.
+    fn asked_by(&self, slot: usize, what: &str) {
+        let Some(task) = self.tasks[slot].as_ref() else { return };
+        let name = core::str::from_utf8(&task.name.bytes[..task.name.len as usize]).unwrap_or("?");
+        let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: {} (PID {}) ASKED TO {}\n", name, task.pid, what));
+    }
+
     // Process control (TASK_LIST ... HALT): only for the holder of the control capability.
     unsafe fn control(&mut self, slot: usize, ptr: *mut SyscallMailbox, request: &SyscallMailbox) -> Result<usize, usize> {
         // Statistics need only the observe privilege; kill, focus, key listening, logs, console and halt need process control (MC-10.2).
@@ -1361,8 +1371,8 @@ impl Scheduler {
                 Ok(used)
             }
             SYSCALL_HALT => { crate::firmware::clear_run_mark(); crate::halt_asked() }
-            SYSCALL_REBOOT if request.arg1 == REBOOT_POWER_OFF => { crate::firmware::clear_run_mark(); crate::acpi::power_off() }
-            SYSCALL_REBOOT => { crate::firmware::clear_run_mark(); crate::acpi::reboot() }
+            SYSCALL_REBOOT if request.arg1 == REBOOT_POWER_OFF => { self.asked_by(slot, "TURN THE MACHINE OFF"); crate::firmware::clear_run_mark(); crate::acpi::power_off() }
+            SYSCALL_REBOOT => { self.asked_by(slot, "RESTART THE MACHINE"); crate::firmware::clear_run_mark(); crate::acpi::reboot() }
             _ => Err(ERR_INVALID),
         }
     }
@@ -1855,8 +1865,6 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         if let Some(job) = revocation {
             let mut job = Some(job);
             let next = loop {
-                // A CPU waiting for the lock takes it now: a test-and-set lock would otherwise go back to this one.
-                for _ in 0..LET_GO_SPINS { if LOCK.load(Ordering::Relaxed) { break; } core::hint::spin_loop(); }
                 ZEROING[cpu].store(true, Ordering::Relaxed); interrupts::window(); ZEROING[cpu].store(false, Ordering::Relaxed);
                 let done = locked(|| {
                     let s = scheduler();
@@ -1886,8 +1894,6 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
     }
 }
 
-// Spins a CPU between two steps of a revocation leaves for another to take the lock (000-KRN-0104).
-const LET_GO_SPINS: usize = 2000;
 // Each CPU's mark while it takes interrupts between the pieces of a block it zeroes (262-KRN-0165), and whether a wake
 // came then. Such an interrupt only keeps the books: the frame under it is the kernel's, never a task's to switch from.
 static ZEROING: [AtomicBool; cpu::MAX] = [const { AtomicBool::new(false) }; cpu::MAX];

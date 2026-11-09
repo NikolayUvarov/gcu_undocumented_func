@@ -32,7 +32,18 @@ pub fn identity(cut: u8, maps: &Maps) -> Result<Identity> {
     Ok(Identity { cut, mac, rfe, xtal, country: [maps.logical[efuse::COUNTRY_AT], maps.logical[efuse::COUNTRY_AT + 1]], channel_plan: maps.logical[efuse::CHANNEL_PLAN_AT] })
 }
 
-/// The caller owns a verified MEM-only BAR grant; an already-active MAC is left untouched for diagnosis.
+/// A MAC that another instance left on (a replaced or stopped service) is powered off before the board read, as
+/// Linux's rtw89_mac_pwr_on powers off and on again after "MAC has already powered on". The caller owns a verified
+/// MEM-only BAR grant, so bus mastering is off and no DMA runs. Returns whether the MAC was on.
+pub fn power_off_left_on(io: &mut impl RegisterIo) -> Result<bool> {
+    power::identify(io)?;
+    let state = read32(io, R_AX_IC_PWR_STATE)?;
+    if state & B_AX_WLMAC_PWR_STE_MASK == 0 { return Ok(false); }
+    power::off(&mut TimedIo::new(io, 1_000_000), None)?;
+    Ok(true)
+}
+
+/// The caller owns a verified MEM-only BAR grant; an already-active MAC is refused: power_off_left_on comes first.
 pub fn read(io: &mut impl RegisterIo) -> core::result::Result<Board, Failure> {
     let fail = |cause| Failure { stage: Stage::Identify, cause, efuse_restore: None, shutdown: None };
     let cut = power::identify(io).map_err(fail)?;

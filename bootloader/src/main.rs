@@ -19,7 +19,76 @@ const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel
 const FILE_BUFFER_PAGES: usize = 1024; // 4 MiB: the largest boot image
 const MANIFEST_PAGES: usize = 16; // 64 KiB: the largest boot manifest (350-UPD-0003)
 
-// Boot errors go to the serial line (COM1, or the PL011 of QEMU's aarch64 `virt`) and the UEFI console, then the
+// aarch64's line (100000-PRT-0009): a UART the firmware names, the SPCR's PL011 or SBSA UART under ACPI, else the
+// console a device tree's `stdout-path` names, a PL011 or a 16550 in memory. None otherwise: no address is written that
+// may be RAM or nothing on another board (QEMU `virt`'s PL011 at 0x0900_0000 was written on every board before).
+#[cfg(target_arch = "aarch64")]
+#[path = "../../common/fdt.rs"] mod fdt;
+#[cfg(target_arch = "aarch64")]
+mod line {
+    use core::ptr::{read_volatile, write_volatile};
+    use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    static BASE: AtomicUsize = AtomicUsize::new(0); // 0: no line of the loader's own
+    static NS16550: AtomicUsize = AtomicUsize::new(0); // 0: a PL011; else 1 + the shift, the width in bits 8 and up
+    pub fn kind() -> &'static str { if BASE.load(Relaxed) == 0 { "NONE" } else if NS16550.load(Relaxed) == 0 { "PL011" } else { "16550" } }
+    pub fn base() -> usize { BASE.load(Relaxed) }
+    fn set(base: u64, ns16550: Option<(u8, u8)>) {
+        if base == 0 || base >= 1 << 40 { return; }
+        NS16550.store(ns16550.map_or(0, |(shift, width)| 1 + shift as usize | (width as usize) << 8), Relaxed);
+        BASE.store(base as usize, Relaxed);
+    }
+    // The SPCR's UART (interface type at 36: 3 a PL011, 0x0E the SBSA generic UART; its address in memory space at 40).
+    unsafe fn spcr(rsdp: u64) -> Option<u64> {
+        if rsdp == 0 || rsdp >= 1 << 40 { return None; }
+        let root = core::slice::from_raw_parts(rsdp as *const u8, 36);
+        if &root[..8] != b"RSD PTR " || root[15] < 2 { return None; }
+        let xsdt = u64::from_le_bytes(root[24..32].try_into().ok()?);
+        if xsdt == 0 || xsdt >= 1 << 40 { return None; }
+        let len = (u32::from_le_bytes(core::slice::from_raw_parts((xsdt + 4) as *const u8, 4).try_into().ok()?) as usize).min(64 * 1024);
+        let list = core::slice::from_raw_parts(xsdt as *const u8, len);
+        for at in (36..len.saturating_sub(7)).step_by(8) {
+            let table = u64::from_le_bytes(list[at..at + 8].try_into().ok()?);
+            if table == 0 || table >= 1 << 40 { continue; }
+            let t = core::slice::from_raw_parts(table as *const u8, 52);
+            if &t[..4] == b"SPCR" && u32::from_le_bytes(t[4..8].try_into().ok()?) >= 52 && matches!(t[36], 0x03 | 0x0E) && t[40] == 0 {
+                return Some(u64::from_le_bytes(t[44..52].try_into().ok()?));
+            }
+        }
+        None
+    }
+    /// The line from the firmware's tables: ACPI's SPCR first, else the device tree's console.
+    pub unsafe fn choose(rsdp: u64, device_tree: u64) {
+        if rsdp != 0 { if let Some(base) = spcr(rsdp) { set(base, None); } return; }
+        if device_tree == 0 || device_tree >= 1 << 40 { return; }
+        let Some(size) = super::fdt::total_size(core::slice::from_raw_parts(device_tree as *const u8, 40)) else { return };
+        if size > 1 << 24 { return; }
+        let Some(tree) = super::fdt::Tree::open(core::slice::from_raw_parts(device_tree as *const u8, size)) else { return };
+        match super::fdt::console(&tree) {
+            Some(super::fdt::Uart { base, kind: super::fdt::UartKind::Pl011, .. }) => set(base, None),
+            Some(super::fdt::Uart { base, kind: super::fdt::UartKind::Ns16550 { shift, width, .. }, .. }) => set(base, Some((shift, width))),
+            None => {}
+        }
+    }
+    pub unsafe fn byte(b: u8) {
+        let base = BASE.load(Relaxed);
+        if base == 0 { return; }
+        match NS16550.load(Relaxed) {
+            0 => {
+                for _ in 0..100_000 { if read_volatile((base + 0x18) as *const u32) & 0x20 == 0 { break; } }
+                write_volatile(base as *mut u32, b as u32);
+            }
+            n => {
+                let (shift, width) = ((n & 0xFF) - 1, n >> 8);
+                let lsr = base + (5 << shift);
+                let empty = || match width { 4 => read_volatile(lsr as *const u32) as u8, 2 => read_volatile(lsr as *const u16) as u8, _ => read_volatile(lsr as *const u8) } & 0x20 != 0;
+                for _ in 0..100_000 { if empty() { break; } }
+                match width { 4 => write_volatile(base as *mut u32, b as u32), 2 => write_volatile(base as *mut u16, b as u16), _ => write_volatile(base as *mut u8, b) }
+            }
+        }
+    }
+}
+
+// Boot errors go to the serial line (COM1, or on aarch64 the UART the firmware names) and the UEFI console, then the
 // machine stops: never a silent hang.
 struct Serial;
 impl Write for Serial {
@@ -30,11 +99,7 @@ impl Write for Serial {
                     for _ in 0..100_000 { let status: u8; core::arch::asm!("in al, dx", out("al") status, in("dx") 0x3FDu16); if status & 0x20 != 0 { break; } }
                     core::arch::asm!("out dx, al", in("al") byte, in("dx") 0x3F8u16);
                 }
-                #[cfg(target_arch = "aarch64")] {
-                    const PL011: usize = 0x0900_0000;
-                    for _ in 0..100_000 { if core::ptr::read_volatile((PL011 + 0x18) as *const u32) & 0x20 == 0 { break; } }
-                    core::ptr::write_volatile(PL011 as *mut u32, byte as u32);
-                }
+                #[cfg(target_arch = "aarch64")] line::byte(byte);
             }
         }
         Ok(())
@@ -629,6 +694,13 @@ fn load_slots(services: &BootServices, image: Handle, safe: bool, root: &mut uef
 #[entry]
 fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     BOOT_TABLE.store(system_table.as_ptr().cast_mut(), Relaxed);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        let table = |guid| system_table.config_table().iter().find(|e| e.guid == guid).map_or(0, |e| e.address as u64);
+        let rsdp = match table(uefi::table::cfg::ACPI2_GUID) { 0 => table(uefi::table::cfg::ACPI_GUID), r => r };
+        line::choose(rsdp, table(uefi::guid!("b1b621d5-f19c-41a5-830b-d9152c69aae0")));
+        let _ = writeln!(Serial, "\r\nBOOT: THE LINE: {} AT {:#x}, FROM THE {}\r", line::kind(), line::base(), if rsdp != 0 { "SPCR" } else { "DEVICE TREE" });
+    }
     show_text(&system_table);
     // Started by the loader at EFI/BOOT/ for its slot (351-UPD-0010): that one chose the slot and asked for the pause
     // and the safe start's key.
@@ -695,16 +767,26 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         say(&system_table, format_args!("SLOT {}{}", slot as char, if trial { ", ON TRIAL" } else { "" }));
     }
     say(&system_table, format_args!("KERNEL AND {} SERVICES READ", programs.iter().filter(|p| p.len > 0).count()));
-    let display = select_display(&system_table);
-    let (fb_ptr, mode) = match (display, chained) {
-        (Ok(display), _) => display,
+    // No graphics output at all (U-Boot drives no display on a board whose panel it does not know): on aarch64 the
+    // system starts without a screen, its console on the serial line (100000-PRT-0009); x86 stops as before.
+    let display = match (select_display(&system_table), chained) {
+        (Ok(display), _) => Some(display),
+        #[cfg(target_arch = "aarch64")]
+        (Err("no graphics output"), _) => {
+            say(&system_table, format_args!("NO GRAPHICS OUTPUT: STARTING WITHOUT A SCREEN"));
+            let _ = writeln!(Serial, "BOOT: NO GRAPHICS OUTPUT: STARTING WITHOUT A SCREEN\r");
+            None
+        }
         (Err(reason), Some(c)) => return back(&system_table, c, "display", reason),
         (Err(reason), None) => fail(&mut system_table, "display", reason),
     };
-    let (pixel_format, pixel_masks) = match (mode.pixel_format(), mode.pixel_bitmask()) {
-        (PixelFormat::Rgb, _) => (PIXEL_RGB, [0; 3]),
-        (PixelFormat::Bitmask, Some(m)) => (PIXEL_BITMASK, [m.red, m.green, m.blue]),
-        _ => (PIXEL_BGR, [0; 3]),
+    let (fb_ptr, (width, height, stride), (pixel_format, pixel_masks)) = match display {
+        Some((fb_ptr, mode)) => (fb_ptr, (mode.resolution().0, mode.resolution().1, mode.stride()), match (mode.pixel_format(), mode.pixel_bitmask()) {
+            (PixelFormat::Rgb, _) => (PIXEL_RGB, [0; 3]),
+            (PixelFormat::Bitmask, Some(m)) => (PIXEL_BITMASK, [m.red, m.green, m.blue]),
+            _ => (PIXEL_BGR, [0; 3]),
+        }),
+        None => (core::ptr::null_mut(), (0, 0, 0), (PIXEL_BGR, [0; 3])),
     };
     // The ACPI 2.0 root pointer (or the 1.0 one), for the kernel's reset register.
     let acpi_rsdp = system_table.config_table().iter().find(|e| e.guid == uefi::table::cfg::ACPI2_GUID).or_else(|| system_table.config_table().iter().find(|e| e.guid == uefi::table::cfg::ACPI_GUID)).map_or(0, |e| e.address as u64);
@@ -720,7 +802,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: BOOT_HANDOFF_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, boot_flags: if safe { BOOT_SAFE } else { 0 }, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
+        let info = BootInfo { fb_ptr, width, height, stride, programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: BOOT_HANDOFF_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, boot_flags: if safe { BOOT_SAFE } else { 0 }, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
     // When asked, time for a photo of these lines before the screen changes (211-PRT-0004).
     if pause_s > 0 {

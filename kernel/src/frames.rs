@@ -26,6 +26,19 @@ fn locked<T>(f: impl FnOnce(&mut Pool) -> T) -> T {
     })
 }
 
+// The parts of [start, end) outside every range the board reserves (100000-PRT-0009: a device tree's), in order.
+fn outside_reserved(start: u64, end: u64, take: &mut impl FnMut(u64, u64)) {
+    let mut holes = [(0u64, 0u64); 16];
+    let mut count = 0;
+    crate::platform::reserved(|s, e| if count < holes.len() { holes[count] = (s, e); count += 1; });
+    let mut cut = start;
+    while cut < end {
+        let Some(&(s, e)) = holes[..count].iter().filter(|&&(s, e)| e > cut && s < end).min_by_key(|h| h.0) else { take(cut, end); return };
+        if s > cut { take(cut, s); }
+        cut = e.max(cut);
+    }
+}
+
 /// Takes every free conventional range the kernel maps, highest first. The bootloader allocated everything it hands
 /// over (arena, boot images, kernel, memory map) as loader data, so conventional memory is unused.
 pub unsafe fn init(map: &[StatPhys]) {
@@ -33,7 +46,7 @@ pub unsafe fn init(map: &[StatPhys]) {
     let mut take = |start: u64, end: u64| if end > start && end - start >= MIN_RANGE { ranges.push((start, end)); };
     for entry in map.iter().filter(|e| e.kind == CONVENTIONAL) {
         let (start, end) = (entry.start.max(0x10_0000).next_multiple_of(4096), entry.start + entry.pages * 4096);
-        take(start, end.min(IDENTITY_END));
+        outside_reserved(start, end.min(IDENTITY_END), &mut take);
         // x86-64: RAM above 4 GiB, as far as the kernel maps it (issue 171).
         if let Some((high, top)) = crate::mmu::high_ram(start, end) { take(high, top); }
     }

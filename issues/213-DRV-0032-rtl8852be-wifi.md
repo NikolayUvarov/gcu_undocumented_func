@@ -1154,3 +1154,125 @@ Details and limits are in [the service notes](../hwdocs/rtl8852be-service.md#rec
 **Next, for the second line:**
 - the channel stage run again from a tuned channel (retune);
 - on an applied country: tune that channel actively, grant, calibrate (IQK, TSSI, DPK), prepare the station and data mode, then hand over to `service.rs`'s data service, logging `DATAPATH ADMITTED ON CHANNEL n`.
+
+## The image's own service on the Ryzen: a 30 µs poll timed out unread (2026-11-06)
+
+The first boot of `fast-test` 44a1a4f1 with the maintainer at the screen was the first run of the image's own `rtw89_wifi` with `SLOT_SERVICE` lent. It stopped 9 ms after the MAC was ready:
+- **the line:** `WLANHW SERVICE STOPPED: … stage: RadioB, cause: Fault { kind: Timeout, register: 71500, value: 0 }`;
+- **the register** is 0x1174C (SWSI status);
+- **value 0** says `io::poll32` never read it. A preemption longer than the 30 µs window between the poll's start and its first read ended it with no read. The stage's 100 ms budget was not spent.
+
+**The fix:**
+- **`io::poll32`** takes the time before each read and reads once after its window, as Linux's `read_poll_timeout` does. A ready value read then counts. The clock is still checked after each read, and the iteration guard still ends a stalled clock.
+- **`poll_rck`** follows the same rule. It no longer wraps its reads in a 30 µs `TimedIo`.
+
+The rule it replaces (DRV's own, 2026-10-16) refused a ready value read after the window. Stage budgets (`TimedIo`) stay hard: they admit no read after them.
+
+**The tests now check the new rule.** Each case keeps its bound:
+- the power suite adds the Ryzen's case, a clock that jumps past a 30 µs window before the first read;
+- the MAC, DM and BTC cases that expected a late ready to fail now expect it to count once, and to time out when the ready comes after that one read.
+
+[The PHY notes](../hwdocs/rtl8852be-phy.md) say so.
+
+**A MAC left on is powered off first (2026-11-06).**
+- **What happened:** a `replace` of the serving service left the MAC on. The new instance then refused it at `Identify` (`PowerState` at 0x3F0, 0x02200105).
+- **The fix:** `board::power_off_left_on` now powers such a MAC off before the board read, as Linux's `rtw89_mac_pwr_on` powers off and on again after "MAC has already powered on". The grant has bus mastering off, so no DMA runs. The service logs `THE MAC WAS LEFT ON … POWERED OFF FIRST`.
+- **On the Ryzen,** a replaced build then went through to `SERVING WLANHW` again.
+- **Still refused:** a MAC that stays on, and an unknown chip, which gets no write.
+
+## The second of 0123's lines on the Ryzen: `DATAPATH ADMITTED ON CHANNEL 1` (2026-11-06)
+
+**What the service does now (`receive_service.rs`):**
+- **Before a country,** every `set-channel` is a passive tune (`channel::run` may tune a tuned channel again, as Linux's `set_channel`). `info` names channels 1 to 13, so the station's first scan hears them all.
+- **`set-country` is applied** (answered with `info`) unless 0122's platform word is unknown.
+- **The first `send` on a channel the country lets it send on** is answered `busy` and admits that channel:
+  - `calibrate`: the station's rule, an active tune, `grant`, IQK, TSSI, DPK and the station;
+  - then the data mode and `connection::activate`, the tail now shared with `connection::run`;
+  - then `service.rs` takes the endpoint, and the service logs `[RTW89] DATAPATH ADMITTED ON CHANNEL n`.
+- **The session gets its packet inbox** (`Session::attach_inbox`) only before the data mode, so receive-only and the calibrations retain no packet.
+- **`rtw89_wifi` asks for a 256 KiB stack** (`PT_GNU_STACK`): the 64 KiB default overflowed (`FAULT VECTOR 14`).
+
+**What the Ryzen showed on the way** (each now modelled in `rtw89_initial_phy_device.rs`):
+- **0xCE40** reads back bit 24 set: only the PPDU report's bits 0–8 (Linux's) are compared.
+- **RF restores after IQK, DPK and DACK, and TSSI's thermal-offset table, are now written unread,** as Linux's `_rfk_restore_rf_reg` and `write32` do:
+  - RF0's gain field is the AGC's in RX mode;
+  - path B's RF 0x85 and the table at 0x7C00 read back changed while Bluetooth was active.
+- **The station and data-mode guards** now name each condition they refused.
+
+**On the Ryzen** (a replaced build, `wlan` restarted from its boot image):
+- the country came from the APs, or `00` when none named one;
+- the first send admitted channel 1 and logged `DATAPATH ADMITTED ON CHANNEL 1`.
+
+**Next:** 330 ms later the data service stopped with `TransmitTimeout`. The first frame sent got no completion within 100 ms. The TX path on the hardware comes next.
+
+## The Ryzen joins CoolNet2 over the RTL8852BE (2026-11-08)
+
+**The setup:** the Ryzen's image is `fast-test` 44a1a4f1. `rtw89_wifi` was replaced over the link and `wlan` restarted from its boot image, one build after another. CoolNet2 is on channel 8 of 2.4 GHz (and 100 of 5 GHz, which this driver does not tune). Linux's scan that day heard three strong networks on channel 8.
+
+**What stood in the way, in order** (each fix in its own commit on `claude/ASR-DRV`):
+
+| What the Ryzen did | Why | The change |
+|---|---|---|
+| The scan's first probe request admitted channel 1. Data mode then held channel 1 alone, and CoolNet2 was never heard (2026-11-06) | Calibration on every scan hop | A probe request admits nothing; the join's authentication admits the network's channel, as Linux calibrates at `rtw89_core_sta_add` (274654e5) |
+| Data mode refused every `set-country` and kept sending | — | It keeps the admitted channel when the new limits allow it at no less EIRP. A **debug mode, `KEEP_SENDING`**, only logs a refusal and goes on sending (f47ba6f8) |
+| Data mode stopped 64–320 ms after admission:<br>• `CMAC_ERR_ISR` 8;<br>• `0xc800` bit 31;<br>• `SER_DBG_INFO` counting the firmware's L0 recoveries, which held the BB in reset and zeroed the scheduler | The data mode kept the scan's hardware RX filter `0x03004400`, so the whole busy channel filled the packet buffer | Linux's station filter outside a scan, `0x030044b6`, for a network's filter. It applies in data mode, and in receive-only mode from the join's filter on. After it, no recovery was seen (c696adf2) |
+| — | One receive descriptor a step | 32 a step (c696adf2) |
+| — | — | A **debug mode, `OUTLAST_SER`**, waits up to 60 ms for the BB and the scheduler after such a recovery (c696adf2) |
+| The handshake's message 2 timed out: fetched, released by the RPQ, never reported by the firmware (`tx::Seen`) | The firmware reports the management queue's frames only. Linux's PCIe path takes a frame's status from the RPQ alone (`rtw89_pci_release_rpp`) | A **debug mode, `RPQ_ALONE`**: a data queue's frame is final on DMA and the RPQ (8e3913fd) |
+| Three admissions of four failed in TSSI `ConfigureB`, reading back `0x7a10`, `0x7a1c`, `0x7a2c` changed | Path B is shared with Bluetooth, as on 2026-11-06 | Path B's DAC gain table written unread, as Linux (8e3913fd) |
+
+**The result** (build `rtw89_pathb1`, 8e3913fd, 2026-11-08 ~17:20 UTC):
+- `DATAPATH ADMITTED ON CHANNEL 8`, then the WPA2 handshake;
+- `[WLAN] AUTO-JOIN CoolNet2: JOINED (TRY 1)`;
+- `[NETSTACK] DHCP 192.168.2.169/24 GATEWAY 192.168.2.1 DNS 8.8.8.8 ON CARD 2`.
+
+DHCP's exchange is data both ways over the CCMP-protected link.
+
+**Not yet shown:**
+- **Traffic over Wi-Fi alone.** The wired card 0 is the default route, so the shell's pings (0% lost to the gateway and to 8.8.8.8) went over Ethernet. The laptop's ping of 192.168.2.169 got no ARP answer: `netstack` with two cards on one subnet (NET's question). A measurement needs the cable out.
+- **The issue's acceptance:** ping and traffic during the test suites, measured over Wi-Fi.
+
+**Seen once, not explained:**
+- 320 ms after admission, with a frame pending, the BB was fully in reset (`SYS_FUNC_EN` 0xDC) and all host DMA stopped (`DMA_STOP` 0x000BFF00), with no recovery counted.
+- A passive retune of channel 7 timed out reading `0x10378`. That poisons the PHY, and the service stops.
+
+**To harden later** (the maintainer: everything runs first): `KEEP_SENDING`, `OUTLAST_SER` and `RPQ_ALONE` are constants in `service.rs`, `data_mode.rs` and `tx.rs`, each with the strict path beside it and its host cases.
+
+**What this shows:** that machine, that AP and those builds only (MC-12.1).
+
+## The Wi-Fi alone, the cable out (2026-11-08, evening)
+
+**The setup:** the same image. The maintainer pulled the Ryzen's Ethernet cable, so card 2 became the default route. The trial builds were replaced over the link.
+
+**What stood in the way, in order:**
+
+| What the Ryzen did | Why | The change |
+|---|---|---|
+| 75 minutes joined with `bt_hci`'s rounds paused; 1.5 s after the cable came out, the data mode stopped: `Station(CheckFailure { Timeout })`, `SER_DBG_INFO` counting a second recovery | The first TLS traffic over the Wi-Fi. A firmware recovery outlasted during a pending frame used up that frame's 100 ms, and the station's register check ran out of it | `OUTLAST_SER`'s wait has its own time; the frame's and the operation's deadlines move by it and 20 ms. A recovery that begins during the checks is outlasted, and they run again |
+| The stop line's changes showed the BB in reset and all host DMA stopped | They were the data mode's own shutdown, read after it | The service watches no change after the data mode's shutdown |
+| A frame released as dropped stops the data mode | — | **`DROP_UNACKED`**: answered as not acknowledged |
+| `TransmitTimeout`, 7 tries done, each about 10.4 ms | The release reports were batched (30, Linux's value), with one frame in flight | **`REPORT_EACH`**: a report per frame |
+| Then `Session(Permit(Timeout))` near a frame's deadline, and `TransmitTimeout` after 12 unacknowledged tries at 24 Mb/s | wlan asks 15 tries a send. At about 7 ms each they outran the send's time, so wlan's rate never stepped down | **`SEND_TRIES`**: at most 8 submissions a send. A release is acted on in the step that took it. The service times a send out 10 ms before the data mode does, with the frame's queue, length and age |
+
+**The result** (build `rtw89_tries1`):
+- **Effector's TLS.** It reached hesere.uz over the Wi-Fi alone: `CONNECTED TO hesere.uz (PINNED)`, twice in 3 minutes.
+- **Card 2** carried 130 frames.
+
+**Still open:**
+- **A frame that never ends.** After about 3 minutes, one frame of 84 bytes was fetched by the DMA after five tries, and its release did not come in the 45 ms left. That is the next thing to find.
+- **No ARP answer from the LAN.**
+  - The laptop's ping of 192.168.2.169 still got no ARP answer: `Destination host unreachable` from the laptop itself.
+  - The shell's pings from the Ryzen timed out too. That was after the frame above had stopped the data mode.
+
+**`RESTART_AFTER_FAILURE`** (`main.rs`):
+- **What it does.** After such a failure the device stops, powers off and quiesces, and the driver exits. `init` starts a fresh one, up to 3 times in 60 s.
+- **What it still needs.** `wlan` sends its country only at its own start, so the fresh radio stays receive-only. That part is asked of NET on `internal-dev-messages` (2026-11-08T1840Z).
+- **Its first run (`rtw89_restart1`)** joined CoolNet2 and reconnected Effector.
+
+**`OWN_DEADLINES`** (`data_mode.rs`): an operation keeps its own deadline while a frame is pending. `rtw89_restart1` had stopped after 57 s on `Register(Timeout)` near a pending frame's deadline. `rtw89_own1` joined, took DHCP and reconnected Effector.
+
+**`KEEP_LATE`** (`service.rs`): a send that outruns its time is answered as not acknowledged, and its release is awaited 1 s more while nothing else is sent; only one that outruns that too stops the service.
+
+**To harden later:** `KEEP_SENDING`, `OUTLAST_SER`, `RPQ_ALONE`, `DROP_UNACKED`, `REPORT_EACH`, `SEND_TRIES`, `OWN_DEADLINES`, `KEEP_LATE` and `RESTART_AFTER_FAILURE`. Each is a constant with its strict path beside it; the host cases run both where the path is the driver's own.
+
+**What this shows:** that machine, that AP and those builds only (MC-12.1).

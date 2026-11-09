@@ -2,7 +2,7 @@
 // identity-mapped). The tables are untrusted input: every length is checked against the 4 GiB window.
 use super::port::{inb, outb, outl, read, write};
 use crate::serial_print;
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 // Reset register: address space << 56 | value << 48 | address (0: none).
 static RESET: AtomicU64 = AtomicU64::new(0);
@@ -16,6 +16,10 @@ static PM_TIMER: AtomicU32 = AtomicU32::new(0);
 static SLEEP: AtomicU64 = AtomicU64::new(0);
 static SMI: AtomicU32 = AtomicU32::new(0);
 const WINDOW: u64 = 0x1_0000_0000;
+// SCI_EN as the firmware left it, read at boot (000-KRN-0216): 0 unknown, 1 clear, 2 set.
+static SCI_FOUND: AtomicU8 = AtomicU8::new(0);
+// The PM1 event blocks' state (000-KRN-0216): 0 not prepared yet, 1 ready to lend, 2 not (ACPI mode not reached).
+static EVENTS: AtomicU8 = AtomicU8::new(0);
 
 unsafe fn bytes(address: u64, len: u64) -> Option<&'static [u8]> {
     (address != 0 && address.checked_add(len)? <= WINDOW).then(|| core::slice::from_raw_parts(address as *const u8, len as usize))
@@ -54,6 +58,7 @@ pub unsafe fn init(rsdp: u64) {
                    else if table.len() >= 92 && table[91] == 4 { u32_at(table, 76) as u64 } else { 0 };
         if port != 0 && port < 0x1_0000 { PM_TIMER.store(port as u32 | ((table.len() >= 116 && u32_at(table, 112) & 1 << 8 != 0) as u32) << 31, Ordering::Release); }
         sleep_states(table);
+        if let Some(cnt) = crate::fadt::parse(table).and_then(|f| f.pm1a_cnt) { SCI_FOUND.store(if read(cnt.port, 2) as u16 & crate::fadt::SCI_EN != 0 { 2 } else { 1 }, Ordering::Release); }
         if table.len() < 129 || u32_at(table, 112) & 1 << 10 == 0 { serial_print(if table.len() < 129 { "MIND CORE KERNEL: ACPI: FADT WITHOUT A RESET REGISTER (REVISION 1)\n" } else { "MIND CORE KERNEL: ACPI: RESET REGISTER NOT SUPPORTED\n" }); continue; }
         let (space, register) = (table[116], u64_at(table, 120));
         if matches!(space, 0..=2) && register != 0 && register < 1 << 48 { RESET.store((space as u64) << 56 | (table[128] as u64) << 48 | register, Ordering::Release); serial_print("MIND CORE KERNEL: ACPI: RESET REGISTER FOUND\n"); }
@@ -153,6 +158,51 @@ fn processors(madt: &[u8]) {
 }
 
 fn pause() { for _ in 0..1_000_000 { core::hint::spin_loop(); } }
+
+/// The FADT's fixed hardware (000-KRN-0216), if the tables have a FADT.
+pub fn fixed() -> Option<crate::fadt::Fixed> {
+    let mut found = None;
+    tables(|t| if found.is_none() { found = crate::fadt::parse(t); });
+    found
+}
+
+/// SCI_EN as the firmware left it at boot: None when the FADT names no PM1a control block.
+pub fn sci_found() -> Option<bool> { match SCI_FOUND.load(Ordering::Acquire) { 1 => Some(false), 2 => Some(true), _ => None } }
+
+/// Before a PM1 event block is lent (000-KRN-0216), once: the chipset in ACPI mode (ACPI_ENABLE to SMI_CMD, as
+/// power_off does), every GPE and fixed event disabled and their status cleared, so that the SCI is raised only by
+/// what the borrower enables. False when ACPI mode is not reached; SMI_CMD and PM1 control are never lent.
+pub unsafe fn events_ready() -> bool {
+    match EVENTS.load(Ordering::Acquire) { 1 => return true, 2 => return false, _ => {} }
+    let Some(f) = fixed() else { EVENTS.store(2, Ordering::Release); return false };
+    let on = |cnt: crate::fadt::Block| read(cnt.port, 2) as u16 & crate::fadt::SCI_EN != 0;
+    let Some(cnt) = f.pm1a_cnt else { EVENTS.store(2, Ordering::Release); return false };
+    let found = on(cnt);
+    if !found {
+        if let Some(smi) = f.smi_cmd.filter(|_| f.acpi_enable != 0) {
+            outb(smi.port, f.acpi_enable);
+            for _ in 0..300 { if on(cnt) { break; } pause(); }
+        }
+    }
+    if !on(cnt) {
+        serial_print("MIND CORE KERNEL: ACPI: ACPI MODE NOT REACHED (SCI_EN STAYS CLEAR): THE PM1 EVENTS ARE NOT LENT\n");
+        EVENTS.store(2, Ordering::Release);
+        return false;
+    }
+    for gpe in [f.gpe0, f.gpe1].into_iter().flatten() {
+        let half = gpe.len / 2;
+        for i in 0..half { outb(gpe.port + half + i, 0); outb(gpe.port + i, 0xFF); }
+    }
+    for evt in [f.pm1a_evt, f.pm1b_evt].into_iter().flatten() {
+        let (status, enable) = crate::fadt::Fixed::status_enable(evt);
+        write(enable, 2, 0);
+        write(status, 2, 0xFFFF);
+    }
+    serial_print(if found { "MIND CORE KERNEL: ACPI: IN ACPI MODE ALREADY; EVERY GPE AND FIXED EVENT DISABLED, THE PM1 EVENTS LENT\n" }
+                 else { "MIND CORE KERNEL: ACPI: SWITCHED TO ACPI MODE; EVERY GPE AND FIXED EVENT DISABLED, THE PM1 EVENTS LENT\n" });
+    EVENTS.store(1, Ordering::Release);
+    true
+}
 
 /// Turns the machine off through ACPI S5: SLP_TYP and SLP_EN in PM1a/PM1b_CNT; ERR_INVALID when the tables name no S5.
 /// The firmware's _PTS is not run (no AML interpreter). A machine still on after it is halted, and says so on screen.

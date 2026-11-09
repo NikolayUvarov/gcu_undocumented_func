@@ -118,6 +118,9 @@ fn conduit(table: &[u8]) {
     SMC.store(table[129] & 1 != 0 && table[129] & 2 == 0, Ordering::Relaxed);
 }
 
+/// PSCI named by another source than the FADT: the device tree's `/psci` (100000-PRT-0009).
+pub fn set_conduit(smc: bool) { PSCI.store(true, Ordering::Relaxed); SMC.store(smc, Ordering::Relaxed); }
+
 /// Before the handoff is trusted (351-KRN-0167): only the console (virt's, or the SPCR's) and PSCI's conduit.
 pub unsafe fn early(rsdp: u64) {
     let Some(list) = bytes(rsdp, 36).filter(|r| &r[..8] == b"RSD PTR " && r[15] >= 2).and_then(|root| table(u64_at(root, 24))) else { return };

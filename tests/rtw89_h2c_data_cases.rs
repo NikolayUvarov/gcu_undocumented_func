@@ -6,6 +6,9 @@ fn active_transition_requires_actual_command_dma_idle_before_serial_enable(){run
 #[test]
 fn actual_data_owner_wraps_twice_with_receipt_each_time_and_continuous_wifi(){run(0,true,true,|data,c|{
     {let mut c=c.borrow_mut();c.continuous_wifi=8192;c.old=1;}
+    // The station's role, policy and AFH go out once, at the first reconcile (213-DRV-0052); the bounds below are the
+    // commands' own, after it.
+    data.poll_packets(100_000).unwrap();{let mut c=c.borrow_mut();c.wifi_max_pending=0;c.normal_packets.clear();}
     let request=h2c::Command{category:2,class:10,function:2};
     for n in 0..514{
         assert_eq!(data.command(request,&[0;20],h2c::Acks{received:false,done:false},100_000).unwrap(),h2c::Outcome::Received);
@@ -26,7 +29,8 @@ fn wrapped_runtime_ack_without_command_dma_consumption_cannot_release_owner(){ru
     for _ in 0..260{command(data);}
     c.borrow_mut().hold_command_dma=true;
     let failure=data.command(h2c::Command{category:2,class:10,function:2},&[0;20],h2c::Acks{received:true,done:true},1000).unwrap_err();
-    assert!(failure.shutdown.is_some());let count=c.borrow().normal_packets.len();assert_eq!(count,261);
+    // 260 commands, the one that fails, and the station's role, policy and AFH at the first reconcile (213-DRV-0052).
+    assert!(failure.shutdown.is_some());let count=c.borrow().normal_packets.len();assert_eq!(count,264);
     assert!(data.command(h2c::Command{category:2,class:10,function:2},&[0;20],h2c::Acks{received:true,done:true},1000).is_err());
     assert_eq!(c.borrow().normal_packets.len(),count);
 });}

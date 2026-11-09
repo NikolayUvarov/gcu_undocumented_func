@@ -66,7 +66,7 @@ fn exact_poh_ltr_and_receive_only_activation_preserve_uninstalled_channels(){
     d.put(R_AX_WDRLS_CFG,4,u32::MAX);activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();
     assert_eq!(r.state(),rx::State::Running);assert_eq!(q.state(),fwcmd::State::Running);
     assert_eq!(d.get(fwcmd::DMA_STOP,4),RECEIVING);assert_eq!(d.get(fwcmd::INIT_CONFIG,4)&HCI,HCI);
-    assert_eq!(d.get(R_AX_WDRLS_CFG,4)&B_AX_WDRLS_MODE_MASK,0);assert_eq!(d.get(R_AX_RLSRPT0_CFG1,4)&0xff00ff,0xff001e);
+    assert_eq!(d.get(R_AX_WDRLS_CFG,4)&B_AX_WDRLS_MODE_MASK,0);assert_eq!(d.get(R_AX_RLSRPT0_CFG1,4)&0xff00ff,0xff0001,"REPORT_EACH: one report a frame");
     assert_eq!(d.get(0x8410,4),0x2743);assert_eq!(d.get(0x8414,4),0x280028);assert_eq!(d.get(0x8418,4),0x90039003);assert_eq!(d.get(0x841c,4),0x880b880b);
     assert_eq!(d.get(0x8810,4)&1,1);assert_eq!(d.get(0x9a00,4)&2,0);
     assert!(d.writes.iter().all(|(at,_,_)|!HOST_MASKS.contains(at)&&*at!=0xc348&&*at!=fwcmd::INDEX&&!(0x1020..=0x1054).contains(at)&&!(0x1100..=0x11ff).contains(at)));

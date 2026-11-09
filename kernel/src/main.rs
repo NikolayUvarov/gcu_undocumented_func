@@ -27,6 +27,10 @@ unsafe impl GlobalAlloc for IrqAllocator {
 }
 #[path = "../../common/abi.rs"]
 mod abi;
+#[path = "../../common/fadt.rs"]
+mod fadt;
+#[path = "../../common/spinlock.rs"]
+mod spinlock;
 use abi::BootInfo;
 // The processor and platform: only through these names (issue 200).
 mod arch;
@@ -111,7 +115,8 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
             cpu::halt_here();
         }
         let info = &*raw_info;
-        acpi::init(info.acpi_rsdp);
+        // The board from ACPI, else from the device tree a board without ACPI gives (100000-PRT-0009).
+        if info.acpi_rsdp != 0 || !platform::board_from_tree(info.device_tree) { acpi::init(info.acpi_rsdp); }
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         // The identity map first: the frame pool writes its lists into RAM above 4 GiB, which only it maps (issue 171).
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");

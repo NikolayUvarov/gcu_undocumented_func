@@ -174,8 +174,12 @@ fn both_cleanup_failures_are_reported_without_losing_primary_timeout() {
 
 #[test]
 fn late_ready_bits_do_not_erase_the_poll_deadline() {
-    for at in [mac::WDE_READY, mac::PLE_READY] {
+    for (index, at) in [mac::WDE_READY, mac::PLE_READY].into_iter().enumerate() {
+        // A read that takes the whole 2 ms window still counts when it reads ready, as Linux's read_poll_timeout...
         let mut bus = Device::new(); bus.late_ready = Some(at);
+        mac::prepare_download(&mut bus).unwrap();
+        // ...but a ready bit that comes after the one read past the deadline is a timeout.
+        let mut bus = Device::new(); bus.late_ready = Some(at); bus.ready_after[index] = 10_000;
         let err = mac::prepare_download(&mut bus).unwrap_err();
         assert_eq!(err.cause.kind, FaultKind::Timeout); assert_eq!(err.cause.register, at);
         bus.cleaned();

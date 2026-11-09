@@ -8,7 +8,7 @@ pub const HEARD_MAX: usize = 32;
 const POLL_US: u64 = 20_000;
 const IDLE_US: u32 = 200;
 const EVENTS_US: u32 = 10_000;
-const RX_FILTER: usize = 0xce20;
+pub(crate) const RX_FILTER: usize = 0xce20;
 // FIF_BCN_PRBRESP_PROMISC as mac80211 sets it for a scan (mac80211.c:304–378): beacon, broadcast and A1 checks off.
 pub const SCAN_OPEN: u32 = 1 << 7 | 1 << 2 | 1 << 1;
 
