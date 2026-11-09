@@ -429,6 +429,7 @@ macro_rules! types {
     };
 }
 types! {
+    audio: Range Levels;
     battery: Error Status;
     blockstore: Error Codec Durability Stats Head Collected Kept Pinned Usage Update Named Published PinTaken Committed Domain Scrubbed CopyStats Standing CopyName Walked Rebuilt;
     display: Error Mode RemoteState;

@@ -8645,6 +8645,11 @@ def beep_demo_tones(left, rate, first):
 
 
 def audio_suite(vm, wav):
+    # The levels (audio.wit 1.2, 000-DRV-0057): AC'97's master at 0 dB, 1.5 dB a setting, and its record gain at 0 dB;
+    # a program's plain client reads them and is refused setting them.
+    start = vm.service_logs("audio_gw", "[AUDIO] LEVELS AT START")
+    levels = re.search(r"\[AUDIO\] LEVELS AT START: VOLUME 100 % \(0\.00 DB OF (32|64) SETTINGS\); GAIN 0 % \(0\.00 DB OF 16 SETTINGS\), BOOST OFF", start)
+    assert levels, start
     require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
     output = ""
     for _ in range(50):
@@ -8661,6 +8666,14 @@ def audio_suite(vm, wav):
     require(played, "[BEEP] PLAYED 3 NOTES, 600 MS")
     require(played, "[BEEP] DONE")
     assert task_rows_reaped(vm) == {}, "beep ended with its sound"
+    # After beep, which the suite expects as the session's first program.
+    if vm.args.levels_elf:
+        out = vm.command("levelstub")
+        require(out, f"LEVELS STUB: VOLUME 100 MUTED false OUTPUT {levels[1]}/6/{int(levels[1]) - 1} SCALED false; GAIN 0 BOOST false OF 80 QDB CAPTURE 16/6/0 SCALED false")
+        require(out, "LEVELS STUB: SET-VOLUME RIGHTS, SET-GAIN RIGHTS")
+        require(vm.service_logs("audio_gw", "HAS NO LEVELS BADGE"), "[AUDIO] LEVELS: PID ")
+    else:
+        print("SKIP: the levels through a plain client (000-DRV-0057): no tests/levels_stub build (scripts/x86_fixtures.sh)", flush=True)
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
@@ -8685,7 +8698,7 @@ def audio_suite(vm, wav):
     pause = notes[0] + int(rate * 0.22)
     assert not any(left[pause:pause + int(rate * 0.06)]), "the pause is silent"
     print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
-          "beep's notes (440 Hz, a pause, 880 Hz) without a screen", flush=True)
+          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them", flush=True)
 
 
 SPEECH = ("открой файлы", "который час", "hello world")
@@ -8760,6 +8773,10 @@ def hda_suite(args):
             ready = vm.service_logs("audio_gw", "[AUDIO] HDA READY")
             found = re.search(r"\[AUDIO\] HDA READY: CODEC 0 ([0-9A-F]{4}):([0-9A-F]{4}) REVISION [0-9A-F]{8}; OUT PIN (0X[0-9A-F]+) \(LINE\) <- DAC (0X[0-9A-F]+); IN PIN (0X[0-9A-F]+) \(LINE\) -> ADC (0X[0-9A-F]+); 48000 HZ STEREO S16, 32 DMA BUFFERS, (INTERRUPTS|POLLED)", ready.upper())
             assert found, ready
+            # The levels (000-DRV-0057): both sides at 0 dB, on the codec's amplifiers or, without one, scaled.
+            start = ready if "[AUDIO] LEVELS AT START" in ready else vm.service_logs("audio_gw", "[AUDIO] LEVELS AT START")
+            levels = re.search(r"\[AUDIO\] LEVELS AT START: VOLUME (\d+) % \(0\.00 DB OF (\d+) SETTINGS(, SCALED)?\); GAIN (\d+) % \(0\.00 DB OF (\d+) SETTINGS(, SCALED)?\), BOOST (NONE|OFF)", start)
+            assert levels, start
             require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
             output = ""
             for _ in range(60):
@@ -8800,7 +8817,8 @@ def hda_suite(args):
     finally:
         vm.close()
     print(f"PASS: Intel HD Audio: codec {found[1]}:{found[2]}, line out {found[3]} <- DAC {found[4]}, line in {found[5]} -> ADC {found[6]} ({found[7].lower()}); "
-          "beep's tones through the output stream, a second recorded from the input stream; a second controller lent beside the first", flush=True)
+          "beep's tones through the output stream, a second recorded from the input stream; a second controller lent beside the first; "
+          f"the levels at 0 dB: volume {levels[1]} % of {levels[2]} settings{levels[3] or ''}, gain {levels[4]} % of {levels[5]}{levels[6] or ''}, boost {levels[7].lower()}", flush=True)
 
 
 def listen_suite(vm, starts):
@@ -15021,6 +15039,7 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
+    parser.add_argument("--levels-elf", help="test-only ELF built from tests/levels_stub (the audio levels through a plain client in the audio suite, 000-DRV-0057); found where the fixture scripts put it")
     parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
@@ -15061,6 +15080,9 @@ def main():
         built = ROOT / IMAGE / f"fixture-{name}.elf" if args.arch == "aarch64" else \
             Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / f"mind-{name}-target/x86_64-unknown-none/release/{name}_stub"
         setattr(args, f"{name}_elf", getattr(args, f"{name}_elf") or (str(built) if built.exists() else None))
+    # The audio suite's levels stub (000-DRV-0057): x86 only, where the audio suites run.
+    levels = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-levels-target/x86_64-unknown-none/release/levels_stub"
+    args.levels_elf = args.levels_elf or (str(levels) if args.arch == "x86_64" and levels.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -15163,6 +15185,8 @@ def main():
                 (disk / "voice.wav").write_bytes(speech_wav(DIALOGUE)[0])
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
+            if suite == "audio" and args.levels_elf:
+                shutil.copyfile(args.levels_elf, disk / "levelstub.elf")  # the levels through a plain client (000-DRV-0057)
             if suite == "shell":
                 (disk / "data").mkdir(exist_ok=True)
                 if args.secret_elf:
