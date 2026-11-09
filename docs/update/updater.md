@@ -127,6 +127,12 @@ tries 3                                   # tries of a trial boot for an automat
   - The log names the channel held (351-UPD-0025): slot A's at start, current, then the source's, expired.
   - Booted back in slot A with the clock 60 days on, past the expiry of the channel kept there, and no network, the updater says that channel has expired, and the system runs on: `uptime` runs.
 - **The `linkupdate` suite** (351-KRN-0141; x86, aarch64) refuses an expired channel from a directory, as over HTTPS, with no boot record written.
+- **The `updatestore` suite** (351-UPD-0033; x86, aarch64; run with `updater`) uses a blank store disk, and `update.txt` asks nothing automatic.
+  - At its start the updater keeps release 5 in the store.
+  - `update fetch` stages release 6 and keeps it. It puts only the two files release 6 changes (`uptime.elf` and the loader) and takes the others from release 5's tree.
+  - The store logs both pins with the updater's badge, 23. The shell's client holds no pins and is refused the updater's (`Rights`).
+  - Applied and confirmed, the store keeps both releases. A collection frees an object nothing retains, and both trees read back whole with `blocks check <cid> tree`.
+  - With the machine off, slot A's kernel and loader are damaged on the disk. `update rollback` writes release 5 back from the store, and slot A boots on trial with release 5's manifest and is confirmed. Its files are then as published.
 - **Host tests** (`tests/updater_host.rs`) cover each record the updater writes, followed through the bootloader's choice:
   - an update's trial;
   - its confirmation;
@@ -135,7 +141,11 @@ tries 3                                   # tries of a trial boot for an automat
   - no valid record;
   - a sequence at its end.
 
-  They also cover how a manifest's files split into boot files, applications and the root's shared files, and when metadata counts as expired: from the second of its expiry on, or always on a clock that cannot be read.
+  They also cover how a manifest's files split into boot files, applications and the root's shared files, and when metadata counts as expired: from the second of its expiry on, or always on a clock that cannot be read. Since 351-UPD-0033 they cover the releases kept in the store too:
+  - which stay;
+  - a kept tree read back by the layout's paths;
+  - two releases sharing their blobs, with 400 blobs under their prefixes;
+  - trees out of shape or damaged, refused.
 
 ## Not provided yet
 
@@ -150,6 +160,12 @@ tries 3                                   # tries of a trial boot for an automat
     - `apply` boots slot B on trial, and the trial is confirmed.
 
   It has passed in QEMU on x86 and aarch64. The bundle's reader also runs in the host tests (`tests/updater_host.rs`) on a bundle `release.py bundle` wrote and on hostile archives. No client of another badge has run against the install calls: the shell's `update` command is not there yet.
+- **Kept releases, what is not there yet** (351-UPD-0033):
+  - The shell's `update` does not show which releases the store keeps; the log does.
+  - `apply` does not write a damaged staged slot again from the store: `fetch` writes it again from the source.
+  - A collection in the minute between a block's put and the tree's pin may free the block. The pin is then refused (`incomplete`), and the next start keeps the release.
+  - The updater has no quota of its own. Its account counts each release whole, so the store's medium must be at least four times a release to hold three.
+  - None of it has run on real hardware.
 - **SSH** (351-NET-0004).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).
