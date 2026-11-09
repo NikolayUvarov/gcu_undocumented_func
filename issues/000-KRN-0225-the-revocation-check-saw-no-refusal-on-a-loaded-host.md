@@ -1,6 +1,6 @@
 # 000-KRN-0225 — The revocation check saw no refused mint on a loaded host (round 103)
 
-**Type:** tests (the `isolation` suite) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (the check made to take up to three walks, on `claude/youthful-mendel-mf1soy`; its runs beside a busy lane left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (the `isolation` suite) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (the check takes up to three walks, on `claude/youthful-mendel-mf1soy`; 20 runs beside a busy host passed; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -39,6 +39,10 @@
   - the PASS line says which walk it was when it was not the first.
   - With one CPU it runs once, as before.
 - **Tested** in the kernel session's container (QEMU 8.2.2, TCG): the `isolation` suite on 4 CPUs (the first walk refused 3) and on 1 CPU.
+- **On x32-128** through Effector, at 125a87a6, with the x2APIC group's kernel and CPU model (`--cpu-model max`), beside 24 threads that kept 24 of its 32 threads busy:
+  - the `isolation` suite 20 times on 4 CPUs: 20 passed, each at its first walk (8 to 16 mints refused);
+  - 5 times on 1 CPU: 5 passed.
+  - **So round 103's failure was not reproduced:** under that load the child's CPU ran during every walk. The cause above is inferred from the kernel's code and the walk's length, not seen again. With up to three walks, a failure means three walks in a row without the child running, or a fault in the kernel's refusal.
 
 ## Related
 
