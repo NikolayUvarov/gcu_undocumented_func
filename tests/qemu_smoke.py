@@ -9458,9 +9458,10 @@ def api_runs(vm, port):
 def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, plain_port, files):
     """000-NET-0048: `get`, the console's wget and curl, against tests/http_api_stub.py and the release server over HTTPS:
     a body to the console and to files (-o, -O), a download cut short and resumed with -c, a JSON POST, a multipart form
-    and a PUT of a file, redirects by their rules (--max-redirs, HTTPS to HTTP, credentials kept from another host), -f,
-    -I, -w, --max-time, plain HTTP only when asked, curl's exit statuses for each failure, and a host its grant does not
-    name asked of the user at run time (refused, then allowed once)."""
+    and a PUT of a file, redirects by their rules (--max-redirs, HTTPS to HTTP, credentials kept from another host), -u
+    with the password given or typed at the console, -f, -I, -w, --max-time, plain HTTP only when asked, curl's exit
+    statuses for each failure, and a host its grant does not name asked of the user at run time (refused, then allowed
+    once)."""
     api = f"https://10.0.2.2:{port}/api"
     data = (files / "get.bin").read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -9517,6 +9518,31 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
     # Credentials go on to the same host only.
     assert echo(get(f"-H 'Authorization: Bearer t0k' {api}/hop"))["authorization"] == "Bearer t0k"
     assert echo(get(f"-H 'Authorization: Bearer t0k' {api}/elsewhere?{other_port}"))["authorization"] is None
+    # -u (000-NET-0048): Basic authentication from the command line, or with the password typed at the console with no
+    # echo through the shell's secret line (000-APP-0126); Esc refuses it, and a script's get has no console to ask at.
+    def basic(user, password):
+        return "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+    assert echo(get(f"-u alice:s3:cr {api}/echo"))["authorization"] == basic("alice", "s3:cr")
+    assert echo(get(f"-u alice:s3:cr {api}/elsewhere?{other_port}"))["authorization"] is None
+    password = "pa55-\u0436 w0rd"
+
+    def typed(keys, after):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(f"get -u alice {api}/echo\n")
+        vm.logged("PASSWORD FOR alice AT 10.0.2.2", since, timeout=30)
+        vm.send_bytes(keys)
+        vm.expect("MIND> ", timeout=60, after=after)
+        return to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", "")), vm.log[since:]
+    out, raw = typed(password.encode() + b"\r", '"authorization"')
+    require_all(out, "SECRET FOR get (PID ", "(GIVEN)")
+    assert echo(out)["authorization"] == basic("alice", password) and "pa55" not in raw, raw[-3000:]
+    out, _ = typed(b"x\x1b", "NO PASSWORD TYPED")
+    require_all(out, "(REFUSED)", "GET: -u alice: NO PASSWORD TYPED (REFUSED AT THE CONSOLE)")
+    assert '"authorization"' not in out, out
+    code, out = status(f"-u alice {api}/echo")
+    assert code == 2 and "NO CONSOLE TO TYPE IT AT (A SCRIPT)" in out, out
+    assert "pa55" not in vm.command("dmesg -s shell", raw=True)
     # -f, -I, -w, a coded body saved decoded.
     require(get(f"{api}/busy"), "busy")
     code, out = status(f"-f {api}/busy")
@@ -9586,7 +9612,8 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
 
     print("PASS: get: a body to the console and to the user's files (-o, -O), a download cut short and finished with -c by "
           "Range, a JSON POST, a multipart form and a PUT of a file, redirects by their rules (a chain, --max-redirs, HTTPS to "
-          "HTTP refused, 303 after a POST, credentials not sent on to another host), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
+          "HTTP refused, 303 after a POST, credentials not sent on to another host), -u's Basic authentication with the password "
+          "given or typed with no echo at the console (Esc refusing it, none in a script), -f, -I (HEAD), PATCH and DELETE, -w, --max-time, plain HTTP only "
           "with --insecure-http; exit statuses 1, 2, 3, 7, 22, 28, 47, 56 and 60 as curl's; a host not in its grant asked at run "
           "time, refused and allowed once, from a script too (Esc answering no without stopping the script)", flush=True)
 
