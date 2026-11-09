@@ -1,6 +1,6 @@
 # 100000-LNK-0038 — `link` over the board's console UART, so that `effector485` reaches the PinePhone
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-11-09) · **Blocked by:** [100000-KRN-0221](100000-KRN-0221-init-starts-uart-serial-for-link.md), `init`'s part, for the QEMU runs · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.3, MC-12.4
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-11-09) · **Blocked by:** [100000-KRN-0221](../issues-done/100000-KRN-0221-init-starts-uart-serial-for-link.done), `init`'s part, for the QEMU runs · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.3, MC-12.4
 
 Numbered from the kernel session's request of 2026-11-08 in `requests-LNK.md`.
 

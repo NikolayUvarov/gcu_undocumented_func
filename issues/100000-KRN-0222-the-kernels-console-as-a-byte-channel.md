@@ -81,4 +81,4 @@ The kernel has a ring and a blocking read already: a task's text input (`TEXT_QU
 
 ## Related
 
-[100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [100000-KRN-0221](100000-KRN-0221-init-starts-uart-serial-for-link.md), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md) (the 16550 the kernel drives).
+[100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [100000-KRN-0221](../issues-done/100000-KRN-0221-init-starts-uart-serial-for-link.done), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md) (the 16550 the kernel drives).

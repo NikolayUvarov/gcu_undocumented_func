@@ -1,12 +1,12 @@
-# 000-KRN-0226 — An IDL client's call buffer is wiped before it is freed
+# 000-KRN-0226 — An IDL client's call buffer is wiped before it is freed — done
 
-**Type:** libmind (the IDL generator's clients) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (made and tested on the host and in QEMU, x86 and aarch64, 2026-11-09; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.8, MC-11.9
+**Type:** libmind (the IDL generator's clients) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.8, MC-11.9
 
-**Asked by:** APP, 2026-11-09, in `requests-KRN.md` ("The generated binding's buffer of `shell.wit` `secret-line` wiped before it is freed"), from NET's remark in [000-NET-0048](../issues-done/000-NET-0048-get-a-wget-and-curl-analog.done)'s resolution.
+**Asked by:** APP, 2026-11-09, in `requests-KRN.md` ("The generated binding's buffer of `shell.wit` `secret-line` wiped before it is freed"), from NET's remark in [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.done)'s resolution.
 
 ## Problem
 
-- **The secret line's path:** a console program's secret line (`shell.wit` 1.12, [000-APP-0126](../issues-done/000-APP-0126-a-console-program-reads-a-secret.done)) comes back in the call's buffer.
+- **The secret line's path:** a console program's secret line (`shell.wit` 1.12, [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.done)) comes back in the call's buffer.
 - **The generated binding** (`mind::idl::shell::secret_line`) copies it into the caller's `out` and drops its `Pages`, which are freed (`SYSCALL_FREE`) with the line still in them.
 - **What the kernel does:** it zeroes task memory when it gives it out (the profile, MC-1.8), so no other task reads it. Between the free and the next allocation, the bytes stay in the frame.
 - **Other secrets travel the same way:** keystore's PMK (`wifi-remember`, `list<u8, 32>`), the keys `wifi-keys` returns (`list<u8, 48>`), signatures and secrets in `bytes`. So a mark on `bytes` results alone would miss some.
@@ -54,6 +54,18 @@
   - `manifest_test.py` failed on this container's `cryptography` (`_cffi_backend`), as it does on `main` here;
   - the steps after it, run on: no failure.
 
+## Resolution
+
+**All criteria are met.** Landed in round 106 (`main` 7415c9a1, 2026-11-09), after round 105 returned its first form for DRV's host test (fixed in 1cdb9926).
+- **`mind::idl::wire::Wiped`:** every buffered client the generator makes overwrites its call's buffer with zeros, by volatile stores, on every way out, before the pages are freed. Secrets in `bytes`, lists and strings are covered alike.
+- **No interface change:** the wire and the WIT are the same, only the generated code.
+- **Evidence:**
+  - `tests/idl_host.rs`' `a_clients_buffer_is_wiped_before_it_is_freed`, which fails without `Wiped`;
+  - the whole host tests;
+  - the `shell` and `net` suites with the secret line and `get -u`, on x86 and aarch64;
+  - every group of round 106's gate.
+- **Not covered:** a word call's message words, and a server's own copies (each server's to wipe).
+
 ## Related
 
-[000-APP-0126](../issues-done/000-APP-0126-a-console-program-reads-a-secret.done), [000-NET-0048](../issues-done/000-NET-0048-get-a-wget-and-curl-analog.done), [docs/idl/README.md](../docs/idl/README.md).
+[000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.done), [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.done), [docs/idl/README.md](../docs/idl/README.md).
