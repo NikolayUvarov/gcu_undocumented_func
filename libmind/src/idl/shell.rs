@@ -8,7 +8,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -96,7 +96,7 @@ pub fn window(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>> {
 /// be, after the user agrees there (shell/src/clients.rs). The shell's screen commands, scripts and programs are
 /// refused.
 pub fn run(endpoint: Endpoint, line: &str, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<240>(line, &mut w).ok_or(SysError::Invalid)?;
@@ -149,7 +149,7 @@ pub fn wifi(endpoint: Endpoint, receive: usize) -> Result<core::result::Result<(
 /// How the boot went (1.6, 000-APP-0086): after a safe start, the notice the shell shows above its first prompt,
 /// with the services the start left out and `svc start` for each; empty after a normal boot. For any client.
 pub fn boot_notice(endpoint: Endpoint) -> Result<core::result::Result<Text<240>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -165,7 +165,7 @@ pub fn boot_notice(endpoint: Endpoint) -> Result<core::result::Result<Text<240>,
 /// `show = net` line gives the frames a second. It reads only and reaches nothing on the network. `refused` for any
 /// other client; `unavailable`: no network stack.
 pub fn net_counters(endpoint: Endpoint) -> Result<core::result::Result<List<CardCounters, 4>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -202,7 +202,7 @@ pub fn set_zone(endpoint: Endpoint, west: bool, minutes: u32) -> Result<core::re
 /// The layout and its switch now, as `keymap` shows them (1.10). For any client: it only reads. `unavailable`: the
 /// shell holds no keyboard client.
 pub fn keymap(endpoint: Endpoint) -> Result<core::result::Result<Keymap, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -217,7 +217,7 @@ pub fn keymap(endpoint: Endpoint) -> Result<core::result::Result<Keymap, Error>>
 /// Sets them, as `keymap <layout> --switch <key>` does (1.10): for the window manager the shell started, at once, as
 /// the clock (its Settings are the user's choice); `refused` for any other client.
 pub fn set_keymap(endpoint: Endpoint, keymap: &Keymap) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         keymap.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -233,7 +233,7 @@ pub fn set_keymap(endpoint: Endpoint, keymap: &Keymap) -> Result<core::result::R
 /// The machine's name, as `hostname` says it (1.11, 000-APP-0123): `mindcore` when none is set, or
 /// `data/machine/name` holds no name. For any client: it only reads.
 pub fn hostname(endpoint: Endpoint) -> Result<core::result::Result<Text<63>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -250,7 +250,7 @@ pub fn hostname(endpoint: Endpoint) -> Result<core::result::Result<Text<63>, Err
 /// started, at once, as the clock (its Settings are the user's choice); for any other client, once the user agrees in
 /// the shell's window.
 pub fn set_hostname(endpoint: Endpoint, name: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<63>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -270,7 +270,7 @@ pub fn set_hostname(endpoint: Endpoint, name: &str) -> Result<core::result::Resu
 /// client badged for this call alone; `refused` for any other client, and for a program that is not the console
 /// program in front of its session; `busy` while another line is being typed.
 pub fn secret_line(endpoint: Endpoint, prompt: &str, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<80>(prompt, &mut w).ok_or(SysError::Invalid)?;

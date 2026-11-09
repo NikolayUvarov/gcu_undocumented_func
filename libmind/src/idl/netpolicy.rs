@@ -21,7 +21,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -81,7 +81,7 @@ impl Wire for Choice {
 
 /// Makes a grant for `program` from the policy; returns its badge. Error no-policy: the policy names nothing for it.
 pub fn prepare(endpoint: Endpoint, program: &str) -> Result<core::result::Result<u16, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<16>(program, &mut w).ok_or(SysError::Invalid)?;
@@ -115,7 +115,7 @@ pub fn bind(endpoint: Endpoint, badge: u16, pid: u64) -> Result<core::result::Re
 
 /// Revokes every grant of `program` (its copies are removed, its flows closed); returns how many.
 pub fn revoke(endpoint: Endpoint, program: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<16>(program, &mut w).ok_or(SysError::Invalid)?;
@@ -130,7 +130,7 @@ pub fn revoke(endpoint: Endpoint, program: &str) -> Result<core::result::Result<
 
 /// The live grants.
 pub fn list(endpoint: Endpoint) -> Result<List<Grant, 32>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -143,7 +143,7 @@ pub fn list(endpoint: Endpoint) -> Result<List<Grant, 32>> {
 
 /// The lines of the policy in force, from line `start` (comments and blank lines left out) (1.1).
 pub fn lines(endpoint: Endpoint, start: u32) -> Result<List<Text<160>, 16>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -158,7 +158,7 @@ pub fn lines(endpoint: Endpoint, start: u32) -> Result<List<Text<160>, 16>> {
 /// Adds `line` at the end of the policy; a line that is not a rule, a `dns` line or a `resolver` line is refused
 /// (invalid) (1.1).
 pub fn add(endpoint: Endpoint, line: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<160>(line, &mut w).ok_or(SysError::Invalid)?;
@@ -173,7 +173,7 @@ pub fn add(endpoint: Endpoint, line: &str) -> Result<core::result::Result<(), Er
 
 /// Removes every line equal to `line` (spaces aside); returns how many (1.1).
 pub fn remove(endpoint: Endpoint, line: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<160>(line, &mut w).ok_or(SysError::Invalid)?;
@@ -188,7 +188,7 @@ pub fn remove(endpoint: Endpoint, line: &str) -> Result<core::result::Result<u32
 
 /// The questions that wait, oldest first, at most 8 (1.3).
 pub fn questions(endpoint: Endpoint) -> Result<core::result::Result<List<Question, 8>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

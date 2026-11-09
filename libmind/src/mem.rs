@@ -43,11 +43,6 @@ pub fn sealed(handle: usize) -> bool {
 
 impl Drop for Pages { fn drop(&mut self) { call(SYSCALL_FREE, self.address, 0); } }
 
-// A call's buffer, wiped before its pages are freed (000-KRN-0226); shared with the IDL's host tests.
-#[path = "wiped.rs"]
-mod wiped;
-pub use wiped::Wiped;
-
 /// A sealed read-only copy of `data` (SHARE_RO): a memory object with no writable capability or mapping left, so a
 /// receiver can rely on its contents. Returns the handle of its only (read-only) capability, to be moved to the
 /// receiver; the memory is freed when the receiver drops it.
