@@ -320,6 +320,13 @@ impl Shell {
             let Ok(message) = endpoint.recv_timeout(slot, wait.max(1)) else { break };
             wait = 1;
             let (request, call) = match commands::decode(&message, slot) { Ok(decoded) => decoded, Err(reason) => { let _ = mind::idl::wire::reject(reason); continue; } };
+            // The copy badged for a secret line reaches that call alone (000-APP-0126): a program that asked for it gets
+            // none of the shell's other commands through it. Every method's error is `error`.
+            if message.badge == secretctl::BADGE && !matches!(request, commands::Request::SecretLine { .. }) {
+                mind::println!("[SHELL] PID {} CALLED THE SHELL THROUGH ITS SECRET LINE'S CLIENT FOR ANOTHER COMMAND: REFUSED", message.sender);
+                let _ = mind::idl::wire::reply_code(call, commands::Error::Refused as usize);
+                continue;
+            }
             match request {
                 commands::Request::Window => {
                     let result = self.open_window(false).map(|(_, id)| id);
