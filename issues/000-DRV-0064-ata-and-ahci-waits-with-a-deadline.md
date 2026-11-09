@@ -1,6 +1,6 @@
 # 000-DRV-0064 — `ata` and `ahci`: waits with a deadline, and checks that do not lean on the caller
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — (the critique of 2026-10-14) · **Constitution:** MC-1.5, MC-2.4, MC-5.6, MC-6.1, MC-6.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-10) · **Blocked by:** — · **Main task:** — (the critique of 2026-10-14) · **Constitution:** MC-1.5, MC-2.4, MC-5.6, MC-6.1, MC-6.3
 
 Numbered from the kernel track's request of 2026-10-14 in `requests-DRV.md`, from the critique [issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), §2.1–2.2. Checked again on `claude/ASR-DRV` d252e168: the waits below are as the request found them.
 
@@ -38,6 +38,62 @@ Numbered from the kernel track's request of 2026-10-14 in `requests-DRV.md`, fro
 - No path in either driver indexes the DMA region or the buffer without a check of its own.
 
 No real machine is needed.
+
+## Progress (2026-11-10)
+
+**Plan steps 1 to 5 made**, with the failure's code left: see the last point below.
+- **`ata`:** `ata/src/ide.rs`, the channel's commands over a `Bus` (the ports and a clock), so that a host test drives them.
+  - **Each wait** is polled for 2 ms, then between 1 ms sleeps, to a deadline on `monotonic_ns`:
+
+    | Wait | Deadline |
+    |---|---|
+    | IDENTIFY's at probe | 5 s |
+    | A command's start, each sector's DRQ, a write's end | 10 s |
+    | A flush | 30 s |
+
+  - **On a timeout** the request fails: `Busy`, `NoData` or the drive's `Error`. The log names a run of failures once, and "THE DRIVE ANSWERS AGAIN".
+  - **Each `read` and `write` is checked by the driver:** 1 to 256 sectors, LBA28, the drive's end and the buffer's length. Anything else is refused before a port is touched, and logged.
+- **`ahci`:** `ahci/src/checks.rs`.
+  - **The handoff:** OOS set, BOS awaited 25 ms, and while BB is set 2 s more.
+    - Taken: logged with its time.
+    - Silent (BOS kept, BB clear): taken, as AHCI 10.6.3 allows, and said so.
+    - Still busy after 2 s: taken anyway, and said so. Before 000-DRV-0064 the controller was always taken; leaving it to a slow firmware would cost the boot disk, and the i5 PC boots from SATA.
+  - **Every wait** is to a deadline, sleeping 1 ms:
+
+    | Wait | Deadline |
+    |---|---|
+    | CR and FR stopping | 500 ms |
+    | The device ready after the start | 10 s |
+    | A command | 10 s |
+    | A flush | 30 s |
+
+  - **A failed command,** timed out or a task-file error, restarts the port and is logged once a run.
+  - **The checks:** the DMA region must hold a data area at probe. Each `read` and `write` is checked against one command (1 to 65535 sectors), the drive, the buffer and the data area before anything is sliced.
+- **`usb_host/src/xhci.rs`:** the stale "a sleep is a 10 ms tick" comment is gone.
+- **`tests/qemu_smoke.py`:** `--disk ahci` boots the suites from a SATA disk on AHCI, and the `disk` suite's mount check names the boot drive.
+
+**Tested** on this machine (x86, QEMU 8.2.2, TCG):
+- `tests/ata_ahci_waits_host.rs`, 6 tests:
+  - a drive that never leaves BSY fails at 10 s, its command never written;
+  - refusals before the ports;
+  - 256 sectors as one command;
+  - reads, writes and errors on a stand-in;
+  - AHCI's data-area check;
+  - its handoff taken, silent, waited for and kept;
+  - its waits' deadline.
+- `scripts/ci_local.sh --only x86`, all PASS (each suite boots from IDE):
+  - `build (x86 test programs)`;
+  - `x86: boot, display, shell, memory, clock`;
+  - `x86: services, storage, audio`, with the `ahci` suite;
+  - `x86: files and block writes`: `vfs`, `edit`, `disk`, `block` (ATA, AHCI and USB), `store`, `storefaults`.
+- **`--suites vfs,disk --disk ahci`:** both pass from an AHCI boot disk. `block` is left out there, as it runs ATA, AHCI and USB itself.
+- The whole `scripts/host_tests.sh`: 199 suites, none failed.
+
+**Left: the failure's code.** A timed-out request reaches the client as the block protocol's failure, `Peer`, not `ERR_IO` as criterion 2 says:
+- `Driver::read` and `write` answer a bool;
+- `block_protocol` (libmind) answers `false` as `Peer`, which `block::Device` repeats once.
+
+`ERR_IO` needs the protocol to tell a driver's timeout from a lost driver. That is libmind's core, KRN's.
 
 ## Related
 

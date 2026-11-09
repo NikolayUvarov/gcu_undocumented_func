@@ -101,7 +101,7 @@ class VM:
                     "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1,id=usbstick"]
                    if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
-                   if ahci else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]
+                   if ahci or getattr(args, "disk", None) == "ahci" else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]
                    if getattr(args, "disk", None) == "nvme" else ["-drive", source])
         if decoy:
             storage = ["-drive", f"format=raw,file=fat:{decoy.replace(',', ',,')}", *storage]
@@ -7818,7 +7818,7 @@ def models_check(args, boot, temp):
             extra=["-drive", f"if=none,id=models,format=raw,readonly=on,file={image}", "-device", "virtio-blk-pci,drive=models"])
     try:
         mounted = vm.service_logs("vfs_server", "AS RAM:")
-        require(mounted, "[VFS] MOUNTED FAT16 FROM ATA AT LBA 2048")
+        require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048")
         require(mounted, "[VFS] MOUNTED FAT32 FROM VIRTIO AS MODELS: (256 MB, READ-ONLY)")
         assert re.search(r"^models: +MIND MODELS +FAT32 +4096 ", vm.command("df"), re.M), vm.log[-2000:]
         command = "sha256 " + " ".join(f"models:{path}" for path in files)
@@ -15060,7 +15060,7 @@ def main():
     parser.add_argument("--cpus", type=int)
     parser.add_argument("--machine", help="QEMU -machine; aarch64: in place of virt,gic-version=3,highmem=off (issue 205: highmem=on, gic-version=2); x86: added properties (211-PRT-0003: pit=off)")
     parser.add_argument("--memory", help="QEMU -m (default 512; e.g. 6G: RAM above 4 GiB)")
-    parser.add_argument("--disk", choices=("default", "nvme"), default="default", help="the boot disk's bus: nvme puts it on an NVMe controller (issue 205)")
+    parser.add_argument("--disk", choices=("default", "nvme", "ahci"), default="default", help="the boot disk's bus: nvme puts it on an NVMe controller (issue 205), ahci on a SATA disk of an AHCI controller (000-DRV-0064)")
     parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")
     parser.add_argument("--uboot", help="aarch64: U-Boot's qemu_arm64 u-boot.bin as the firmware in place of AAVMF, no ACPI with --machine virt,acpi=off (100000-PRT-0009)")
     parser.add_argument("--aavmf-vars", default="/usr/share/AAVMF/AAVMF_VARS.fd")
@@ -15124,6 +15124,8 @@ def main():
     args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
+    if args.disk == "ahci":
+        BOOT_DRIVE, BOOT_DRIVER = "AHCI", "ahci"
     if args.kernel:
         # A test-only kernel (211-PRT-0002: x2APIC as firmware leaves it) in a copy of the image directory.
         copy = f"{IMAGE}-kernel"
