@@ -1,6 +1,6 @@
 # 000-KRN-0219 — A CPU starved of the scheduler's lock while another takes it again and again (round 91's record)
 
-**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (the ticket lock made and tested on the host and in QEMU, below; the 10 runs beside a busy lane left) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
+**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (the ticket lock refused by round 95's gate; a test-and-set lock with a turn for a CPU that waited long made and tested on the host and in QEMU, below; the gate and the 10 runs beside a busy lane left) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
 
 ## Problem
 
@@ -35,18 +35,43 @@
 
 ## Plan
 
-1. **A fair lock.** `LOCK` becomes a ticket lock: a `next` and a `serving` counter, each CPU served in the order it asked, with `pause` while it waits. `LET_GO_SPINS` then has nothing to do and goes.
-   - The lock is taken with interrupts off, as now (`interrupts::without`).
-   - A CPU never takes it twice: the kernel does not nest `locked`, which a debug assertion checks.
-2. **A test that shows the unfairness first:** a host test of the two locks under threads, one taking the lock in a tight loop, the other timing its waits. The test-and-set one's worst wait grows with the loop; the ticket lock's is bounded by one holder's hold.
+1. **A lock no CPU waits behind for long.**
+   - ~~A ticket lock~~ (refused by round 95's gate, below).
+   - **The lock:** test and test-and-set, so whichever waiting CPU runs when the lock is let go takes it.
+     - A waiter that has spun `PATIENCE` (1024) turns marks itself next. No other CPU tries the lock while it is marked; it takes the lock, then clears its mark.
+     - The mark is drawn from a counter, so no two waiters share one.
+   - **Why it does not crawl as the ticket lock did:** a waiter marks itself only while it runs, one at a time. The ticket lock fixed the order when each CPU drew its ticket, so every handoff waited for whichever vCPU was next to be run by the host.
+   - `LET_GO_SPINS` then has nothing to do and goes.
+   - The lock is taken with interrupts off, as now (`interrupts::without`), and never twice by one CPU: the kernel does not nest `locked`.
+2. **Host tests:**
+   - a marked waiter is let in before the holder takes the lock again;
+   - beside the test-and-set and ticket locks: one thread taking the lock in a tight loop while another waits, and more threads than CPUs.
 3. **In QEMU:** `kbench`'s lock rows before and after on 4 and 16 CPUs (000-KRN-0011's measure), and the `net` group repeated beside a busy lane (000-KRN-0214's 10 runs).
 4. **If the wait comes back** with the fair lock, the record names the CPU and the task again, and this reading was wrong.
 
 ## Acceptance criteria
 
-- The host test shows the starvation with the old lock and none with the new one.
+- The host tests show a marked waiter let in before the holder takes the lock again, and print the three locks beside each other.
 - The gate passes; `kbench`'s numbers on 4 and 16 CPUs are recorded before and after.
 - 10 runs of `x86: network, TLS and Effector` pass in a row on x32-128 beside a busy lane, and that is recorded.
+
+## Round 95's gate (2026-11-09): the ticket lock refused
+
+- **Where:** candidate 86e7ac21 (this task and 100000-PRT-0012), `aarch64: 16 CPUs` on acc-2 (8 host CPUs, beside the other lanes).
+  - It hung twice: in its lane after 95 s, and when run again alone after 110 s.
+  - Both times it stopped after `run clock &`, in `clocks_on_many_cpus`, the 23rd clock.
+  - Logs: `/home/un/mind-core/KRN/logs/land-86e7ac21/acc2-02` and `acc2-95` on acc-2.
+- **The record** (`mind-core-stuck-3039830-1.log`):
+  - every one of the 16 CPUs was at the same PC, the ticket lock's wait, with interrupts off;
+  - their tickets ran from `0x3eef3` to `0x3ef02`, one each;
+  - the others had read `serving` as `0x3eef3`;
+  - the CPU holding ticket `0x3eef3`, CPU 0, had last read `0x3eef0`: it had not run for three turns.
+- **The reading.**
+  - The turn belonged to a vCPU the host was not running at that moment, so every other CPU waited for the host to run it.
+  - A ticket lock fixes the order when each CPU draws its ticket. With more vCPUs than host CPUs, each handoff can wait for a host scheduling turn.
+  - Linux falls back to test-and-set under a hypervisor for the same reason (`virt_spin_lock`).
+- **Reproduced here,** in the kernel session's container (4 CPUs): the image of 86e7ac21, `--cpus 16 --suites normal`, stopped during boot after 90 s, with nine CPUs in the same wait and the same pattern.
+- **The candidate was returned** (`LANDING/2026-11-09T0100Z-KRN-round-86e7ac21.md`).
 
 ## Progress (2026-11-08)
 

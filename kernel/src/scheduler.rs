@@ -197,9 +197,10 @@ struct Scheduler {
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
-// A ticket lock (000-KRN-0219): each CPU is served in the order it asked, so none waits behind one that takes it again and
-// again, as CPU 0 did behind a test-and-set lock in round 91's gate. Taken with interrupts off, never twice by one CPU.
-static LOCK: crate::ticket::Ticket = crate::ticket::Ticket::new();
+// Test-and-set, with a turn for a CPU that waited long (000-KRN-0219): none waits behind one that takes it again and again,
+// as CPU 0 did in round 91's gate, nor for the host to run one vCPU, as a ticket lock did in round 95's. Taken with
+// interrupts off, never twice by one CPU.
+static LOCK: crate::spinlock::SpinLock = crate::spinlock::SpinLock::new();
 struct Guard; impl Drop for Guard { fn drop(&mut self) { LOCK.unlock(); } }
 fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { LOCK.lock(); let _guard = Guard; f() }) }
 
