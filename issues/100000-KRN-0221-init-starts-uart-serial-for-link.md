@@ -47,6 +47,7 @@
   - the system log over the link held `[UART] 16550 AT 115200 BIT/S, 8N1, NO FLOW CONTROL; RECEIVED AT ITS INTERRUPT AND EVERY 2 MS` on x86, and the same with `PL011` on aarch64 `virt`;
   - the log also held `usb_serial NOT STARTED: LINK.CONF SAYS uart` and the shell's line.
   - The rest of the `link` suite passed on both, and the host tests `boot_abi`, `services`, `svc`.
+- **The window manager's menu:** round 105 found `uart_serial` under "Other", started with no window, while it was only a program on the disk (LNK's request alone). As a boot image the loader marks it a service, and it is in no list. The `wm` suite passed on this branch on x86 (17 checks).
 - **Not tested:** the A64's case, where `uart_serial` gets the kernel's console channel (100000-KRN-0222), and the phone.
 
 ## Related
