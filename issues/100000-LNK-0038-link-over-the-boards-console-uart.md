@@ -39,4 +39,4 @@ Numbered from the kernel session's request of 2026-11-08 in `requests-LNK.md`.
 
 ## Related
 
-[100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md), [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md), [800-LNK-0019](800-LNK-0019-the-link-as-the-owners-console.md), [800-LNK-0039](800-LNK-0039-effector485-as-the-effector-agents-engine.md), [docs/remote-serial.md](../docs/remote-serial.md).
+[100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md), [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [800-LNK-0019](800-LNK-0019-the-link-as-the-owners-console.md), [800-LNK-0039](800-LNK-0039-effector485-as-the-effector-agents-engine.md), [docs/remote-serial.md](../docs/remote-serial.md).

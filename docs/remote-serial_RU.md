@@ -229,7 +229,7 @@
 
 - **UART платы из device tree:** [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done).
 - **16550 в памяти:** [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md). Это касается строк ядра и строк загрузчика.
-- **UART отдаётся `link`,** а не оболочке, когда так сказано в `link.conf`: [100000-KRN-0171](../issues/100000-KRN-0171-platform-devices-from-the-device-tree.md).
+- **UART отдаётся `link`,** а не оболочке, когда так сказано в `link.conf`: по своему узлу ([100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), сделано), от `init` ([100000-KRN-0221](../issues/100000-KRN-0221-init-starts-uart-serial-for-link.md)); на A64, где консоль делит страницу, как байтовый канал ядра ([100000-KRN-0222](../issues/100000-KRN-0222-the-kernels-console-as-a-byte-channel.md)).
 - **Сначала в QEMU:** `virt` с UEFI от U-Boot и без ACPI (как Tow-Boot даёт телефону), его PL011 на псевдотерминале. Тесты агента тоже могут с ним работать.
 
 ## 6. Этапы

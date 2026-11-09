@@ -1,6 +1,6 @@
 # 100000-KRN-0222 — The kernel's console as a byte channel (the A64's page of four UARTs)
 
-**Type:** kernel (ABI) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open · **Blocked by:** [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md) in `main` · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.1, MC-2.3, MC-3.1, MC-12.4
+**Type:** kernel (ABI) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open · **Blocked by:** — (100000-KRN-0171 in `main` since round 99) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.1, MC-2.3, MC-3.1, MC-12.4
 
 ## Problem
 
@@ -29,4 +29,4 @@
 
 ## Related
 
-[100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md), [100000-KRN-0221](100000-KRN-0221-init-starts-uart-serial-for-link.md), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md) (the 16550 the kernel drives).
+[100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [100000-KRN-0221](100000-KRN-0221-init-starts-uart-serial-for-link.md), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md) (the 16550 the kernel drives).

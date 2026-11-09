@@ -33,4 +33,4 @@
 
 ## Related
 
-[100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md) (the console's node), [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) (the A64), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md), [docs/remote-serial.md](../docs/remote-serial.md).
+[100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done) (the console's node), [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) (the A64), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md), [docs/remote-serial.md](../docs/remote-serial.md).

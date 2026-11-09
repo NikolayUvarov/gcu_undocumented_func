@@ -433,11 +433,13 @@ impl Server {
                 vfs::reply_fill(call, result)
             }
             Request::Flush { handle } => {
-                // A flush (the shell's sync, init's before a restart) saves the system log first and leaves its volume
-                // clean too (211-KRN-0223).
-                let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| {
-                    self.save_journal(true);
-                    if let Some(log) = self.journal.as_ref().map(|(index, _)| *index).filter(|&log| log != volume) { let _ = self.volumes[log].volume.flush(); }
+                // A volume root's flush (the shell's sync, init's before a restart) saves the system log first and leaves
+                // its volume clean too (211-KRN-0223); a file's flushes its own volume only, so a writer waits for no save.
+                let result = self.get(handle, sender, badge).map(|h| (h.volume, h.node.entry.is_none())).and_then(|(volume, root)| {
+                    if root {
+                        self.save_journal(true);
+                        if let Some(log) = self.journal.as_ref().map(|(index, _)| *index).filter(|&log| log != volume) { let _ = self.volumes[log].volume.flush(); }
+                    }
                     self.volumes[volume].volume.flush().map_err(error)
                 });
                 vfs::reply_flush(call, result)

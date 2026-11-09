@@ -959,7 +959,7 @@ The quota is fixed: three quarters of the medium for every owner. Nobody grants 
 
 **Owners apart from rights (351-STO-0006).** The owner is the whole badge, below the domain clients' badges (`FIRST_DOMAIN_CLIENT`). Its bits 4 to 7 (`mind::blockstore::OWNER_BITS`) grant nothing, and bits 0 to 3 are the rights. So two clients with the same rights and other owner bits keep their names' charges, their pins and their accounts apart, and neither ends the other's pins.
 - `OWNER_UPDATER` (`0x10`) is the updater's owner. With get, put and publish its badge is `0x17`, beside the shell's `7`.
-- `init` gives that client to the updater ([351-KRN-0218](../../issues/351-KRN-0218-the-updaters-store-client.md)), which keeps its releases as trees pinned by it, and names none ([351-UPD-0033](../../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done)).
+- `init` gives that client to the updater ([351-KRN-0218](../../issues-done/351-KRN-0218-the-updaters-store-client.done)), which keeps its releases as trees pinned by it, and names none ([351-UPD-0033](../../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done)).
 - Its account counts each release whole, though the blocks two releases share are stored once. The running, the last known good and a staged release are three, so the store's medium must be at least four times a release for the quota to hold them.
 
 A collection:

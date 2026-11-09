@@ -1,6 +1,6 @@
 # 351-STO-0006 — Releases as objects in the block store, the running and last-known-good ones pinned — done
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-11-09) · **Blocked by:** — ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done) and [351-KRN-0218](../issues/351-KRN-0218-the-updaters-store-client.md)'s `init` part) · the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater, done) · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-11-09) · **Blocked by:** — ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done) and [351-KRN-0218](351-KRN-0218-the-updaters-store-client.done)'s `init` part) · the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater, done) · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
 
 Numbered by the storage track from the kernel track's request in `requests-STO.md` (recorded 2026-10-08 for main task 351, phase 4, at the maintainer's request).
 
@@ -32,7 +32,7 @@ So the work splits three ways:
    - Its pins and its account are its own: no other client ends them, whatever rights it holds.
    - The host tests show a release tree, pinned by that owner, kept whole through the removal of every name and a collection, and read back with each block checked.
    - The quota stays three quarters of the medium for every owner. An account counts each release whole (303-STO-0002), though the blocks two releases share are stored once. So the quota holds the running, the last known good and a staged release once the store's medium is at least four times a release (about 26 MiB on x86 now). A quota of its own for the updater, and a bound on all owners together, stay open (303-STO-0002's "not done").
-2. **`KRN`, `init`'s grant** ([351-KRN-0218](../issues/351-KRN-0218-the-updaters-store-client.md)):
+2. **`KRN`, `init`'s grant** ([351-KRN-0218](351-KRN-0218-the-updaters-store-client.done)):
    - the updater gets a store client badged `OWNER_UPDATER` with get, put and publish, when the store runs;
    - it starts after `blockstore`.
 3. **`UPD`, the updater** ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done); `STO` makes it, by agreement with the update track's owner, as `STO` made 351-UPD-0007):
