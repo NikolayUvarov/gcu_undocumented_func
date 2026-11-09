@@ -1,6 +1,6 @@
 # 000-NET-0048 — `get`, an analog of `wget` and `curl`
 
-**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (a host asked at run time, and a script's question since round 99, 000-APP-0125; `-u` waits for 000-APP-0126, the shell's secret line, on 000-KRN-0224, in `main` since round 99) · **Blocked by:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.md) for `-u`, [000-APP-0125](../issues-done/000-APP-0125-a-scripts-program-asks-about-a-flow.done) for a script's question (the rest it waited on is done) · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
+**Type:** network (a new program `get`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress (a host asked at run time, and a script's question since round 99, 000-APP-0125; `-u USER` with the password typed at the console through the shell's secret line made on 2026-11-09, 000-APP-0126 in `main` since round 102; the gate left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.1, MC-11.6, MC-11.11, MC-12.1
 
 Recorded by the network track on 2026-10-25, for the plan [docs/communications-and-agents.md](../docs/communications-and-agents.md), at the maintainer's request: "an analog of wget/curl".
 
@@ -109,6 +109,24 @@ from 000-APP-0120):
 
 **Landed (2026-11-06).** Round 89 (`main` 5ef99d16): the gate was green on every group, the `net` suite's `get_runs`
 with the question among them, on x86 and aarch64.
+
+## Progress (2026-11-09)
+
+**`-u USER` without a password,** on `claude/youthful-mendel-mf1soy`, through the shell's secret line (`shell.wit` 1.12, 000-APP-0126, in `main` since round 102):
+- `get` asks for `REQUEST_SECRET_LINE`. The shell lends a console program in front of a console a copy of its client badged for that call alone, in `SLOT_SHELL`.
+- **The prompt** is `PASSWORD FOR USER AT HOST`, cut to the 80 bytes the shell takes. The shell names the program and its PID before it, and the line is typed with no echo.
+- **The answer:**
+  - the bytes are built into the `Authorization` header, and `get`'s copy is wiped;
+  - Esc: exit 2, `NO PASSWORD TYPED (REFUSED AT THE CONSOLE)`;
+  - a script's `get`, which gets no such copy: exit 2, `NO CONSOLE TO TYPE IT AT (A SCRIPT): GIVE USER:PASSWORD`.
+- **`help get`** says so, and no longer says a script's `get` is not asked about a host (000-APP-0125 did that).
+- **Tested** in QEMU, the `net` suite's `get_runs`: x86 in the kernel session's container (QEMU 8.2.2, TCG, 4 CPUs; the whole suite, 39 checks), aarch64 on acc-1 through Effector (the group "aarch64: network, TLS and Effector", at 1012596d):
+  - `-u alice:s3:cr` sent as Basic authentication, and not sent on to another port;
+  - `-u alice` with a password typed at the serial console (a space and a non-ASCII letter in it): sent as Basic authentication, and in no line of the serial console or of the shell's log;
+  - Esc refused it (2), and a script's `get -u alice` was refused (2).
+  - The host tests: `get_host` (6).
+
+**Left:** the gate. With it, the issue's criteria are met but for the plan's VFS scope of the current directory, which the shell's client of the user's files replaced (Progress of 2026-10-28).
 
 ## Related
 
