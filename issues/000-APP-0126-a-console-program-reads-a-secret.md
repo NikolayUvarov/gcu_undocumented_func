@@ -1,6 +1,6 @@
 # 000-APP-0126 — A console program reads a secret typed at its console (`get -u`)
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (the shell's part made and tested on x86; `get -u` is NET's, 2026-11-09) · **Blocked by:** 000-KRN-0224 on `main` (made on KRN's branch, f91333db), before this lands; `get -u` ([000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md), NET's) for the last criterion · **Main task:** — · **Constitution:** MC-11.5, MC-11.9
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (the shell's part made and tested on x86; `get -u` is NET's, 2026-11-09) · **Blocked by:** `get -u` ([000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md), NET's) for the last criterion; 000-KRN-0224 landed in round 99 · **Main task:** — · **Constitution:** MC-11.5, MC-11.9
 
 **Asked by:** NET, 2026-11-06, in [requests-APP.md](requests-APP.md), for [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md)'s `get -u user`. Numbered on 2026-11-08.
 
@@ -55,7 +55,7 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
 
 ## Progress (2026-11-09): the lending and its check
 
-- **KRN's part:** 000-KRN-0224 made `REQUEST_SECRET_LINE` (`1 << 29`), `BADGE_SHELL_SECRET` (2) and `init`'s right to badge on `SLOT_COMMANDS`, on KRN's branch (f91333db). Until that commit is on `main`, this branch carries its two code hunks unchanged, at KRN's offer.
+- **KRN's part:** 000-KRN-0224 made `REQUEST_SECRET_LINE` (`1 << 29`), `BADGE_SHELL_SECRET` (2) and `init`'s right to badge on `SLOT_COMMANDS` (f91333db). It landed in round 99 (`main` c92256a3). Until then this branch carried its two code hunks unchanged, at KRN's offer.
 - **The lending** (`shell/src/main.rs`): a console program that declares the bit gets, in `SLOT_SHELL`, a copy of the shell's client badged `BADGE_SHELL_SECRET`, without the right to badge.
   - It gets none from a script, whose wait serves no calls.
   - It gets none when it gets the plain client (`REQUEST_SHELL`), which takes the same slot.
@@ -76,6 +76,7 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
     - a script's program held no client;
     - the secret in no line of the serial log.
   - **Before the lending,** at d1321a04d, the `shell` and `wm` suites passed, 31 checks, with the new way the shell's commands are received.
+  - **With `main` c92256a3 merged** (000-KRN-0224 in it; the hunks this branch carried are its lines), at c2bea2cca: the `shell` and `net` suites passed in one run, 52 checks, `secret_line_check` among them. The secret was in no line of the serial log. The fixtures were built by `scripts/x86_fixtures.sh`.
 - **Not run:** aarch64. `scripts/build_aarch64.sh` builds no stub, so the check is skipped there.
 - **Left:** `get -u`, NET's program, uses it (000-NET-0048).
 
