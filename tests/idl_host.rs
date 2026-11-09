@@ -14,11 +14,6 @@ mod dev {
     pub fn cap_info(slot: usize) -> (usize, usize, usize) { (crate::ipc::kind(slot), 0, 0) }
 }
 
-// libmind's `Wiped` over the stand-in `Pages` below.
-use mem::Pages;
-#[path = "../libmind/src/wiped.rs"]
-mod wiped;
-
 mod mem {
     use std::cell::RefCell;
     thread_local! {
@@ -29,8 +24,6 @@ mod mem {
     // How many buffers were freed with a byte not zero in them (000-KRN-0226: a client's are wiped first).
     thread_local! { pub static DIRTY_FREED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
     impl Drop for Pages { fn drop(&mut self) { if self.0.iter().any(|&b| b != 0) { DIRTY_FREED.with(|d| d.set(d.get() + 1)); } } }
-    // The generated clients' buffer, as libmind has it (its file is the crate's `wiped`, beside this module).
-    pub use crate::wiped::Wiped;
     impl Pages {
         pub fn new(bytes: usize) -> Option<Self> { Some(Self(vec![0; bytes])) }
         pub fn len(&self) -> usize { self.0.len() }

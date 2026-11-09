@@ -5,7 +5,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};

@@ -7,7 +7,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -43,7 +43,7 @@ impl Wire for Info {
 
 /// Any client.
 pub fn info(endpoint: Endpoint) -> Result<core::result::Result<Info, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -57,7 +57,7 @@ pub fn info(endpoint: Endpoint) -> Result<core::result::Result<Info, Error>> {
 
 /// Seals `secret` (1 to 128 bytes) to this TPM; the blob to keep (seal badge only).
 pub fn seal(endpoint: Endpoint, secret: &[u8], out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<128>(secret, &mut w).ok_or(SysError::Invalid)?;
@@ -72,7 +72,7 @@ pub fn seal(endpoint: Endpoint, secret: &[u8], out: &mut [u8]) -> Result<core::r
 
 /// The secret of a blob this TPM sealed (seal badge only).
 pub fn unseal(endpoint: Endpoint, blob: &[u8], out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<1024>(blob, &mut w).ok_or(SysError::Invalid)?;

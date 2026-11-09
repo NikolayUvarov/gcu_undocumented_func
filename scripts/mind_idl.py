@@ -419,7 +419,7 @@ def generate(interface, source):
     w("#![allow(clippy::all, unused_imports, unused_mut, unused_variables)]")
     w("use crate::abi::*;")
     w("use crate::ipc::{Endpoint, Received};")
-    w("use crate::mem::{Pages, Wiped};")
+    w("use crate::mem::Pages;")
     w("use crate::sys::{Error, Result};" if SYS == "Error" else "use crate::sys::{Error as SysError, Result};")
     w("use super::codec::{self, List, Reader, Text, Wire, Writer};")
     w("use super::wire::{self, Call, Reject};")
@@ -482,8 +482,8 @@ def generate_client(w, f):
     enum_error = f"    if let Some(code) = wire::enum_error(&reply)? {{ return Ok(Err({camel(error)}::from_code(code).ok_or({SYS}::Invalid)?)); }}" if error else None
     if f.buffered:
         size = (max(f.request_max, f.reply_max, 1) + PAGE - 1) // PAGE * PAGE
-        # Wiped: zeros over the buffer before it is freed, a secret it carried among them (000-KRN-0226).
-        w(f"    let mut buffer = Wiped(Pages::new({size}).ok_or({SYS}::NoMemory)?);")
+        # wire::Wiped: zeros over the buffer before it is freed, a secret it carried among them (000-KRN-0226).
+        w(f"    let mut buffer = wire::Wiped(Pages::new({size}).ok_or({SYS}::NoMemory)?);")
         w("    let length = {")
         w("        let mut w = Writer::new(buffer.as_mut_slice());")
         for p in f.params:

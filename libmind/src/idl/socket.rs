@@ -52,7 +52,7 @@
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
-use crate::mem::{Pages, Wiped};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
@@ -247,7 +247,7 @@ impl Wire for Accepted {
 }
 
 pub fn config(endpoint: Endpoint) -> Result<core::result::Result<Config, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -271,7 +271,7 @@ pub fn ping(endpoint: Endpoint, address: u32, timeout_ms: u32) -> Result<core::r
 /// ICMP echo to `address` with `size` data bytes of `pattern` (2.6). Errors: `invalid` (a size over 1472, a pattern
 /// longer than 16), and those of `ping`.
 pub fn ping_with(endpoint: Endpoint, address: u32, timeout_ms: u32, size: u16, pattern: &[u8]) -> Result<core::result::Result<Echo, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         address.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -289,7 +289,7 @@ pub fn ping_with(endpoint: Endpoint, address: u32, timeout_ms: u32, size: u16, p
 
 /// IPv4 address of `name` from DNS server `server` (0: the configured one) on `port` (0: 53).
 pub fn resolve(endpoint: Endpoint, name: &str, server: u32, port: u16, timeout_ms: u32) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<253>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -315,7 +315,7 @@ pub fn udp_open(endpoint: Endpoint, port: u16) -> Result<core::result::Result<u3
 }
 
 pub fn udp_send(endpoint: Endpoint, socket: u32, address: u32, port: u16, data: &[u8]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         socket.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -333,7 +333,7 @@ pub fn udp_send(endpoint: Endpoint, socket: u32, address: u32, port: u16, data: 
 
 /// The oldest datagram received on the socket. Error again: none is waiting.
 pub fn udp_receive(endpoint: Endpoint, socket: u32) -> Result<core::result::Result<Datagram, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         socket.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -357,7 +357,7 @@ pub fn tcp_connect(endpoint: Endpoint, address: u32, port: u16, timeout_ms: u32)
 
 /// Queues data; returns how many bytes were taken (0 with a full send buffer).
 pub fn tcp_send(endpoint: Endpoint, socket: u32, data: &[u8]) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         socket.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -373,7 +373,7 @@ pub fn tcp_send(endpoint: Endpoint, socket: u32, data: &[u8]) -> Result<core::re
 
 /// Up to `length` received bytes. Error again: nothing yet; closed: the peer closed and everything was read.
 pub fn tcp_receive(endpoint: Endpoint, socket: u32, length: u32, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         socket.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -398,7 +398,7 @@ pub fn close(endpoint: Endpoint, socket: u32) -> Result<core::result::Result<(),
 
 /// Registers what clients with `badge` may reach, for `seconds`, up to `bytes` in both directions (policy badge only).
 pub fn policy_set(endpoint: Endpoint, badge: u16, rules: &[Rule], seconds: u32, bytes: u64) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         badge.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -425,7 +425,7 @@ pub fn policy_drop(endpoint: Endpoint, badge: u16) -> Result<core::result::Resul
 
 /// What a grant has used (policy badge only).
 pub fn policy_usage(endpoint: Endpoint, badge: u16) -> Result<core::result::Result<Usage, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         badge.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -440,7 +440,7 @@ pub fn policy_usage(endpoint: Endpoint, badge: u16) -> Result<core::result::Resu
 
 /// Every interface whose card driver answered (2.1).
 pub fn interfaces(endpoint: Endpoint) -> Result<core::result::Result<List<Interface, 4>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -464,7 +464,7 @@ pub fn offload(endpoint: Endpoint, enable: bool) -> Result<core::result::Result<
 /// The open sockets from the stack's table index `start`, in its order (2.4): every one for the operator, its own
 /// for a grant; `denied` for the policy badge. A socket a client closed is gone from the list.
 pub fn sockets(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<SocketInfo, 32>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -489,7 +489,7 @@ pub fn prefer(endpoint: Endpoint, card: u8) -> Result<core::result::Result<(), E
 
 /// Every card the stack has a slot for, in order (2.5).
 pub fn cards(endpoint: Endpoint) -> Result<core::result::Result<List<Card, 4>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -504,7 +504,7 @@ pub fn cards(endpoint: Endpoint) -> Result<core::result::Result<List<Card, 4>, E
 /// A grant asks to reach `host` on TCP `port`; answers the question's id at once (2.8). `invalid`: an empty host or
 /// port 0; `limit`: a question of this grant already waits, or 8 do in all; `denied`: not a live grant.
 pub fn ask(endpoint: Endpoint, host: &str, port: u16, why: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<253>(host, &mut w).ok_or(SysError::Invalid)?;
@@ -521,7 +521,7 @@ pub fn ask(endpoint: Endpoint, host: &str, port: u16, why: &str) -> Result<core:
 
 /// What became of question `id`, for the grant that asked it (2.8); `not-found` for any other client or id.
 pub fn asked(endpoint: Endpoint, id: u32) -> Result<core::result::Result<Ruling, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         id.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -536,7 +536,7 @@ pub fn asked(endpoint: Endpoint, id: u32) -> Result<core::result::Result<Ruling,
 
 /// The questions that wait, oldest first (policy badge, 2.8).
 pub fn questions(endpoint: Endpoint) -> Result<core::result::Result<List<Question, 8>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -562,7 +562,7 @@ pub fn decide(endpoint: Endpoint, id: u32, address: u32, allowed: bool, once: bo
 /// Registers who may connect to grant `badge`'s listening sockets, replacing what it had (policy badge, 2.9).
 /// `not-found`: no grant with that badge; `invalid`: port 0, a prefix over 32, or more than 4 networks for a port.
 pub fn policy_listen(endpoint: Endpoint, badge: u16, rules: &[ListenRule]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         badge.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -591,7 +591,7 @@ pub fn tcp_listen(endpoint: Endpoint, port: u16, backlog: u8) -> Result<core::re
 /// The oldest connection listening socket `listener` holds, as a connected socket (2.9). `again`: none yet;
 /// `limit`: the client holds 8 sockets (the connection waits).
 pub fn tcp_accept(endpoint: Endpoint, listener: u32) -> Result<core::result::Result<Accepted, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         listener.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -607,7 +607,7 @@ pub fn tcp_accept(endpoint: Endpoint, listener: u32) -> Result<core::result::Res
 /// The rules of the caller's own grant (2.10, 111-NET-0057): the destinations the broker registered and the user's
 /// answers added, so that a service the policy gives its servers learns them here. `denied`: not a live grant's badge.
 pub fn grant_rules(endpoint: Endpoint) -> Result<core::result::Result<List<Rule, 16>, Error>> {
-    let mut buffer = Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
