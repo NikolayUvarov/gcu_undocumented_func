@@ -42,7 +42,7 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
 - **`shell/src/secretctl.rs`:**
   - **Who is answered:** only through the badged copy (`BADGE`, the value proposed as `BADGE_SHELL_SECRET`) and only for the console program of an open session. Any other caller gets `refused`, and a second line while one is typed gets `busy`.
   - **Nothing else through that copy:** every other call that comes through it is refused and logged, so a program that asked only for a secret line gets none of the shell's other commands (KRN's condition, 2026-11-09).
-  - **The call is held** (`Call::defer`) while the user types. Its buffer stays where it came, so the shell's next requests arrive in another slot it holds nothing in (`SLOT_CLIPBOARD`).
+  - **The call is held** (`Call::defer`) while the user types. Its buffer stays where it came, so the shell's next requests arrive in another slot it holds nothing in: `SLOT_APPS`, the Effector gateway's alone. It was `SLOT_CLIPBOARD` at first, which 000-APP-0032 will fill.
   - **The keys** of that session go to the line first after a flow question's, from the serial line, the PS/2 keyboard and the shell's window. Nothing is echoed.
   - **The answer:**
     - the bytes, in the caller's buffer, or `declined`;
@@ -77,6 +77,7 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
     - the secret in no line of the serial log.
   - **Before the lending,** at d1321a04d, the `shell` and `wm` suites passed, 31 checks, with the new way the shell's commands are received.
   - **With `main` c92256a3 merged** (000-KRN-0224 in it; the hunks this branch carried are its lines), at c2bea2cca: the `shell` and `net` suites passed in one run, 52 checks, `secret_line_check` among them. The secret was in no line of the serial log. The fixtures were built by `scripts/x86_fixtures.sh`.
+  - **With the other slot exercised** (2026-11-09): a copy of the stub in the background asks while the line in front is typed. Its call arrives in that slot and is refused (`NOT THE CONSOLE PROGRAM IN FRONT`), and the line in front is given as before. The `shell` suite passed with it, 15 checks, the secret in no line of the serial log.
 - **Not run:** aarch64. `scripts/build_aarch64.sh` builds no stub, so the check is skipped there.
 - **Left:** `get -u`, NET's program, uses it (000-NET-0048).
 
