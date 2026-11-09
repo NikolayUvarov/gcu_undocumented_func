@@ -41,6 +41,7 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
   - its wiping, by writes the compiler keeps, when it is given or refused and when it is dropped.
 - **`shell/src/secretctl.rs`:**
   - **Who is answered:** only through the badged copy (`BADGE`, the value proposed as `BADGE_SHELL_SECRET`) and only for the console program of an open session. Any other caller gets `refused`, and a second line while one is typed gets `busy`.
+  - **Nothing else through that copy:** every other call that comes through it is refused and logged, so a program that asked only for a secret line gets none of the shell's other commands (KRN's condition, 2026-11-09).
   - **The call is held** (`Call::defer`) while the user types. Its buffer stays where it came, so the shell's next requests arrive in another slot it holds nothing in (`SLOT_CLIPBOARD`).
   - **The keys** of that session go to the line first after a flow question's, from the serial line, the PS/2 keyboard and the shell's window. Nothing is echoed.
   - **The answer:**
