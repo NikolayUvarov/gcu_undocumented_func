@@ -99,7 +99,7 @@ from 000-APP-0120):
   console; refused with `N`, allowed with `O` and its body fetched.
 
 **What waits for the shell (APP), numbered by APP on 2026-11-08:**
-- **`-u user`:** [000-APP-0126](../issues/000-APP-0126-a-console-program-reads-a-secret.md). `get` is a console program: the shell keeps the keys typed while it runs (Esc and Ctrl+C stop it,
+- **`-u user`:** [000-APP-0126](000-APP-0126-a-console-program-reads-a-secret.done). `get` is a console program: the shell keeps the keys typed while it runs (Esc and Ctrl+C stop it,
   `Shell::key`), so it cannot read a password from the console. A first version read the keys itself and was taken
   out when the `get_runs` check showed that none arrived.
 - **A question from a script:** [000-APP-0125](000-APP-0125-a-scripts-program-asks-about-a-flow.done). `msh`'s wait on its program (`ShellHost::run`) does not put the question, so a
