@@ -36,6 +36,12 @@
 
 **Landed** in round 103 (`main` a927f175, 2026-11-09): every group of the gate passed. "x86: RAM above 4 GiB" ran on acc-1, which had no second lane, so the second criterion waits for a gate that runs the group beside another lane on one machine.
 
+## Progress (2026-11-09, rounds 105 and 106)
+
+- **Beside the other lane, the Wi-Fi checks passed:** in round 105's second candidate on `x32-2`, `world_country_check`'s PASS line came before the group failed elsewhere (`browse_check`, 000-KRN-0227).
+- **The group itself failed there,** so the second criterion is not met yet.
+- **The 30 s wait is the harness's default for every `dmesg` now** (000-KRN-0227, after round 106's Effector suite read). The eight explicit waits of the Wi-Fi checks are taken out.
+
 ## Related
 
 [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done), [069](../issues-done/069-logd-dmesg.done).
