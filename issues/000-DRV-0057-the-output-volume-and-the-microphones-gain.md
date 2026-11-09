@@ -1,6 +1,6 @@
 # 000-DRV-0057 — The output volume and the microphone's gain in `audio.wit`
 
-**Type:** driver, interface · **Owner:** `DRV` · **Priority:** P1 · **Status:** open · **Blocked by:** — (the shell's levels badge from `init` is KRN's, to be asked when this starts) · **Main task:** [000-APP-0048](000-APP-0048-wm-settings.md), for [000-APP-0076](000-APP-0076-output-volume.md) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md) · **Constitution:** MC-3.11, MC-11.5, MC-12.4
+**Type:** driver, interface · **Owner:** `DRV` · **Priority:** P1 · **Status:** open · **Blocked by:** — (the shell's levels badge is in `main` already: `mind::audio::BADGE_LEVELS`, which `init` gives the shell alone, 000-KRN-0118) · **Main task:** [000-APP-0048](000-APP-0048-wm-settings.md), for [000-APP-0076](000-APP-0076-output-volume.md) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md) · **Constitution:** MC-3.11, MC-11.5, MC-12.4
 
 Numbered from the tools track's request of 2026-10-10, widened on 2026-10-14, in `requests-DRV.md`. The maintainer: "the output volume and the microphone's sensitivity need settings".
 
@@ -24,7 +24,7 @@ Numbered from the tools track's request of 2026-10-10, widened on 2026-10-14, in
    - **HDA:** the output path's amplifier gain and mute; the input path's amplifier, the ADC's gain and the pin's boost where the codec has them;
    - **without an amplifier,** `audio_gw` scales the samples, and `levels` says so.
 3. **Authority:**
-   - `set-volume` and `set-gain` only for a client with the badge `init` gives the shell alone; any other client gets `rights`;
+   - `set-volume` and `set-gain` only for a client badged `BADGE_LEVELS`, which `init` gives the shell alone (000-KRN-0118); any other client gets `rights`;
    - `levels` answers every client.
 4. **Not kept by `audio_gw`:** the shell keeps the levels in `data/sound.conf` and sets them again when it starts (000-APP-0076).
 
