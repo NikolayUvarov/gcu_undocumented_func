@@ -1,6 +1,6 @@
 # 000-APP-0126 — A console program reads a secret typed at its console (`get -u`)
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (the shell's part written, 2026-11-09) · **Blocked by:** `KRN`: `REQUEST_SECRET_LINE` and `BADGE_SHELL_SECRET` ([requests-KRN.md](requests-KRN.md), 2026-11-09), for the lending and the QEMU check · **Main task:** — · **Constitution:** MC-11.5, MC-11.9
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (the shell's part made and tested on x86; `get -u` is NET's, 2026-11-09) · **Blocked by:** 000-KRN-0224 on `main` (made on KRN's branch, f91333db), before this lands; `get -u` ([000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md), NET's) for the last criterion · **Main task:** — · **Constitution:** MC-11.5, MC-11.9
 
 **Asked by:** NET, 2026-11-06, in [requests-APP.md](requests-APP.md), for [000-NET-0048](000-NET-0048-get-a-wget-and-curl-analog.md)'s `get -u user`. Numbered on 2026-11-08.
 
@@ -68,7 +68,15 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
   - another command through the copy refused;
   - no copy for a script's program.
 - **docs/tools** in both languages.
-- **Its run:** pending.
+- **Its runs,** on this container's QEMU x86, 4 CPUs, TCG:
+  - **The `shell` suite passed, 15 checks** (c34d4baf4's tree with 8c1ba71f1's fix to the check's log line; the first run, at c34d4baf4, stopped at that line after the line itself had passed). Among them is `secret_line_check`:
+    - 12 bytes given, with the stub's SHA-256 matching;
+    - `(GIVEN)` and `(REFUSED)` on the console, and Esc answered `declined`;
+    - `hostname` through the badged copy refused and logged;
+    - a script's program held no client;
+    - the secret in no line of the serial log.
+  - **Before the lending,** at d1321a04d, the `shell` and `wm` suites passed, 31 checks, with the new way the shell's commands are received.
+- **Not run:** aarch64. `scripts/build_aarch64.sh` builds no stub, so the check is skipped there.
 - **Left:** `get -u`, NET's program, uses it (000-NET-0048).
 
 ## Related
