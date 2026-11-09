@@ -41,4 +41,4 @@ No real machine is needed.
 
 ## Related
 
-[issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), [000-DRV-0065](000-DRV-0065-virtio-blk-waits-a-whole-tick.md).
+[issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), [000-DRV-0065](../issues-done/000-DRV-0065-virtio-blk-waits-a-whole-tick.done).

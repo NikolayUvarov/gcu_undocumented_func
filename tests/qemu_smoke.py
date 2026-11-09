@@ -8862,6 +8862,9 @@ def listen_suite(vm, starts):
             break
         time.sleep(.25)
     require(log, "[LISTEN] RECORDING 1 S")
+    # An overflow's cause is in audio_gw's log (000-DRV-0066): it goes into the failure's text.
+    if "OVERFLOWS 0" not in log:
+        log += vm.service_logs("audio_gw")
     require(log, "[LISTEN] RECORDED 48000 FRAMES (1000 MS), PEAK 0, RMS 0, OVERFLOWS 0")
     require(log, "[LISTEN] PLAYED BACK")
     vm.command("kill 1")

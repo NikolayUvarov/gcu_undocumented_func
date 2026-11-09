@@ -1,8 +1,9 @@
 #![no_std]
 #![no_main]
 // audio_gw: ring 3 audio gateway. Intel High Definition Audio (551-DRV-0010, hda.rs) or, LEGACY, AC97 (QEMU's old card,
-// docs/legacy.md): playback DMA ring of 32 buffers, capture ring of 16 (microphone); interrupts arrive as IPC messages
-// on the service endpoint, client PCM comes through their shared buffers.
+// docs/legacy.md): playback DMA ring of 32 buffers, capture ring of 16 (microphone), which the gateway empties into its own
+// copy every POLL_MS while it records; interrupts arrive as IPC messages on the service endpoint, client PCM comes
+// through their shared buffers.
 // Extension point for TTS: a speech synthesizer is an ordinary client feeding PCM to `play` (idl/audio.wit).
 use mind::abi::*;
 use mind::dev::{Irq, Ports};
@@ -23,6 +24,10 @@ const BUFFER_BYTES: usize = 4096;
 // Capture ring: 16 buffers of 4 KiB and a descriptor list, after the playback ring in the DMA region.
 const CAPTURE_BUFFERS: usize = 16;
 const CAPTURE_BASE: usize = (BUFFERS + 1) * BUFFER_BYTES;
+// AC'97's capture as the gateway keeps it for its reader (000-DRV-0066): 256 buffers, 5461 ms, beside the DMA ring's 341.
+// 64 still overflowed once in 10 runs on a host three times oversubscribed, where the guest ran behind QEMU's sound.
+const KEPT_BUFFERS: usize = 256;
+static mut KEPT: [u8; KEPT_BUFFERS * BUFFER_BYTES] = [0; KEPT_BUFFERS * BUFFER_BYTES];
 // Mixer registers (NAM) and the bus master PCM OUT channel (NABM).
 const RESET: u16 = 0x00; const MASTER: u16 = 0x02; const PCM_OUT: u16 = 0x18; const EXT_ID: u16 = 0x28; const EXT_CTRL: u16 = 0x2A; const FRONT_RATE: u16 = 0x2C;
 const MIC: u16 = 0x0E; const RECORD_SELECT: u16 = 0x1A; const RECORD_GAIN: u16 = 0x1C; const ADC_RATE: u16 = 0x32;
@@ -50,7 +55,10 @@ impl Regs {
     fn out32(&self, at: u16, value: u32) { self.ports.out32(self.base + at, value) }
 }
 
-struct Ac97 { mixer: Regs, bus: Regs, ring: Mapping, physical: u32, head: usize, started: bool, interrupts: usize, capture: bool, tail: usize, master: Amp }
+// `kept_head`, `kept`: the next buffer written in KEPT and how many it holds; `lost`: an overflow not yet reported;
+// `looked_ms`, `asked_ms`: when the gateway last emptied the DMA ring and when its reader last asked, for the log.
+struct Ac97 { mixer: Regs, bus: Regs, ring: Mapping, physical: u32, head: usize, started: bool, interrupts: usize, capture: bool, tail: usize, master: Amp,
+              kept_head: usize, kept: usize, lost: bool, looked_ms: u64, asked_ms: u64 }
 
 // AC'97's record gain: 16 settings of 1.5 dB from 0 dB (register 0x1C).
 const AC97_RECORD: Amp = Amp { steps: 16, step_qdb: 6, zero: 0 };
@@ -73,7 +81,8 @@ impl Ac97 {
         // Record from the microphone input, unmuted at 0 dB.
         mixer.out16(MIC, 0x0008); mixer.out16(RECORD_SELECT, 0x0000); mixer.out16(RECORD_GAIN, 0x0000);
         if ring.len() < CAPTURE_BASE + (CAPTURE_BUFFERS + 1) * BUFFER_BYTES { mind::println!("[AUDIO] DMA REGION TOO SMALL FOR CAPTURE"); }
-        let mut device = Self { mixer, bus, ring, physical, head: 0, started: false, interrupts: 0, capture: false, tail: 0, master };
+        let mut device = Self { mixer, bus, ring, physical, head: 0, started: false, interrupts: 0, capture: false, tail: 0, master,
+                                kept_head: 0, kept: 0, lost: false, looked_ms: 0, asked_ms: 0 };
         device.reset();
         Some(device)
     }
@@ -133,10 +142,17 @@ impl Ac97 {
         done
     }
     fn can_capture(&self) -> bool { self.ring.len() >= CAPTURE_BASE + (CAPTURE_BUFFERS + 1) * BUFFER_BYTES }
-    // Starts PCM-in DMA over the whole capture ring; the hardware stops at LVI, kept just behind the reader.
+    // Starts a capture: the gateway's copy empty, the DMA over the whole ring.
     fn record_start(&mut self) -> bool {
         if !self.can_capture() { return false; }
         if self.capture { return true; }
+        let now = mind::time::uptime_ms() as u64;
+        (self.kept_head, self.kept, self.lost, self.looked_ms, self.asked_ms) = (0, 0, false, now, now);
+        self.start_ring();
+        true
+    }
+    // PCM-in DMA over the whole capture ring; the hardware stops at LVI, kept just behind what the gateway took.
+    fn start_ring(&mut self) {
         self.bus.out8(PI_CR, CR_RESET);
         for _ in 0..1000 { if self.bus.in8(PI_CR) & CR_RESET == 0 { break; } }
         let list = CAPTURE_BASE + CAPTURE_BUFFERS * BUFFER_BYTES;
@@ -151,28 +167,46 @@ impl Ac97 {
         self.bus.out8(PI_LVI, (CAPTURE_BUFFERS - 1) as u8);
         self.bus.out8(PI_CR, CR_RUN);
         self.capture = true;
-        true
     }
     fn record_stop(&mut self) { self.bus.out8(PI_CR, 0); self.bus.out8(PI_CR, CR_RESET); self.capture = false; }
-    // Copies completed capture buffers into `out`; returns (bytes, overflow). On overflow the ring restarts.
-    fn record_read(&mut self, out: &mut [u8]) -> (usize, bool) {
-        if !self.capture { return (0, false); }
+    // Takes the completed capture buffers into the gateway's copy, as many as it has room for. A DMA ring that filled is
+    // an overflow: what it held is taken, the log says whose wait it was, and the ring starts over.
+    fn drain(&mut self) {
+        if !self.capture { return; }
+        let now = mind::time::uptime_ms() as u64;
         let halted = self.bus.in16(PI_SR) & SR_DCH != 0;
         let civ = self.bus.in8(PI_CIV) as usize % CAPTURE_BUFFERS;
         let ready = if halted { CAPTURE_BUFFERS } else { (civ + CAPTURE_BUFFERS - self.tail) % CAPTURE_BUFFERS };
-        let take = ready.min(out.len() / BUFFER_BYTES);
+        let take = ready.min(KEPT_BUFFERS - self.kept);
+        let kept = unsafe { &mut *core::ptr::addr_of_mut!(KEPT) };
         for i in 0..take {
-            let at = CAPTURE_BASE + ((self.tail + i) % CAPTURE_BUFFERS) * BUFFER_BYTES;
-            out[i * BUFFER_BYTES..(i + 1) * BUFFER_BYTES].copy_from_slice(&self.ring.as_slice()[at..at + BUFFER_BYTES]);
+            let (from, to) = (CAPTURE_BASE + ((self.tail + i) % CAPTURE_BUFFERS) * BUFFER_BYTES, ((self.kept_head + i) % KEPT_BUFFERS) * BUFFER_BYTES);
+            kept[to..to + BUFFER_BYTES].copy_from_slice(&self.ring.as_slice()[from..from + BUFFER_BYTES]);
         }
-        self.tail = (self.tail + take) % CAPTURE_BUFFERS;
+        (self.tail, self.kept_head, self.kept) = ((self.tail + take) % CAPTURE_BUFFERS, (self.kept_head + take) % KEPT_BUFFERS, self.kept + take);
         if halted {
-            // The reader fell a whole ring behind: deliver what was kept and start over.
-            self.bus.out16(PI_SR, SR_CLEAR | SR_DCH); self.capture = false; self.record_start();
+            mind::println!("[AUDIO] CAPTURE OVERFLOW: THE DMA RING ({} MS) FILLED; THE GATEWAY LAST TOOK FROM IT {} MS AGO, ITS READER LAST ASKED {} MS AGO, {} OF {} BUFFERS KEPT",
+                           CAPTURE_BUFFERS * BUFFER_BYTES * 1000 / (AUDIO_RATE * 4), now - self.looked_ms, now - self.asked_ms, self.kept, KEPT_BUFFERS);
+            self.lost = true;
+            self.bus.out16(PI_SR, SR_CLEAR | SR_DCH); self.capture = false; self.start_ring();
         } else {
             self.bus.out8(PI_LVI, ((self.tail + CAPTURE_BUFFERS - 1) % CAPTURE_BUFFERS) as u8);
         }
-        (take * BUFFER_BYTES, halted)
+        self.looked_ms = now;
+    }
+    // The kept capture into `out`, whole buffers, oldest first; returns (bytes, an overflow since the last read).
+    fn record_read(&mut self, out: &mut [u8]) -> (usize, bool) {
+        if !self.capture && self.kept == 0 { return (0, core::mem::take(&mut self.lost)); }
+        self.drain();
+        self.asked_ms = mind::time::uptime_ms() as u64;
+        let take = self.kept.min(out.len() / BUFFER_BYTES);
+        let (first, kept) = ((self.kept_head + KEPT_BUFFERS - self.kept) % KEPT_BUFFERS, unsafe { &*core::ptr::addr_of!(KEPT) });
+        for i in 0..take {
+            let at = ((first + i) % KEPT_BUFFERS) * BUFFER_BYTES;
+            out[i * BUFFER_BYTES..(i + 1) * BUFFER_BYTES].copy_from_slice(&kept[at..at + BUFFER_BYTES]);
+        }
+        self.kept -= take;
+        (take * BUFFER_BYTES, core::mem::take(&mut self.lost))
     }
     // Clears the write-1-to-clear flags until none is left: a buffer that completes between the read and the write
     // would otherwise keep the line asserted, and on an edge-triggered line no interrupt would come again.
@@ -226,7 +260,9 @@ impl Device {
         Some((Device::Hda(d), SECOND_IRQ))
     }
     fn free(&mut self) -> usize { match self { Device::Ac97(d) => d.free(), Device::Hda(d) => d.free() } }
-    fn active(&self) -> bool { matches!(self, Device::Hda(d) if d.active()) }
+    // A stream the loop looks at every POLL_MS: HDA's while it plays or records, AC'97's capture (000-DRV-0066).
+    fn active(&self) -> bool { match self { Device::Hda(d) => d.active(), Device::Ac97(d) => d.capture } }
+    fn drain(&mut self) { if let Device::Ac97(d) = self { d.drain(); } }
     fn play(&mut self, pcm: &[u8]) -> usize { match self { Device::Ac97(d) => d.play(pcm), Device::Hda(d) => d.play(pcm) } }
     fn tone(&mut self, hz: usize, ms: usize) -> usize { match self { Device::Ac97(d) => d.tone(hz, ms), Device::Hda(d) => d.tone(hz, ms, sine) } }
     fn reset(&mut self) { match self { Device::Ac97(d) => d.reset(), Device::Hda(d) => d.reset() } }
@@ -326,13 +362,14 @@ fn main(_info: &'static BootInfo) {
             Ok(request) => request,
             Err(Error::Other(ERR_TIMEOUT)) => {
                 // No interrupt for a while: do what it would have done, and unmask the line again.
-                if let Some(device) = device.as_mut() { device.clear_status(); }
+                if let Some(device) = device.as_mut() { device.clear_status(); device.drain(); }
                 let _ = irq.ack();
                 release(&mut device, &mut waiters, false);
                 continue;
             }
             Err(_) => continue,
         };
+        if let Some(device) = device.as_mut() { device.drain(); }
         if request.irq.is_some() {
             if let Some(device) = device.as_mut() {
                 let count = device.interrupt();

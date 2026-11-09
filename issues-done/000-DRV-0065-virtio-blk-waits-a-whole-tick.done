@@ -1,0 +1,63 @@
+# 000-DRV-0065 — `virtio_blk`: a request waits a whole tick — done
+
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** — (found by [351-NET-0034](351-NET-0034-the-download-check-flushed-bounded-and-logged.done)) · **Constitution:** MC-5.6, MC-6.1
+
+Numbered from the network track's request of 2026-10-20 in `requests-DRV.md`.
+
+## Problem
+
+- **What was measured.** On aarch64 (`virtio_blk` boot disk, QEMU TCG on un-rizen), `download` read an 8 MiB file back in 512 requests of 16 KiB. It took 5,080 ms, nearly all of it in the file service's reads, about 10 ms each.
+- **Why.** `virtio_blk/src/main.rs`'s `wait` spins 1,000 times, then calls `mind::time::sleep(1)`. On aarch64 the tick is 10 ms, so every request that QEMU has not finished within the spins costs a whole tick. Under TCG that is nearly every one.
+- **What it costs.** The file service reads at about 1.6 MB/s on aarch64. On x86 (1 ms tick) the same check reads 30 MiB in about 5 s.
+- **The same pattern** is in `ahci`'s `wait` ([000-DRV-0064](../issues/000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md)).
+
+## Plan
+
+1. **Wait on the queue's interrupt,** or poll the used ring against `monotonic_ns`, with a short sleep only once a request is known to be slow.
+2. **Give each request a deadline in time,** as 000-DRV-0064 does for `ata`.
+
+## Acceptance criteria
+
+- On aarch64, the `net` suite's `TIME: download's … check` lines show reads well under a tick each.
+- The `vfs` and `store` suites pass.
+
+No real machine is needed.
+
+## Related
+
+[351-NET-0034](351-NET-0034-the-download-check-flushed-bounded-and-logged.done), [000-DRV-0064](../issues/000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md).
+
+## Resolution
+
+**The cause** was the one the problem names:
+- `wait` spun 1,000 times, a few microseconds, then slept 1 ms a poll;
+- a sleep is a tick, 10 ms on aarch64;
+- under TCG almost no request ends within those spins, so almost every one cost a tick.
+
+**The fix** (plan step 1's second way, and step 2): `virtio_blk/src/wait.rs`.
+- It polls the used ring against the monotonic clock for 2 ms (`SPIN_NS`), the clock read every 64 polls, as each reading is a system call.
+- Only then does it sleep between polls.
+- A request fails at a deadline in time, 10 s (`DEADLINE_NS`), not after a count of polls. Before, the count meant about 2 s on x86 and 20 s on aarch64.
+- The queue's interrupt is not used: `virtio_blk` has no line from `init` (`NO_VECTOR`).
+
+**Tested:**
+- **The host test** `tests/virtio_blk_wait_host.rs` (4), with a clock of its own:
+  - a request that ends within the spin costs no sleep;
+  - a slow one sleeps only after the spin;
+  - one that never ends fails at the deadline;
+  - one done at once reads the clock once.
+- **QEMU aarch64,** `net` suite on this machine (TCG, 4 CPUs): download's 8 MiB read back in 512 requests of 16 KiB.
+
+  | Read back | First check | Second check |
+  |---|---|---|
+  | Before | 5,120 ms, the longest read 10 ms | 5,120 ms, the longest read 20 ms |
+  | After, first run | 470 ms | 470 ms |
+  | After, second run | 540 ms | 400 ms |
+
+  Under a millisecond a read, against 10 ms before, the longest still 10 ms.
+- **The first run after** stopped at 000-NET-0054's static setup check. That check drains the log: its first `service_logs` took `WAITING FOR DHCP` and `STATIC` in one read, and the second found nothing. The second run passed it (2.8 s), with all 35 checks, as the run before the change did.
+- **The groups:**
+  - `aarch64: files and the block store` (`vfs`, `store`, `storefaults`): PASS;
+  - `x86: files and block writes`: PASS on a second run. The first timed out in the `edit` suite (on `ata`, not VirtIO) while the host's load stood at 45.
+- **The whole `scripts/host_tests.sh`:** 198 suites, none failed.
+

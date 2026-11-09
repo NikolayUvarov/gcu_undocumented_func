@@ -26,5 +26,5 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
   - the Intel i5 PC's sound and Ethernet: [214-DRV-0063](214-DRV-0063-the-intel-i5-pcs-sound-and-ethernet.md);
   - `ata` and `ahci` waits with a deadline: [000-DRV-0064](000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md);
   - BCM4331 applying the country: done in [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md)'s `set-country`, [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done) and [550-DRV-0050](../issues-done/550-DRV-0050-bcm-wifi-takes-the-world-domain.done). Its channels and listen-only channels are applied, and a channel the country forbids is left. The EIRP limits wait for power control in [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), and the log says so at each `set-country`;
-  - `virtio_blk` waiting a whole tick: [000-DRV-0065](000-DRV-0065-virtio-blk-waits-a-whole-tick.md);
+  - `virtio_blk` waiting a whole tick: [000-DRV-0065](../issues-done/000-DRV-0065-virtio-blk-waits-a-whole-tick.done);
   - the AC97 capture ring's overflow: [000-DRV-0066](000-DRV-0066-the-ac97-capture-ring-overflows.md).
