@@ -218,6 +218,9 @@ pub const BADGE_NOTICE: u16 = 7;
 /// The badge of the shell's command client init mints for link with `dev` in link.conf (800-KRN-0148): the shell takes
 /// that client's lines on the link's rule.
 pub const BADGE_SHELL_LINK: u16 = 1;
+/// The badge of the copy of its command client the shell lends for REQUEST_SECRET_LINE (000-KRN-0224, for 000-APP-0126):
+/// through it the shell answers `shell.wit` 1.12 `secret-line` alone.
+pub const BADGE_SHELL_SECRET: u16 = 2;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)
@@ -230,6 +233,7 @@ pub const REQUEST_OWN: u32 = 33554432; // its own directory, system/own/<name>/,
 pub const REQUEST_SECRETS: u32 = 67108864; // its own secrets' client of keystore in SLOT_SECRETS: from the loader itself, by its name (000-KRN-0182)
 pub const REQUEST_NN: u32 = 134217728; // the model service's client in SLOT_NN, badged for this start by the shell (262-KRN-0178, for 262-APP-0112)
 pub const REQUEST_WIFI_READ: u32 = 268435456; // the Wi-Fi station's reading client (BADGE_WIFI, which wlan mints) in SLOT_WIFI (550-KRN-0213, for 550-NET-0058)
+pub const REQUEST_SECRET_LINE: u32 = 536870912; // a console program's client of the shell badged BADGE_SHELL_SECRET in SLOT_SHELL: one secret line typed at its console (000-KRN-0224, for 000-APP-0126)
 /// The badge of the updater's client init gives the Effector gateway (update.wit 1.2, 751-KRN-0185): `fetch`, `apply`
 /// and `rollback` only while init's `remote-update` counts, which the updater asks at each.
 pub const BADGE_UPDATE_GATEWAY: u16 = 1;
