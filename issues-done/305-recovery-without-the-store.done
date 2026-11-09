@@ -23,7 +23,7 @@ Appendix B.4: "the bootstrap/recovery set is available without a functioning mai
 
 ## Related
 
-[docs/storage](../docs/storage/README.md) (Recovery without the main store); [351-STO-0006](../issues/351-STO-0006-releases-pinned-in-the-store.md).
+[docs/storage](../docs/storage/README.md) (Recovery without the main store); [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.done).
 
 ## Resolution
 

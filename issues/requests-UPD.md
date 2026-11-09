@@ -1,6 +1,6 @@
 # Requests for the update track (UPD), not numbered yet
 
-**Owner:** update track (the kernel session) · **Status:** open (none waiting; STO's releases kept in the block store, 2026-11-08, became [351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md), made by STO) · **Recorded by:** the tools track (APP), 2026-10-28
+**Owner:** update track (the kernel session) · **Status:** open (none waiting; STO's releases kept in the block store, 2026-11-08, became [351-UPD-0033](../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done), made by STO) · **Recorded by:** the tools track (APP), 2026-10-28
 
 The update track numbers its own tasks (`NNN-UPD-MMMM`), so requests from other tracks wait here. The update track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 

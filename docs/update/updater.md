@@ -61,7 +61,7 @@ MC-9.3 asks that the recovery images and the objects they need be kept from ordi
   - `channels/<name>`, the channel kept with it;
   - `releases/<version>/<processor>/MANIFEST` and `MANIFEST.SIG`;
   - the blob of each file the manifest lists for a slot, under the first two digits of its name (`blobs/ab/ab…`), so that no directory is over a block.
-- **Pinned by the updater's own owner.** Its client is badged `OWNER_UPDATER` ([351-STO-0006](../../issues/351-STO-0006-releases-pinned-in-the-store.md)). Collection never frees what a pin retains, and no client of another owner ends the pin, whatever its rights. No name points at a release: a name keeps its versions, which would hold a release past its pin.
+- **Pinned by the updater's own owner.** Its client is badged `OWNER_UPDATER` ([351-STO-0006](../../issues-done/351-STO-0006-releases-pinned-in-the-store.done)). Collection never frees what a pin retains, and no client of another owner ends the pin, whatever its rights. No name points at a release: a name keeps its versions, which would hold a release past its pin.
 - **When a release is kept:**
   - the running one, at start and once a trial is confirmed, if the store does not keep it yet. Its manifest must be the one booted and the boot key's, and its channel the release key's naming it;
   - a staged one, once `fetch` or `install-commit` has written it and its files passed their checks.

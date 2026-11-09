@@ -1,6 +1,6 @@
-# 351-STO-0006 — Releases as objects in the block store, the running and last-known-good ones pinned
+# 351-STO-0006 — Releases as objects in the block store, the running and last-known-good ones pinned — done
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** in progress (2026-11-08) · **Blocked by:** the updater's part ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md)); `init`'s store client is done ([351-KRN-0218](351-KRN-0218-the-updaters-store-client.md), its `init` part) · the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater, done) · **Main task:** [351](351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-11-09) · **Blocked by:** — ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done) and [351-KRN-0218](../issues/351-KRN-0218-the-updaters-store-client.md)'s `init` part) · the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater, done) · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
 
 Numbered by the storage track from the kernel track's request in `requests-STO.md` (recorded 2026-10-08 for main task 351, phase 4, at the maintainer's request).
 
@@ -32,10 +32,10 @@ So the work splits three ways:
    - Its pins and its account are its own: no other client ends them, whatever rights it holds.
    - The host tests show a release tree, pinned by that owner, kept whole through the removal of every name and a collection, and read back with each block checked.
    - The quota stays three quarters of the medium for every owner. An account counts each release whole (303-STO-0002), though the blocks two releases share are stored once. So the quota holds the running, the last known good and a staged release once the store's medium is at least four times a release (about 26 MiB on x86 now). A quota of its own for the updater, and a bound on all owners together, stay open (303-STO-0002's "not done").
-2. **`KRN`, `init`'s grant** ([351-KRN-0218](351-KRN-0218-the-updaters-store-client.md)):
+2. **`KRN`, `init`'s grant** ([351-KRN-0218](../issues/351-KRN-0218-the-updaters-store-client.md)):
    - the updater gets a store client badged `OWNER_UPDATER` with get, put and publish, when the store runs;
    - it starts after `blockstore`.
-3. **`UPD`, the updater** ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.md); `STO` makes it, by agreement with the update track's owner, as `STO` made 351-UPD-0007):
+3. **`UPD`, the updater** ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done); `STO` makes it, by agreement with the update track's owner, as `STO` made 351-UPD-0007):
    - **Each staged release** goes into the store as a `mind::tree` directory of its files, once its files have passed their checks. It is named `release/<version>` (for people; names are anyone's to change), and pinned.
    - **After a confirmed boot** the pins of the running and the last-known-good release stay, and older ones end (351-KRN-0014). The updater finds its releases by its own pins (`pins`) and the manifest each holds, never by a name.
    - **A slot is rebuilt from the store** as from any other source: every file is checked by size and SHA-256 against the manifest, and the manifest against the boot key. So a name changed by another client, or a damaged medium, can stage nothing the signatures do not allow. A new minor version of `update.wit` asks for it.
@@ -67,6 +67,21 @@ After collection runs, the last-known-good release is still complete in the stor
 
 **Part 3, the updater's,** is made on the same branch (351-UPD-0033): it keeps its releases in the store and a rollback rewrites a damaged slot from there. This task closes once that part lands, with its criteria shown in QEMU on x86 and aarch64.
 
+## Resolution
+
+The three parts of 2026-11-08 (above):
+1. **STO's, in `main`** (round 92): the store's owner apart from rights (`OWNER_UPDATER`) and `tree::files`.
+2. **KRN's, in `main`** (351-KRN-0218): `init`'s client for the updater.
+3. **UPD's, made by STO** ([351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done)): the updater keeps the running, the last known good and a staged release in the store, and a rollback writes a damaged slot again from there.
+
+The criterion, in QEMU on x86 and aarch64 (the `updatestore` suite, on `0d58f4c2 (the commits after it change only text)`):
+- after a collection, the last-known-good release is whole in the store (`blocks check <cid> tree`, every block checked);
+- slot A's kernel and loader, damaged on the disk, are written again from the store by `update rollback`, and the slot boots on trial and is confirmed.
+
+Not done here:
+- the store on a medium other than a VirtIO disk the store owns (300-KRN-0025's);
+- a quota of the updater's own, and a bound on all owners together (303-STO-0002).
+
 ## Related
 
-[351](351-self-update.md), [303](../issues-done/303-retention-and-collection.done), [docs/storage](../docs/storage/README.md).
+[351](../issues/351-self-update.md), [303](../issues-done/303-retention-and-collection.done), [docs/storage](../docs/storage/README.md).
