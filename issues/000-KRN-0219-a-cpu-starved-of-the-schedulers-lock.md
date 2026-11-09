@@ -73,13 +73,13 @@
 - **Reproduced here,** in the kernel session's container (4 CPUs): the image of 86e7ac21, `--cpus 16 --suites normal`, stopped during boot after 90 s, with nine CPUs in the same wait and the same pattern.
 - **The candidate was returned** (`LANDING/2026-11-09T0100Z-KRN-round-86e7ac21.md`).
 
-## Progress (2026-11-08)
+## Progress (2026-11-08): the ticket lock, since refused
 
-- **`common/ticket.rs`:** the ticket lock, `next` and `serving` counters.
+- **`common/ticket.rs`** (since removed): the ticket lock, `next` and `serving` counters.
 - **`scheduler.rs`:**
   - `LOCK` is one, taken in `locked` with interrupts off as before;
   - the revocation loop's `LET_GO_SPINS` and its spin are gone: a CPU that waits is served before this one takes the lock again.
-- **`tests/ticket_host.rs`,** run by `scripts/host_tests.sh`:
+- **`tests/ticket_host.rs`** (since replaced), run by `scripts/host_tests.sh`:
   - mutual exclusion: four threads, 80 000 increments, none lost;
   - fairness: one thread takes the lock in a tight loop with a short hold while another takes it 2000 times. With the ticket lock the busy one took it at most once while the other waited for a turn.
   - The test-and-set lock's count is printed beside it: **up to 37 347** in the kernel session's container, 4 CPUs. That is the starvation the record suggested, shown on the host (it does not prove the record's cause, MC-12.2).
@@ -98,7 +98,18 @@
 
   - The revocations are two to four times faster, as their steps no longer spin `LET_GO_SPINS` before taking the lock again. The other rows move both ways within TCG's noise.
 - **Passed with it** in the same container: x86 `normal` (4 CPUs) and aarch64 `smp`.
-- **Left:** the gate; 10 runs of `x86: network, TLS and Effector` on x32-128 beside a busy lane; `kbench` on the gate machines.
+- **Left then:** the gate, which refused it (above).
+
+## Progress (2026-11-09): test-and-set with a turn for a CPU that waited long
+
+- **`common/spinlock.rs`:** the lock of plan step 1, `PATIENCE` 1024 turns; `common/ticket.rs` and its test are gone.
+- **`scheduler.rs`:** `LOCK` is the new lock, taken in `locked` as before; `LET_GO_SPINS` stays gone.
+- **`tests/spinlock_host.rs`,** run by `scripts/host_tests.sh`. The test-and-set and ticket locks are kept in the test only, to be measured beside it.
+  - **Exclusion:** four threads, 80 000 increments, each waiter marked next after 8 turns: none lost, no mark left.
+  - **A marked waiter goes first:** the holder lets go and asks again at once, and the marked waiter is let in before it.
+  - **Printed, not asserted:** three runs in the kernel session's container (4 CPUs). They show the two failures, not a cause (MC-12.2).
+    - **One thread taking the lock again and again** while another waits for one turn: the busy one took it at most 82 to 159 times with this lock, 39 050 to 54 467 with test-and-set, and 1 to 36 with the ticket lock.
+    - **16 threads on 4 CPUs for 0.5 s:** 172 386 to 197 206 turns with this lock, 190 364 to 347 162 with test-and-set, and 3 162 to 3 489 with the ticket lock, about 55 times fewer: its turns wait for the host to run the one thread next.
 
 ## Related
 
