@@ -87,6 +87,7 @@ Once the storage track's part is there:
   - `find notes:` lists what the shell wrote;
   - `grep -r` reads `other:` alone through its scope;
   - `edit notes:docs/b.txt` writes through its directory's scope.
+- **On aarch64** (QEMU `virt`, 4 CPUs, TCG), at 03aa61ee0, with the stub built as `fixture-storewrite.elf`: the same `storefs_check` passed in the `shell` suite.
 - **Not run here:** that a scope reaches nothing beside its root. It rests on `storefs`'s scope rules and their host tests (311-STO-0037).
 
 ## Related

@@ -78,7 +78,7 @@ NET's second form, which keeps the secret in the shell's hands for the shortest 
   - **Before the lending,** at d1321a04d, the `shell` and `wm` suites passed, 31 checks, with the new way the shell's commands are received.
   - **With `main` c92256a3 merged** (000-KRN-0224 in it; the hunks this branch carried are its lines), at c2bea2cca: the `shell` and `net` suites passed in one run, 52 checks, `secret_line_check` among them. The secret was in no line of the serial log. The fixtures were built by `scripts/x86_fixtures.sh`.
   - **With the other slot exercised** (2026-11-09): a copy of the stub in the background asks while the line in front is typed. Its call arrives in that slot and is refused (`NOT THE CONSOLE PROGRAM IN FRONT`), and the line in front is given as before. The `shell` suite passed with it, 15 checks, the secret in no line of the serial log.
-- **Not run:** aarch64. `scripts/build_aarch64.sh` builds no stub, so the check is skipped there.
+- **On aarch64** (QEMU `virt`, 4 CPUs, TCG), at 03aa61ee0: `scripts/build_aarch64.sh --fixtures` builds the stub as `fixture-secret.elf`, and the `shell` and `nnd` suites passed in one run, 19 checks, `secret_line_check` among them. The secret was in no line of the serial log.
 - **Left:** `get -u`, NET's program, uses it (000-NET-0048).
 
 ## Related
