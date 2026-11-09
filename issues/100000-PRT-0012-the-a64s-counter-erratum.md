@@ -1,6 +1,6 @@
 # 100000-PRT-0012 — The A64's counter erratum: a stable read of the generic timer
 
-**Type:** porting (kernel) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** open (the workaround made and tested on the host and in QEMU, below; the phone's run left) · **Blocked by:** a PinePhone at hand to show the fault and its fix ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 1 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
+**Type:** porting (kernel) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** open (the workaround made, tested on the host and in QEMU, and in `main` since round 96, 5bc2ce6e; the phone's run left) · **Blocked by:** a PinePhone at hand to show the fault and its fix ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 1 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
 
 ## Problem
 
@@ -38,6 +38,8 @@
   - `tests/fdt_host.rs` (the PinePhone's tree names `Sun50iA64`);
   - QEMU `virt,acpi=off,gic-version=2`, four Cortex-A53, U-Boot 2025.10, with `-dtb` a `virt` tree whose timer node names `allwinner,erratum-unknown1` (the kernel session's container, 2026-11-08): the kernel names the erratum and turns the retry on; the shell starts, four CPUs online, and `uptime` advanced 20 s over 20.3 s of the host's. QEMU's counter has no such fault: this shows the workaround harms nothing, not that it cures the A64's (MC-12.1, 12.2).
 - **Left:** the hours' run on the PinePhone, and programs' own reads.
+
+**Landed** in round 96 (`main` 5bc2ce6e, 2026-11-09), with 000-KRN-0219; round 95 had returned both with that task's ticket lock.
 
 ## Related
 

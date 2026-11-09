@@ -1,6 +1,6 @@
 # 000-KRN-0219 — A CPU starved of the scheduler's lock while another takes it again and again (round 91's record)
 
-**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (the ticket lock refused by round 95's gate; a test-and-set lock with a turn for a CPU that waited long made and tested on the host, in QEMU and on acc-2, below; the gate and the 10 runs beside a busy lane left) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
+**Type:** kernel (`scheduler.rs`'s lock) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (the ticket lock refused by round 95's gate; a test-and-set lock with a turn for a CPU that waited long made and tested on the host, in QEMU and on acc-2, and in `main` since round 96, 5bc2ce6e; the 10 runs beside a busy lane left) · **Blocked by:** — · **Roadmap:** the landing gate, track A · **Constitution:** MC-6.1, MC-12.2
 
 ## Problem
 
@@ -152,6 +152,9 @@
     | the old test-and-set (main dc715b7b) | 210 s | 213 s | 598 s |
 
     All six passed. A QEMU run says nothing of a machine's lock (MC-12.1); this one is no slower than the old lock where the ticket lock crawled.
+
+- **Landed** in round 96 (`main` 5bc2ce6e, 2026-11-09): the gate passed, 55 groups on acc-1, acc-2, PCU and x32-128's two lanes, `aarch64: 16 CPUs` among them (186 s on x32-128).
+- **Left:** the 10 runs of `x86: network, TLS and Effector` on x32-128 beside a busy lane, started on 5bc2ce6e.
 
 ## Related
 
