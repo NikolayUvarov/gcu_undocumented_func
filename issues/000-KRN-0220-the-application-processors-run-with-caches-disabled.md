@@ -53,7 +53,8 @@
   - **The groups on one CPU and the scheduler's,** on 9baf987b (with 100000-KRN-0171 and the kernel's budget at 7400): `x86: services, storage, audio` (785 s), `x86: scheduling, isolation, heap` (146 s), `x86: one CPU` (142 s) and `x86: AVX state, one CPU` (48 s), through `scripts/ci_local.sh`; all passed.
   - All in the kernel session's container (QEMU 8.2.2, OVMF, TCG). TCG models no cache, so these show the bits, not a speed (MC-12.1).
 - **Left:** the run on a machine, `kbench` before and after (plan step 4). It waits for a build with this on the MacBook Pro or the DEXP.
+  - **Its call-and-reply row** also says whether 000-KRN-0219's lock is slower there on 4 CPUs, as it measured in QEMU: 248 to 342 µs against the old lock's 190 to 206 (its resolution). That run needs the same build with the old lock (`main` dc715b7b) beside it.
 
 ## Related
 
-[000-KRN-0219](000-KRN-0219-a-cpu-starved-of-the-schedulers-lock.md) (the record), [000-KRN-0084](000-KRN-0084-an-ipc-round-trip-between-two-cpus.md), [174](174-full-use-of-pc-hardware.md).
+[000-KRN-0219](../issues-done/000-KRN-0219-a-cpu-starved-of-the-schedulers-lock.done) (the record), [000-KRN-0084](000-KRN-0084-an-ipc-round-trip-between-two-cpus.md), [174](174-full-use-of-pc-hardware.md).
