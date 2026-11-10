@@ -1,6 +1,6 @@
 # 307 — A durable medium on real machines: the store's own partition (track B, eighth step)
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md) (`init`'s grant, which waits for `DRV`'s bounded client) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-4.8, MC-12.1, preamble ("preservation of state"), Appendix B.3
+**Type:** main task · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done) (`init`'s grant, which waits for `DRV`'s bounded client) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-4.8, MC-12.1, preamble ("preservation of state"), Appendix B.3
 
 From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-as-a-minds-memory.md` on `internal-dev-messages`), taken by the storage session at the maintainer's word (2026-10-27). Everything here is plan, not a guarantee (MC-12.3).
 

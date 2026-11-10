@@ -56,6 +56,7 @@ pub mod mem;
 pub mod memconf;
 pub mod network;
 pub mod parse;
+pub mod partition; // MBR and GPT, and the block store's own partition (307-KRN-0177)
 pub mod release;
 pub mod json;
 pub mod models;

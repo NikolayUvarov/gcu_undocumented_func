@@ -22,6 +22,12 @@
 
    A restarted driver is checked the same way.
 4. **`usb_storage`** (the drivers track, by request): it reports the return instead of running the command.
+5. **The windows (added 2026-11-10, for 307-KRN-0177).**
+   - **The gap.** A device that comes back keeps the driver instance's windows (307-DRV-0054), since its driver did not restart. So the block store's window 1 reaches whatever medium is now in the stick's place, by sector numbers.
+   - **The fix:**
+     - `block::serve` clears every window on a return, as a restart does. A window's client then gets "not found" until the window is set again;
+     - `init` sets the store's window again only after the check it makes after a restart: the same partition number, PARTUUID and sectors, still the store's candidate (`store_window_again`, 307-KRN-0177).
+   - **How `init` learns of a return** is part of this task's design. One way is the driver restarting itself on a return, so that `init`'s restart path runs.
 
 ## Acceptance criteria
 
@@ -30,6 +36,7 @@
   - `vfs_server` logs `CAME BACK WITH ANOTHER MEDIUM`.
 - The same stick plugged in again still works.
 - A driver killed and restarted is checked and goes on.
+- The block store's window does not reach the copy: after the swap its client gets "not found", and `init` sets no window on the copy unless its partition passes the check.
 
 ## Related
 

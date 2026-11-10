@@ -13,6 +13,7 @@ use mind::abi::*;
 use mind::dev::cap_info;
 use mind::idl::{init as idl_init, netpolicy, vfs, wire};
 use mind::ipc::{self, Endpoint};
+use mind::partition::{self, Kind, Scheme};
 use mind::platform;
 use mind::effector::policy::{Action, Ask, Deny, Policy};
 use mind::process::{grant, grant_moved, Image, Quota};
@@ -70,6 +71,10 @@ const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's in
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
+const STORE_WINDOW: u8 = 1; // the block store's own partition, as a window of its driver (307-KRN-0177)
+const STORE_TXT: &str = "store.txt"; // the owner's word on the store's partition: `partition <PARTUUID>` (307-KRN-0177)
+// The drivers whose disks may hold the store's own partition (307-KRN-0177, STO's 307).
+const STORE_DRIVERS: [&str; 6] = ["nvme", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2"];
 const EFFECTOR_MEMORY_MIB: u16 = 48; // the agent's benchmark: a 16 MiB chase and two 8 MiB copy buffers (750-KRN-0158)
 const EFFECTOR_TASKS: u16 = 32; // its benchmark's workers: a ceiling, the kernel allows one per online CPU (750-KRN-0159)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
@@ -145,7 +150,11 @@ enum Off { #[default] No, Disabled, Needs(usize), NoDevice, NoImage, Safe, Mode,
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
-struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<(Option<&'static str>, Option<&'static str>)>,
+// The block store's own partition (307-KRN-0177): its driver, its number there, and the sectors of its window.
+#[derive(Clone, Copy)]
+struct StorePart { driver: &'static str, number: u8, id: partition::Id, first: u64, count: u32 }
+
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<(Option<&'static str>, Option<&'static str>)>, store_part: Option<Option<StorePart>>,
               link: Option<[u8; LINK_WORDS_MAX]>,
               // The platform's nodes init gives drivers, read once at boot (100000-KRN-0171).
               nodes: hardware::Nodes,
@@ -246,6 +255,100 @@ impl Init {
         self.store = Some(found);
         found
     }
+    // The block store's own partition when no VirtIO disk is its own (307-KRN-0177), looked for once: every driver's table
+    // is read and logged, and the one partition of the store's type with its superblock, or the one store.txt names, gets
+    // window STORE_WINDOW on its driver. Never a partition because it is blank; with two candidates or more, none.
+    fn store_partition(&mut self) -> Option<StorePart> {
+        if let Some(found) = self.store_part { return found; }
+        let found = self.look_for_store_partition();
+        self.store_part = Some(found);
+        found
+    }
+    fn look_for_store_partition(&mut self) -> Option<StorePart> {
+        let mut text = [0u8; 256];
+        let length = self.read_boot_file(STORE_TXT, &mut text);
+        let named = partition::named(&text[..length]).unwrap_or_else(|why| { mind::println!("[INIT] {}", why); None });
+        let mut candidates = [None; 4];
+        let (mut found, mut named_seen) = (0, false);
+        for name in STORE_DRIVERS {
+            if !self.running(service_index(name)) { continue; }
+            let Ok(keeper) = self.keeper(name) else { continue };
+            let Ok(client) = ipc::mint_badged(keeper, CLIENT, 0) else { continue };
+            match mind::block::Device::open(Endpoint(client)) {
+                Ok(mut disk) => {
+                    let table = partition::read_table(disk.sectors(), &mut |lba, out| disk.read(lba, 1).map(|s| out.copy_from_slice(&s[..partition::SECTOR])).is_ok());
+                    log_table(name, &table);
+                    for part in table.partitions().filter(|p| p.store_type() || named == Some(p.id)) {
+                        let mut first = [0u8; partition::SECTOR];
+                        match disk.read(part.first, 1) {
+                            Ok(sector) => first.copy_from_slice(&sector[..partition::SECTOR]),
+                            Err(error) => { mind::println!("[INIT] {} PARTITION {}: ITS FIRST SECTOR NOT READ ({:?}): NOT THE STORE'S", name, part.number, error); continue; }
+                        }
+                        named_seen |= named == Some(part.id);
+                        match partition::candidate(part, &first, named) {
+                            Some(why) => { if found < candidates.len() { candidates[found] = Some((name, *part, why)); } found += 1; }
+                            None => mind::println!("[INIT] {} PARTITION {}: THE STORE'S TYPE WITHOUT ITS SUPERBLOCK: NOT TAKEN, UNLESS {} NAMES IT", name, part.number, STORE_TXT),
+                        }
+                    }
+                }
+                Err(Error::Other(ERR_TIMEOUT)) => mind::println!("[INIT] {} DID NOT ANSWER IN {} S: ITS PARTITIONS NOT READ", name, CALL_LIMIT_MS / 1000),
+                Err(_) => {}
+            }
+            let _ = ipc::drop_cap(client);
+        }
+        if let Some(id) = named.filter(|_| !named_seen) {
+            let mut text = [0u8; partition::ID_TEXT];
+            let n = partition::id_text(&id, &mut text);
+            mind::println!("[INIT] {} NAMES PARTITION {}: NO DISK HAS IT", STORE_TXT, core::str::from_utf8(&text[..n]).unwrap_or("?"));
+        }
+        let why_text = |why| match why { partition::Why::Found => "ITS TYPE AND SUPERBLOCK", partition::Why::Named => "NAMED IN STORE.TXT", partition::Why::FoundAndNamed => "ITS TYPE AND SUPERBLOCK, NAMED IN STORE.TXT" };
+        match (found, candidates[0]) {
+            (1, Some((driver, part, why))) => {
+                let Ok(count) = u32::try_from(part.count) else {
+                    mind::println!("[INIT] {} PARTITION {}: {} SECTORS, MORE THAN A WINDOW HOLDS (2 TIB): NOT THE STORE'S", driver, part.number, part.count);
+                    return None;
+                };
+                let store = StorePart { driver, number: part.number, id: part.id, first: part.first, count };
+                self.set_store_window(store).ok()?;
+                mind::println!("[INIT] THE BLOCK STORE'S PARTITION: {} PARTITION {} ({}), {} SECTORS FROM {}, WINDOW {}", driver, part.number, why_text(why), count, part.first, STORE_WINDOW);
+                Some(store)
+            }
+            (0, _) => { mind::println!("[INIT] NO PARTITION OF THE STORE'S: NONE OF ITS TYPE WITH ITS SUPERBLOCK, NONE {} NAMES", STORE_TXT); None }
+            (n, _) => {
+                mind::println!("[INIT] THE STORE'S PARTITION REFUSED: {} CANDIDATES, NONE TAKEN", n);
+                for (driver, part, why) in candidates.into_iter().flatten() { mind::println!("[INIT] A CANDIDATE: {} PARTITION {} ({})", driver, part.number, why_text(why)); }
+                None
+            }
+        }
+    }
+    // After the store's driver started again: its partition is still the store's, the same number, PARTUUID and sectors,
+    // and still of the store's type with its superblock or named, before its window is set again; never by number alone.
+    fn store_window_again(&mut self, store: StorePart) {
+        let Ok(client) = self.keeper(store.driver).and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)) else { return };
+        let mut text = [0u8; 256];
+        let length = self.read_boot_file(STORE_TXT, &mut text);
+        let named = partition::named(&text[..length]).unwrap_or(None);
+        let same = mind::block::Device::open(Endpoint(client)).ok().is_some_and(|mut disk| {
+            let table = partition::read_table(disk.sectors(), &mut |lba, out| disk.read(lba, 1).map(|s| out.copy_from_slice(&s[..partition::SECTOR])).is_ok());
+            let Some(part) = table.partitions().find(|p| p.number == store.number).copied() else { return false };
+            let mut first = [0u8; partition::SECTOR];
+            part.id == store.id && part.first == store.first && part.count == store.count as u64
+                && disk.read(part.first, 1).map(|s| first.copy_from_slice(&s[..partition::SECTOR])).is_ok()
+                && partition::candidate(&part, &first, named).is_some()
+        });
+        let _ = ipc::drop_cap(client);
+        if !same { mind::println!("[INIT] {}: PARTITION {} IS NOT THE STORE'S IT WAS: NO WINDOW FOR THE BLOCK STORE", store.driver, store.number); return; }
+        if self.set_store_window(store).is_ok() { mind::println!("[INIT] {}: WINDOW {} SET AGAIN FOR THE BLOCK STORE (PARTITION {})", store.driver, STORE_WINDOW, store.number); }
+    }
+    // Window STORE_WINDOW over the store's partition, set through a client badged BADGE_WINDOWS that init drops at once;
+    // set again whenever the driver starts again, since a restarted driver holds no window (307-DRV-0054).
+    fn set_store_window(&mut self, store: StorePart) -> Result<()> {
+        let client = ipc::mint_badged(self.keeper(store.driver)?, CLIENT, mind::block::BADGE_WINDOWS)?;
+        let set = mind::idl::block::window(Endpoint(client), STORE_WINDOW, store.count, store.first);
+        let _ = ipc::drop_cap(client);
+        if let Err(error) = set { mind::println!("[INIT] {}: WINDOW {} FOR THE BLOCK STORE NOT SET: {:?}", store.driver, STORE_WINDOW, error); }
+        set
+    }
     // Whether vfs_server serves the boot volume: its root opens through a client of init's own.
     fn boot_volume_mounted(&mut self) -> bool {
         let Ok(keeper) = self.keeper("vfs_server") else { return false };
@@ -329,7 +432,10 @@ impl Init {
                 } else { platform::resume(device)?; }
             }
             if let Some(device) = self.others[index] { platform::resume(device)?; }
-            return self.spawn(index, plan);
+            let pid = self.spawn(index, plan)?;
+            // A block driver started again holds no window: the store's is set again once its partition is checked (307-KRN-0177).
+            if let Some(store) = self.store_part.flatten().filter(|store| store.driver == name) { self.store_window_again(store); }
+            return Ok(pid);
         }
         let (plan, mut minted) = self.plan(index)?;
         let pid = self.spawn(index, plan)?;
@@ -681,20 +787,28 @@ impl Init {
             }
             // Each instance its own disk: ramdisk for vfs_server's ram:, ramdisk#1 for the block store (300-KRN-0001).
             "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL),
-            // The block store over a RAM disk of its own: its only block client (block::serve has one buffer for all).
             "blockstore" => {
                 // It badges its memory domains' clients from 0x100 up, below them init's (308-STO-0023, 308-KRN-0184).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "blockstore")?, ALL | CAP_BADGE);
-                // Its own disk when there is one, else the RAM disk whose contents never outlive the boot (300-KRN-0025).
-                let disk = match self.store_disk() { Some(disk) => disk, None if self.running(service_index("ramdisk#1")) => "ramdisk#1", None => return Err(Error::NotFound) };
-                grants.add(SLOT_DEV0, self.badged(&mut minted, disk, mind::block::BADGE_WRITE)?, CLIENT);
+                // Its own disk: a VirtIO disk in QEMU (300-KRN-0025), else its own partition as a window of its driver
+                // (307-KRN-0177), else the RAM disk whose contents never outlive the boot.
+                let disk = self.store_disk();
+                let store = if disk.is_none() { self.store_partition() } else { None };
+                let (driver, badge) = match (disk, store) {
+                    (Some(disk), _) => (disk, mind::block::BADGE_WRITE),
+                    (None, Some(store)) => (store.driver, mind::block::badge_for(STORE_WINDOW, true)),
+                    (None, None) if self.running(service_index("ramdisk#1")) => ("ramdisk#1", mind::block::BADGE_WRITE),
+                    (None, None) => return Err(Error::NotFound),
+                };
+                grants.add(SLOT_DEV0, self.badged(&mut minted, driver, badge)?, CLIENT);
                 // keystore's client for its own secrets, its volume keys (308-STO-0022), badged so that keystore answers
                 // it about the store's secrets alone (keystore.wit 1.5, 308-KRN-0183). Without keystore it keeps a key
                 // in the clear, and says so; keystore never needs the store.
                 if self.present("keystore") { grants.add(3, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_BLOCKSTORE)?, CLIENT); }
                 else { mind::println!("[INIT] BLOCKSTORE STARTS WITHOUT ITS SECRETS CLIENT: KEYSTORE DOES NOT RUN (MC-6.8)"); }
-                // The copy's disk beside a disk of its own, never beside ramdisk#1 (309-KRN-0209); slot 4 stays empty without one.
-                if disk != "ramdisk#1" {
+                // The copy's disk beside a VirtIO disk of its own, never beside ramdisk#1 or a partition (309-KRN-0209); slot 4
+                // stays empty without one.
+                if disk.is_some() {
                     if let Some(copy) = self.store_copy() { grants.add(SLOT_STORE_COPY, self.badged(&mut minted, copy, mind::block::BADGE_WRITE)?, CLIENT); }
                 }
             }
@@ -1833,6 +1947,23 @@ fn private_dir_of(name: &str) -> Option<(u16, &'static str)> {
 }
 
 // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell) but for
+// A disk's partition table, as init found it (307-KRN-0177).
+fn log_table(name: &str, table: &partition::Table) {
+    let scheme = match table.scheme { Scheme::None => "NO PARTITION TABLE", Scheme::Mbr => "MBR", Scheme::Gpt => "GPT" };
+    mind::println!("[INIT] {}: {}, {} PARTITIONS{}{}", name, scheme, table.partitions().count() + table.left_out, if table.problem.is_some() { "; " } else { "" }, table.problem.unwrap_or(""));
+    for part in table.partitions() {
+        let (mut id, mut kind) = ([0u8; partition::ID_TEXT], [0u8; partition::ID_TEXT]);
+        let id_len = partition::id_text(&part.id, &mut id);
+        let kind_len = match part.kind {
+            Kind::Mbr(byte) => { kind[..2].copy_from_slice(&[b"0123456789ABCDEF"[(byte >> 4) as usize], b"0123456789ABCDEF"[(byte & 15) as usize]]); 2 }
+            Kind::Gpt(guid) => partition::guid_text(&guid, &mut kind),
+        };
+        let (id, kind) = (&id[..id_len], &kind[..kind_len]);
+        let text = |bytes| core::str::from_utf8(bytes).unwrap_or("?");
+        mind::println!("[INIT] {} PARTITION {}: TYPE {}, {} SECTORS FROM {}, PARTUUID {}{}{}", name, part.number, text(kind), part.count, part.first, text(id), if part.label().is_empty() { "" } else { ", " }, part.label());
+    }
+}
+
 // services::LATE (blockstore after keystore); further instances of an image follow its first one.
 fn boot_order() -> impl Iterator<Item = usize> {
     services::start_images(&BOOT_SERVICES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)))
@@ -1951,7 +2082,7 @@ fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(inf
 
 fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
-    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
+    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None, store_part: None,
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
