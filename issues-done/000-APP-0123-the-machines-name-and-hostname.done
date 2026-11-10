@@ -85,4 +85,4 @@ Every criterion holds:
 
 ## Related
 
-[750-EFF-0018](../issues/750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.done), [000-NET-0050](../issues/000-NET-0050-dhcp-sends-the-machines-name.md), [800-LNK-0028](../issues/800-LNK-0028-the-machines-name-on-the-link.md), [000-APP-0099](../issues/000-APP-0099-clocks-show-the-time-zone.md) (`data/clock.conf`, set the same way).
+[750-EFF-0018](../issues/750-EFF-0018-the-machines-name-reported-by-the-agent.md), [000-KRN-0180](000-KRN-0180-sysmon-answers-the-machines-name.done), [000-NET-0050](../issues/000-NET-0050-dhcp-sends-the-machines-name.md), [800-LNK-0028](../issues/800-LNK-0028-the-machines-name-on-the-link.md), [000-APP-0099](000-APP-0099-clocks-show-the-time-zone.done) (`data/clock.conf`, set the same way).
