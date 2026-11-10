@@ -64,9 +64,64 @@
   - a GUID's byte order;
   - an MBR bound.
 
-**Left:**
-- **Step 2:** `init` classifies the disks, sets the window and grants `blockstore` its client. It sets the windows again after a driver's restart.
-- **Step 3:** the QEMU checks of the acceptance criteria, on x86 and aarch64.
+## Progress (2026-11-10, steps 2 and 3)
+
+### Step 2, made: `init` and the drivers' loop
+
+**One buffer per client badge** (`libmind/src/block_protocol.rs` `Buffers`, `block::serve`), found while making step 2.
+- **The flaw before:** `serve` kept one transfer buffer per driver instance, and each `attach` replaced it. So two clients of one disk would read into each other's buffer.
+  - The stick's case is exactly that: `vfs_server`'s FAT partitions and `blockstore`'s window on one `usb_storage`.
+  - So is `init` reading a disk's table while `vfs_server` uses it.
+- **Now:** each badge attaches its own, up to 8.
+  - A badge attaching again replaces only its own.
+  - With every place taken, `attach` is refused (`limit`).
+- **Tested:** `tests/block_host.rs` checks that reads land in each badge's own buffer.
+
+**`init`**, when no VirtIO disk is the store's (300-KRN-0025):
+- **The tables.** It reads and logs the table of every `nvme`, `ahci`, `usb_storage` and `virtio_blk` disk, once: the scheme, each partition's number, type, sectors, PARTUUID and GPT name.
+- **The choice:**
+  - it takes the one partition of the store's type with its superblock, or the one `store.txt` names;
+  - it says why it took it;
+  - with two candidates or more it takes none, and names each.
+- **The grant.** It sets window 1 on that driver, through a client badged `BADGE_WINDOWS` that it drops at once. It gives `blockstore` the window's write client, `badge_for(1, true)`, in slot 2.
+- **After the driver starts again** it reads the table again. It sets the window again only when the partition has the same number, PARTUUID and sectors and is still a candidate. Never by the number alone.
+- **The copy's disk** (slot 4) stays a VirtIO disk's, given only beside a VirtIO disk of the store's.
+- **`ata` is not read:** the plan's list is `nvme`, `ahci`, `usb_storage` and `virtio_blk`.
+
+### Step 3, tested: `tests/usb_image_smoke.py`
+
+Run on acc-1 through Effector, x86, at bfd38a3e: the group "x86: USB image" passed, 98 s.
+
+**The main boot** of the real stick, which most suites do not boot, since they use `fat:` disks without partition 3:
+- **`init`'s lines:**
+  - `usb_storage: MBR, 3 PARTITIONS`, with each partition;
+  - `THE BLOCK STORE'S PARTITION: usb_storage PARTITION 3 (ITS TYPE AND SUPERBLOCK), 262144 SECTORS FROM 1163264, WINDOW 1`.
+- **`usb_storage`'s line:** `[BLOCK] WINDOW 1 SET`.
+- **The store:** `READY ... SECTORS=1/262144 ... DURABILITY=FLUSHED`.
+- **The rest of the boot,** with the store and `vfs_server` on the one drive:
+  - `vfs_server`'s boot volume, `log:` and its files;
+  - the unplug and replug;
+  - another medium in the stick's place, left untouched.
+- **On the host afterwards:**
+  - the stick's table is unchanged;
+  - the store's superblock holds its key, written in place;
+  - the boot volume and `log:` pass `fsck.fat`.
+
+**Four more boots, on fresh copies of the stick:**
+1. **A blank NVMe disk beside it:** `nvme: NO PARTITION TABLE`. The stick's partition is taken, and the NVMe disk stays all zeros.
+2. **An NVMe disk with a partition of the store's type and superblock:** `THE STORE'S PARTITION REFUSED: 2 CANDIDATES, NONE TAKEN`, and both are named. The store runs on `ramdisk#1` (`SECTORS=1/16384`), and neither candidate is written.
+3. **The stick's partition 3 made blank:** it is logged as the store's type without its superblock and not taken. The store runs on `ramdisk#1`, and the partition stays blank.
+4. **The same, with `store.txt` at the boot volume's root** naming `partition <signature>-03`: taken (`NAMED IN STORE.TXT`), and the store formats it (`MIND-STO` on the host afterwards).
+
+### What this does not show (MC-12.3)
+
+- **A medium that comes back.** A device that comes back keeps the driver's windows, since its driver did not restart (`usb_storage`, 000-DRV-0058).
+  - So window 1 then reaches whatever medium is in the stick's place.
+  - In this suite the store wrote nothing then, so the copy stayed untouched, but nothing stopped it.
+  - Clearing the windows on a return, and `init`'s checked re-set, are added to [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md)'s plan.
+  - A byte-identical copy of the stick would pass any check of its contents.
+- **`vfs_server` still holds the stick whole** for its FAT partitions, so the store's sectors are inside its reach. That is [307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.md), split from plan step 3.
+- **aarch64:** the USB image suite and the storage groups on aarch64 are running on acc-1 and PCU as this is written; their results follow.
 
 ## Related
 
