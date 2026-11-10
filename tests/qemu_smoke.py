@@ -12800,15 +12800,15 @@ def recovery_key_check(args, cpu):
         def recovery(vm, words, answer, line):
             # `run recovery …`, the shell's question answered; recovery's line, from the serial line or its log.
             vm.send(f"run recovery {words}\n")
-            vm.expect("(Y/N)", timeout=30)
+            asked = vm.expect("(Y/N)", timeout=30)  # the shell's question, which the output after it no longer holds
             vm.send(answer)
-            out = vm.expect("MIND> ", timeout=120)
+            out = asked + vm.expect("MIND> ", timeout=120)
             for _ in range(20):
                 if line in out:
                     return out
                 out += vm.command("dmesg -s recovery", raw=True)
                 time.sleep(.5)
-            raise AssertionError((line, out))
+            raise AssertionError((line, out, vm.command("dmesg -s blockstore", raw=True)[-1500:], vm.command("dmesg -s keystore", raw=True)[-1500:]))
         vm = boot()
         try:
             log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
@@ -12849,8 +12849,10 @@ def recovery_key_check(args, cpu):
         held = subprocess.run(["mtype", "-i", part, "::/data/recovery.txt"], env=MTOOLS_ENV, capture_output=True, text=True).stdout.splitlines()
         assert len(held) == 2 and held[0] == "MIND CORE RECOVERY KEY 1" and re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){7}", held[1]), held
         key = held[1]
-        # As on another machine: keystore makes a new device key, under which the volume key is not kept.
+        # As on another machine: keystore makes a new device key, under which the volume key is not kept, and holds no
+        # secrets of the block store's (the file of them here is sealed under the old key, and it would not open).
         subprocess.run(["mdel", "-i", part, "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
+        subprocess.run(["mdeltree", "-i", part, "::/system/keystore/services"], env=MTOOLS_ENV, check=True, capture_output=True)
         vm = boot()
         try:
             refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")

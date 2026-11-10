@@ -25,8 +25,12 @@ fn main(info: &'static mind::BootInfo) {
         Ok(command) => command,
         Err(usage) => { mind::println!("{}", usage); mind::process::exit_with(2) }
     };
-    // The user's files only for the key's file.
-    if command.is_none() { let _ = mind::ipc::drop_cap(SLOT_FILE); }
+    // The user's files only for the key's file, through the client the shell lent, which writes in data/ (as fm's).
+    match command {
+        None => { let _ = mind::ipc::drop_cap(SLOT_FILE); }
+        Some(_) if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT => mind::fs::use_endpoint(Endpoint(SLOT_FILE)),
+        Some(_) => {}
+    }
     let held = mind::dev::cap_info(SLOT_RECOVER).0 == CAP_KIND_ENDPOINT;
     let (mut service, mut absent) = (Service(Endpoint(SLOT_RECOVER)), Absent);
     let store: &mut dyn Store = if held { &mut service } else { &mut absent };
@@ -95,20 +99,20 @@ fn without_screen(command: Command, store: &mut dyn Store) -> u32 {
     }
 }
 
-fn write(path: &str, bytes: &[u8]) -> Result<(), &'static str> {
-    let mut file = mind::fs::File::create(path).map_err(|_| "it cannot be created")?;
-    file.write(bytes).map_err(|_| "it cannot be written")?;
-    file.flush().map_err(|_| "it cannot be flushed")
+fn write(path: &str, bytes: &[u8]) -> Result<(), String> {
+    let mut file = mind::fs::File::create(path).map_err(|e| alloc::format!("it cannot be created: {:?}", e))?;
+    file.write(bytes).map_err(|e| alloc::format!("it cannot be written: {:?}", e))?;
+    file.flush().map_err(|e| alloc::format!("it cannot be flushed: {:?}", e))
 }
 
 // The key the file at `path` holds, or why it holds none; what was read is wiped.
-fn read_key(path: &str) -> Result<Result<String, String>, &'static str> {
-    let mut file = mind::fs::File::open(path).map_err(|_| "it cannot be opened")?;
+fn read_key(path: &str) -> Result<Result<String, String>, String> {
+    let mut file = mind::fs::File::open(path).map_err(|e| alloc::format!("it cannot be opened: {:?}", e))?;
     let mut bytes: Vec<u8> = alloc::vec![0u8; file.size().min(512)];
     let mut at = 0;
-    while at < bytes.len() { match file.read(&mut bytes[at..]) { Ok(0) => break, Ok(n) => at += n, Err(_) => { keyfile::wipe_bytes(&mut bytes); return Err("it cannot be read") } } }
+    while at < bytes.len() { match file.read(&mut bytes[at..]) { Ok(0) => break, Ok(n) => at += n, Err(e) => { keyfile::wipe_bytes(&mut bytes); return Err(alloc::format!("it cannot be read: {:?}", e)) } } }
     bytes.truncate(at);
-    let parsed = core::str::from_utf8(&bytes).map(keyfile::parse).map_err(|_| "not text");
+    let parsed = core::str::from_utf8(&bytes).map(keyfile::parse).map_err(|_| String::from("not text"));
     keyfile::wipe_bytes(&mut bytes);
     parsed
 }
