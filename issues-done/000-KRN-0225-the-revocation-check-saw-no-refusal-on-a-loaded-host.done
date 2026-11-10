@@ -60,4 +60,4 @@
 
 ## Related
 
-[000-KRN-0104](000-KRN-0104-revocation-bounded-by-the-profile.done), [000-NET-0063](../issues/000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.md) (round 102's slow `dmesg`, another check on a loaded host).
+[000-KRN-0104](000-KRN-0104-revocation-bounded-by-the-profile.done), [000-NET-0063](000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.done) (round 102's slow `dmesg`, another check on a loaded host).
