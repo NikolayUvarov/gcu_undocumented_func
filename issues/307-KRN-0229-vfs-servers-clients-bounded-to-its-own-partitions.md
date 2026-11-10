@@ -2,7 +2,7 @@
 
 **Type:** `init` (grants), `vfs_server` (mounts) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [307](307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.3
 
-Split from [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md), plan step 3's second half: "`vfs_server` gets none of that partition".
+Split from [307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done), plan step 3's second half: "`vfs_server` gets none of that partition".
 
 ## Problem
 
@@ -28,4 +28,4 @@ Since 307-KRN-0177:
 
 ## Related
 
-[307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md), [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md), [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md).
+[307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done), [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md), [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md).

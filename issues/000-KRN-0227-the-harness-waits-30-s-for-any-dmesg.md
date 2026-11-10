@@ -1,6 +1,6 @@
 # 000-KRN-0227 — The QEMU harness waits 30 s for any `dmesg`, not 8 s
 
-**Type:** tests (the QEMU harness, `tests/qemu_smoke.py`'s `VM.command`) · **Owner:** `KRN` (CI) · **Priority:** P2 · **Status:** in progress (both steps landed, rounds 107 and 108; two more gates with the group kept off x32-128 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (the QEMU harness, `tests/qemu_smoke.py`'s `VM.command`) · **Owner:** `KRN` (CI) · **Priority:** P2 · **Status:** in progress (both steps landed, rounds 107 and 108; one more gate with the group kept off x32-128 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -54,6 +54,7 @@
 - **Step 2 landed** in round 108 (`main` 807e0614, gate `land-807e0614b`, every group green).
   - The group ran on acc-2 and passed the first time (1238 s), beside nothing else of ours on that machine.
   - **The first of the three gates** the second criterion asks for. The other two are the next rounds' gates.
+- **The second gate:** round 109 (`main` 95a87938, gate `land-95a87938b`, every group green). The group ran on i9 and passed the first time (1493 s).
 
 
 ## Related

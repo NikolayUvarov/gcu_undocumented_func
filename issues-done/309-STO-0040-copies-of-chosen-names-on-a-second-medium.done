@@ -55,7 +55,7 @@ Everything here is plan, not a guarantee (MC-12.3).
 - in QEMU, the next VirtIO disk after the store's that is blank or starts with the store's superblock;
 - granted to `blockstore` in slot 4, with the write badge, and never to `vfs_server`;
 - logged as the store's disk is;
-- on real machines it waits for [307-KRN-0177](../issues/307-KRN-0177-the-stores-own-partition-classified-and-granted.md)'s partitions.
+- on real machines it waits for [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.done)'s partitions.
 
 ## What it does not give
 
