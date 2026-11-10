@@ -295,6 +295,7 @@ impl Scheduler {
         };
         self.on_cpu[cpu] = mine;
         self.current[cpu] = next;
+        if next != 0 && self.tasks[next].as_ref().is_some_and(|t| t.band == BAND_SYSTEM as u8) { self.readied.mark(cpu); }
         let (pid, name) = if next == 0 { (0, [0u8; 16]) } else { let task = self.tasks[next].as_ref().unwrap(); let mut name = [0u8; 16]; name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]); (task.pid, name) };
         for (word, value) in cpu::RUNNING[cpu].iter().zip([pid, u64::from_le_bytes(name[..8].try_into().unwrap()), u64::from_le_bytes(name[8..].try_into().unwrap())]) { word.store(value, Ordering::Relaxed); }
         if next != current { self.accounting.switches[cpu] += 1; }
@@ -315,8 +316,29 @@ impl Scheduler {
             for t in self.tasks.iter().flatten().filter(runnable) { ready.mark(t.cpu); }
         }
         if ready.is_empty() { return; }
+        self.move_waiting(&mut ready, count);
         for other in 0..count {
             if ready.has(other) && other != this && self.current[other] == 0 && !self.woken[other] { self.woken[other] = true; unsafe { cpu::wake(other); } }
+        }
+    }
+    // An application ready on a CPU that runs a system-band task goes to an idle CPU, which `ready` then wakes: the band
+    // runs first there, and behind the compositor's frame copies a 10 ms sleep ended 30-60 ms late in QEMU (000-KRN-0231).
+    // A worker stays where it was placed (262-KRN-0163); a task that runs or is held is not moved.
+    fn move_waiting(&mut self, ready: &mut Cpus, count: usize) {
+        for from in 0..count {
+            let running = self.current[from];
+            if !ready.has(from) || self.tasks[running].as_ref().is_none_or(|t| running == 0 || t.band != BAND_SYSTEM as u8) { continue; }
+            let mut i = 0;
+            while i < self.on_cpu[from].len() {
+                let slot = self.on_cpu[from][i]; i += 1;
+                if slot == 0 || slot == running || !self.ready(slot, from, BAND_APPLICATION as u8) || self.tasks[slot].as_ref().is_some_and(|t| t.worker_of.is_some()) { continue; }
+                let idle = |j: usize| j != from && self.current[j] == 0 && !self.woken[j] && !ready.has(j) && cpu::ONLINE[j].load(Ordering::Acquire);
+                let Some(to) = (0..count).find(|&j| idle(j)) else { return };
+                if self.on_cpu[to].try_reserve(1).is_err() { return; }
+                if let Err(at) = self.on_cpu[to].binary_search(&slot) { self.on_cpu[to].insert(at, slot); }
+                self.tasks[slot].as_mut().unwrap().cpu = to;
+                ready.mark(to);
+            }
         }
     }
     // Sleeps and IPC deadlines end on the boot CPU's tick, every millisecond, the source of every other (000-KRN-0083);
@@ -919,14 +941,11 @@ impl Scheduler {
         space.map(paging::USER_INFO, abi.ptr() as usize, 4096, false, false)?; space.map(paging::USER_MAILBOX, abi.ptr() as usize + 4096, 4096, true, false)?; space.map(paging::USER_EXIT, exit.ptr() as usize, 4096, false, true)?;
         let context = Region::task(context::size(), 64)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance. A worker goes
-        // where neither its creator nor another of its workers runs, while such a CPU is online (262-KRN-0163). Of CPUs
-        // with as many, an application goes where services have run least: the system band runs first, and behind the
-        // compositor's frame copies a 10 ms sleep ended 30-60 ms late in QEMU (000-KRN-0231).
+        // where neither its creator nor another of its workers runs, while such a CPU is online (262-KRN-0163).
         let family = |t: &Task| worker.is_some_and(|w| t.pid == w.creator.1 || t.worker_of == Some(w.creator));
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| {
             let here = || self.tasks.iter().flatten().filter(move |t| t.cpu == i && t.state != State::Exited);
-            let services_ns = if service { 0 } else { here().filter(|t| t.service).map(|t| t.run_ns).sum::<u64>() };
-            (here().any(|t| family(t)), here().filter(|t| t.service == service).count(), services_ns)
+            (here().any(|t| family(t)), here().filter(|t| t.service == service).count())
         }).unwrap_or(0);
         // The fixed slots from the grants, then free kernel-allocated ones; the table grows later as needed (issue 171).
         if self.on_cpu[cpu].try_reserve_exact(1).is_err() { return Err("OUT OF MEMORY: TASK LIST"); }
