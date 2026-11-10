@@ -1,6 +1,6 @@
 # 252-APP-0128 — `tts` speaks Russian with the neural voice from `models:`, the formant voice its fallback
 
-**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`tts`'s side made and run on QEMU with the asked grant applied locally; KRN's grant left, 2026-11-10) · **Blocked by:** [252-KRN-0230](252-KRN-0230-tts-reads-the-neural-voice.md) (`tts`'s scope of `models:` and its memory line) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
+**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`tts`'s side made and run on QEMU with the asked grant applied locally; KRN's grant left, 2026-11-10) · **Blocked by:** [252-KRN-0230](../issues-done/252-KRN-0230-tts-reads-the-neural-voice.done) (`tts`'s scope of `models:` and its memory line) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
 
 **Numbered by:** the tools track, 2026-11-09, from [252-APP-0041](252-APP-0041-russian-speech-on-the-macbook.md)'s measurements.
 
@@ -59,7 +59,7 @@
 - **With KRN's grant** (252-KRN-0230, in the landing queue): the `tts` suite's machine gets a model disk holding only its manifest. The suite takes either reason for the formant voice: no scope of `models:`, or no voice's file on such a disk. `git merge-tree` of the two branches has no conflict.
 - **aarch64:** `tts` builds for `aarch64-unknown-none-softfloat` through its `.cargo/config.toml`, and the image's `normal` and `shell` suites pass on QEMU (4 CPUs, TCG), 2026-11-10. The voice is not run there.
 - **Left:**
-  - KRN's grant ([252-KRN-0230](252-KRN-0230-tts-reads-the-neural-voice.md)), then the same run on `main`'s `init`;
+  - KRN's grant ([252-KRN-0230](../issues-done/252-KRN-0230-tts-reads-the-neural-voice.done)), then the same run on `main`'s `init`;
   - a voice control answer;
   - the latency of a later phrase;
   - aarch64, whose programs are soft-float, so emulated synthesis there would take far longer;

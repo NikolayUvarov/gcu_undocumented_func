@@ -223,6 +223,12 @@ STEP="signing the boot volume"
 if [ -n "${MIND_SECURE_BOOT_KEYS:-}" ]; then
     python3 "$BUILD_SCRIPT_DIR/scripts/secure_boot.py" sign "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI" "$MIND_SECURE_BOOT_KEYS" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
 fi
+# With $MIND_UPDATE_EVERY (whole seconds), the release carries the updater's period in its slot (351-UPD-0036).
+rm -f "$BUILD_SCRIPT_DIR/usb_root/period.txt"
+if [ -n "${MIND_UPDATE_EVERY:-}" ]; then
+    [[ "$MIND_UPDATE_EVERY" =~ ^[0-9]+$ ]] || { echo "MIND_UPDATE_EVERY must be whole seconds, not '$MIND_UPDATE_EVERY'" >&2; exit 1; }
+    printf '# the updater checks this often, in place of update.txt'"'"'s period (351-UPD-0036)\nevery %s\n' "$MIND_UPDATE_EVERY" > "$BUILD_SCRIPT_DIR/usb_root/period.txt"
+fi
 python3 "$BUILD_SCRIPT_DIR/scripts/sign_manifest.py" "$BUILD_SCRIPT_DIR/usb_root"
 
 trap - ERR

@@ -42,6 +42,8 @@
 - **The group itself failed there,** so the second criterion is not met yet.
 - **The 30 s wait is the harness's default for every `dmesg` now** (000-KRN-0227, after round 106's Effector suite read). The eight explicit waits of the Wi-Fi checks are taken out.
 
+**Round 110** (`main` 91e74b59, 2026-11-10): the group passed on acc-1, which ran one lane. Since round 108 the pool keeps the x86 network group off x32-128 (`KEPT_OFF`, 000-KRN-0227), so the second criterion needs a gate that runs "aarch64: network, TLS and Effector" beside another lane on one machine, or the criterion's owner choosing another way to show it.
+
 ## Related
 
 [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done), [069](../issues-done/069-logd-dmesg.done).
