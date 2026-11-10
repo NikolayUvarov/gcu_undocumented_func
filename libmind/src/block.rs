@@ -8,15 +8,15 @@ use crate::sys::{Error, Result};
 const RECEIVED_CAP: usize = 9;
 pub const BUFFER: usize = BLOCK_MAX_SECTORS * BLOCK_SECTOR;
 
-pub use crate::block_protocol::{badge_for, window_of, Driver, DriverError, Outcome, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, KIND_RAM, WINDOWS};
+pub use crate::block_protocol::{badge_for, window_of, Buffers, Driver, DriverError, Outcome, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, KIND_RAM, WINDOWS};
 use crate::block_protocol as protocol;
 
 /// Driver loop for idl/block.wit: sectors, kind, attach of the client's buffer, read, and for a client with the write
 /// badge write (from sealed memory) and flush. Without a device every call reports not-found. A client of a window sees
 /// the window as the device; `init`'s client badged BADGE_WINDOWS sets the windows (1.2, 307-DRV-0054), which a
-/// restarted instance holds none of.
+/// restarted instance holds none of. Each client badge attaches a buffer of its own (BUFFERS, 307-KRN-0177).
 pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
-    let mut buffer: Option<Mapping> = None;
+    let mut buffers: Buffers<Mapping> = Buffers::new();
     let mut windows = Windows::new();
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
@@ -26,12 +26,12 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
             Ok((block::Request::Kind, call)) => block::reply_kind(call, kind as u8),
             Ok((block::Request::Sectors, call)) => block::reply_sectors(call, driver.as_deref().ok_or(Error::NotFound).and_then(|d| protocol::sectors(d, &windows, badge))),
             Ok((block::Request::Attach { buffer: cap }, call)) => {
-                // The mapping outlives the received capability, which the reply drops.
-                let attached = if driver.is_none() { Err(Error::NotFound) } else { drop(buffer.take()); Mapping::new(cap).map(|m| { buffer = Some(m); }) };
+                // The mapping outlives the received capability, which the reply drops; the badge's old one goes first.
+                let attached = if driver.is_none() { Err(Error::NotFound) } else { buffers.attach(badge, || Mapping::new(cap)) };
                 block::reply_attach(call, attached)
             }
             Ok((block::Request::Read { count, lba }, call)) => {
-                let result = match (driver.as_deref_mut(), buffer.as_mut()) {
+                let result = match (driver.as_deref_mut(), buffers.get(badge)) {
                     (None, _) | (_, None) => Err(Error::NotFound),
                     (Some(device), Some(target)) => protocol::read(device, &windows, badge, target.as_mut_slice(), count, lba),
                 };

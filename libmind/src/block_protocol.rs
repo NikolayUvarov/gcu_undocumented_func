@@ -52,6 +52,31 @@ pub trait Driver {
     fn read_only(&self) -> bool { true }
 }
 
+/// Clients of one driver instance that hold a buffer at once, each badge its own (307-KRN-0177): clients that share a
+/// disk, as vfs_server's FAT partitions and blockstore's window on one stick, never read into each other's buffer.
+pub const BUFFERS: usize = 8;
+
+/// The transfer buffers lent to a driver instance, one per client badge. A badge that attaches again replaces its own;
+/// with every place another badge's, attach is refused (`limit`), and nothing attached before is touched.
+pub struct Buffers<T> { slots: [Option<(u16, T)>; BUFFERS] }
+
+impl<T> Buffers<T> {
+    pub const fn new() -> Self { Buffers { slots: [const { None }; BUFFERS] } }
+
+    /// Drops `badge`'s buffer, if any, then lends it the one `make` maps; `make` is not called when no place is left.
+    pub fn attach(&mut self, badge: u16, make: impl FnOnce() -> Result<T>) -> Result<()> {
+        if let Some(own) = self.slots.iter_mut().find(|s| s.as_ref().is_some_and(|(b, _)| *b == badge)) { *own = None; }
+        let place = self.slots.iter_mut().find(|s| s.is_none()).ok_or(Error::Other(ERR_LIMIT))?;
+        *place = Some((badge, make()?));
+        Ok(())
+    }
+
+    /// `badge`'s buffer; None when it attached none (a restarted driver's clients, before they attach again).
+    pub fn get(&mut self, badge: u16) -> Option<&mut T> {
+        self.slots.iter_mut().flatten().find(|(b, _)| *b == badge).map(|(_, buffer)| buffer)
+    }
+}
+
 /// The badge of a client of `window` (0: the whole device), that may write if `write`.
 pub const fn badge_for(window: u8, write: bool) -> u16 { ((window as u16) << 1 & BADGE_WINDOW) | if write { BADGE_WRITE } else { 0 } }
 

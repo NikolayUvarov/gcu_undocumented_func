@@ -1,8 +1,9 @@
 //! Host tests of the block protocol's server side (libmind/src/block_protocol.rs, idl/block.wit 2.0): writing needs
 //! the write badge on the client's capability and a writable medium (Appendix B.6); the data must hold every sector
 //! written; reads, clipping at the end, errors. A client of a window (307-DRV-0054) sees the window as the device and
-//! nothing outside it; only init's windows badge sets one; a window not set gives nothing. A driver's failure reaches
-//! the client as io, invalid or not-found, never as peer (000-KRN-0228).
+//! nothing outside it; only init's windows badge sets one; a window not set gives nothing. Each client badge has a
+//! buffer of its own (307-KRN-0177). A driver's failure reaches the client as io, invalid or not-found, never as peer
+//! (000-KRN-0228).
 #![allow(dead_code)]
 #[path = "../common/abi.rs"]
 mod abi;
@@ -13,7 +14,7 @@ mod sys;
 #[path = "../libmind/src/block_protocol.rs"]
 mod block_protocol;
 use abi::*;
-use block_protocol::{badge_for, flush, read, sectors, window_of, writable, write, Driver, DriverError, Outcome, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, WINDOWS};
+use block_protocol::{badge_for, flush, read, sectors, window_of, writable, write, Buffers, Driver, DriverError, Outcome, Windows, BUFFERS, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, WINDOWS};
 use sys::Error;
 
 struct Memory { data: Vec<u8>, protected: bool, flushes: usize, fail: Option<DriverError> }
@@ -198,4 +199,36 @@ fn only_the_windows_badge_sets_a_window() {
     assert_eq!(windows, Windows::new());
     assert_eq!(windows.set(BADGE_WINDOWS, disk.sectors(), 1, 60, 4), Ok(()), "up to the device's last sector");
     assert_eq!(sectors(&disk, &windows, badge_for(1, false)), Ok(4));
+}
+
+#[test]
+fn each_client_badge_reads_into_a_buffer_of_its_own() {
+    // vfs_server's whole disk (BADGE_WRITE), blockstore's window 1 and init's look at the table (0) on one driver: a read
+    // for one lands in its own buffer, whoever attached last (307-KRN-0177).
+    let mut disk = Memory::new(64);
+    let mut windows = Windows::new();
+    assert_eq!(windows.set(BADGE_WINDOWS, disk.sectors(), 1, 32, 32), Ok(()));
+    for lba in 0..64 { disk.data[lba * BLOCK_SECTOR] = lba as u8; }
+    let mut buffers: Buffers<Vec<u8>> = Buffers::new();
+    let (vfs, store, init) = (WRITER, badge_for(1, true), 0);
+    for badge in [vfs, store, init] { assert_eq!(buffers.attach(badge, || Ok(vec![0u8; 2 * BLOCK_SECTOR])), Ok(())); }
+    for (badge, lba, sector) in [(vfs, 3, 3u8), (store, 3, 35), (init, 0, 0)] {
+        let target = buffers.get(badge).unwrap();
+        assert_eq!(read(&mut disk, &windows, badge, target, 1, lba), Ok(1));
+        assert_eq!(target[0], sector, "badge {badge:#x}'s read, window-relative for the store");
+    }
+    assert_eq!((buffers.get(vfs).unwrap()[0], buffers.get(store).unwrap()[0]), (3, 35), "each read stayed in its client's buffer");
+    // Attaching again replaces the badge's own buffer and leaves the others'.
+    assert_eq!(buffers.attach(store, || Ok(vec![0xEE; BLOCK_SECTOR])), Ok(()));
+    assert_eq!((buffers.get(vfs).unwrap()[0], buffers.get(store).unwrap()[0], buffers.get(store).unwrap().len()), (3, 0xEE, BLOCK_SECTOR));
+    // A badge that attached none has none, and with every place another badge's, attach is refused and changes nothing.
+    assert!(buffers.get(0x10).is_none());
+    for badge in 0x20..0x20 + (BUFFERS - 3) as u16 { assert_eq!(buffers.attach(badge, || Ok(vec![1])), Ok(())); }
+    let mut called = false;
+    assert_eq!(buffers.attach(0x40, || { called = true; Ok(vec![2]) }), Err(Error::Other(ERR_LIMIT)));
+    assert!(!called && buffers.get(0x40).is_none() && buffers.get(vfs).unwrap()[0] == 3);
+    assert_eq!(buffers.attach(vfs, || Ok(vec![9])), Ok(()), "its own place is always free to it");
+    // A mapping that fails leaves the badge without a buffer, as before the change.
+    assert_eq!(buffers.attach(vfs, || Err(Error::Invalid)), Err(Error::Invalid));
+    assert!(buffers.get(vfs).is_none());
 }

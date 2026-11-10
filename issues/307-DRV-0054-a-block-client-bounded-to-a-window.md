@@ -73,4 +73,4 @@ Made by STO on `claude/relaxed-meitner-5bmhpz`, as planned.
 
 ## Related
 
-[307](307-the-stores-own-partition.md), [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.md), [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md).
+[307](307-the-stores-own-partition.md), [307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done), [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md).
