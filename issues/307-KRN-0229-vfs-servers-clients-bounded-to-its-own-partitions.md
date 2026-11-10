@@ -77,7 +77,10 @@ Since 307-KRN-0177:
   - "aarch64: boot and fault containment";
   - "aarch64: files and the block store";
   - "aarch64: NVMe boot disk".
-- **"x86: files and block writes" failed first, as it should have.** The old block suite looked for a whole disk in slots 2 to 4, and its partitioned disk now comes as windows. The suite is changed as above.
+- **"x86: files and block writes" failed first, as it should have.** The old block suite looked for a whole disk in slots 2 to 4, and its partitioned disk now comes as windows.
+  - **The fix.** The suite is changed as above.
+  - **What the changed suite found.** Under AHCI, `ata` runs without a device and its client still comes whole (`NO DEVICE`), so the suite leaves such lines out.
+  - **The group then passed** (1055 s): the block suite through ATA, AHCI and USB, and every other suite of the group.
 - **A fault put in by hand, never committed:** `vfs_windows` set each window 256 sectors longer than its partition. The past-the-window boot then wrote past the partition (`WROTE`, `sync` `OK`), and the check failed. Without the fault it passes.
 
 ## Related
