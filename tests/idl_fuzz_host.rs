@@ -442,7 +442,7 @@ types! {
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;
     tpm: Error Info;
-    update: Error Offer State Metadata;
+    update: Error Offer State Metadata KeptRelease;
     vfs: Error Entry Volume Report;
     video: Error Camera Frame;
     voice: Action Order;
