@@ -97,6 +97,15 @@ def main():
         except (ValueError, subprocess.CalledProcessError) as error:
             detail = getattr(error, "stderr", "") or ""
             sys.exit(f"FAIL: {error} {detail}".strip())
+    # 351-UPD-0036: with --slots, a release's period.txt goes into slot A with the boot files; update.txt stays at the root.
+    from scripts.make_usb_image import slots
+    laid = slots({"kernel.elf": b"k", "init.elf": b"i", "wm.elf": b"w", "period.txt": b"every 60\n", "update.txt": b"every 20\n",
+                  "EFI/BOOT/BOOTX64.EFI": b"l", "LICENSES/MIT.txt": b"m", "MANIFEST": b"", "MANIFEST.SIG": b""}, "x86_64")
+    for name in ("MIND/A/kernel.elf", "MIND/A/init.elf", "MIND/A/wm.elf", "MIND/A/period.txt", "MIND/A/BOOTX64.EFI", "MIND/A/MANIFEST",
+                 "update.txt", "EFI/BOOT/BOOTX64.EFI", "LICENSES/MIT.txt"):
+        assert name in laid, (name, sorted(laid))
+    assert "period.txt" not in laid and "MIND/A/update.txt" not in laid, sorted(laid)
+    print("PASS: --slots puts a release's period.txt in slot A and leaves update.txt at the root")
 
 
 if __name__ == "__main__":

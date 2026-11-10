@@ -7944,10 +7944,11 @@ def updater_parser_check(vm, https):
     print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
 
 
-def update_releases(temp, arch, changed=None, minimum6=None, gateway=None):
+def update_releases(temp, arch, changed=None, minimum6=None, gateway=None, period5=None, period6=None):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
     TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6, and so does
-    the loader, so that slot B boots through its own (351-UPD-0010); `gateway`, if named, is both releases' effector_gw.
+    the loader, so that slot B boots through its own (351-UPD-0010); `gateway`, if named, is both releases' effector_gw;
+    `period5` and `period6`, if given, the period.txt each release carries (351-UPD-0036).
     Returns the volumes, the server, release 5's channel, release 6's and that one with its signature changed, release
     6's manifest, its boot files (name, digest) with the loader's last, and a channel maker."""
     volume = temp / "release5"
@@ -7956,9 +7957,14 @@ def update_releases(temp, arch, changed=None, minimum6=None, gateway=None):
         shutil.copyfile(ROOT / IMAGE / name, volume / name)
     if gateway:
         shutil.copyfile(gateway, volume / "effector_gw.elf")
+    if period5 is not None:
+        (volume / boot_slots.PERIOD).write_bytes(period5)
     sign_manifest.sign_volume(volume, version=5)  # the version under the boot key (351-UPD-0024)
     newer = temp / "release6"
     shutil.copytree(volume, newer)
+    (newer / boot_slots.PERIOD).unlink(missing_ok=True)
+    if period6 is not None:
+        (newer / boot_slots.PERIOD).write_bytes(period6)
     if changed:
         with open(newer / changed, "ab") as elf:  # bytes past the ELF's segments: another file, loaded the same
             elf.write(b"release 6 of the update suite\0")
@@ -8017,8 +8023,13 @@ def update_suite(args):
         return
     temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
     arch = args.arch
-    # Release 6 raises the minimum to 6, as for a fix: once it is confirmed the floor is 6 (351-UPD-0024).
-    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf", minimum6=6)
+    # Release 6 raises the minimum to 6, as for a fix: once it is confirmed the floor is 6 (351-UPD-0024). 351-UPD-0036:
+    # release 5's period.txt names a source, which is the root's alone, so it is refused; release 6's checks every 7 s
+    # in place of update.txt's 20.
+    period5 = b"# 351-UPD-0036: what is the root's alone is refused here\nevery 9\nsource https://elsewhere.example\n"
+    period6 = b"# 351-UPD-0036\nevery 7\n"
+    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf", minimum6=6,
+                                                                                                period5=period5, period6=period6)
     largest = max(boot_files[:-1], key=lambda f: (newer / f[0]).stat().st_size)
     # 351-UPD-0023: the applications go into the slot with the boot files; those the volume holds as listed are copied.
     applications = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6)
@@ -8065,6 +8076,7 @@ def update_suite(args):
     try:
         log = logged("[UPDATER] CHECK: REFUSED: Expired", 120)
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
+        require(log, "[UPDATER] SLOT A: period.txt REFUSED (source https://elsewhere.example): update.txt'S PERIOD (20 S) KEPT")
         # 351-UPD-0025: the channel it holds, kept in slot A and current, then the source's, expired.
         for line in (held + "\n", "[UPDATER] METADATA: CHANNEL stable VERSION 6, MINIMUM 5, EXPIRES 2020-01-01T00:00:00Z, "
                                   "FROM THE SOURCE; EXPIRED: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL"):
@@ -8147,6 +8159,24 @@ def update_suite(args):
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/B/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        # 351-UPD-0036: release 6's period, 7 s, in place of update.txt's 20 s: three checks after it, each ending within
+        # 18 s of the one before by the log's clock (7 s and a check's own time; update.txt's would be 20 s and that).
+        require(log, "[UPDATER] EVERY 7 S, BY SLOT B'S period.txt (update.txt'S: 20 S)")
+        checks, deadline = [], time.monotonic() + 120
+        while len(checks) < 3:
+            assert time.monotonic() < deadline, checks
+            time.sleep(3)
+            try:
+                read = vm.command("dmesg -s updater", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            after = read.rpartition("BY SLOT B'S period.txt")[2]
+            checks = [int(s) * 1000 + int(ms) for s, ms in re.findall(r"\[\s*(\d+)\.(\d{3})\] updater\(\d+\) \[UPDATER\] CHECK: ", after)]
+        gaps = [b - a for a, b in zip(checks, checks[1:])]
+        assert all(gap < 18_000 for gap in gaps), (gaps, after[-2000:])
+        print(f"TIME: release 6's period: checks {gaps} ms apart (update.txt's: 20000)", flush=True)
         # 351-APP-0029: the shell's `update` shows the updater's view and the channel it holds (update.wit 1.1), says
         # check's refusal, asks before a rollback and is refused to a script without `requires: lifecycle`.
         out = vm.command("update", raw=True, timeout=60)
@@ -8172,6 +8202,7 @@ def update_suite(args):
     for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    assert image.read(f"MIND/B/{boot_slots.PERIOD}") == period6  # 351-UPD-0036: staged with the slot's files
     # Only the application release 6 changed came from the server; the others were copied from slot A.
     asked = {path for path, _ in https.requests}
     assert f"/blobs/{changed}" in asked and not asked & {f"/blobs/{digest}" for name, digest in applications if digest != changed}, asked
@@ -8192,12 +8223,15 @@ def update_suite(args):
         vm.close()
     # The floor lowered by hand, as the recovery authority would (351-UPD-0030), for the checks of release 5 that follow.
     boot_slots.write_next(image, slot="A", confirmed=True, floor=1)
+    # 351-UPD-0036: slot A's period.txt, changed on the disk, no longer matches its manifest's line and is not read.
+    image.write(f"MIND/A/{boot_slots.PERIOD}", b"every 3\n")
     import datetime
     later = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%S")
     vm = VM(args, str(image.path), raw=True, snapshot=False, rtc=later, ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
     try:
         log = vm.service_logs("updater", "[UPDATER] METADATA")
-        for line in ("[UPDATER] SLOT A, VERSION 5", held + "; EXPIRED: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL"):
+        for line in ("[UPDATER] SLOT A, VERSION 5", held + "; EXPIRED: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL",
+                     "[UPDATER] SLOT A: period.txt IS NOT AS THE MANIFEST LISTS IT: update.txt'S PERIOD (20 S) KEPT"):
             require(log, line)
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
@@ -8223,6 +8257,8 @@ def update_suite(args):
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
           "restart and slot B's own loader, release 6's, and confirmed on the disk by the updater as soon as init confirmed it; "
           "its applications are in slot B, "
+          "and its period.txt, so it checks every 7 s, where release 5's naming a source was refused and, changed on the "
+          "disk, was not read (351-UPD-0036); "
           "the one it changed fetched and the others copied from slot A, and the trial runs them from there; release 6's minimum "
           "raises the version floor to 6, and a record booting slot A's release 5 boots slot B instead; booted back in "
           "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the shell's "

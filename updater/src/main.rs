@@ -235,6 +235,37 @@ impl Updater {
         (digest.is_some() && channel.manifest(ARCH) == digest).then_some(channel)
     }
 
+    /// The period the running slot's release carries (351-UPD-0036) in place of update.txt's: its period.txt as the
+    /// manifest booted lists it, holding `every` alone. Otherwise update.txt's stays, and the log says why.
+    fn slot_period(&mut self, parser: Endpoint) {
+        let slot = slot_name(self.slot);
+        let root = self.config.every_ms / 1000;
+        let read = |name: &str, limit: usize| -> Option<Vec<u8>> {
+            let file = File::open(&format!("MIND/{}/{}", slot, name)).ok().filter(|f| f.size() <= limit)?;
+            let mut data = alloc::vec![0u8; file.size()];
+            (file.read_at(0, &mut data) == Ok(data.len())).then_some(data)
+        };
+        // The manifest the bootloader checked and booted: its digest is the launch record's.
+        let Some(manifest) = read("MANIFEST", MANIFEST_MAX).filter(|m| mind::sha256::digest(m) == self.manifest) else {
+            return mind::println!("[UPDATER] SLOT {}'S MANIFEST IS NOT THE ONE BOOTED: {}'S PERIOD ({} S) KEPT", slot, CONFIG, root);
+        };
+        let mut listed = None;
+        if read_manifest(parser, &manifest, |f| if kind(f.path.as_str()) == Kind::Period { listed = Some(*f) }).is_err() {
+            return mind::println!("[UPDATER] SLOT {}'S MANIFEST NOT READ: {}'S PERIOD ({} S) KEPT", slot, CONFIG, root);
+        }
+        let Some(f) = listed else { return };
+        let Some(text) = read(plan::PERIOD, 4096).filter(|t| t.len() as u64 == f.size && mind::sha256::digest(t) == f.digest) else {
+            return mind::println!("[UPDATER] SLOT {}: {} IS NOT AS THE MANIFEST LISTS IT: {}'S PERIOD ({} S) KEPT", slot, plan::PERIOD, CONFIG, root);
+        };
+        match plan::period(&String::from_utf8_lossy(&text)) {
+            Ok(seconds) => {
+                self.config.every_ms = (seconds as usize).saturating_mul(1000);
+                mind::println!("[UPDATER] EVERY {} S, BY SLOT {}'S {} ({}'S: {} S)", seconds, slot, plan::PERIOD, CONFIG, root);
+            }
+            Err(line) => mind::println!("[UPDATER] SLOT {}: {} REFUSED ({}): {}'S PERIOD ({} S) KEPT", slot, plan::PERIOD, line, CONFIG, root),
+        }
+    }
+
     /// Holds `channel`, and says so in the log when it is another one or came from elsewhere.
     fn hold(&mut self, channel: Channel, from: Held) {
         if self.held == Some((channel, from)) { return; }
@@ -349,8 +380,9 @@ impl Updater {
         let files = slot_files(&manifest, parser.endpoint())?;
         let slot = self.other();
         let applications = files.iter().filter(|f| kind(f.path.as_str()) == Kind::Application).count();
-        mind::println!("[UPDATER] {}: VERSION {} INTO SLOT {}: {} BOOT FILES AND {} APPLICATIONS, MANIFEST {}", step, channel.version, slot,
-                       files.len() - applications, applications, short(&digest));
+        let period = files.iter().any(|f| kind(f.path.as_str()) == Kind::Period);
+        mind::println!("[UPDATER] {}: VERSION {} INTO SLOT {}: {} BOOT FILES AND {} APPLICATIONS{}, MANIFEST {}", step, channel.version, slot,
+                       files.len() - applications - period as usize, applications, if period { ", ITS period.txt" } else { "" }, short(&digest));
         // The channel goes first and comes back last: a slot holds one only once all of it is there. A boot file the
         // manifest does not list goes too (the bootloader refuses a slot with one); a listed one is resumed. A directory
         // stays: INSTALL holds the bundle being read.
@@ -448,6 +480,23 @@ impl Updater {
             (Some(f), Ok(file)) if file.size() as u64 == f.size && sha256(&file) == Some(f.digest) => {}
             (_, Err(_)) => {}
             _ => { mind::println!("[UPDATER] SLOT {}: {} IS NOT AS THE MANIFEST LISTS IT", slot, plan::in_slot(LOADER)); return Err(Error::Digest); }
+        }
+        // Its period as the manifest lists it, and none it does not list (351-UPD-0036): a release refused by its
+        // period is not booted.
+        let period = files.iter().find(|f| kind(f.path.as_str()) == Kind::Period);
+        let period_text = File::open(&format!("MIND/{}/{}", slot, plan::PERIOD)).ok().filter(|file| file.size() <= 4096).and_then(|file| {
+            let mut data = alloc::vec![0u8; file.size()];
+            (file.read_at(0, &mut data) == Ok(data.len())).then_some(data)
+        });
+        match (period, period_text) {
+            (Some(f), Some(text)) if text.len() as u64 == f.size && mind::sha256::digest(&text) == f.digest => {
+                if let Err(line) = plan::period(&String::from_utf8_lossy(&text)) {
+                    mind::println!("[UPDATER] SLOT {}: {} REFUSED ({})", slot, plan::PERIOD, line);
+                    return Err(Error::Malformed);
+                }
+            }
+            (None, None) => {}
+            _ => { mind::println!("[UPDATER] SLOT {}: {} IS NOT AS THE MANIFEST LISTS IT", slot, plan::PERIOD); return Err(Error::Digest); }
         }
         // A slot that holds applications holds every one the manifest lists, and none it does not (351-UPD-0023). One
         // staged before holds none, and the root's serve it.
@@ -778,6 +827,7 @@ fn main(info: &'static BootInfo) {
         // after it ends (109-KRN-0133).
         let parser = parser();
         let kept = updater.kept(slot_name(slot), Some(updater.manifest), parser.endpoint());
+        updater.slot_period(parser.endpoint());
         let (running, minimum) = kept.map_or((0, 0), |c| (c.version, c.minimum));
         updater.running = running; updater.minimum = minimum;
         let staged = updater.kept(updater.other(), None, parser.endpoint()).map_or(0, |c| c.version);

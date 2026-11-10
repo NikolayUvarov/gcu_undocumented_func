@@ -42,6 +42,8 @@ BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*
 SIGNED = ("MANIFEST", "MANIFEST.SIG")
 # The loader as a volume and its manifest hold it, and its name in a slot (351-UPD-0010).
 LOADERS = {"EFI/BOOT/BOOTX64.EFI": "BOOTX64.EFI", "EFI/BOOT/BOOTAA64.EFI": "BOOTAA64.EFI"}
+# A release's period for the updater, which its slot carries (351-UPD-0036, updater/src/plan.rs).
+PERIOD = "period.txt"
 MTOOLS_ENV = dict(os.environ, MTOOLS_SKIP_CHECK="1")
 
 
@@ -94,7 +96,7 @@ def layout(volume, out, both=False, with_applications=True, with_loader=True, fl
     351-UPD-0010."""
     volume, out = Path(volume), Path(out)
     shutil.copytree(volume, out)
-    moved = boot_set(volume) + (applications(volume) if with_applications else [])
+    moved = boot_set(volume) + ([PERIOD] if (volume / PERIOD).is_file() else []) + (applications(volume) if with_applications else [])
     for slot in ("A", "B") if both else ("A",):
         (out / "MIND" / slot).mkdir(parents=True)
         for name in moved:
