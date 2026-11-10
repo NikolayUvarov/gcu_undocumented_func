@@ -532,6 +532,31 @@ fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colou
 
 mind::entry!(main);
 
+// A line of the shell's commands (shell.wit `run`): its last line of output, or why there is none.
+fn shell_line(line: &str) -> Result<String, String> {
+    let mut out = alloc::vec![0u8; 512];
+    match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::run(Endpoint(SLOT_SHELL), line, &mut out)) {
+        Ok(Ok(n)) => Ok(String::from(core::str::from_utf8(&out[..n.min(out.len())]).unwrap_or("").lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim())),
+        Ok(Err(error)) => Err(format!("The shell did not run {} ({:?})", line, error)),
+        Err(error) => Err(format!("The shell did not answer {} ({:?})", line, error)),
+    }
+}
+
+// The levels as the shell's `volume` and `mic` say them, or the line saying why there are none (no device).
+fn sound_levels() -> Result<wm::settings::Sound, String> {
+    if !holds(SLOT_SHELL) { return Err(String::from("Reading the levels needs the shell's commands, which wm does not hold")); }
+    let volume = shell_line("volume")?;
+    wm::settings::sound(&volume, &shell_line("mic")?).ok_or(volume)
+}
+
+// The sound page's levels, or the shell's line.
+fn show_sound(settings: &mut wm::settings::Settings) -> bool {
+    let (sound, note) = match sound_levels() { Ok(s) => (Some(s), None), Err(why) => (None, Some(why)) };
+    let changed = sound != settings.sound || note != settings.sound_note;
+    (settings.sound, settings.sound_note) = (sound, note);
+    changed
+}
+
 // The machine's name as the shell says it (shell.wit 1.11, 000-APP-0123); None without its commands or an answer.
 fn machine_name() -> Option<String> {
     if !holds(SLOT_SHELL) { return None; }
@@ -589,6 +614,7 @@ fn main(info: &'static BootInfo) {
     let mut frame_times = FrameTimes::default();
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
     let mut next_country = 0usize; // when Settings' network page reads the station's country again
+    let mut next_sound = 0usize; // when its sound page reads the levels again
     let mut keymap_asked = false; // whether Settings' keyboard page asked the shell for the layout, this time it is open
     let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
@@ -753,6 +779,18 @@ fn main(info: &'static BootInfo) {
                     }
                     manager.wm.notice = Some(text);
                 }
+                Action::Level(line) => {
+                    // The sound page's levels through the shell's `volume` and `mic` (000-APP-0076, 000-APP-0077): taken at
+                    // once, they change no authority; the shell keeps them in data/sound.conf.
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the levels needs the shell's commands, which wm does not hold") }
+                        else { shell_line(&line).unwrap_or_else(|why| why) };
+                    mind::println!("[WM] SOUND PAGE {}: {}", line, text);
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        show_sound(settings);
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                }
                 Action::SetHostname(name) => {
                     // The machine's name through the shell, at once as the clock (shell.wit 1.11, 000-APP-0123); the shell
                     // checks it is a name and keeps it in data/machine/name.
@@ -877,6 +915,11 @@ fn main(info: &'static BootInfo) {
                     relayout = true;
                 }
             }
+            // The sound page's levels as the shell says them, read every 2 s (000-APP-0076, 000-APP-0077).
+            if settings.page == wm::settings::SOUND && now >= next_sound {
+                next_sound = now + COUNTRY_MS;
+                if show_sound(settings) { relayout = true; }
+            }
             // The network page names the station's country and why it applies (550-APP-0082), read every 2 s.
             if settings.page == wm::settings::NETWORK && now >= next_country {
                 next_country = now + COUNTRY_MS;
@@ -897,6 +940,7 @@ fn main(info: &'static BootInfo) {
         } else {
             keymap_asked = false;
             next_country = 0;
+            next_sound = 0;
         }
         let pattern_due = backdrop.moving() && now >= next_pattern;
         if backdrop.shown() && (pattern_due || now >= next_info) {
