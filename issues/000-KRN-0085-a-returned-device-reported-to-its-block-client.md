@@ -1,6 +1,6 @@
 # 000-KRN-0085 — A block device that came back is reported to its client, which checks the medium first
 
-**Type:** kernel and services (`libmind/src/block.rs`, `block_protocol.rs`, `vfs_server`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the request in [requests-DRV.md](requests-DRV.md) ("`usb_storage` reports a device that came back") · **Roadmap:** track B · **Constitution:** MC-4 (data integrity), MC-6.3, MC-6.4
+**Type:** kernel and services (`libmind/src/block.rs`, `block_protocol.rs`, `vfs_server`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (step 1 in `main` since round 113, 2026-11-10; `usb_storage`'s part and the QEMU swap left) · **Blocked by:** the request in [requests-DRV.md](requests-DRV.md) ("`usb_storage` reports a device that came back") · **Roadmap:** track B · **Constitution:** MC-4 (data integrity), MC-6.3, MC-6.4
 
 ## Problem
 
@@ -37,6 +37,27 @@
 - The same stick plugged in again still works.
 - A driver killed and restarted is checked and goes on.
 - The block store's window does not reach the copy: after the swap its client gets "not found", and `init` sets no window on the copy unless its partition passes the check.
+
+## Progress (2026-11-10): step 1, by DRV's choice
+
+**DRV chose** (its message of 2026-11-10, 0644Z) that a driver whose medium comes back ends, so that `init`'s restart path runs, and a fresh instance claims the device anew.
+
+**Made** on the branch `claude/000-KRN-0085-a-returned-disk`, on round 111's candidate, which carries 000-KRN-0228:
+- **`block_protocol::Driver::returned()`,** false by default. A driver that notices its medium going and coming back answers true.
+- **`block::serve`** asks it before each request. On a return it:
+  - logs `[BLOCK] THE MEDIUM WENT AWAY AND CAME BACK: …`;
+  - answers that request as a driver without a device does (`not found` for sectors, attach, read, write, flush and windows);
+  - ends the instance.
+- **What the fresh instance brings.** It holds no client's buffer and no window. So the clients attach again, and `vfs_server`'s check of 000-KRN-0079 runs as after any restart (plan steps 2 and 3). The block store's window is set again only after `init`'s check (`store_window_again`, 307-KRN-0177, plan step 5).
+- **Tests:**
+  - `tests/block_host.rs`: the default;
+  - `usb_storage` and `ramdisk` build with it.
+
+**Left:**
+- **`usb_storage`'s `returned()`** (DRV's 000-DRV-0058), and the QEMU swap the acceptance criteria name. No driver answers true before that.
+- **The restart budget.** `init` quarantines a service after 3 restarts in 60 s, and a return counts as one. So a stick swapped four times in a minute leaves `usb_storage` quarantined until `run usb_storage`.
+
+**Landed** in round 113 (`main` d8d52c57, 2026-11-10): step 1, every group of the gate passed with it. **Left:** `usb_storage`'s `returned` (the request in `requests-DRV.md`) and the QEMU check that swaps a stick.
 
 ## Related
 
