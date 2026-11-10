@@ -3,6 +3,7 @@
 //! a cancel or a time limit turned into STOP. While a lease is held, only its holder's operations and reads start; the
 //! programs started before it are still followed. The workers take the line in turn, one exchange each (bus.rs).
 use crate::bus::{Bus, BusLine};
+use crate::console::{HUSH, QUIET};
 use crate::json::{s, Value};
 use crate::ops::{now, State, RUN_TIMEOUT};
 use linkproto::app::{Client, EXIT_UNKNOWN, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
@@ -118,9 +119,24 @@ pub fn work(state: Shared, index: usize, bus: Arc<Bus>, o: Options) {
     let mut console_at = Instant::now();
     loop {
         if !online {
-            // A line typed on as a console gets no hello: U-Boot would take a frame's bytes as typed (800-LNK-0043).
+            // No hello on a line typed on as a console, nor on one that printed within QUIET: U-Boot's countdown and the
+            // loader's safe-start window take a frame's bytes as keys (800-LNK-0043). Said once a hold, for the line.
             let hushed = { let mut st = lock(&state); st.expire(now()); st.hushed() };
-            if hushed { std::thread::sleep(Duration::from_millis(200)); continue; }
+            let why = if hushed { Some("typed") } else if bus.printed().is_some_and(|t| t.elapsed() < QUIET) { Some("printing") } else { None };
+            let held = {
+                let mut st = lock(&state);
+                if why != st.hello_held {
+                    eprintln!("effector485: {}: {}", bus.spec(), match why {
+                        Some("typed") => format!("the line is typed on: no hello until {} s after its last input", HUSH.as_secs()),
+                        Some(_) => format!("the line prints: no hello until it has been quiet for {} ms", QUIET.as_millis()),
+                        None => "the line is quiet: hello again".to_string(),
+                    });
+                    st.hello_held = why;
+                    st.changed();
+                }
+                why.is_some()
+            };
+            if held { std::thread::sleep(Duration::from_millis(200)); continue; }
             // A machine that is not there is asked once each time, so the line stays free for the others and its console.
             match connect(&mut c, &bus) {
                 Ok(name) => {

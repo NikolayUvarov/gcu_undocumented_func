@@ -42,15 +42,27 @@ impl Bus {
     /// Between exchanges: what the line holds, read so that a boot's lines are seen as they come; the bytes outside
     /// frames found so far, with the times they came.
     pub fn drain(self: &Arc<Self>) -> Vec<(u64, Vec<u8>)> {
+        let quiet = self.take_in();
+        let mut stray = lock(&self.stray);
+        if quiet { stray.idle(); }
+        std::mem::take(&mut stray.found)
+    }
+
+    /// What the line holds, read with the line taken for it; true when it held nothing.
+    fn take_in(self: &Arc<Self>) -> bool {
         let mut line = self.line();
         line.claim();
         let mut buf = [0u8; 1024];
         let mut quiet = true;
         loop { let n = line.read(&mut buf, 0); if n == 0 { break; } quiet = false; }
         line.release();
-        let mut stray = lock(&self.stray);
-        if quiet { stray.idle(); }
-        std::mem::take(&mut stray.found)
+        quiet
+    }
+
+    /// When the line last carried bytes outside frames, what it holds now read first (800-LNK-0043).
+    pub fn printed(self: &Arc<Self>) -> Option<Instant> {
+        self.take_in();
+        lock(&self.stray).printed()
     }
 
     /// Bytes typed on a line no machine answers, written as they are with the line taken for them (800-LNK-0043).
