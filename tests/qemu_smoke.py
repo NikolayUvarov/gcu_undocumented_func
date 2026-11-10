@@ -12628,9 +12628,9 @@ def recovery_key_check(args, cpu):
         def recovery(vm, words, answer, line):
             # `run recovery …`, the shell's question answered; recovery's line, from the serial line or its log.
             vm.send(f"run recovery {words}\n")
-            vm.expect("(Y/N)", timeout=30)
+            asked = vm.expect("(Y/N)", timeout=30)  # the shell's question, which the output after it no longer holds
             vm.send(answer)
-            out = vm.expect("MIND> ", timeout=120)
+            out = asked + vm.expect("MIND> ", timeout=120)
             for _ in range(20):
                 if line in out:
                     return out
