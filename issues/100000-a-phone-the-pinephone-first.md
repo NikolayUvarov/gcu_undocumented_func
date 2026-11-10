@@ -1,6 +1,6 @@
 # 100000 — MIND Core on a phone: the PinePhone first
 
-**Type:** porting (main task) · **Owner:** `MOB` track (later) · **Priority:** P2 · **Status:** stage 0 started (the maintainer, 2026-11-08: before the phone, for a test run) · **Blocked by:** for stage 1, a PinePhone at hand ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)); stage 0 is not · **Roadmap:** track H (boards with UEFI) · **Constitution:** MC-1.3, MC-1.5, MC-5.1, MC-6.3, MC-11.3, MC-11.4, MC-11.11, MC-12.1, MC-12.3
+**Type:** porting (main task) · **Owner:** `MOB` (the assessing session since 2026-11-10) · **Priority:** P2 · **Status:** stage 0 started (the maintainer, 2026-11-08: before the phone, for a test run) · **Blocked by:** for stage 1, a PinePhone at hand ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)); stage 0 is not · **Roadmap:** track H (boards with UEFI) · **Constitution:** MC-1.3, MC-1.5, MC-5.1, MC-6.3, MC-11.3, MC-11.4, MC-11.11, MC-12.1, MC-12.3
 
 **Recorded by:** the kernel session, 2026-10-25, at the maintainer's request:
 - the question: what MIND Core needs to run on mobile phones, and which phone to start with;
@@ -56,6 +56,8 @@ As found on 2026-10-25 (sources at the end). Each point is checked on the phone 
 ## Plan
 
 ### Stage 0: in QEMU and on the host, started once the phone is at hand
+
+**Before the phone, on two Allwinner boards** (the maintainer, 2026-11-10): main task [100004](100004-two-allwinner-boards-before-the-phone.md). The H5 shares the A64's addresses for the UARTs, the GIC, the MMC controllers and TWI0, and the H618 has 2 GiB as the phone's smaller edition. What runs there is evidence for those boards only (MC-12.1).
 
 - [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done): the board from the device tree. Done (2026-11-08): MIND Core boots to the shell on QEMU `virt` without ACPI, under AAVMF and under U-Boot's UEFI.
 - [100000-PRT-0012](100000-PRT-0012-the-a64s-counter-erratum.md): the A64's counter erratum, which the PinePhone's tree names.

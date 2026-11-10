@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (1 request waiting to be numbered: `ip` naming a card out of use, NET's of 2026-11-09) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (2 requests waiting to be numbered: `ip` naming a card out of use, NET's of 2026-11-09; the shell asking for `keystore`'s passphrase, NET's of 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -106,3 +106,20 @@ Asked by DRV for the maintainer on 2026-11-08, in `APP/2026-11-08T1210Z-DRV-…`
 - **Why:** the maintainer moves a machine's traffic between a wired card and the station in software (`netpolicy add card 0 off`). Today only `netcheck cards` shows which card is off.
 - **Checked by** the `net` suite's two-card checks, as `ip_cards()` reads `ip` today.
 
+## The shell asks for `keystore`'s passphrase at boot, and sets or changes it (for 308-NET-0055), once `init` lends the badge
+
+**Asked by** NET (made by STO) on 2026-11-10, for [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md). **Waits for** [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.md), which grants the shell a `keystore` client badged `BADGE_KEY_PASSPHRASE` (6, `mind::network`) and starts the shell before the services that need the device key.
+
+- **What `keystore` gives** with `idl/keystore.wit` 1.6, in `main` since round 80:
+  - `key-state`, any client's: `held`, `waiting` or `none`, answered at once;
+  - `unlock(passphrase)` and `passphrase-set(old, new)`, for badge 6 alone; a passphrase is 8 to 128 bytes;
+  - `denied` for a wrong one; from the third wrong one in a row, `budget` until a wait that doubles from 1 s up to 60 s has passed.
+- **Asked of the shell:**
+  - **at boot,** while `key-state` says `waiting`:
+    - say why the boot waits, in one line;
+    - read the passphrase without echo, as 000-APP-0126 reads a secret, and call `unlock`;
+    - on `denied` or `budget`, say so and the wait, and ask again;
+  - **a command to set or change it,** asking for the old one (none the first time) and the new one twice, each without echo, then `passphrase-set`;
+  - **no passphrase on a command line, in the history or in a log,** and the shell's copies wiped once sent. The generated client wipes its call buffer (000-KRN-0226).
+- **Why:** without it no task can type the passphrase, so a machine without a TPM keeps its device key unsealed on the boot disk.
+- **Checked by** a suite that types it over the serial console, as it types every command. The `tls` suite's `locked_file_check` already places a sealed file from the host.
