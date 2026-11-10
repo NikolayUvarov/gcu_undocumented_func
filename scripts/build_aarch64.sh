@@ -85,5 +85,11 @@ fi
 if [[ -n "${MIND_SECURE_BOOT_KEYS:-}" ]]; then
     python3 "$ROOT/scripts/secure_boot.py" sign "$OUT/EFI/BOOT/BOOTAA64.EFI" "$MIND_SECURE_BOOT_KEYS" "$OUT/EFI/BOOT/BOOTAA64.EFI"
 fi
+# With $MIND_UPDATE_EVERY (whole seconds), the release carries the updater's period in its slot (351-UPD-0036).
+rm -f "$OUT/period.txt"
+if [[ -n "${MIND_UPDATE_EVERY:-}" ]]; then
+    [[ "$MIND_UPDATE_EVERY" =~ ^[0-9]+$ ]] || { echo "MIND_UPDATE_EVERY must be whole seconds, not '$MIND_UPDATE_EVERY'" >&2; exit 1; }
+    printf '# the updater checks this often, in place of update.txt'"'"'s period (351-UPD-0036)\nevery %s\n' "$MIND_UPDATE_EVERY" > "$OUT/period.txt"
+fi
 python3 "$ROOT/scripts/sign_manifest.py" "$OUT"
 echo ">>> aarch64 build ready: $OUT"

@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (2 requests waiting to be numbered: `ip` naming a card out of use, NET's of 2026-11-09; the shell asking for `keystore`'s passphrase, NET's of 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: `ip` naming a card out of use became [550-APP-0129](550-APP-0129-ip-names-a-card-out-of-use.md), the shell asking for `keystore`'s passphrase [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -97,6 +97,8 @@ Asked by DRV for the maintainer on 2026-11-08, in `APP/2026-11-08T1210Z-DRV-…`
 
 ## `ip` names a card out of use (for 550-NET-0062)
 
+Numbered on 2026-11-10 as [550-APP-0129](550-APP-0129-ip-names-a-card-out-of-use.md).
+
 **Asked by** NET (made by STO) on 2026-11-09, for [550-NET-0062](550-NET-0062-the-card-chosen-in-software.md).
 
 - **What the stack gives** with `idl/socket.wit` 2.11:
@@ -107,6 +109,8 @@ Asked by DRV for the maintainer on 2026-11-08, in `APP/2026-11-08T1210Z-DRV-…`
 - **Checked by** the `net` suite's two-card checks, as `ip_cards()` reads `ip` today.
 
 ## The shell asks for `keystore`'s passphrase at boot, and sets or changes it (for 308-NET-0055), once `init` lends the badge
+
+Numbered on 2026-11-10 as [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md).
 
 **Asked by** NET (made by STO) on 2026-11-10, for [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md). **Waits for** [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.md), which grants the shell a `keystore` client badged `BADGE_KEY_PASSPHRASE` (6, `mind::network`) and starts the shell before the services that need the device key.
 

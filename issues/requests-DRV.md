@@ -1,6 +1,6 @@
 # Requests for the drivers track (DRV), not numbered yet
 
-**Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** empty (2026-11-09) · **Recorded by:** the kernel track (KRN), 2026-10-09
+**Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** empty (2026-11-10: STO's `ahci` request is 307-DRV-0068) · **Recorded by:** the kernel track (KRN), 2026-10-09
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. It turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below the list.
 
@@ -27,4 +27,6 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
   - `ata` and `ahci` waits with a deadline: [000-DRV-0064](000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md);
   - BCM4331 applying the country: done in [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md)'s `set-country`, [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done) and [550-DRV-0050](../issues-done/550-DRV-0050-bcm-wifi-takes-the-world-domain.done). Its channels and listen-only channels are applied, and a channel the country forbids is left. The EIRP limits wait for power control in [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), and the log says so at each `set-country`;
   - `virtio_blk` waiting a whole tick: [000-DRV-0065](../issues-done/000-DRV-0065-virtio-blk-waits-a-whole-tick.done);
-  - the AC97 capture ring's overflow: [000-DRV-0066](000-DRV-0066-the-ac97-capture-ring-overflows.md).
+  - the AC97 capture ring's overflow: [000-DRV-0066](../issues-done/000-DRV-0066-the-ac97-capture-ring-overflows.done).
+- **2026-11-10:**
+  - `ahci` on a controller the firmware left untouched (STO's, for 307-STO-0044): [307-DRV-0068](307-DRV-0068-ahci-on-a-controller-the-firmware-left-untouched.md).

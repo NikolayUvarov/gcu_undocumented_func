@@ -28,7 +28,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
     "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the console UART (COM1's ports, the console's node, or the kernel's console channel) and its line, with link.conf's `uart`", "the serial line's client (a converter's, or the console UART's); a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own disk (else of ramdisk#1) and of its copy's when there is one; keystore's client for its own secrets", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
-    "spawn privilege; a VFS client of system/own/ for the programs' own directories; the key service's client for the programs' secrets clients", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
+    "spawn privilege; a VFS client of system/own/ for the programs' own directories; the key service's client for the programs' secrets clients", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client; a read-only scope of models: with the model disk; its quota by its line of data/memory.conf, read at each start", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
@@ -489,9 +489,7 @@ impl Init {
     // quota and its argument `--memory`, and the right to start workers, at most NND_TASKS live; without a line the
     // default quota and none.
     fn nnd_memory(&mut self, mut plan: Plan) -> Plan {
-        let mut text = [0u8; mind::memconf::MAX];
-        let length = self.read_boot_file(mind::memconf::FILE, &mut text);
-        let line = core::str::from_utf8(&text[..length]).ok().and_then(|text| mind::memconf::mib(text, "nnd"));
+        let line = self.memory_line("nnd");
         let mut args = mind::util::FixedBuf::<ARGS_KEPT>::new();
         match line {
             Some(mib) => {
@@ -509,6 +507,30 @@ impl Init {
         }
         plan.args = ([0; ARGS_KEPT], args.as_str().len());
         plan.args.0[..plan.args.1].copy_from_slice(args.as_str().as_bytes());
+        plan
+    }
+
+    // A service's line of data/memory.conf, its MiB, read at each start; None without one.
+    fn memory_line(&mut self, name: &str) -> Option<u16> {
+        let mut text = [0u8; mind::memconf::MAX];
+        let length = self.read_boot_file(mind::memconf::FILE, &mut text);
+        core::str::from_utf8(&text[..length]).ok().and_then(|text| mind::memconf::mib(text, name))
+    }
+
+    // tts's quota by its line of data/memory.conf, read at each start, for the neural voice (252-KRN-0230): its MiB, 0 for
+    // HEAP_MAX_BYTES; without a line the default quota, and the formant voice alone.
+    fn tts_memory(&mut self, mut plan: Plan) -> Plan {
+        match self.memory_line("tts") {
+            Some(mib) => {
+                let mib = if mib == 0 { (HEAP_MAX_BYTES >> 20) as u16 } else { mib };
+                plan.quota = Quota { memory_mib: mib, ..Quota::default() };
+                mind::println!("[INIT] tts: {} MIB BY {}", mib, mind::memconf::FILE);
+            }
+            None => {
+                plan.quota = Quota::default();
+                mind::println!("[INIT] tts: NO LINE IN {}: THE DEFAULT QUOTA", mind::memconf::FILE);
+            }
+        }
         plan
     }
 
@@ -1178,7 +1200,7 @@ impl Init {
 
     fn spawn(&mut self, index: usize, plan: Plan) -> Result<u64> {
         let name = unit_name(index);
-        let plan = if name == "nnd" { self.nnd_memory(plan) } else { plan };
+        let plan = match name { "nnd" => self.nnd_memory(plan), "tts" => self.tts_memory(plan), _ => plan };
         // A new shell starts with no client of nnd the old one minted or lent: every copy of the kept one goes (262-KRN-0178).
         if let Some(kept) = self.shell_nn.filter(|_| name == "shell" && self.starts[index] > 0) {
             match ipc::revoke(kept) {
@@ -1932,6 +1954,9 @@ fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
         // The models nnd reads, and nothing else of the volumes (262-KRN-0178): each scope's root is its directory. Neither
         // is made: a boot writes nothing to the boot volume for nnd, whose scope waits for the owner's data/models/.
         "nnd" => &[(SLOT_VFS, mind::fs::BADGE_USER, NN_MODELS_DIR, false, false), (NND_MODELS, mind::fs::BADGE_USER, "models:", false, false)],
+        // The neural voice (252-KRN-0230): the model disk read-only, in SLOT_FILE, whose root holds MANIFEST.json, which each
+        // model file is checked against (MC-4.2). Without the disk none, and tts speaks with the formant voice.
+        "tts" => &[(SLOT_FILE, mind::fs::BADGE_USER, "models:", false, false)],
         _ => &[],
     }
 }

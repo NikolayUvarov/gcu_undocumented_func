@@ -138,14 +138,16 @@ def signing_seed():
 
 
 def shipped(volume):
-    """The files a volume ships, by path: the bootloader, the kernel and every program, licences, the voice model."""
+    """The files a volume ships, by path: the bootloader, the kernel and every program, licences, the voice model, and
+    the release's period for the updater (period.txt, 351-UPD-0036)."""
     names = []
     for path in sorted(volume.rglob("*")):
         rel = path.relative_to(volume).as_posix()
         if not path.is_file():
             continue
         top = rel.split("/")[0]
-        if (rel.startswith("EFI/BOOT/") and rel.upper().endswith(".EFI")) or ("/" not in rel and rel.endswith(".elf")) or top in ("LICENSES", "voice"):
+        if (rel.startswith("EFI/BOOT/") and rel.upper().endswith(".EFI")) or ("/" not in rel and rel.endswith(".elf")) or top in ("LICENSES", "voice") \
+                or rel == "period.txt":
             names.append(rel)
     return names
 
