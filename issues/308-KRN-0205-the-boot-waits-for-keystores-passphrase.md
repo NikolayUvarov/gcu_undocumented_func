@@ -1,6 +1,6 @@
 # 308-KRN-0205 — The boot waits for `keystore`'s passphrase before the services that need the device key
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md) · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) · **Constitution:** MC-6.8, MC-9.6
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — (keystore's part of [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md) is in `main`, round 80; its open criteria are this task's grant and wait; the kernel session's queue) · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) · **Constitution:** MC-6.8, MC-9.6
 
 ## Problem
 
