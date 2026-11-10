@@ -4,18 +4,39 @@
 use super::slots::{Record, SEQUENCE_LAST};
 
 /// What a file a manifest lists is to a slot (351-UPD-0023): the kernel or a boot service the bootloader loads, the
-/// loader the slot carries for itself (351-UPD-0010), an application the slot carries with them, or a file of the root
-/// shared by both slots (licences, data, another processor's loader).
+/// loader the slot carries for itself (351-UPD-0010), an application the slot carries with them, the updater's period
+/// the release carries (351-UPD-0036), or a file of the root shared by both slots (licences, data, another processor's
+/// loader).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Kind { Boot, Loader, Application, Shared }
+pub enum Kind { Boot, Loader, Application, Period, Shared }
+
+/// A release's period for the updater, in its slot (351-UPD-0036): not `update.txt`, which is the root's.
+pub const PERIOD: &str = "period.txt";
 
 /// `boot` is the bootloader's list of boot services (BOOT_FILES), `loader` the loader's path for this processor
 /// (`EFI/BOOT/BOOTX64.EFI`); a volume's names may come back in another case.
 pub fn kind(path: &str, boot: &[&str], loader: &str) -> Kind {
     if path.eq_ignore_ascii_case("kernel.elf") || boot.iter().any(|name| name.eq_ignore_ascii_case(path)) { return Kind::Boot; }
     if path.eq_ignore_ascii_case(loader) { return Kind::Loader; }
+    if path.eq_ignore_ascii_case(PERIOD) { return Kind::Period; }
     let elf = path.len() > 4 && path.as_bytes()[path.len() - 4..].eq_ignore_ascii_case(b".elf");
     if elf && !path.contains('/') { Kind::Application } else { Kind::Shared }
+}
+
+/// The seconds a slot's period.txt names (351-UPD-0036): one line `every SECONDS`, with `#` comments and blank lines.
+/// Any other line, a second `every` or none is refused: the line, or why. `source`, `pin` and the rest are the root's.
+pub fn period(text: &str) -> Result<u64, &str> {
+    let mut every = None;
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() { continue; }
+        let mut words = line.split_whitespace();
+        match (words.next(), words.next().map(str::parse::<u64>), words.next()) {
+            (Some("every"), Some(Ok(seconds)), None) if every.is_none() => every = Some(seconds),
+            _ => return Err(line),
+        }
+    }
+    every.ok_or("NO `every` LINE")
 }
 
 /// A slot's file's name in the slot: the loader's without its `EFI/BOOT/` (`BOOTX64.EFI`), the others as listed.

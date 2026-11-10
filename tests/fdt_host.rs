@@ -1,6 +1,7 @@
 //! Host tests of the device tree reader (common/fdt.rs, 100000-PRT-0009): QEMU `virt`'s trees (GICv2 as U-Boot hands
-//! it to the loader, GICv3 as QEMU dumps it), the PinePhone's (Linux v6.12), small trees made here for what those lack,
-//! and truncated, mutated and malformed blobs, which must yield nothing rather than a panic.
+//! it to the loader, GICv3 as QEMU dumps it), the PinePhone's and the two Allwinner boards' (Linux v6.12, 100004-PRT-0013),
+//! small trees made here for what those lack, and truncated, mutated and malformed blobs, which must yield nothing rather
+//! than a panic.
 #[path = "../common/fdt.rs"]
 mod fdt;
 
@@ -13,6 +14,9 @@ const VIRT_V2: &[u8] = include_bytes!("data/fdt/virt-gicv2-uboot.dtb");
 const VIRT_V3: &[u8] = include_bytes!("data/fdt/virt-gicv3.dtb");
 // Linux v6.12's sun50i-a64-pinephone-1.2.dts, compiled without sun50i-a64-cpu-opp.dtsi (THIRD_PARTY.md).
 const PINEPHONE: &[u8] = include_bytes!("data/fdt/pinephone-1.2.dtb");
+// Linux v6.12's sun50i-h5-orangepi-zero-plus2.dts and sun50i-h618-orangepi-zero3.dts (THIRD_PARTY.md, 100004-PRT-0013).
+const ZERO_PLUS2: &[u8] = include_bytes!("data/fdt/orangepi-zero-plus2-h5.dtb");
+const ZERO3: &[u8] = include_bytes!("data/fdt/orangepi-zero3-h618.dtb");
 
 fn mpidrs(tree: &Tree) -> (Vec<u64>, usize) { let mut all = Vec::new(); let (_, left) = cpus(tree, |m| all.push(m)); (all, left) }
 
@@ -67,6 +71,51 @@ fn the_pinephones_tree() {
     assert_eq!(tree.resolve(b"serial0").unwrap().name(), b"serial@1c28000");
     assert_eq!(tree.at_path(b"/soc/serial@1c28000").unwrap().first_reg(), Some((0x01C2_8000, 0x400)));
     assert!(tree.at_path(b"/soc/serial").is_some(), "a part without a unit address matches");
+}
+
+// The status of the node at `path`: None without the node.
+fn status<'a>(tree: &'a Tree, path: &[u8]) -> Option<&'a [u8]> { tree.at_path(path).map(|node| node.string("status").unwrap_or(b"okay")) }
+
+#[test]
+fn the_orange_pi_zero_plus2s_tree() {
+    // Allwinner H5: the A64's addresses for the GIC-400 and UART0, four Cortex-A53, PSCI by SMC to TF-A.
+    let tree = Tree::open(ZERO_PLUS2).unwrap();
+    let b = board(&tree);
+    let gic = b.gic.unwrap();
+    assert_eq!((gic.version, gic.distributor, gic.cpu_interface, gic.v2m, gic.redistributor, gic.its), (2, 0x01C8_1000, 0x01C8_2000, 0, 0, 0));
+    assert_eq!(b.timer, Some(27), "the virtual timer, PPI 11");
+    assert_eq!(b.timer_erratum, None, "the A64's counter erratum is the A64's alone");
+    assert_eq!(b.psci, Some(Conduit::Smc));
+    // UART0 through serial0, a DesignWare 16550 with 32-bit registers 4 bytes apart, SPI 0, 115200 from stdout-path.
+    assert_eq!(b.console, Some(Uart { base: 0x01C2_8000, kind: UartKind::Ns16550 { shift: 2, width: 4, designware: true }, spi: Some(0), speed: Some(115_200) }));
+    assert_eq!(console(&tree), b.console);
+    assert_eq!((b.rtc, b.ecam, b.framebuffer), (None, None, None));
+    assert_eq!(mpidrs(&tree), (vec![0, 1, 2, 3], 0));
+    // No memory node: U-Boot adds one at boot, and the loader takes memory from UEFI's map.
+    assert!(tree.at_path(b"/memory").is_none());
+    // UART1 (the AP6212's Bluetooth) is enabled in UART0's page: the console's page is not UART0's alone.
+    assert_eq!(status(&tree, b"/soc/serial@1c28400"), Some(&b"okay"[..]));
+    assert_eq!(status(&tree, b"/soc/serial@1c28800"), Some(&b"disabled"[..]));
+    assert_eq!(status(&tree, b"/soc/serial@1c28c00"), Some(&b"disabled"[..]));
+}
+
+#[test]
+fn the_orange_pi_zero3s_tree() {
+    // Allwinner H618: the H6/H616 layout, the GIC-400 and UART0 elsewhere.
+    let tree = Tree::open(ZERO3).unwrap();
+    let b = board(&tree);
+    let gic = b.gic.unwrap();
+    assert_eq!((gic.version, gic.distributor, gic.cpu_interface, gic.v2m, gic.redistributor, gic.its), (2, 0x0302_1000, 0x0302_2000, 0, 0, 0));
+    assert_eq!((b.timer, b.timer_erratum, b.psci), (Some(27), None, Some(Conduit::Smc)));
+    assert_eq!(b.console, Some(Uart { base: 0x0500_0000, kind: UartKind::Ns16550 { shift: 2, width: 4, designware: true }, spi: Some(0), speed: Some(115_200) }));
+    assert_eq!(console(&tree), b.console);
+    assert_eq!((b.rtc, b.ecam, b.framebuffer), (None, None, None));
+    assert_eq!(mpidrs(&tree), (vec![0, 1, 2, 3], 0));
+    assert!(tree.at_path(b"/memory").is_none());
+    // UART1 to UART5 share UART0's page, all disabled in this tree.
+    for path in [&b"/soc/serial@5000400"[..], b"/soc/serial@5000800", b"/soc/serial@5000c00", b"/soc/serial@5001000", b"/soc/serial@5001400"] {
+        assert_eq!(status(&tree, path), Some(&b"disabled"[..]), "{}", String::from_utf8_lossy(path));
+    }
 }
 
 // A tree written here: the header, an empty reservation block unless given, the structure and the strings.

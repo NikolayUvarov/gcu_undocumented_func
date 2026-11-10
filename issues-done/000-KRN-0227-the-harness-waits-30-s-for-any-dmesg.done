@@ -1,6 +1,6 @@
-# 000-KRN-0227 — The QEMU harness waits 30 s for any `dmesg`, not 8 s
+# 000-KRN-0227 — The QEMU harness waits 30 s for any `dmesg`, not 8 s — done
 
-**Type:** tests (the QEMU harness, `tests/qemu_smoke.py`'s `VM.command`) · **Owner:** `KRN` (CI) · **Priority:** P2 · **Status:** in progress (both steps landed, rounds 107 and 108; one more gate with the group kept off x32-128 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (the QEMU harness, `tests/qemu_smoke.py`'s `VM.command`) · **Owner:** `KRN` (CI) · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -57,6 +57,18 @@
 - **The second gate:** round 109 (`main` 95a87938, gate `land-95a87938b`, every group green). The group ran on i9 and passed the first time (1493 s).
 
 
+## Resolution
+
+**Both criteria are met.**
+- **The suites** passed with the change on x86 and aarch64.
+- **Three gates in a row passed with every group green** after step 2: rounds 108, 109 and 110 (`main` 807e0614, 95a87938 and 91e74b59).
+  - Since round 108 the pool keeps "x86: network, TLS and Effector" off x32-128 (`KEPT_OFF`).
+  - The group passed the first time in each of the three: on i9 in rounds 108 and 109, and on acc-1 in round 110 (1210 s).
+- **The fixes:**
+  - step 1: the harness's `dmesg` reads wait 30 s by default;
+  - step 2: the shell's lateness, shown and handled;
+  - the pool rule for the lane.
+
 ## Related
 
-[000-NET-0063](000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.md) (round 102, the Wi-Fi checks), [000-KRN-0225](../issues-done/000-KRN-0225-the-revocation-check-saw-no-refusal-on-a-loaded-host.done) (round 103, another check on a loaded host).
+[000-NET-0063](../issues/000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.md) (round 102, the Wi-Fi checks), [000-KRN-0225](000-KRN-0225-the-revocation-check-saw-no-refusal-on-a-loaded-host.done) (round 103, another check on a loaded host).

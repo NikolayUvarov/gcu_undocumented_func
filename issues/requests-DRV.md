@@ -1,6 +1,6 @@
 # Requests for the drivers track (DRV), not numbered yet
 
-**Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** 1 request waiting to be numbered (2026-11-10: `ahci` on a controller the firmware left untouched, STO's) · **Recorded by:** the kernel track (KRN), 2026-10-09
+**Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** empty (2026-11-10: STO's `ahci` request is 307-DRV-0068) · **Recorded by:** the kernel track (KRN), 2026-10-09
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. It turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below the list.
 
@@ -27,18 +27,6 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
   - `ata` and `ahci` waits with a deadline: [000-DRV-0064](000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md);
   - BCM4331 applying the country: done in [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md)'s `set-country`, [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done) and [550-DRV-0050](../issues-done/550-DRV-0050-bcm-wifi-takes-the-world-domain.done). Its channels and listen-only channels are applied, and a channel the country forbids is left. The EIRP limits wait for power control in [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), and the log says so at each `set-country`;
   - `virtio_blk` waiting a whole tick: [000-DRV-0065](../issues-done/000-DRV-0065-virtio-blk-waits-a-whole-tick.done);
-  - the AC97 capture ring's overflow: [000-DRV-0066](000-DRV-0066-the-ac97-capture-ring-overflows.md).
-
-## `ahci` finds no disk on a controller the firmware left untouched (for 307-STO-0044)
-
-**Asked by** STO on 2026-11-10, for [307-STO-0044](../issues-done/307-STO-0044-the-store-on-an-nvme-and-an-ahci-partition.done) and 307's second criterion, the store on an AHCI partition on aarch64.
-
-- **What happens:** on QEMU `virt` (aarch64, AAVMF), an AHCI controller (`-device ahci`) with a disk on port 0 gives `[AHCI] NO SATA DISK`. A local build of `ahci` with its probe's values logged, never committed, read:
-  - `CAP 0xc0141f05`, `PI 0x3f`, `GHC 0x80000000`;
-  - port 0: `SSTS 0x113` (a device, the link up), `SIG 0xffffffff`;
-  - ports 1 to 5: `SSTS 0`.
-- **Why, as far as STO reads AHCI 1.3.1:** `PxSIG` holds the device's signature only once the port has received its first D2H register FIS, which needs `PxCMD.FRE` set (sections 3.3.9 and 10.1.2). `Ahci::probe` reads `SIG` before `start()` sets `FRE`.
-  - On x86, OVMF's own AHCI driver has started the port before, so the signature is there. AAVMF leaves the controller as it is.
-  - A real machine whose firmware does not touch the controller, a boot from USB or NVMe for one, may do the same.
-- **Asked:** that `ahci` sets up the port (`CLB`, `FB`, `FRE`) before it reads the signature, waits for it to a deadline (000-DRV-0064's form), and resets the port (`PxSCTL.DET`) if none comes, then finds the disk as now.
-- **Checked by:** `store_partition_disk_check` in the `store` suite. It skips its AHCI machine on aarch64, with a line naming this request; that skip goes once `ahci` finds the disk there.
+  - the AC97 capture ring's overflow: [000-DRV-0066](../issues-done/000-DRV-0066-the-ac97-capture-ring-overflows.done).
+- **2026-11-10:**
+  - `ahci` on a controller the firmware left untouched (STO's, for 307-STO-0044): [307-DRV-0068](307-DRV-0068-ahci-on-a-controller-the-firmware-left-untouched.md).

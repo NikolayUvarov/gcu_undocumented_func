@@ -76,7 +76,7 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 - an object and a name found after a reboot;
 - on the host, every sector outside the store's partition as written, another system's partitions before and after it and the disk beside it among them.
 
-**Left for the second criterion:** the store on an AHCI partition on aarch64. Under AAVMF `ahci` finds no disk, which is recorded for DRV in [requests-DRV.md](requests-DRV.md) (2026-11-10).
+**Left for the second criterion:** the store on an AHCI partition on aarch64. Under AAVMF `ahci` finds no disk, which DRV has as [307-DRV-0068](307-DRV-0068-ahci-on-a-controller-the-firmware-left-untouched.md).
 
 **Left besides:**
 - [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md): what a flush reaches, per driver;

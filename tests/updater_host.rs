@@ -32,7 +32,7 @@ mod tree;
 #[path = "../updater/src/kept.rs"]
 mod kept;
 
-use plan::{confirm, expired, floor, in_slot, keeps, last_good, manifest_version, kind, may_stage, newest, other, raise, trial_of_other, Kind};
+use plan::{confirm, expired, floor, in_slot, keeps, last_good, manifest_version, kind, may_stage, newest, other, period, raise, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
@@ -129,9 +129,32 @@ fn a_manifest_splits_into_boot_files_applications_and_shared_files() {
     assert_eq!(kind("efi/boot/bootx64.efi"), Kind::Loader);
     assert_eq!(in_slot("EFI/BOOT/BOOTX64.EFI"), "BOOTX64.EFI");
     assert_eq!(in_slot("kernel.elf"), "kernel.elf");
-    for shared in ["EFI/BOOT/BOOTAA64.EFI", "EFI/BOOT/BOOTX64.EFI.old", "BOOTX64.EFI", "LICENSES/MIT.txt", "data/models/x.elf", "MANIFEST", "elf", ".elf"] {
+    // 351-UPD-0036: the release's period goes into the slot; the root's update.txt stays the root's.
+    assert_eq!(kind("period.txt"), Kind::Period);
+    assert_eq!(kind("PERIOD.TXT"), Kind::Period);
+    assert_eq!(in_slot("period.txt"), "period.txt");
+    for shared in ["EFI/BOOT/BOOTAA64.EFI", "EFI/BOOT/BOOTX64.EFI.old", "BOOTX64.EFI", "LICENSES/MIT.txt", "data/models/x.elf", "MANIFEST", "elf", ".elf",
+                   "update.txt", "data/period.txt", "period.txt.old"] {
         assert_eq!(kind(shared), Kind::Shared, "{}", shared);
     }
+}
+
+#[test]
+fn a_slots_period_holds_every_alone() {
+    // 351-UPD-0036: one `every SECONDS`, with comments and blank lines around it.
+    assert_eq!(period("every 60\n"), Ok(60));
+    assert_eq!(period("# the maintainer's minute\n\n  every   7  # seconds\r\n"), Ok(7));
+    assert_eq!(period("every 0"), Ok(0), "0: once at start, as update.txt's");
+    // What is the root's alone, a second period, a bad number or none: refused, with the line or why.
+    assert_eq!(period("every 60\nsource https://elsewhere.example\n"), Err("source https://elsewhere.example"));
+    assert_eq!(period("pin 00\nevery 60\n"), Err("pin 00"));
+    for line in ["automatic apply", "channel stable", "tries 3"] { assert_eq!(period(&format!("every 9\n{}\n", line)), Err(line)); }
+    assert_eq!(period("every 60\nevery 30\n"), Err("every 30"));
+    for bad in ["every", "every -1", "every 1.5", "every 60 s", "every 99999999999999999999", "EVERY 60"] {
+        assert_eq!(period(bad), Err(bad.trim()), "{}", bad);
+    }
+    assert_eq!(period(""), Err("NO `every` LINE"));
+    assert_eq!(period("# nothing\n\n"), Err("NO `every` LINE"));
 }
 
 #[test]

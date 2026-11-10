@@ -32,6 +32,9 @@ pub unsafe fn serial_write_byte(b: u8) {
 // The console as a byte channel (100000-KRN-0222): its received bytes, room to send one, and its interrupts.
 pub unsafe fn console_take(out: &mut [u8]) -> usize {
     let (uart, is16550) = (board::get(&board::UART), board::get(&board::UART_KIND) == board::UART_16550);
+    // A DesignWare UART's busy-detect interrupt (IIR 7: LCR written while it was busy, by the firmware, as the kernel
+    // never writes it) holds the line until USR, register 31, is read. A plain 16550's IIR never reads 7.
+    if uart != 0 && is16550 && read_16550(uart, 2) & 0x0F == 0x07 { read_16550(uart, 31); }
     let mut n = 0;
     // 16550: LSR bit 0, data ready; PL011: FR bit 4, the receiver is empty.
     while uart != 0 && n < out.len() && if is16550 { read_16550(uart, 5) & 1 != 0 } else { read_volatile((uart + 0x18) as *const u32) & 0x10 == 0 } {
