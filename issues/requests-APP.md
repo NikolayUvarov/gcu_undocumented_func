@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered: the shell's `update kept` became [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: the shell's prompt above a program that ended before it was in front became [000-APP-0133](000-APP-0133-no-prompt-before-an-early-exits-notice.md), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -141,3 +141,23 @@ Numbered on 2026-11-10 as [351-APP-0132](../issues-done/351-APP-0132-update-kept
 - **Asked of the shell:** `update kept` (or a line in `update status`, as APP prefers), one line a release, for example `KEPT VERSION 6, PIN 2, 26 677 432 BYTES, ROOT bafy…`. With none: `NO RELEASE KEPT IN THE BLOCK STORE`. The root as `mind::cid`'s text form.
 - **Why:** which releases the store keeps, so which ones a rollback or a damaged slot can come back from (351-UPD-0033, 0034), shows only in the updater's log today.
 - **Checked by:** the `updatestore` suite, which then reads the kept releases through the shell before and after the apply (351-UPD-0035's second criterion).
+
+## The shell's prompt above the output of a program that ended before it was in front (for 000-NET-0065)
+
+Numbered on 2026-11-10 as [000-APP-0133](000-APP-0133-no-prompt-before-an-early-exits-notice.md).
+
+**Asked by** NET on 2026-11-10, for [000-NET-0065](000-NET-0065-the-wifi-checks-lines-after-an-early-prompt.md). Seen in round 117's gate and in the kernel session's container.
+
+- **What the serial line shows:** `wifi scan` has a screen and starts in front (`start_front`, issue 160). When it ends before `started()` calls `control::focus`, the focus fails and `Edit::Submit` prints the prompt at once. The exit notice comes next, and the shell shows the program's lines under that prompt:
+  ```
+  MIND> wifi scan
+  STARTED PID=40 NAME=wifi FOREGROUND
+  MIND> [PID 40] [WIFI] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 -42 DBM WPA2 REMEMBERED JOINED
+  [PID 40] [WIFI] SCAN: 1 NETWORK
+
+  PID=40 EXITED. SHELL RESUMED.
+  MIND>
+  ```
+- **Asked of the shell:** when the focus of a program it started in front fails because the program has ended, no prompt until its exit notice is shown, as when the focus succeeds. How is APP's to choose.
+- **Why:** a user sees a prompt, then output that belongs above it. The tests read the output up to the prompt after the exit notice (000-NET-0065's `front_command`), so they do not depend on this.
+- **How often:** rare on `main`, frequent with 000-KRN-0231's change, which lets an application run on an idle CPU after a wait, beside the shell.
