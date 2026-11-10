@@ -11649,11 +11649,9 @@ def slow_radio_check(args):
             require(vm.service_logs("wlan", "[WLAN] COUNTRY "), "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS")
             # Where the station's last scan missed the network, the join scans once by itself, then joins (550-APP-0098).
             join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
-            vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
-            joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
+            joined = front_command(vm, join, 90)  # with a join's wait (60 s at most in wifi)
             require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-            scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
-                             joined + vm.command("dmesg -s wifi", raw=True))
+            scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)", joined)
             assert scan is None or scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
