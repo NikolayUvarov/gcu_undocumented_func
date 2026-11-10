@@ -6,6 +6,7 @@
 // screen, and only what wm holds and they ask for: the user's files, system information. The windows belong to the
 // broker: when wm leaves (Alt+Q) or dies, the programs keep running and the next wm shows them where they were.
 extern crate alloc;
+mod meter;
 
 use alloc::format;
 use alloc::string::String;
@@ -619,6 +620,9 @@ fn main(info: &'static BootInfo) {
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
     let mut next_country = 0usize; // when Settings' network page reads the station's country again
     let mut next_sound = 0usize; // when its sound page reads the levels again
+    // The sound page's microphone meter while it records (000-APP-0077), when it tries to start again, and whether its
+    // first level was logged.
+    let (mut mic_meter, mut next_meter, mut metered): (Option<meter::Meter>, usize, bool) = (None, 0, false);
     let mut keymap_asked = false; // whether Settings' keyboard page asked the shell for the layout, this time it is open
     let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
@@ -928,6 +932,27 @@ fn main(info: &'static BootInfo) {
                 next_sound = now + COUNTRY_MS;
                 if show_sound(settings) { relayout = true; }
             }
+            // Its microphone's meter, recorded through wm's own client only while the page shows it (000-APP-0077,
+            // MC-11.4); another program's recording is waited for.
+            if settings.page == wm::settings::SOUND {
+                if mic_meter.is_none() && now >= next_meter {
+                    next_meter = now + COUNTRY_MS;
+                    let note = match meter::Meter::start() {
+                        Ok(m) => { mic_meter = Some(m); mind::println!("[WM] SOUND PAGE METER STARTED: {}", wm::settings::METER_NOTE); String::from("Microphone: listening...") }
+                        Err(why) => { if settings.meter.as_deref() != Some(why.as_str()) { mind::println!("[WM] SOUND PAGE METER: {}", why); } why }
+                    };
+                    if settings.meter.as_deref() != Some(note.as_str()) { settings.meter = Some(note); relayout = true; }
+                }
+                if let Some((peak, rms, floor)) = mic_meter.as_mut().and_then(|m| m.poll()) {
+                    let line = wm::settings::meter_line(peak, rms, floor);
+                    if !metered { metered = true; mind::println!("[WM] SOUND PAGE {}", line); }
+                    settings.meter = Some(line);
+                    relayout = true;
+                }
+            } else if mic_meter.take().is_some() {
+                (settings.meter, metered, next_meter) = (None, false, 0);
+                mind::println!("[WM] SOUND PAGE METER STOPPED");
+            }
             // The network page names the station's country and why it applies (550-APP-0082), read every 2 s.
             if settings.page == wm::settings::NETWORK && now >= next_country {
                 next_country = now + COUNTRY_MS;
@@ -949,6 +974,8 @@ fn main(info: &'static BootInfo) {
             keymap_asked = false;
             next_country = 0;
             next_sound = 0;
+            if mic_meter.take().is_some() { mind::println!("[WM] SOUND PAGE METER STOPPED"); }
+            (metered, next_meter) = (false, 0);
         }
         let pattern_due = backdrop.moving() && now >= next_pattern;
         if backdrop.shown() && (pattern_due || now >= next_info) {

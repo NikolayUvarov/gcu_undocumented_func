@@ -8714,10 +8714,48 @@ def sound_kept_check(args, disk):
             require_all(vm.command("volume"), f"VOLUME {volume} % (", "), MUTED")
             require(vm.command("mic"), f"MIC {mic} % (")
             cards.append(f"{card} {volume} % and {mic} %")
+            if card == "AC97":
+                meter = sound_meter_check(vm)
         finally:
             vm.close()
     print(f"PASS: the levels kept across a reboot (000-APP-0076, 000-APP-0077): volume 50, muted, and mic 80 set again "
-          f"from data/sound.conf at the shell's start ({', '.join(cards)})", flush=True)
+          f"from data/sound.conf at the shell's start ({', '.join(cards)}); wm's Sound page metered the microphone ({meter}) "
+          "and its capture stopped with the page", flush=True)
+
+
+def sound_meter_check(vm):
+    """000-APP-0077: wm's Sound page records the microphone through wm's own client only while it shows: a level from
+    QEMU's silent input, then the capture stopped when Settings close, and the microphone free for another program."""
+    vm.send("wm\n")
+    started = vm.expect("[WM] READY", timeout=180)
+    wm = int(re.findall(r"STARTED PID=(\d+) NAME=wm FOREGROUND", started)[-1])
+    since = len(vm.log)
+    vm.hmp("sendkey alt-s")
+    time.sleep(.3)
+    for key in ["down"] * 4:  # to the sound page (settings::SOUND): it shows while the pages' list is in front
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("[WM] SOUND PAGE METER STARTED: The microphone records only while this page is open.", since)
+    vm.logged("[WM] SOUND PAGE Microphone: peak ", since)
+    level = re.search(r"\[WM\] SOUND PAGE (Microphone: peak -?\d+ dBFS, RMS -?\d+ dBFS; noise floor -?\d+ dBFS)", ANSI.sub("", vm.log[since:]))[1]
+    time.sleep(1)  # drawn by now
+    shown = screen_text(vm)
+    vm.serial(enter=False)  # the screenshot was taken in QEMU's monitor
+    assert any("Microphone: peak " in row for row in shown) and any("The microphone records only while this page is open." in row for row in shown), shown
+    since = len(vm.log)
+    vm.hmp("sendkey esc")
+    vm.serial(enter=False)
+    vm.logged("[WM] SOUND PAGE METER STOPPED", since)
+    since = len(vm.log)
+    vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+    vm.logged("SHELL RESUMED.", since)
+    gateway = vm.service_logs("audio_gw", "CAPTURE STOPPED")
+    require(gateway, f"[AUDIO] CAPTURE STARTED FOR PID {wm}")
+    assert gateway.rfind("[AUDIO] CAPTURE STOPPED") > gateway.rfind(f"[AUDIO] CAPTURE STARTED FOR PID {wm}"), gateway[-2000:]
+    vm.send("hear 1\n")
+    assert "THE MICROPHONE IS BUSY" not in vm.expect("MIND> ", timeout=120, after="hear 1\n")
+    return level
 
 
 def audio_suite(vm, wav):
@@ -13547,6 +13585,8 @@ def wm_suite(vm):
         keys("ret", text="SETTINGS=Sound:Volume")
         time.sleep(2.5)  # the page's first reading of the levels
         screen_has("NO AUDIO DEVICE")
+        screen_has("No microphone to read.")  # the meter (000-APP-0077): no capture without a device
+        until("[WM] SOUND PAGE METER: No microphone to read.")
         keys("tab", text="SETTINGS=Sound")
         # The network page (550-APP-0033) names what each row opens; Enter on Wi-Fi closes Settings and starts wifi in a
         # window, which says there is no station here.

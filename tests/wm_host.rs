@@ -1632,6 +1632,14 @@ fn every_page_and_row_of_settings_reacts() {
         assert_eq!(s.click(inner.x + 30, inner.y + 3, &config), Outcome::Level(String::from("mic 8")), "a click on a slider steps it up");
         assert_eq!(s.sound_row, 2);
         for line in screen(&s).lines() { assert!(!line.contains("To read:"), "{}", line); }
+        // The microphone's meter (000-APP-0077): its level and that it records only while the page is open.
+        assert!(!screen(&s).contains(settings::METER_NOTE), "no meter, no note");
+        assert_eq!(settings::meter_line(-41, -52, -60), "Microphone: peak -41 dBFS, RMS -52 dBFS; noise floor -60 dBFS");
+        s.meter = Some(settings::meter_line(-41, -52, -60));
+        s.message = Some(String::from("VOLUME 46 % (-25.50 DB OF 64 SETTINGS), NOT MUTED; KEPT IN data/sound.conf"));
+        let shown = screen(&s);
+        assert!(shown.contains("Microphone: peak -41 dBFS, RMS -52 dBFS; noise floor -60 dBFS") && shown.contains(settings::METER_NOTE), "{}", shown);
+        assert!(shown.contains("NOT MUTED; KEPT IN ") && shown.contains("│ data/sound.conf "), "the whole message, wrapped, below the meter: {}", shown);
     }
     // The network page (550-APP-0033): each row starts what it opens, by Enter and by a click; ← goes back to the pages.
     for (row, (name, command, what)) in settings::NETWORK_ROWS.iter().enumerate() {
