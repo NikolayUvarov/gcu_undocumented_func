@@ -139,7 +139,9 @@ def slots(payloads, arch, channel=None):
     import boot_slots, release as release_tool, sign_manifest  # noqa: E401
     boot = {"kernel.elf", *BOOT_FILES, *SIGNED}
     # The applications too: every other *.elf at the root goes with the services it was built with (351-UPD-0023).
-    out = {(f"MIND/A/{name}" if name in boot or ("/" not in name and name.endswith(".elf")) else name): data for name, data in payloads.items()}
+    # The release's period for the updater as well (351-UPD-0036), when the build wrote one.
+    out = {(f"MIND/A/{name}" if name in boot or name == boot_slots.PERIOD or ("/" not in name and name.endswith(".elf")) else name): data
+           for name, data in payloads.items()}
     # The loader stays at EFI/BOOT/, where the firmware starts it, and slot A holds its copy (351-UPD-0010).
     out.update({f"MIND/A/{name}": payloads[path] for path, name in boot_slots.LOADERS.items() if path in payloads})
     out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True)
