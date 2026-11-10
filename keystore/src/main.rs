@@ -154,9 +154,9 @@ impl Keys {
                 mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK, NOT SEALED)", stored::FILE);
                 true
             }
-            stored::Loaded::Missing => made(seed, ""),
+            stored::Loaded::Missing => anew(made(seed, "")),
             // A damaged file is replaced: servers that knew the old key must be told the new one.
-            stored::Loaded::Damaged => made(seed, " ANEW: THE STORED ONE WAS DAMAGED"),
+            stored::Loaded::Damaged => anew(made(seed, " ANEW: THE STORED ONE WAS DAMAGED")),
             stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
         }
     }
@@ -194,10 +194,10 @@ impl Keys {
                     }
                     true
                 }
-                _ => made(seed, ""),
+                _ => anew(made(seed, "")),
             },
-            stored::Unsealed::Refused => made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM"),
-            stored::Unsealed::Damaged => made(seed, " ANEW: THE SEALED ONE WAS DAMAGED"),
+            stored::Unsealed::Refused => anew(made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM")),
+            stored::Unsealed::Damaged => anew(made(seed, " ANEW: THE SEALED ONE WAS DAMAGED")),
             stored::Unsealed::Unreadable(error) => { mind::println!("[KEYSTORE] SEALED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
             // The sealed key is kept for the next boot: a key for this boot only.
             stored::Unsealed::Failed => { mind::println!("[KEYSTORE] THE TPM SERVICE DID NOT UNSEAL THE KEY: A KEY FOR THIS BOOT ONLY"); random(seed) }
@@ -259,6 +259,12 @@ impl Keys {
 }
 
 // Random bytes, or a line in the log saying the service has no key without them.
+// A device key made anew, not for this boot only: the owners' secrets under the earlier one set aside (308-NET-0064).
+fn anew(made: bool) -> bool {
+    if made { secrets::set_aside(); }
+    made
+}
+
 fn random(bytes: &mut [u8]) -> bool {
     let filled = mind::random::fill(bytes);
     if !filled { mind::println!("[KEYSTORE] NO {}: NO DEVICE KEY", mind::random::SOURCE); }

@@ -124,6 +124,17 @@ Made while building it:
 - **The count of wrong tries is kept in memory:** a restart of `keystore` or of the machine starts it again.
 - **The unencrypted copy** (`device.key`) is zeroed and flushed before it is removed (the storage session's review, 2026-11-04, in all three places that remove it). A flash medium may still keep the old bytes in blocks it remapped, and a copy of the disk made before the passphrase was set holds the key. The zeroing is not tested on the platform: the suite reads the file's absence, not the freed clusters.
 
+## Progress (2026-11-10)
+
+- **Decision 10's two cuts, now tested** in the `tls` suite's `locked_file_check`, on x86 and aarch64 (8 checks each, on the branch merged with `main`, df5708ea):
+  - with `device.locked` removed and a whole `device.locked.new`, `keystore` puts the new file in its place and waits on it;
+  - with a `device.locked.new` not whole and no `device.locked`, it replaced nothing, is left as it is, and the key kept on disk is held.
+
+  The files are read back on the host after each boot. A power cut during the flushes themselves is not made; these are the states one leaves.
+- **The client's request buffer is wiped** since KRN's 000-KRN-0226 (round 106): the generated clients of `unlock` and `passphrase-set` hold it in `mind::idl::wire::Wiped`. Of decision 16's points not wiped, the stack's temporaries and what BLAKE2b keeps stay.
+- **APP is asked** for the shell's dialog, in [requests-APP.md](requests-APP.md) (2026-11-10): at boot while `key-state` says `waiting`, and a command to set or change the passphrase. It waits for [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.md), now in KRN's queue.
+- **Still open:** the acceptance criterion in QEMU, the key held only after the passphrase, which needs a task with badge 6.
+
 ## Related
 
 [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done), [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md), [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md).
