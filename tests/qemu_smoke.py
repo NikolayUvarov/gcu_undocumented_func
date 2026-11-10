@@ -238,7 +238,8 @@ class VM:
 
     def expect(self, text, timeout=None, after=None):
         """Waits for `text` (after the first `after`, when given) in the output since the last match."""
-        deadline = time.monotonic() + (self.wait if timeout is None else timeout)
+        timeout = self.wait if timeout is None else timeout
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.collect()
             clean = to_ordinal(ANSI.sub("", self.output).replace("\r", ""))
