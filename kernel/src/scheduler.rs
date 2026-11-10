@@ -330,8 +330,8 @@ impl Scheduler {
     // An application whose wait ended, ready on a CPU that runs a system-band task, runs on an idle CPU until it waits
     // again, then goes back (select): the band runs first on its own, and behind the compositor's frame copies a 10 ms
     // sleep ended 30-60 ms late in QEMU (000-KRN-0231). Its place, which spawn balances and `ps` shows, stays `home`. One
-    // preempted while ready stays and shares its CPU as before; so does a worker (262-KRN-0163) and a task that runs or is
-    // held.
+    // preempted while ready on its own CPU stays and shares it as before; one preempted on the CPU it borrowed, by a task
+    // placed there, may move again. A worker (262-KRN-0163) and a task that runs or is held stay.
     fn move_waiting(&mut self, ready: &mut Cpus, count: usize) {
         for from in 0..count {
             let running = self.current[from];
@@ -339,7 +339,7 @@ impl Scheduler {
             let mut i = 0;
             while i < self.on_cpu[from].len() {
                 let slot = self.on_cpu[from][i];
-                if slot == 0 || slot == running || !self.ready(slot, from, BAND_APPLICATION as u8) || self.tasks[slot].as_ref().is_some_and(|t| t.ran_out || t.worker_of.is_some()) { i += 1; continue; }
+                if slot == 0 || slot == running || !self.ready(slot, from, BAND_APPLICATION as u8) || self.tasks[slot].as_ref().is_some_and(|t| (t.ran_out && t.cpu == t.home) || t.worker_of.is_some()) { i += 1; continue; }
                 let free = |j: usize| j != from && self.current[j] == 0 && !self.woken[j] && !ready.has(j) && cpu::ONLINE[j].load(Ordering::Acquire);
                 let Some(to) = (0..count).find(|&j| free(j)) else { return };
                 if !self.relist(slot, from, to) { return; }
