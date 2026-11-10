@@ -12,6 +12,7 @@ pub static GITS: AtomicUsize = AtomicUsize::new(0x0808_0000); // 0: no ITS
 pub static UART: AtomicUsize = AtomicUsize::new(0); // a PL011 (or SBSA UART); 0: none
 pub const VIRT_UART: usize = 0x0900_0000;
 pub static UART_LINE: AtomicUsize = AtomicUsize::new(1); // SPI number - 32
+pub static ENTRY_EL: AtomicUsize = AtomicUsize::new(1); // the EL the boot CPU entered the kernel at (100004-PRT-0014)
 // The console's kind (from the SPCR always a PL011) and, for a 16550 a device tree names, where register n is (n << shift)
 // and how wide it is read and written (100000-PRT-0010).
 pub static UART_KIND: AtomicUsize = AtomicUsize::new(UART_PL011);
