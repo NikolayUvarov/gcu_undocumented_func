@@ -1,6 +1,6 @@
 # 307-KRN-0177 — `init` finds the store's own partition and grants `blockstore` a client bounded to it
 
-**Type:** `init` (media, grants) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (step 1 made on `claude/307-KRN-0177-store-partition`, 2026-11-10) · **Blocked by:** — (the client bounded to a range is [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md)'s windows, made by STO and about to land; this branch is built on them) · **Main task:** [307](307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.1
+**Type:** `init` (media, grants) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (made and tested on `claude/307-KRN-0177-store-partition`, 2026-11-10; landing left) · **Blocked by:** — (the client bounded to a range is [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md)'s windows, made by STO and about to land; this branch is built on them) · **Main task:** [307](307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.1
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-27, "The store's own partition: media classified and a bounded grant (for 307)".
 
@@ -121,7 +121,18 @@ Run on acc-1 through Effector, x86, at bfd38a3e: the group "x86: USB image" pass
   - Clearing the windows on a return, and `init`'s checked re-set, are added to [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md)'s plan.
   - A byte-identical copy of the stick would pass any check of its contents.
 - **`vfs_server` still holds the stick whole** for its FAT partitions, so the store's sectors are inside its reach. That is [307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.md), split from plan step 3.
-- **aarch64:** the USB image suite and the storage groups on aarch64 are running on acc-1 and PCU as this is written; their results follow.
+
+### aarch64 and the other suites, at bfd38a3e
+
+- **`tests/usb_image_smoke.py --arch aarch64`** on acc-1: passed, with the same lines and the same four boots. The store's key there is kept by `keystore`.
+- **The groups the change touches,** through Effector:
+  - on acc-2: "x86: files and block writes" (965 s), "x86: services, storage, audio" (678 s) and "x86: NVMe boot disk" (93 s);
+  - on PCU: "aarch64: files and the block store" (947 s) and "aarch64: NVMe boot disk" (205 s).
+
+  All passed. Their suites boot `fat:` disks without partition 3, so the store stays on its VirtIO disk or on `ramdisk#1` as before (criterion 3).
+- **The host tests** in the kernel session's container all passed, the 11 of `tests/partition_host.rs` and `tests/block_host.rs` among them. `tests/manifest_test.py` was not run: it fails in this container's Python on `main` too.
+
+**The acceptance criteria are met in QEMU on x86 and aarch64.** The issue closes when it lands. Its remainders are 307-KRN-0229 and 000-KRN-0085's step 5.
 
 ## Related
 
