@@ -8232,7 +8232,9 @@ def update_store_suite(args):
     Applied and confirmed, the store keeps both: the shell's client is refused
     their pins, and after a collection both trees read back whole, every block checked. With the machine off, slot A's
     kernel and loader are damaged on the disk: `update rollback` writes release 5 back into slot A from the store,
-    checked as a fetch, and slot A boots on trial and is confirmed, as published."""
+    checked as a fetch, and slot A boots on trial and is confirmed, as published. 351-UPD-0034: before the apply, with
+    the machine off, a byte of slot B's staged kernel is changed on the disk; with no network, `update apply` writes
+    release 6 back into slot B from the store, and slot B boots on trial and is confirmed, its kernel as published."""
     if not raw_tools() or not shutil.which("openssl"):
         print("SKIP: updatestore suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
         return
@@ -8306,6 +8308,18 @@ def update_store_suite(args):
         require(vm.command("blocks pins", raw=True), "0 PINS")
         for pin in (pin5, pin6):
             require(vm.command(f"blocks unpin {pin}", raw=True), f"blocks: unpin {pin}: Rights")
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-{args.cpus}cpu.log").write_text(vm.log)
+    # 351-UPD-0034: slot B's staged kernel damaged on the disk with the machine off; no network, so only the store has it.
+    staged = bytearray(image.read("MIND/B/kernel.elf"))
+    staged[len(staged) // 2] ^= 1
+    image.write("MIND/B/kernel.elf", bytes(staged))
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none", *disks])
+    try:
+        log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
+        require(log, "[UPDATER] SLOT A, VERSION 5")
         vm.collect(); vm.output = ""
         since = len(vm.log)
         vm.send("update apply 3\n")
@@ -8331,8 +8345,10 @@ def update_store_suite(args):
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
-        https.shutdown()
-        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-{args.cpus}cpu.log").write_text(vm.log)
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-apply-{args.cpus}cpu.log").write_text(vm.log)
+    # Slot B's kernel is release 6's as published: written back from the store by the apply.
+    kernel6 = [digest for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf"]
+    assert kernel6 and hashlib.sha256(image.read("MIND/B/kernel.elf")).hexdigest() == kernel6[0], "slot B's kernel not written back"
     # Slot A damaged on the disk: a byte of its kernel and of its loader changed.
     damaged = ["kernel.elf", boot_slots.LOADERS[BOOT_EFI]]
     for name in damaged:
@@ -8371,7 +8387,9 @@ def update_store_suite(args):
           f"release 6 kept once staged with {taken6} of its {files6} files taken from release 5's tree; applied and "
           "confirmed, the store keeps both, the shell's client is refused their pins, and after a collection both trees "
           "read back whole; slot A's kernel and loader damaged on the disk, `update rollback` writes release 5 back from "
-          "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033)", flush=True)
+          "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033); slot B's staged kernel "
+          "damaged before the apply, `update apply` with no network writes release 6 back from the store, and slot B boots "
+          "on trial and is confirmed, its kernel as published (351-UPD-0034)", flush=True)
 
 
 def install_suite(args, stub_elf):
@@ -11932,8 +11950,9 @@ def device_key_check(args, cpu):
           "is in no log line and no command line", flush=True)
     print("PASS: keystore's passphrase (308-NET-0055): key-state Held without a TPM; unlock and passphrase-set refused (Denied) to a "
           "client without the passphrase's badge and logged; a sealed file placed from the host waits (key-state Waiting, no key, the "
-          "unencrypted file kept beside it), a damaged one leaves no key, and neither file is changed; unlock itself not run (no task "
-          "holds badge 6 before 308-KRN-0205)", flush=True)
+          "unencrypted file kept beside it), a damaged one leaves no key, and neither file is changed; a change cut short after the old "
+          "file was removed puts the whole new one in its place and waits on it, one cut while the new one was written replaced "
+          "nothing and the key on disk is held; unlock itself not run (no task holds badge 6 before 308-KRN-0205)", flush=True)
     print(f"PASS: the block store's own secrets in keystore (308-KRN-0183): its client from init in slot 3 (BADGE_KEY_BLOCKSTORE), "
           f"the volume key of its blank disk kept as {volume} and read back at the next boot, not on the medium; no program runs by the "
           "store's name, another program's client sees none of it nor opens the store's file copied under its name; under a new device "
@@ -11953,16 +11972,23 @@ def passphrase_calls_check(vm):
 def locked_file_check(args, cpu, image, part, temp, store):
     """308-NET-0055: a device.locked placed from the host beside device.key, of the file's form (passlock) with a sealed
     part that opens under no passphrase: keystore waits for its passphrase, holds no key, and changes neither file.
-    Then the same file damaged: no key, nothing made in its place, the file left as it is."""
+    Then the same file damaged: no key, nothing made in its place, the file left as it is. Then a change of the
+    passphrase cut short (decision 10): with device.locked removed and device.locked.new whole, the new file is put in
+    its place and waited on; with a device.locked.new not whole and no device.locked, it replaced nothing, is left as it
+    is, and the key kept on disk is held."""
     def stored(name):
         out = temp / f"stored-{name}"
-        subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
-        return out.read_bytes()
+        found = subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, capture_output=True)
+        return out.read_bytes() if found.returncode == 0 else None
 
-    def boot(locked, until):
-        path = temp / "device.locked"
-        path.write_bytes(locked)
-        subprocess.run(["mcopy", "-o", "-i", part, str(path), "::/system/keystore/device.locked"], env=MTOOLS_ENV, check=True, capture_output=True)
+    def boot(files, until, waits=True):
+        for name, data in files.items():
+            if data is None:
+                subprocess.run(["mdel", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True)
+                continue
+            path = temp / name
+            path.write_bytes(data)
+            subprocess.run(["mcopy", "-o", "-i", part, str(path), f"::/system/keystore/{name}"], env=MTOOLS_ENV, check=True, capture_output=True)
         plain = stored("device.key")
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
                 extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
@@ -11970,25 +11996,44 @@ def locked_file_check(args, cpu, image, part, temp, store):
         try:
             log = vm.service_logs("keystore", until)
             require(log, until)
-            assert "DEVICE KEY READY" not in log and "DEVICE KEY MADE" not in log, log
+            assert "DEVICE KEY MADE" not in log, log
+            assert not waits or "DEVICE KEY READY" not in log, log
             out = vm.command("netcheck key-state unlock secret-get:token")
         finally:
             vm.close()
-        assert stored("device.locked") == locked and stored("device.key") == plain, "a file changed"
+        assert plain is not None and stored("device.key") == plain, "the unencrypted copy changed"
         return log, out
 
     # MINDPWD1, version 1, 9216 KiB, 4 passes, 1 lane, a salt and a nonce, then 48 random bytes for the sealed seed.
     header = b"MINDPWD1" + bytes([1]) + struct.pack("<III", 9216, 4, 1) + os.urandom(16 + 12)
     locked = header + os.urandom(48)
-    log, out = boot(locked, "IT WAITS FOR IT")
+    new = "device.locked.new"
+    log, out = boot({"device.locked": locked}, "IT WAITS FOR IT")
     require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN system/keystore/device.locked: IT WAITS FOR IT")
     require(log, "[KEYSTORE] THE UNENCRYPTED COPY system/keystore/device.key IS REMOVED ONCE THE PASSPHRASE OPENS THE KEY")
     assert "NO TPM: THE DEVICE KEY IS KEPT ON DISK" not in log, log
     require_all(out, "NETCHECK key-state OK Waiting", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
+    assert stored("device.locked") == locked, "the sealed file changed"
     damaged = b"MINDPWX1" + locked[8:]
-    log, out = boot(damaged, "NO NEW KEY MADE")
+    log, out = boot({"device.locked": damaged}, "NO NEW KEY MADE")
     require(log, "[KEYSTORE] system/keystore/device.locked DAMAGED: NO DEVICE KEY, THE FILE LEFT AS IT IS AND NO NEW KEY MADE")
     require_all(out, "NETCHECK key-state OK None", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
+    assert stored("device.locked") == damaged, "the damaged file changed"
+    # Cut after the old file was removed: the whole new one is put in its place, and the boot waits on it.
+    log, out = boot({"device.locked": None, new: locked}, "PUT IN PLACE")
+    require(log, f"[KEYSTORE] A CHANGE OF THE PASSPHRASE WAS CUT SHORT: system/keystore/{new} PUT IN PLACE")
+    require(log, "IT WAITS FOR IT")
+    require_all(out, "NETCHECK key-state OK Waiting", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
+    assert stored("device.locked") == locked and stored(new) is None, "the new file not put in place"
+    # Cut while the new one was written, with no old one: it replaced nothing, and the key kept on disk is held.
+    torn = locked[:60]
+    log, out = boot({"device.locked": None, new: torn}, "DEVICE KEY FROM", waits=False)
+    require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
+    require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key")
+    assert "CUT SHORT" not in log and "IT WAITS FOR IT" not in log, log
+    require(out, "NETCHECK key-state OK Held")
+    assert stored(new) == torn and stored("device.locked") is None, "the torn new file was taken, or changed"
+    subprocess.run(["mdel", "-i", part, f"::/system/keystore/{new}"], env=MTOOLS_ENV, check=True, capture_output=True)
 
 
 def service_log(vm, name, until, tries=120):
