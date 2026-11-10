@@ -80,6 +80,24 @@ def to_ordinal(text):
     return PID_OUT.sub(lambda m: f"{m[1]}{int(m[2]) - BASE}" if int(m[2]) > BASE else m[0], text)
 
 
+def task_states_text(page):
+    """000-KRN-0232: the kernel's page of task states as lines: b"TASKS v1" and the time in ms, then 32 bytes a task (PID,
+    CPU, `stat tasks`' wait as common/abi.rs's WAIT_ codes name it, what it waits on, the name) until a zero PID."""
+    if page[:8] != b"TASKS v1":
+        return f"not the page: {page[:16]!r}"
+    waits = {int(code): name for name, code in re.findall(r"pub const WAIT_(\w+): u8 = (\d+);", (ROOT / "common/abi.rs").read_text())}
+    on = {"SEND": " TO ENDPOINT {}", "RECEIVE": " ON ENDPOINT {}", "REPLY": " FROM PID {}", "IRQ": " LINE {}"}
+    lines = [f"AT {int.from_bytes(page[8:16], 'little')} MS"]
+    for at in range(32, len(page) - 31, 32):
+        row = page[at:at + 32]
+        pid = int.from_bytes(row[:4], "little")
+        if pid == 0:
+            break
+        wait = waits.get(row[5], str(row[5]))
+        lines.append(f"{pid} {row[12:28].split(bytes(1))[0].decode('ascii', 'replace')} CPU {row[4]} {wait}" + on.get(wait, "").format(int.from_bytes(row[8:12], "little")))
+    return "\n".join(lines)
+
+
 class VM:
     wait = 8  # s: how long command() and expect() wait by default; a suite may set its own
 
@@ -291,8 +309,29 @@ class VM:
         except Exception as error:  # QEMU gone, or its monitor not answering: the record says so
             cpus = f"no answer from the monitor: {error!r}"
         path = Path(tempfile.gettempdir()) / f"mind-core-stuck-{os.getpid()}-{self.stuck_records}.log"
-        path.write_text(f"{time.strftime('%H:%M:%S')} waiting for {text!r}\n--- the CPUs\n{cpus}\n--- the console's end\n{clean[-3000:]}\n")
+        path.write_text(f"{time.strftime('%H:%M:%S')} waiting for {text!r}\n--- the CPUs\n{cpus}\n--- the tasks\n{self.task_states()}\n--- the console's end\n{clean[-3000:]}\n")
         print(f"NOTE: a wait for {text!r} ran out; the CPUs' state is in {path}", flush=True)
+
+    def task_states(self):
+        """000-KRN-0232: each task's state, whom it waits for, as the kernel wrote it in the last second: copied through
+        QEMU's monitor from the address the kernel printed at boot (by its own mapping, else as a physical address)."""
+        found = re.findall(r"TASK STATES AT 0[xX]([0-9A-F]+), (\d+) BYTES", self.log)
+        if not found:
+            return "the kernel printed no address for them"
+        address, size = int(found[-1][0], 16), int(found[-1][1])
+        copy = Path(tempfile.gettempdir()) / f"mind-core-states-{os.getpid()}.bin"
+        text = ""
+        for command in ("memsave", "pmemsave"):
+            try:
+                self.hmp(f'{command} {address:#x} {size} "{copy}"')
+                text = task_states_text(copy.read_bytes())
+            except Exception as error:  # QEMU gone, its monitor not answering, or the address not mapped
+                text = f"not copied: {error!r}"
+            finally:
+                copy.unlink(missing_ok=True)
+            if text.startswith("AT "):
+                break
+        return text
 
     def send(self, text, raw=False):
         if not raw:
@@ -958,6 +997,29 @@ def fill_suite(args):
           f"mapped read-only, its SHA-256 the host's; a worker's read-only mapping gave the same, another's write faulted (QEMU, not a machine's figure)", flush=True)
 
 
+def recover_lending_check(vm):
+    """308-KRN-0204: the store's client that may recover the volume key (BADGE_RECOVER, 8) is the shell's, in SLOT_RECOVER
+    (43); a program started without REQUEST_RECOVER holds no copy, as the shell lends one only for that request
+    (308-APP-0122)."""
+    real = vm.services()
+    if "blockstore" not in real:
+        return
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    recovers = lambda held: [m for m in re.finditer(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", held, re.M)
+                             if servers.get(int(m[3])) == real["blockstore"] and int(m[2]) & 8]
+    shell = vm.command(f"stat caps {real['shell']}", raw=True)
+    assert [m[1] for m in recovers(shell)] == ["43"], shell
+    shown = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    task = int(re.search(r"^(\d+) clock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    held = vm.command(f"stat caps {task}", raw=True)
+    require(held, "STAT CAPS VERSION=")
+    assert not recovers(held) and not re.search(r"^SLOT=43 ", held, re.M), held
+    require(vm.command(f"kill {shown}"), f"KILLED PID={shown}")
+    task_rows_reaped(vm)
+    print("PASS: the store's recovery client is the shell's alone, in slot 43; a program started without REQUEST_RECOVER "
+          "holds no copy (308-KRN-0204)", flush=True)
+
+
 def hardware_report_check(vm):
     """174-KRN-0038: init asks the kernel for the hardware report at boot; without a log volume it writes nothing (ram:
     and data/ are the user's) and says how large the report was. usb_image_smoke.py reads one from a log volume."""
@@ -1138,6 +1200,12 @@ def normal_suite(vm):
         # INIT with both set. QEMU's TCG models no cache, so only the bits say it.
         cr0 = [int(v, 16) for v in re.findall(r"CR0=([0-9a-f]{8})", vm.hmp("info registers -a"))]
         assert len(cr0) == vm.cpus and all(v & (3 << 29) == 0 for v in cr0), [f"{v:08X}" for v in cr0]
+    # 000-KRN-0232: the kernel's page of task states, as a wait that runs out records it: a line each, and a service's
+    # wait names its endpoint.
+    states = vm.task_states()
+    assert re.fullmatch(r"AT \d+ MS", states.splitlines()[0]), states[:800]
+    assert re.search(r"^1 init CPU \d+ [A-Z_]+", states, re.M) and re.search(r"^\d+ shell CPU \d+ [A-Z_]+", states, re.M), states[:800]
+    assert re.search(r"^\d+ \S+ CPU \d+ RECEIVE ON ENDPOINT \d+$", states, re.M), states[:800]
     vm.serial()
     # Every CPU the machine has is online in the guest (issue 171: no cap of 8).
     online = vm.command("cpus")
@@ -1163,6 +1231,7 @@ def normal_suite(vm):
         for pid in holders:
             vm.command(f"kill {pid}")
     stack_check(vm)
+    recover_lending_check(vm)
     # 211-KRN-0044: init's first line names the branch and commit built (02_build.sh). Last: dmesg takes a PID.
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
@@ -7942,6 +8011,8 @@ def updater_suite(args, updater_elf):
                 caps = vm.command(f"stat caps {vm.services()['updater']}", raw=True)
                 assert re.search(r"^SLOT=25 GEN=\d+ KIND=1 .*BADGE=23 ", caps, re.M), caps
             require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
+            # 351-APP-0132: the stand-in keeps no release, and the shell's `update kept` says so.
+            require(vm.command("update kept", raw=True), "UPDATE: NO RELEASE KEPT IN THE BLOCK STORE")
             for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
                 require(vm.command(command), answer)
             vm.process.wait(timeout=60)
@@ -8244,7 +8315,7 @@ def update_suite(args):
             require(out.replace("\r", ""), line)
         require(out, ", READ FROM THE SOURCE")
         require(vm.command("update check", raw=True, timeout=60), "UPDATE: THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE")
-        require(vm.command("update apply 10", raw=True), "USAGE: UPDATE [STATUS | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]")
+        require(vm.command("update apply 10", raw=True), "USAGE: UPDATE [STATUS | KEPT | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]")
         vm.send("update rollback\n")
         require(vm.expect("(Y/N)", timeout=30), "ROLL BACK TO SLOT A? ")
         vm.send_bytes(b"n")
@@ -8392,6 +8463,12 @@ def update_store_suite(args):
         found = re.search(rf"\[UPDATER\] STORE: VERSION {version} KEPT AS PIN (\d+), ROOT (\S+): (\d+) FILES, (\d+) BYTES PUT FROM SLOT ([AB]), (\d+) TAKEN FROM A KEPT RELEASE", log)
         assert found, log[-3000:]
         return int(found[1]), found[2], int(found[3]), int(found[4]), found[5], int(found[6])
+    def kept_releases(vm, releases):
+        # 351-APP-0132: the shell's `update kept` (update.wit 1.5 `kept`, 351-UPD-0035) lists the releases the store
+        # keeps, newest first, with the pins and roots the updater logged and their bytes read.
+        out = vm.command("update kept", raw=True, timeout=60).replace("\r", "")
+        rows = re.findall(r"^UPDATE: KEPT VERSION (\d+), PIN (\d+), ([\d ]+) BYTES, ROOT (\S+)$", out, re.M)
+        assert [(int(v), int(p), r) for v, p, _, r in rows] == releases and all(int(b.replace(" ", "")) > 0 for _, _, b, _ in rows), (releases, out)
     vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network, *disks])
     try:
         require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (BLANK)")
@@ -8399,10 +8476,12 @@ def update_store_suite(args):
         require(log, "[UPDATER] STORE: RELEASES ARE KEPT IN THE BLOCK STORE")
         pin5, root5, files5, put5, slot5, taken5 = pinned(log, 5)
         assert (slot5, taken5) == ("A", 0), log
+        kept_releases(vm, [(5, pin5, root5)])
         out = vm.command("update fetch", raw=True, timeout=1500)
         require(out, "UPDATE: VERSION 6 STAGED IN THE OTHER SLOT")
         log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 60)
         pin6, root6, files6, put6, slot6, taken6 = pinned(log, 6)
+        kept_releases(vm, [(6, pin6, root6), (5, pin5, root5)])
         # Only what release 6 changes is put: its uptime and its loader.
         assert slot6 == "B" and put6 == (newer / "uptime.elf").stat().st_size + (newer / BOOT_EFI).stat().st_size and taken6 == files6 - 2, log
         # The store names the updater's badge at its pins: OWNER_UPDATER with get, put and publish (351-KRN-0218).
@@ -8437,6 +8516,7 @@ def update_store_suite(args):
         log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
         require(log, "[UPDATER] SLOT B CONFIRMED ON THE DISK")
         assert "LET GO" not in log, log
+        kept_releases(vm, [(6, pin6, root6), (5, pin5, root5)])
         # An object nothing retains, so the collection has something to free once its lease (60 s) has ended.
         loose = re.search(r"PUT (\S+) SIZE 40000", vm.command("blocks pattern 40000", raw=True))[1]
         time.sleep(62)
@@ -8490,7 +8570,7 @@ def update_store_suite(args):
     shutil.rmtree(temp, ignore_errors=True)
     print(f"PASS: updatestore: release 5 kept in the block store at the updater's start ({files5} files, {put5} bytes), "
           f"release 6 kept once staged with {taken6} of its {files6} files taken from release 5's tree; applied and "
-          "confirmed, the store keeps both, the shell's client is refused their pins, and after a collection both trees "
+          "confirmed, the store keeps both, as `update kept` lists them each time, the shell's client is refused their pins, and after a collection both trees "
           "read back whole; slot A's kernel and loader damaged on the disk, `update rollback` writes release 5 back from "
           "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033); slot B's staged kernel "
           "damaged before the apply, `update apply` with no network writes release 6 back from the store, and slot B boots "
@@ -11524,11 +11604,9 @@ def slow_radio_check(args):
             require(vm.service_logs("wlan", "[WLAN] COUNTRY "), "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS")
             # Where the station's last scan missed the network, the join scans once by itself, then joins (550-APP-0098).
             join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
-            vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
-            joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
+            joined = front_command(vm, join, 90)  # with a join's wait (60 s at most in wifi)
             require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-            scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
-                             joined + vm.command("dmesg -s wifi", raw=True))
+            scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)", joined)
             assert scan is None or scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
@@ -12302,6 +12380,10 @@ def passphrase_wait_check(args, cpu):
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=extra)
         try:
             require(vm.service_logs("keystore", "NOT SEALED"), "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
+            # 308-STO-0028: an object named on the store's disk, its volume key kept by keystore under the device key.
+            require(service_log(vm, "blockstore", "[BLOCKSTORE] READY"), "SEALED, KEY KEPT BY KEYSTORE")
+            kept = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))[1]
+            require(vm.command(f"blocks publish pass {kept}", raw=True), "PUBLISHED pass VERSION 1 (FLUSHED)")
             # Set: the one set is none, so Enter alone; the new one checked, then typed again.
             asked(vm, "passphrase", "THE PASSPHRASE SET (NO ECHO; ENTER ALONE WHEN NONE IS SET YET, ESC: NOTHING CHANGES): ")
             typed(vm, "", "THE NEW PASSPHRASE, 8 TO 128 BYTES (NO ECHO): ")
@@ -12388,6 +12470,11 @@ def passphrase_wait_check(args, cpu):
             while not {"blockstore", "storefs", "tls", "ssh"} <= set(services := vm.services()) and time.monotonic() < deadline:
                 time.sleep(1)
             assert {"blockstore", "storefs", "tls", "ssh"} <= set(services), services
+            # 308-STO-0028: the right passphrase opens the store: it mounts its disk with the volume key keystore keeps under
+            # the device key, and the object named at the first boot reads back.
+            require(service_log(vm, "blockstore", "[BLOCKSTORE] READY"), "SEALED, KEY KEPT BY KEYSTORE")
+            require(vm.command("blocks resolve pass", raw=True), f"pass VERSION 1 ROOT {kept}")
+            require(vm.command(f"blocks check {kept} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
             require_all(vm.command("dmesg -s keystore", raw=True), "REFUSED UNLOCK FOR PID ", "A WRONG PASSPHRASE (2 IN A ROW",
                         "[KEYSTORE] DEVICE KEY FROM system/keystore/device.locked (SEALED UNDER THE PASSPHRASE), OPENED FOR PID ")
             require_all(vm.command("dmesg -s shell", raw=True), "[SHELL] THE BOOT WAITS FOR keystore'S PASSPHRASE: ASKED ON CONSOLE 1",
@@ -12406,7 +12493,8 @@ def passphrase_wait_check(args, cpu):
           "(typed with no echo, the new one twice, a short one and two that differ asked again, a wrong one set refused); "
           f"at the next boot the services that need the device key ({', '.join(sorted(set(waited)))}) wait for it, prepared, "
           "while the shell asks in place of its first prompt holding keystore's client badged for it in slot 44; a wrong one "
-          "refused, the right one opens the key and init starts them; no passphrase on the serial line, in a log or the history", flush=True)
+          "refused, the right one opens the key and init starts them, the store mounting its disk with the key keystore keeps and "
+          "the object named at the first boot reading back (308-STO-0028); no passphrase on the serial line, in a log or the history", flush=True)
 
 
 def device_key_check(args, cpu):
@@ -12862,9 +12950,9 @@ def recovery_key_check(args, cpu):
     """308-APP-0122: `recovery`, through the store's client badged BADGE_RECOVER that the shell lends only when the
     user agrees, each time (REQUEST_RECOVER, 308-KRN-0204). On a raw image with a store disk whose volume key keystore
     keeps: refused, it gets no client; allowed, `recovery new --key-file` makes a key, writes it to the file and keeps
-    it. With keystore's device key gone, as on another machine, the store is not mounted; `recovery open --key-file`
-    opens it, the object put at the first boot reads back, and at the next boot it mounts as this machine's own. The
-    key's text is on no serial line."""
+    it. With keystore's device key lost on the machine, its old secrets set aside (308-NET-0064), the store is not
+    mounted; `recovery open --key-file` opens it, the object put at the first boot reads back, and at the next boot it
+    mounts as this machine's own. The key's text is on no serial line."""
     if not raw_tools():
         print("SKIP: the recovery key check needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
@@ -12937,14 +13025,14 @@ def recovery_key_check(args, cpu):
         held = subprocess.run(["mtype", "-i", part, "::/data/recovery.txt"], env=MTOOLS_ENV, capture_output=True, text=True).stdout.splitlines()
         assert len(held) == 2 and held[0] == "MIND CORE RECOVERY KEY 1" and re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){7}", held[1]), held
         key = held[1]
-        # As on another machine: keystore makes a new device key, under which the volume key is not kept, and holds no
-        # secrets of the block store's (the file of them here is sealed under the old key, and it would not open).
+        # As on another machine: keystore makes a new device key, under which the volume key is not kept; the block
+        # store's secrets sealed under the old one it sets aside (308-NET-0064), so the recovered key is kept anew.
         subprocess.run(["mdel", "-i", part, "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
-        subprocess.run(["mdeltree", "-i", part, "::/system/keystore/services"], env=MTOOLS_ENV, check=True, capture_output=True)
         vm = boot()
         try:
             refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
             require(refused, "[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS ")
+            require(service_log(vm, "keystore", "SET ASIDE"), "[KEYSTORE] SECRETS OF SERVICE blockstore MADE UNDER AN EARLIER DEVICE KEY: SET ASIDE AS system/keystore/services/blockstore.kept.before")
             require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
             recovery(vm, "open --key-file data/recovery.txt", "y", "[RECOVERY] THE STORE OPENED WITH THE KEY FROM data/recovery.txt: THIS MACHINE'S KEYSTORE KEEPS ITS VOLUME KEY NOW")
             require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
@@ -12962,8 +13050,9 @@ def recovery_key_check(args, cpu):
         for k in (key, screen_key):
             assert k not in log and k.lower() not in log and k.replace("-", "") not in log and k[:9] not in log, "a key on the serial line"
     print("PASS: a recovery key (308-APP-0122): the shell asked; refused, recovery had no client; allowed, its screen "
-          "showed a key the store made, kept once typed back; without a screen it made another, wrote it to its file and kept it; with keystore's device key gone the store was not mounted, the key file "
-          "opened it and the object read back, and it mounted again at the next boot; the key on no serial line", flush=True)
+          "showed a key the store made, kept once typed back; without a screen it made another, wrote it to its file and kept it; with keystore's device key lost on the machine "
+          "and its old secrets set aside (308-NET-0064), the store was not mounted, the key file opened it and the object read back, "
+          "and it mounted again at the next boot; the key on no serial line", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):

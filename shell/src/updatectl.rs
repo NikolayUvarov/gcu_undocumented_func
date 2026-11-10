@@ -13,7 +13,7 @@ fn failed(shell: &mut crate::Shell, error: update::Error) { let _ = writeln!(she
 
 fn silent(shell: &mut crate::Shell) { let _ = writeln!(shell.term, "UPDATE: THE UPDATER DOES NOT ANSWER"); }
 
-// `update [status|check|fetch|apply [tries]|rollback]`: apply and rollback restart the machine after the operator agrees
+// `update [status|kept|check|fetch|apply [tries]|rollback]`: apply and rollback restart the machine after the operator agrees
 // at this console; the others only read, or stage into the slot that did not boot.
 pub fn command(shell: &mut crate::Shell, args: &[u8]) {
     let asked = match updates::parse(core::str::from_utf8(args).unwrap_or("")) { Ok(asked) => asked, Err(usage) => { let _ = writeln!(shell.term, "{}", usage); return } };
@@ -30,6 +30,19 @@ pub fn command(shell: &mut crate::Shell, args: &[u8]) {
                 Err(_) => silent(shell),
             }
         }
+        // The releases the block store keeps for the updater (update.wit 1.5, 351-APP-0132).
+        Asked::Kept => match update::kept(updater) {
+            Ok(list) => {
+                let roots: alloc::vec::Vec<alloc::string::String> = list.as_slice().iter().map(|r| match mind::cid::Cid::from_bytes(r.root.as_slice()) {
+                    Ok(cid) => alloc::format!("{}", cid),
+                    Err(_) => alloc::string::String::from("NOT A CID"),
+                }).collect();
+                let releases: alloc::vec::Vec<updates::Kept> = list.as_slice().iter().zip(&roots)
+                    .map(|(r, root)| updates::Kept { version: r.version, pin: r.pin, root: root.as_str(), bytes: r.bytes }).collect();
+                updates::kept(&mut shell.term, &releases);
+            }
+            Err(_) => silent(shell),
+        },
         Asked::Check => match update::check(updater) {
             Ok(Ok(offer)) => updates::offer(&mut shell.term, offer.channel.as_str(), offer.version, offer.minimum, offer.expires.as_str(), offer.running),
             Ok(Err(error)) => failed(shell, error),

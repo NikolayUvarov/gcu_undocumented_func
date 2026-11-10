@@ -1,6 +1,6 @@
 # 000-NET-0065 — The Wi-Fi checks read `wifi`'s lines that come after an early prompt
 
-**Type:** tests (`wifi_join_check` and the country check of 550-NET-0035, `tests/qemu_smoke.py`) · **Owner:** `NET` · **Priority:** P2 · **Status:** open (made on `claude/000-NET-0065-wifi-lines-after-an-early-prompt`, 2026-11-10; landing left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D · **Constitution:** MC-12.2
+**Type:** tests (`wifi_join_check`, `world_country_check` and `slow_radio_check`, `tests/qemu_smoke.py`) · **Owner:** `NET` · **Priority:** P2 · **Status:** open (made on `claude/000-NET-0065-wifi-lines-after-an-early-prompt`, 2026-11-10; landing left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -54,7 +54,7 @@ The comment above `run()` names this race (the gates of ASR and NET, 2026-10-20)
 
 1. **A helper, `front_command`,** sends a command that starts `wifi` and reads its output up to the prompt after the shell's exit notice (`SHELL RESUMED.`). When the first prompt comes before the notice, it waits for the notice and the prompt after it.
 2. **`run()` in `wifi_join_check` uses it** and checks its line there. The `dmesg -s wifi` fallback and the `dmesg` added to `scanned` go.
-3. **550-NET-0035's country check** reads `wifi join` and `wifi country` the same way.
+3. **550-NET-0035's checks read `wifi join` and `wifi country` the same way:** `world_country_check`, and `slow_radio_check`'s join, which read `vm.expect` up to the first prompt.
 4. **The shell's early prompt** is reported to `APP`: a program with a screen that ends before the shell takes it in front leaves the prompt above its output.
 
 ## Acceptance criteria
@@ -64,7 +64,13 @@ The comment above `run()` names this race (the gates of ASR and NET, 2026-10-20)
 
 ## Progress
 
-**Made (2026-11-10)** on `claude/000-NET-0065-wifi-lines-after-an-early-prompt`: steps 1 to 3, in `tests/qemu_smoke.py`.
+**Made (2026-11-10)** on `claude/000-NET-0065-wifi-lines-after-an-early-prompt`: steps 1 to 3, in `tests/qemu_smoke.py`. Step 4 is APP's [000-APP-0133](000-APP-0133-no-prompt-before-an-early-exits-notice.md).
+
+**Tested in this container** (4 CPUs, QEMU 8.2.2 under TCG), with 000-KRN-0231's branch, which makes the race frequent:
+- **x86, the `net` suite, 4 runs: all passed.** Without this change the same branch failed 2 of 4.
+- **The early prompt came in every run,** 1 to 4 times each (the VMs' serial logs), and the checks read the lines after it.
+- **aarch64, the `net` suite:** passed.
+- These runs predate `slow_radio_check`'s change; one more x86 run covers it (below).
 
 ## Related
 

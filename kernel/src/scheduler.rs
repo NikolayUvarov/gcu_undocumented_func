@@ -182,9 +182,14 @@ struct Scheduler {
     zeroing: [Option<Zeroing>; cpu::MAX], // each CPU's large block to zero once it lets go of the lock (262-KRN-0160)
     storms: [Storm; MSI_VECTORS],
     console: Option<Console>, // the console as a byte channel (100000-KRN-0222)
+    states_second: u64, // the second STATES was last written in
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
+// Each task's state, rewritten each second by the boot CPU's tick: a test whose wait ran out copies it through QEMU's
+// monitor from the address printed at boot, where a stuck shell cannot be asked, and reads it (000-KRN-0232).
+const STATES_BYTES: usize = 16384;
+static mut STATES: [u8; STATES_BYTES] = [0; STATES_BYTES];
 // Test-and-set, with a turn for a CPU that waited long (000-KRN-0219): none waits behind one that takes it again and again,
 // as CPU 0 did in round 91's gate, nor for the host to run one vCPU, as a ticket lock did in round 95's. Taken with
 // interrupts off, never twice by one CPU.
@@ -242,7 +247,8 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None, states_second: 0 }); }
+    crate::serial_only(&alloc::format!("MIND CORE KERNEL: TASK STATES AT {:#X}, {} BYTES, EACH SECOND\n", core::ptr::addr_of!(STATES) as usize, STATES_BYTES));
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
@@ -374,6 +380,7 @@ impl Scheduler {
             }
         }
         if now >= self.next_expiry { self.expire(now); }
+        if now / 1000 != self.states_second { self.states_second = now / 1000; self.write_states(now); }
         if let Some((_, pid, _, _)) = self.held.filter(|&(_, _, since, _)| ns.saturating_sub(since) >= HOLD_NS) {
             // Kept in the ring, not printed: under load it came in the middle of the echo of a typed command.
             let _ = core::fmt::Write::write_fmt(&mut crate::klog::Kept, format_args!("MIND CORE KERNEL: PID {} HELD FOR THE COMPOSITOR'S COPY {} MS, LET GO\n", pid, HOLD_NS / 1_000_000));
@@ -381,6 +388,20 @@ impl Scheduler {
         }
         self.wake_idle(cpu, every);
         crate::trial::check(now);
+    }
+    // STATES: b"TASKS v1" and the time in ms, then 32 bytes a task: PID, CPU, `stat tasks`' wait and what it waits on, and
+    // its name; a zero PID ends it.
+    fn write_states(&self, now: u64) {
+        let page = unsafe { &mut *core::ptr::addr_of_mut!(STATES) };
+        page[..8].copy_from_slice(b"TASKS v1"); page[8..16].copy_from_slice(&now.to_le_bytes());
+        let mut rows = page[32..].chunks_exact_mut(32);
+        for (index, task) in self.tasks.iter().enumerate().skip(1).filter_map(|(i, t)| Some((i, t.as_ref()?))) {
+            let Some(row) = rows.next() else { return };
+            let (wait, on) = stat::wait_of(task.state, self.current.contains(&index), &self.tasks);
+            row.fill(0); row[..4].copy_from_slice(&(task.pid as u32).to_le_bytes()); row[4] = task.cpu as u8; row[5] = wait;
+            row[8..12].copy_from_slice(&on.to_le_bytes()); row[12..12 + task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]);
+        }
+        if let Some(row) = rows.next() { row.fill(0); }
     }
     // Quota use of the task in `slot` (MC-1.7, MC-5.1): tasks reserved by its live children and endpoints it created or
     // delegated.

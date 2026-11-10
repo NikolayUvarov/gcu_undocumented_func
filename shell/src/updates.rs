@@ -1,12 +1,13 @@
 //! `update`'s command line and text (351-APP-0029): the updater's view, the channel it holds (`update.wit` 1.1
-//! `metadata`, for 351-UPD-0025) and its answers; the calls are `updatectl.rs`'. Host-tested in tests/shell_host.rs.
+//! `metadata`, for 351-UPD-0025), the releases the block store keeps for it (1.5 `kept`, 351-APP-0132) and its answers;
+//! the calls are `updatectl.rs`'. Host-tested in tests/shell_host.rs.
 use core::fmt::Write;
 
 /// What `update` was asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Asked { Status, Check, Fetch, Apply(u8), Rollback }
+pub enum Asked { Status, Kept, Check, Fetch, Apply(u8), Rollback }
 
-pub const USAGE: &str = "USAGE: UPDATE [STATUS | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]";
+pub const USAGE: &str = "USAGE: UPDATE [STATUS | KEPT | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]";
 /// Tries of a trial boot when `apply` names none, as update.txt's example (docs/update/updater.md).
 pub const TRIES: u8 = 3;
 /// `update.wit` error codes the shell answers itself before it asks the operator.
@@ -18,6 +19,7 @@ pub fn parse(args: &str) -> Result<Asked, &'static str> {
     let mut words = args.split_whitespace();
     let asked = match words.next().map(|w| w.to_ascii_lowercase()).as_deref() {
         None | Some("status") => Asked::Status,
+        Some("kept") => Asked::Kept,
         Some("check") => Asked::Check,
         Some("fetch") => Asked::Fetch,
         Some("rollback") => Asked::Rollback,
@@ -89,6 +91,33 @@ pub fn channel(out: &mut impl Write, name: &str, version: u64, minimum: u64, exp
     let whence = if checked { "READ FROM THE SOURCE" } else { "KEPT IN THE RUNNING SLOT, NOT READ FROM THE SOURCE SINCE THE UPDATER STARTED" };
     let _ = writeln!(out, "UPDATE: CHANNEL {}: VERSION {}, MINIMUM {}, EXPIRES {}, {}", name, Version(version), Version(minimum), expires, whence);
     if expired { let _ = writeln!(out, "UPDATE: THE CHANNEL HAS EXPIRED, OR THE CLOCK CANNOT BE READ: FETCH AND APPLY WAIT FOR A CURRENT ONE, ROLLBACK STAYS POSSIBLE"); }
+}
+
+/// A release the block store keeps for the updater (`update.wit` 1.5 `kept`): its version, the pin that keeps it, the
+/// tree's root as text (`mind::cid`'s form, or why none) and the bytes of its files (0: its blobs were not read).
+pub struct Kept<'a> { pub version: u64, pub pin: u32, pub root: &'a str, pub bytes: u64 }
+
+/// `kept`'s answer, newest first: one line a release.
+pub fn kept(out: &mut impl Write, releases: &[Kept]) {
+    if releases.is_empty() { let _ = writeln!(out, "UPDATE: NO RELEASE KEPT IN THE BLOCK STORE"); return; }
+    for release in releases {
+        let _ = write!(out, "UPDATE: KEPT VERSION {}, PIN {}, ", Version(release.version), release.pin);
+        let _ = match release.bytes { 0 => write!(out, "ITS BYTES NOT READ"), bytes => write!(out, "{} BYTES", Grouped(bytes)) };
+        let _ = writeln!(out, ", ROOT {}", release.root);
+    }
+}
+
+/// A count with its thousands apart by spaces (26 677 432).
+struct Grouped(u64);
+
+impl core::fmt::Display for Grouped {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        let (mut groups, mut n, mut count) = ([0u16; 7], self.0, 0);
+        loop { groups[count] = (n % 1000) as u16; count += 1; n /= 1000; if n == 0 { break; } }
+        write!(f, "{}", groups[count - 1])?;
+        for &group in groups[..count - 1].iter().rev() { write!(f, " {:03}", group)?; }
+        Ok(())
+    }
 }
 
 /// `check`'s offer.
