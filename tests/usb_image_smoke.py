@@ -14,7 +14,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, find_qemu_img, pack, qemu_path, read_payloads, slots
+from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, find_qemu_img, pack, qemu_path, read_payloads, slots, store_superblock
 import qemu_smoke
 sys.path.insert(0, str(ROOT / "scripts"))
 import release as release_tool  # noqa: E402
@@ -45,9 +45,111 @@ def main():
     shutil.copyfile(args.image, booted)
     try:
         run(args, booted)
+        store_partition_check(args, work)
         slots_check(args, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def partitions(image):
+    """The MBR's entries, (number, type, first sector, count), and the disk's signature."""
+    with Path(image).open("rb") as f:
+        mbr = f.read(512)
+    entries = [(i + 1, mbr[446 + i * 16 + 4], *struct.unpack_from("<II", mbr, 446 + i * 16 + 8)) for i in range(4) if mbr[446 + i * 16 + 4]]
+    return entries, struct.unpack_from("<I", mbr, 440)[0]
+
+
+def sector(image, lba):
+    with Path(image).open("rb") as f:
+        f.seek(lba * 512)
+        return f.read(512)
+
+
+def store_lines(vm):
+    """The block store's READY line, once it is up, and init's lines: through dmesg, which `logs` does not drain."""
+    for _ in range(60):
+        ready = vm.command("dmesg -s blockstore", raw=True)
+        if "[BLOCKSTORE] READY" in ready:
+            return ready, vm.command("dmesg -s init", raw=True)
+        time.sleep(1)
+    raise AssertionError(f"the block store never got ready: {ready[-1500:]}")
+
+
+def store_partition_check(args, work):
+    """307-KRN-0177, on fresh copies of the stick: a blank NVMe disk beside it is not given to the store, which takes the
+    stick's partition; a second disk with a partition of the store's type and superblock makes two candidates, and init
+    takes neither and names both, so the store runs on ramdisk#1 and neither is written; the stick's partition made
+    blank is not taken, until store.txt names it: then the store takes it blank and formats it."""
+    entries, signature = partitions(args.image)
+    _, kind, first, count = entries[2]
+    assert kind == 0x7F, entries
+    taken = f"[INIT] THE BLOCK STORE'S PARTITION: usb_storage PARTITION 3 ({{}}), {count} SECTORS FROM {first}, WINDOW 1"
+
+    def boot(name, extra=None, change=None):
+        stick = work / f"store-{name}.img"
+        shutil.copyfile(args.image, stick)
+        if change:
+            change(stick)
+        nvme = ("-drive", f"format=raw,file={qemu_path(extra, args.qemu)},if=none,id=storecheck", "-device", "nvme,serial=storecheck,drive=storecheck") if extra else ()
+        vm = VM(args, qemu_path(stick, args.qemu), usb=True, snapshot=False, extra=nvme)
+        try:
+            return (stick, *store_lines(vm))
+        finally:
+            vm.close()
+
+    # A blank NVMe disk: no table, so nothing of it is the store's; the stick's partition is taken, and the disk stays blank.
+    blank = work / "store-blank-nvme.img"
+    with blank.open("wb") as f:
+        f.truncate(16 << 20)
+    stick, ready, init = boot("blank-nvme", blank)
+    require(init, "[INIT] nvme: NO PARTITION TABLE, 0 PARTITIONS")
+    require(init, taken.format("ITS TYPE AND SUPERBLOCK"))
+    require(ready, f"SECTORS=1/{count} ")
+    assert not any(blank.read_bytes()), "the blank NVMe disk was written"
+    # Two candidates: neither taken, both named; the store on ramdisk#1 (8 MiB), and neither partition written.
+    other = work / "store-nvme.img"
+    with other.open("wb") as f:
+        f.truncate(16 << 20)
+        mbr = bytearray(512)
+        mbr[446 + 4] = 0x7F
+        struct.pack_into("<II", mbr, 446 + 8, 2048, 30720)
+        struct.pack_into("<I", mbr, 440, 0x5EC0DD15)
+        mbr[510:512] = b"\x55\xaa"
+        f.write(mbr)
+        f.seek(2048 * 512)
+        f.write(store_superblock())
+    before = hashlib.sha256(other.read_bytes()).hexdigest()
+    stick, ready, init = boot("two", other)
+    require(init, "[INIT] THE STORE'S PARTITION REFUSED: 2 CANDIDATES, NONE TAKEN")
+    require(init, "[INIT] A CANDIDATE: nvme PARTITION 1 (ITS TYPE AND SUPERBLOCK)")
+    require(init, "[INIT] A CANDIDATE: usb_storage PARTITION 3 (ITS TYPE AND SUPERBLOCK)")
+    require(ready, "SECTORS=1/16384 ")
+    assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "the NVMe disk's candidate was written"
+    assert sector(stick, first) == store_superblock(), "the stick's candidate was written"
+    # The stick's partition made blank: the store's type alone is not enough...
+    stick, ready, init = boot("blank", change=lambda image: _blank(image, first))
+    require(init, "[INIT] usb_storage PARTITION 3: THE STORE'S TYPE WITHOUT ITS SUPERBLOCK: NOT TAKEN, UNLESS store.txt NAMES IT")
+    require(init, "[INIT] NO PARTITION OF THE STORE'S")
+    require(ready, "SECTORS=1/16384 ")
+    assert not any(sector(stick, first)), "the blank partition was written"
+    # ...until store.txt at the boot volume's root names it by its PARTUUID: the store takes it blank and formats it.
+    def named(image):
+        _blank(image, first)
+        word = work / "store.txt"
+        word.write_text(f"# the block store's own partition\npartition {signature:08x}-03\n")
+        subprocess.run(["mcopy", "-i", f"{image}@@{entries[0][2] * 512}", str(word), "::store.txt"], check=True, env=MTOOLS_ENV)
+    stick, ready, init = boot("named", change=named)
+    require(init, taken.format("NAMED IN STORE.TXT"))
+    require(ready, f"SECTORS=1/{count} ")
+    assert sector(stick, first).startswith(b"MIND-STO"), "the store did not format the partition store.txt names"
+    print(f"PASS ({args.arch}): the store's own partition (307-KRN-0177): a blank NVMe disk not given to it; two candidates refused, "
+          "both named, neither written; a blank partition of its type not taken, then taken and formatted once store.txt names it", flush=True)
+
+
+def _blank(image, lba):
+    with Path(image).open("r+b") as f:
+        f.seek(lba * 512)
+        f.write(bytes(512))
 
 
 def slots_check(args, work):
@@ -229,6 +331,15 @@ def run(args, booted):
         require(vm.service_logs("usb_host", "SUPER SPEED"), "(SUPER SPEED)")
         require(vm.service_logs("usb_storage", "[USB] MASS STORAGE: "), "[USB] MASS STORAGE: ")
         require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM USB"), "[VFS] MOUNTED FAT16 FROM USB")
+        # 307-KRN-0177: the store on its own partition, window 1 of the usb_storage vfs_server reads its volumes from.
+        entries, signature = partitions(booted)
+        _, _, store_first, store_count = entries[2]
+        ready, init = store_lines(vm)
+        require(init, "[INIT] usb_storage: MBR, 3 PARTITIONS")
+        require(init, f"[INIT] usb_storage PARTITION 3: TYPE 7F, {store_count} SECTORS FROM {store_first}, PARTUUID {signature:08x}-03")
+        require(init, f"[INIT] THE BLOCK STORE'S PARTITION: usb_storage PARTITION 3 (ITS TYPE AND SUPERBLOCK), {store_count} SECTORS FROM {store_first}, WINDOW 1")
+        require(vm.command("dmesg -s usb_storage", raw=True), f"[BLOCK] WINDOW 1 SET: {store_count} SECTORS FROM {store_first}")
+        require(ready, f"SECTORS=1/{store_count} ")
         require(vm.command("run files &"), "PID=5 NAME=files BACKGROUND")
         files_check(vm, 5)
         vm.command("kill 5")
@@ -287,10 +398,16 @@ def run(args, booted):
         assert data[:4] == table.encode() and len(data) == struct.unpack_from("<I", data, 4)[0], (table, len(data))
     assert read("acpi/RSDP.bin").startswith(b"RSD PTR ")
     fsck_volume(booted, start, LOG_SECTORS)
+    # 307-KRN-0177: the store wrote its key into its own superblock, in place; the table and the boot volume are intact.
+    entries, _ = partitions(booted)
+    assert sector(booted, 0) == sector(args.image, 0), "the stick's table changed"
+    superblock = sector(booted, entries[2][2])
+    assert superblock.startswith(b"MIND-STO") and superblock != store_superblock(), "the store's key not in its superblock"
+    fsck_volume(booted, entries[0][2], entries[0][3])
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
           "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
           "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host; "
-          "log: in help, df, fsck and fm")
+          "log: in help, df, fsck and fm; the block store on the stick's partition 3, window 1 of the same drive, its key in its superblock, the boot volume clean")
 
 
 def log_tools_check(vm, name):
