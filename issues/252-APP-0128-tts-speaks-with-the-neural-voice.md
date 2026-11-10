@@ -56,6 +56,8 @@
     - `say Говорит разум корабля.` was the neural voice's;
     - the voice was ready in 23.9 s, and the whole took 176 s, for 1544 ms of speech: emulated, not a machine's times (MC-12.1);
     - from the audio captured at QEMU's AC'97, Vosk's small model and Vosk 0.54's transducer both heard `говорит разум корабля`.
+- **With KRN's grant** (252-KRN-0230, in the landing queue): the `tts` suite's machine gets a model disk holding only its manifest. The suite takes either reason for the formant voice: no scope of `models:`, or no voice's file on such a disk. `git merge-tree` of the two branches has no conflict.
+- **aarch64:** `tts` builds for `aarch64-unknown-none-softfloat` through its `.cargo/config.toml`, and the image's `normal` and `shell` suites pass on QEMU (4 CPUs, TCG), 2026-11-10. The voice is not run there.
 - **Left:**
   - KRN's grant ([252-KRN-0230](252-KRN-0230-tts-reads-the-neural-voice.md)), then the same run on `main`'s `init`;
   - a voice control answer;

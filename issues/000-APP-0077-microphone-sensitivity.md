@@ -74,6 +74,7 @@ Once `audio.wit` has the capture's gain and the shell may change it:
     - `hear` then recorded, so the microphone was free.
   - **The `wm` suite,** with no device: `No microphone to read.`
   - **The `listen` suite:** after `mic 60`, `hear 1`'s report names the gain.
+- **aarch64:** the image builds with these programs, and its `normal` and `shell` suites pass on QEMU (4 CPUs, TCG). QEMU's aarch64 machine has no sound device, so the levels are not checked there.
 - **Left:** the MacBook Pro: speech at arm's length reaching `hear`'s threshold at a gain the page sets, and `hear`'s level rising with `mic`.
 
 ## Related

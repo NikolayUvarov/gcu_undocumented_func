@@ -69,6 +69,7 @@ Once `audio.wit` has the output's level and the shell may change it:
   - **After a reboot,** on AC'97 and on HD Audio (QEMU's `hda-duplex`): `volume 50` and mute set again from `data/sound.conf`, `volume` reading 51 % and 50 %.
   - **The `wm` suite's machine has no sound device:** the page shows `NO AUDIO DEVICE`. The slider's check runs in the `audio` suite, whose machine has one.
 - **No evidence of the level itself:** in QEMU's captured sound, the tone at 46 % was 3.5 dB below `beep` at 100 %. The `wav` backend does not follow AC'97's master attenuation, so this measures nothing about the volume at the device (MC-12.1).
+- **aarch64:** the image builds with these programs, and its `normal` and `shell` suites pass on QEMU (4 CPUs, TCG). QEMU's aarch64 machine has no sound device, so the levels are not checked there.
 - **Left:** the MacBook Pro: `volume 30` quieter than `volume 100` by ear, and `volume mute` silent.
 
 ## Related
