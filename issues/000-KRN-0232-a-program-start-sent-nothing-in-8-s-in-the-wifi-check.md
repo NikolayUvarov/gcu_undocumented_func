@@ -42,6 +42,14 @@
   - `tests/qemu_stuck_test.py` (host): the record holds the page's lines and nothing past its end; a page that cannot be read by its virtual address is read by its physical one; a kernel that printed no address is recorded as such.
   - The `normal` suite: the page read from a running VM has a line for `init` and the shell, and a service waiting to receive on an endpoint.
 
+**Seen again (2026-11-10).** Round 116's gate, candidate 46d756be (`main` 3fc93b93 with STO's request of 1642Z), "x86: RAM above 4 GiB" on x32 (x32-128), 124 s in.
+- **Where:** the `normal` suite's endpoint loop, which starts 40 `memtest endpoints &` in a row, each creating the 4 endpoints the loader allows.
+- **What came back:** 15 starts answered `STARTED PID=…`. The 16th got nothing in 8 s, not even that line.
+- **The record:** all four CPUs halted (`HLT=1`), and the console ends with the command's echo, as in round 114. It is kept on x32-128 in `mind-core/KRN/logs/land-r116/x32-03/`.
+- **Both cases** are a program's start under "x86: RAM above 4 GiB" (6 GiB) on x32.
+- **A guess, not measured:** the 16th program's endpoints are the first past the 127 of the former fixed table. The endpoint table may have to grow at that start, so its growth path is a suspect.
+- **This record still has no task states:** step 1 is not in `main` yet.
+
 ## Related
 
 [307-KRN-0229](../issues-done/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done), [000-KRN-0214](../issues-done/000-KRN-0214-the-shell-stopped-answering-during-the-effector-screenshot.done) (the record), [000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another start that waited past 8 s, seen once).
