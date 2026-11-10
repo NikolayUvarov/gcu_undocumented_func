@@ -1,6 +1,6 @@
-# 211-KRN-0223 — The system log saves less often, with fewer flushes (a USB boot disk accessed all the time)
+# 211-KRN-0223 — The system log saves less often, with fewer flushes (a USB boot disk accessed all the time) — done
 
-**Type:** `vfs_server` (the journal) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** open (in `main` since round 99, c92256a3; the MacBook Pro's run, DRV's, left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track H, stage I · **Constitution:** MC-5.1, MC-10.6
+**Type:** `vfs_server` (the journal) · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track H, stage I · **Constitution:** MC-5.1, MC-10.6
 
 **Asked by** DRV, 2026-11-09 (`KRN/2026-11-09T0429Z-DRV-the-system-log-writes-the-boot-disk-every-11-s.md` on `internal-dev-messages`), after the maintainer saw the MacBook Pro's USB boot disk accessed all the time.
 
@@ -68,6 +68,24 @@
 - **For APP** (the shell's 1 s for an answer that writes a file): told in a message; the broker's store on a slow disk may take longer than that whatever the log does.
 - **Landed** in round 100 (`main` 9c79dcc3, 2026-11-09): every group of the gate passed, `aarch64: network above 4 GiB` among them. APP gives the broker's answer 5 s (in its request for round 101).
 
+## Resolution
+
+**All criteria are met.** The code landed in rounds 99 and 100 (`main` c92256a3 and 9c79dcc3, 2026-11-09).
+- **The cadence:** the system log's journal saves once within 2 s for a warning, every 30 s for ordinary records (after the boot's first two minutes), and at once for many records. Each save costs one flush.
+- **A volume root's flush** (`sync`, and `init`'s flush before a restart or a power-off) saves the journal and marks the log volume clean. A file's flush writes its own volume only (round 100).
+- **Evidence:**
+  - `tests/log_cadence_host.rs`;
+  - `tests/usb_image_smoke.py` and the `boot` suite's log check;
+  - every group of rounds 99 and 100;
+  - **on the MacBook Pro, DRV's run over the link** (release 202611091850, `main` 31a3e995 plus text, confirmed in slot B), 245 samples of `ps` in 149 s:
+    - after the first two minutes the stick was touched every 30 s by the log's save, about 20 commands with one flush;
+    - every 20 s by the updater's check of `data/link/rel/` (`every 20` in that stick's `update.txt`);
+    - nothing else;
+    - before, on the old image, a save every 11 s with three flushes.
+
+  That holds on that machine (MC-12.1).
+- **The updater's period,** the stick's remaining traffic, is [351-UPD-0036](../issues/351-UPD-0036-the-updaters-period-from-the-release-it-booted.md).
+
 ## Related
 
-[211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the journal), 211-KRN-0050 (a drive that is gone), 211-DRV-0053.
+[211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.done) (the journal), 211-KRN-0050 (a drive that is gone), 211-DRV-0053.
