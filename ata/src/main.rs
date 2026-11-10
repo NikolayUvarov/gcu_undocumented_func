@@ -8,7 +8,7 @@ mod ide;
 
 use ide::{Bus, Fault, Ide};
 use mind::abi::{BootInfo, BLOCK_KIND_ATA, SLOT_DEV0, SLOT_DEV1};
-use mind::block::{self, Driver};
+use mind::block::{self, Driver, DriverError, Outcome};
 use mind::dev::Ports;
 
 // The command block's ports and the control port, each its own grant.
@@ -27,16 +27,16 @@ impl Bus for Channel {
 struct Ata { ide: Ide<Channel>, failing: Option<Fault> }
 
 impl Ata {
-    fn done(&mut self, what: &str, lba: u64, count: usize, result: Result<(), Fault>) -> bool {
+    fn done(&mut self, what: &str, lba: u64, count: usize, result: Result<(), Fault>) -> Outcome {
         match result {
-            Ok(()) => { if self.failing.take().is_some() { mind::println!("[ATA] THE DRIVE ANSWERS AGAIN"); } true }
-            Err(Fault::Refused) => { mind::println!("[ATA] {} OF {} SECTORS AT {} REFUSED: OUTSIDE ONE COMMAND, THE DRIVE OR THE BUFFER", what, count, lba); false }
+            Ok(()) => { if self.failing.take().is_some() { mind::println!("[ATA] THE DRIVE ANSWERS AGAIN"); } Ok(()) }
+            Err(Fault::Refused) => { mind::println!("[ATA] {} OF {} SECTORS AT {} REFUSED: OUTSIDE ONE COMMAND, THE DRIVE OR THE BUFFER", what, count, lba); Err(DriverError::Range) }
             Err(fault) => {
                 if self.failing.replace(fault) != Some(fault) {
                     mind::println!("[ATA] {} AT {} FAILED: {}", what, lba, match fault {
                         Fault::Busy => "THE DRIVE STAYED BUSY PAST ITS DEADLINE", Fault::NoData => "NO DATA CAME IN TIME", _ => "THE DRIVE REPORTED AN ERROR" });
                 }
-                false
+                Err(DriverError::Io)
             }
         }
     }
@@ -44,9 +44,9 @@ impl Ata {
 
 impl Driver for Ata {
     fn sectors(&self) -> u64 { self.ide.sectors }
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool { let r = self.ide.read(lba, count, out); self.done("READ", lba, count, r) }
-    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool { let r = self.ide.write(lba, count, data); self.done("WRITE", lba, count, r) }
-    fn flush(&mut self) -> bool { let r = self.ide.flush(); self.done("FLUSH", 0, 0, r) }
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome { let r = self.ide.read(lba, count, out); self.done("READ", lba, count, r) }
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome { let r = self.ide.write(lba, count, data); self.done("WRITE", lba, count, r) }
+    fn flush(&mut self) -> Outcome { let r = self.ide.flush(); self.done("FLUSH", 0, 0, r) }
     fn read_only(&self) -> bool { false }
 }
 

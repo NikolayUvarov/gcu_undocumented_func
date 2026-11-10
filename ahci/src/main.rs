@@ -8,7 +8,7 @@ mod checks;
 
 use checks::{Bohc, Clock, Handoff, COMMAND_NS, FLUSH_NS, READY_NS, STOP_NS};
 use mind::abi::{BootInfo, BLOCK_KIND_AHCI, SLOT_DEV0, SLOT_MEM};
-use mind::block::{self, Driver};
+use mind::block::{self, Driver, DriverError, Outcome};
 use mind::dev::{Dma, Mmio};
 
 const CAP2: usize = 0x24; const BOHC: usize = 0x28; const GHC: usize = 0x04; const PI: usize = 0x0C;
@@ -131,16 +131,16 @@ impl Ahci {
 
 impl Driver for Ahci {
     fn sectors(&self) -> u64 { self.sectors }
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool { // READ DMA EXT
-        let Some(bytes) = self.checked("READ", lba, count, out.len()) else { return false };
-        self.command(0x25, lba, count, &mut out[..bytes], COMMAND_NS).is_some()
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome { // READ DMA EXT
+        let bytes = self.checked("READ", lba, count, out.len()).ok_or(DriverError::Range)?;
+        self.command(0x25, lba, count, &mut out[..bytes], COMMAND_NS).ok_or(DriverError::Io)
     }
-    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool { // WRITE DMA EXT
-        let Some(bytes) = self.checked("WRITE", lba, count, data.len()) else { return false };
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome { // WRITE DMA EXT
+        let bytes = self.checked("WRITE", lba, count, data.len()).ok_or(DriverError::Range)?;
         self.dma.bytes(DATA, bytes).copy_from_slice(&data[..bytes]);
-        self.issue(0x35, lba, count, bytes, true, COMMAND_NS).is_some()
+        self.issue(0x35, lba, count, bytes, true, COMMAND_NS).ok_or(DriverError::Io)
     }
-    fn flush(&mut self) -> bool { self.issue(0xEA, 0, 0, 0, false, FLUSH_NS).is_some() } // FLUSH CACHE EXT
+    fn flush(&mut self) -> Outcome { self.issue(0xEA, 0, 0, 0, false, FLUSH_NS).ok_or(DriverError::Io) } // FLUSH CACHE EXT
     fn read_only(&self) -> bool { false }
 }
 

@@ -1,6 +1,6 @@
 # 308-KRN-0204 — A store client that may recover the volume key, held by the shell alone
 
-**Type:** `init`, the ABI (a request bit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — (STO's `blockstore.wit` 2.4 calls and `BADGE_RECOVER` are in `main`, 9015431c; the kernel session's queue) · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) · **Constitution:** MC-3.1, MC-6.8, MC-9.6, MC-11.9
+**Type:** `init`, the ABI (a request bit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (the kernel session's part in `main` since round 111, 2026-11-10, ABI 30; the shell's lending is APP's, 308-APP-0122) · **Blocked by:** — (STO's `blockstore.wit` 2.4 calls and `BADGE_RECOVER` are in `main`, 9015431c; the kernel session's queue) · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) · **Constitution:** MC-3.1, MC-6.8, MC-9.6, MC-11.9
 
 **Asked by:** STO, 2026-10-30 and 2026-11-04 (`issues/requests-KRN.md`, taken out of it with this issue). STO asked for the shell and `wm`. APP's program `recovery` (308-APP-0122) has a window of its own, so `wm` needs no copy (`KRN/2026-11-04T0441Z-APP-…`). The client goes to the shell alone, the least authority that serves (MC-3.1).
 
@@ -22,6 +22,27 @@
 
 - The shell alone holds the client, and only programs with `REQUEST_RECOVER` get a copy, in QEMU on x86 and aarch64.
 - The store's recovery calls answer that client alone.
+
+## Progress (2026-11-10)
+
+On the branch `claude/308-KRN-0204-the-recovery-client`, ABI 30:
+
+- **`common/abi.rs`:**
+  - `SLOT_RECOVER` 43, a launch slot; `SLOT_DYNAMIC` 44; `ABI_VERSION` 30;
+  - `CAP_SLOTS` 108, so that 64 dynamic slots stay beside the fixed ones. README and `docs/profile/kernel-objects.md` said 104, out of date since 107.
+- **`libmind/src/process.rs`:** `REQUEST_RECOVER` (1 << 30).
+- **`init`:** while the store runs, the shell gets the store's client badged `BADGE_RECOVER` alone, in `SLOT_RECOVER`.
+- **Tests:**
+  - `tests/runtime.rs`: the slot, the ABI and the launch slots;
+  - `tests/boot_abi_host.rs`: handoff 30 left as it is;
+  - the `services` suite's `blockstore_check`: the shell holds slot 43 with badge 8, of `blockstore`'s endpoint; `updater` and `storefs` hold no client with that badge.
+- **Docs:** `docs/api` (ABI 30, the slot) and `docs/profile/bootstrap.md` (the shell's holdings).
+
+**The store's refusal** of a recovery call from any other badge is `blockstore`'s (`rights::allowed`), tested by `tests/blockstore_host.rs`. No QEMU program calls with another badge yet.
+
+**APP's part:** the shell lends a copy for `REQUEST_RECOVER` and asks the user each time (308-APP-0122). The criterion "only programs with `REQUEST_RECOVER` get a copy" waits for it.
+
+**Landed** in round 111 (`main` 08cdd8d8, 2026-11-10): every group of the gate passed with ABI 30. **Left:** the criterion "only programs with `REQUEST_RECOVER` get a copy", which waits for APP's lending (308-APP-0122).
 
 ## Related
 

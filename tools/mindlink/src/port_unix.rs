@@ -1,6 +1,6 @@
 //! The byte stream to the other end on Linux: a serial port set raw through termios, a TCP connection, or a pseudo-terminal
 //! that `serve` makes for tests. Linux only (glibc's termios layout).
-use std::ffi::{c_char, c_int, c_short, c_uint, c_void, CStr};
+use std::ffi::{c_char, c_int, c_short, c_uint, c_ulong, c_void, CStr};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
@@ -33,6 +33,7 @@ extern "C" {
     fn unlockpt(fd: c_int) -> c_int;
     fn ptsname_r(fd: c_int, buf: *mut c_char, len: usize) -> c_int;
     fn read(fd: c_int, buf: *mut c_void, n: usize) -> isize;
+    fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
 }
 
 const TCSANOW: c_int = 0;
@@ -48,6 +49,8 @@ const CRTSCTS: c_uint = 0o20000000000;
 const VMIN: usize = 6;
 const VTIME: usize = 5;
 const POLLIN: c_short = 1;
+const TIOCSBRK: c_ulong = 0x5427;
+const TIOCCBRK: c_ulong = 0x5428;
 
 /// Linux's speed codes for the rates a converter takes.
 fn speed(baud: u32) -> Option<c_uint> {
@@ -152,6 +155,16 @@ impl linkproto::Line for Port {
 impl Port {
     /// The line failed for good (closed or gone).
     pub fn failed(&self) -> bool { self.failed }
+
+    /// A break of `ms` (800-LNK-0043): the line held at space, then let go; a TCP connection has none.
+    #[allow(dead_code)] // effector485's; mindlink sends none
+    pub fn brk(&mut self, ms: u64) -> Result<(), String> {
+        let fd = self.file.as_raw_fd();
+        if unsafe { ioctl(fd, TIOCSBRK) } != 0 { return Err(format!("{}: no break on this line: {}", self.name, std::io::Error::last_os_error())); }
+        std::thread::sleep(Duration::from_millis(ms));
+        if unsafe { ioctl(fd, TIOCCBRK) } != 0 { self.failed = true; return Err(format!("{}: the break did not end: {}", self.name, std::io::Error::last_os_error())); }
+        Ok(())
+    }
 
     /// The FTDI driver's latency timer for this port, in ms, when the system shows it (it delays every answer).
     pub fn latency_ms(&self) -> Option<u32> {

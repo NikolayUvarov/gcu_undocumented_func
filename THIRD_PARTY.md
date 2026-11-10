@@ -121,6 +121,20 @@ RTL8852BE's `rtw89/rtw8852b_fw-1.bin` is fetched from official `linux-firmware` 
 
 The RTL8821C Bluetooth controller's `rtl_bt/rtl8821c_fw.bin` and `rtl_bt/rtl8821c_config.bin` (`bt_hci`, 700-BLT-0001) come from the same `linux-firmware` commit, fetched by [`scripts/firmware/rtl8821c_bt.py`](scripts/firmware/rtl8821c_bt.py) through `scripts/proprietary.sh fetch`, with the same `LICENCE.rtlwifi_firmware.txt` (WHENCE's `rtl_bt` section). They stay in ignored `proprietary/firmware/rtl_bt/` and reach a disk's `data/firmware/rtl_bt/` the same way; [their pins](hwdocs/rtl8821c-bt.md#the-patch). `bt_hci`'s loader is written from the patch file's layout, not from Linux's `btrtl.c`.
 
+## The Allwinner boards' firmware (built from fetched sources; on a board's card, in no system image)
+
+`scripts/board_uboot.sh` builds U-Boot with TF-A's BL31 for the Orange Pi Zero Plus 2 H5 and the Orange Pi Zero 3 ([100004-MOB-0001](issues/100004-MOB-0001-the-boards-sd-card.md)), from the pinned tags below, each checked against its commit. Neither source is stored here. `scripts/board_image.py` writes the result at 8 KiB on the board's card, outside MIND Core's partitions. A card holds code from both, so one given to others must carry their notices, and U-Boot's source with it (GPL-2.0).
+
+| Part | Version | Licence |
+|---|---|---|
+| [U-Boot](https://source.denx.de/u-boot/u-boot) (the SPL and U-Boot, with their device trees), Copyright (C) the U-Boot contributors | v2026.10, commit `5508406582f6f7120dce0c4b3059819a41788db2` | GPL-2.0 (most files GPL-2.0+; its device trees mostly GPL-2.0+ OR MIT) |
+| [Trusted Firmware-A](https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git) (BL31: PSCI and the secure monitor), Copyright (c) Arm Limited and Contributors | v2.15.0, commit `da738d5eae93af342fdc4995dd3c05acb4c9d757` | BSD-3-Clause |
+
+- **Settings changed from the boards' defconfigs:** the network off (`CONFIG_NO_NET`), the countdown stopped only by the word `stop` (`CONFIG_AUTOBOOT_KEYED`), no capsule tool.
+- **Built with** the host's cross compiler. On Ubuntu 24.04's `gcc-aarch64-linux-gnu` 13.3.0 both boards' files came out the same on two runs, and the script says when its bytes differ from those.
+- **`--fetch-tools`** unpacks Ubuntu's `bison`, `swig` and `python3-pyelftools` packages into the cache instead of installing them; they run only at build time.
+- **No proprietary file** is needed by either board's firmware.
+
 ## Tools used at build or test time (not distributed)
 
 - OVMF (EDK II UEFI firmware, BSD-2-Clause-Patent) to boot QEMU; installed by the system package manager or placed next to the launch scripts.

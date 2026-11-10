@@ -35,7 +35,7 @@ Variants tested as stand-ins for boards (issue 205): `highmem=on` with 6 GiB (RA
 
 | Mechanism | aarch64 | x86-64 counterpart |
 |---|---|---|
-| Privilege | Tasks at EL0, the kernel at EL1 | ring 3, ring 0 |
+| Privilege | Tasks at EL0, the kernel at EL1. A kernel the firmware entered at EL2 (U-Boot's and EDK2's EFI applications where the core has EL2) sets EL2 so that nothing traps there and goes on at EL1, each CPU, before anything relies on EL1 (100004-PRT-0014); the board's line names the EL entered at | ring 3, ring 0 |
 | System call | `svc #0`, the same mailbox ABI | `int 0x80` |
 | Exceptions | EL1 vector table (`VBAR_EL1`); a per-CPU exception stack (`TPIDR_EL1`) for entries from tasks | IDT, TSS stacks |
 | Address spaces | Stage 1, 4 KiB granule, 4 levels, 48-bit TTBR0: L0 entries 0 and 1 the kernel's identity map of the first TiB (EL1 only; RAM from the UEFI memory map normal memory, the rest device memory, in 1 GiB blocks or 2 MiB where a gigabyte holds both), the task window at L0 entry 255 (x86: 512 GiB); user pages `PXN`, data pages `UXN`, code read-only; the generic walk is `kernel/src/paging.rs` | 4-level page tables, NX |
