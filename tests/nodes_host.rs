@@ -1,6 +1,7 @@
 //! Host tests of the platform's nodes (common/nodes.rs and fdt.rs's `devices`, 100000-KRN-0171): which nodes of QEMU
 //! `virt`'s and the PinePhone's trees are devices to lend, their ranges and lines; that a page another node shares is
-//! lent to neither (the A64's four UARTs); and the table's bounds, as PLATFORM_NODES hands it out.
+//! lent to neither (the A64's four UARTs, the H5's UART0 and UART1); that the H618's console page is UART0's alone in its
+//! tree (100004-PRT-0013); and the table's bounds, as PLATFORM_NODES hands it out.
 #![allow(dead_code)]
 #[path = "../common/abi.rs"]
 mod abi;
@@ -15,6 +16,8 @@ use nodes::Nodes;
 const VIRT_V2: &[u8] = include_bytes!("data/fdt/virt-gicv2-uboot.dtb");
 const VIRT_V3: &[u8] = include_bytes!("data/fdt/virt-gicv3.dtb");
 const PINEPHONE: &[u8] = include_bytes!("data/fdt/pinephone-1.2.dtb");
+const ZERO_PLUS2: &[u8] = include_bytes!("data/fdt/orangepi-zero-plus2-h5.dtb");
+const ZERO3: &[u8] = include_bytes!("data/fdt/orangepi-zero3-h618.dtb");
 
 // The table the kernel builds from `blob` (devicetree.rs does the same).
 fn table(blob: &[u8]) -> Nodes {
@@ -71,6 +74,29 @@ fn the_pinephones_uarts_share_a_page_and_none_is_lent_by_it() {
     assert!(named(&nodes, "arm,gic-400").is_empty());
     assert!(nodes.iter().all(|n| n.regs[0][0] != 0x0300_0000 || n.compatible() != b"snps,dw-apb-uart"));
     assert!(nodes.count() > 20 && nodes.left_out() == 0, "{} nodes, {} left out", nodes.count(), nodes.left_out());
+}
+
+#[test]
+fn the_allwinner_boards_consoles_and_the_uarts_beside_them() {
+    // H5 (Orange Pi Zero Plus 2): UART1, the AP6212's Bluetooth, is enabled in UART0's page, so neither is lent by it.
+    let nodes = table(ZERO_PLUS2);
+    let uarts = named(&nodes, "snps,dw-apb-uart");
+    let bases: Vec<u64> = uarts.iter().map(|(_, n)| n.regs[0][0]).collect();
+    assert_eq!(bases, [0x01c2_8000, 0x01c2_8400]);
+    let (console, uart0) = uarts[0];
+    assert_eq!((uart0.flags & NODE_CONSOLE, &uart0.lines[..uart0.line_count as usize]), (NODE_CONSOLE, &[0u32][..]));
+    assert_eq!(nodes.pages(console, 0), Some((0x01c2_8000, 0x1000)));
+    assert_eq!(nodes.sharer(console, 0), Some(uarts[1].0));
+    assert!(named(&nodes, "arm,gic-400").is_empty() && nodes.left_out() == 0);
+    // H618 (Orange Pi Zero 3): UART1 to UART5 are disabled in its tree, so the console's page is UART0's alone. init
+    // still asks for the kernel's channel there: it lends a console's node only when it is a PL011 (hardware.rs).
+    let nodes = table(ZERO3);
+    let uarts = named(&nodes, "snps,dw-apb-uart");
+    assert_eq!(uarts.iter().map(|(_, n)| n.regs[0][0]).collect::<Vec<_>>(), [0x0500_0000]);
+    let (console, uart0) = uarts[0];
+    assert_eq!((uart0.flags & NODE_CONSOLE, &uart0.lines[..uart0.line_count as usize]), (NODE_CONSOLE, &[0u32][..]));
+    assert_eq!((nodes.pages(console, 0), nodes.sharer(console, 0)), (Some((0x0500_0000, 0x1000)), None));
+    assert!(named(&nodes, "arm,gic-400").is_empty() && nodes.left_out() == 0);
 }
 
 #[test]
