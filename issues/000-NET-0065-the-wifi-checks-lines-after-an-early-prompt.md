@@ -70,7 +70,7 @@ The comment above `run()` names this race (the gates of ASR and NET, 2026-10-20)
 - **x86, the `net` suite, 4 runs: all passed.** Without this change the same branch failed 2 of 4.
 - **The early prompt came in every run,** 1 to 4 times each (the VMs' serial logs), and the checks read the lines after it.
 - **aarch64, the `net` suite:** passed.
-- These runs predate `slow_radio_check`'s change; one more x86 run covers it (below).
+- These runs predate `slow_radio_check`'s change. **A fifth x86 run with it** (`main` e84f1018 merged) passed, with 4 early prompts.
 
 ## Related
 
