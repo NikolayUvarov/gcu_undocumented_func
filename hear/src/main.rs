@@ -28,6 +28,18 @@ const METER_EVERY: usize = RATE as usize / 4;
 // The candidates shown for each utterance.
 const CANDIDATES: usize = 3;
 
+// The microphone's gain it hears at (000-APP-0077), so that two reports can be compared: `GAIN 60 % (+13.50 DB), BOOST
+// OFF (+20.00 DB)`, the dB as `audio_gw` sets them (the nearest setting); none from a gateway without audio.wit 1.2.
+fn gain() -> Option<String> {
+    let l = mind::idl::wire::with_timeout(500, mind::audio::levels).ok()?;
+    let db = |qdb: i32| alloc::format!("{}{}.{:02} DB", if qdb < 0 { "-" } else if qdb > 0 { "+" } else { "" }, qdb.unsigned_abs() / 4, qdb.unsigned_abs() % 4 * 25);
+    let top = l.capture.steps.saturating_sub(1) as i32;
+    let setting = (l.gain.min(100) as i32 * top + 50) / 100;
+    let boost = if l.boost_qdb == 0 { String::from("NO BOOST") } else { alloc::format!("BOOST {} ({})", if l.boost { "ON" } else { "OFF" }, db(l.boost_qdb as i32)) };
+    Some(alloc::format!("GAIN {} % ({}{}), {}", l.gain, db((setting - l.capture.zero as i32) * l.capture.step_qdb as i32),
+        if l.capture.scaled { ", SCALED BY THE GATEWAY" } else { "" }, boost))
+}
+
 fn hundredths(per_mille: u32) -> String { alloc::format!("{}.{:02}", per_mille / 1000, per_mille % 1000 / 10) }
 
 fn report(recognizer: &Recognizer, utterance: &Utterance) {
@@ -71,6 +83,7 @@ fn main(_info: &'static mind::BootInfo) {
         Some(path) => hear::wav_utterances(path, &mut |detector, chunk| sound.note(detector, chunk)),
         None => {
             mind::println!("LISTENING FOR {} S: SPEECH STARTS 9 DB ABOVE THE NOISE FLOOR, NOT BELOW -50 DBFS; IT ENDS AFTER {} MS OF QUIET", seconds, COMMAND_PAUSE_MS);
+            if let Some(gain) = gain() { mind::println!("{}", gain); }
             let mut since = 0usize;
             let mut watch = |detector: &Detector, chunk: &[i16]| {
                 sound.note(detector, chunk);
