@@ -1,13 +1,13 @@
-# 100004-PRT-0013 — The two Allwinner boards' device trees, with host tests of the reader
+# 100004-PRT-0013 — The two Allwinner boards' device trees, with host tests of the reader — done
 
-**Type:** porting (tests) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** open (the trees and the tests made, 2026-11-10; landing left) · **Blocked by:** — · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md) · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1, MC-12.2
+**Type:** porting (tests) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** [100004](../issues/100004-two-allwinner-boards-before-the-phone.md) · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1, MC-12.2
 
 ## Problem
 
-- **`MOB` asked for it** (its message of 2026-11-10 to `KRN` and `PRT` on `internal-dev-messages`, point 1). Two Allwinner boards stand in for the PinePhone ([100004](100004-two-allwinner-boards-before-the-phone.md)):
+- **`MOB` asked for it** (its message of 2026-11-10 to `KRN` and `PRT` on `internal-dev-messages`, point 1). Two Allwinner boards stand in for the PinePhone ([100004](../issues/100004-two-allwinner-boards-before-the-phone.md)):
   - an Orange Pi Zero Plus 2 (H5);
   - an Orange Pi Zero 3 (H618).
-- **What the kernel reads from their trees.** The kernel takes the board from the tree U-Boot hands over ([100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done)): the GIC, the timer's line, PSCI's conduit, the console. `init` takes the devices to lend from it ([100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done)).
+- **What the kernel reads from their trees.** The kernel takes the board from the tree U-Boot hands over ([100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.done)): the GIC, the timer's line, PSCI's conduit, the console. `init` takes the devices to lend from it ([100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.done)).
 - **What is tested today.** The reader is tested on QEMU `virt`'s trees and the PinePhone's, not on these two boards'. Their console is a DesignWare 16550, and its page holds other UARTs.
 
 ## Plan
@@ -53,9 +53,18 @@ On the branch `claude/100004-PRT-0013-allwinner-boards-trees`:
 - **U-Boot's copy of each tree.** U-Boot 2025.01, the H5's in Debian (100004-MOB-0001), and the H618's own build may carry copies that differ from Linux v6.12's. That is not checked. The boards' first boots (100004-MOB-0002, 0003) show what the kernel reads from the tree U-Boot hands over.
 - **The memory.** These trees have no `/memory` node, so the tests check its absence. The memory itself is checked on the boards.
 
+## Resolution
+
+**All criteria are met.** It landed in round 110 (`main` 91e74b59, 2026-11-10).
+- **The trees.** Linux v6.12's Orange Pi Zero Plus 2 (H5) and Orange Pi Zero 3 (H618) trees are in `tests/data/fdt/`. Their licence is in THIRD_PARTY.md.
+- **`tests/fdt_host.rs`** checks each board's GIC-400, the timer's line 27, PSCI by SMC, four CPUs, no `/memory` node, and the console from `stdout-path` as a DesignWare 16550 (shift 2, width 4) at 0x01C28000 and 0x05000000.
+- **`tests/nodes_host.rs`** checks the console's node and page: the H5's UART1 shares UART0's page, and the H618's page is UART0's alone.
+- **The gate** passed in every group.
+- **Left, for the boards' first boots (100004-MOB-0002, 0003):** what U-Boot's own copy of each tree holds.
+
 ## Related
 
-- [100004](100004-two-allwinner-boards-before-the-phone.md); [100004-MOB-0002](100004-MOB-0002-the-first-boot-on-the-h5.md), [100004-MOB-0003](100004-MOB-0003-the-first-boot-on-the-h618.md): the first boots.
-- [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done): the reader; [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done): the nodes.
-- [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md): the 16550 console and DesignWare's busy-detect.
-- [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md): the console as a channel when its page is shared.
+- [100004](../issues/100004-two-allwinner-boards-before-the-phone.md); [100004-MOB-0002](../issues/100004-MOB-0002-the-first-boot-on-the-h5.md), [100004-MOB-0003](../issues/100004-MOB-0003-the-first-boot-on-the-h618.md): the first boots.
+- [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.done): the reader; [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.done): the nodes.
+- [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md): the 16550 console and DesignWare's busy-detect.
+- [100000-KRN-0222](../issues/100000-KRN-0222-the-kernels-console-as-a-byte-channel.md): the console as a channel when its page is shared.
