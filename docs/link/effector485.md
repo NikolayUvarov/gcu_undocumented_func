@@ -54,7 +54,7 @@ effector485 --agent link-2 submit log --key LNK-log-2 --reason "LNK: the second 
   - queue: its operations run one at a time, in order;
   - lease: a lease on `link-1` holds back `link-1`'s changes alone;
   - state: `online`, its name, when it last answered.
-- **The line is shared, exchange by exchange.** Each machine has a worker of its own, and the workers take the line in turn for one request and its answer. A long `put` to one machine therefore slows the others but does not stop them. A machine that does not answer is asked once every 3 s, so it costs the others little.
+- **The line is shared, exchange by exchange.** Each machine has a worker of its own, and the workers take the line in turn for one request and its answer. A long `put` to one machine therefore slows the others but does not stop them. A machine that does not answer is asked with one `hello` every 3 s, so it costs the others little. On a cable of one this holds too (800-LNK-0043), so that the line is free for its console in between.
 - **Naming the machine.** With several, a submission and a lease name theirs, or are refused (400):
   - in the API, `agent_id` in the body;
   - on the command line, `--agent <machine>` or `EFFECTOR485_AGENT`.
@@ -117,18 +117,19 @@ JSON over HTTP, as Effector's:
 | `GET /api/v1/operations`, `?status=active`, `&agent_id=<machine>` | all, or those not ended, or one machine's, without their output |
 | `GET /api/v1/operations/output?id=<id>&from=<n>` | the output from byte `n`: `text`, `from`, `next`, `status` |
 | `POST /api/v1/operations/cancel` with `operation_id`, `idempotency_key`, `reason` | the operation. A queued one is cancelled at once; a running one when the daemon next reaches it |
-| `GET /api/v1/endpoints` | each machine on the cable: `agent_id`, `address`, `online`, `name`, `last_seen`, `error`, `queued`, `running`; the cable's bytes since the daemon started, `sent_bytes` and `received_bytes`; its lease, `reservation` (`null` when there is none) |
+| `GET /api/v1/endpoints` | each machine on the cable: `agent_id`, `address`, `online`, `name`, `last_seen`, `error`, `queued`, `running`; the line's `mode`, `link` or `console` (below); the cable's bytes since the daemon started, `sent_bytes` and `received_bytes`; its lease, `reservation` (`null` when there is none) |
 | `GET`, `POST`, `PATCH`, `DELETE /api/v1/terminal-reservations` | the lease on the machine (below) |
 | `GET /api/v1/api-key` | `valid`: the key is right |
 | `GET /api/v1/version` | `api_version`, `program`; `kinds`, each with its `required` fields and whether it only `reads`; `changes`, what each version brought |
-| `GET /api/v1/console?agent_id=<machine>&from=<offset>&max_bytes=<n>` | the machine's console from that offset (below): `from`, `next`, `gap`, `data` (base64), `text`, `pieces`, `offered`, `input_seq` |
-| `POST /api/v1/console/input` with `agent_id`, `seq` and `text` or `data` (base64) | `written`: true, or false when that `seq` was taken already |
+| `GET /api/v1/console?agent_id=<machine>&from=<offset>&max_bytes=<n>` | the machine's console from that offset (below), or `line`'s on a cable of several: `from`, `next`, `gap`, `data` (base64), `text`, `pieces`, `offered`, `input_seq`, the line's `mode` |
+| `POST /api/v1/console/input` with `agent_id`, `seq`, `text` or `data` (base64), and in `console` mode `pace_ms` (20; 0 to 1000) | `written`: true, or false when that `seq` was taken already; `mode`: `console` when it goes to the line as it is, `link` when through channel 1. 409 `link_mode` for `line` while a machine answers; 503 while the port does not open |
+| `POST /api/v1/console/break` with `agent_id` and `ms` (250; 10 to 5000) | in `console` mode, `sent`: true once the break has been sent. 409 `link_mode` while a machine answers; 409 `unsupported` where the port has none (a TCP line); 503 while the port does not open |
 | `GET /` | the page (below) |
 | `GET /api/v1/stream` | the page's live feed, a WebSocket (below) |
 
 **The output** keeps the last 256 KiB of each operation.
 
-**The API's version** is 1.1 (800-LNK-0039). A change of its fields makes a new one (MC-12.4), and `GET /api/v1/version` lists what each version brought: 1.0 is the operations, the endpoints, the reservations and the page's feed; 1.1 adds the version, the console and `--supervised`.
+**The API's version** is 1.2 (800-LNK-0043). A change of its fields makes a new one (MC-12.4), and `GET /api/v1/version` lists what each version brought: 1.0 is the operations, the endpoints, the reservations and the page's feed; 1.1 adds the version, the console and `--supervised` (800-LNK-0039); 1.2 adds the line's `mode`, the input written to it as it is with `pace_ms`, and the break.
 
 **The console** (800-LNK-0039), for an agent's console session ([remote-serial.md](../remote-serial.md), section 4.3):
 - **What it holds:** for each machine, a ring of 1 MiB with absolute byte offsets, the oldest dropped first, each piece with the time it came (`pieces`: `offset`, `time_ms` on the host's clock). It is kept in memory only.
@@ -136,6 +137,21 @@ JSON over HTTP, as Effector's:
   - **The bytes outside frames:** a boot's lines before `link` answers, or a console beside the link on one UART. They are read between exchanges too. On a cable of several machines they go to a console of their own, `line`.
 - **Reading:** from any offset. One already dropped answers from the oldest kept, with `gap` the bytes lost.
 - **Input:** up to 4 KiB a call. A `seq` that is not higher than the last taken is not written again (MC-7.5), and the answer says `written: false`. While a lease holds the machine, only its holder's input is taken (`reservation_not_held`).
+
+**A line no machine answers** (800-LNK-0043), such as a board's U-Boot prompt before MIND Core runs:
+- **The mode.** The line is in `console` mode while no machine on it answers `hello`, and in `link` mode while one does. `GET /api/v1/endpoints` and the console's answer say which.
+- **Its console** is the machine's on a cable of one, and `line` on a cable of several.
+- **Input** to it in `console` mode is written to the port as it is:
+  - in order, `pace_ms` after each character (default 20 ms: U-Boot at 115200 drops a pasted line without it);
+  - with the same `seq` rule and lease rule as above. On `line`, every lease on the cable holds it: a session types there only when it holds each lease that is held.
+- **A break,** `POST /api/v1/console/break` with its length in `ms`, goes after the input before it:
+  - Linux holds the line with `TIOCSBRK` and lets it go with `TIOCCBRK`; Windows with `SetCommBreak` and `ClearCommBreak`;
+  - a TCP line has none: 409 `unsupported`. A pseudo-terminal takes the call and sends nothing.
+- **No hello while it is typed on.** From an input or a break until 60 s after the last one, the daemon says no `hello` on the line, since U-Boot would take a frame's bytes as typed. So:
+  - a machine booted from the prompt is found up to 60 s after the last key;
+  - before the first key, the daemon's hellos may have left bytes at the prompt: Ctrl-C clears U-Boot's line;
+  - a hello during U-Boot's countdown may stop it, as any key does. Whether it does on each board is not tested yet.
+- **While a machine answers** (`link`), input to `line` and a break are refused, 409 `link_mode`, "the link's frames share this line": a frame and typed bytes must not mix. A machine's own console still takes input through channel 1. Typed bytes still waiting when a machine starts to answer are dropped, and the daemon's log says so.
 
 **Cancel** stops a put or a get between frames. It stops a running program with STOP, where the other end can: MIND Core's `link` does, through the loader (800-KRN-0138). Where it cannot, the cancel is recorded as `cancel_error` and the program goes on.
 
@@ -207,6 +223,7 @@ Open the daemon's address, `http://127.0.0.1:8485/`, in a browser on the same ma
 - **What it shows, live:** the cable's other end (online, its name, when it last answered), the lease (who holds the machine, why, until when), the bytes sent ↑ and received ↓ since the daemon started with the speed each way over the last seconds and how busy the line is, the queue, the newest 200 operations with the reason each waiting one waits, and the output of the one clicked as it comes. The address keeps the operation followed (`#<id>`), so a reload or a link shows it again.
 - **Its buttons:** `hello`, the log (new since the last read, or all of it), the shell's `ip`, `netstat -i` and `ps`, a shell line, a program with arguments, a directory's list, a service replaced or put back, and a reboot. Each is an operation like any other, with its own idempotency key and the reason typed on the page. Those that change the machine ask first.
 - **The console** (800-LNK-0039): `show` puts the machine's console in the output pane, read every half second from `/api/v1/console`. A line typed beside it goes to `/api/v1/console/input` with a carriage return and a number that grows across reloads.
+  - **In `console` mode** (800-LNK-0043) the pane says so, and its typing goes to the line as it is: on a cable of several, `show` then shows `line`. An empty line sends the carriage return alone, which stops U-Boot's countdown. `^C` sends Ctrl-C, and `break` a break of 250 ms.
 - **The feed** is a WebSocket at `/api/v1/stream`. Its messages are JSON: `hello` (whether the key is needed), `traffic` (every second: `sent`, `received`, the daemon's clock `ms` and `baud`; read with no lock), `links` (at least every 2 s: the machines on the cable, each with its lease as `reservation`), `ops` (when the list changes, each with its `waiting`) and `output` (for the operation the page follows with `{"follow": "<id>", "from": <byte>}`).
 - **The cable comes first.** A feed never waits for the daemon's state: when the queue's worker holds it, the feed skips that turn. The feed holds it only to copy a few fields and at most 48 KiB of output, and writes to the browser afterwards. A browser that stops reading for 2 s is dropped, and at most 8 pages are served at once.
 - **The key.** With `--key-file`, the page asks for the key once. It keeps it for the tab (`sessionStorage`), sends it in `X-API-Key` with each call, and as the feed's first message.
@@ -222,5 +239,13 @@ Open the daemon's address, `http://127.0.0.1:8485/`, in a browser on the same ma
 - the page, the feed following a program's output to its end, eight pages that never read while operations go on, a ninth page refused, the key asked by the feed, and calls from another site or host name refused;
 - a lease: a second one refused, another session's `mkdir` waiting while a `log` passes and the holder's own run, wrong PINs refused, the lease kept across a restart and shown in the feed, and the waiting `mkdir` run once the lease is released. A unit test in `ops.rs` ends a lease at its time and reads `reservation.json` back.
 - two machines on one cable (800-LNK-0026), `mindlink serve --address 1` and `--address 2` on a simulated shared line ([common/mod.rs](../../tools/mindlink/tests/common/mod.rs)): both online, a submission naming no machine refused, each `put` and `list` reaching its own machine alone, a lease on `link-1` holding back its `mkdir` while `link-2`'s runs, the lease refused for `link-2`, and the held `mkdir` run once it is released. A unit test in `ops.rs` keeps each machine's queue and lease apart, and marks `lost` the operations of a machine the daemon no longer serves.
+- a line no machine answers (800-LNK-0043), a fake U-Boot on a pseudo-terminal that echoes and prints `=> `:
+  - `console` mode in the endpoints and the console;
+  - Ctrl-C and `version` written as they are, 20 ms apart, and nothing of the daemon's after them; the same `seq` twice written once;
+  - a non-holder's input and break refused while a lease is held, the holder's taken, and a break of 100 ms answered on the pseudo-terminal;
+  - with `mindlink serve` answering: `link` mode and a break refused; on a cable of two with one answering, input to `line` refused;
+  - on a TCP line with none answering: input to `line` written, a break answered `unsupported`.
+
+  A unit test in `console.rs` paces the typed bytes and shares the input's numbers.
 
 `scripts/host_tests.sh` runs it. It says nothing about a real cable or a MIND Core machine (MC-12.1); [800-LNK-0011](../../issues/800-LNK-0011-effector485.md) records what has run on them.

@@ -391,10 +391,16 @@ impl State {
     /// Where the bytes outside frames go: the machine's console on a cable of one, else `line`'s.
     pub fn stray_console(&self) -> usize { if self.links.len() > 1 { self.links.len() } else { 0 } }
 
+    /// The line's mode (800-LNK-0043): `link` while a machine on it answers, else `console`, its bytes as they are.
+    pub fn mode(&self) -> &'static str { if self.links.iter().any(|l| l.online) { "link" } else { "console" } }
+
+    /// The line is typed on as a console: no hello goes out on it.
+    pub fn hushed(&self) -> bool { self.consoles[self.stray_console()].hushed() }
+
     /// The machines as the API and the page show them: whether each answers, its queue and its lease.
     pub fn endpoints(&self, now: u64) -> Vec<Value> {
         self.links.iter().map(|l| obj(vec![
-            ("agent_id", s(&l.agent)), ("address", Value::Num(l.address as f64)), ("port", s(&l.port)), ("online", Value::Bool(l.online)),
+            ("agent_id", s(&l.agent)), ("address", Value::Num(l.address as f64)), ("port", s(&l.port)), ("online", Value::Bool(l.online)), ("mode", s(self.mode())),
             ("name", s(&l.name)), ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)), ("parallel_limit", Value::Num(1.0)),
             ("queued", Value::Num(self.queued(&l.agent) as f64)), ("running", Value::Num(self.running(&l.agent) as f64)),
             ("reservation", self.lease_at(&l.agent, now).map_or(Value::Null, |lease| lease.json(now))),
