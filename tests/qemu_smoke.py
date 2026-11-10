@@ -66,6 +66,8 @@ DMESG_WAIT = 30
 # How long the listen suite waits for an answer whose text it checks, beside a build load (000-APP-0131): DRV saw the
 # shell's prompt take more than 8 s there; the wait ends at the answer, so an unloaded run takes no longer.
 LOADED_WAIT = 60
+# The shell's prompt for keystore's passphrase while the boot waits for it, in place of its first one (308-APP-0130).
+BOOT_PASSPHRASE = "PASSPHRASE (NO ECHO; ENTER ENDS IT, ESC: LATER): "
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
@@ -81,13 +83,15 @@ def to_ordinal(text):
 class VM:
     wait = 8  # s: how long command() and expect() wait by default; a suite may set its own
 
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio"):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio", passphrase=False):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
         # and line ends came in the middle of lines the guest printed.
         # `decoy`: a directory served as another FAT disk ahead of the boot disk, on the same bus (211-KRN-0012).
         # `serial`: the console UART's chardev; "pty" gives it to a test's own tool (100000-KRN-0221), with no prompt to wait for.
+        # Where the boot waits for keystore's passphrase, the shell asks for it in place of its first prompt (308-APP-0130):
+        # Esc answers it (later) unless `passphrase`, which leaves the question to the test.
         self.disk = disk
         self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
@@ -148,7 +152,11 @@ class VM:
             return
         try:
             # Two tracks' suites may share a machine's CPUs (000-KRN-0092): a boot under that load takes longer.
-            self.expect("MIND> ", timeout=90)
+            if self.first_of(("MIND> ", BOOT_PASSPHRASE), timeout=90) == BOOT_PASSPHRASE:
+                if passphrase:
+                    return
+                self.send_bytes(b"\x1b")
+                self.expect("MIND> ", timeout=30, after="(LATER: THEY WAIT FOR IT")
             global BASE
             BASE = len(self.services())
         except BaseException:
@@ -235,6 +243,23 @@ class VM:
                 self.log += char
             except queue.Empty:
                 return
+
+    def first_of(self, texts, timeout):
+        """Which of `texts` comes first in the output since the last match, waited for as expect() waits."""
+        deadline = time.monotonic() + timeout
+        clean = ""
+        while time.monotonic() < deadline:
+            self.collect()
+            clean = to_ordinal(ANSI.sub("", self.output).replace("\r", ""))
+            if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
+                raise AssertionError(clean)
+            if found := sorted((clean.index(text), text) for text in texts if text in clean):
+                self.output = ""
+                return found[0][1]
+            if self.process.poll() is not None:
+                raise AssertionError(f"QEMU exited {self.process.returncode}: {clean[-3000:]}")
+            time.sleep(.01)
+        raise AssertionError(f"Timeout waiting for any of {texts!r}: {clean[-3000:]}")
 
     def expect(self, text, timeout=None, after=None):
         """Waits for `text` (after the first `after`, when given) in the output since the last match."""
@@ -12250,21 +12275,99 @@ def tls_suite(args, disk):
 
 
 def passphrase_wait_check(args, cpu):
-    """308-KRN-0205: with the device key sealed under the owner's passphrase (keystore.wit 1.6, passlock's file) and no
-    TPM, keystore waits for it, and init prepares the services that need the key instead of starting them; the shell
-    holds keystore's client badged for the passphrase (SLOT_PASSPHRASE 44, BADGE_KEY_PASSPHRASE 6). Nothing here types
-    the passphrase: the shell's command for it is APP's part, so the check ends at the wait. The file's header is
-    passlock's (MAGIC, version 1, the default parameters, salt and nonce); what it seals is never opened here."""
-    import struct
-    sealed = b"MINDPWD1" + bytes([1]) + struct.pack("<III", 9216, 4, 1) + os.urandom(16 + 12) + os.urandom(32 + 16)
+    """308-KRN-0205, 308-APP-0130: keystore's passphrase without a TPM, typed over the serial console with no echo.
+    Boot 1, keystore holding its device key unsealed: `passphrase` sets one (the one set Enter alone; a new one too short,
+    then two that differ, asked again) and changes it (a wrong one set refused, counted); a script and a passphrase on the
+    line are refused. Boot 2: keystore waits for it (keystore.wit 1.6, passlock's file), init prepares the services that
+    need the key instead of starting them, and the shell asks for it in place of its first prompt, holding keystore's
+    client badged for it (SLOT_PASSPHRASE 44, BADGE_KEY_PASSPHRASE 6). A short one is told, a wrong one refused; later
+    (Esc), `passphrase` asks again, the old one is refused and the new one opens the key, and init starts them. No
+    passphrase is in any serial line, log or history."""
+    first, second, wrong = "correct horse \u0436", "battery staple 2", "not-it guess 7"
+    secrets = (first.encode(), second.encode(), wrong.encode(), b"correct horse", b"battery staple", b"guess 7")
+
+    def typed(vm, text, then, timeout=120):
+        # `text` and Enter, typed with no echo; `then` once the shell has answered.
+        vm.collect()
+        since = len(vm.log)
+        vm.send_bytes(text.encode() + b"\r")
+        vm.logged(then, since, timeout=timeout)
+        return to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+
+    def asked(vm, command, then):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(command + "\n")
+        vm.logged(then, since, timeout=30)
+
     with tempfile.TemporaryDirectory(prefix="smoke-pass-", dir=ROOT / IMAGE) as temp:
-        image, _, _ = raw_fat_image(Path(temp), extra={"system/keystore/device.locked": sealed})
+        image, _, _ = raw_fat_image(Path(temp))
         store = Path(temp) / "store.img"
         with store.open("wb") as f:
             f.truncate(32 << 20)
-        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
-                extra=["-cpu", cpu, "-nic", "none", "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"])
+        extra = ["-cpu", cpu, "-nic", "none", "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
+        logs = []
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=extra)
         try:
+            require(vm.service_logs("keystore", "NOT SEALED"), "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
+            # Set: the one set is none, so Enter alone; the new one checked, then typed again.
+            asked(vm, "passphrase", "THE PASSPHRASE SET (NO ECHO; ENTER ALONE WHEN NONE IS SET YET, ESC: NOTHING CHANGES): ")
+            typed(vm, "", "THE NEW PASSPHRASE, 8 TO 128 BYTES (NO ECHO): ")
+            typed(vm, "short", "(NOT TAKEN: SHORTER THAN 8 BYTES)")
+            typed(vm, first, "THE NEW PASSPHRASE AGAIN (NO ECHO): ")
+            typed(vm, first + "x", "(THE TWO DIFFER: THE NEW ONE AGAIN, TWICE)")
+            typed(vm, first, "THE NEW PASSPHRASE AGAIN (NO ECHO): ")
+            out = typed(vm, first, "MIND> ")
+            require(out, "(SET: THE DEVICE KEY IS SEALED UNDER IT AND ITS UNENCRYPTED COPY REMOVED; EVERY BOOT WAITS FOR IT)")
+            log = vm.service_logs("keystore", "REMOVED")
+            require_all(log, "[KEYSTORE] PASSPHRASE SET FOR PID ", "THE DEVICE KEY SEALED UNDER IT IN system/keystore/device.locked",
+                        "[KEYSTORE] THE UNENCRYPTED COPY system/keystore/device.key REMOVED")
+            # A wrong one set: refused, and counted with the boot's.
+            asked(vm, "passphrase", "THE PASSPHRASE SET (NO ECHO")
+            typed(vm, wrong, "THE NEW PASSPHRASE, 8 TO 128 BYTES")
+            typed(vm, second, "THE NEW PASSPHRASE AGAIN")
+            out = typed(vm, second, "MIND> ")
+            require(out, "(NOT CHANGED: THAT IS NOT THE ONE SET, OR NONE IS: THEN ENTER ALONE) (WRONG: 1 IN A ROW)")
+            # The one set: changed.
+            asked(vm, "passphrase", "THE PASSPHRASE SET (NO ECHO")
+            typed(vm, first, "THE NEW PASSPHRASE, 8 TO 128 BYTES")
+            typed(vm, second, "THE NEW PASSPHRASE AGAIN")
+            out = typed(vm, second, "MIND> ")
+            require(out, "(CHANGED: THE DEVICE KEY IS SEALED UNDER THE NEW ONE; THE OLD ONE OPENS IT NO MORE)")
+            require(vm.service_logs("keystore", "PASSPHRASE CHANGED"), "[KEYSTORE] PASSPHRASE CHANGED FOR PID ")
+            # Never in a script, and never on the line: such a line stays out of the history.
+            require(vm.command('msh -c "passphrase"'), "PASSPHRASE: TYPED AT A CONSOLE OR THE SHELL'S WINDOW ALONE, NOT IN A SCRIPT")
+            require(vm.command("passphrase on-the-line-1"), "ERROR: USAGE: PASSPHRASE (TYPED WITH NO ECHO AFTER IT, NEVER ON THE LINE)")
+            vm.collect()
+            mark = len(vm.log)
+            vm.send_bytes(b"\x1b[A")
+            time.sleep(1)
+            vm.send_bytes(b"\x1b")
+            time.sleep(.5)
+            vm.collect()
+            assert "on-the-line-1" not in vm.log[mark:], vm.log[mark:][-500:]
+            log = vm.command("dmesg -s shell", raw=True)
+            require_all(log, "[SHELL] keystore'S PASSPHRASE SET ON CONSOLE 1", "[SHELL] keystore'S PASSPHRASE NOT CHANGED: WRONG: 1 IN A ROW",
+                        "[SHELL] keystore'S PASSPHRASE CHANGED ON CONSOLE 1")
+            vm.command("sync")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            logs.append(vm.log)
+        # Boot 2: the boot waits, and the shell asks before its first prompt.
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=extra, passphrase=True)
+        try:
+            require(vm.log, "THE BOOT WAITS FOR keystore'S PASSPHRASE: NO TPM SEALS THE DEVICE KEY HERE, THE PASSPHRASE DOES")
+            assert "MIND> " not in ANSI.sub("", vm.log), "the passphrase is asked in place of the first prompt"
+            typed(vm, "short", "(NOT TAKEN: SHORTER THAN 8 BYTES)")
+            out = typed(vm, wrong, BOOT_PASSPHRASE)
+            require(out, "(WRONG: 1 IN A ROW)")
+            # Later: the services that need the key wait for it, prepared, while the rest and the shell run.
+            vm.collect()
+            since = len(vm.log)
+            vm.send_bytes(b"\x1b")
+            vm.logged("MIND> ", since, timeout=30)
+            require(vm.log[since:], "(LATER: THEY WAIT FOR IT; `passphrase` ASKS AGAIN)")
             require(vm.service_logs("keystore", "IT WAITS FOR IT"), "[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN system/keystore/device.locked: IT WAITS FOR IT")
             # init's lines from the system log, whole: the service's own log keeps its last 4 KiB only.
             deadline, log = time.monotonic() + 60, ""
@@ -12279,12 +12382,39 @@ def passphrase_wait_check(args, cpu):
             servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
             held = re.search(r"^SLOT=44 GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE=6 EP=(\d+)", caps, re.M)
             assert held and servers.get(int(held[1])) == services["keystore"], caps
+            # `passphrase` asks again: the old one is refused, the second in a row; the new one opens the key.
+            asked(vm, "passphrase", BOOT_PASSPHRASE)
+            out = typed(vm, first, BOOT_PASSPHRASE)
+            require(out, "(WRONG: 2 IN A ROW)")
+            out = typed(vm, second, "MIND> ")
+            require(out, "(OPENED: keystore HOLDS THE DEVICE KEY, AND THE SERVICES THAT WAITED FOR IT START)")
+            deadline, log = time.monotonic() + 60, ""
+            while "THE SERVICES THAT WAITED FOR IT START" not in log and time.monotonic() < deadline:
+                log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] keystore HOLDS THE DEVICE KEY: THE SERVICES THAT WAITED FOR IT START")
+            deadline = time.monotonic() + 60
+            while not {"blockstore", "storefs", "tls", "ssh"} <= set(services := vm.services()) and time.monotonic() < deadline:
+                time.sleep(1)
+            assert {"blockstore", "storefs", "tls", "ssh"} <= set(services), services
+            require_all(vm.command("dmesg -s keystore", raw=True), "REFUSED UNLOCK FOR PID ", "A WRONG PASSPHRASE (2 IN A ROW",
+                        "[KEYSTORE] DEVICE KEY FROM system/keystore/device.locked (SEALED UNDER THE PASSPHRASE), OPENED FOR PID ")
+            require_all(vm.command("dmesg -s shell", raw=True), "[SHELL] THE BOOT WAITS FOR keystore'S PASSPHRASE: ASKED ON CONSOLE 1",
+                        "[SHELL] keystore'S PASSPHRASE REFUSED: WRONG: 1 IN A ROW", "[SHELL] keystore'S PASSPHRASE NOT TYPED: LATER",
+                        "[SHELL] keystore'S PASSPHRASE REFUSED: WRONG: 2 IN A ROW", "[SHELL] keystore'S PASSPHRASE TYPED ON CONSOLE 1: THE DEVICE KEY OPENED")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
-    print(f"PASS: keystore's passphrase without a TPM (308-KRN-0205): the services that need the device key ({', '.join(sorted(set(waited)))}) "
-          "wait for it, prepared, not started, while the rest and the shell run; the shell holds keystore's client badged for "
-          "the passphrase in slot 44", flush=True)
+            logs.append(vm.log)
+    # Not one byte of a passphrase on the serial line, the console and the system log being copied there.
+    for log in logs:
+        raw = log.encode("utf-8", "replace")
+        for secret in secrets:
+            assert secret not in raw, f"a passphrase on the serial line: {secret!r}"
+    print(f"PASS: keystore's passphrase without a TPM (308-KRN-0205, 308-APP-0130): set and changed with `passphrase` "
+          "(typed with no echo, the new one twice, a short one and two that differ asked again, a wrong one set refused); "
+          f"at the next boot the services that need the device key ({', '.join(sorted(set(waited)))}) wait for it, prepared, "
+          "while the shell asks in place of its first prompt holding keystore's client badged for it in slot 44; a wrong one "
+          "refused, the right one opens the key and init starts them; no passphrase on the serial line, in a log or the history", flush=True)
 
 
 def device_key_check(args, cpu):
