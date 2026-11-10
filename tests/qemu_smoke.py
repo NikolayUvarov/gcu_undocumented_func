@@ -12022,6 +12022,7 @@ def device_key_check(args, cpu):
             vm.close()
         kept = secrets_file(part, Path(temp), "netcheck")
         service_secrets_file(part, Path(temp))
+        copies = {name: keystore_file(part, Path(temp), name) for name in ("secrets/netpeer.kept", "secrets/netcopy.kept", "services/blockstore.kept")}
         vm, log, second = boot()
         try:
             require(vm.command("netpolicy"), "kept 10.0.2.2 tcp 7")
@@ -12031,17 +12032,35 @@ def device_key_check(args, cpu):
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key (ON DISK, NOT SEALED)")
         assert second == first, (first, second)
+        # 308-NET-0064: a file copied under another owner's name opens nothing and stays where it is, as it was.
+        for name, data in copies.items():
+            assert keystore_file(part, Path(temp), name) == data and keystore_file(part, Path(temp), name + ".before") is None, name
+        assert "SET ASIDE" not in log, log
         damaged = Path(temp) / "device.key"
         damaged.write_bytes(b"MINDKEY1" + bytes(64))
         subprocess.run(["mcopy", "-o", "-i", part, str(damaged), "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
+        # The store's disk made blank, so that the store makes a volume key at once under the new device key.
+        with store.open("r+b") as f:
+            f.write(bytes(32 << 20))
         vm, log, third = boot()
         try:
-            # The store's volume key was sealed under the old device key: it opens no more (308-KRN-0183).
-            require(service_log(vm, "keystore", "SECRETS OF SERVICE blockstore"), "[KEYSTORE] SECRETS OF SERVICE blockstore DO NOT OPEN UNDER THIS DEVICE KEY AND NAME: NOT READ")
+            # 308-NET-0064: every owner's file under the earlier device key set aside, and the store's new volume key kept.
+            log = service_log(vm, "keystore", "OF SERVICE blockstore KEPT")
+            for owner, name in (("SERVICE blockstore", "services/blockstore"), ("netpeer", "secrets/netpeer"), ("netcopy", "secrets/netcopy")):
+                require(log, f"[KEYSTORE] SECRETS OF {owner} MADE UNDER AN EARLIER DEVICE KEY: SET ASIDE AS system/keystore/{name}.kept.before")
+            assert re.search(r"\[KEYSTORE\] SECRET volume-[0-9a-f]{16} OF SERVICE blockstore KEPT FOR PID \d+", log), log
+            assert "DO NOT OPEN UNDER THIS DEVICE KEY" not in log, log
+            stored = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+            assert re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE FROM \w+, KEPT BY KEYSTORE, NOT ON THE MEDIUM", stored), stored
         finally:
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
         assert third != first, (first, third)
+        # The earlier files kept whole beside the new ones, for an owner who restores the earlier key by hand.
+        for name, data in copies.items():
+            assert keystore_file(part, Path(temp), name + ".before") == data, name
+        assert keystore_file(part, Path(temp), "services/blockstore.kept")[:8] == b"MINDSEC1"
+        assert keystore_file(part, Path(temp), "secrets/netpeer.kept") is None
         locked_file_check(args, cpu, image, part, Path(temp), store)
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
@@ -12057,8 +12076,9 @@ def device_key_check(args, cpu):
           "nothing and the key on disk is held; unlock itself not run (no task holds badge 6 before 308-KRN-0205)", flush=True)
     print(f"PASS: the block store's own secrets in keystore (308-KRN-0183): its client from init in slot 3 (BADGE_KEY_BLOCKSTORE), "
           f"the volume key of its blank disk kept as {volume} and read back at the next boot, not on the medium; no program runs by the "
-          "store's name, another program's client sees none of it nor opens the store's file copied under its name; under a new device "
-          "key it opens no more", flush=True)
+          "store's name, another program's client sees none of it nor opens the store's file copied under its name, which stays as "
+          "it is; when the device key is made anew, every owner's file is set aside whole and the store's new volume key is kept "
+          "(308-NET-0064)", flush=True)
 
 
 def passphrase_calls_check(vm):
@@ -12168,6 +12188,13 @@ def service_secrets_first_boot(vm):
     require_all(vm.command(f"netcopy secret-get:{kept[1]} secrets"), f"NETCHECK secret-get:{kept[1]} Missing", "NETCHECK secrets OK (NONE)")
     assert " FOR blockstore" not in vm.command("dmesg -s keystore", raw=True, timeout=60), "a program's secrets client named after the store"
     return kept[1]
+
+
+def keystore_file(part, temp, name):
+    """A file of system/keystore/ read from the disk on the host; None when there is none."""
+    out = temp / ("read-" + name.replace("/", "-"))
+    found = subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, capture_output=True)
+    return out.read_bytes() if found.returncode == 0 else None
 
 
 def service_secrets_file(part, temp):
@@ -12375,6 +12402,8 @@ def tpm_check(args, cpu):
         try:
             refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
             require(refused, f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}, WHICH KEEPS NONE UNDER IT")
+            # 308-NET-0064: the store's secrets under TPM A's key set aside when TPM B's key was made.
+            require(service_log(vm, "keystore", "SET ASIDE"), "[KEYSTORE] SECRETS OF SERVICE blockstore MADE UNDER AN EARLIER DEVICE KEY: SET ASIDE AS system/keystore/services/blockstore.kept.before")
             require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
         finally:
             close(vm)
