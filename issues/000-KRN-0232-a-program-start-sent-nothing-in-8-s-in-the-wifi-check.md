@@ -33,13 +33,17 @@
 
 **Step 1, the tasks' states in the record (2026-11-10).**
 
-- **The kernel** (`kernel/src/scheduler.rs`) keeps a page of text, 16 KiB, with a line for each task: its PID, name, CPU and state.
-  - It names what a waiting task waits for: the endpoint it receives on; the endpoint and the owner it sends to; the task whose reply it waits for; its interrupt line; or how long its sleep has left.
-  - The boot CPU's tick rewrites the page once a second, under the scheduler's lock. That CPU's tick runs while every CPU is halted, so the page is at most a second old when a wait runs out.
+- **The kernel** (`kernel/src/scheduler.rs`) keeps a 16 KiB page.
+  - A header (`TASKS v1`, the time in ms), then 32 bytes for each task: its PID, CPU, the wait `stat tasks` reports and what it waits on (an endpoint, a server's PID or a line), and its name.
+  - The boot CPU's tick rewrites it once a second, under the scheduler's lock. That CPU's tick runs while every CPU is halted, so the page is at most a second old when a wait runs out.
   - At boot the kernel prints the page's address on the serial line alone: `MIND CORE KERNEL: TASK STATES AT 0x…, 16384 BYTES, EACH SECOND`. It is not shown on the screen or kept in the kernel's log.
-- **The harness.** When a wait of 5 s or more runs out (000-KRN-0214), `tests/qemu_smoke.py` copies the page through QEMU's monitor. It tries `memsave` first, then `pmemsave`. It writes the page into the record between the CPUs' registers and the console's end. A stuck shell is never asked.
+  - **Its first form wrote text**, 34 lines of the kernel. Round 117's gate found that past the kernel's size budget (MC-1.2), so the page holds `wait_of`'s codes and the harness writes the lines: 17 lines.
+- **The harness.** When a wait of 5 s or more runs out (000-KRN-0214), `tests/qemu_smoke.py` copies the page through QEMU's monitor. It tries `memsave` first, then `pmemsave`.
+  - It writes a line for each task into the record, between the CPUs' registers and the console's end: `52 shell CPU 2 REPLY FROM PID 30`, `30 loader CPU 1 SEND TO ENDPOINT 9`.
+  - The waits are named as `common/abi.rs`'s `WAIT_` constants name them.
+  - A stuck shell is never asked.
 - **The checks:**
-  - `tests/qemu_stuck_test.py` (host): the record holds the page's lines and nothing past its end; a page that cannot be read by its virtual address is read by its physical one; a kernel that printed no address is recorded as such.
+  - `tests/qemu_stuck_test.py` (host): the record holds a line for each of the page's tasks and nothing past its zero PID; a page that cannot be read by its virtual address is read by its physical one; a kernel that printed no address is recorded as such.
   - The `normal` suite: the page read from a running VM has a line for `init` and the shell, and a service waiting to receive on an endpoint.
 
 **Seen again (2026-11-10).** Round 116's gate, candidate 46d756be (`main` 3fc93b93 with STO's request of 1642Z), "x86: RAM above 4 GiB" on x32 (x32-128), 124 s in.

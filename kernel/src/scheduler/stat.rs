@@ -36,7 +36,7 @@ fn largest_free(free: usize) -> usize {
     low
 }
 
-fn wait_of(state: State, running: bool, tasks: &Table<TaskBox>) -> (u8, u32) {
+pub(super) fn wait_of(state: State, running: bool, tasks: &Table<TaskBox>) -> (u8, u32) {
     if running { return (WAIT_RUNNING, 0); }
     match state {
         State::BlockedSend(ep) => (WAIT_SEND, ep as u32),

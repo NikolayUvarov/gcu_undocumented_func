@@ -40,7 +40,14 @@ class Hung:
 
 
 BOOT = "MIND CORE KERNEL: INIT STARTED\r\nMIND CORE KERNEL: TASK STATES AT 0x3A5000, 16384 BYTES, EACH SECOND\r\n"
-STATES = b"AT 41000 MS\n1 init CPU 0 IPC_WAIT RECEIVE ON 1\n52 shell CPU 2 IPC_WAIT REPLY FROM 30 loader\n30 loader CPU 1 IPC_WAIT SEND TO 9 OF 18 vfs_server\n\0garbage"
+def row(pid, cpu, wait, on, name):
+    return pid.to_bytes(4, "little") + bytes([cpu, wait, 0, 0]) + on.to_bytes(4, "little") + name.ljust(16, b"\0") + bytes(4)
+
+
+# The kernel's page (000-KRN-0232): init receiving, the shell waiting for the loader's reply, the loader sending to
+# vfs_server's endpoint 9, a sleeper; then a zero PID, and what follows it is not read.
+STATES = (b"TASKS v1" + (41000).to_bytes(8, "little") + bytes(16) + row(1, 0, 2, 1, b"init") + row(52, 2, 3, 30, b"shell")
+          + row(30, 1, 1, 9, b"loader") + row(77, 3, 4, 0, b"clock") + bytes(32) + row(99, 0, 8, 0, b"garbage"))
 
 
 class Stuck(unittest.TestCase):
@@ -78,9 +85,10 @@ class Stuck(unittest.TestCase):
         self.assertEqual(len(vm.asked), 2)
         [record] = self.records()
         text = record.read_text()
-        self.assertIn("--- the tasks\nAT 41000 MS\n", text)
-        self.assertIn("52 shell CPU 2 IPC_WAIT REPLY FROM 30 loader", text)
-        self.assertIn("30 loader CPU 1 IPC_WAIT SEND TO 9 OF 18 vfs_server", text)
+        self.assertIn("--- the tasks\nAT 41000 MS\n1 init CPU 0 RECEIVE ON ENDPOINT 1\n", text)
+        self.assertIn("52 shell CPU 2 REPLY FROM PID 30\n", text)
+        self.assertIn("30 loader CPU 1 SEND TO ENDPOINT 9\n", text)
+        self.assertIn("77 clock CPU 3 SLEEP\n", text)
         self.assertNotIn("garbage", text)
         self.assertEqual(list(pathlib.Path(self.temp.name).glob("mind-core-states-*")), [])
 
@@ -90,7 +98,7 @@ class Stuck(unittest.TestCase):
             vm.expect("MIND> ", timeout=0.1, after="dmesg -s blockstore\n")
         self.assertEqual([command.split()[0] for command in vm.asked], ["info", "memsave", "pmemsave"])
         [record] = self.records()
-        self.assertIn("52 shell CPU 2 IPC_WAIT REPLY FROM 30 loader", record.read_text())
+        self.assertIn("52 shell CPU 2 REPLY FROM PID 30", record.read_text())
 
     def test_a_kernel_that_printed_no_address_is_recorded_as_such(self):
         vm = Hung("CPU#0")

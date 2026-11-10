@@ -80,6 +80,24 @@ def to_ordinal(text):
     return PID_OUT.sub(lambda m: f"{m[1]}{int(m[2]) - BASE}" if int(m[2]) > BASE else m[0], text)
 
 
+def task_states_text(page):
+    """000-KRN-0232: the kernel's page of task states as lines: b"TASKS v1" and the time in ms, then 32 bytes a task (PID,
+    CPU, `stat tasks`' wait as common/abi.rs's WAIT_ codes name it, what it waits on, the name) until a zero PID."""
+    if page[:8] != b"TASKS v1":
+        return f"not the page: {page[:16]!r}"
+    waits = {int(code): name for name, code in re.findall(r"pub const WAIT_(\w+): u8 = (\d+);", (ROOT / "common/abi.rs").read_text())}
+    on = {"SEND": " TO ENDPOINT {}", "RECEIVE": " ON ENDPOINT {}", "REPLY": " FROM PID {}", "IRQ": " LINE {}"}
+    lines = [f"AT {int.from_bytes(page[8:16], 'little')} MS"]
+    for at in range(32, len(page) - 31, 32):
+        row = page[at:at + 32]
+        pid = int.from_bytes(row[:4], "little")
+        if pid == 0:
+            break
+        wait = waits.get(row[5], str(row[5]))
+        lines.append(f"{pid} {row[12:28].split(bytes(1))[0].decode('ascii', 'replace')} CPU {row[4]} {wait}" + on.get(wait, "").format(int.from_bytes(row[8:12], "little")))
+    return "\n".join(lines)
+
+
 class VM:
     wait = 8  # s: how long command() and expect() wait by default; a suite may set its own
 
@@ -306,7 +324,7 @@ class VM:
         for command in ("memsave", "pmemsave"):
             try:
                 self.hmp(f'{command} {address:#x} {size} "{copy}"')
-                text = copy.read_bytes().split(b"\0")[0].decode("ascii", "replace")
+                text = task_states_text(copy.read_bytes())
             except Exception as error:  # QEMU gone, its monitor not answering, or the address not mapped
                 text = f"not copied: {error!r}"
             finally:
@@ -1164,7 +1182,7 @@ def normal_suite(vm):
     states = vm.task_states()
     assert re.fullmatch(r"AT \d+ MS", states.splitlines()[0]), states[:800]
     assert re.search(r"^1 init CPU \d+ [A-Z_]+", states, re.M) and re.search(r"^\d+ shell CPU \d+ [A-Z_]+", states, re.M), states[:800]
-    assert re.search(r"^\d+ \S+ CPU \d+ IPC_WAIT RECEIVE ON \d+$", states, re.M), states[:800]
+    assert re.search(r"^\d+ \S+ CPU \d+ RECEIVE ON ENDPOINT \d+$", states, re.M), states[:800]
     vm.serial()
     # Every CPU the machine has is online in the guest (issue 171: no cap of 8).
     online = vm.command("cpus")
