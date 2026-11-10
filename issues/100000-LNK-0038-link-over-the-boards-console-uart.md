@@ -1,6 +1,6 @@
 # 100000-LNK-0038 — `link` over the board's console UART, so that `effector485` reaches the PinePhone
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-11-09) · **Blocked by:** [100000-KRN-0221](../issues-done/100000-KRN-0221-init-starts-uart-serial-for-link.done), `init`'s part, for the QEMU runs · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.3, MC-12.4
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-11-10) · **Blocked by:** — ([100000-KRN-0221](../issues-done/100000-KRN-0221-init-starts-uart-serial-for-link.done), `init`'s part, done); for the board runs, [100004-MOB-0002](100004-MOB-0002-the-first-boot-on-the-h5.md) and [0003](100004-MOB-0003-the-first-boot-on-the-h618.md) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.3, MC-12.4
 
 Numbered from the kernel session's request of 2026-11-08 in `requests-LNK.md`.
 
@@ -63,6 +63,19 @@ Numbered from the kernel session's request of 2026-11-08 in `requests-LNK.md`.
 - step 6's QEMU runs: x86 with COM1 on a pty, `virt` with its PL011, then the channel on a tree whose console shares its page.
 
 Until then `uart_serial` has not run on any machine or emulator (MC-12.3).
+
+## Progress (2026-11-10)
+
+**In `main` since round 106** (7415c9a1), through the kernel session's request:
+- `uart_serial` (db50334a) and `link_update.py`'s race (b9fa8183);
+- 100000-KRN-0221: `uart_serial` a boot image (handoff 30), started with `uart` in link.conf; `link` takes its client in place of `usb_serial`'s.
+
+**Tested by the kernel session** (QEMU 8.2.2, TCG), in the `link` suite's new check: the console UART on a pseudo-terminal, `mindlink` put and got 16 KiB through it, on x86 (16550) and aarch64 `virt` (PL011). So plan step 3 and the first half of step 6 are done for those two emulators.
+
+**Left:**
+- plan step 6's `effector485` run in QEMU: `hello`, `log` and `shell` through `uart_serial`, and the boot's first lines as console text;
+- the kernel's console channel (chip 5) on a machine whose console page holds other UARTs. No emulator has one. The first are the two Allwinner boards (main task [100004](100004-two-allwinner-boards-before-the-phone.md): the H5's UART0 page holds UART1 to UART3, the H618's UART1 to UART5), then the phone;
+- U-Boot's prompt on the same line, through effector485: [800-LNK-0043](800-LNK-0043-effector485-a-line-without-link.md).
 
 ## Related
 
