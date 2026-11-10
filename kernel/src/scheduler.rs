@@ -180,9 +180,21 @@ struct Scheduler {
     zeroing: [Option<Zeroing>; cpu::MAX], // each CPU's large block to zero once it lets go of the lock (262-KRN-0160)
     storms: [Storm; MSI_VECTORS],
     console: Option<Console>, // the console as a byte channel (100000-KRN-0222)
+    states_second: u64, // the second STATES was last written in
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
+// Each task's state as text, rewritten each second by the boot CPU's tick: a test whose wait ran out copies it through
+// QEMU's monitor from the address printed at boot, where a stuck shell cannot be asked (000-KRN-0232).
+const STATES_BYTES: usize = 16384;
+static mut STATES: [u8; STATES_BYTES] = [0; STATES_BYTES];
+struct StatesText<'a> { bytes: &'a mut [u8], at: usize }
+impl core::fmt::Write for StatesText<'_> {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let n = text.len().min(self.bytes.len() - 1 - self.at); // the last byte stays 0, the text's end
+        self.bytes[self.at..self.at + n].copy_from_slice(&text.as_bytes()[..n]); self.at += n; Ok(())
+    }
+}
 // Test-and-set, with a turn for a CPU that waited long (000-KRN-0219): none waits behind one that takes it again and again,
 // as CPU 0 did in round 91's gate, nor for the host to run one vCPU, as a ticket lock did in round 95's. Taken with
 // interrupts off, never twice by one CPU.
@@ -240,7 +252,8 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None, states_second: 0 }); }
+    crate::serial_only(&alloc::format!("MIND CORE KERNEL: TASK STATES AT {:#X}, {} BYTES, EACH SECOND\n", core::ptr::addr_of!(STATES) as usize, STATES_BYTES));
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
@@ -333,6 +346,7 @@ impl Scheduler {
             }
         }
         if now >= self.next_expiry { self.expire(now); }
+        if now / 1000 != self.states_second { self.states_second = now / 1000; self.write_states(now, ns); }
         if let Some((_, pid, _, _)) = self.held.filter(|&(_, _, since, _)| ns.saturating_sub(since) >= HOLD_NS) {
             // Kept in the ring, not printed: under load it came in the middle of the echo of a typed command.
             let _ = core::fmt::Write::write_fmt(&mut crate::klog::Kept, format_args!("MIND CORE KERNEL: PID {} HELD FOR THE COMPOSITOR'S COPY {} MS, LET GO\n", pid, HOLD_NS / 1_000_000));
@@ -340,6 +354,29 @@ impl Scheduler {
         }
         self.wake_idle(cpu, every);
         crate::trial::check(now);
+    }
+    // STATES: a line a task, and for one that waits whom or what it waits for.
+    fn write_states(&self, now: u64, ns: u64) {
+        use core::fmt::Write;
+        let mut text = StatesText { bytes: unsafe { &mut *core::ptr::addr_of_mut!(STATES) }, at: 0 };
+        let name = |slot: usize| (slot < self.tasks.len()).then(|| self.tasks[slot].as_ref()).flatten().map_or((0, ""), |t| (t.pid, core::str::from_utf8(&t.name.bytes[..t.name.len as usize]).unwrap_or("?")));
+        let _ = write!(text, "AT {} MS\n", now);
+        for (slot, task) in self.tasks.iter().enumerate().skip(1) {
+            let Some(task) = task else { continue };
+            let (pid, own) = name(slot);
+            let state = if self.current.contains(&slot) { "RUNNING" } else { task.state.label() };
+            let _ = write!(text, "{} {} CPU {} {}", pid, own, task.cpu, state);
+            let _ = match task.state {
+                State::Sleeping(deadline) => write!(text, " {} MS LEFT", deadline.saturating_sub(ns) / 1_000_000),
+                State::BlockedRecv(ep) => write!(text, " RECEIVE ON {}", ep),
+                State::BlockedSend(ep) => { let (p, n) = self.endpoint_owner.get(ep).copied().flatten().map_or((0, ""), |(s, _)| name(s)); write!(text, " SEND TO {} OF {} {}", ep, p, n) }
+                State::BlockedReply(server) => { let (p, n) = name(server); write!(text, " REPLY FROM {} {}", p, n) }
+                State::BlockedIrq(line) => write!(text, " IRQ {}", line),
+                _ => Ok(()),
+            };
+            let _ = text.write_str("\n");
+        }
+        let at = text.at; text.bytes[at] = 0;
     }
     // Quota use of the task in `slot` (MC-1.7, MC-5.1): tasks reserved by its live children and endpoints it created or
     // delegated.

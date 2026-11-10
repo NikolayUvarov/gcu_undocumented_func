@@ -1,6 +1,6 @@
 # 000-KRN-0232 — A program's start sent nothing in 8 s in the Wi-Fi check (round 114, x32)
 
-**Type:** tests and the program start (shell, `loader`, `vfs_server`, `netpolicy`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
+**Type:** tests and the program start (shell, `loader`, `vfs_server`, `netpolicy`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (step 1 made on `claude/000-KRN-0232-the-records-task-states`, 2026-11-10; the ten runs on x32 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -28,6 +28,19 @@
 ## Acceptance criteria
 
 - The cause is named, with the record that shows it, or ten runs on x32 beside a busy lane pass with the added state, which then stays.
+
+## Progress
+
+**Step 1, the tasks' states in the record (2026-11-10).**
+
+- **The kernel** (`kernel/src/scheduler.rs`) keeps a page of text, 16 KiB, with a line for each task: its PID, name, CPU and state.
+  - It names what a waiting task waits for: the endpoint it receives on; the endpoint and the owner it sends to; the task whose reply it waits for; its interrupt line; or how long its sleep has left.
+  - The boot CPU's tick rewrites the page once a second, under the scheduler's lock. That CPU's tick runs while every CPU is halted, so the page is at most a second old when a wait runs out.
+  - At boot the kernel prints the page's address on the serial line alone: `MIND CORE KERNEL: TASK STATES AT 0x…, 16384 BYTES, EACH SECOND`. It is not shown on the screen or kept in the kernel's log.
+- **The harness.** When a wait of 5 s or more runs out (000-KRN-0214), `tests/qemu_smoke.py` copies the page through QEMU's monitor. It tries `memsave` first, then `pmemsave`. It writes the page into the record between the CPUs' registers and the console's end. A stuck shell is never asked.
+- **The checks:**
+  - `tests/qemu_stuck_test.py` (host): the record holds the page's lines and nothing past its end; a page that cannot be read by its virtual address is read by its physical one; a kernel that printed no address is recorded as such.
+  - The `normal` suite: the page read from a running VM has a line for `init` and the shell, and a service waiting to receive on an endpoint.
 
 ## Related
 
