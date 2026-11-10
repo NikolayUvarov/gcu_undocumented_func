@@ -7942,6 +7942,8 @@ def updater_suite(args, updater_elf):
                 caps = vm.command(f"stat caps {vm.services()['updater']}", raw=True)
                 assert re.search(r"^SLOT=25 GEN=\d+ KIND=1 .*BADGE=23 ", caps, re.M), caps
             require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
+            # 351-APP-0132: the stand-in keeps no release, and the shell's `update kept` says so.
+            require(vm.command("update kept", raw=True), "UPDATE: NO RELEASE KEPT IN THE BLOCK STORE")
             for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
                 require(vm.command(command), answer)
             vm.process.wait(timeout=60)
@@ -8244,7 +8246,7 @@ def update_suite(args):
             require(out.replace("\r", ""), line)
         require(out, ", READ FROM THE SOURCE")
         require(vm.command("update check", raw=True, timeout=60), "UPDATE: THE CHANNEL NAMES THE RUNNING VERSION OR AN OLDER ONE")
-        require(vm.command("update apply 10", raw=True), "USAGE: UPDATE [STATUS | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]")
+        require(vm.command("update apply 10", raw=True), "USAGE: UPDATE [STATUS | KEPT | CHECK | FETCH | APPLY [TRIES, 1 TO 9] | ROLLBACK]")
         vm.send("update rollback\n")
         require(vm.expect("(Y/N)", timeout=30), "ROLL BACK TO SLOT A? ")
         vm.send_bytes(b"n")
@@ -8392,6 +8394,12 @@ def update_store_suite(args):
         found = re.search(rf"\[UPDATER\] STORE: VERSION {version} KEPT AS PIN (\d+), ROOT (\S+): (\d+) FILES, (\d+) BYTES PUT FROM SLOT ([AB]), (\d+) TAKEN FROM A KEPT RELEASE", log)
         assert found, log[-3000:]
         return int(found[1]), found[2], int(found[3]), int(found[4]), found[5], int(found[6])
+    def kept_releases(vm, releases):
+        # 351-APP-0132: the shell's `update kept` (update.wit 1.5 `kept`, 351-UPD-0035) lists the releases the store
+        # keeps, newest first, with the pins and roots the updater logged and their bytes read.
+        out = vm.command("update kept", raw=True, timeout=60).replace("\r", "")
+        rows = re.findall(r"^UPDATE: KEPT VERSION (\d+), PIN (\d+), ([\d ]+) BYTES, ROOT (\S+)$", out, re.M)
+        assert [(int(v), int(p), r) for v, p, _, r in rows] == releases and all(int(b.replace(" ", "")) > 0 for _, _, b, _ in rows), (releases, out)
     vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network, *disks])
     try:
         require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (BLANK)")
@@ -8399,10 +8407,12 @@ def update_store_suite(args):
         require(log, "[UPDATER] STORE: RELEASES ARE KEPT IN THE BLOCK STORE")
         pin5, root5, files5, put5, slot5, taken5 = pinned(log, 5)
         assert (slot5, taken5) == ("A", 0), log
+        kept_releases(vm, [(5, pin5, root5)])
         out = vm.command("update fetch", raw=True, timeout=1500)
         require(out, "UPDATE: VERSION 6 STAGED IN THE OTHER SLOT")
         log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 60)
         pin6, root6, files6, put6, slot6, taken6 = pinned(log, 6)
+        kept_releases(vm, [(6, pin6, root6), (5, pin5, root5)])
         # Only what release 6 changes is put: its uptime and its loader.
         assert slot6 == "B" and put6 == (newer / "uptime.elf").stat().st_size + (newer / BOOT_EFI).stat().st_size and taken6 == files6 - 2, log
         # The store names the updater's badge at its pins: OWNER_UPDATER with get, put and publish (351-KRN-0218).
@@ -8437,6 +8447,7 @@ def update_store_suite(args):
         log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
         require(log, "[UPDATER] SLOT B CONFIRMED ON THE DISK")
         assert "LET GO" not in log, log
+        kept_releases(vm, [(6, pin6, root6), (5, pin5, root5)])
         # An object nothing retains, so the collection has something to free once its lease (60 s) has ended.
         loose = re.search(r"PUT (\S+) SIZE 40000", vm.command("blocks pattern 40000", raw=True))[1]
         time.sleep(62)
@@ -8490,7 +8501,7 @@ def update_store_suite(args):
     shutil.rmtree(temp, ignore_errors=True)
     print(f"PASS: updatestore: release 5 kept in the block store at the updater's start ({files5} files, {put5} bytes), "
           f"release 6 kept once staged with {taken6} of its {files6} files taken from release 5's tree; applied and "
-          "confirmed, the store keeps both, the shell's client is refused their pins, and after a collection both trees "
+          "confirmed, the store keeps both, as `update kept` lists them each time, the shell's client is refused their pins, and after a collection both trees "
           "read back whole; slot A's kernel and loader damaged on the disk, `update rollback` writes release 5 back from "
           "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033); slot B's staged kernel "
           "damaged before the apply, `update apply` with no network writes release 6 back from the store, and slot B boots "
