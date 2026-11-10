@@ -3,18 +3,18 @@
 // Ring 3 AHCI (SATA) driver: HBA registers via an MMIO capability, commands and data in its own DMA region. READ DMA
 // EXT, WRITE DMA EXT and FLUSH CACHE EXT (writes only for clients with the write badge, see mind::block_protocol).
 // Every wait ends at a deadline; a request is checked against the DMA region here; a failed command restarts the port,
-// and the log names a run of failures once (000-DRV-0064, checks.rs).
+// and the log names a run of failures once (000-DRV-0064, checks.rs). Each port's signature is received before it is
+// read, as a controller the firmware left untouched needs (307-DRV-0068, checks.rs).
 mod checks;
 
-use checks::{Bohc, Clock, Handoff, COMMAND_NS, FLUSH_NS, READY_NS, STOP_NS};
+use checks::{Answer, Bohc, Clock, Handoff, Ports, CLB, CMD, CMD_CR, CMD_FR, CMD_FRE, CMD_ST, COMMAND_NS, FB, FLUSH_NS, READY_NS, SERR, STOP_NS, TFD};
 use mind::abi::{BootInfo, BLOCK_KIND_AHCI, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver, DriverError, Outcome};
 use mind::dev::{Dma, Mmio};
 
 const CAP2: usize = 0x24; const BOHC: usize = 0x28; const GHC: usize = 0x04; const PI: usize = 0x0C;
-const CLB: usize = 0x00; const FB: usize = 0x08; const IS: usize = 0x10; const CMD: usize = 0x18; const TFD: usize = 0x20;
-const SIG: usize = 0x24; const SSTS: usize = 0x28; const SERR: usize = 0x30; const CI: usize = 0x38;
-const CMD_ST: u32 = 1; const CMD_SUD: u32 = 2; const CMD_POD: u32 = 4; const CMD_FRE: u32 = 1 << 4; const CMD_FR: u32 = 1 << 14; const CMD_CR: u32 = 1 << 15;
+const IS: usize = 0x10; const CI: usize = 0x38; // a port's, the others in checks.rs
+const CMD_SUD: u32 = 2; const CMD_POD: u32 = 4;
 const IS_TFES: u32 = 1 << 30;
 // DMA region layout: command list, received FIS, command table, data buffer (64 KiB aligned).
 const LIST: usize = 0; const FIS: usize = 0x400; const TABLE: usize = 0x1000; const DATA: usize = 0x10000;
@@ -27,15 +27,19 @@ impl Clock for Time {
 }
 fn wait(deadline_ns: u64, done: impl FnMut() -> bool) -> bool { checks::wait(&Time, deadline_ns, done) }
 
-// The HBA's BOHC for the handoff.
-struct Owner<'a>(&'a Mmio);
-impl Clock for Owner<'_> {
+// The HBA's BOHC for the handoff, and its ports' registers for their signatures.
+struct Hba<'a>(&'a Mmio);
+impl Clock for Hba<'_> {
     fn now_ns(&self) -> u64 { Time.now_ns() }
     fn sleep(&self) { Time.sleep() }
 }
-impl Bohc for Owner<'_> {
+impl Bohc for Hba<'_> {
     fn bohc(&self) -> u32 { self.0.read32(BOHC) }
     fn set_bohc(&self, value: u32) { self.0.write32(BOHC, value) }
+}
+impl Ports for Hba<'_> {
+    fn reg(&self, port: usize, offset: usize) -> u32 { self.0.read32(0x100 + port * 0x80 + offset) }
+    fn set(&self, port: usize, offset: usize, value: u32) { self.0.write32(0x100 + port * 0x80 + offset, value) }
 }
 
 // `room`: the data area's bytes in the DMA region; `failing`: whether the last command failed, so that a run of
@@ -47,20 +51,27 @@ impl Ahci {
     fn set(&self, offset: usize, value: u32) { self.hba.write32(0x100 + self.port * 0x80 + offset, value) }
 
     fn probe() -> Option<Self> {
-        let (hba, dma) = (Mmio::map(SLOT_DEV0).ok()?, Dma::map(SLOT_MEM).ok()?);
+        let (hba, mut dma) = (Mmio::map(SLOT_DEV0).ok()?, Dma::map(SLOT_MEM).ok()?);
         if dma.len() < DATA + 512 { mind::println!("[AHCI] THE DMA REGION ({} BYTES) HOLDS NO DATA AREA", dma.len()); return None; }
         hba.write32(GHC, hba.read32(GHC) | 1 << 31); // AHCI mode
         // Taken from the firmware where it offers the handoff (CAP2.BOH); one still busy after 2 s is taken too, as before
         // the handoff was checked, so that a slow firmware does not cost the boot disk (the i5 PC boots from SATA).
         if hba.read32(CAP2) & 1 != 0 {
-            match checks::handoff(&Owner(&hba)) {
+            match checks::handoff(&Hba(&hba)) {
                 Handoff::Taken(ms) => mind::println!("[AHCI] TAKEN FROM THE FIRMWARE IN {} MS", ms),
                 Handoff::Silent(ms) => mind::println!("[AHCI] THE FIRMWARE DID NOT LET GO IN {} MS AND IS NOT BUSY: TAKEN, AS AHCI 10.6.3 ALLOWS", ms),
                 Handoff::Kept(ms) => mind::println!("[AHCI] THE FIRMWARE STILL SAYS IT IS BUSY AFTER {} MS: TAKEN ANYWAY", ms),
             }
         }
-        let implemented = hba.read32(PI);
-        let port = (0..32).find(|&p| implemented & 1 << p != 0 && hba.read32(0x100 + p * 0x80 + SSTS) & 0xF == 3 && hba.read32(0x100 + p * 0x80 + SIG) == 0x0000_0101)?;
+        // Each port with a device gets this command list and FIS area and FIS receive before its SIG is read: OVMF hands
+        // its ports over started, AAVMF and a firmware that boots from elsewhere may leave them untouched (307-DRV-0068).
+        dma.zero(0, DATA);
+        let port = checks::disk_port(&Hba(&hba), hba.read32(PI), dma.physical(LIST), dma.physical(FIS), |p, answer| match answer {
+            Answer::Signature(sig, true) => mind::println!("[AHCI] PORT {}: SIGNATURE {:08X} AFTER A COMRESET", p, sig),
+            Answer::Silent { ssts, tfd, sig } => mind::println!("[AHCI] PORT {}: NO SIGNATURE, EVEN AFTER A COMRESET (SSTS {:X}, TFD {:X}, SIG {:08X}): SKIPPED", p, ssts, tfd, sig),
+            Answer::Stuck => mind::println!("[AHCI] PORT {}: IT DID NOT STOP: SKIPPED", p),
+            Answer::Signature(_, false) => {}
+        })?;
         let room = dma.len() - DATA;
         let mut device = Self { hba, dma, port, sectors: 0, room, failing: false };
         device.start()?;
