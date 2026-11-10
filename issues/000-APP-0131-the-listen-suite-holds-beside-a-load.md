@@ -2,7 +2,7 @@
 
 **Type:** tools (tests: the `listen` suite) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [000-APP-0114](000-APP-0114-hear-waits-for-a-whole-command.md) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.2
 
-**Numbered by:** the tools track, 2026-11-10, from DRV's note on [000-DRV-0066](000-DRV-0066-the-ac97-capture-ring-overflows.md) (`internal-dev-messages`, `APP/2026-11-09T2217Z-DRV-…`).
+**Numbered by:** the tools track, 2026-11-10, from DRV's note on [000-DRV-0066](../issues-done/000-DRV-0066-the-ac97-capture-ring-overflows.done) (`internal-dev-messages`, `APP/2026-11-09T2217Z-DRV-…`).
 
 ## Problem
 
@@ -25,4 +25,4 @@
 
 ## Related
 
-[000-DRV-0066](000-DRV-0066-the-ac97-capture-ring-overflows.md), [000-APP-0114](000-APP-0114-hear-waits-for-a-whole-command.md).
+[000-DRV-0066](../issues-done/000-DRV-0066-the-ac97-capture-ring-overflows.done), [000-APP-0114](000-APP-0114-hear-waits-for-a-whole-command.md).

@@ -84,7 +84,7 @@
     - before, on the old image, a save every 11 s with three flushes.
 
   That holds on that machine (MC-12.1).
-- **The updater's period,** the stick's remaining traffic, is [351-UPD-0036](../issues/351-UPD-0036-the-updaters-period-from-the-release-it-booted.md).
+- **The updater's period,** the stick's remaining traffic, is [351-UPD-0036](351-UPD-0036-the-updaters-period-from-the-release-it-booted.done).
 
 ## Related
 

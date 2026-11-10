@@ -101,6 +101,8 @@ The kernel has a ring and a blocking read already: a task's text input (`TEXT_QU
 
 **Not changed, and offered to `MOB`:** holding those lines back while the channel stands, keeping only the fatal and stop lines (about one line of kernel code, against 5 left in the budget).
 
+**Landed** in round 110 (`main` 91e74b59, 2026-11-10), with 100000-PRT-0010's busy-detect: the finding above of what still reaches the line while the channel stands. MOB keeps those lines on the line for the boards' first boots (its message of 2026-11-10, 0738Z).
+
 ## Related
 
 [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [100000-KRN-0221](../issues-done/100000-KRN-0221-init-starts-uart-serial-for-link.done), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md) (the 16550 the kernel drives).

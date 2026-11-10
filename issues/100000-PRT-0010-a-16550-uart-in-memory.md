@@ -1,6 +1,6 @@
 # 100000-PRT-0010 — A 16550 UART in memory, as the kernel's console and the shell's
 
-**Type:** porting (the console) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** open (started 2026-11-08 at the maintainer's word, before the phone; the kernel's and the loader's lines done; the busy-detect and the host tests of the kernel's console done, 2026-11-10; below) · **Blocked by:** — ([100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done), the console from `stdout-path`, done) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
+**Type:** porting (the console) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** open (the kernel's and the loader's lines, the channel's busy-detect and the host tests of the kernel's console in `main`, round 110; the shell's console on a 16550 and any run on a platform left) · **Blocked by:** — ([100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done), the console from `stdout-path`, done) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
 
 ## Problem
 
@@ -43,7 +43,7 @@
 
 ## Progress (2026-11-10): the busy-detect, and host tests of the kernel's console
 
-`MOB` asked for it for the two Allwinner boards ([100004](100004-two-allwinner-boards-before-the-phone.md); its message of 2026-11-10 to `KRN` and `PRT`, point 2). Both boards' consoles are DesignWare UARTs ([100004-PRT-0013](100004-PRT-0013-the-allwinner-boards-trees.md)). On the branch `claude/100000-PRT-0010-busy-detect`:
+`MOB` asked for it for the two Allwinner boards ([100004](100004-two-allwinner-boards-before-the-phone.md); its message of 2026-11-10 to `KRN` and `PRT`, point 2). Both boards' consoles are DesignWare UARTs ([100004-PRT-0013](../issues-done/100004-PRT-0013-the-allwinner-boards-trees.done)). On the branch `claude/100000-PRT-0010-busy-detect`:
 
 - **Why the kernel needs it.**
   - **The interrupt.** A DesignWare UART raises its busy-detect interrupt (IIR 7) when LCR is written while it is busy. The interrupt stays up until `USR`, register 31 (0x7C at `reg-shift` 2), is read.
@@ -69,6 +69,8 @@
 - the shell's console on a 16550 (`mind::dev::Uart`), with interrupts and the DesignWare busy-detect. `init` lends a console's node only when it is a PL011, so on these boards `link` and the shell reach the console through the kernel's channel (100000-KRN-0222);
 - any run on a platform: QEMU's `virt` has only a PL011, and neither the boards nor the PinePhone have run it yet. The code above has run nowhere.
 
+**Landed** in round 110 (`main` 91e74b59, 2026-11-10): the busy-detect and `tests/console16550_host.rs`. Every group of the gate passed with it.
+
 ## Related
 
-[100000](100000-a-phone-the-pinephone-first.md), [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done), [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) (the console as a channel), [100004](100004-two-allwinner-boards-before-the-phone.md) and [100004-PRT-0013](100004-PRT-0013-the-allwinner-boards-trees.md) (the two Allwinner boards, whose consoles are DesignWare UARTs).
+[100000](100000-a-phone-the-pinephone-first.md), [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done), [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) (the console as a channel), [100004](100004-two-allwinner-boards-before-the-phone.md) and [100004-PRT-0013](../issues-done/100004-PRT-0013-the-allwinner-boards-trees.done) (the two Allwinner boards, whose consoles are DesignWare UARTs).
