@@ -6,7 +6,7 @@
 //! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029); the badges of
 //! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112); a program's question about a flow (shell/src/flowask.rs,
 //! 000-APP-0120); a console program's secret line (shell/src/secret.rs, 000-APP-0126); `nn run`'s rows (shell/src/nnrows.rs, 262-APP-0112); `volume`, `mic` and data/sound.conf (shell/src/sound.rs,
-//! 000-APP-0076, 000-APP-0077).
+//! 000-APP-0076, 000-APP-0077); keystore's passphrase typed at the console (shell/src/passphrase.rs, 308-APP-0130).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -43,6 +43,8 @@ mod hostname;
 mod wifilend;
 #[path = "../shell/src/secret.rs"]
 mod secret;
+#[path = "../shell/src/passphrase.rs"]
+mod passphrase;
 #[path = "../shell/src/nnrows.rs"]
 mod nnrows;
 #[path = "../shell/src/sound.rs"]
@@ -670,6 +672,81 @@ fn a_secret_line_is_typed_with_no_echo_and_wiped() {
     // The shell's prompt names the program and its PID, and shows the program's words made safe.
     assert_eq!(secret::prompt("get", 42, "PASSWORD FOR bob"), "SECRET FOR get (PID 42), TYPED WITH NO ECHO (ENTER ENDS IT, ESC REFUSES IT): PASSWORD FOR bob ");
     assert!(!secret::prompt("get", 42, "a\u{1b}[2Jb").contains('\u{1b}'), "no escape sequence of the program's reaches the console");
+}
+
+#[test]
+fn keystores_passphrase_is_typed_in_steps_and_checked_before_it_is_sent() {
+    // 308-APP-0130: each line typed with no echo; the boot's one sent once it is 8 to 128 bytes; a new one asked after
+    // the one set (empty when none is), then again, and sent only when the two match; Esc wipes every line.
+    use passphrase::{length, on_line, prompt, Ask, Next, Typing, MAX, MIN};
+    fn typed(typing: &mut Typing, text: &str) -> Next {
+        for c in text.chars() { assert_eq!(typing.key(Some(c), false, false, false), Next::Going); }
+        typing.key(None, false, true, false)
+    }
+    // The boot's: out of 8 to 128 bytes it is told at once, nothing sent; UTF-8 counts in bytes.
+    let mut boot = Typing::new(Ask::Unlock);
+    assert_eq!(typed(&mut boot, "short"), Next::Ask(Ask::Unlock, Some("(NOT TAKEN: SHORTER THAN 8 BYTES)")));
+    assert!(boot.line.bytes().is_empty(), "a line not taken is wiped");
+    assert_eq!(typed(&mut boot, &"x".repeat(MAX + 1)), Next::Ask(Ask::Unlock, Some("(NOT TAKEN: LONGER THAN 128 BYTES)")));
+    assert_eq!(typed(&mut boot, "\u{0436}\u{0436}\u{0436}\u{0436}"), Next::Unlock, "4 Cyrillic letters are 8 bytes");
+    assert_eq!(boot.line.bytes(), "\u{0436}\u{0436}\u{0436}\u{0436}".as_bytes());
+    boot.wipe();
+    assert!(boot.line.bytes().is_empty());
+    assert_eq!((length(&[b'a'; MIN - 1]).is_some(), length(&[b'a'; MIN]), length(&[b'a'; MAX]), length(&[b'a'; MAX + 1]).is_some()), (true, None, None, true));
+    // A first one: the one set is Enter alone; the new one checked, then typed again.
+    let mut first = Typing::new(Ask::Old);
+    assert_eq!(typed(&mut first, ""), Next::Ask(Ask::New, None));
+    assert!(!first.changes());
+    assert_eq!(typed(&mut first, "1234567"), Next::Ask(Ask::New, Some("(NOT TAKEN: SHORTER THAN 8 BYTES)")));
+    assert_eq!(typed(&mut first, "correct horse"), Next::Ask(Ask::Again, None));
+    assert_eq!(typed(&mut first, "correct h0rse"), Next::Ask(Ask::New, Some("(THE TWO DIFFER: THE NEW ONE AGAIN, TWICE)")));
+    assert!(first.new.bytes().is_empty(), "the new one typed again from the start");
+    assert_eq!(typed(&mut first, "correct horse"), Next::Ask(Ask::Again, None));
+    assert_eq!(typed(&mut first, "correct horse"), Next::Set);
+    assert_eq!((first.old.bytes(), first.new.bytes(), first.line.bytes()), (&b""[..], &b"correct horse"[..], &b""[..]));
+    // A change: the one set is typed; a short one there is told, as keystore never sealed under it.
+    let mut change = Typing::new(Ask::Old);
+    assert_eq!(typed(&mut change, "abc"), Next::Ask(Ask::Old, Some("(NOT TAKEN: SHORTER THAN 8 BYTES)")));
+    assert_eq!(typed(&mut change, "correct horse"), Next::Ask(Ask::New, None));
+    assert!(change.changes());
+    assert_eq!(typed(&mut change, "battery staple"), Next::Ask(Ask::Again, None));
+    // Esc, or Ctrl+C, at any step: nothing sent, every line wiped.
+    assert_eq!(change.key(None, true, false, false), Next::Cancelled);
+    assert!(change.old.bytes().is_empty() && change.new.bytes().is_empty() && change.line.bytes().is_empty());
+    let mut again = Typing::new(Ask::Unlock);
+    assert_eq!(again.key(Some('a'), false, false, false), Next::Going);
+    assert_eq!(again.key(Some('\u{3}'), false, false, false), Next::Cancelled);
+    assert!(again.line.bytes().is_empty());
+    // The prompts say there is no echo; none names a passphrase.
+    for ask in [Ask::Unlock, Ask::Old, Ask::New, Ask::Again] { assert!(prompt(ask).contains("NO ECHO"), "{:?}", ask); }
+    assert!(prompt(Ask::Old).contains("ENTER ALONE WHEN NONE IS SET YET"));
+    // A passphrase typed on the line by mistake stays out of the history; `passphrase` alone goes in.
+    assert!(on_line("passphrase correct horse") && on_line("  PASSPHRASE x"));
+    assert!(!on_line("passphrase") && !on_line("passphrase   ") && !on_line("passphrases x") && !on_line("help passphrase"));
+}
+
+#[test]
+fn keystores_wait_after_wrong_passphrases_is_said() {
+    // 308-APP-0130 (keystore.wit 1.6): no wait after the first two wrong ones in a row, then 1 s, doubling up to 60 s;
+    // `budget` after the shell restarted, which counted none, keeps a wait too; an opened one starts the count again.
+    use passphrase::{set, unlocked, wait_ms, Refusal, Tries};
+    assert_eq!((1..=11).map(wait_ms).collect::<Vec<_>>(), [0, 0, 1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000]);
+    let mut tries = Tries::default();
+    assert_eq!(tries.denied(10_000), "(WRONG: 1 IN A ROW)");
+    assert_eq!(tries.left(10_000), 0);
+    assert_eq!(tries.denied(11_000), "(WRONG: 2 IN A ROW)");
+    assert_eq!(tries.denied(12_000), "(WRONG: 3 IN A ROW; keystore TAKES THE NEXT TRY IN 1 S)");
+    assert_eq!(tries.left(12_400), 600);
+    assert_eq!(tries.denied(13_000), "(WRONG: 4 IN A ROW; keystore TAKES THE NEXT TRY IN 2 S)");
+    tries.opened();
+    assert_eq!(tries, Tries::default());
+    let mut restarted = Tries::default();
+    assert_eq!(restarted.budget(5_000), "(TOO SOON AFTER A WRONG ONE: keystore TAKES THE NEXT TRY IN 1 S)");
+    assert_eq!((restarted.wrong, restarted.left(5_000)), (3, 1000));
+    assert!(unlocked(Ok(())).starts_with("(OPENED"));
+    assert!(set(Ok(()), false).starts_with("(SET") && set(Ok(()), true).starts_with("(CHANGED"));
+    assert!(set(Err(Refusal::Denied), true).starts_with("(NOT CHANGED: THAT IS NOT THE ONE SET"));
+    assert!(set(Err(Refusal::Denied), false).starts_with("(NOT SET: ONE IS SET ALREADY"));
 }
 
 #[test]

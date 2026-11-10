@@ -63,6 +63,7 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 - [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done): a block client bounded to a window of sectors, in every driver's serve loop.
 - [307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done): `init` finds the store's partition and gives `blockstore` window 1 of its driver.
 - [307-STO-0042](../issues-done/307-STO-0042-a-pass-over-the-medium-reads-ahead.done): a pass over the medium reads ahead, for the partition's size.
+- [307-STO-0044](../issues-done/307-STO-0044-the-store-on-an-nvme-and-an-ahci-partition.done): the store on a partition of an NVMe and of an AHCI disk, beside other systems' partitions.
 
 **What QEMU has shown,** on x86 and aarch64 (`tests/usb_image_smoke.py`, 307-KRN-0177):
 - the store mounts the stick's partition through window 1, its size the partition's, while `vfs_server` reads its volumes on the same drive;
@@ -70,7 +71,12 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 - two candidates are refused and neither is written;
 - a blank partition is taken only once `store.txt` names it, and the store then formats it through the window, as the host reads back.
 
-**Left for the second criterion:** the store on a partition of an NVMe and of an AHCI disk, and an object found on a partition after a reboot. No suite checks these yet.
+**What the `store` suite shows** (307-STO-0044):
+- the store on an NVMe partition (GPT) and on an AHCI partition (MBR), on x86 and on aarch64 (the latter since 307-DRV-0068);
+- an object and a name found after a reboot;
+- on the host, every sector outside the store's partition as written, another system's partitions before and after it and the disk beside it among them.
+
+**The second criterion is met in QEMU,** on x86 and aarch64: the NVMe and AHCI partitions here, and the USB stick's partition, a blank disk and two candidates never written in 307-KRN-0177's USB image suite.
 
 **Left besides:**
 - [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md): what a flush reaches, per driver;

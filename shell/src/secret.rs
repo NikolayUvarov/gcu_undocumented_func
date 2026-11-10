@@ -44,6 +44,14 @@ impl Line {
 
     pub fn bytes(&self) -> &[u8] { &self.bytes[..self.len] }
 
+    /// `from`'s bytes in place of these, and `from` wiped: a line kept for a later step (308-APP-0130).
+    pub fn take(&mut self, from: &mut Line) {
+        self.wipe();
+        self.bytes[..from.len].copy_from_slice(&from.bytes[..from.len]);
+        self.len = from.len;
+        from.wipe();
+    }
+
     /// Every byte zeroed, by writes the compiler keeps.
     pub fn wipe(&mut self) {
         for b in self.bytes.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) } }

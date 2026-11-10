@@ -173,6 +173,36 @@ pub fn load(seed: &[u8; 32], owner: &Owner) -> Result<Secrets, Error> {
     opened.map_err(|why| { mind::println!("[KEYSTORE] SECRETS OF {} {}: NOT READ", owner, why); Error::NoKey })
 }
 
+/// Every owner's file, kept or a write's new one, moved aside once a device key is made anew (308-NET-0064): sealed under
+/// the earlier key, it opens under no later one, and `put` would refuse that owner for ever. The owners start with no
+/// secrets; one who restores the earlier `device.key` by hand moves its file back. Called only where a key is made
+/// anew, so a file that does not open at any other time, one copied under another owner's name among them, stays.
+pub fn set_aside() {
+    for kind in [Kind::Service, Kind::Program] {
+        let dir = kind.dir();
+        let mut names = Vec::new();
+        let _ = fs::list(dir, |entry| {
+            let name = entry.name_str();
+            let lower = name.to_ascii_lowercase();
+            if !entry.is_dir && (lower.ends_with(".kept") || lower.ends_with(".new")) { names.push(alloc::string::String::from(name)); }
+        });
+        for name in names {
+            let (mut from, mut to) = (FixedBuf::<96>::new(), FixedBuf::<96>::new());
+            let _ = core::fmt::Write::write_fmt(&mut from, format_args!("{}/{}", dir, name));
+            let _ = core::fmt::Write::write_fmt(&mut to, format_args!("{}/{}.before", dir, name));
+            let owner = name.rsplit_once('.').map_or(name.as_str(), |(owner, _)| owner);
+            let what = match kind { Kind::Service => "SERVICE ", Kind::Program => "" };
+            // One set aside before goes: it was sealed under a key older still.
+            let replaced = fs::remove(to.as_str()).is_ok();
+            match fs::rename(from.as_str(), to.as_str()) {
+                Ok(()) => mind::println!("[KEYSTORE] SECRETS OF {}{} MADE UNDER AN EARLIER DEVICE KEY: SET ASIDE AS {}{}", what, owner, to.as_str(),
+                                         if replaced { ", IN PLACE OF ONE SET ASIDE BEFORE" } else { "" }),
+                Err(error) => mind::println!("[KEYSTORE] SECRETS OF {}{} MADE UNDER AN EARLIER DEVICE KEY: NOT SET ASIDE ({:?}), SO ITS PUTS STAY REFUSED", what, owner, error),
+            }
+        }
+    }
+}
+
 /// Writes `owner`'s secrets whole: the new file first, then in place of the kept one; none kept, no file.
 pub fn store(seed: &[u8; 32], owner: &Owner, secrets: &Secrets) -> Result<(), Error> {
     let (kept, new) = (path(owner, ".kept"), path(owner, ".new"));

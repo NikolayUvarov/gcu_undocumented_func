@@ -112,7 +112,7 @@ Numbered on 2026-11-10 as [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-
 
 Numbered on 2026-11-10 as [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md).
 
-**Asked by** NET (made by STO) on 2026-11-10, for [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md). **Waits for** [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.md), which grants the shell a `keystore` client badged `BADGE_KEY_PASSPHRASE` (6, `mind::network`) and starts the shell before the services that need the device key.
+**Asked by** NET (made by STO) on 2026-11-10, for [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md). **Waits for** [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done), which grants the shell a `keystore` client badged `BADGE_KEY_PASSPHRASE` (6, `mind::network`) and starts the shell before the services that need the device key.
 
 - **What `keystore` gives** with `idl/keystore.wit` 1.6, in `main` since round 80:
   - `key-state`, any client's: `held`, `waiting` or `none`, answered at once;

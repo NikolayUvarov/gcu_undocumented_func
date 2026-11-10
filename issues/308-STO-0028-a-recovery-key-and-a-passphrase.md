@@ -1,6 +1,6 @@
 # 308-STO-0028 — A recovery key and a passphrase for the store's volume key
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md) (a client badged `BADGE_RECOVER`, the shell's alone), [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md) (the key shown and typed back), [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.md) and this track's [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md) (the passphrase) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md) (a client badged `BADGE_RECOVER`, the shell's alone), [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md) (the key shown and typed back), [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done) and this track's [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md) (the passphrase) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
 Split from [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done) (2026-10-30): the part that needs the owner, once the volume key is off the medium.
 

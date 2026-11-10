@@ -66,6 +66,8 @@ DMESG_WAIT = 30
 # How long the listen suite waits for an answer whose text it checks, beside a build load (000-APP-0131): DRV saw the
 # shell's prompt take more than 8 s there; the wait ends at the answer, so an unloaded run takes no longer.
 LOADED_WAIT = 60
+# The shell's prompt for keystore's passphrase while the boot waits for it, in place of its first one (308-APP-0130).
+BOOT_PASSPHRASE = "PASSPHRASE (NO ECHO; ENTER ENDS IT, ESC: LATER): "
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
@@ -81,13 +83,15 @@ def to_ordinal(text):
 class VM:
     wait = 8  # s: how long command() and expect() wait by default; a suite may set its own
 
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio"):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio", passphrase=False):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
         # and line ends came in the middle of lines the guest printed.
         # `decoy`: a directory served as another FAT disk ahead of the boot disk, on the same bus (211-KRN-0012).
         # `serial`: the console UART's chardev; "pty" gives it to a test's own tool (100000-KRN-0221), with no prompt to wait for.
+        # Where the boot waits for keystore's passphrase, the shell asks for it in place of its first prompt (308-APP-0130):
+        # Esc answers it (later) unless `passphrase`, which leaves the question to the test.
         self.disk = disk
         self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
@@ -148,7 +152,11 @@ class VM:
             return
         try:
             # Two tracks' suites may share a machine's CPUs (000-KRN-0092): a boot under that load takes longer.
-            self.expect("MIND> ", timeout=90)
+            if self.first_of(("MIND> ", BOOT_PASSPHRASE), timeout=90) == BOOT_PASSPHRASE:
+                if passphrase:
+                    return
+                self.send_bytes(b"\x1b")
+                self.expect("MIND> ", timeout=30, after="(LATER: THEY WAIT FOR IT")
             global BASE
             BASE = len(self.services())
         except BaseException:
@@ -236,9 +244,27 @@ class VM:
             except queue.Empty:
                 return
 
+    def first_of(self, texts, timeout):
+        """Which of `texts` comes first in the output since the last match, waited for as expect() waits."""
+        deadline = time.monotonic() + timeout
+        clean = ""
+        while time.monotonic() < deadline:
+            self.collect()
+            clean = to_ordinal(ANSI.sub("", self.output).replace("\r", ""))
+            if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
+                raise AssertionError(clean)
+            if found := sorted((clean.index(text), text) for text in texts if text in clean):
+                self.output = ""
+                return found[0][1]
+            if self.process.poll() is not None:
+                raise AssertionError(f"QEMU exited {self.process.returncode}: {clean[-3000:]}")
+            time.sleep(.01)
+        raise AssertionError(f"Timeout waiting for any of {texts!r}: {clean[-3000:]}")
+
     def expect(self, text, timeout=None, after=None):
         """Waits for `text` (after the first `after`, when given) in the output since the last match."""
-        deadline = time.monotonic() + (self.wait if timeout is None else timeout)
+        timeout = self.wait if timeout is None else timeout
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.collect()
             clean = to_ordinal(ANSI.sub("", self.output).replace("\r", ""))
@@ -8338,7 +8364,9 @@ def update_store_suite(args):
     Applied and confirmed, the store keeps both: the shell's client is refused
     their pins, and after a collection both trees read back whole, every block checked. With the machine off, slot A's
     kernel and loader are damaged on the disk: `update rollback` writes release 5 back into slot A from the store,
-    checked as a fetch, and slot A boots on trial and is confirmed, as published."""
+    checked as a fetch, and slot A boots on trial and is confirmed, as published. 351-UPD-0034: before the apply, with
+    the machine off, a byte of slot B's staged kernel is changed on the disk; with no network, `update apply` writes
+    release 6 back into slot B from the store, and slot B boots on trial and is confirmed, its kernel as published."""
     if not raw_tools() or not shutil.which("openssl"):
         print("SKIP: updatestore suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
         return
@@ -8412,6 +8440,18 @@ def update_store_suite(args):
         require(vm.command("blocks pins", raw=True), "0 PINS")
         for pin in (pin5, pin6):
             require(vm.command(f"blocks unpin {pin}", raw=True), f"blocks: unpin {pin}: Rights")
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-{args.cpus}cpu.log").write_text(vm.log)
+    # 351-UPD-0034: slot B's staged kernel damaged on the disk with the machine off; no network, so only the store has it.
+    staged = bytearray(image.read("MIND/B/kernel.elf"))
+    staged[len(staged) // 2] ^= 1
+    image.write("MIND/B/kernel.elf", bytes(staged))
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none", *disks])
+    try:
+        log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
+        require(log, "[UPDATER] SLOT A, VERSION 5")
         vm.collect(); vm.output = ""
         since = len(vm.log)
         vm.send("update apply 3\n")
@@ -8437,8 +8477,10 @@ def update_store_suite(args):
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
-        https.shutdown()
-        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-{args.cpus}cpu.log").write_text(vm.log)
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-apply-{args.cpus}cpu.log").write_text(vm.log)
+    # Slot B's kernel is release 6's as published: written back from the store by the apply.
+    kernel6 = [digest for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf"]
+    assert kernel6 and hashlib.sha256(image.read("MIND/B/kernel.elf")).hexdigest() == kernel6[0], "slot B's kernel not written back"
     # Slot A damaged on the disk: a byte of its kernel and of its loader changed.
     damaged = ["kernel.elf", boot_slots.LOADERS[BOOT_EFI]]
     for name in damaged:
@@ -8477,7 +8519,9 @@ def update_store_suite(args):
           f"release 6 kept once staged with {taken6} of its {files6} files taken from release 5's tree; applied and "
           "confirmed, the store keeps both, the shell's client is refused their pins, and after a collection both trees "
           "read back whole; slot A's kernel and loader damaged on the disk, `update rollback` writes release 5 back from "
-          "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033)", flush=True)
+          "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033); slot B's staged kernel "
+          "damaged before the apply, `update apply` with no network writes release 6 back from the store, and slot B boots "
+          "on trial and is confirmed, its kernel as published (351-UPD-0034)", flush=True)
 
 
 def install_suite(args, stub_elf):
@@ -12249,24 +12293,103 @@ def tls_suite(args, disk):
     device_key_check(args, with_entropy)
     passphrase_wait_check(args, with_entropy)
     tpm_check(args, with_entropy)
+    recovery_key_check(args, with_entropy)
 
 
 def passphrase_wait_check(args, cpu):
-    """308-KRN-0205: with the device key sealed under the owner's passphrase (keystore.wit 1.6, passlock's file) and no
-    TPM, keystore waits for it, and init prepares the services that need the key instead of starting them; the shell
-    holds keystore's client badged for the passphrase (SLOT_PASSPHRASE 44, BADGE_KEY_PASSPHRASE 6). Nothing here types
-    the passphrase: the shell's command for it is APP's part, so the check ends at the wait. The file's header is
-    passlock's (MAGIC, version 1, the default parameters, salt and nonce); what it seals is never opened here."""
-    import struct
-    sealed = b"MINDPWD1" + bytes([1]) + struct.pack("<III", 9216, 4, 1) + os.urandom(16 + 12) + os.urandom(32 + 16)
+    """308-KRN-0205, 308-APP-0130: keystore's passphrase without a TPM, typed over the serial console with no echo.
+    Boot 1, keystore holding its device key unsealed: `passphrase` sets one (the one set Enter alone; a new one too short,
+    then two that differ, asked again) and changes it (a wrong one set refused, counted); a script and a passphrase on the
+    line are refused. Boot 2: keystore waits for it (keystore.wit 1.6, passlock's file), init prepares the services that
+    need the key instead of starting them, and the shell asks for it in place of its first prompt, holding keystore's
+    client badged for it (SLOT_PASSPHRASE 44, BADGE_KEY_PASSPHRASE 6). A short one is told, a wrong one refused; later
+    (Esc), `passphrase` asks again, the old one is refused and the new one opens the key, and init starts them. No
+    passphrase is in any serial line, log or history."""
+    first, second, wrong = "correct horse \u0436", "battery staple 2", "not-it guess 7"
+    secrets = (first.encode(), second.encode(), wrong.encode(), b"correct horse", b"battery staple", b"guess 7")
+
+    def typed(vm, text, then, timeout=120):
+        # `text` and Enter, typed with no echo; `then` once the shell has answered.
+        vm.collect()
+        since = len(vm.log)
+        vm.send_bytes(text.encode() + b"\r")
+        vm.logged(then, since, timeout=timeout)
+        return to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
+
+    def asked(vm, command, then):
+        vm.collect()
+        since = len(vm.log)
+        vm.send(command + "\n")
+        vm.logged(then, since, timeout=30)
+
     with tempfile.TemporaryDirectory(prefix="smoke-pass-", dir=ROOT / IMAGE) as temp:
-        image, _, _ = raw_fat_image(Path(temp), extra={"system/keystore/device.locked": sealed})
+        image, _, _ = raw_fat_image(Path(temp))
         store = Path(temp) / "store.img"
         with store.open("wb") as f:
             f.truncate(32 << 20)
-        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
-                extra=["-cpu", cpu, "-nic", "none", "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"])
+        extra = ["-cpu", cpu, "-nic", "none", "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
+        logs = []
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=extra)
         try:
+            require(vm.service_logs("keystore", "NOT SEALED"), "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
+            # Set: the one set is none, so Enter alone; the new one checked, then typed again.
+            asked(vm, "passphrase", "THE PASSPHRASE SET (NO ECHO; ENTER ALONE WHEN NONE IS SET YET, ESC: NOTHING CHANGES): ")
+            typed(vm, "", "THE NEW PASSPHRASE, 8 TO 128 BYTES (NO ECHO): ")
+            typed(vm, "short", "(NOT TAKEN: SHORTER THAN 8 BYTES)")
+            typed(vm, first, "THE NEW PASSPHRASE AGAIN (NO ECHO): ")
+            typed(vm, first + "x", "(THE TWO DIFFER: THE NEW ONE AGAIN, TWICE)")
+            typed(vm, first, "THE NEW PASSPHRASE AGAIN (NO ECHO): ")
+            out = typed(vm, first, "MIND> ")
+            require(out, "(SET: THE DEVICE KEY IS SEALED UNDER IT AND ITS UNENCRYPTED COPY REMOVED; EVERY BOOT WAITS FOR IT)")
+            log = vm.service_logs("keystore", "REMOVED")
+            require_all(log, "[KEYSTORE] PASSPHRASE SET FOR PID ", "THE DEVICE KEY SEALED UNDER IT IN system/keystore/device.locked",
+                        "[KEYSTORE] THE UNENCRYPTED COPY system/keystore/device.key REMOVED")
+            # A wrong one set: refused, and counted with the boot's.
+            asked(vm, "passphrase", "THE PASSPHRASE SET (NO ECHO")
+            typed(vm, wrong, "THE NEW PASSPHRASE, 8 TO 128 BYTES")
+            typed(vm, second, "THE NEW PASSPHRASE AGAIN")
+            out = typed(vm, second, "MIND> ")
+            require(out, "(NOT CHANGED: THAT IS NOT THE ONE SET, OR NONE IS: THEN ENTER ALONE) (WRONG: 1 IN A ROW)")
+            # The one set: changed.
+            asked(vm, "passphrase", "THE PASSPHRASE SET (NO ECHO")
+            typed(vm, first, "THE NEW PASSPHRASE, 8 TO 128 BYTES")
+            typed(vm, second, "THE NEW PASSPHRASE AGAIN")
+            out = typed(vm, second, "MIND> ")
+            require(out, "(CHANGED: THE DEVICE KEY IS SEALED UNDER THE NEW ONE; THE OLD ONE OPENS IT NO MORE)")
+            require(vm.service_logs("keystore", "PASSPHRASE CHANGED"), "[KEYSTORE] PASSPHRASE CHANGED FOR PID ")
+            # Never in a script, and never on the line: such a line stays out of the history.
+            require(vm.command('msh -c "passphrase"'), "PASSPHRASE: TYPED AT A CONSOLE OR THE SHELL'S WINDOW ALONE, NOT IN A SCRIPT")
+            require(vm.command("passphrase on-the-line-1"), "ERROR: USAGE: PASSPHRASE (TYPED WITH NO ECHO AFTER IT, NEVER ON THE LINE)")
+            vm.collect()
+            mark = len(vm.log)
+            vm.send_bytes(b"\x1b[A")
+            time.sleep(1)
+            vm.send_bytes(b"\x1b")
+            time.sleep(.5)
+            vm.collect()
+            assert "on-the-line-1" not in vm.log[mark:], vm.log[mark:][-500:]
+            log = vm.command("dmesg -s shell", raw=True)
+            require_all(log, "[SHELL] keystore'S PASSPHRASE SET ON CONSOLE 1", "[SHELL] keystore'S PASSPHRASE NOT CHANGED: WRONG: 1 IN A ROW",
+                        "[SHELL] keystore'S PASSPHRASE CHANGED ON CONSOLE 1")
+            vm.command("sync")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            logs.append(vm.log)
+        # Boot 2: the boot waits, and the shell asks before its first prompt.
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=extra, passphrase=True)
+        try:
+            require(vm.log, "THE BOOT WAITS FOR keystore'S PASSPHRASE: NO TPM SEALS THE DEVICE KEY HERE, THE PASSPHRASE DOES")
+            assert "MIND> " not in ANSI.sub("", vm.log), "the passphrase is asked in place of the first prompt"
+            typed(vm, "short", "(NOT TAKEN: SHORTER THAN 8 BYTES)")
+            out = typed(vm, wrong, BOOT_PASSPHRASE)
+            require(out, "(WRONG: 1 IN A ROW)")
+            # Later: the services that need the key wait for it, prepared, while the rest and the shell run.
+            vm.collect()
+            since = len(vm.log)
+            vm.send_bytes(b"\x1b")
+            vm.logged("MIND> ", since, timeout=30)
+            require(vm.log[since:], "(LATER: THEY WAIT FOR IT; `passphrase` ASKS AGAIN)")
             require(vm.service_logs("keystore", "IT WAITS FOR IT"), "[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN system/keystore/device.locked: IT WAITS FOR IT")
             # init's lines from the system log, whole: the service's own log keeps its last 4 KiB only.
             deadline, log = time.monotonic() + 60, ""
@@ -12281,12 +12404,39 @@ def passphrase_wait_check(args, cpu):
             servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
             held = re.search(r"^SLOT=44 GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE=6 EP=(\d+)", caps, re.M)
             assert held and servers.get(int(held[1])) == services["keystore"], caps
+            # `passphrase` asks again: the old one is refused, the second in a row; the new one opens the key.
+            asked(vm, "passphrase", BOOT_PASSPHRASE)
+            out = typed(vm, first, BOOT_PASSPHRASE)
+            require(out, "(WRONG: 2 IN A ROW)")
+            out = typed(vm, second, "MIND> ")
+            require(out, "(OPENED: keystore HOLDS THE DEVICE KEY, AND THE SERVICES THAT WAITED FOR IT START)")
+            deadline, log = time.monotonic() + 60, ""
+            while "THE SERVICES THAT WAITED FOR IT START" not in log and time.monotonic() < deadline:
+                log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] keystore HOLDS THE DEVICE KEY: THE SERVICES THAT WAITED FOR IT START")
+            deadline = time.monotonic() + 60
+            while not {"blockstore", "storefs", "tls", "ssh"} <= set(services := vm.services()) and time.monotonic() < deadline:
+                time.sleep(1)
+            assert {"blockstore", "storefs", "tls", "ssh"} <= set(services), services
+            require_all(vm.command("dmesg -s keystore", raw=True), "REFUSED UNLOCK FOR PID ", "A WRONG PASSPHRASE (2 IN A ROW",
+                        "[KEYSTORE] DEVICE KEY FROM system/keystore/device.locked (SEALED UNDER THE PASSPHRASE), OPENED FOR PID ")
+            require_all(vm.command("dmesg -s shell", raw=True), "[SHELL] THE BOOT WAITS FOR keystore'S PASSPHRASE: ASKED ON CONSOLE 1",
+                        "[SHELL] keystore'S PASSPHRASE REFUSED: WRONG: 1 IN A ROW", "[SHELL] keystore'S PASSPHRASE NOT TYPED: LATER",
+                        "[SHELL] keystore'S PASSPHRASE REFUSED: WRONG: 2 IN A ROW", "[SHELL] keystore'S PASSPHRASE TYPED ON CONSOLE 1: THE DEVICE KEY OPENED")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
-    print(f"PASS: keystore's passphrase without a TPM (308-KRN-0205): the services that need the device key ({', '.join(sorted(set(waited)))}) "
-          "wait for it, prepared, not started, while the rest and the shell run; the shell holds keystore's client badged for "
-          "the passphrase in slot 44", flush=True)
+            logs.append(vm.log)
+    # Not one byte of a passphrase on the serial line, the console and the system log being copied there.
+    for log in logs:
+        raw = log.encode("utf-8", "replace")
+        for secret in secrets:
+            assert secret not in raw, f"a passphrase on the serial line: {secret!r}"
+    print(f"PASS: keystore's passphrase without a TPM (308-KRN-0205, 308-APP-0130): set and changed with `passphrase` "
+          "(typed with no echo, the new one twice, a short one and two that differ asked again, a wrong one set refused); "
+          f"at the next boot the services that need the device key ({', '.join(sorted(set(waited)))}) wait for it, prepared, "
+          "while the shell asks in place of its first prompt holding keystore's client badged for it in slot 44; a wrong one "
+          "refused, the right one opens the key and init starts them; no passphrase on the serial line, in a log or the history", flush=True)
 
 
 def device_key_check(args, cpu):
@@ -12343,6 +12493,7 @@ def device_key_check(args, cpu):
             vm.close()
         kept = secrets_file(part, Path(temp), "netcheck")
         service_secrets_file(part, Path(temp))
+        copies = {name: keystore_file(part, Path(temp), name) for name in ("secrets/netpeer.kept", "secrets/netcopy.kept", "services/blockstore.kept")}
         vm, log, second = boot()
         try:
             require(vm.command("netpolicy"), "kept 10.0.2.2 tcp 7")
@@ -12352,17 +12503,35 @@ def device_key_check(args, cpu):
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key (ON DISK, NOT SEALED)")
         assert second == first, (first, second)
+        # 308-NET-0064: a file copied under another owner's name opens nothing and stays where it is, as it was.
+        for name, data in copies.items():
+            assert keystore_file(part, Path(temp), name) == data and keystore_file(part, Path(temp), name + ".before") is None, name
+        assert "SET ASIDE" not in log, log
         damaged = Path(temp) / "device.key"
         damaged.write_bytes(b"MINDKEY1" + bytes(64))
         subprocess.run(["mcopy", "-o", "-i", part, str(damaged), "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
+        # The store's disk made blank, so that the store makes a volume key at once under the new device key.
+        with store.open("r+b") as f:
+            f.write(bytes(32 << 20))
         vm, log, third = boot()
         try:
-            # The store's volume key was sealed under the old device key: it opens no more (308-KRN-0183).
-            require(service_log(vm, "keystore", "SECRETS OF SERVICE blockstore"), "[KEYSTORE] SECRETS OF SERVICE blockstore DO NOT OPEN UNDER THIS DEVICE KEY AND NAME: NOT READ")
+            # 308-NET-0064: every owner's file under the earlier device key set aside, and the store's new volume key kept.
+            log = service_log(vm, "keystore", "OF SERVICE blockstore KEPT")
+            for owner, name in (("SERVICE blockstore", "services/blockstore"), ("netpeer", "secrets/netpeer"), ("netcopy", "secrets/netcopy")):
+                require(log, f"[KEYSTORE] SECRETS OF {owner} MADE UNDER AN EARLIER DEVICE KEY: SET ASIDE AS system/keystore/{name}.kept.before")
+            assert re.search(r"\[KEYSTORE\] SECRET volume-[0-9a-f]{16} OF SERVICE blockstore KEPT FOR PID \d+", log), log
+            assert "DO NOT OPEN UNDER THIS DEVICE KEY" not in log, log
+            stored = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+            assert re.search(r"\[BLOCKSTORE\] VOLUME KEY MADE FROM \w+, KEPT BY KEYSTORE, NOT ON THE MEDIUM", stored), stored
         finally:
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
         assert third != first, (first, third)
+        # The earlier files kept whole beside the new ones, for an owner who restores the earlier key by hand.
+        for name, data in copies.items():
+            assert keystore_file(part, Path(temp), name + ".before") == data, name
+        assert keystore_file(part, Path(temp), "services/blockstore.kept")[:8] == b"MINDSEC1"
+        assert keystore_file(part, Path(temp), "secrets/netpeer.kept") is None
         locked_file_check(args, cpu, image, part, Path(temp), store)
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
@@ -12373,12 +12542,14 @@ def device_key_check(args, cpu):
           "is in no log line and no command line", flush=True)
     print("PASS: keystore's passphrase (308-NET-0055): key-state Held without a TPM; unlock and passphrase-set refused (Denied) to a "
           "client without the passphrase's badge and logged; a sealed file placed from the host waits (key-state Waiting, no key, the "
-          "unencrypted file kept beside it), a damaged one leaves no key, and neither file is changed; unlock itself not run (no task "
-          "holds badge 6 before 308-KRN-0205)", flush=True)
+          "unencrypted file kept beside it), a damaged one leaves no key, and neither file is changed; a change cut short after the old "
+          "file was removed puts the whole new one in its place and waits on it, one cut while the new one was written replaced "
+          "nothing and the key on disk is held; unlock itself not run (no task holds badge 6 before 308-KRN-0205)", flush=True)
     print(f"PASS: the block store's own secrets in keystore (308-KRN-0183): its client from init in slot 3 (BADGE_KEY_BLOCKSTORE), "
           f"the volume key of its blank disk kept as {volume} and read back at the next boot, not on the medium; no program runs by the "
-          "store's name, another program's client sees none of it nor opens the store's file copied under its name; under a new device "
-          "key it opens no more", flush=True)
+          "store's name, another program's client sees none of it nor opens the store's file copied under its name, which stays as "
+          "it is; when the device key is made anew, every owner's file is set aside whole and the store's new volume key is kept "
+          "(308-NET-0064)", flush=True)
 
 
 def passphrase_calls_check(vm):
@@ -12394,16 +12565,23 @@ def passphrase_calls_check(vm):
 def locked_file_check(args, cpu, image, part, temp, store):
     """308-NET-0055: a device.locked placed from the host beside device.key, of the file's form (passlock) with a sealed
     part that opens under no passphrase: keystore waits for its passphrase, holds no key, and changes neither file.
-    Then the same file damaged: no key, nothing made in its place, the file left as it is."""
+    Then the same file damaged: no key, nothing made in its place, the file left as it is. Then a change of the
+    passphrase cut short (decision 10): with device.locked removed and device.locked.new whole, the new file is put in
+    its place and waited on; with a device.locked.new not whole and no device.locked, it replaced nothing, is left as it
+    is, and the key kept on disk is held."""
     def stored(name):
         out = temp / f"stored-{name}"
-        subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
-        return out.read_bytes()
+        found = subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, capture_output=True)
+        return out.read_bytes() if found.returncode == 0 else None
 
-    def boot(locked, until):
-        path = temp / "device.locked"
-        path.write_bytes(locked)
-        subprocess.run(["mcopy", "-o", "-i", part, str(path), "::/system/keystore/device.locked"], env=MTOOLS_ENV, check=True, capture_output=True)
+    def boot(files, until, waits=True):
+        for name, data in files.items():
+            if data is None:
+                subprocess.run(["mdel", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True)
+                continue
+            path = temp / name
+            path.write_bytes(data)
+            subprocess.run(["mcopy", "-o", "-i", part, str(path), f"::/system/keystore/{name}"], env=MTOOLS_ENV, check=True, capture_output=True)
         plain = stored("device.key")
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
                 extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
@@ -12411,25 +12589,44 @@ def locked_file_check(args, cpu, image, part, temp, store):
         try:
             log = vm.service_logs("keystore", until)
             require(log, until)
-            assert "DEVICE KEY READY" not in log and "DEVICE KEY MADE" not in log, log
+            assert "DEVICE KEY MADE" not in log, log
+            assert not waits or "DEVICE KEY READY" not in log, log
             out = vm.command("netcheck key-state unlock secret-get:token")
         finally:
             vm.close()
-        assert stored("device.locked") == locked and stored("device.key") == plain, "a file changed"
+        assert plain is not None and stored("device.key") == plain, "the unencrypted copy changed"
         return log, out
 
     # MINDPWD1, version 1, 9216 KiB, 4 passes, 1 lane, a salt and a nonce, then 48 random bytes for the sealed seed.
     header = b"MINDPWD1" + bytes([1]) + struct.pack("<III", 9216, 4, 1) + os.urandom(16 + 12)
     locked = header + os.urandom(48)
-    log, out = boot(locked, "IT WAITS FOR IT")
+    new = "device.locked.new"
+    log, out = boot({"device.locked": locked}, "IT WAITS FOR IT")
     require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN system/keystore/device.locked: IT WAITS FOR IT")
     require(log, "[KEYSTORE] THE UNENCRYPTED COPY system/keystore/device.key IS REMOVED ONCE THE PASSPHRASE OPENS THE KEY")
     assert "NO TPM: THE DEVICE KEY IS KEPT ON DISK" not in log, log
     require_all(out, "NETCHECK key-state OK Waiting", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
+    assert stored("device.locked") == locked, "the sealed file changed"
     damaged = b"MINDPWX1" + locked[8:]
-    log, out = boot(damaged, "NO NEW KEY MADE")
+    log, out = boot({"device.locked": damaged}, "NO NEW KEY MADE")
     require(log, "[KEYSTORE] system/keystore/device.locked DAMAGED: NO DEVICE KEY, THE FILE LEFT AS IT IS AND NO NEW KEY MADE")
     require_all(out, "NETCHECK key-state OK None", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
+    assert stored("device.locked") == damaged, "the damaged file changed"
+    # Cut after the old file was removed: the whole new one is put in its place, and the boot waits on it.
+    log, out = boot({"device.locked": None, new: locked}, "PUT IN PLACE")
+    require(log, f"[KEYSTORE] A CHANGE OF THE PASSPHRASE WAS CUT SHORT: system/keystore/{new} PUT IN PLACE")
+    require(log, "IT WAITS FOR IT")
+    require_all(out, "NETCHECK key-state OK Waiting", "NETCHECK unlock Denied", "NETCHECK secret-get:token NoKey")
+    assert stored("device.locked") == locked and stored(new) is None, "the new file not put in place"
+    # Cut while the new one was written, with no old one: it replaced nothing, and the key kept on disk is held.
+    torn = locked[:60]
+    log, out = boot({"device.locked": None, new: torn}, "DEVICE KEY FROM", waits=False)
+    require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
+    require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key")
+    assert "CUT SHORT" not in log and "IT WAITS FOR IT" not in log, log
+    require(out, "NETCHECK key-state OK Held")
+    assert stored(new) == torn and stored("device.locked") is None, "the torn new file was taken, or changed"
+    subprocess.run(["mdel", "-i", part, f"::/system/keystore/{new}"], env=MTOOLS_ENV, check=True, capture_output=True)
 
 
 def service_log(vm, name, until, tries=120):
@@ -12462,6 +12659,13 @@ def service_secrets_first_boot(vm):
     require_all(vm.command(f"netcopy secret-get:{kept[1]} secrets"), f"NETCHECK secret-get:{kept[1]} Missing", "NETCHECK secrets OK (NONE)")
     assert " FOR blockstore" not in vm.command("dmesg -s keystore", raw=True, timeout=60), "a program's secrets client named after the store"
     return kept[1]
+
+
+def keystore_file(part, temp, name):
+    """A file of system/keystore/ read from the disk on the host; None when there is none."""
+    out = temp / ("read-" + name.replace("/", "-"))
+    found = subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, capture_output=True)
+    return out.read_bytes() if found.returncode == 0 else None
 
 
 def service_secrets_file(part, temp):
@@ -12669,6 +12873,8 @@ def tpm_check(args, cpu):
         try:
             refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
             require(refused, f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}, WHICH KEEPS NONE UNDER IT")
+            # 308-NET-0064: the store's secrets under TPM A's key set aside when TPM B's key was made.
+            require(service_log(vm, "keystore", "SET ASIDE"), "[KEYSTORE] SECRETS OF SERVICE blockstore MADE UNDER AN EARLIER DEVICE KEY: SET ASIDE AS system/keystore/services/blockstore.kept.before")
             require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
         finally:
             close(vm)
@@ -12680,6 +12886,114 @@ def tpm_check(args, cpu):
     print(f"PASS: the store's volume key kept by keystore under the device key (308-STO-0022): its disk made at a boot without a TPM "
           f"({volume[1]}) mounts and reads back an object put then after TPM A sealed the device key, and twice under A; under "
           "TPM B's new device key it is not mounted and the object is not read", flush=True)
+
+
+def recovery_key_check(args, cpu):
+    """308-APP-0122: `recovery`, through the store's client badged BADGE_RECOVER that the shell lends only when the
+    user agrees, each time (REQUEST_RECOVER, 308-KRN-0204). On a raw image with a store disk whose volume key keystore
+    keeps: refused, it gets no client; allowed, `recovery new --key-file` makes a key, writes it to the file and keeps
+    it. With keystore's device key gone, as on another machine, the store is not mounted; `recovery open --key-file`
+    opens it, the object put at the first boot reads back, and at the next boot it mounts as this machine's own. The
+    key's text is on no serial line."""
+    if not raw_tools():
+        print("SKIP: the recovery key check needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-recovery-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        image, start, fs_sectors = raw_fat_image(temp, extra={"data/readme.txt": b"the recovery check's directory\n"})
+        part = f"{image}@@{start * 512}"
+        store = temp / "store.img"
+        with store.open("wb") as f:
+            f.truncate(32 << 20)
+        disk = ["-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
+        serial = []
+
+        def boot():
+            return VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *disk])
+
+        def close(vm):
+            serial.append(vm.log)
+            vm.close()
+
+        def recovery(vm, words, answer, line):
+            # `run recovery …`, the shell's question answered; recovery's line, from the serial line or its log.
+            vm.send(f"run recovery {words}\n")
+            asked = vm.expect("(Y/N)", timeout=30)  # the shell's question, which the output after it no longer holds
+            vm.send(answer)
+            out = asked + vm.expect("MIND> ", timeout=120)
+            for _ in range(20):
+                if line in out:
+                    return out
+                out += vm.command("dmesg -s recovery", raw=True)
+                time.sleep(.5)
+            raise AssertionError((line, out, vm.command("dmesg -s blockstore", raw=True)[-1500:], vm.command("dmesg -s keystore", raw=True)[-1500:]))
+        vm = boot()
+        try:
+            log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+            require(log, "SEALED, KEY KEPT BY KEYSTORE")
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.command("dmesg -s blockstore", raw=True)
+            root = put[1]
+            require(vm.command(f"blocks publish kept {root}"), "PUBLISHED kept VERSION 1")
+            require(vm.command("blocks recovery"), "RECOVERY RECORDS 0")
+            asked = recovery(vm, "new --key-file data/recovery.txt", "n", "this program holds no recovery client")
+            require(asked, "RECOVERY ASKS TO MAKE OR USE A RECOVERY KEY, WHICH OPENS THE STORE'S MEDIUM ON ANY MACHINE. ALLOW?")
+            require(vm.command("blocks recovery"), "RECOVERY RECORDS 0")
+            # On the screen: m has the store make a key, which the screen alone shows; typed back, it is kept.
+            vm.send("run recovery\n")
+            vm.expect("(Y/N)", timeout=30)
+            vm.send("y")
+            vm.expect("[RECOVERY] READY: MENU; THE STORE OPEN, 0 RECOVERY RECORD(S)", timeout=60)
+            vm.send_bytes(b"m")
+            vm.expect("[RECOVERY] KEY SHOWN", timeout=60)
+            time.sleep(1)
+            shown = [re.search(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){7}", row) for row in screen_text(vm)]
+            vm.serial(enter=False)  # the screenshot was taken in QEMU's monitor
+            screen_key = next(m[0] for m in shown if m)
+            vm.send_bytes(b"\r")
+            vm.expect("[RECOVERY] TYPING THE KEY BACK")
+            vm.send_bytes(screen_key.lower().encode() + b"\r")
+            vm.expect("[RECOVERY] Kept: this key opens the medium on any machine; 0 older recovery record(s) erased", timeout=60)
+            vm.send_bytes(b"q")
+            vm.expect("SHELL RESUMED.", timeout=30)
+            time.sleep(.2); vm.collect(); vm.output = ""
+            require(vm.command("blocks recovery"), "RECOVERY RECORDS 1")
+            # Without a screen, the key to a file: it takes the screen's key's place.
+            recovery(vm, "new --key-file data/recovery.txt", "y", "[RECOVERY] A KEY MADE, WRITTEN TO data/recovery.txt AND KEPT: 1 OLDER RECOVERY RECORD(S) ERASED")
+            require(vm.command("blocks recovery"), "RECOVERY RECORDS 1")
+            vm.command("sync")
+        finally:
+            close(vm)
+        held = subprocess.run(["mtype", "-i", part, "::/data/recovery.txt"], env=MTOOLS_ENV, capture_output=True, text=True).stdout.splitlines()
+        assert len(held) == 2 and held[0] == "MIND CORE RECOVERY KEY 1" and re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){7}", held[1]), held
+        key = held[1]
+        # As on another machine: keystore makes a new device key, under which the volume key is not kept, and holds no
+        # secrets of the block store's (the file of them here is sealed under the old key, and it would not open).
+        subprocess.run(["mdel", "-i", part, "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
+        subprocess.run(["mdeltree", "-i", part, "::/system/keystore/services"], env=MTOOLS_ENV, check=True, capture_output=True)
+        vm = boot()
+        try:
+            refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
+            require(refused, "[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS ")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
+            recovery(vm, "open --key-file data/recovery.txt", "y", "[RECOVERY] THE STORE OPENED WITH THE KEY FROM data/recovery.txt: THIS MACHINE'S KEYSTORE KEEPS ITS VOLUME KEY NOW")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+        finally:
+            close(vm)
+        vm = boot()
+        try:
+            require(service_log(vm, "blockstore", "[BLOCKSTORE] READY"), "SEALED, KEY KEPT BY KEYSTORE")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+        finally:
+            close(vm)
+        fsck_volume(image, start, fs_sectors)
+    assert screen_key != key, "a new key each time"
+    for log in serial:
+        for k in (key, screen_key):
+            assert k not in log and k.lower() not in log and k.replace("-", "") not in log and k[:9] not in log, "a key on the serial line"
+    print("PASS: a recovery key (308-APP-0122): the shell asked; refused, recovery had no client; allowed, its screen "
+          "showed a key the store made, kept once typed back; without a screen it made another, wrote it to its file and kept it; with keystore's device key gone the store was not mounted, the key file "
+          "opened it and the object read back, and it mounted again at the next boot; the key on no serial line", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
@@ -14944,6 +15258,128 @@ def store_rebuild_check(args, disk):
           f"THE STORE'S and the name resolves at the same root (309-STO-0041)", flush=True)
 
 
+GPT_STORE_TYPE = "27d2c2a1-7133-4d3d-a6ed-1de599cabdb7"  # libmind/src/partition.rs GPT_STORE
+GPT_BASIC_DATA = "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"  # Microsoft basic data: another system's
+GPT_LINUX_DATA = "0fc63daf-8483-4772-8e79-3d69d8477de4"  # Linux filesystem data: another system's
+
+
+def partitioned_image(path, sectors, scheme, parts, seed):
+    """A raw disk of `sectors` with an MBR or a GPT (primary and backup) of `parts`, each (kind, first, count): an MBR type
+    byte or a GPT type GUID. Every partition holds seeded random bytes, but one of the store's type, which holds the
+    store's superblock and zeros. Returns the image's bytes as written."""
+    import random
+    import uuid
+    from make_usb_image import store_superblock
+    rand = random.Random(seed)
+    image = bytearray(sectors * 512)
+    if scheme == "mbr":
+        image[440:444] = struct.pack("<I", rand.getrandbits(32))
+        for i, (kind, first, count) in enumerate(parts):
+            image[446 + 16 * i:462 + 16 * i] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", kind, b"\xfe\xff\xff", first, count)
+    else:
+        image[446:462] = struct.pack("<B3sB3sII", 0, b"\x00\x02\x00", 0xEE, b"\xff\xff\xff", 1, min(sectors - 1, 0xFFFFFFFF))
+        entries = bytearray(128 * 128)
+        for i, (kind, first, count) in enumerate(parts):
+            entries[i * 128:(i + 1) * 128] = (uuid.UUID(kind).bytes_le + uuid.UUID(int=rand.getrandbits(128)).bytes_le
+                                              + struct.pack("<QQQ", first, first + count - 1, 0) + f"part{i + 1}".encode("utf-16-le").ljust(72, b"\0"))
+        guid = uuid.UUID(int=rand.getrandbits(128)).bytes_le
+
+        def header(current, backup, at):
+            head = bytearray(struct.pack("<8sIIIIQQQQ16sQIII", b"EFI PART", 0x10000, 92, 0, 0, current, backup, 34, sectors - 34,
+                                         guid, at, 128, 128, zlib.crc32(entries)))
+            head[16:20] = struct.pack("<I", zlib.crc32(head))
+            return bytes(head)
+        image[512:604] = header(1, sectors - 1, 2)
+        image[1024:1024 + len(entries)] = entries
+        image[(sectors - 33) * 512:(sectors - 1) * 512] = entries
+        image[(sectors - 1) * 512:(sectors - 1) * 512 + 92] = header(sectors - 1, 1, sectors - 33)
+    image[510:512] = b"\x55\xaa"
+    for kind, first, count in parts:
+        if kind in (0x7F, GPT_STORE_TYPE):
+            image[first * 512:(first + 1) * 512] = store_superblock()
+        else:
+            image[first * 512:(first + count) * 512] = rand.randbytes(count * 512)
+    path.write_bytes(image)
+    return bytes(image)
+
+
+def store_partition_disk_check(args, disk):
+    """307-STO-0044: the block store on a partition of an NVMe disk (GPT) and, in a second machine, of an AHCI disk (MBR):
+    another system's partition before the store's and after it, and beside it a disk of the other bus that is wholly
+    another system's. init takes the store's partition, window 1 of its driver; an object put and a name published there
+    are found after a reboot. On the host afterwards, every sector outside the store's partition on both disks is as it
+    was written, and the store has written inside its own past the superblock. The images are written in place. On
+    aarch64 ahci finds its disk where AAVMF leaves the controller untouched since 307-DRV-0068."""
+    if getattr(args, "disk", "default") != "default":
+        print("SKIP: the store on an NVMe and an AHCI partition (307-STO-0044): the boot disk is on one of those buses", flush=True)
+        return
+    first, count = 2048, 32768  # the store's partition: 16 MiB from the first MiB, after another system's 8 MiB
+    layouts = (("nvme", "gpt", (GPT_BASIC_DATA, GPT_STORE_TYPE, GPT_LINUX_DATA), "ahci", "mbr", (0x07,)),
+               ("ahci", "mbr", (0x07, 0x7F, 0x83), "nvme", "gpt", (GPT_BASIC_DATA,)))
+    shown = []
+    for bus, scheme, kinds, other_bus, other_scheme, other_kinds in layouts:
+        with tempfile.TemporaryDirectory(prefix="mind-store-part-") as temp:
+            own, other = Path(temp) / "store.img", Path(temp) / "other.img"
+            spans = ((first, 16384), (first + 16384, count), (first + 16384 + count, 16384))
+            written = partitioned_image(own, 81920, scheme, [(k, a, n) for k, (a, n) in zip(kinds, spans)], seed=f"{bus} store")
+            elsewhere = partitioned_image(other, 32768, other_scheme, [(other_kinds[0], 2048, 28672)], seed=f"{other_bus} other")
+            store_first = spans[1][0]
+            extra = []
+            for image, on, name in ((own, bus, "own"), (other, other_bus, "other")):
+                extra += ["-drive", f"format=raw,file={image},if=none,id={name},snapshot=off"]
+                extra += (["-device", f"nvme,serial={name},drive={name}"] if on == "nvme"
+                          else ["-device", f"ahci,id=sata{name}", "-device", f"ide-hd,drive={name},bus=sata{name}.0"])
+            # RDRAND on x86, so that the volume key is random.
+            if getattr(args, "arch", None) != "aarch64":
+                extra += ["-cpu", "qemu64,+rdrand"]
+            vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+
+            def blocks(command, *expected, timeout=60):
+                out = vm.command(f"blocks {command}", raw=True, timeout=timeout)
+                for e in expected:
+                    require(out, e)
+                return out
+
+            def mounted():
+                init = ready = ""
+                for _ in range(60):
+                    init, ready = vm.command("dmesg -s init", raw=True), vm.command("dmesg -s blockstore", raw=True)
+                    if "[BLOCKSTORE] READY" in ready or "[BLOCKSTORE] NOT MOUNTED" in ready:
+                        break
+                    time.sleep(2)
+                require(init, f"[INIT] {bus}: {scheme.upper()}, 3 PARTITIONS")
+                require(init, f"[INIT] {other_bus}: {other_scheme.upper()}, 1 PARTITIONS")
+                require(init, f"[INIT] THE BLOCK STORE'S PARTITION: {bus} PARTITION 2 (ITS TYPE AND SUPERBLOCK), {count} SECTORS FROM {store_first}, WINDOW 1")
+                require(ready, f"/{count} ")
+                require(ready, "DURABILITY=FLUSHED")
+
+            try:
+                mounted()
+                require(vm.service_logs(bus, "WINDOW 1 SET"), f"[BLOCK] WINDOW 1 SET: {count} SECTORS FROM {store_first}")
+                put = re.search(r"PUT (\S+) SIZE 5000", blocks("pattern 5000"))[1]
+                blocks(f"publish part {put}", "PUBLISHED part VERSION 1 (FLUSHED)")
+                vm.send("reboot\n")
+                vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+                vm.expect("MIND>", timeout=60)
+                time.sleep(1); vm.collect(); vm.output = ""
+                mounted()
+                blocks("resolve part", f"part VERSION 1 ROOT {put}")
+                blocks(f"check {put} pattern", "CHECKED 5000 BYTES = PATTERN")
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-store-part-{bus}-{args.cpus}cpu.log").write_text(vm.log)
+            now, start, end = own.read_bytes(), store_first * 512, (store_first + count) * 512
+            assert now[:start] == written[:start], f"{bus}: the table or the partition before the store's was written"
+            assert now[end:] == written[end:], f"{bus}: the partition after the store's, or GPT's backup, was written"
+            assert any(now[start + 512:end]), f"{bus}: the store wrote nothing past its superblock, so the comparison shows nothing"
+            assert other.read_bytes() == elsewhere, f"{other_bus}: another system's disk was written"
+            shown.append(f"{bus} ({scheme.upper()}) beside {other_bus} ({other_scheme.upper()})")
+    print(f"PASS: the store on its own partition of {' and of '.join(shown)}: init takes partition 2, window 1 of its "
+          "driver; an object and a name found after a reboot (FLUSHED); on the host every sector outside the store's "
+          "partition is as written, another system's partition before and after it and GPT's backup, and the disk beside "
+          "it untouched, while the store wrote inside its own (307-STO-0044)", flush=True)
+
+
 def store_disk_check(args, disk):
     """300-KRN-0025: a blank VirtIO disk is the block store's own: the store formats it, vfs_server never gets it,
     and an object put there is found after a reboot (the snapshot overlay outlives the guest's reboot)."""
@@ -15774,6 +16210,7 @@ def main():
             if suite == "store":  # its own machine with two store disks, booted twice (309-KRN-0209)
                 store_copy_disk_check(args, disk)
                 store_rebuild_check(args, disk)  # another, the store's disk replaced by a blank one (309-STO-0041)
+                store_partition_disk_check(args, disk)  # two more, the store on an NVMe and an AHCI partition (307-STO-0044)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The tts suite's model disk (252-KRN-0230): its manifest alone, read-only, as models: holds it.
             models = model_disk(Path(tempfile.mkdtemp(prefix="mind-tts-models-"))) if suite == "tts" else None

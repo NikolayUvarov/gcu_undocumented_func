@@ -109,6 +109,8 @@ mod idl {
     pub mod wire;
     #[path = "../../tests/idl/sample.rs"]
     pub mod sample;
+    #[path = "../../libmind/src/idl/update.rs"]
+    pub mod update;
 }
 
 use idl::codec::{Text, Wire, Writer};
@@ -146,6 +148,24 @@ fn server(request: &ipc::Received) {
     };
 }
 
+// 351-UPD-0035: the updater's `kept`, answering as many releases as KEPT says, each with a CID's 36 bytes as its root.
+thread_local! { static KEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn kept_release(n: usize) -> idl::update::KeptRelease {
+    let root: Vec<u8> = [0x01, 0x70, 0x12, 0x20].into_iter().chain((0..32).map(|i| (i * 7 + n) as u8)).collect();
+    idl::update::KeptRelease { version: 9 - n as u64, pin: 100 + n as u32, root: idl::codec::List::from_slice(&root).unwrap(), bytes: (n as u64) << 33 | 5 }
+}
+
+fn updater(request: &ipc::Received) {
+    use idl::update;
+    let mut scratch = [0u8; update::REQUEST_MAX];
+    let _ = match update::decode(request, ipc::SERVER_SLOT, &mut scratch) {
+        Ok((update::Request::Kept, call)) => update::reply_kept(call, &(0..KEPT.with(|k| k.get())).map(kept_release).collect::<Vec<_>>()),
+        Ok(_) => unreachable!("only kept is asked"),
+        Err(reason) => wire::reject(reason),
+    };
+}
+
 fn serve(f: fn(&ipc::Received)) -> ipc::Endpoint { ipc::SERVER.with(|s| *s.borrow_mut() = Some(f)); ipc::Endpoint(3) }
 
 #[test]
@@ -175,6 +195,20 @@ fn strings_records_lists_and_enum_errors() {
     assert!(list.as_slice()[2].hidden);
     let pair = sample::info(endpoint, Kind::Device).unwrap();
     assert_eq!((pair.tag, pair.entry.name.as_str()), (2, "Документы"));
+}
+
+#[test]
+fn the_updaters_kept_releases() {
+    // update.wit 1.5 `kept`: none, two, and the most a reply holds, each record whole, a root's 36 bytes and a size past 32 bits.
+    let endpoint = serve(updater);
+    for count in [0, 2, 8] {
+        KEPT.with(|k| k.set(count));
+        let kept = idl::update::kept(endpoint).unwrap();
+        assert_eq!(kept.as_slice(), &(0..count).map(kept_release).collect::<Vec<_>>()[..], "{count} releases");
+    }
+    // A ninth does not fit the list the interface declares: the server cannot send it, and the client gets no list.
+    KEPT.with(|k| k.set(9));
+    assert!(idl::update::kept(endpoint).is_err());
 }
 
 #[test]
