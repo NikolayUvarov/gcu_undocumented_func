@@ -12648,7 +12648,27 @@ def recovery_key_check(args, cpu):
             asked = recovery(vm, "new --key-file data/recovery.txt", "n", "this program holds no recovery client")
             require(asked, "RECOVERY ASKS TO MAKE OR USE A RECOVERY KEY, WHICH OPENS THE STORE'S MEDIUM ON ANY MACHINE. ALLOW?")
             require(vm.command("blocks recovery"), "RECOVERY RECORDS 0")
-            recovery(vm, "new --key-file data/recovery.txt", "y", "[RECOVERY] A KEY MADE, WRITTEN TO data/recovery.txt AND KEPT: 0 OLDER RECOVERY RECORD(S) ERASED")
+            # On the screen: m has the store make a key, which the screen alone shows; typed back, it is kept.
+            vm.send("run recovery\n")
+            vm.expect("(Y/N)", timeout=30)
+            vm.send("y")
+            vm.expect("[RECOVERY] READY: MENU; THE STORE OPEN, 0 RECOVERY RECORD(S)", timeout=60)
+            vm.send_bytes(b"m")
+            vm.expect("[RECOVERY] KEY SHOWN", timeout=60)
+            time.sleep(1)
+            shown = [re.search(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){7}", row) for row in screen_text(vm)]
+            vm.serial(enter=False)  # the screenshot was taken in QEMU's monitor
+            screen_key = next(m[0] for m in shown if m)
+            vm.send_bytes(b"\r")
+            vm.expect("[RECOVERY] TYPING THE KEY BACK")
+            vm.send_bytes(screen_key.lower().encode() + b"\r")
+            vm.expect("[RECOVERY] Kept: this key opens the medium on any machine; 0 older recovery record(s) erased", timeout=60)
+            vm.send_bytes(b"q")
+            vm.expect("SHELL RESUMED.", timeout=30)
+            time.sleep(.2); vm.collect(); vm.output = ""
+            require(vm.command("blocks recovery"), "RECOVERY RECORDS 1")
+            # Without a screen, the key to a file: it takes the screen's key's place.
+            recovery(vm, "new --key-file data/recovery.txt", "y", "[RECOVERY] A KEY MADE, WRITTEN TO data/recovery.txt AND KEPT: 1 OLDER RECOVERY RECORD(S) ERASED")
             require(vm.command("blocks recovery"), "RECOVERY RECORDS 1")
             vm.command("sync")
         finally:
@@ -12674,10 +12694,12 @@ def recovery_key_check(args, cpu):
         finally:
             close(vm)
         fsck_volume(image, start, fs_sectors)
+    assert screen_key != key, "a new key each time"
     for log in serial:
-        assert key not in log and key.replace("-", "") not in log and key[:9] not in log, "the key on the serial line"
-    print("PASS: a recovery key (308-APP-0122): the shell asked; refused, recovery had no client; allowed, it made a key, "
-          "wrote it to its file and kept it; with keystore's device key gone the store was not mounted, the key file "
+        for k in (key, screen_key):
+            assert k not in log and k.lower() not in log and k.replace("-", "") not in log and k[:9] not in log, "a key on the serial line"
+    print("PASS: a recovery key (308-APP-0122): the shell asked; refused, recovery had no client; allowed, its screen "
+          "showed a key the store made, kept once typed back; without a screen it made another, wrote it to its file and kept it; with keystore's device key gone the store was not mounted, the key file "
           "opened it and the object read back, and it mounted again at the next boot; the key on no serial line", flush=True)
 
 
