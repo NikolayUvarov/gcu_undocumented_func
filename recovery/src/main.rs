@@ -25,8 +25,12 @@ fn main(info: &'static mind::BootInfo) {
         Ok(command) => command,
         Err(usage) => { mind::println!("{}", usage); mind::process::exit_with(2) }
     };
-    // The user's files only for the key's file.
-    if command.is_none() { let _ = mind::ipc::drop_cap(SLOT_FILE); }
+    // The user's files only for the key's file, through the client the shell lent, which writes in data/ (as fm's).
+    match command {
+        None => { let _ = mind::ipc::drop_cap(SLOT_FILE); }
+        Some(_) if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT => mind::fs::use_endpoint(Endpoint(SLOT_FILE)),
+        Some(_) => {}
+    }
     let held = mind::dev::cap_info(SLOT_RECOVER).0 == CAP_KIND_ENDPOINT;
     let (mut service, mut absent) = (Service(Endpoint(SLOT_RECOVER)), Absent);
     let store: &mut dyn Store = if held { &mut service } else { &mut absent };
