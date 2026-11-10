@@ -196,8 +196,9 @@ for entry in "${USER_CRATES[@]}"; do
     out_name=${rest#*:}
     # The voice engines are built for targets/x86_64-mind-float.json (SSE2, 250); every other program for x86_64-unknown-none.
     # The newer of the two: a crate that changes its target (tts, 252-APP-0128) leaves the other's last build behind.
-    built=$(ls -t "$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name" \
-        "$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-mind-float/release/$bin_name" 2>/dev/null | head -1)
+    built="$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name"
+    float="$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-mind-float/release/$bin_name"
+    if [ -f "$float" ] && { [ ! -f "$built" ] || [ "$float" -nt "$built" ]; }; then built=$float; fi
     cp "$built" "$BUILD_SCRIPT_DIR/usb_root/$out_name"
 done
 cp "$BUILD_SCRIPT_DIR/bootloader/target/x86_64-unknown-uefi/release/bootloader.efi" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
