@@ -1,6 +1,6 @@
 # 000-DRV-0057 — The output volume and the microphone's gain in `audio.wit`
 
-**Type:** driver, interface · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-11-09) · **Blocked by:** — (the shell's levels badge is in `main` already: `mind::audio::BADGE_LEVELS`, which `init` gives the shell alone, 000-KRN-0118) · **Main task:** [000-APP-0048](000-APP-0048-wm-settings.md), for [000-APP-0076](000-APP-0076-output-volume.md) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md) · **Constitution:** MC-3.11, MC-11.5, MC-12.4
+**Type:** driver, interface · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-11-09) · **Blocked by:** — (the shell's levels badge is in `main` already: `mind::audio::BADGE_LEVELS`, which `init` gives the shell alone, 000-KRN-0118) · **Main task:** [000-APP-0048](../issues-done/000-APP-0048-wm-settings.done), for [000-APP-0076](000-APP-0076-output-volume.md) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md) · **Constitution:** MC-3.11, MC-11.5, MC-12.4
 
 Numbered from the tools track's request of 2026-10-10, widened on 2026-10-14, in `requests-DRV.md`. The maintainer: "the output volume and the microphone's sensitivity need settings".
 

@@ -47,4 +47,4 @@
 
 ## Related
 
-[000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done), [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done), [000-APP-0091](000-APP-0091-wms-background-by-rows.md) (the frame time), [000-APP-0048](000-APP-0048-wm-settings.md) (Settings).
+[000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done), [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done), [000-APP-0091](000-APP-0091-wms-background-by-rows.md) (the frame time), [000-APP-0048](../issues-done/000-APP-0048-wm-settings.done) (Settings).
