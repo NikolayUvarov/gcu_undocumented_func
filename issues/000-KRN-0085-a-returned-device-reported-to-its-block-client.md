@@ -1,6 +1,6 @@
 # 000-KRN-0085 — A block device that came back is reported to its client, which checks the medium first
 
-**Type:** kernel and services (`libmind/src/block.rs`, `block_protocol.rs`, `vfs_server`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (step 1 made, 2026-11-10; `usb_storage`'s part and the QEMU swap left) · **Blocked by:** the request in [requests-DRV.md](requests-DRV.md) ("`usb_storage` reports a device that came back") · **Roadmap:** track B · **Constitution:** MC-4 (data integrity), MC-6.3, MC-6.4
+**Type:** kernel and services (`libmind/src/block.rs`, `block_protocol.rs`, `vfs_server`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (step 1 in `main` since round 113, 2026-11-10; `usb_storage`'s part and the QEMU swap left) · **Blocked by:** the request in [requests-DRV.md](requests-DRV.md) ("`usb_storage` reports a device that came back") · **Roadmap:** track B · **Constitution:** MC-4 (data integrity), MC-6.3, MC-6.4
 
 ## Problem
 
@@ -56,6 +56,8 @@
 **Left:**
 - **`usb_storage`'s `returned()`** (DRV's 000-DRV-0058), and the QEMU swap the acceptance criteria name. No driver answers true before that.
 - **The restart budget.** `init` quarantines a service after 3 restarts in 60 s, and a return counts as one. So a stick swapped four times in a minute leaves `usb_storage` quarantined until `run usb_storage`.
+
+**Landed** in round 113 (`main` d8d52c57, 2026-11-10): step 1, every group of the gate passed with it. **Left:** `usb_storage`'s `returned` (the request in `requests-DRV.md`) and the QEMU check that swaps a stick.
 
 ## Related
 
