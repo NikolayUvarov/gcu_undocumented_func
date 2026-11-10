@@ -1131,6 +1131,8 @@ impl Init {
                     grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH)?, CLIENT);
                     // One that may only get, for programs that only read (300-KRN-0024).
                     grants.add(SLOT_BLOCKSTORE_READ, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET)?, CLIENT);
+                    // One that may recover the volume key, the shell's alone: it lends a copy for REQUEST_RECOVER (308-KRN-0204).
+                    grants.add(SLOT_RECOVER, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_RECOVER)?, CLIENT);
                 }
                 // storefs's client that writes, as vfs_server's does (BADGE_USER); the shell lends it on (311-KRN-0190).
                 if self.present("storefs") { grants.add(SLOT_STOREFS, self.badged(&mut minted, "storefs", mind::fs::BADGE_USER)?, CLIENT); }
