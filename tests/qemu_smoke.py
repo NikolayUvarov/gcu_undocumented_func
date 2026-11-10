@@ -8789,6 +8789,7 @@ def audio_suite(vm, wav):
     vm.hmp("sendkey left")
     vm.serial(enter=False)
     vm.logged(f"[WM] SOUND PAGE volume {half - 5}: VOLUME {lower} % (", since)
+    vm.logged("[WM] SOUND PAGE TONE 880 HZ, 150 MS", since)
     vm.hmp("sendkey esc")
     time.sleep(.2)
     since = len(vm.log)
@@ -8806,9 +8807,11 @@ def audio_suite(vm, wav):
     left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
     loud = [i for i, sample in enumerate(left) if sample]
     assert loud, "AC97 produced no audio"
-    # The demo, then after a second of silence the notes.
-    gap = next(k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate)
-    demo, notes = loud[:gap], loud[gap:]
+    # The demo, then after a second of silence the notes, then wm's test tone (000-APP-0076).
+    gaps = [k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate] + [len(loud)]
+    assert len(gaps) >= 3, [round(loud[k] / rate, 2) for k in gaps[:-1]]
+    gap = gaps[0]
+    demo, notes, tone = loud[:gap], loud[gap:gaps[1]], loud[gaps[1]:gaps[2]]
     seconds = (demo[-1] - demo[0]) / rate
     assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
@@ -8821,8 +8824,16 @@ def audio_suite(vm, wav):
     assert power(first, 440) > 5 * power(first, 880) and power(second, 880) > 5 * power(second, 440)
     pause = notes[0] + int(rate * 0.22)
     assert not any(left[pause:pause + int(rate * 0.06)]), "the pause is silent"
+    # wm's tone after ← on the Sound page: 880 Hz for 150 ms, at the volume it set.
+    seconds = (tone[-1] - tone[0]) / rate
+    assert 0.12 < seconds < 0.2, seconds
+    middle = tone[0] + int(rate * 0.05)
+    assert power(middle, 880) > 5 * power(middle, 440)
+    peak = lambda part: max(abs(left[i]) for i in part)
+    below = 20 * math.log10(peak(notes[int(len(notes) * 0.7):]) / max(peak(tone), 1))
     print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
-          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them", flush=True)
+          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
+          f"wm's test tone at {lower} %, its peak {below:.1f} dB below beep's 880 Hz at 100 %", flush=True)
 
 
 SPEECH = ("открой файлы", "который час", "hello world")
