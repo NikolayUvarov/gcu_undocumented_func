@@ -12240,7 +12240,46 @@ def tls_suite(args, disk):
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
           f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
     device_key_check(args, with_entropy)
+    passphrase_wait_check(args, with_entropy)
     tpm_check(args, with_entropy)
+
+
+def passphrase_wait_check(args, cpu):
+    """308-KRN-0205: with the device key sealed under the owner's passphrase (keystore.wit 1.6, passlock's file) and no
+    TPM, keystore waits for it, and init prepares the services that need the key instead of starting them; the shell
+    holds keystore's client badged for the passphrase (SLOT_PASSPHRASE 44, BADGE_KEY_PASSPHRASE 6). Nothing here types
+    the passphrase: the shell's command for it is APP's part, so the check ends at the wait. The file's header is
+    passlock's (MAGIC, version 1, the default parameters, salt and nonce); what it seals is never opened here."""
+    import struct
+    sealed = b"MINDPWD1" + bytes([1]) + struct.pack("<III", 9216, 4, 1) + os.urandom(16 + 12) + os.urandom(32 + 16)
+    with tempfile.TemporaryDirectory(prefix="smoke-pass-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"system/keystore/device.locked": sealed})
+        store = Path(temp) / "store.img"
+        with store.open("wb") as f:
+            f.truncate(32 << 20)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
+                extra=["-cpu", cpu, "-nic", "none", "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"])
+        try:
+            require(vm.service_logs("keystore", "IT WAITS FOR IT"), "[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN system/keystore/device.locked: IT WAITS FOR IT")
+            # init's lines from the system log, whole: the service's own log keeps its last 4 KiB only.
+            deadline, log = time.monotonic() + 60, ""
+            while "WAITS FOR keystore'S PASSPHRASE" not in log and time.monotonic() < deadline:
+                log = vm.command("dmesg -s init", raw=True)
+            waited = re.findall(r"\[INIT\] (\S+) WAITS FOR keystore'S PASSPHRASE: PREPARED, STARTED ONCE THE DEVICE KEY IS OPENED", log)
+            assert {"blockstore", "storefs", "tls", "ssh"} <= set(waited), (waited, log[-3000:])
+            services = vm.services()
+            assert not {"blockstore", "storefs", "tls", "ssh"} & set(services), services
+            assert "keystore" in services and "shell" in services, services
+            caps = vm.command(f"stat caps {services['shell']}", raw=True)
+            servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+            held = re.search(r"^SLOT=44 GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE=6 EP=(\d+)", caps, re.M)
+            assert held and servers.get(int(held[1])) == services["keystore"], caps
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+    print(f"PASS: keystore's passphrase without a TPM (308-KRN-0205): the services that need the device key ({', '.join(sorted(set(waited)))}) "
+          "wait for it, prepared, not started, while the rest and the shell run; the shell holds keystore's client badged for "
+          "the passphrase in slot 44", flush=True)
 
 
 def device_key_check(args, cpu):
