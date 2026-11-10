@@ -30,7 +30,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use mind::abi::*;
 use mind::fs::{Dir, File, MODE_CREATE, MODE_WRITE};
 use mind::idl::update::{self as api, Error, Metadata, Offer, State};
-use mind::idl::codec::Text;
+use mind::idl::codec::{List, Text};
 use mind::idl::{init, wire};
 use mind::ipc::Endpoint;
 use mind::parse::{read_channel, read_manifest, Refused, Session};
@@ -530,7 +530,8 @@ impl Updater {
         let result = (|| {
             if !(1..=TRIES_MAX).contains(&tries) { return Err(Error::NotStaged); }
             self.may_stage()?;
-            let channel = self.verify_other()?;
+            // A staged slot not as its manifest lists it is written again from the store's copy (351-UPD-0034).
+            let channel = match self.verify_other() { Ok(channel) => channel, Err(why) => self.restage(why)? };
             let version = channel.version;
             if version <= self.running { return Err(Error::Older); }
             // Past its channel's expiry a staged release waits for a current one (351-UPD-0025); a rollback does not.
@@ -685,16 +686,50 @@ impl Updater {
         let version = plan::last_good(&versions, self.running, self.minimum.max(plan::floor(self.records()))).ok_or(Error::NoFallback)?;
         let root = releases.iter().find(|r| r.2 == version).map(|r| r.1).ok_or(Error::NoFallback)?;
         mind::println!("[UPDATER] RESTORE: SLOT {} IS NOT AS ITS MANIFEST LISTS IT ({:?}): VERSION {} FROM THE STORE, ROOT {}", self.other(), why, version, root);
-        let name = kept::channel(&mut Store, &root, &mut chunk()).map_err(|_| Error::Digest)?;
-        let source = Source::Store(root);
+        self.from_store(&root, version, "RESTORE")?;
+        self.verify_other().map(|c| c.version)
+    }
+
+    /// The release staged in the other slot written there again from the block store, since that slot is not as its
+    /// manifest lists it (`why`): only the version staged, above the running one and kept by the store (351-UPD-0034).
+    /// Its channel once the slot checks as the bootloader will check it; `why` again without such a release.
+    fn restage(&mut self, why: Error) -> Result<Channel, Error> {
+        let version = self.staged;
+        if self.store.is_none() || version <= self.running { return Err(why); }
+        let Some(root) = self.stored().iter().find(|r| r.2 == version).map(|r| r.1) else { return Err(why) };
+        mind::println!("[UPDATER] APPLY: SLOT {} IS NOT AS ITS MANIFEST LISTS IT ({:?}): VERSION {} FROM THE STORE, ROOT {}", self.other(), why, version, root);
+        self.from_store(&root, version, "APPLY")?;
+        self.staged = version;
+        self.verify_other()
+    }
+
+    /// Release `version`, kept in the store at `root`, written into the other slot as a fetch writes a source's: its
+    /// channel the one kept with it, every file checked by size and SHA-256; `step` names it in the log.
+    fn from_store(&mut self, root: &Cid, version: u64, step: &str) -> Result<(), Error> {
+        let name = kept::channel(&mut Store, root, &mut chunk()).map_err(|_| Error::Digest)?;
+        let source = Source::Store(*root);
         let mut parser = parser();
         let channel_file = source.small(&format!("channels/{}", name), CHANNEL_MAX, &mut parser)?;
         let channel = channel_of(&channel_file, parser.endpoint())?;
         if channel.version != version || channel.name.as_str() != name { return Err(Error::Digest); }
-        let (read, _, _, files) = self.write_slot(&source, "RESTORE", &channel, &channel_file, &mut parser)?;
+        let (read, _, _, files) = self.write_slot(&source, step, &channel, &channel_file, &mut parser)?;
         drop(parser);
-        mind::println!("[UPDATER] RESTORE: VERSION {} WRITTEN INTO SLOT {} AGAIN: {} FILES, {} BYTES FROM THE STORE", version, self.other(), files.len(), read);
-        self.verify_other().map(|c| c.version)
+        mind::println!("[UPDATER] {}: VERSION {} WRITTEN INTO SLOT {} AGAIN: {} FILES, {} BYTES FROM THE STORE", step, version, self.other(), files.len(), read);
+        Ok(())
+    }
+
+    /// The releases the block store keeps, newest first, at most 8 (update.wit 1.5 `kept`): each one's bytes those of
+    /// its blobs, each counted once; 0 when its tree is not read, which the log says.
+    fn releases_kept(&self) -> Vec<api::KeptRelease> {
+        let mut releases = self.stored();
+        releases.sort_unstable_by(|a, b| b.2.cmp(&a.2));
+        let mut buffer = chunk();
+        releases.into_iter().take(8).map(|(pin, root, version)| {
+            let (mut left, mut seen, mut bytes) = (BLOBS_MAX, BTreeMap::new(), 0u64);
+            let read = kept::blobs(&mut Store, &root, &mut buffer, &mut left, |b| if seen.insert(b.digest, ()).is_none() { bytes += b.size; });
+            if let Err(e) = read { mind::println!("[UPDATER] STORE: THE BLOBS OF {} NOT READ ({:?})", root, e); bytes = 0; }
+            api::KeptRelease { version, pin, root: List::from_slice(&root.to_bytes()).unwrap_or_default(), bytes }
+        }).collect()
     }
 
     fn bundle_dir(&self) -> String { format!("MIND/{}/{}", self.other(), INSTALL) }
@@ -911,6 +946,7 @@ fn main(info: &'static BootInfo) {
             Ok((api::Request::Rollback, call)) => api::reply_rollback(call, allowed("ROLLBACK").and_then(|()| updater.rollback())),
             Ok((api::Request::Status, call)) => api::reply_status(call, &updater.state()),
             Ok((api::Request::Metadata, call)) => api::reply_metadata(call, &updater.metadata()),
+            Ok((api::Request::Kept, call)) => api::reply_kept(call, &updater.releases_kept()),
             Ok((api::Request::InstallBegin { size, sha256, command }, call)) =>
                 api::reply_install_begin(call, gateway("INSTALL-BEGIN").and_then(|()| updater.install_begin(size, sha256.as_str(), command.as_str()))),
             Ok((api::Request::InstallWrite { handle, offset, bytes }, call)) => {

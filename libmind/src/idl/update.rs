@@ -8,7 +8,8 @@
 //! only while init's `remote-update` counts (`init.wit` 1.11 `mode`), which the updater asks at each; else `denied`. That
 //! client alone may hand it a release as a bundle (`install-…`, 1.3, 751-UPD-0032), which it checks as any source. It
 //! keeps releases in the block store, and `rollback` writes the last known good back from there into a slot not as its
-//! manifest lists it (1.4, 351-UPD-0033).
+//! manifest lists it (1.4, 351-UPD-0033); `apply` writes the staged release back from there in the same way, and
+//! `kept` lists what the store keeps (1.5, 351-UPD-0034 and 0035).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -18,7 +19,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:update";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;
@@ -77,6 +78,16 @@ impl Wire for Metadata {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { channel: Wire::decode(r)?, version: Wire::decode(r)?, minimum: Wire::decode(r)?, expires: Wire::decode(r)?, expired: Wire::decode(r)?, checked: Wire::decode(r)? }) }
 }
 
+/// A release the block store keeps for the updater (1.5): its version, the pin that keeps it, the tree's root (a CID
+/// in binary), and the bytes of the files its manifest lists for a slot, each counted once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeptRelease { pub version: u64, pub pin: u32, pub root: List<u8, 36>, pub bytes: u64 }
+impl Wire for KeptRelease {
+    const MAX: usize = <u64 as Wire>::MAX + <u32 as Wire>::MAX + <List<u8, 36> as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.pin.encode(w)?; self.root.encode(w)?; self.bytes.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, pin: Wire::decode(r)?, root: Wire::decode(r)?, bytes: Wire::decode(r)? }) }
+}
+
 /// Reads the channel and checks its signature, its form and its expiry. A version not above the running one is
 /// `older`.
 pub fn check(endpoint: Endpoint) -> Result<core::result::Result<Offer, Error>> {
@@ -105,7 +116,8 @@ pub fn fetch(endpoint: Endpoint) -> Result<core::result::Result<u64, Error>> {
 
 /// Checks the other slot as the bootloader will, and that the channel kept there has not expired; writes the boot
 /// record that boots it on trial with `tries` (1 to 9), falling back to the running slot, and asks init to restart
-/// the machine.
+/// the machine. A slot that is not as its manifest lists it is first written again from the block store's copy of
+/// the release staged there, when the store keeps one above the running version, with every check of `fetch` (1.5).
 pub fn apply(endpoint: Endpoint, tries: u8) -> Result<core::result::Result<(), Error>> {
     let words = [3 | MAJOR << 8 | ((tries) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
@@ -153,6 +165,19 @@ pub fn metadata(endpoint: Endpoint) -> Result<Metadata> {
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Metadata as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
 
+/// The releases the block store keeps for the updater, newest first, at most 8; none without the store (1.5).
+pub fn kept(endpoint: Endpoint) -> Result<List<KeptRelease, 8>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    let length = wire::buffer_reply(&reply, 466, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<KeptRelease, 8> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
+}
+
 /// Begins a bundle of `size` bytes with SHA-256 `sha256` (64 hex digits) in the updater's own staging, for the
 /// gateway's command `command` (named in the log, MC-10.3); one begun before goes. From `BADGE_UPDATE_GATEWAY` only,
 /// while `remote-update` counts. The bundle is one ZIP of stored entries holding what `scripts/release.py bundle`
@@ -166,7 +191,7 @@ pub fn install_begin(endpoint: Endpoint, size: u64, sha256: &str, command: &str)
         codec::encode_str::<64>(command, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 4, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -184,7 +209,7 @@ pub fn install_write(endpoint: Endpoint, handle: u32, offset: u64, bytes: &[u8])
         codec::encode_bytes::<32768>(bytes, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 0, false, false)?;
     if length != Some(0) { return Err(SysError::Invalid); }
@@ -194,7 +219,7 @@ pub fn install_write(endpoint: Endpoint, handle: u32, offset: u64, bytes: &[u8])
 /// Checks the bundle's size and SHA-256 (`remote-update` asked again), stages the release it holds in the other slot
 /// as `fetch` stages a source's, with the same checks, and removes it. Returns the version staged; `apply` follows.
 pub fn install_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<u64, Error>> {
-    let words = [9 | MAJOR << 8 | ((handle) as usize) << 16, 0];
+    let words = [10 | MAJOR << 8 | ((handle) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let _ = wire::check_reply(&reply, [0x0, 0xffffffffffffffff], false)?;
@@ -213,6 +238,7 @@ pub enum Request<'a> {
     Rollback,
     Status,
     Metadata,
+    Kept,
     InstallBegin { size: u64, sha256: Text<64>, command: Text<64> },
     InstallWrite { handle: u32, offset: u64, bytes: &'a [u8] },
     InstallCommit { handle: u32 },
@@ -260,6 +286,13 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Metadata, call))
         }
         7 => {
+            let (call, length) = wire::take_buffer(request, cap, 466, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Kept, call))
+        }
+        8 => {
             let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -269,7 +302,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::InstallBegin { size, sha256, command }, call))
         }
-        8 => {
+        9 => {
             let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -279,7 +312,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::InstallWrite { handle, offset, bytes }, call))
         }
-        9 => {
+        10 => {
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::InstallCommit { handle: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
         }
@@ -308,6 +341,9 @@ pub fn reply_status(call: Call, value: &State) -> Result<()> {
 }
 pub fn reply_metadata(call: Call, value: &Metadata) -> Result<()> {
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_kept(call: Call, value: &[KeptRelease]) -> Result<()> {
+    wire::reply_buffer(call, |w| codec::encode_slice::<KeptRelease, 8>(value, w))
 }
 pub fn reply_install_begin(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };

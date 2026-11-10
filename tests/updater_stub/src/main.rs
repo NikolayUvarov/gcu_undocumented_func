@@ -238,6 +238,7 @@ impl Stub {
             Ok((api::Request::Rollback, call)) => api::reply_rollback(call, Err(Error::NoFallback)),
             Ok((api::Request::Status, call)) => api::reply_status(call, &State { staged: self.staged, ..State::default() }),
             Ok((api::Request::Metadata, call)) => api::reply_metadata(call, &Metadata::default()),
+            Ok((api::Request::Kept, call)) => api::reply_kept(call, &[]), // no store: nothing kept (update.wit 1.5)
             Ok((api::Request::InstallBegin { size, sha256, command }, call)) => { let begun = self.begin(request, size, sha256.as_str(), command); api::reply_install_begin(call, begun) }
             Ok((api::Request::InstallWrite { handle, offset, bytes }, call)) => { let written = self.write(handle, offset, bytes); api::reply_install_write(call, written) }
             Ok((api::Request::InstallCommit { handle }, call)) => { let committed = self.commit(request, handle); api::reply_install_commit(call, committed) }
