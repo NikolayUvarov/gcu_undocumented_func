@@ -152,7 +152,7 @@ enum Off { #[default] No, Disabled, Needs(usize), NoDevice, NoImage, Safe, Mode,
 // missing at boot.
 // The block store's own partition (307-KRN-0177): its driver, its number there, and the sectors of its window.
 #[derive(Clone, Copy)]
-struct StorePart { driver: &'static str, number: u8, first: u64, count: u32 }
+struct StorePart { driver: &'static str, number: u8, id: partition::Id, first: u64, count: u32 }
 
 struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<(Option<&'static str>, Option<&'static str>)>, store_part: Option<Option<StorePart>>,
               link: Option<[u8; LINK_WORDS_MAX]>,
@@ -308,7 +308,7 @@ impl Init {
                     mind::println!("[INIT] {} PARTITION {}: {} SECTORS, MORE THAN A WINDOW HOLDS (2 TIB): NOT THE STORE'S", driver, part.number, part.count);
                     return None;
                 };
-                let store = StorePart { driver, number: part.number, first: part.first, count };
+                let store = StorePart { driver, number: part.number, id: part.id, first: part.first, count };
                 self.set_store_window(store).ok()?;
                 mind::println!("[INIT] THE BLOCK STORE'S PARTITION: {} PARTITION {} ({}), {} SECTORS FROM {}, WINDOW {}", driver, part.number, why_text(why), count, part.first, STORE_WINDOW);
                 Some(store)
@@ -320,6 +320,25 @@ impl Init {
                 None
             }
         }
+    }
+    // After the store's driver started again: its partition is still the store's, the same number, PARTUUID and sectors,
+    // and still of the store's type with its superblock or named, before its window is set again; never by number alone.
+    fn store_window_again(&mut self, store: StorePart) {
+        let Ok(client) = self.keeper(store.driver).and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)) else { return };
+        let mut text = [0u8; 256];
+        let length = self.read_boot_file(STORE_TXT, &mut text);
+        let named = partition::named(&text[..length]).unwrap_or(None);
+        let same = mind::block::Device::open(Endpoint(client)).ok().is_some_and(|mut disk| {
+            let table = partition::read_table(disk.sectors(), &mut |lba, out| disk.read(lba, 1).map(|s| out.copy_from_slice(&s[..partition::SECTOR])).is_ok());
+            let Some(part) = table.partitions().find(|p| p.number == store.number).copied() else { return false };
+            let mut first = [0u8; partition::SECTOR];
+            part.id == store.id && part.first == store.first && part.count == store.count as u64
+                && disk.read(part.first, 1).map(|s| first.copy_from_slice(&s[..partition::SECTOR])).is_ok()
+                && partition::candidate(&part, &first, named).is_some()
+        });
+        let _ = ipc::drop_cap(client);
+        if !same { mind::println!("[INIT] {}: PARTITION {} IS NOT THE STORE'S IT WAS: NO WINDOW FOR THE BLOCK STORE", store.driver, store.number); return; }
+        if self.set_store_window(store).is_ok() { mind::println!("[INIT] {}: WINDOW {} SET AGAIN FOR THE BLOCK STORE (PARTITION {})", store.driver, STORE_WINDOW, store.number); }
     }
     // Window STORE_WINDOW over the store's partition, set through a client badged BADGE_WINDOWS that init drops at once;
     // set again whenever the driver starts again, since a restarted driver holds no window (307-DRV-0054).
@@ -414,10 +433,8 @@ impl Init {
             }
             if let Some(device) = self.others[index] { platform::resume(device)?; }
             let pid = self.spawn(index, plan)?;
-            // A block driver started again holds no window: the store's is set again (307-KRN-0177).
-            if let Some(store) = self.store_part.flatten().filter(|store| store.driver == name) {
-                if self.set_store_window(store).is_ok() { mind::println!("[INIT] {}: WINDOW {} SET AGAIN FOR THE BLOCK STORE (PARTITION {})", name, STORE_WINDOW, store.number); }
-            }
+            // A block driver started again holds no window: the store's is set again once its partition is checked (307-KRN-0177).
+            if let Some(store) = self.store_part.flatten().filter(|store| store.driver == name) { self.store_window_again(store); }
             return Ok(pid);
         }
         let (plan, mut minted) = self.plan(index)?;
