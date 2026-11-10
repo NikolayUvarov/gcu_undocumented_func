@@ -63,6 +63,9 @@ BASE = 0
 # How long `dmesg` is waited for unless a check says (000-NET-0063, 000-KRN-0227): it reads the whole ring, 16 records to
 # a call, which took more than 8 s beside another gate lane on the same machine (rounds 102 and 106).
 DMESG_WAIT = 30
+# How long the listen suite waits for an answer whose text it checks, beside a build load (000-APP-0131): DRV saw the
+# shell's prompt take more than 8 s there; the wait ends at the answer, so an unloaded run takes no longer.
+LOADED_WAIT = 60
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
@@ -76,6 +79,8 @@ def to_ordinal(text):
 
 
 class VM:
+    wait = 8  # s: how long command() and expect() wait by default; a suite may set its own
+
     def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio"):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
@@ -231,9 +236,9 @@ class VM:
             except queue.Empty:
                 return
 
-    def expect(self, text, timeout=8, after=None):
+    def expect(self, text, timeout=None, after=None):
         """Waits for `text` (after the first `after`, when given) in the output since the last match."""
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + (self.wait if timeout is None else timeout)
         while time.monotonic() < deadline:
             self.collect()
             clean = to_ordinal(ANSI.sub("", self.output).replace("\r", ""))
@@ -281,7 +286,7 @@ class VM:
 
     def command(self, text, raw=False, timeout=None):
         if timeout is None:
-            timeout = DMESG_WAIT if text.split()[:1] == ["dmesg"] else 8
+            timeout = DMESG_WAIT if text.split()[:1] == ["dmesg"] else self.wait
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
         return self.expect("MIND> ", timeout=timeout, after=to_ordinal(text if raw else to_real(text)) + "\n")
@@ -8881,6 +8886,7 @@ def hda_suite(args):
 
 
 def listen_suite(vm, starts):
+    vm.wait = LOADED_WAIT
     # The network card the launchers add shares the sound card's interrupt line: both drivers hear it (issue 159);
     # audio_gw would also play without interrupts, looking at the ring while a client waits (096).
     lines = dict(re.findall(r"(Ethernet|audio \(AC97\)) IRQ=(\d+)", vm.command("devices")))
@@ -8981,8 +8987,10 @@ def listen_suite(vm, starts):
     assert re.search(r"NOTHING HEARD: (DIGITAL SILENCE FOR \d+ S|NOISE FLOOR -\d+ DBFS, PEAK -\d+ DBFS OVER \d+ S; SPEECH STARTS AT -\d+ DBFS)", quiet), quiet
     require(vm.command("hear --wav nosuch.wav"), "HEAR: CANNOT READ nosuch.wav: File(NotFound)")
     require(vm.command("hear x y"), "USAGE: HEAR [SECONDS] [--save FILE] | HEAR --wav FILE [--save FILE]")
-    # The microphone has one owner at a time (idl/audio.wit 1.1): hear cannot record while listen does.
-    pid = re.search(r"STARTED PID=(\d+) NAME=listen", vm.command("run listen 10 &"))[1]
+    # The microphone has one owner at a time (idl/audio.wit 1.1): hear cannot record while listen does. hear asks once
+    # listen holds it, for up to 60 s (000-APP-0131: on a loaded machine hear came before listen, or after its 10 s).
+    pid = re.search(r"STARTED PID=(\d+) NAME=listen", vm.command("run listen --vad 60 &"))[1]
+    require(logs(pid, "[LISTEN] LISTENING FOR SPEECH 60 S"), "[LISTEN] LISTENING FOR SPEECH 60 S")
     vm.send("hear 1\n")
     require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "HEAR: THE MICROPHONE IS BUSY (ANOTHER PROGRAM RECORDS)")
     vm.command(f"kill {pid}")
