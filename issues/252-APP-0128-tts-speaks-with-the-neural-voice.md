@@ -1,6 +1,6 @@
 # 252-APP-0128 — `tts` speaks Russian with the neural voice from `models:`, the formant voice its fallback
 
-**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`tts`'s side made and run on QEMU with the asked grant applied locally; KRN's grant left, 2026-11-10) · **Blocked by:** [252-KRN-0230](../issues-done/252-KRN-0230-tts-reads-the-neural-voice.done) (`tts`'s scope of `models:` and its memory line) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
+**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (made and run on QEMU x86 with `main`'s grant; a voice control answer, a later phrase's latency, aarch64's run and the MacBook Pro left, 2026-11-10) · **Blocked by:** — ([252-KRN-0230](../issues-done/252-KRN-0230-tts-reads-the-neural-voice.done) in `main`, round 110) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
 
 **Numbered by:** the tools track, 2026-11-09, from [252-APP-0041](252-APP-0041-russian-speech-on-the-macbook.md)'s measurements.
 
@@ -56,10 +56,12 @@
     - `say Говорит разум корабля.` was the neural voice's;
     - the voice was ready in 23.9 s, and the whole took 176 s, for 1544 ms of speech: emulated, not a machine's times (MC-12.1);
     - from the audio captured at QEMU's AC'97, Vosk's small model and Vosk 0.54's transducer both heard `говорит разум корабля`.
-- **With KRN's grant** (252-KRN-0230, in the landing queue): the `tts` suite's machine gets a model disk holding only its manifest. The suite takes either reason for the formant voice: no scope of `models:`, or no voice's file on such a disk. `git merge-tree` of the two branches has no conflict.
+- **With KRN's grant** (252-KRN-0230, in `main` since round 110): the `tts` suite's machine gets a model disk holding only its manifest. The suite takes either reason for the formant voice: no scope of `models:`, or no voice's file on such a disk. `git merge-tree` of the two branches has no conflict.
 - **aarch64:** `tts` builds for `aarch64-unknown-none-softfloat` through its `.cargo/config.toml`, and the image's `normal` and `shell` suites pass on QEMU (4 CPUs, TCG), 2026-11-10. The voice is not run there.
+- **On `main`'s `init`** (6894fa27, `main` 7c496688 merged in, 2026-11-10), with no local edit:
+  - the `tts` suite passed with KRN's holdings check: a read-only scope of `models:` in slot 7, `tts 48` read at a restart, 16 MiB without a line;
+  - `ttsneural` passed, with the same disk and `tts 320`: the voice was ready in 19.5 s, the whole took 165 s for 1544 ms of speech (TCG, MC-12.1), and Vosk's small model heard `говорит разум корабля`.
 - **Left:**
-  - KRN's grant ([252-KRN-0230](../issues-done/252-KRN-0230-tts-reads-the-neural-voice.done)), then the same run on `main`'s `init`;
   - a voice control answer;
   - the latency of a later phrase;
   - aarch64, whose programs are soft-float, so emulated synthesis there would take far longer;

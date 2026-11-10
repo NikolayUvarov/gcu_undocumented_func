@@ -9376,36 +9376,67 @@ def tts_neural_suite(args, disk):
     scripts/voice_dictate/convert.py, russian.dic from scripts/voice_tts/dictionary.py, both listed in its MANIFEST.json)
     and `tts 320` in data/memory.conf, tts says a Russian sentence with the neural voice: its log says so, and the
     speech captured from QEMU's AC97 is the sentence's length and, with --asr-model, heard by the host's recognizer.
-    Emulated: the voice's load and synthesis times are TCG's, not a machine's (MC-12.1)."""
+    Then a later phrase, and voice control's answer to «который час» from a WAV file, take the neural voice too; tts
+    logs when each first sound went out. Emulated: the voice's load and synthesis times are TCG's, not a machine's
+    (MC-12.1)."""
     if not getattr(args, "tts_models_disk", None):
         print("SKIP: tts's neural voice (252-APP-0128): no --tts-models-disk", flush=True)
         return
     import copy, json, struct, wave
     (disk / "data").mkdir(exist_ok=True)
     (disk / "data/memory.conf").write_text("tts 320\n")
+    (disk / "voice.wav").write_bytes(speech_wav(("который час",))[0])  # voice control's question
     machine = copy.copy(args)
     if gibibytes(getattr(args, "memory", None)) < 2:
         machine.memory = "2G"
     wav = Path(tempfile.gettempdir()) / "mind-core-ttsneural.wav"
     vm = VM(machine, disk.relative_to(ROOT).as_posix(), audio=str(wav),
             extra=["-drive", f"if=none,id=models,format=raw,readonly=on,file={args.tts_models_disk}", "-device", "virtio-blk-pci,drive=models"])
-    sentence = "Говорит разум корабля."
+    sentence, later = "Говорит разум корабля.", "Система готова к работе."
+
+    def spoken_lines(count, timeout):
+        # tts's log once it has said `count` texts: the voice's load and its synthesis, emulated, take minutes.
+        for _ in range(timeout // 5):
+            log = vm.command("dmesg -s tts", raw=True)
+            if log.count("[TTS] SPOKE") >= count or "[TTS] ERROR" in log:
+                return log
+            time.sleep(5)
+        raise AssertionError(log[-2000:])
     try:
         require(vm.service_logs("tts", "[TTS] FORMANT SYNTHESIZER READY"), "AUDIO=true")
         require(vm.command("dmesg -s vfs_server", raw=True), "AS MODELS:")
         vm.send_bytes(f"run say {sentence} &\n".encode())
         started = time.monotonic()
-        for _ in range(300):  # the voice's load and its synthesis, emulated: minutes
-            log = vm.command("dmesg -s tts", raw=True)
-            if "[TTS] SPOKE" in log or "[TTS] ERROR" in log:
-                break
-            time.sleep(5)
+        log = spoken_lines(1, 1500)
         took = time.monotonic() - started
         require(log, "[TTS] THE NEURAL VOICE SPEAKS RUSSIAN: ")
         assert "THE FORMANT VOICE SPEAKS RUSSIAN" not in log, log[-2000:]
         spoken = int(re.search(r"\[TTS\] SPOKE \d+ BYTES, (\d+) MS", log)[1])
         assert 800 < spoken < 4000, spoken
         time.sleep(spoken / 1000 + 2)  # the DMA ring's playback
+        # A later phrase: the voice is loaded, so its first sound waits for its synthesis alone.
+        vm.send_bytes(f"run say {later} &\n".encode())
+        log = spoken_lines(2, 1500)
+        # Voice control's answer (the time in words) through tts, as any client's.
+        on = vm.command("voice on --wav voice.wav")
+        require(on, "VOICE CONTROL ON")
+        pid = re.search(r"STARTED PID=(\d+) NAME=voice BACKGROUND", on)[1]
+        voice = ""
+        for _ in range(240):
+            voice += vm.command(f"logs {pid}")
+            if "[VOICE] READY" in voice:
+                break
+            time.sleep(.5)
+        require(voice, "[VOICE] READY")
+        vm.send("voice listen\n")
+        answer = vm.expect(" минут", timeout=1500)  # voice reports once it has heard; tts may still synthesize the answer
+        require(answer, 'VOICE: "который час" (')
+        log = spoken_lines(3, 1500)
+        firsts = [int(ms) for ms in re.findall(r"THE NEURAL VOICE'S FIRST SOUND AFTER (\d+) MS", log)]
+        assert len(firsts) == 3 and "THE FORMANT VOICE SPEAKS RUSSIAN" not in log and "THE NEURAL VOICE FAILED" not in log, log[-3000:]
+        lengths = [int(ms) for ms in re.findall(r"\[TTS\] SPOKE \d+ BYTES, (\d+) MS", log)]
+        time.sleep(lengths[-1] / 1000 + 2)
+        require(vm.command("voice off"), "VOICE CONTROL OFF")
     finally:
         vm.close()
     with wave.open(str(wav)) as audio:
@@ -9413,6 +9444,9 @@ def tts_neural_suite(args, disk):
     left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
     loud = [i for i, sample in enumerate(left) if abs(sample) > 300]
     assert loud, "the neural voice gave no audio"
+    # The first sentence: the sound up to the first second of quiet, which the later ones come after.
+    gaps = [k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate] + [len(loud)]
+    phrases, loud = len(gaps), loud[:gaps[0]]
     seconds = (loud[-1] - loud[0]) / rate
     assert abs(seconds * 1000 - spoken) < 1000, (seconds, spoken)
     heard = ""
@@ -9420,7 +9454,8 @@ def tts_neural_suite(args, disk):
         import vosk
         vosk.SetLogLevel(-1)
         step = rate / 16000
-        mono = [left[int(i * step)] for i in range(int(len(left) / step))]
+        first = left[max(0, loud[0] - rate // 2):loud[-1] + rate // 2]
+        mono = [first[int(i * step)] for i in range(int(len(first) / step))]
         recognizer = vosk.KaldiRecognizer(vosk.Model(args.asr_model), 16000)
         recognizer.AcceptWaveform(struct.pack(f"<{len(mono)}h", *mono))
         heard = json.loads(recognizer.FinalResult())["text"]
@@ -9428,7 +9463,9 @@ def tts_neural_suite(args, disk):
         assert sum(word in heard for word in ("говорит", "разум", "корабля")) >= 2, heard
     ready = re.search(r"READY IN (\d+) MS", log)[1]
     print(f"PASS: tts's neural voice (252-APP-0128): {sentence} said with Vosk TTS 0.7 from the model disk, {spoken} ms of speech; "
-          f"the voice ready in {ready} ms and the whole in {took:.0f} s of emulation (TCG, not a machine's)" + (f"; heard as {heard!r}" if heard else ""), flush=True)
+          f"the voice ready in {ready} ms and the whole in {took:.0f} s of emulation (TCG, not a machine's)" + (f"; heard as {heard!r}" if heard else "") +
+          f"; the first sound after {firsts[0]} ms, the load included, then {firsts[1]} ms for {later} ({lengths[1]} ms) and {firsts[2]} ms for "
+          f"voice control's answer ({lengths[2]} ms); {phrases} stretches of sound captured", flush=True)
 
 
 def large_bss(path):
