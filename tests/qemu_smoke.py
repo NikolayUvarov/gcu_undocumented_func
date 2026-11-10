@@ -60,6 +60,9 @@ BOOT_EFI = "EFI/BOOT/BOOTX64.EFI"
 BOOT_DRIVE, BOOT_DRIVER = "ATA", "ata"
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
+# How long `dmesg` is waited for unless a check says (000-NET-0063, 000-KRN-0227): it reads the whole ring, 16 records to
+# a call, which took more than 8 s beside another gate lane on the same machine (rounds 102 and 106).
+DMESG_WAIT = 30
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
@@ -101,7 +104,7 @@ class VM:
                     "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1,id=usbstick"]
                    if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
-                   if ahci else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]
+                   if ahci or getattr(args, "disk", None) == "ahci" else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]
                    if getattr(args, "disk", None) == "nvme" else ["-drive", source])
         if decoy:
             storage = ["-drive", f"format=raw,file=fat:{decoy.replace(',', ',,')}", *storage]
@@ -276,7 +279,9 @@ class VM:
             self.process.stdin.flush()
             time.sleep(.01)
 
-    def command(self, text, raw=False, timeout=8):
+    def command(self, text, raw=False, timeout=None):
+        if timeout is None:
+            timeout = DMESG_WAIT if text.split()[:1] == ["dmesg"] else 8
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
         return self.expect("MIND> ", timeout=timeout, after=to_ordinal(text if raw else to_real(text)) + "\n")
@@ -7796,7 +7801,7 @@ def models_check(args, boot, temp):
             extra=["-drive", f"if=none,id=models,format=raw,readonly=on,file={image}", "-device", "virtio-blk-pci,drive=models"])
     try:
         mounted = vm.service_logs("vfs_server", "AS RAM:")
-        require(mounted, "[VFS] MOUNTED FAT16 FROM ATA AT LBA 2048")
+        require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048")
         require(mounted, "[VFS] MOUNTED FAT32 FROM VIRTIO AS MODELS: (256 MB, READ-ONLY)")
         assert re.search(r"^models: +MIND MODELS +FAT32 +4096 ", vm.command("df"), re.M), vm.log[-2000:]
         command = "sha256 " + " ".join(f"models:{path}" for path in files)
@@ -8842,6 +8847,9 @@ def listen_suite(vm, starts):
             break
         time.sleep(.25)
     require(log, "[LISTEN] RECORDING 1 S")
+    # An overflow's cause is in audio_gw's log (000-DRV-0066): it goes into the failure's text.
+    if "OVERFLOWS 0" not in log:
+        log += vm.service_logs("audio_gw")
     require(log, "[LISTEN] RECORDED 48000 FRAMES (1000 MS), PEAK 0, RMS 0, OVERFLOWS 0")
     require(log, "[LISTEN] PLAYED BACK")
     vm.command("kill 1")
@@ -10020,9 +10028,6 @@ def ping_options_check(vm):
     assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]
 
 
-# How long a check waits for `dmesg -s NAME` (000-NET-0063): it reads the whole ring, 16 records to a call, which took
-# more than 8 s on a host loaded by another gate lane (round 102).
-DMESG_WAIT = 30
 
 
 def wifi_join_check(vm):
@@ -10050,11 +10055,11 @@ def wifi_join_check(vm):
     # before it (the gates of ASR and NET, 2026-10-20), so the line may come in logd's record of wifi instead, once more
     # than it was there before the command.
     def run(text, timeout, line):  # as vm.command, with a join's wait (60 s at most in wifi)
-        before = vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT).count(line)
+        before = vm.command("dmesg -s wifi", raw=True).count(line)
         vm.send(text + "\n")
         out = vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
         for _ in range(20):
-            if line in out or vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT).count(line) > before:
+            if line in out or vm.command("dmesg -s wifi", raw=True).count(line) > before:
                 return out
             time.sleep(.5)
         raise AssertionError((line, out))
@@ -10064,7 +10069,7 @@ def wifi_join_check(vm):
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # 550-APP-0117 (for 550-DRV-0042, 0045): the networks as text, the joined one marked, then their count.
     scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
-    scanned += vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT)
+    scanned += vm.command("dmesg -s wifi", raw=True)
     assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 -\d+ DBM WPA2( REMEMBERED)? JOINED', scanned), scanned[-2000:]
     assert re.search(r"\[WIFI\] SCAN: \d+ NETWORKS?", scanned), scanned[-2000:]
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
@@ -10223,10 +10228,10 @@ def wifi_join_check(vm):
     # 550-NET-0035, stage B (the maintainer's decision of 2026-11-04): with no country chosen the first scan sent nothing,
     # and the station ran under the country wlansim's access point announces (UZ, every channel to send on). Then the
     # user's US, kept by keystore across a restart of the station, under which it joins again on channel 6.
-    log = vm.command("dmesg -s wlan", raw=True, timeout=DMESG_WAIT)
+    log = vm.command("dmesg -s wlan", raw=True)
     require_all(log, "[WLAN] NO COUNTRY CHOSEN: THE FIRST SCAN SENDS NOTHING",
                 "[WLAN] COUNTRY UZ (NONE CHOSEN; ANNOUNCED BY 1 OF THE 1 ACCESS POINTS THAT NAMED A COUNTRY): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
-    radio = vm.command("dmesg -s wlansim", raw=True, timeout=DMESG_WAIT)
+    radio = vm.command("dmesg -s wlansim", raw=True)
     require(radio, "[WLANSIM] COUNTRY UZ: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, "the first scan sent a probe request"
     run("wifi country", 30, "[WIFI] COUNTRY UZ (Uzbekistan) APPLIED")
@@ -10253,7 +10258,7 @@ def wifi_join_check(vm):
     ru = wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30)
     # Planned over the radio's own channels, not the 11 US left it: RU, as UZ, sends on all 13 (550-NET-0059).
     require(ru, "[WLAN] COUNTRY RU (CHOSEN BY THE USER, KEPT BY KEYSTORE): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
-    require(vm.command("dmesg -s wlansim", raw=True, timeout=DMESG_WAIT), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    require(vm.command("dmesg -s wlansim", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     after = ru.partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
     if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
         after += wlan_until("[WLAN] Off", 30)
@@ -11045,7 +11050,7 @@ def world_country_check(args):
             for _ in range(20):
                 if "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6" in out:
                     break
-                out += vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT)
+                out += vm.command("dmesg -s wifi", raw=True)
                 time.sleep(.5)
             require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS")
@@ -11110,7 +11115,7 @@ def slow_radio_check(args):
             joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
             require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
             scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
-                             joined + vm.command("dmesg -s wifi", raw=True, timeout=DMESG_WAIT))
+                             joined + vm.command("dmesg -s wifi", raw=True))
             assert scan is None or scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
@@ -15035,7 +15040,7 @@ def main():
     parser.add_argument("--cpus", type=int)
     parser.add_argument("--machine", help="QEMU -machine; aarch64: in place of virt,gic-version=3,highmem=off (issue 205: highmem=on, gic-version=2); x86: added properties (211-PRT-0003: pit=off)")
     parser.add_argument("--memory", help="QEMU -m (default 512; e.g. 6G: RAM above 4 GiB)")
-    parser.add_argument("--disk", choices=("default", "nvme"), default="default", help="the boot disk's bus: nvme puts it on an NVMe controller (issue 205)")
+    parser.add_argument("--disk", choices=("default", "nvme", "ahci"), default="default", help="the boot disk's bus: nvme puts it on an NVMe controller (issue 205), ahci on a SATA disk of an AHCI controller (000-DRV-0064)")
     parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")
     parser.add_argument("--uboot", help="aarch64: U-Boot's qemu_arm64 u-boot.bin as the firmware in place of AAVMF, no ACPI with --machine virt,acpi=off (100000-PRT-0009)")
     parser.add_argument("--aavmf-vars", default="/usr/share/AAVMF/AAVMF_VARS.fd")
@@ -15099,6 +15104,8 @@ def main():
     args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
+    if args.disk == "ahci":
+        BOOT_DRIVE, BOOT_DRIVER = "AHCI", "ahci"
     if args.kernel:
         # A test-only kernel (211-PRT-0002: x2APIC as firmware leaves it) in a copy of the image directory.
         copy = f"{IMAGE}-kernel"

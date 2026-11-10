@@ -1,13 +1,15 @@
 #![no_std]
 #![no_main]
 // Ring 3 VirtIO block driver (issue 202): the modern interface over one BAR, one request virtqueue in its own DMA
-// region, requests polled to completion one at a time like ahci's. Reads, writes (for clients with the write badge,
+// region, requests polled to completion one at a time like ahci's, against the clock (wait.rs). Reads, writes (for clients with the write badge,
 // mind::block_protocol) and flushes; a read-only device (VIRTIO_BLK_F_RO) refuses writes. Holds its BAR and DMA only.
 use core::sync::atomic::{fence, Ordering};
 use mind::abi::{BootInfo, BLOCK_KIND_VIRTIO, BLOCK_MAX_SECTORS, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver};
 use mind::dev::{cap_info, Dma, Mmio};
 use mind::virtio::{Layout, Modern, NO_VECTOR};
+
+mod wait;
 
 const F_RO: u64 = 1 << 5; const F_FLUSH: u64 = 1 << 9;
 const T_IN: u32 = 0; const T_OUT: u32 = 1; const T_FLUSH: u32 = 4;
@@ -20,11 +22,8 @@ const DATA: usize = 0x10000;
 
 struct VirtioBlk { modern: Modern, dma: Dma, size: u16, notify: usize, last_used: u16, sectors: u64, features: u64 }
 
-// Waits for a condition, busy-polling first, then sleeping (QEMU completes requests asynchronously).
-fn wait(mut done: impl FnMut() -> bool) -> bool {
-    for attempt in 0..3_000 { if done() { return true; } if attempt > 1_000 { mind::time::sleep(1); } else { core::hint::spin_loop(); } }
-    false
-}
+// Waits for a request's end: polled for wait::SPIN_NS, then with sleeps, until wait::DEADLINE_NS.
+fn wait(done: impl FnMut() -> bool) -> bool { wait::wait(mind::time::monotonic_ns, || { mind::time::sleep(1); }, done) }
 
 impl VirtioBlk {
     fn probe() -> Option<Self> {

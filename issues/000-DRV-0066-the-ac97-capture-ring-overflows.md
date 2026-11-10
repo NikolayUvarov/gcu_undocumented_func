@@ -1,6 +1,6 @@
 # 000-DRV-0066 — `audio_gw`: the AC97 capture ring overflows in the `listen` suite on x86 TCG
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [000-APP-0114](000-APP-0114-hear-waits-for-a-whole-command.md) (the suite's check stays as it is) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-10) · **Blocked by:** — · **Main task:** [000-APP-0114](000-APP-0114-hear-waits-for-a-whole-command.md) (the suite's check stays as it is) · **Constitution:** MC-6.1, MC-12.1
 
 Numbered from the tools track's request of 2026-10-30 in `requests-DRV.md`.
 
@@ -24,6 +24,37 @@ Numbered from the tools track's request of 2026-10-30 in `requests-DRV.md`.
 - The check's requirement, `OVERFLOWS 0`, is unchanged.
 
 No real machine is needed.
+
+## Progress (2026-11-10)
+
+**Plan step 1, the cause, logged and seen.**
+- **The log line:** on an overflow, `audio_gw` says how long since it last took from the DMA ring and since its reader last asked, and how much it kept: `[AUDIO] CAPTURE OVERFLOW: THE DMA RING (341 MS) FILLED; THE GATEWAY LAST TOOK FROM IT … MS AGO, ITS READER LAST ASKED … MS AGO, … OF … BUFFERS KEPT`.
+- **The suite:** when the recording reports an overflow, it adds `audio_gw`'s log to the failure.
+- **Seen on this machine** (x86 TCG, 4 CPUs, 24 host CPUs), with the gateway taking only when asked as before:
+  - **10 runs alone:** no overflow.
+  - **10 runs beside a build loop** (load average 65 to 75): the recording overflowed in 4.
+  - **Each time** `listen` had not asked for 242 to 386 ms, and the gateway had taken nothing in that time.
+
+  So the reader was late: the gateway emptied the ring only when its reader asked. Under that load the guest also runs behind QEMU's sound, which fills the ring at the host's pace: twice the ring filled in 242 ms of the guest's clock.
+
+**Plan step 2, the fix.** The DMA ring is `init`'s region (`AUDIO_DMA_BYTES`, 16 capture buffers), so it stays as it is. Instead the gateway keeps up:
+- **While the microphone records,** its loop looks at the DMA ring every `POLL_MS` (20 ms) and at each message. It takes the completed buffers into its own copy, `KEPT`.
+- **The copy:** 256 buffers, 1 MiB, 5461 ms.
+- **A read** gives the oldest kept buffers. The capture's start empties the copy.
+- **An overflow** is now the DMA ring filling while the copy has no room, or while the gateway itself was not running for 341 ms.
+
+The first copy of 64 buffers (1365 ms) still overflowed once in 10 runs beside the build. The copy was full there: the reader had asked 75 ms before, but took 4 buffers a call while the sound came faster than the guest ran.
+
+**The criterion.** 20 runs of the `listen` suite, x86 TCG, 4 CPUs, beside the same build loop (load average 63 to 76):
+- **The recording:** no overflow in any of the 20. Before the fix, 4 overflows in 10 runs under that load.
+- **The suite whole:** it passed in 9 of the 20.
+- **The other 11 failed after the recording:**
+  - the suite's waits for the shell's answer to `hear --wav nosuch.wav`, `voice on --wav`, `hear x y` and `run keys`;
+  - three times `HEAR: THE MICROPHONE IS BUSY`, which depends on `listen` still recording when `hear` asks.
+
+  The same failures came with the old gateway under that load (3 of its 10 runs). They are the load's on the suite's timing, not the capture's.
+
+So "the `listen` suite passes 20 runs in a row beside a build" is met for the recording, not for the suite's later checks under this load. The issue stays open until the whole suite holds, or its criterion is narrowed to the recording, which is APP's and the maintainer's to decide.
 
 ## Related
 
