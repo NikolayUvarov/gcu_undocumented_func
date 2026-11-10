@@ -1,6 +1,6 @@
 # 308-NET-0064 — The old secrets set aside when `keystore` makes the device key anew
 
-**Type:** `keystore` · **Owner:** STO, by agreement with the network track's owner (the kernel session, 2026-11-10) · **Priority:** P2 · **Status:** in progress (2026-11-10) · **Blocked by:** — · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) and [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** `keystore` · **Owner:** STO, by agreement with the network track's owner (the kernel session, 2026-11-10) · **Priority:** P2 · **Status:** in progress (in `main` since round 116, 2026-11-10; the `recovery_key_check` criterion left, STO's) · **Blocked by:** — · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) and [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
 **Numbered by the network track's owner** at STO's offer (`NET/2026-11-10T1152Z-STO-…`), after APP's report (`NET/2026-11-10T1136Z-APP-…`). STO makes it with the track's code and counter (AGENTS.md, section 2), in `keystore`'s code, on its own branch.
 
@@ -54,6 +54,8 @@ STO's proposal, taken as it is:
 - **The TPM check:** TPM B's new key sets the store's file aside.
 
 **Left:** the criterion on `recovery_key_check` (it removes `device.key` alone), once APP's 308-APP-0122 is in `main`.
+
+**Landed** in round 116 (`main` 46d756be, 2026-11-10; STO's request of 1642Z), every group of the gate passed. **Left:** the criterion on `recovery_key_check`. APP's 308-APP-0122 has been in `main` since round 115, so it is STO's next step.
 
 ## Related
 
