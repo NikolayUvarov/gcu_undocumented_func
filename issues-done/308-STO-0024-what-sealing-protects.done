@@ -63,7 +63,7 @@ Done by the storage session through 308's parts, in the commits that closed [308
 
 These are tests of the configurations named, not a proof (MC-12.2).
 
-**What is left** goes with [308-STO-0028](../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md): the recovery key and the passphrase, whose criteria include docs/storage and the profile.
+**What is left** goes with [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.done): the recovery key and the passphrase, whose criteria include docs/storage and the profile.
 
 ## Related
 
