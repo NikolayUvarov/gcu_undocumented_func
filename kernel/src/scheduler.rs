@@ -919,11 +919,14 @@ impl Scheduler {
         space.map(paging::USER_INFO, abi.ptr() as usize, 4096, false, false)?; space.map(paging::USER_MAILBOX, abi.ptr() as usize + 4096, 4096, true, false)?; space.map(paging::USER_EXIT, exit.ptr() as usize, 4096, false, true)?;
         let context = Region::task(context::size(), 64)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance. A worker goes
-        // where neither its creator nor another of its workers runs, while such a CPU is online (262-KRN-0163).
+        // where neither its creator nor another of its workers runs, while such a CPU is online (262-KRN-0163). Of CPUs
+        // with as many, an application goes where services have run least: the system band runs first, and behind the
+        // compositor's frame copies a 10 ms sleep ended 30-60 ms late in QEMU (000-KRN-0231).
         let family = |t: &Task| worker.is_some_and(|w| t.pid == w.creator.1 || t.worker_of == Some(w.creator));
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| {
             let here = || self.tasks.iter().flatten().filter(move |t| t.cpu == i && t.state != State::Exited);
-            (here().any(|t| family(t)), here().filter(|t| t.service == service).count())
+            let services_ns = if service { 0 } else { here().filter(|t| t.service).map(|t| t.run_ns).sum::<u64>() };
+            (here().any(|t| family(t)), here().filter(|t| t.service == service).count(), services_ns)
         }).unwrap_or(0);
         // The fixed slots from the grants, then free kernel-allocated ones; the table grows later as needed (issue 171).
         if self.on_cpu[cpu].try_reserve_exact(1).is_err() { return Err("OUT OF MEMORY: TASK LIST"); }

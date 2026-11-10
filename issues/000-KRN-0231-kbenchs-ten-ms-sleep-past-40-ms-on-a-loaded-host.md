@@ -1,6 +1,6 @@
 # 000-KRN-0231 — `kbench`'s 10 ms sleep past 40 ms on a loaded host
 
-**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (cause found and fixed on `claude/000-KRN-0231-a-ten-ms-sleep`, 2026-11-10; the ten runs on acc-2 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -28,6 +28,33 @@
 
 - The cause is named, with the measurements that show it.
 - "x86: keys, shell, tools" passes ten times in a row on acc-2 beside a loaded lane.
+
+## Progress
+
+**The cause (2026-11-10).** The sleep is armed and woken on time; the CPU it wakes on is held by the compositor.
+
+- **Measured in this container**, QEMU 8.2.2, TCG, 4 CPUs, the `bench` suite, `main` 49282594. A temporary build printed each of `kbench`'s samples and, for each of its wakes chosen more than 5 ms after the tick made it ready, the CPU and what had run there. Times in ms:
+
+  | build | `sleep 10 ms`, 50 samples | `sleep 1 ms`, 100 samples |
+  |---|---|---|
+  | `main` | 25 between 10.1 and 10.9, 25 between 39.3 and 65.0 | 86 near 2, 14 between 36.5 and 38.4 |
+  | the wake IPI sent whatever `woken` says (a shorter run) | 3 of 5 past 41 | 1 of 10 at 50.7 |
+  | the compositor's hold (000-KRN-0086, 0186) off, two runs | 25 between 10.1 and 12.1, 25 between 40.4 and 75.2, each run | 88 between 1.1 and 2.3, 12 between 37.6 and 67.8, each run |
+  | **the fix below** | **all 50 between 10.1 and 11.3, median 11.0** | **all 100 between 1.6 and 2.1** |
+
+- **Every late wake** (51 in one run) was on CPU 0, and the task that ran there meanwhile was the compositor (50 of 51; `tls` once). In the 40 lines read, no other task was ready there.
+- **The chain:**
+  - every sleep marks the foreground task as drawn (`dirty`), so the compositor copies its frame;
+  - under TCG a copy runs 30 to 60 ms;
+  - the compositor is in the system band, which runs before the application band on its CPU;
+  - `kbench` was placed on the compositor's CPU: applications were balanced by application count alone, and a tie went to CPU 0.
+- **A loaded host** makes the copy slower, so the median passed 40 ms on some hosts only.
+- **With one CPU,** five samples of `sleep 10 ms` were on time (10.3 to 11.5).
+
+**The fix (`kernel/src/scheduler.rs`, the CPU a new task is placed on).** Of the CPUs with the fewest applications, an application goes to the one whose services have run least. Services and workers are placed as before. The band order and the sleep are unchanged, and the bound stays 40 ms (MC-12.5).
+
+- **With it**, the same run's shell script `diag/quick.msh` took 17 s, not 38 s.
+- **Not done:** an application already on a busy service's CPU is not moved. An application placed with a busy service, when every CPU holds as many applications, still waits behind it.
 
 ## Related
 
