@@ -1,6 +1,6 @@
 # 000-KRN-0231 — `kbench`'s 10 ms sleep past 40 ms on a loaded host
 
-**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (cause found and fixed on `claude/000-KRN-0231-a-ten-ms-sleep`, 2026-11-10; the ten runs on acc-2 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (cause found and fixed on `claude/000-KRN-0231-a-ten-ms-sleep`, 2026-11-10; the gate and the ten runs on acc-2 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -40,7 +40,8 @@
   | `main` | 25 between 10.1 and 10.9, 25 between 39.3 and 65.0 | 86 near 2, 14 between 36.5 and 38.4 |
   | the wake IPI sent whatever `woken` says (a shorter run) | 3 of 5 past 41 | 1 of 10 at 50.7 |
   | the compositor's hold (000-KRN-0086, 0186) off, two runs | 25 between 10.1 and 12.1, 25 between 40.4 and 75.2, each run | 88 between 1.1 and 2.3, 12 between 37.6 and 67.8, each run |
-  | **the fix below** | **all 50 between 10.1 and 11.3, median 11.0** | **all 100 between 1.6 and 2.1** |
+  | the first fix (2cc88f4a, below) | all 50 between 10.1 and 11.3, median 11.0 | all 100 between 1.6 and 2.1 |
+  | **the fix below (the move)** | **all 50 between 10.0 and 11.2, median 11.0** | **all 100 between 1.0 and 2.7** |
 
 - **Every late wake** (51 in one run) was on CPU 0, and the task that ran there meanwhile was the compositor (50 of 51; `tls` once). In the 40 lines read, no other task was ready there.
 - **The chain:**
@@ -51,10 +52,32 @@
 - **A loaded host** makes the copy slower, so the median passed 40 ms on some hosts only.
 - **With one CPU,** five samples of `sleep 10 ms` were on time (10.3 to 11.5).
 
-**The fix (`kernel/src/scheduler.rs`, the CPU a new task is placed on).** Of the CPUs with the fewest applications, an application goes to the one whose services have run least. Services and workers are placed as before. The band order and the sleep are unchanged, and the bound stays 40 ms (MC-12.5).
+**A first fix, replaced (2cc88f4a).** It placed a new application, of the CPUs with the fewest, on the one whose services had run least.
+- `kbench` was on time with it (its row above).
+- The `nnd` suite then failed. `nncheck`'s cancel of a 131 ms job came after the job had ended in all 16 tries, even at 0 ms.
+- **Why, as read from the code (not measured):** `nnd`'s worker is a service, placed by service count alone. It can go to the CPU `nncheck` was given, and `nncheck` then waits behind it, as `kbench` had behind the compositor. The fix below passed the same check.
+- A placement made at the start cannot know which service will be busy later.
 
-- **With it**, the same run's shell script `diag/quick.msh` took 17 s, not 38 s.
-- **Not done:** an application already on a busy service's CPU is not moved. An application placed with a busy service, when every CPU holds as many applications, still waits behind it.
+**The fix (`kernel/src/scheduler.rs`, `move_waiting`).** An application that is ready on a CPU running a system-band task moves to an idle CPU, if one is online, and that CPU is woken.
+- **When it is looked at:**
+  - when it becomes ready;
+  - when a `select` puts a system-band task first;
+  - at each slice's end.
+- **What is not moved:**
+  - a worker, which stays where 262-KRN-0163 placed it;
+  - a task that runs, is held for the compositor's copy, or has no budget left;
+  - a service.
+- **Unchanged:** the band order (the system band still runs first on its CPU, MC-5.5), the placement, the sleep, and `kbench_check`'s 40 ms bound (MC-12.5).
+- **Why the move is safe:** each switch reloads the address space and flushes that CPU's TLB (no PCID on x86, no ASIDs on aarch64). A task's registers and FP state are saved in the task at each switch on both architectures.
+
+**With it,** in the same container:
+- `kbench`'s `sleep 10 ms` was on time (its row above; the `bench` suite's own run gave a median of 10.8 ms);
+- `nncheck`'s cancel came partway on its first try (40 ms);
+- the `bench` and `nnd` suites passed.
+
+**Not done:**
+- An application behind another application is not moved; the slices share that CPU, as before.
+- With no idle CPU, an application still waits behind the system band.
 
 ## Related
 
