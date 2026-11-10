@@ -1,6 +1,6 @@
-# 000-NET-0063 — The Wi-Fi checks' `dmesg` waited 8 s on a loaded host (round 102)
+# 000-NET-0063 — The Wi-Fi checks' `dmesg` waited 8 s on a loaded host (round 102) — done
 
-**Type:** tests (the `net` suite) · **Owner:** `NET` · **Priority:** P2 · **Status:** open (in `main` since round 103, a927f175; a gate with the group beside another lane left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (the `net` suite) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -44,6 +44,16 @@
 
 **Round 110** (`main` 91e74b59, 2026-11-10): the group passed on acc-1, which ran one lane. Since round 108 the pool keeps the x86 network group off x32-128 (`KEPT_OFF`, 000-KRN-0227), so the second criterion needs a gate that runs "aarch64: network, TLS and Effector" beside another lane on one machine, or the criterion's owner choosing another way to show it.
 
+## Resolution
+
+**Both criteria are met.**
+- **The longer wait.** It is 000-KRN-0227's: the harness's 30 s default for every `dmesg`, which replaced the Wi-Fi checks' own waits. The `net` suite has passed with it on x86 and aarch64 in every gate since round 106.
+- **Beside another lane on one machine.** Round 111's gate passed green (`main` 08cdd8d8, 2026-11-10).
+  - On x32-128, lane x32-2 ran "aarch64: network, TLS and Effector" from 08:03 to 08:19, and passed (948 s).
+  - Lane x32 meanwhile ran "x86: files and block writes" on the same machine, from 08:04 to 08:18.
+  - The Wi-Fi checks' `dmesg` reads passed there.
+- **Kept as it is:** the x86 network group stays off x32-128 (`KEPT_OFF`, 000-KRN-0227).
+
 ## Related
 
-[550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done), [069](../issues-done/069-logd-dmesg.done).
+[550-NET-0035](550-NET-0035-the-stations-country.done), [069](069-logd-dmesg.done).
