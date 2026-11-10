@@ -3,7 +3,9 @@
 //! be bounded to a window of the device's sectors (1.2, 307-DRV-0054): its badge names the window in bits 1 to 3
 //! (`mind::block::BADGE_WINDOW`; 0 is the whole device), and it sees the window as the device: `sectors` is the
 //! window's count, and `read` and `write` take sectors from the window's first, clipped at its end. Until the window is
-//! set, after a driver's restart too, every call of its client is not-found, never the whole device.
+//! set, after a driver's restart too, every call of its client is not-found, never the whole device. A drive that fails
+//! or does not answer is io (1.3, 000-KRN-0228), never peer: a client repeats a call only after peer or not-found, which
+//! a restarted driver answers.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,7 +15,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:block";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Number of sectors; error not-found without a drive.
@@ -43,7 +45,8 @@ pub fn attach(endpoint: Endpoint, buffer: usize) -> Result<()> {
 }
 
 /// Reads `count` sectors from `lba` into the attached buffer; returns the sectors read. Error not-found: no buffer is
-/// attached to this instance (the driver was restarted), invalid: past the end or an empty request.
+/// attached to this instance (the driver was restarted), invalid: past the end or an empty request, io: the drive
+/// failed or did not answer (1.3).
 pub fn read(endpoint: Endpoint, count: u16, lba: u64) -> Result<u16> {
     let words = [4 | MAJOR << 8 | ((count) as usize) << 16, ((lba) as usize) << 0];
     let reply = wire::call(endpoint, words, None)?;
@@ -63,7 +66,8 @@ pub fn writable(endpoint: Endpoint) -> Result<bool> {
 
 /// Writes `count` sectors to `lba` from `data`, sealed read-only memory (SHARE_RO: nobody can change it while the
 /// driver writes it) of at least `count` sectors; returns the sectors written. Errors: rights (no write badge, or the
-/// medium is write-protected), invalid (the memory is not sealed or too small, past the end, an empty request) (1.1).
+/// medium is write-protected), invalid (the memory is not sealed or too small, past the end, an empty request) (1.1),
+/// io (the drive failed or did not answer) (1.3).
 pub fn write(endpoint: Endpoint, data: usize, count: u16, lba: u64) -> Result<u16> {
     let words = [6 | MAJOR << 8 | ((count) as usize) << 16, ((lba) as usize) << 0];
     let reply = wire::call(endpoint, words, Some((data, true)))?;
@@ -72,7 +76,7 @@ pub fn write(endpoint: Endpoint, data: usize, count: u16, lba: u64) -> Result<u1
     Ok(wire::field(&reply, 0, 16, 16) as u16)
 }
 
-/// Empties the drive's write cache; error rights without the write badge (1.1).
+/// Empties the drive's write cache; error rights without the write badge (1.1), io when the drive fails it (1.3).
 pub fn flush(endpoint: Endpoint) -> Result<()> {
     let words = [7 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;

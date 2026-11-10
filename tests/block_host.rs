@@ -1,7 +1,8 @@
-//! Host tests of the block protocol's server side (libmind/src/block_protocol.rs, idl/block.wit 1.2): writing needs
+//! Host tests of the block protocol's server side (libmind/src/block_protocol.rs, idl/block.wit 1.3): writing needs
 //! the write badge on the client's capability and a writable medium (Appendix B.6); the data must hold every sector
 //! written; reads, clipping at the end, errors. A client of a window (307-DRV-0054) sees the window as the device and
-//! nothing outside it; only init's windows badge sets one; a window not set gives nothing.
+//! nothing outside it; only init's windows badge sets one; a window not set gives nothing. A driver's failure reaches
+//! the client as io, invalid or not-found, never as peer (000-KRN-0228).
 #![allow(dead_code)]
 #[path = "../common/abi.rs"]
 mod abi;
@@ -12,25 +13,25 @@ mod sys;
 #[path = "../libmind/src/block_protocol.rs"]
 mod block_protocol;
 use abi::*;
-use block_protocol::{badge_for, flush, read, sectors, window_of, writable, write, Driver, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, WINDOWS};
+use block_protocol::{badge_for, flush, read, sectors, window_of, writable, write, Driver, DriverError, Outcome, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, WINDOWS};
 use sys::Error;
 
-struct Memory { data: Vec<u8>, protected: bool, flushes: usize, fail: bool }
-impl Memory { fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * BLOCK_SECTOR], protected: false, flushes: 0, fail: false } } }
+struct Memory { data: Vec<u8>, protected: bool, flushes: usize, fail: Option<DriverError> }
+impl Memory { fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * BLOCK_SECTOR], protected: false, flushes: 0, fail: None } } }
 impl Driver for Memory {
     fn sectors(&self) -> u64 { (self.data.len() / BLOCK_SECTOR) as u64 }
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool {
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome {
         let at = lba as usize * BLOCK_SECTOR;
         out[..count * BLOCK_SECTOR].copy_from_slice(&self.data[at..at + count * BLOCK_SECTOR]);
-        !self.fail
+        self.fail.map_or(Ok(()), Err)
     }
-    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool {
-        if self.fail { return false; }
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome {
+        if let Some(error) = self.fail { return Err(error); }
         let at = lba as usize * BLOCK_SECTOR;
         self.data[at..at + count * BLOCK_SECTOR].copy_from_slice(&data[..count * BLOCK_SECTOR]);
-        true
+        Ok(())
     }
-    fn flush(&mut self) -> bool { self.flushes += 1; true }
+    fn flush(&mut self) -> Outcome { self.flushes += 1; self.fail.map_or(Ok(()), Err) }
     fn read_only(&self) -> bool { self.protected }
 }
 
@@ -38,7 +39,7 @@ impl Driver for Memory {
 struct ReadOnly;
 impl Driver for ReadOnly {
     fn sectors(&self) -> u64 { 16 }
-    fn read(&mut self, _: u64, _: usize, _: &mut [u8]) -> bool { true }
+    fn read(&mut self, _: u64, _: usize, _: &mut [u8]) -> Outcome { Ok(()) }
 }
 
 const WRITER: u16 = BADGE_WRITE;
@@ -95,9 +96,35 @@ fn requests_are_clipped_and_checked() {
     assert_eq!(read(&mut disk, &WHOLE, 0, &mut small, 1, 16), Err(Error::Invalid), "past the end");
     assert_eq!(read(&mut disk, &WHOLE, 0, &mut small, 0, 0), Err(Error::Invalid), "no sectors");
     assert_eq!(read(&mut disk, &WHOLE, 0, &mut [], 1, 0), Err(Error::Invalid), "an empty buffer");
-    disk.fail = true;
-    assert_eq!(write(&mut disk, &WHOLE, WRITER, &data, 1, 0), Err(Error::Peer), "a device error");
-    assert_eq!(read(&mut disk, &WHOLE, 0, &mut small, 1, 0), Err(Error::Peer));
+    disk.fail = Some(DriverError::Io);
+    assert_eq!(write(&mut disk, &WHOLE, WRITER, &data, 1, 0), Err(Error::Other(ERR_IO)), "a device error");
+    assert_eq!(read(&mut disk, &WHOLE, 0, &mut small, 1, 0), Err(Error::Other(ERR_IO)));
+}
+
+#[test]
+fn a_drivers_failure_reaches_the_client_as_io_invalid_or_not_found_never_peer() {
+    // What a client is answered for each failure: only io is a drive's; peer stays a restart's (000-KRN-0228).
+    let answers = [(DriverError::Io, Error::Other(ERR_IO)), (DriverError::Range, Error::Invalid), (DriverError::Gone, Error::NotFound)];
+    let data = vec![0x5Au8; 2 * BLOCK_SECTOR];
+    for (failure, answer) in answers {
+        let mut disk = Memory::new(64);
+        let mut windows = Windows::new();
+        assert_eq!(windows.set(BADGE_WINDOWS, disk.sectors(), 1, 32, 16), Ok(()));
+        disk.fail = Some(failure);
+        for badge in [WRITER, badge_for(1, true)] {
+            let mut target = vec![0u8; 2 * BLOCK_SECTOR];
+            assert_eq!(read(&mut disk, &windows, badge, &mut target, 2, 0), Err(answer), "{failure:?}: read, badge {badge:#x}");
+            assert_eq!(write(&mut disk, &windows, badge, &data, 2, 0), Err(answer), "{failure:?}: write, badge {badge:#x}");
+            assert_eq!(flush(&mut disk, &windows, badge), Err(answer), "{failure:?}: flush, badge {badge:#x}");
+        }
+        assert!(disk.data.iter().all(|&b| b == 0), "{failure:?}: a failed write left nothing");
+    }
+    // The code the client decodes is ERR_IO, which libmind::sys gives back as the same error.
+    assert_eq!(Error::from(DriverError::Io).code(), ERR_IO);
+    assert_eq!(sys::check(ERR_IO), Err(Error::Other(ERR_IO)));
+    // A driver that keeps the trait's write is never asked to write: it is read-only, so rights come first.
+    assert_eq!(write(&mut ReadOnly, &WHOLE, WRITER, &data, 1, 0), Err(Error::Rights));
+    assert_eq!(flush(&mut ReadOnly, &WHOLE, WRITER), Err(Error::Rights));
 }
 
 #[test]

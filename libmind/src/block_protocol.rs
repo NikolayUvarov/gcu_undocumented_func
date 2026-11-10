@@ -1,7 +1,9 @@
 //! The server side of the block protocol (idl/block.wit) without IPC: what a driver does for one request, and the write
 //! rule of Appendix B.6 (writing needs `BADGE_WRITE` in the badge of the client's capability and a writable medium).
 //! A client may be bounded to a window of the device's sectors, named by its badge (307-DRV-0054): it sees the window as
-//! the whole device, and nothing outside it. Builds on the host for tests (tests/block_host.rs).
+//! the whole device, and nothing outside it. A driver's failure reaches the client as `io`, `invalid` or `not-found`,
+//! never as `peer`, which is for a restart (block.wit 1.3, 000-KRN-0228). Builds on the host for tests
+//! (tests/block_host.rs).
 use crate::abi::*;
 use crate::sys::{Error, Result};
 
@@ -17,15 +19,35 @@ pub const BADGE_WINDOW: u16 = 0b1110;
 /// Its window bits are 0, so it reads the whole device, and it carries no write right.
 pub const BADGE_WINDOWS: u16 = 0x8000;
 
+/// Why a driver's read, write or flush failed (000-KRN-0228); a restart is none of them, its client sees `peer` for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriverError {
+    /// The device failed or did not answer in time: `io`, which the client does not repeat.
+    Io,
+    /// Refused before the device, e.g. past its end: `invalid`.
+    Range,
+    /// No device behind the driver any more: `not-found`.
+    Gone,
+}
+
+impl From<DriverError> for Error {
+    fn from(error: DriverError) -> Error {
+        match error { DriverError::Io => Error::Other(ERR_IO), DriverError::Range => Error::Invalid, DriverError::Gone => Error::NotFound }
+    }
+}
+
+/// What a driver's read, write or flush did.
+pub type Outcome = core::result::Result<(), DriverError>;
+
 /// Storage driver with 512-byte sectors.
 pub trait Driver {
     fn sectors(&self) -> u64;
     /// Reads `count` sectors (at most BLOCK_MAX_SECTORS) into `out`.
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool;
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome;
     /// Writes `count` sectors from `data`; a driver that cannot write keeps the default.
-    fn write(&mut self, _lba: u64, _count: usize, _data: &[u8]) -> bool { false }
+    fn write(&mut self, _lba: u64, _count: usize, _data: &[u8]) -> Outcome { Err(DriverError::Range) }
     /// Empties the drive's write cache.
-    fn flush(&mut self) -> bool { true }
+    fn flush(&mut self) -> Outcome { Ok(()) }
     /// The medium is write-protected, or the driver cannot write.
     fn read_only(&self) -> bool { true }
 }
@@ -87,7 +109,7 @@ pub fn read(driver: &mut dyn Driver, windows: &Windows, badge: u16, target: &mut
     let (first, size) = windows.view(badge, driver.sectors())?;
     let fits = (target.len() / BLOCK_SECTOR).min(u16::MAX as usize) as u16;
     let count = span(size, count.min(fits), lba, target.len())?;
-    if driver.read(first + lba, count, &mut target[..count * BLOCK_SECTOR]) { Ok(count as u16) } else { Err(Error::Peer) }
+    driver.read(first + lba, count, &mut target[..count * BLOCK_SECTOR]).map(|()| count as u16).map_err(Error::from)
 }
 
 /// `write`: `count` sectors to `lba` of the client's view from `data` (sealed memory of at least `count` sectors,
@@ -97,12 +119,12 @@ pub fn write(driver: &mut dyn Driver, windows: &Windows, badge: u16, data: &[u8]
     if !writable(badge, driver, windows) { return Err(Error::Rights); }
     if data.len() < count as usize * BLOCK_SECTOR { return Err(Error::Invalid); }
     let count = span(size, count, lba, data.len())?;
-    if driver.write(first + lba, count, &data[..count * BLOCK_SECTOR]) { Ok(count as u16) } else { Err(Error::Peer) }
+    driver.write(first + lba, count, &data[..count * BLOCK_SECTOR]).map(|()| count as u16).map_err(Error::from)
 }
 
 /// `flush`: empties the drive's write cache. Rights without the write badge; not-found for a window not set.
 pub fn flush(driver: &mut dyn Driver, windows: &Windows, badge: u16) -> Result<()> {
     windows.view(badge, driver.sectors())?;
     if !writable(badge, driver, windows) { return Err(Error::Rights); }
-    if driver.flush() { Ok(()) } else { Err(Error::Peer) }
+    driver.flush().map_err(Error::from)
 }
