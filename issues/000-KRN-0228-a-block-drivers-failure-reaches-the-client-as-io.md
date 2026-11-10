@@ -51,6 +51,12 @@ So a drive that fails or does not answer looks like a restart:
   - "x86: NVMe boot disk", 111 s.
 
   None of them makes a drive fail.
+- **Run again on 2.0** (9eb6dcec), the same local port, the same container:
+  - "x86: services, storage, audio", 750 s;
+  - "x86: files and block writes", 1055 s, with `tests/block_app.rs` on major 2;
+  - "x86: NVMe boot disk", 95 s.
+
+  None of them makes a drive fail.
 - **Sent to DRV and STO:** `ALL/2026-11-10T0214Z-KRN-the-block-drivers-failure-as-io-is-000-krn-0228-libminds-part-is-ready.md`. The third criterion is DRV's branch's.
 
 ## Related
