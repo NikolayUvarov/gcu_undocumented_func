@@ -8718,21 +8718,52 @@ def audio_suite(vm, wav):
         print("SKIP: the levels through a plain client (000-DRV-0057): no tests/levels_stub build (scripts/x86_fixtures.sh)", flush=True)
     # 000-APP-0076, 000-APP-0077: the shell's volume and mic through its badged client, kept in data/sound.conf; after the
     # notes, so that the captured audio below is at the levels as they started.
-    settings = levels[1]
+    settings = int(levels[1])
+    # A level is the nearest setting: 50 % of 64 settings reads back as 51 % (audio_gw/src/levels.rs's arithmetic).
+    top = settings - 1
+    half = ((50 * top + 50) // 100 * 100 + top // 2) // top
     require(vm.command("volume"), f"VOLUME 100 % (0.00 DB OF {settings} SETTINGS), NOT MUTED")
-    require_all(vm.command("volume 50"), "VOLUME 50 % (-", f" DB OF {settings} SETTINGS), NOT MUTED; KEPT IN data/sound.conf")
-    require(vm.command("volume"), "VOLUME 50 %")
-    require(vm.service_logs("audio_gw", "VOLUME 50 %"), "[AUDIO] LEVELS")
+    require_all(vm.command("volume 50"), f"VOLUME {half} % (-", f" DB OF {settings} SETTINGS), NOT MUTED; KEPT IN data/sound.conf")
+    require(vm.command("volume"), f"VOLUME {half} %")
+    require(vm.service_logs("audio_gw", f"VOLUME {half} %"), "[AUDIO] LEVELS")
     for wrong in ("volume 101", "volume loud"):
         require(vm.command(wrong), "ERROR: VOLUME [0-100 | MUTE | UNMUTE]")
-    require(vm.command("volume mute"), "VOLUME 50 % (")
+    require(vm.command("volume mute"), f"VOLUME {half} % (")
     require(vm.command("volume"), "), MUTED")
     require(vm.command("volume unmute"), "NOT MUTED")
     require(vm.command("mic"), "MIC 0 % (0.00 DB OF 16 SETTINGS), BOOST OFF (+20.00 DB)")
     require_all(vm.command("mic 60"), "MIC 60 % (+13.50 DB OF 16 SETTINGS), BOOST OFF", "KEPT IN data/sound.conf")
     require(vm.command("mic boost on"), "BOOST ON (+20.00 DB)")
     require(vm.command("mic 120"), "ERROR: MIC [0-100 | BOOST ON | BOOST OFF]")
-    require_all(vm.command("cat data/sound.conf"), "volume 50", "muted no", "gain 60", "boost on")
+    require_all(vm.command("cat data/sound.conf"), f"volume {half}", "muted no", "gain 60", "boost on")
+    # wm's Sound page (000-APP-0076): it reads the levels through the shell every 2 s, and ← on its first row sets the
+    # volume 5 % lower through the shell's `volume`, which the shell then reads back.
+    lower = ((half - 5) * top + 50) // 100 * 100 + top // 2
+    lower //= top
+    vm.send("wm\n")
+    vm.expect("[WM] MODE=", timeout=180)
+    since = len(vm.log)
+    vm.hmp("sendkey alt-s")
+    time.sleep(.3)
+    for key in ["down"] * 4 + ["ret"]:  # to the sound page (settings::SOUND), and into it
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("SETTINGS=Sound:Volume", since)
+    time.sleep(2.5)  # the page's first reading of the levels
+    since = len(vm.log)
+    vm.hmp("sendkey left")
+    vm.serial(enter=False)
+    vm.logged(f"[WM] SOUND PAGE volume {half - 5}: VOLUME {lower} % (", since)
+    vm.hmp("sendkey esc")
+    time.sleep(.2)
+    since = len(vm.log)
+    vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+    vm.logged("SHELL RESUMED.", since)
+    require(vm.command("volume"), f"VOLUME {lower} %")
+    print(f"PASS: volume and mic (000-APP-0076, 000-APP-0077): set, muted and read back through the shell's badged client "
+          f"(50 % reads as {half} % of {settings} settings), 101 and loud refused, kept in data/sound.conf; wm's Sound page "
+          f"set {lower} % with ←", flush=True)
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
@@ -13448,14 +13479,17 @@ def wm_suite(vm):
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
             changed += 1
         keys("tab", text="SETTINGS=Background")
-        # The keyboard page is entered (000-APP-0048, keyboard_from_settings); the sound page is to read (the screen page
+        # The keyboard page is entered (000-APP-0048, keyboard_from_settings); the sound page too (000-APP-0076): with no
+        # sound card here, it shows the shell's line saying so (the audio suite sets a level from it; the screen page
         # sets the scale, 000-APP-0061, scale_from_settings).
         keys("down", text="SETTINGS=Keyboard")
         keys("ret", text="SETTINGS=Keyboard:Layout")
         keys("tab", text="SETTINGS=Keyboard")
         keys(*["down"] * 3, text="SETTINGS=Sound")
-        keys("ret")
-        screen_has("Sound: a page to read; nothing is set here yet")
+        keys("ret", text="SETTINGS=Sound:Volume")
+        time.sleep(2.5)  # the page's first reading of the levels
+        screen_has("NO AUDIO DEVICE")
+        keys("tab", text="SETTINGS=Sound")
         # The network page (550-APP-0033) names what each row opens; Enter on Wi-Fi closes Settings and starts wifi in a
         # window, which says there is no station here.
         keys("up", text="SETTINGS=Network")
