@@ -1,6 +1,6 @@
 # 000-KRN-0232 — A program's start sent nothing in 8 s in the Wi-Fi check (round 114, x32)
 
-**Type:** tests and the program start (shell, `loader`, `vfs_server`, `netpolicy`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (step 1 made on `claude/000-KRN-0232-the-records-task-states`, 2026-11-10; the ten runs on x32 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
+**Type:** tests and the program start (shell, `loader`, `vfs_server`, `netpolicy`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (step 1, the tasks' states in the record, in `main` since round 118, 6c1ffdf9; step 2 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -53,6 +53,8 @@
 - **Both cases** are a program's start under "x86: RAM above 4 GiB" (6 GiB) on x32.
 - **A guess, not measured:** the 16th program's endpoints are the first past the 127 of the former fixed table. The endpoint table may have to grow at that start, so its growth path is a suspect.
 - **This record still has no task states:** step 1 is not in `main` yet.
+
+**Step 1 landed** in round 118 (`main` 6c1ffdf9, 2026-11-10), every group of the gate passing; the kernel is 7500 lines, within its budget. **Left:** step 2, ten runs of "x86: RAM above 4 GiB" on x32 beside the other lane, with the record.
 
 ## Related
 
