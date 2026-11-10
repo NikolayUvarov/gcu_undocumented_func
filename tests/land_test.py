@@ -129,6 +129,11 @@ def test_a_pool_takes_the_longest_first():
     # PCU takes the 16-CPU group too since the idle check measures a thread (000-KRN-0197).
     assert land.pick([("aarch64", "aarch64: 16 CPUs"), ("aarch64", "b")], "pcu", set(), {"aarch64: 16 CPUs": 900, "b": 1}) == ("aarch64", "aarch64: 16 CPUs")
     assert land.pick(queue, "acc2", set(), {"a": 900, "b": 1}, broken={"x86"}) == ("aarch64", "b")
+    # 000-KRN-0227: a group kept off a machine goes to another lane, whichever is longest there.
+    kept = [("x86", "x86: network, TLS and Effector"), ("x86", "short")]
+    times = {"x86: network, TLS and Effector": 900, "short": 10}
+    assert land.pick(kept, "x32", {"x86"}, times) == ("x86", "short") == land.pick(kept, "x32-2", {"x86"}, times)
+    assert land.pick(kept, "i9", {"x86"}, times) == ("x86", "x86: network, TLS and Effector")
     assert land.pick(queue, "i9", set(), {}, broken={"x86"}) is None
     # A machine Effector lists as off gives no lane (round 47).
     endpoints = [{"id": land.MACHINES["rz"]["agent"], "online": True}, {"id": land.MACHINES["acc1"]["agent"], "online": False, "last_seen": "20:07"}]
