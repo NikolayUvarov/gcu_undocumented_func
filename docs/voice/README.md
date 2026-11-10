@@ -73,6 +73,7 @@ microphone ─► audio_gw ─► front end ─► recognizer ─► interpreter
 - **`hear [seconds] [--save FILE]`**, **`hear --wav FILE [--save FILE]`** (console program): `HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=0.95`, `NOT UNDERSTOOD (CLOSEST "...", CONFIDENCE=0.00)` or `NOTHING HEARD`.
   - **For the operator** (000-APP-0053):
     - while it listens to the microphone, a level meter on one line: the peak and RMS in dBFS, the noise floor and the level that starts speech;
+    - before it, the microphone's gain it hears at, as the shell's `mic` set it (`GAIN 60 % (+13.50 DB), BOOST OFF (+20.00 DB)`, 000-APP-0077), so that two reports can be compared;
     - for each utterance, its time, length and level and the three closest phrases with their confidence, then the verdict (a refusal says whether the utterance was far from every phrase or too close to one meaning something else);
     - when nothing was heard, the noise floor and the peak, or that the microphone gave only zeros.
   - **The wait for a command** (000-APP-0114): an utterance ends after 600 ms of quiet, so a command's words and a quiet microphone's weak syllable stay in it; a sound shorter than 300 ms (`hear::COMMAND_MIN_MS`: a key's click, a knock) is named (`SKIPPED AT 0.12 S: 180 MS, …, SHORTER THAN A COMMAND`) and the wait goes on. `voice` waits the same way for a command (`[VOICE] SKIPPED …`), and takes a shorter «да» or «нет» when it asks.

@@ -8660,6 +8660,35 @@ def beep_demo_tones(left, rate, first):
         assert tone_power(left, rate, start, hz) > 5 * max(tone_power(left, rate, start, other) for other in (523, 659, 784) if other != hz), hz
 
 
+def sound_kept_check(args, disk):
+    """000-APP-0076, 000-APP-0077: the levels `volume` and `mic` set are kept in data/sound.conf, and the shell sets them
+    again when it starts after a reboot, on AC'97 and on HD Audio (QEMU's hda-duplex codec)."""
+    def nearest(percent, line):
+        # The per cent a level reads back as: the nearest setting (audio_gw/src/levels.rs's arithmetic).
+        top = int(re.search(r"OF (\d+) SETTINGS", line)[1]) - 1
+        return ((percent * top + 50) // 100 * 100 + top // 2) // top
+    cards = []
+    for card in ("AC97", "HDA"):
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), audio="none", audio_card=card, reboot=True)
+        try:
+            volume, mic = nearest(50, vm.command("volume")), nearest(80, vm.command("mic"))
+            require_all(vm.command("volume 50"), f"VOLUME {volume} % (", "KEPT IN data/sound.conf")
+            require_all(vm.command("mic 80"), f"MIC {mic} % (", "KEPT IN data/sound.conf")
+            require_all(vm.command("volume mute"), "), MUTED", "KEPT IN data/sound.conf")
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=180)
+            vm.expect("MIND>", timeout=120)
+            time.sleep(1); vm.collect(); vm.output = ""
+            require(vm.command("dmesg -s shell", raw=True), f"[SHELL] THE LEVELS FROM data/sound.conf: VOLUME {volume} % (")
+            require_all(vm.command("volume"), f"VOLUME {volume} % (", "), MUTED")
+            require(vm.command("mic"), f"MIC {mic} % (")
+            cards.append(f"{card} {volume} % and {mic} %")
+        finally:
+            vm.close()
+    print(f"PASS: the levels kept across a reboot (000-APP-0076, 000-APP-0077): volume 50, muted, and mic 80 set again "
+          f"from data/sound.conf at the shell's start ({', '.join(cards)})", flush=True)
+
+
 def audio_suite(vm, wav):
     # The levels (audio.wit 1.2, 000-DRV-0057): AC'97's master at 0 dB, 1.5 dB a setting, and its record gain at 0 dB;
     # a program's plain client reads them and is refused setting them.
@@ -8980,9 +9009,13 @@ def listen_suite(vm, starts):
     require(heard, "SAVED THE FIRST UTTERANCE TO ram:first.wav: ")
     vm.send("hear --wav ram:first.wav\n")
     require(vm.expect("MIND> ", timeout=180, after="hear --wav ram:first.wav\n"), 'HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=')
-    # The microphone's silence: the level meter while it listens, then the noise floor rather than a bare "nothing".
+    # The microphone's silence: the level meter while it listens, then the noise floor rather than a bare "nothing"; the
+    # gain it hears at, as the shell's `mic` set it (000-APP-0077), then set back.
+    require(vm.command("mic 60"), "MIC 60 % (+13.50 DB OF 16 SETTINGS)")
     vm.send("hear 1\n")
     quiet = vm.expect("MIND> ", timeout=60, after="hear 1\n")
+    require(vm.command("mic 0"), "MIC 0 % (0.00 DB OF 16 SETTINGS)")
+    assert re.search(r"^GAIN 60 % \(\+13\.50 DB\), BOOST OFF \(\+20\.00 DB\)\r?$", quiet, re.M), quiet
     require(quiet, "LEVEL: PEAK ")
     assert re.search(r"NOTHING HEARD: (DIGITAL SILENCE FOR \d+ S|NOISE FLOOR -\d+ DBFS, PEAK -\d+ DBFS OVER \d+ S; SPEECH STARTS AT -\d+ DBFS)", quiet), quiet
     require(vm.command("hear --wav nosuch.wav"), "HEAR: CANNOT READ nosuch.wav: File(NotFound)")
@@ -15440,6 +15473,8 @@ def main():
             if suite == "devicetree":
                 devicetree_suite(args, disk)
                 continue
+            if suite == "audio":  # the levels across a reboot, on machines of their own first (000-APP-0076, 000-APP-0077)
+                sound_kept_check(args, disk)
             if suite == "ttsneural":  # 252-APP-0128: with a model disk of its own; named only, in no gate group
                 tts_neural_suite(args, disk)
                 continue
