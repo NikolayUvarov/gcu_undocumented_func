@@ -307,7 +307,7 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
   - `-s` sets each request's data bytes, 0 to 1472 (one frame on a 1500-byte MTU); `-p` the bytes repeated over them, 1 to 16 in hexadecimal (`-p a55a0f`), 56 bytes with `-p` alone. Without them a request carries the stack's 8 bytes, `MINDCORE`.
   - With either, each line names the reply's size, `[1/3] REPLY FROM 10.0.2.2: 1000 BYTES, TIME=812 US`, and `BAD DATA` when its data are not what was sent; the last line counts those (`, 1 WITH BAD DATA`). They go through `socket.wit` 2.6 `ping-with` (000-NET-0040); an older stack is named so.
   - The TTL is not shown: the stack's ICMP socket does not hand it over.
-- `ip` (550-APP-0085): the default card's address, then each card with its address, frames, kind, `DOWN`, `PREFERRED` and `DEFAULT`.
+- `ip` (550-APP-0085, 550-APP-0129): the default card's address, then each card with its address, frames, kind, `DOWN`, `PREFERRED`, `DEFAULT` and `OFF`, a card the policy took out of use (`card N off`).
 - `netstat [-i]` (000-APP-0031): every socket of the stack with its protocol, ports, remote end, TCP state, bytes each way and program, then the cards; `-i` the cards alone.
 - `mode [development|maintenance on|off [reason]]` (750-EFF-0013, `init.wit` 1.5): the machine's modes, in which `init` runs the Effector agent's services and keeps the choice in `data/mode.conf` across reboots.
   - `mode` alone: which are on, who set them last (`disk`, `operator`, `mind`) and why: `MODE: MAINTENANCE, SET BY operator: the Mac's Wi-Fi tests`.

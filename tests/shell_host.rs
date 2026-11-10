@@ -732,3 +732,16 @@ fn volume_and_mic_read_their_words_and_keep_the_levels() {
     assert_eq!(parse(""), Kept::default());
     assert_eq!(render(&Kept { volume: Some(40), ..Kept::default() }).lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>(), vec!["volume 40"]);
 }
+
+#[test]
+fn ip_names_a_card_out_of_use() {
+    // 550-APP-0129: after the card's kind, DOWN, PREFERRED and DEFAULT as before (550-APP-0085), then OFF for a card the
+    // policy took out of use, a bit each in socket.wit 2.11's `withdrawn`.
+    use netstat::{card_words, off};
+    assert_eq!(card_words(false, false, false, false, true), " WIRED OFF");
+    assert_eq!(card_words(true, false, true, true, false), " WI-FI PREFERRED DEFAULT");
+    assert_eq!(card_words(false, true, false, false, true), " WIRED DOWN OFF");
+    assert_eq!(card_words(false, false, false, true, false), " WIRED DEFAULT");
+    assert!(off(0b01, 0) && !off(0b01, 1) && off(0b10, 1) && !off(0, 0));
+    assert!(!off(0xFF, 8), "no ninth card");
+}
