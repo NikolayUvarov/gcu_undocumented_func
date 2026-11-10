@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered: the shell's `update kept` became [351-APP-0132](351-APP-0132-update-kept-the-releases-the-store-keeps.md), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: the shell's `update kept` became [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -130,7 +130,7 @@ Numbered on 2026-11-10 as [308-APP-0130](../issues-done/308-APP-0130-the-shell-a
 
 ## The shell's `update kept`: the releases the block store keeps for the updater (for 351-UPD-0035)
 
-Numbered on 2026-11-10 as [351-APP-0132](351-APP-0132-update-kept-the-releases-the-store-keeps.md).
+Numbered on 2026-11-10 as [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done).
 
 **Asked by** STO (UPD's 351-UPD-0035, made by STO by agreement) on 2026-11-10, for [351-UPD-0035](351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md). KRN, the update track's owner, said this request is STO's to send once the call is in `main`. It is, since round 116.
 

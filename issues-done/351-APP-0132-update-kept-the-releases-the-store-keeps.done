@@ -1,0 +1,43 @@
+# 351-APP-0132 — `update kept`: the releases the block store keeps for the updater — done
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-11-10) · **Blocked by:** — (`update.wit` 1.5 `kept` is in `main` since round 116) · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track G · **Constitution:** MC-9.2, MC-12.3
+
+**Asked by:** STO, for [351-UPD-0035](../issues/351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md), in [requests-APP.md](../issues/requests-APP.md), 2026-11-10. Numbered on 2026-11-10.
+
+## Problem
+
+Which releases the block store keeps for the updater, so which ones a rollback or a damaged slot can come back from (351-UPD-0033, 0034), shows only in the updater's log. `update.wit` 1.5 gives them to any client:
+- `kept: func() -> list<kept-release, 8>`, newest first, none without the store or on a RAM disk;
+- each `kept-release` is the version, the pin that keeps it, the tree's root (a CID in binary, 36 bytes) and the bytes of the files its manifest lists for a slot, each counted once (0: its blobs were not read).
+
+## Plan
+
+- **`update kept`** in the shell (`shell/src/updates.rs` for the words and lines, `updatectl.rs` for the call): one line a release, `UPDATE: KEPT VERSION 6, PIN 2, 26 677 432 BYTES, ROOT bafy…`, the root in `mind::cid`'s text form; with none, `UPDATE: NO RELEASE KEPT IN THE BLOCK STORE`.
+- **`update`'s usage** and `help` name it; `docs/tools` (English and Russian) too.
+
+## Acceptance criteria
+
+- **Host tests:** the word, the lines (the bytes grouped by thousands, a release whose bytes were not read, none kept, a root that is not a CID).
+- **QEMU:** the `updatestore` suite reads the releases through the shell after a fetch, versions 6 and 5 with the pins and roots the updater logged (351-UPD-0035's second criterion); where the updater keeps none (the stub), `update kept` says so.
+
+## Resolution
+
+- **`update kept`** (`shell/src/updates.rs`, `updatectl.rs`): `update.wit` 1.5 `kept` through the shell's client in `SLOT_UPDATE`.
+  - **One line a release,** newest first: `UPDATE: KEPT VERSION 6, PIN 2, 26 677 432 BYTES, ROOT bafy…`.
+    - The bytes are grouped by thousands; `ITS BYTES NOT READ` where the updater gives 0.
+    - The root is in `mind::cid`'s text form, `NOT A CID` where its bytes do not read as one.
+  - **With none:** `UPDATE: NO RELEASE KEPT IN THE BLOCK STORE`.
+  - **Clients:** the shell's commands take `update` from no client, so a program's or the link's is refused, as before.
+- **`update`'s usage and `help`** name `kept`. So does `docs/tools` (English and Russian).
+- **Tests:**
+  - **Host:** `tests/shell_host.rs` `update_takes_its_requests_and_says_what_the_updater_holds`: the word, a word after it refused, the lines (26 677 432, 999, 1 000 000 007), a release not read, a root that is not a CID, none kept.
+  - **QEMU, the `updater` group,** x86 and aarch64 (`virt`), 4 CPUs, TCG, in this track's container, 2026-11-10:
+    - `updatestore` reads them through the shell, 351-UPD-0035's second criterion: version 5 at the updater's start; versions 6 and 5 after the fetch; versions 6 and 5 again once the trial is confirmed. Each time the pins and roots are those the updater logged, and their bytes are read.
+    - `updater`: the stand-in, which keeps none, says so.
+    - `update`: the usage with `KEPT`.
+    - All six checks of the group passed on both architectures.
+- Not run on real hardware (MC-12.1).
+
+## Related
+
+[351-UPD-0035](../issues/351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md), [351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done), [351-APP-0029](351-APP-0029-update-in-the-shell.done).
