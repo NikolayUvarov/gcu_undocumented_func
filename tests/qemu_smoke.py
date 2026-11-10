@@ -14548,13 +14548,19 @@ def store_partition_disk_check(args, disk):
     another system's partition before the store's and after it, and beside it a disk of the other bus that is wholly
     another system's. init takes the store's partition, window 1 of its driver; an object put and a name published there
     are found after a reboot. On the host afterwards, every sector outside the store's partition on both disks is as it
-    was written, and the store has written inside its own past the superblock. The images are written in place."""
+    was written, and the store has written inside its own past the superblock. The images are written in place. On
+    aarch64 the disk beside the NVMe one is a VirtIO disk, and the AHCI machine is skipped: ahci finds no disk on a
+    controller the firmware left untouched, as AAVMF leaves it (requests-DRV.md, 2026-11-10)."""
     if getattr(args, "disk", "default") != "default":
         print("SKIP: the store on an NVMe and an AHCI partition (307-STO-0044): the boot disk is on one of those buses", flush=True)
         return
     first, count = 2048, 32768  # the store's partition: 16 MiB from the first MiB, after another system's 8 MiB
     layouts = (("nvme", "gpt", (GPT_BASIC_DATA, GPT_STORE_TYPE, GPT_LINUX_DATA), "ahci", "mbr", (0x07,)),
                ("ahci", "mbr", (0x07, 0x7F, 0x83), "nvme", "gpt", (GPT_BASIC_DATA,)))
+    if getattr(args, "arch", None) == "aarch64":
+        layouts = (("nvme", "gpt", (GPT_BASIC_DATA, GPT_STORE_TYPE, GPT_LINUX_DATA), "virtio_blk", "gpt", (GPT_LINUX_DATA,)),)
+        print("SKIP: the store on an AHCI partition on aarch64 (307-STO-0044): ahci finds no disk where the firmware left the "
+              "controller untouched, PxSIG not yet valid (requests-DRV.md, 2026-11-10)", flush=True)
     shown = []
     for bus, scheme, kinds, other_bus, other_scheme, other_kinds in layouts:
         with tempfile.TemporaryDirectory(prefix="mind-store-part-") as temp:
@@ -14567,6 +14573,7 @@ def store_partition_disk_check(args, disk):
             for image, on, name in ((own, bus, "own"), (other, other_bus, "other")):
                 extra += ["-drive", f"format=raw,file={image},if=none,id={name},snapshot=off"]
                 extra += (["-device", f"nvme,serial={name},drive={name}"] if on == "nvme"
+                          else ["-device", f"virtio-blk-pci,drive={name}"] if on == "virtio_blk"
                           else ["-device", f"ahci,id=sata{name}", "-device", f"ide-hd,drive={name},bus=sata{name}.0"])
             # RDRAND on x86, so that the volume key is random.
             if getattr(args, "arch", None) != "aarch64":
@@ -14587,7 +14594,8 @@ def store_partition_disk_check(args, disk):
                         break
                     time.sleep(2)
                 require(init, f"[INIT] {bus}: {scheme.upper()}, 3 PARTITIONS")
-                require(init, f"[INIT] {other_bus}: {other_scheme.upper()}, 1 PARTITIONS")
+                # A VirtIO disk beside the boot disk is virtio_blk#1 or #2, as QEMU's slots fall.
+                assert re.search(rf"\[INIT\] {other_bus}(#\d)?: {other_scheme.upper()}, 1 PARTITIONS", init), init[-3000:]
                 require(init, f"[INIT] THE BLOCK STORE'S PARTITION: {bus} PARTITION 2 (ITS TYPE AND SUPERBLOCK), {count} SECTORS FROM {store_first}, WINDOW 1")
                 require(ready, f"/{count} ")
                 require(ready, "DURABILITY=FLUSHED")
