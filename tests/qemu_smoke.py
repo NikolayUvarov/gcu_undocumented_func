@@ -7844,9 +7844,12 @@ def models_check(args, boot, temp):
 
 
 def block_suite(args, block_elf):
-    """Block write through each driver: a raw FAT image (the file system in its first 60 MiB) boots with the test
-    stand-in for vfs_server, which writes 8 sectors near the end of the disk through the write-badged client init
-    gives it, flushes and reads them back; the image is then checked on the host."""
+    """Block write through each driver: a raw FAT image (the file system in its first 60 MiB, then a blank FAT32
+    partition to the disk's end) boots with the test stand-in for vfs_server. init gives it the two partitions as windows
+    2 and 3 of the driver, write-badged, and no client of the whole disk (307-KRN-0229). It writes 8 sectors near the end
+    of the blank one, flushes and reads them back, leaves the file system's alone, and is refused a sector past each
+    window's end; the image is then checked on the host: the sectors written, the first past the file system's window
+    still blank, the file system intact."""
     if not raw_tools():
         print("SKIP: block suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
@@ -7854,14 +7857,24 @@ def block_suite(args, block_elf):
         image, start, fs_sectors = raw_fat_image(Path(temp), {"vfs_server.elf": block_elf})
         env = MTOOLS_ENV
         sectors = (BLOCK_IMAGE_MB << 20) // 512
+        blank = (start + fs_sectors, sectors - start - fs_sectors)
+        with image.open("r+b") as f:
+            mbr = bytearray(f.read(512))
+            mbr[462:478] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0x0C, b"\xfe\xff\xff", *blank)
+            f.seek(0)
+            f.write(mbr)
         for kind, name, options in [(1, "ATA", {}), (2, "AHCI", {"ahci": True}), (3, "USB", {"usb": True})]:
             # OVMF keeps its variables (boot entries of the previous controller) in NvVars on the disk.
             subprocess.run(["mdel", "-i", f"{image}@@{start * 512}", "::/NvVars"], env=env, capture_output=True)
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, **options)
             try:
                 output = vm.service_logs("vfs_server", "[BLOCKTEST] DONE")
-                line = next((l for l in output.splitlines() if f"KIND={kind} " in l), None)
-                assert line and "BADGE=1 " in line and "WRITABLE" in line and f"SECTORS={sectors} " in line, output
+                # A driver that runs without a device (ata beside AHCI) still lends its client whole: it holds no disk.
+                lines = [l for l in output.splitlines() if l.startswith("[BLOCKTEST] SLOT=") and not l.endswith(" NO DEVICE")]
+                assert [l.split()[1] for l in lines] == ["SLOT=16", "SLOT=17"], output
+                held, line = lines
+                assert f"BADGE=5 KIND={kind} SECTORS={fs_sectors} WRITABLE PAST=REFUSED A FILE SYSTEM: LEFT ALONE" in held, held
+                assert f"BADGE=7 KIND={kind} SECTORS={blank[1]} WRITABLE PAST=REFUSED " in line, line
                 assert "ATTACH=OK WRITE=OK UNSEALED=REFUSED FLUSH=OK READBACK=OK" in line, line
             finally:
                 vm.close()
@@ -7869,9 +7882,13 @@ def block_suite(args, block_elf):
             with image.open("rb") as f:
                 f.seek((sectors - 8 * kind) * 512)
                 written = f.read(8 * 512)
+                f.seek(blank[0] * 512)
+                after = f.read(512)
             assert written == b"".join(block_pattern(kind, s) for s in range(8)), f"{name}: the image does not hold the written sectors"
+            assert not any(after), f"{name}: the sector past the file system's window was written"
         fsck_volume(image, start, fs_sectors)
-    print("PASS: block write: badged client of ATA, AHCI and USB drivers writes, flushes and reads back; the raw image holds the sectors; the file system is intact", flush=True)
+    print("PASS: block write: ATA, AHCI and USB drivers each give the test's vfs_server windows of the disk's two partitions and no client of the whole disk; "
+          "it writes, flushes and reads back in the blank one, is refused past each window's end; the raw image holds the sectors; the file system is intact", flush=True)
 
 
 def updater_suite(args, updater_elf):

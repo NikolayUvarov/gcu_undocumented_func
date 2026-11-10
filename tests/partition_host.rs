@@ -1,6 +1,6 @@
 //! Host tests of libmind/src/partition.rs (307-KRN-0177): MBR and GPT tables read from sample disks, GPT's CRCs checked,
 //! partitions outside the disk left out; the store's partition known by its type and superblock both, or by `store.txt`'s
-//! PARTUUID even when blank; `store.txt`'s line in both forms.
+//! PARTUUID even when blank; `store.txt`'s line in both forms; the partitions vfs_server mounts (307-KRN-0229).
 #[path = "../libmind/src/partition.rs"]
 mod partition;
 use partition::*;
@@ -93,6 +93,21 @@ fn the_sticks_mbr_lists_its_three_partitions_and_the_stores_is_found() {
     assert_eq!(parts[2].label(), "");
     let found: Vec<_> = parts.iter().filter_map(|p| candidate(p, &first_sector(&disk, p), None).map(|w| (p.number, w))).collect();
     assert_eq!(found, [(3, Why::Found)], "the store's type and superblock both; the FAT partitions are not candidates");
+}
+
+#[test]
+fn vfs_servers_partitions_are_the_fat_types_and_none_overlaps_the_stores() {
+    // 307-KRN-0229: the stick's FAT16 and FAT32 partitions are vfs_server's, the store's and a Linux one are not.
+    let mut disk = stick(true);
+    disk.mbr_entry(3, 0x83, 7168, 512);
+    let parts: Vec<_> = disk.table().partitions().copied().collect();
+    assert_eq!(parts.iter().map(|p| p.fat_type()).collect::<Vec<_>>(), [true, true, false, false]);
+    let with = |kind| { let mut p = parts[0]; p.kind = kind; p };
+    assert!(MBR_FAT.iter().all(|&kind| with(Kind::Mbr(kind)).fat_type()));
+    assert!(!with(Kind::Gpt([0; 16])).fat_type(), "GPT types are not read as FAT");
+    // Sectors 4096 to 6143 against the store's 6144 to 8191: they touch, they do not overlap.
+    assert!(!parts[1].overlaps(parts[2].first, parts[2].count) && !parts[2].overlaps(parts[1].first, parts[1].count));
+    assert!(parts[1].overlaps(6143, 1) && parts[1].overlaps(0, 4097) && !parts[1].overlaps(0, 4096) && parts[1].overlaps(5000, u64::MAX));
 }
 
 #[test]

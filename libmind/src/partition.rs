@@ -7,6 +7,9 @@ pub const SECTOR: usize = 512;
 pub const MBR_STORE: u8 = 0x7F;
 /// GPT type of the store's partition, 27d2c2a1-7133-4d3d-a6ed-1de599cabdb7, in GPT's byte order.
 pub const GPT_STORE: [u8; 16] = [0xA1, 0xC2, 0xD2, 0x27, 0x33, 0x71, 0x3D, 0x4D, 0xA6, 0xED, 0x1D, 0xE5, 0x99, 0xCA, 0xBD, 0xB7];
+/// MBR types vfs_server mounts as FAT (vfs_server/src/fat.rs, `fat_starts`): FAT12, FAT16 (small, large, LBA), FAT32 (CHS,
+/// LBA) and the EFI system partition.
+pub const MBR_FAT: [u8; 7] = [0x01, 0x04, 0x06, 0x0B, 0x0C, 0x0E, 0xEF];
 /// The first bytes of the store's superblock (blockstore/src/store.rs).
 pub const STORE_MAGIC: &[u8; 8] = b"MIND-STO";
 /// Partitions kept per disk; a table with more keeps the first ones and counts the rest.
@@ -46,6 +49,10 @@ impl Partition {
     pub fn label(&self) -> &str { core::str::from_utf8(&self.label[..self.label_len as usize]).unwrap_or("") }
     /// The store's type, MBR or GPT.
     pub fn store_type(&self) -> bool { matches!(self.kind, Kind::Mbr(MBR_STORE)) || self.kind == Kind::Gpt(GPT_STORE) }
+    /// An MBR entry of a type vfs_server mounts as FAT (307-KRN-0229).
+    pub fn fat_type(&self) -> bool { matches!(self.kind, Kind::Mbr(kind) if MBR_FAT.contains(&kind)) }
+    /// Whether it shares a sector with the `count` sectors from `first`.
+    pub fn overlaps(&self, first: u64, count: u64) -> bool { self.first < first.saturating_add(count) && first < self.first.saturating_add(self.count) }
 }
 
 /// A disk's table: its scheme, the partitions kept, how many more there were, and what was wrong with it, if anything.

@@ -72,6 +72,7 @@ const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
 const STORE_WINDOW: u8 = 1; // the block store's own partition, as a window of its driver (307-KRN-0177)
+const VFS_WINDOW_FIRST: u8 = 2; // vfs_server's windows of a partitioned disk, from 2 up to the driver's last (307-KRN-0229)
 const STORE_TXT: &str = "store.txt"; // the owner's word on the store's partition: `partition <PARTUUID>` (307-KRN-0177)
 // The drivers whose disks may hold the store's own partition (307-KRN-0177, STO's 307).
 const STORE_DRIVERS: [&str; 6] = ["nvme", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2"];
@@ -141,7 +142,8 @@ impl Grants {
 // How a service was started: its grants (over capabilities init keeps), spawn flags, quota and arguments.
 #[derive(Clone, Copy)]
 struct Plan { grants: Grants, flags: usize, quota: Quota, args: ([u8; ARGS_KEPT], usize) }
-const ARGS_KEPT: usize = LINK_WORDS_MAX; // link.conf's words at most (800-KRN-0128)
+const ARGS_KEPT: usize = 192; // link.conf's words (800-KRN-0128), or vfs_server's windows (307-KRN-0229): 6 on 6 disks
+const _: () = assert!(LINK_WORDS_MAX <= ARGS_KEPT);
 
 // What this boot did with a service (173-KRN-0035, init.wit 1.9 `boot-plan`): its place in the order tried (0: not
 // tried), the unit it waited for, and why it did not start.
@@ -156,8 +158,14 @@ enum Off { #[default] No, Disabled, Needs(usize), NoDevice, NoImage, Safe, Mode,
 // The block store's own partition (307-KRN-0177): its driver, its number there, and the sectors of its window.
 #[derive(Clone, Copy)]
 struct StorePart { driver: &'static str, number: u8, id: partition::Id, first: u64, count: u32 }
+// A window vfs_server holds in place of a partitioned disk (307-KRN-0229): the partition it covers and its index.
+#[derive(Clone, Copy)]
+struct VfsPart { driver: &'static str, window: u8, number: u8, id: partition::Id, first: u64, count: u32 }
 
 struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<(Option<&'static str>, Option<&'static str>)>, store_part: Option<Option<StorePart>>,
+              // vfs_server's windows of partitioned disks (307-KRN-0229), and the volume the firmware booted from.
+              // vfs_whole: the drivers whose whole disk vfs_server holds, where the store takes no partition.
+              vfs_parts: [Option<VfsPart>; VFS_PARTS], vfs_whole: [bool; UNITS], boot_volume: BootVolume,
               link: Option<[u8; LINK_WORDS_MAX]>,
               // The platform's nodes init gives drivers, read once at boot (100000-KRN-0171).
               nodes: hardware::Nodes,
@@ -281,7 +289,17 @@ impl Init {
                 Ok(mut disk) => {
                     let table = partition::read_table(disk.sectors(), &mut |lba, out| disk.read(lba, 1).map(|s| out.copy_from_slice(&s[..partition::SECTOR])).is_ok());
                     log_table(name, &table);
+                    // Never sectors vfs_server reaches: a disk it holds whole, or one of its windows (307-KRN-0229).
+                    if self.vfs_whole[service_index(name)] && table.partitions().next().is_some() {
+                        mind::println!("[INIT] {}: VFS_SERVER HOLDS THE WHOLE DISK: NONE OF ITS PARTITIONS IS THE STORE'S", name);
+                        let _ = ipc::drop_cap(client);
+                        continue;
+                    }
                     for part in table.partitions().filter(|p| p.store_type() || named == Some(p.id)) {
+                        if let Some(vfs) = self.vfs_parts.iter().flatten().find(|v| v.driver == name && part.overlaps(v.first, v.count as u64)) {
+                            mind::println!("[INIT] {} PARTITION {}: SECTORS OF PARTITION {}, WHICH VFS_SERVER MOUNTS: NOT THE STORE'S", name, part.number, vfs.number);
+                            continue;
+                        }
                         let mut first = [0u8; partition::SECTOR];
                         match disk.read(part.first, 1) {
                             Ok(sector) => first.copy_from_slice(&sector[..partition::SECTOR]),
@@ -346,11 +364,68 @@ impl Init {
     // Window STORE_WINDOW over the store's partition, set through a client badged BADGE_WINDOWS that init drops at once;
     // set again whenever the driver starts again, since a restarted driver holds no window (307-DRV-0054).
     fn set_store_window(&mut self, store: StorePart) -> Result<()> {
-        let client = ipc::mint_badged(self.keeper(store.driver)?, CLIENT, mind::block::BADGE_WINDOWS)?;
-        let set = mind::idl::block::window(Endpoint(client), STORE_WINDOW, store.count, store.first);
-        let _ = ipc::drop_cap(client);
+        let set = self.set_window(store.driver, STORE_WINDOW, store.count, store.first);
         if let Err(error) = set { mind::println!("[INIT] {}: WINDOW {} FOR THE BLOCK STORE NOT SET: {:?}", store.driver, STORE_WINDOW, error); }
         set
+    }
+    fn set_window(&mut self, driver: &str, index: u8, count: u32, first: u64) -> Result<()> {
+        let client = ipc::mint_badged(self.keeper(driver)?, CLIENT, mind::block::BADGE_WINDOWS)?;
+        let set = mind::idl::block::window(Endpoint(client), index, count, first);
+        let _ = ipc::drop_cap(client);
+        set
+    }
+    // `driver`'s partition table, read through a client of init's own; None when the disk does not answer.
+    fn table_of(&mut self, driver: &str) -> Option<partition::Table> {
+        let client = self.keeper(driver).and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)).ok()?;
+        let table = mind::block::Device::open(Endpoint(client)).ok()
+            .map(|mut disk| partition::read_table(disk.sectors(), &mut |lba, out| disk.read(lba, 1).map(|s| out.copy_from_slice(&s[..partition::SECTOR])).is_ok()));
+        let _ = ipc::drop_cap(client);
+        table
+    }
+    // vfs_server's windows of `driver`'s disk (307-KRN-0229), set before it gets them, in `vfs_parts`: on a disk with a
+    // partition table, one for each partition it may mount (an MBR entry of a FAT type, or the GPT partition the firmware
+    // booted from), from window VFS_WINDOW_FIRST up; none over the store's partition. None for a disk without a table, or
+    // one that did not answer: vfs_server then holds it whole, and the store takes no partition there.
+    fn vfs_windows(&mut self, driver: &'static str) -> Option<usize> {
+        let table = self.table_of(driver).filter(|table| table.scheme != Scheme::None)?;
+        let (boot, store) = (self.boot_volume, self.store_part.flatten().filter(|store| store.driver == driver));
+        let (mut window, mut set) = (VFS_WINDOW_FIRST, 0);
+        let mounted = |p: &&partition::Partition| p.fat_type() || (boot.kind == VOLUME_GPT && matches!(p.kind, Kind::Gpt(_)) && p.first == boot.start);
+        for part in table.partitions().filter(mounted) {
+            if store.is_some_and(|store| part.overlaps(store.first, store.count as u64)) {
+                mind::println!("[INIT] {} PARTITION {}: SECTORS OF THE STORE'S PARTITION: NOT GIVEN TO VFS_SERVER", driver, part.number);
+                continue;
+            }
+            let free = self.vfs_parts.iter().position(Option::is_none);
+            let (Some(free), true) = (free, window as usize <= mind::block::WINDOWS) else {
+                mind::println!("[INIT] {} PARTITION {}: NO WINDOW LEFT FOR VFS_SERVER ({} IN ALL, {} A DISK)", driver, part.number, VFS_PARTS, mind::block::WINDOWS - 1);
+                break;
+            };
+            let Ok(count) = u32::try_from(part.count) else {
+                mind::println!("[INIT] {} PARTITION {}: {} SECTORS, MORE THAN A WINDOW HOLDS (2 TIB): NOT GIVEN TO VFS_SERVER", driver, part.number, part.count);
+                continue;
+            };
+            if let Err(error) = self.set_window(driver, window, count, part.first) { mind::println!("[INIT] {}: WINDOW {} FOR VFS_SERVER NOT SET: {:?}", driver, window, error); continue; }
+            mind::println!("[INIT] {} PARTITION {}: WINDOW {} FOR VFS_SERVER, {} SECTORS FROM {}", driver, part.number, window, count, part.first);
+            self.vfs_parts[free] = Some(VfsPart { driver, window, number: part.number, id: part.id, first: part.first, count });
+            (window, set) = (window + 1, set + 1);
+        }
+        if set == 0 { mind::println!("[INIT] {}: NO PARTITION VFS_SERVER MOUNTS: IT GETS NONE OF THE DISK", driver); }
+        Some(set)
+    }
+    // After a driver started again, which holds no window: each of vfs_server's on it is set again while its partition is
+    // still there, the same number, PARTUUID and sectors; never by number alone (307-KRN-0229).
+    fn vfs_windows_again(&mut self, driver: &str) {
+        if !self.vfs_parts.iter().flatten().any(|vfs| vfs.driver == driver) { return; }
+        let table = self.table_of(driver);
+        for vfs in self.vfs_parts.into_iter().flatten().filter(|vfs| vfs.driver == driver) {
+            let same = table.as_ref().is_some_and(|table| table.partitions().any(|p| p.number == vfs.number && p.id == vfs.id && p.first == vfs.first && p.count == vfs.count as u64));
+            if !same { mind::println!("[INIT] {}: PARTITION {} IS NOT THE ONE VFS_SERVER HAD: WINDOW {} NOT SET AGAIN", driver, vfs.number, vfs.window); continue; }
+            match self.set_window(driver, vfs.window, vfs.count, vfs.first) {
+                Ok(()) => mind::println!("[INIT] {}: WINDOW {} SET AGAIN FOR VFS_SERVER (PARTITION {})", driver, vfs.window, vfs.number),
+                Err(error) => mind::println!("[INIT] {}: WINDOW {} FOR VFS_SERVER NOT SET: {:?}", driver, vfs.window, error),
+            }
+        }
     }
     // Whether vfs_server serves the boot volume: its root opens through a client of init's own.
     fn boot_volume_mounted(&mut self) -> bool {
@@ -465,6 +540,7 @@ impl Init {
             let pid = self.spawn(index, plan)?;
             // A block driver started again holds no window: the store's is set again once its partition is checked (307-KRN-0177).
             if let Some(store) = self.store_part.flatten().filter(|store| store.driver == name) { self.store_window_again(store); }
+            self.vfs_windows_again(name);
             return Ok(pid);
         }
         let (plan, mut minted) = self.plan(index)?;
@@ -877,12 +953,31 @@ impl Init {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 // It badges the file clients it hands out (idl/vfs.wit), so its endpoint keeps the right to (000-KRN-0073).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL | CAP_BADGE);
-                let mut slot = SLOT_BLOCK_FIRST;
+                let (mut slot, mut part_slot) = (SLOT_BLOCK_FIRST, SLOT_VFS_PARTS_FIRST);
                 let store = self.store_disks(); // the block store's disk and its copy's: never a file system's (Appendix B.6)
+                // A partitioned disk as windows of the partitions it mounts (307-KRN-0229), and in its arguments where they
+                // lie: `parts`, then for each disk its MBR signature (0 on GPT) and its windows' first sectors, in slot order.
+                let mut parts = mind::util::FixedBuf::<ARGS_KEPT>::new();
+                let _ = core::fmt::Write::write_str(&mut parts, "parts");
+                (self.vfs_parts, self.vfs_whole) = ([None; VFS_PARTS], [false; UNITS]);
                 for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
-                    if Some(driver) == store.0 || Some(driver) == store.1 { continue; }
-                    if self.running(service_index(driver)) && slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
+                    if Some(driver) == store.0 || Some(driver) == store.1 || !self.running(service_index(driver)) { continue; }
+                    let before = self.vfs_parts.iter().flatten().count();
+                    if self.vfs_windows(driver).is_none() {
+                        if slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES {
+                            grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT);
+                            (slot, self.vfs_whole[service_index(driver)]) = (slot + 1, true);
+                        }
+                        continue;
+                    }
+                    for (n, vfs) in self.vfs_parts.into_iter().flatten().skip(before).enumerate() {
+                        grants.add(part_slot, self.badged(&mut minted, driver, mind::block::badge_for(vfs.window, true))?, CLIENT);
+                        part_slot += 1;
+                        let signature = match vfs.id { partition::Id::Mbr { signature, .. } => signature, partition::Id::Gpt(_) => 0 };
+                        let _ = if n == 0 { core::fmt::Write::write_fmt(&mut parts, format_args!(" {:08x}:{}", signature, vfs.first)) } else { core::fmt::Write::write_fmt(&mut parts, format_args!(",{}", vfs.first)) };
+                    }
                 }
+                if part_slot > SLOT_VFS_PARTS_FIRST { let _ = core::fmt::Write::write_str(&mut args, parts.as_str()); }
                 if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
                 self.lend(&mut grants, SLOT_VFS_RTC, "rtc")?;
             }
@@ -2146,6 +2241,7 @@ fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(inf
 fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None, store_part: None,
+                         vfs_parts: [None; VFS_PARTS], vfs_whole: [false; UNITS], boot_volume: info.boot_volume,
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
