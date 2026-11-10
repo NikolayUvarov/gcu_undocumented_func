@@ -86,7 +86,7 @@ def store_partition_check(args, work):
     taken = f"[INIT] THE BLOCK STORE'S PARTITION: usb_storage PARTITION 3 ({{}}), {count} SECTORS FROM {first}, WINDOW 1"
 
     def boot(name, extra=None, change=None):
-        stick = work / f"store-{name}.img"
+        stick = work / f"stick-{name}.img"
         shutil.copyfile(args.image, stick)
         if change:
             change(stick)
@@ -98,7 +98,7 @@ def store_partition_check(args, work):
             vm.close()
 
     # A blank NVMe disk: no table, so nothing of it is the store's; the stick's partition is taken, and the disk stays blank.
-    blank = work / "store-blank-nvme.img"
+    blank = work / "nvme-blank.img"
     with blank.open("wb") as f:
         f.truncate(16 << 20)
     stick, ready, init = boot("blank-nvme", blank)
@@ -107,7 +107,7 @@ def store_partition_check(args, work):
     require(ready, f"SECTORS=1/{count} ")
     assert not any(blank.read_bytes()), "the blank NVMe disk was written"
     # Two candidates: neither taken, both named; the store on ramdisk#1 (8 MiB), and neither partition written.
-    other = work / "store-nvme.img"
+    other = work / "nvme-candidate.img"
     with other.open("wb") as f:
         f.truncate(16 << 20)
         mbr = bytearray(512)
