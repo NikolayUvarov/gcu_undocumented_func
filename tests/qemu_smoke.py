@@ -8685,6 +8685,23 @@ def audio_suite(vm, wav):
         require(vm.service_logs("audio_gw", "HAS NO LEVELS BADGE"), "[AUDIO] LEVELS: PID ")
     else:
         print("SKIP: the levels through a plain client (000-DRV-0057): no tests/levels_stub build (scripts/x86_fixtures.sh)", flush=True)
+    # 000-APP-0076, 000-APP-0077: the shell's volume and mic through its badged client, kept in data/sound.conf; after the
+    # notes, so that the captured audio below is at the levels as they started.
+    settings = levels[1]
+    require(vm.command("volume"), f"VOLUME 100 % (0.00 DB OF {settings} SETTINGS), NOT MUTED")
+    require_all(vm.command("volume 50"), "VOLUME 50 % (-", f" DB OF {settings} SETTINGS), NOT MUTED; KEPT IN data/sound.conf")
+    require(vm.command("volume"), "VOLUME 50 %")
+    require(vm.service_logs("audio_gw", "VOLUME 50 %"), "[AUDIO] LEVELS")
+    for wrong in ("volume 101", "volume loud"):
+        require(vm.command(wrong), "ERROR: VOLUME [0-100 | MUTE | UNMUTE]")
+    require(vm.command("volume mute"), "VOLUME 50 % (")
+    require(vm.command("volume"), "), MUTED")
+    require(vm.command("volume unmute"), "NOT MUTED")
+    require(vm.command("mic"), "MIC 0 % (0.00 DB OF 16 SETTINGS), BOOST OFF (+20.00 DB)")
+    require_all(vm.command("mic 60"), "MIC 60 % (+13.50 DB OF 16 SETTINGS), BOOST OFF", "KEPT IN data/sound.conf")
+    require(vm.command("mic boost on"), "BOOST ON (+20.00 DB)")
+    require(vm.command("mic 120"), "ERROR: MIC [0-100 | BOOST ON | BOOST OFF]")
+    require_all(vm.command("cat data/sound.conf"), "volume 50", "muted no", "gain 60", "boost on")
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:

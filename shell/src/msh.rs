@@ -48,7 +48,8 @@ impl ShellHost<'_> {
     fn run(&mut self, line: &str, keep: bool) -> Result<String, String> {
         let word = line.split_whitespace().next().unwrap_or("");
         // `hostname <name>` writes data/machine/name (000-APP-0123); `hostname` alone only reads.
-        let sets_name = word.eq_ignore_ascii_case("hostname") && line.split_whitespace().nth(1).is_some();
+        let sets_name = (word.eq_ignore_ascii_case("hostname") || word.eq_ignore_ascii_case("volume") || word.eq_ignore_ascii_case("mic"))
+            && line.split_whitespace().nth(1).is_some(); // and data/sound.conf (000-APP-0076, 000-APP-0077)
         // `nn load`, `unload`, `run` and `bench` use the model service on the shell's client (262-APP-0112); `nn` alone reads.
         let uses_nn = word.eq_ignore_ascii_case("nn") && matches!(line.split_whitespace().nth(1), Some("load" | "unload" | "run" | "bench"));
         if let Some(need) = needs(word).or(sets_name.then_some("files")).or(uses_nn.then_some("nn")) {

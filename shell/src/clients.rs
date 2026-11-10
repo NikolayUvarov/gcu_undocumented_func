@@ -10,7 +10,8 @@
 //! policy's changes run too, never `mode`. Host-tested in tests/shell_host.rs.
 
 /// Taken at once.
-pub const NOW: [&str; 16] = ["ps", "cpus", "free", "faults", "quotas", "heap", "devices", "irqs", "endpoints", "physmap", "time", "ip", "net", "netgrants", "sync", "battery"];
+pub const NOW: [&str; 18] = ["ps", "cpus", "free", "faults", "quotas", "heap", "devices", "irqs", "endpoints", "physmap", "time", "ip", "net", "netgrants", "sync", "battery",
+    "volume", "mic"]; // the levels change no authority, as wm's Sound page sets them (000-APP-0076, 000-APP-0077)
 /// Taken after the user agrees in the shell's window (`date` with `set`, `netpolicy` with a change, `caps` with a PID,
 /// `hostname` with a name).
 pub const ASKED: [&str; 21] = ["kill", "stop", "reboot", "poweroff", "shutdown", "budget", "netrevoke", "netpolicy", "date", "logs", "stat", "pmap", "caps", "logger",
