@@ -70,6 +70,8 @@ const HELP: &str = "- help [command or program]: these lines; with a name, what 
 
 // Words the shell completes with Tab besides program names.
 const BOOT_LOG_LINES: usize = 24;
+// How long the exit notice of a program that ended before it was in front is waited for, in ms (000-APP-0133).
+const NOTICE_MS: u64 = 2000;
 const COMMANDS: [&str; 62] = ["battery", "boot", "budget", "caps", "cat", "cd", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mic", "mkdir", "mode", "msh", "mv", "net", "netgrants", "netpolicy", "netrevoke", "netstat", "nn", "nslookup", "passphrase", "physmap", "ping", "pmap", "poweroff", "ps", "pwd", "quotas", "reboot", "release", "rm", "run", "screenshot", "shutdown", "stat", "stop", "sync", "time", "tls", "tpm", "update", "voice", "volume", "write"];
 const NAMES: usize = 128; // as many as the loader lists (loader.wit 1.4)
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
@@ -182,6 +184,7 @@ struct Shell {
     asking: Option<flowctl::Asking>, flow_due: u64, // a program's question about a flow shown, and when the broker is next asked (000-APP-0120)
     secret: Option<secretctl::Typing>, // a console program's secret line being typed (000-APP-0126)
     pass: passctl::State, // keystore's passphrase typed, and the boot's wait for it looked for (308-APP-0130)
+    gone_front: Option<(u64, u64)>, // a program started in front that ended before its focus, and when (000-APP-0133)
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -629,6 +632,14 @@ impl Shell {
                 let _ = writeln!(self.term, "\nPID={} EXITED.", pid);
                 self.prompt();
             }
+            // One that ended before it was in front and whose exit notice did not come (000-APP-0133): the shell's again.
+            let now = mind::time::uptime_ms() as u64;
+            if self.gone_front.is_some_and(|(gone, since)| gone == pid && now >= since + NOTICE_MS) && !mind::process::alive(pid) {
+                self.gone_front = None;
+                self.focused = None;
+                let _ = writeln!(self.term, "\nPID={} EXITED. SHELL RESUMED.", pid);
+                self.prompt();
+            }
         }
         self.feed_more();
         if let Some(pid) = self.console { self.pump_console(pid); }
@@ -1051,7 +1062,15 @@ impl Shell {
         if background || windowed { return; }
         match task {
             Some(t) if t.screen != 0 && is_window(self.active) => {} // behind the manager: `fg` from a console
-            Some(t) if t.screen != 0 => { let _ = self.focus(pid, true); }
+            Some(t) if t.screen != 0 => {
+                // One that ended before it was in front (NET's report, 000-APP-0133): its lines and its exit notice come
+                // before the prompt, as when the focus succeeds; the notice is waited for NOTICE_MS at most.
+                if self.focus(pid, true).is_err() && !mind::process::alive(pid) {
+                    self.focused = Some(pid); self.line_start = true;
+                    self.gone_front = Some((pid, mind::time::uptime_ms() as u64));
+                    mind::println!("[SHELL] PID {} ENDED BEFORE IT WAS IN FRONT: ITS EXIT NOTICE COMES BEFORE THE PROMPT", pid);
+                }
+            }
             Some(t) if t.service != 0 => {}
             _ => self.console = Some(pid),
         }
@@ -1694,7 +1713,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), gave_up: 0, managers: alloc::vec::Vec::new(), unasked: false, console_link: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64) })
+                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64), gone_front: None })
 }
 
 mind::entry!(main);
@@ -1749,6 +1768,7 @@ fn main(info: &'static BootInfo) {
         // What happened to the program with the keyboard: it is the foreground program of the console shown.
         while let Some(notice) = control::notice() {
             let pid = match notice { Notice::Exited(pid) | Notice::Background(pid) => pid, Notice::Front(pid) => { shell.add_front(pid); continue; } };
+            if shell.gone_front.is_some_and(|(gone, _)| gone == pid) { shell.gone_front = None; }
             shell.activate(shell.console_of(pid));
             shell.drop_fronts(shell.active);
             let what = match notice { Notice::Exited(pid) => { shell.mirror(pid); "EXITED" } Notice::Background(_) | Notice::Front(_) => "BACKGROUND" };

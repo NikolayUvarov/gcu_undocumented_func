@@ -1450,6 +1450,28 @@ def consoles_check(vm):
           "wintest keeps running there while console 1 is shown and its output is there after; each console its own history; ps names the console", flush=True)
 
 
+def early_end_check(vm):
+    """000-APP-0133 (NET's report): `wifi scan` with no station has a screen, starts in front and ends at once, often
+    before the shell's focus. Its lines and its exit notice come before the shell's next prompt either way: none between
+    its start and `SHELL RESUMED.`. How often it ended first is the shell's log line's count, which only says the race
+    was met here."""
+    for _ in range(8):
+        vm.collect()
+        since = len(vm.log)
+        vm.send("wifi scan\n")
+        vm.logged("SHELL RESUMED.", since, timeout=30)
+        time.sleep(.3)
+        vm.collect()
+        vm.output = ""
+        text = ANSI.sub("", vm.log[since:]).replace("\r", "")
+        run = re.search(r"STARTED PID=(\d+) NAME=wifi FOREGROUND\n(.*?)PID=\1 EXITED\. SHELL RESUMED\.", text, re.S)
+        assert run and "MIND> " not in run[2], text[-1500:]
+        require(run[2], "[WIFI]")
+    early = vm.command("dmesg -s shell", raw=True).count("ENDED BEFORE IT WAS IN FRONT: ITS EXIT NOTICE COMES BEFORE THE PROMPT")
+    print(f"PASS: a program that ends at once (wifi scan with no station, 8 times) has its lines and its exit notice before "
+          f"the shell's prompt; it ended before its focus {early} time(s)", flush=True)
+
+
 def shell_suite(vm):
     """The shell's line editor, history, completion, Cyrillic and scrollback, from the UART and from PS/2."""
     def keys(data, fragment):
@@ -1585,6 +1607,7 @@ def shell_suite(vm):
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots, and its country "
           "list finds UZ and applies it", flush=True)
+    early_end_check(vm)
     # battery (211-APP-0070): QEMU's firmware names no embedded controller, so no battery service runs.
     require(vm.command("battery"), "NO BATTERY SERVICE")
     require(vm.command("battery now"), "THIS COMMAND TAKES NO ARGUMENTS")
