@@ -1,6 +1,6 @@
 # 000-KRN-0231 — `kbench`'s 10 ms sleep past 40 ms on a loaded host
 
-**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (cause found and fixed on `claude/000-KRN-0231-a-ten-ms-sleep`, 2026-11-10; the gate and the ten runs on acc-2 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (cause found and fixed on `claude/000-KRN-0231-a-ten-ms-sleep`, 2026-11-10; round 117 returned it, and 000-NET-0065 and a second move for a preempted borrower were added; the gate and the ten runs on acc-2 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -103,6 +103,16 @@
 - **With the relaxed rule:** both aarch64 groups passed, and three runs of the `nnd` suite alone passed, with 7, 0 and 0 late cancels before the partway one.
   - When the job's rows run on every CPU's worker, no CPU is idle and nothing can move, on `main` as with this fix.
   - Whether borrowing makes late cancels more frequent is not known from so few runs. Placement and `ps` keep to `home`, so the heap suite's spread no longer depends on where a borrower runs.
+
+**Round 117's gate (2026-11-10), candidate 6f61c855, returned this request.** The host tests found the kernel above its size budget with 000-KRN-0232 (a raise of its own is on this branch, 09ba086e). Two groups failed once and passed when run again alone; no gate had failed either before:
+- **"x86: RAM above 4 GiB" on acc-2,** `wifi_join_check` at `wifi scan`. Seen again in this container, 2 times in 4 runs of the `net` suite on this branch. A run that kept every VM's serial log showed the cause, a race of the shell's that this change makes frequent:
+  - `wifi` has a screen and starts in front. After its first wait it borrowed an idle CPU and ended before the shell's `started()` called `control::focus`.
+  - The focus failed, the shell printed the prompt at once, and `wifi`'s lines came after it with the exit notice. The check's `dmesg -s wifi` fallback could not see them: `wifi` holds no log client.
+  - **The tests' side is [000-NET-0065](000-NET-0065-the-wifi-checks-lines-after-an-early-prompt.md),** merged into this branch: a `wifi` command is read up to the prompt after the exit notice. The shell's side is a request to `APP` (`issues/requests-APP.md`).
+- **"aarch64: programs, shell and four CPUs" on acc-1,** the `nnd` suite: `nncheck`'s cancel came after the job in all 16 tries, at 40 ms down to 0 ms.
+  - **Read from the code, not measured:** the first idle CPU a borrower takes can be where a system-band task is placed, as `nnd`'s worker is by service count. The worker then preempted `nncheck` there, and `nncheck`, ready when its CPU switched, stayed behind it for the whole job.
+  - **Changed (440adbcd):** a task preempted on the CPU it borrowed may move again to an idle CPU. Only on its own CPU does a preempted task stay. No kernel line added.
+  - Two runs of the `nnd` suite alone in this container, beside the `net` suite on x86, passed before this change with 0 late cancels. So acc-1's case is not reproduced here.
 
 **Not done:**
 - An application behind another application is not moved; the slices share that CPU, as before.

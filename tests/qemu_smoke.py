@@ -10548,6 +10548,18 @@ def ping_options_check(vm):
 
 
 
+def front_command(vm, text, timeout):
+    """`text` starts a program with a screen in front (wifi): its output up to the prompt after the shell's exit notice
+    (`PID=… EXITED. SHELL RESUMED.`), with which the shell shows the program's lines. One that ended before the shell
+    took it in front leaves the prompt first, then its lines and the notice (the gates of ASR and NET, 2026-10-20;
+    round 117's, 000-NET-0065). wifi holds no log client, so `dmesg` has none of its lines."""
+    vm.send(text + "\n")
+    out = vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
+    if "SHELL RESUMED." not in out:
+        out += vm.expect("MIND> ", timeout=timeout, after="SHELL RESUMED.")
+    return out
+
+
 def wifi_join_check(vm):
     """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
     MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
@@ -10569,25 +10581,16 @@ def wifi_join_check(vm):
     print("PASS: wifi over the shell's station client (SLOT_WIFI): MIND-TEST listed, joined through wlan's WPA2 handshake "
           "with wlansim's access point, and left", flush=True)
     # 550-APP-0078: the same without a screen, the passphrase read from a file whose first line names the network.
-    # wifi's line goes through the system log: a wifi that ends at once may see the shell's prompt on the serial line
-    # before it (the gates of ASR and NET, 2026-10-20), so the line may come in logd's record of wifi instead, once more
-    # than it was there before the command.
     def run(text, timeout, line):  # as vm.command, with a join's wait (60 s at most in wifi)
-        before = vm.command("dmesg -s wifi", raw=True).count(line)
-        vm.send(text + "\n")
-        out = vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
-        for _ in range(20):
-            if line in out or vm.command("dmesg -s wifi", raw=True).count(line) > before:
-                return out
-            time.sleep(.5)
-        raise AssertionError((line, out))
+        out = front_command(vm, text, timeout)
+        assert line in out, (line, out)
+        return out
     run("wifi join MIND-TEST --passphrase-file data/wifiother.txt", 30, "[WIFI] REFUSED MIND-TEST: the file's first line is not the network's name")
     run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90, "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # 550-APP-0117 (for 550-DRV-0042, 0045): the networks as text, the joined one marked, then their count.
     scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
-    scanned += vm.command("dmesg -s wifi", raw=True)
     assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 -\d+ DBM WPA2( REMEMBERED)? JOINED', scanned), scanned[-2000:]
     assert re.search(r"\[WIFI\] SCAN: \d+ NETWORKS?", scanned), scanned[-2000:]
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
@@ -11564,14 +11567,8 @@ def world_country_check(args):
             radio = vm.service_logs("wlansim", "COUNTRY 00")
             require(radio, "[WLANSIM] COUNTRY 00: 13 CHANNELS, 2 TO LISTEN ON ONLY")
             assert "A PROBE REQUEST BEFORE ANY COUNTRY'S LIMITS" not in radio, radio
-            out = vm.command("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", timeout=90)
-            for _ in range(20):
-                if "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6" in out:
-                    break
-                out += vm.command("dmesg -s wifi", raw=True)
-                time.sleep(.5)
-            require(out, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-            require(vm.command("wifi country", timeout=30), "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS")
+            require(front_command(vm, "wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            require(front_command(vm, "wifi country", 30), "[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; NONE CHOSEN, AND THE ACCESS POINTS ANNOUNCED NONE THE CATALOGUE HAS")
         finally:
             vm.close()
     print("PASS: the station's country with none chosen and none announced (550-NET-0035): 00 applied, 11 channels to send "
