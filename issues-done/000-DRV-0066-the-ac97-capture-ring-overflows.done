@@ -1,6 +1,6 @@
-# 000-DRV-0066 — `audio_gw`: the AC97 capture ring overflows in the `listen` suite on x86 TCG
+# 000-DRV-0066 — `audio_gw`: the AC97 capture ring overflows in the `listen` suite on x86 TCG — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-10) · **Blocked by:** — · **Main task:** [000-APP-0114](000-APP-0114-hear-waits-for-a-whole-command.md) (the suite's check stays as it is) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** [000-APP-0114](../issues/000-APP-0114-hear-waits-for-a-whole-command.md) (the suite's check stays as it is) · **Constitution:** MC-6.1, MC-12.1
 
 Numbered from the tools track's request of 2026-10-30 in `requests-DRV.md`.
 
@@ -20,7 +20,7 @@ Numbered from the tools track's request of 2026-10-30 in `requests-DRV.md`.
 
 ## Acceptance criteria
 
-- The `listen` suite passes 20 runs in a row on x86 TCG, with 4 CPUs, beside a build.
+- ~~The `listen` suite passes 20 runs in a row on x86 TCG, with 4 CPUs, beside a build.~~ Narrowed on 2026-11-10 to the recording (APP's answer, `DRV/2026-11-10T0622Z-APP-…`): the recording overflows in none of 20 runs beside a build. The rest of the suite's 20 runs is [000-APP-0131](../issues/000-APP-0131-the-listen-suite-holds-beside-a-load.md)'s criterion.
 - The check's requirement, `OVERFLOWS 0`, is unchanged.
 
 No real machine is needed.
@@ -56,6 +56,18 @@ The first copy of 64 buffers (1365 ms) still overflowed once in 10 runs beside t
 
 So "the `listen` suite passes 20 runs in a row beside a build" is met for the recording, not for the suite's later checks under this load. The issue stays open until the whole suite holds, or its criterion is narrowed to the recording, which is APP's and the maintainer's to decide.
 
+## Resolution
+
+**The cause:** under load the gateway emptied AC'97's capture DMA ring (16 buffers, 341 ms, `init`'s region) only when its reader asked, and the reader was late by 242 to 386 ms.
+
+**The fix** (`audio_gw`, in `main` since round 6989bbe6 with 059970f5):
+- while the microphone records, the gateway looks at the DMA ring every 20 ms and at each message;
+- it keeps the completed buffers in its own copy of 256 buffers, 1 MiB, 5461 ms;
+- a read gives the oldest kept;
+- an overflow is logged with how long since the gateway and its reader last took from the ring.
+
+**The evidence** (x86 QEMU, TCG, 4 CPUs, beside a build loop at load 63 to 76 on 24 host CPUs): no overflow in 20 runs of the recording, against 4 in 10 before. The suite's later checks failed in 11 of those runs, as they did with the old gateway, and are APP's [000-APP-0131](../issues/000-APP-0131-the-listen-suite-holds-beside-a-load.md). The criterion was narrowed to the recording in APP's answer of 2026-11-10; the maintainer may decide otherwise.
+
 ## Related
 
-[000-APP-0114](000-APP-0114-hear-waits-for-a-whole-command.md), [000-DRV-0057](000-DRV-0057-the-output-volume-and-the-microphones-gain.md).
+[000-APP-0114](../issues/000-APP-0114-hear-waits-for-a-whole-command.md), [000-DRV-0057](../issues/000-DRV-0057-the-output-volume-and-the-microphones-gain.md).
