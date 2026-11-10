@@ -86,6 +86,9 @@ const FIRMWARE_DIR: &str = "data/firmware"; // the drivers' proprietary files; l
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
 const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
+// The services that need the device key, and the store's file face after the store: where keystore holds the key sealed
+// under the owner's passphrase (308-NET-0055), they are prepared at boot and started once it is typed (308-KRN-0205).
+const KEYED: [&str; 5] = ["blockstore", "storefs", "wlan", "tls", "ssh"];
 const NND_MODELS: usize = 2; // nnd: a read-only scope of the model disk, models: (262-KRN-0178)
 const NN_MODELS_DIR: &str = "data/models"; // the owner's models on the boot volume, nnd's SLOT_VFS scope (262-KRN-0178)
 // nnd's task quota with its line: a ceiling on its live workers, which the kernel bounds by the online CPUs too; init
@@ -145,7 +148,7 @@ const ARGS_KEPT: usize = LINK_WORDS_MAX; // link.conf's words at most (800-KRN-0
 #[derive(Clone, Copy, Default)]
 struct Placed { place: u8, after: Option<usize>, off: Off }
 #[derive(Clone, Copy, Default, PartialEq)]
-enum Off { #[default] No, Disabled, Needs(usize), NoDevice, NoImage, Safe, Mode, NoLink, Failed }
+enum Off { #[default] No, Disabled, Needs(usize), NoDevice, NoImage, Safe, Mode, NoLink, Failed, Passphrase }
 
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
@@ -359,6 +362,33 @@ impl Init {
         mounted
     }
     fn badged(&mut self, minted: &mut Minted, name: &str, badge: u16) -> Result<usize> { let keeper = self.keeper(name)?; minted.badged(keeper, CLIENT, badge) }
+    // keystore's word on the device key (keystore.wit 1.6 `key-state`, answered to any client): whether it waits for the
+    // owner's passphrase (308-KRN-0205). No keystore, or no answer, is no wait: the services start as they did.
+    fn key_state(&mut self) -> Option<mind::idl::keystore::KeyState> {
+        if !self.running(service_index("keystore")) { return None; }
+        let client = ipc::mint_badged(self.keeper("keystore").ok()?, CLIENT, 0).ok()?;
+        let state = mind::idl::keystore::key_state(Endpoint(client));
+        let _ = ipc::drop_cap(client);
+        state.ok().and_then(|state| state.ok())
+    }
+    fn key_waits(&mut self) -> bool { matches!(self.key_state(), Some(mind::idl::keystore::KeyState::Waiting)) }
+    // Whether a keyed service waits for the passphrase: prepared at boot, not started since.
+    fn passphrase_waits(&self) -> bool { (1..UNITS).any(|i| matches!(self.placed[i].off, Off::Passphrase) && self.prepared(i)) }
+    // Once keystore holds the device key, the keyed services it held back start in boot order (308-KRN-0205).
+    fn key_opened(&mut self) {
+        if !self.passphrase_waits() || !matches!(self.key_state(), Some(mind::idl::keystore::KeyState::Held)) { return; }
+        mind::println!("[INIT] keystore HOLDS THE DEVICE KEY: THE SERVICES THAT WAITED FOR IT START");
+        let (mut waited, mut count) = ([0usize; UNITS], 0);
+        for index in boot_order() { if matches!(self.placed[index].off, Off::Passphrase) && self.prepared(index) { waited[count] = index; count += 1; } }
+        for &index in &waited[..count] {
+            self.stopped[index] = false;
+            self.placed[index].off = Off::No;
+            match self.start(index) {
+                Ok(pid) => mind::println!("[INIT] {} STARTED PID={}", unit_name(index), pid),
+                Err(error) => mind::println!("[INIT] {} NOT STARTED: {:?}", unit_name(index), error),
+            }
+        }
+    }
     // The keyboard service the shell's keymap talks to: the PS/2 driver if the machine has the controller, else the USB
     // HID driver, else the VirtIO one.
     fn keyboard(&self) -> &'static str { ["ps2_kbd", "usb_hid", "virtio_input"].into_iter().find(|&n| self.running(service_index(n))).unwrap_or("virtio_input") }
@@ -1156,6 +1186,8 @@ impl Init {
                     // One that may recover the volume key, the shell's alone: it lends a copy for REQUEST_RECOVER (308-KRN-0204).
                     grants.add(SLOT_RECOVER, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_RECOVER)?, CLIENT);
                 }
+                // keystore's client that types the owner's passphrase, the shell's alone (308-KRN-0205).
+                if self.present("keystore") { grants.add(SLOT_PASSPHRASE, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_PASSPHRASE)?, CLIENT); }
                 // storefs's client that writes, as vfs_server's does (BADGE_USER); the shell lends it on (311-KRN-0190).
                 if self.present("storefs") { grants.add(SLOT_STOREFS, self.badged(&mut minted, "storefs", mind::fs::BADGE_USER)?, CLIENT); }
                 // The firmware's variables (the boot order), lent on with the user's consent (351-KRN-0027).
@@ -1475,6 +1507,7 @@ impl Init {
                 Off::Mode => core::fmt::Write::write_str(&mut off, "mode"),
                 Off::NoLink => core::fmt::Write::write_str(&mut off, "no link.conf"),
                 Off::Failed => core::fmt::Write::write_str(&mut off, "failed"),
+                Off::Passphrase => core::fmt::Write::write_str(&mut off, "passphrase"),
             };
             let placed = self.placed[i];
             idl_init::Planned { name: wire_text(unit_name(i)), place: if i == 0 { 0 } else { placed.place }, enabled: !matches!(placed.off, Off::Disabled),
@@ -1706,18 +1739,21 @@ impl Init {
         }
         // Left out by a safe start, and the station whose radio is (000-KRN-0131), or by data/services.txt: prepared, not
         // started, so that `svc start` starts it once the platform privilege is dropped.
-        let left = off.or((safe && (SAFE_LEFT_OUT.contains(&name) || (name == "wlan" && !RADIOS.iter().any(|&r| self.running(service_index(r)))))).then_some(Off::Safe));
+        let left = off.or((safe && (SAFE_LEFT_OUT.contains(&name) || (name == "wlan" && !RADIOS.iter().any(|&r| self.running(service_index(r)))))).then_some(Off::Safe))
+            .or((KEYED.contains(&name) && self.key_waits()).then_some(Off::Passphrase));
         if let Some(why) = left {
             self.placed[index].off = why;
             match (self.prepare(index), why) {
                 (Ok(()), Off::Safe) => mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, PREPARED: `svc start {}` STARTS IT", name, name),
                 (Ok(()), Off::Needs(need)) => mind::println!("[INIT] {} OFF: IT NEEDS {}, WHICH {} TURNS OFF; PREPARED: `svc start {}` STARTS IT", name, unit_name(need), services::FILE, name),
+                (Ok(()), Off::Passphrase) => mind::println!("[INIT] {} WAITS FOR keystore'S PASSPHRASE: PREPARED, STARTED ONCE THE DEVICE KEY IS OPENED", name),
                 (Ok(()), _) => mind::println!("[INIT] {} OFF BY {}: PREPARED, `svc start {}` STARTS IT", name, services::FILE, name),
                 (Err(Error::NotFound), _) => {
                     self.missing[index] = true; self.stopped[index] = true; self.placed[index].off = Off::NoDevice;
                     mind::println!("[INIT] {} NOT STARTED: {}", name, not_found(name));
                 }
                 (Err(error), Off::Safe) => { self.stopped[index] = true; mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, NOT PREPARED: {:?}", name, error) }
+                (Err(error), Off::Passphrase) => { self.stopped[index] = true; mind::println!("[INIT] {} WAITS FOR keystore'S PASSPHRASE, NOT PREPARED: {:?}", name, error) }
                 (Err(error), _) => { self.stopped[index] = true; mind::println!("[INIT] {} OFF BY {}, NOT PREPARED: {:?}", name, services::FILE, error) }
             }
             return true;
@@ -2182,7 +2218,9 @@ fn boot(info: &'static BootInfo) {
     // Exit notices of the services, and lifecycle requests (idl/init.wit) from the shell and the programs it lends
     // init's endpoint to; until the run's mark is cleared, a look at the clock every second.
     loop {
-        let received = if mark.is_some() { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) } else { Endpoint::SERVICE.recv(RECEIVED) };
+        // A look every second too while keyed services wait for the passphrase (308-KRN-0205).
+        let received = if mark.is_some() || init.passphrase_waits() { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) } else { Endpoint::SERVICE.recv(RECEIVED) };
+        init.key_opened();
         if let Some(f) = mark.filter(|_| mind::time::uptime_ms() - ready >= MARK_CLEAR_MS) {
             let cleared = mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, 0, &[]).is_ok();
             let _ = ipc::drop_cap(f);

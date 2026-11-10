@@ -56,7 +56,7 @@ fn the_handoff_takes_only_its_own_loader() {
     assert_eq!(BOOT_HANDOFF_VERSION, 30);
     // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192; ABI 29,
     // 100000-KRN-0222). It stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older,
-    // 351-KRN-0166). Handoff 30 came at ABI 29 (100000-KRN-0221), and ABI 30 (308-KRN-0204) left it: the next change of
+    // 351-KRN-0166). Handoff 30 came at ABI 29 (100000-KRN-0221), and ABIs 30 and 31 (308-KRN-0204, 0205) left it: the next change of
     // the handoff takes a number above ABI_VERSION.
     assert!(BOOT_HANDOFF_VERSION > 18, "a handoff is above every ABI an older loader wrote in its place");
     const ABI_AT_THE_HANDOFF: u32 = 29;
