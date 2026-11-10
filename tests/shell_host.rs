@@ -429,7 +429,23 @@ fn update_takes_its_requests_and_says_what_the_updater_holds() {
     assert_eq!(parse("apply 1"), Ok(Asked::Apply(1)));
     assert_eq!(parse("apply 9"), Ok(Asked::Apply(9)));
     assert_eq!(parse("rollback"), Ok(Asked::Rollback));
-    for line in ["apply 0", "apply 10", "apply x", "apply 3 4", "status now", "install", "rollback a"] { assert_eq!(parse(line), Err(USAGE), "{}", line); }
+    assert_eq!(parse("kept"), Ok(Asked::Kept));
+    for line in ["apply 0", "apply 10", "apply x", "apply 3 4", "status now", "install", "rollback a", "kept 6"] { assert_eq!(parse(line), Err(USAGE), "{}", line); }
+    // 351-APP-0132: the releases the block store keeps (update.wit 1.5 `kept`), newest first, their bytes grouped by
+    // thousands; a release whose blobs were not read, and none kept.
+    let mut kept = String::new();
+    updates::kept(&mut kept, &[updates::Kept { version: 6, pin: 2, root: "bafkreia", bytes: 26_677_432 },
+                               updates::Kept { version: 5, pin: 1, root: "NOT A CID", bytes: 0 },
+                               updates::Kept { version: 0, pin: 3, root: "bafkreib", bytes: 1_000_000_007 }]);
+    assert_eq!(kept, "UPDATE: KEPT VERSION 6, PIN 2, 26 677 432 BYTES, ROOT bafkreia\n\
+                      UPDATE: KEPT VERSION 5, PIN 1, ITS BYTES NOT READ, ROOT NOT A CID\n\
+                      UPDATE: KEPT VERSION NOT KNOWN, PIN 3, 1 000 000 007 BYTES, ROOT bafkreib\n");
+    kept.clear();
+    updates::kept(&mut kept, &[updates::Kept { version: 7, pin: 4, root: "r", bytes: 999 }]);
+    assert_eq!(kept, "UPDATE: KEPT VERSION 7, PIN 4, 999 BYTES, ROOT r\n");
+    kept.clear();
+    updates::kept(&mut kept, &[]);
+    assert_eq!(kept, "UPDATE: NO RELEASE KEPT IN THE BLOCK STORE\n");
     let mut out = String::new();
     let trial = View { slot: b'B', trial: true, running: 6, recorded: b'B', confirmed: false, staged: 0, failure: "" };
     updates::state(&mut out, &trial);
