@@ -1,0 +1,58 @@
+# 308-APP-0122 — A recovery key shown once and typed back, and a store opened with one — done
+
+**Type:** tools · **Owner:** `APP` track · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — ([308-KRN-0204](../issues/308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md), the store client badged `BADGE_RECOVER` and `REQUEST_RECOVER`, in `main` since round 111; `blockstore.wit` 2.4, STO, [308-STO-0028](../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md)) · **Main task:** [308](../issues/308-encryption-at-rest.md) · **Roadmap:** track B · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+
+STO's request of 2026-11-04 in [requests-APP.md](../issues/requests-APP.md), numbered here.
+
+## Problem
+
+Since 308-STO-0022 a medium's volume key is kept by `keystore`, so a medium moved to another machine opens nothing. The store's own part of a recovery key is built (308-STO-0028): `recovery-new`, `recovery-keep` and `recover`, and the key's written form (`mind::blockstore::recovery_text` and `recovery_parse`). Nothing yet shows the owner a key or takes one back.
+
+The key must reach no log and no serial line. The console is copied to serial, which the tests read, so a console program such as `blocks` cannot show it.
+
+## Plan
+
+- **A program with a window of its own, `recovery`**, rather than a page of `wm`'s settings.
+  - **Why a program.** It is the only one that asks for the recovery client: a request bit lent by the shell, asked of the user each time, as `REQUEST_FIRMWARE` is.
+  - **What that saves.** `wm` holds many clients already; it need not hold this one. So `init` lends the client to the shell alone (KRN agreed, 2026-11-04: 308-KRN-0204, the bit `REQUEST_RECOVER`).
+  - **The window.** The compositor draws it, and nothing of it goes to serial.
+- **"Make a recovery key":**
+  1. `recovery-new`;
+  2. the key shown once in `recovery_text`'s 8 groups of 4, with a request to write it down;
+  3. the key asked for again, without echo, and given to `recovery-keep`.
+
+  Until `recovery-keep`, the older keys still open the medium. A key typed back wrong is told, and asked for again; closing the window leaves the older keys as they are.
+- **"Open with a recovery key"**, for a store not mounted with `key`:
+  1. the key typed without echo;
+  2. checked with `recovery_parse`, so a typo is told before the store is asked;
+  3. `recover`.
+- **Without a screen**, for the tests and the MacBook Pro: `--key-file <path>`, as `wifi join --passphrase-file` does (550-APP-0078). The file's first line names the medium's id. With `new`, the key is written to that file instead of shown; with `open`, it is read from it.
+- **What the program prints on its console** names the step and its result only, never the key.
+
+## Acceptance criteria
+
+- Host tests: the key's groups as shown, a typo refused before the store is asked, the two steps of "make" (a key typed back wrong keeps the older keys), the key file's form.
+- QEMU, x86 and aarch64, with `--key-file`:
+  - a key made and kept;
+  - the medium on a machine whose `keystore` does not hold its key stays closed, and the key file opens it;
+  - the key's text appears nowhere on serial.
+- docs/tools (English and Russian).
+
+## Resolution
+
+- **`recovery`** (`recovery/`, a program with a window of its own, built for x86 and aarch64): it asks for `REQUEST_RECOVER | REQUEST_FILES`, and holds the store's client badged `BADGE_RECOVER` in `SLOT_RECOVER` only when the shell lent it.
+  - **On the screen:** the store's state and its recovery records. `m` makes a key (`recovery-new`), shown once in its 8 groups of 4. Enter asks for it again, typed with no echo, checked with `recovery_parse` first, then compared with the key shown; only that key goes to `recovery-keep`. Esc or `q` before it leaves the older keys as they are. For a store that no keeper of this machine opens, `o` takes a key typed the same way to `recover`.
+  - **Without a screen:** `recovery new --key-file <file>` writes the key to the file, reads it back and keeps what it read; `recovery open --key-file <file>` reads it and calls `recover`. The calls go through the user's files the shell lent (`SLOT_FILE`), dropped when no file is named. Exit 0 done, 1 refused, 2 usage, 3 no client.
+  - **The key reaches no log:** the console's lines name the step and its result; the copies are wiped once sent.
+  - **The file's first line** is its form, `MIND CORE RECOVERY KEY 1`, refused with its name when another is there (MC-12.4), and the second the key. The plan named the medium's id there: the store gives no client the id, and `recover` finds the medium's own records, so the line names the form instead.
+- **The shell** (`shell/src/main.rs`) lends a copy of its `SLOT_RECOVER` for `REQUEST_RECOVER` after asking, each time: `<NAME> ASKS TO MAKE OR USE A RECOVERY KEY, WHICH OPENS THE STORE'S MEDIUM ON ANY MACHINE. ALLOW?`; a script needs `requires: recover` (`msh`'s words). `wm` names the bit among those it does not lend.
+- **Docs:** `docs/tools/README.md` and `README_RU.md`; the profile (`docs/profile/README.md`, `evidence.md`, `aarch64/evidence.md`, `threat-model.md`).
+- **Tests:**
+  - host: `tests/recovery_host.rs` (6): the key file's form and its refusals, the words without a screen, the key shown once and kept when typed back (a typo and another key refused before the store is asked), closing before keeps the older keys, a closed store opened, the refusals' lines;
+  - QEMU, the `tls` suite's `recovery_key_check`, x86 (`qemu64,+rdrand`) and aarch64 (`virt`, `max`), 4 CPUs, TCG, in this track's container, 2026-11-10: a raw image with a store disk whose volume key `keystore` keeps; refused, `recovery` gets no client; on the screen a key made, read from the screen and typed back in lower case, then kept; `recovery new --key-file` makes another and keeps it, one record left. With `keystore`'s device key and the block store's secrets removed, as on another machine, the store is not mounted and an object put before is refused with `key`; `recovery open --key-file` opens it and the object reads back; the next boot mounts it as the machine's own; `fsck.fat` clean. Neither key, in any case or without its dashes, is in any serial log. The check ran alone; on x86 the `tls` suite's 8 other checks, and the `shell` and `wm` suites (32 checks), passed on the same tree.
+- **Found:** a `keystore` whose device key was made anew keeps the file of the block store's secrets sealed under the old one, which it does not open, so it refuses to keep the recovered volume key there and the store answers `key`; on another machine no such file exists. Told to NET and STO (`internal-dev-messages`).
+- Not run on real hardware (MC-12.1).
+
+## Related
+
+[308](../issues/308-encryption-at-rest.md), [308-STO-0028](../issues/308-STO-0028-a-recovery-key-and-a-passphrase.md), [308-KRN-0204](../issues/308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md), 550-APP-0078 (`--passphrase-file`).
