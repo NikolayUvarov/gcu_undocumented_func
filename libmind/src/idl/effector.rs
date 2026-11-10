@@ -232,7 +232,7 @@ impl Wire for UpdateState {
 
 /// The machine's state for the heartbeat. Allowed to both clients; changes nothing.
 pub fn status(endpoint: Endpoint) -> Result<Status> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -246,7 +246,7 @@ pub fn status(endpoint: Endpoint) -> Result<Status> {
 /// Starts, stops or restarts a boot service the policy names for that action. `init`, the shell and the agent's
 /// own services are always refused.
 pub fn service_control(endpoint: Endpoint, origin: &Origin, name: &str, action: ServiceAction) -> Result<core::result::Result<ServiceState, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -263,7 +263,7 @@ pub fn service_control(endpoint: Endpoint, origin: &Origin, name: &str, action: 
 
 /// Opens a log source the policy names (`ring`: the system log; `boot`: the last boot's log on `log:`).
 pub fn open_log(endpoint: Endpoint, origin: &Origin, source: &str) -> Result<core::result::Result<Transfer, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -279,7 +279,7 @@ pub fn open_log(endpoint: Endpoint, origin: &Origin, source: &str) -> Result<cor
 
 /// Opens a file under a root the policy lets leave the machine. Never the agent's own directories.
 pub fn open_file(endpoint: Endpoint, origin: &Origin, path: &str) -> Result<core::result::Result<Transfer, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -295,7 +295,7 @@ pub fn open_file(endpoint: Endpoint, origin: &Origin, path: &str) -> Result<core
 
 /// Captures the screen as a PNG, if the policy allows it.
 pub fn open_screen(endpoint: Endpoint, origin: &Origin) -> Result<core::result::Result<Transfer, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -310,7 +310,7 @@ pub fn open_screen(endpoint: Endpoint, origin: &Origin) -> Result<core::result::
 
 /// Reads up to 32768 bytes of an open transfer from `offset`; an empty answer is its end.
 pub fn read(endpoint: Endpoint, handle: u32, offset: u64, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(36864).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(36864).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -335,7 +335,7 @@ pub fn close(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<(),
 
 /// Starts delivering a file of `size` bytes and the announced SHA-256 to `path`, under the policy's delivery root.
 pub fn deliver_begin(endpoint: Endpoint, origin: &Origin, path: &str, size: u64, sha256: &str, replace: bool) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -355,7 +355,7 @@ pub fn deliver_begin(endpoint: Endpoint, origin: &Origin, path: &str, size: u64,
 /// Starts receiving a package of `size` bytes and the announced SHA-256 for `action`, if the policy allows
 /// packages.
 pub fn package_begin(endpoint: Endpoint, origin: &Origin, action: PackageAction, size: u64, sha256: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -373,7 +373,7 @@ pub fn package_begin(endpoint: Endpoint, origin: &Origin, action: PackageAction,
 
 /// Writes the next bytes of an incoming transfer at `offset`; bytes must come in order, without gaps.
 pub fn write(endpoint: Endpoint, handle: u32, offset: u64, data: &[u8]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(36864).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(36864).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -391,7 +391,7 @@ pub fn write(endpoint: Endpoint, handle: u32, offset: u64, data: &[u8]) -> Resul
 /// Finishes a delivered file: checks its size and SHA-256, flushes it and gives it its name, then reads it back
 /// under that name; a read-back that differs is `digest`.
 pub fn deliver_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Delivered, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -406,7 +406,7 @@ pub fn deliver_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::R
 
 /// Finishes a package: checks its size and SHA-256, then its signature and version, then does its action.
 pub fn package_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<PackageReport, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         handle.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -422,7 +422,7 @@ pub fn package_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::R
 /// Asks `updater` to check the owner's channel, to fetch a newer release if the policy allows it, and to apply it
 /// if `apply` is set and the policy allows the restart.
 pub fn update_check(endpoint: Endpoint, origin: &Origin, apply: bool) -> Result<core::result::Result<UpdateReport, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -438,7 +438,7 @@ pub fn update_check(endpoint: Endpoint, origin: &Origin, apply: bool) -> Result<
 
 /// Restarts the machine after `delay-ms` (at most 600000), if the policy allows it.
 pub fn reboot(endpoint: Endpoint, origin: &Origin, delay_ms: u32) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -455,7 +455,7 @@ pub fn reboot(endpoint: Endpoint, origin: &Origin, delay_ms: u32) -> Result<core
 /// Runs an `msh` script in the test account with at most the grants the policy allows tests (501), within
 /// `timeout-ms`.
 pub fn test_run(endpoint: Endpoint, origin: &Origin, script: &str, timeout_ms: u32) -> Result<core::result::Result<RunReport, Error>> {
-    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -472,7 +472,7 @@ pub fn test_run(endpoint: Endpoint, origin: &Origin, script: &str, timeout_ms: u
 
 /// Cancels the request with this command ID if it is still open; a request that ended is `not-found`.
 pub fn cancel(endpoint: Endpoint, command: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(command, &mut w).ok_or(SysError::Invalid)?;
@@ -487,7 +487,7 @@ pub fn cancel(endpoint: Endpoint, command: &str) -> Result<core::result::Result<
 
 /// The owner only: reads `data/effector/policy` again. A policy that does not parse leaves none loaded.
 pub fn reload_policy(endpoint: Endpoint) -> Result<core::result::Result<PolicySummary, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -501,7 +501,7 @@ pub fn reload_policy(endpoint: Endpoint) -> Result<core::result::Result<PolicySu
 
 /// The owner only: the last `count` audit lines (at most 16), newest last.
 pub fn audit(endpoint: Endpoint, count: u8) -> Result<core::result::Result<List<Text<256>, 16>, Error>> {
-    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         count.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -516,7 +516,7 @@ pub fn audit(endpoint: Endpoint, count: u8) -> Result<core::result::Result<List<
 
 /// The telemetry counters (1.1, after the 1.0 calls so their numbers stay). Allowed to both clients; changes nothing.
 pub fn sample(endpoint: Endpoint) -> Result<Sample> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -547,7 +547,7 @@ pub fn connection(endpoint: Endpoint, connected: bool, active: bool) -> Result<(
 /// `update apply` and the owner's `remote-update` is on (else `denied`, and nothing reaches the updater). `write`
 /// streams it; `close` and `cancel` drop it.
 pub fn update_begin(endpoint: Endpoint, origin: &Origin, size: u64, sha256: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -574,7 +574,7 @@ pub fn update_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::Re
 /// Has `updater` boot the staged release on trial with `tries` (1 to 9), as `update-begin` allows. `init` restarts
 /// the machine at once, so usually only a refusal is answered.
 pub fn update_apply(endpoint: Endpoint, origin: &Origin, tries: u8) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         origin.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -590,7 +590,7 @@ pub fn update_apply(endpoint: Endpoint, origin: &Origin, tries: u8) -> Result<co
 
 /// The updater's view (above). Allowed to both clients; changes nothing.
 pub fn update_state(endpoint: Endpoint) -> Result<UpdateState> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

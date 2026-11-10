@@ -75,7 +75,7 @@ impl Wire for Pin {
 
 /// The controllers, in the order the other calls number them.
 pub fn controllers(endpoint: Endpoint) -> Result<List<Controller, 4>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -88,7 +88,7 @@ pub fn controllers(endpoint: Endpoint) -> Result<List<Controller, 4>> {
 
 /// The state of every pin of a controller.
 pub fn pins(endpoint: Endpoint, controller: u8) -> Result<core::result::Result<List<Pin, 64>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         controller.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -103,7 +103,7 @@ pub fn pins(endpoint: Endpoint, controller: u8) -> Result<core::result::Result<L
 
 /// The names of a pin's functions in function order (from hwdocs; an empty name: none, or no table).
 pub fn functions(endpoint: Endpoint, controller: u8, pin: u8) -> Result<core::result::Result<List<Text<24>, 8>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         controller.encode(&mut w).ok_or(SysError::Invalid)?;

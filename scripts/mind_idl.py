@@ -22,7 +22,7 @@ BUFFER_MAX = 64 * 1024  # largest request or reply of a buffer call
 PAGE = 4096
 # Names the generated code uses itself; an interface type may not take them (`error` is allowed: the system error
 # type is then imported as `SysError`).
-RESERVED = {"Result", "Endpoint", "Received", "Pages", "Wire", "Reader", "Writer", "Text", "List", "Call", "Reject", "Request", "SysError"}
+RESERVED = {"Result", "Endpoint", "Received", "Pages", "Wiped", "Wire", "Reader", "Writer", "Text", "List", "Call", "Reject", "Request", "SysError"}
 
 
 class IdlError(Exception):
@@ -482,7 +482,8 @@ def generate_client(w, f):
     enum_error = f"    if let Some(code) = wire::enum_error(&reply)? {{ return Ok(Err({camel(error)}::from_code(code).ok_or({SYS}::Invalid)?)); }}" if error else None
     if f.buffered:
         size = (max(f.request_max, f.reply_max, 1) + PAGE - 1) // PAGE * PAGE
-        w(f"    let mut buffer = Pages::new({size}).ok_or({SYS}::NoMemory)?;")
+        # wire::Wiped: zeros over the buffer before it is freed, a secret it carried among them (000-KRN-0226).
+        w(f"    let mut buffer = wire::Wiped(Pages::new({size}).ok_or({SYS}::NoMemory)?);")
         w("    let length = {")
         w("        let mut w = Writer::new(buffer.as_mut_slice());")
         for p in f.params:

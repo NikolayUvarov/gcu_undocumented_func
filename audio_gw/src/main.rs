@@ -13,6 +13,9 @@ use mind::sys::Error;
 use mind::mem::{self, Mapping};
 
 mod hda;
+mod levels;
+
+use levels::Amp;
 
 const RECEIVED_CAP: usize = 9;
 const BUFFERS: usize = 32;
@@ -47,7 +50,10 @@ impl Regs {
     fn out32(&self, at: u16, value: u32) { self.ports.out32(self.base + at, value) }
 }
 
-struct Ac97 { bus: Regs, ring: Mapping, physical: u32, head: usize, started: bool, interrupts: usize, capture: bool, tail: usize }
+struct Ac97 { mixer: Regs, bus: Regs, ring: Mapping, physical: u32, head: usize, started: bool, interrupts: usize, capture: bool, tail: usize, master: Amp }
+
+// AC'97's record gain: 16 settings of 1.5 dB from 0 dB (register 0x1C).
+const AC97_RECORD: Amp = Amp { steps: 16, step_qdb: 6, zero: 0 };
 
 impl Ac97 {
     fn init() -> Option<Self> {
@@ -57,13 +63,17 @@ impl Ac97 {
         bus.out32(GLOB_CNT, 0x2); // release the codec cold reset
         mind::time::sleep(20);
         mixer.out16(RESET, 0);
+        // The master's attenuation has 5 bits or 6: a codec with 5 reads 0x1F back for 0x20 (AC'97 2.3, 5.7.2).
+        mixer.out16(MASTER, 0x2020);
+        let master = Amp { steps: if mixer.in16(MASTER) & 0x3F == 0x20 { 64 } else { 32 }, step_qdb: 6, zero: 0 };
+        let master = Amp { zero: master.steps - 1, ..master };
         mixer.out16(MASTER, 0x0000);
         mixer.out16(PCM_OUT, 0x0808);
         if mixer.in16(EXT_ID) & 1 != 0 { mixer.out16(EXT_CTRL, mixer.in16(EXT_CTRL) | 1); mixer.out16(FRONT_RATE, AUDIO_RATE as u16); mixer.out16(ADC_RATE, AUDIO_RATE as u16); }
         // Record from the microphone input, unmuted at 0 dB.
         mixer.out16(MIC, 0x0008); mixer.out16(RECORD_SELECT, 0x0000); mixer.out16(RECORD_GAIN, 0x0000);
         if ring.len() < CAPTURE_BASE + (CAPTURE_BUFFERS + 1) * BUFFER_BYTES { mind::println!("[AUDIO] DMA REGION TOO SMALL FOR CAPTURE"); }
-        let mut device = Self { bus, ring, physical, head: 0, started: false, interrupts: 0, capture: false, tail: 0 };
+        let mut device = Self { mixer, bus, ring, physical, head: 0, started: false, interrupts: 0, capture: false, tail: 0, master };
         device.reset();
         Some(device)
     }
@@ -174,6 +184,29 @@ impl Ac97 {
         }
     }
     fn interrupt(&mut self) { self.clear_status(); self.interrupts += 1; }
+    fn set_volume(&self, setting: u8, muted: bool) { self.mixer.out16(MASTER, levels::ac97_master(setting, self.master, muted)); }
+    fn set_gain(&self, setting: u8, boost: bool) { self.mixer.out16(RECORD_GAIN, levels::ac97_record(setting)); self.mixer.out16(MIC, levels::ac97_microphone(boost)); }
+}
+
+// The levels as set (audio.wit 1.2, 000-DRV-0057): each side's amplifier and setting, and the switch (mute for the
+// output, the boost for the capture); `scaled`: no amplifier, the gateway scales the samples.
+#[derive(Clone, Copy)]
+struct Side { amp: Amp, setting: u8, switch: bool, scaled: bool }
+struct Levels { output: Side, capture: Side, boost_qdb: u16 }
+
+impl Levels {
+    fn answer(&self) -> audio::Levels {
+        let range = |s: &Side| audio::Range { steps: s.amp.steps, step_qdb: s.amp.step_qdb, zero: s.amp.zero, scaled: s.scaled };
+        audio::Levels { volume: levels::percent(self.output.setting, self.output.amp), muted: self.output.switch, output: range(&self.output),
+                        gain: levels::percent(self.capture.setting, self.capture.amp), boost: self.capture.switch, boost_qdb: self.boost_qdb, capture: range(&self.capture) }
+    }
+    fn say(&self, why: &str) {
+        let side = |s: &Side| { let q = levels::qdb(s.setting, s.amp); (levels::percent(s.setting, s.amp), if q < 0 { "-" } else { "" }, q.abs() / 4, q.abs() % 4 * 25, s.amp.steps, if s.scaled { ", SCALED" } else { "" }) };
+        let ((vp, vn, vd, vf, vs, vx), (gp, gn, gd, gf, gs, gx)) = (side(&self.output), side(&self.capture));
+        mind::println!("[AUDIO] LEVELS {}: VOLUME {} % ({}{}.{:02} DB OF {} SETTINGS{}){}; GAIN {} % ({}{}.{:02} DB OF {} SETTINGS{}), BOOST {}", why,
+                       vp, vn, vd, vf, vs, vx, if self.output.switch { ", MUTED" } else { "" },
+                       gp, gn, gd, gf, gs, gx, if self.boost_qdb == 0 { "NONE" } else if self.capture.switch { "ON" } else { "OFF" });
+    }
 }
 
 // The device behind the gateway: HDA when init granted memory-mapped registers, AC97 when it granted ports.
@@ -202,6 +235,37 @@ impl Device {
     fn record_read(&mut self, out: &mut [u8]) -> (usize, bool) { match self { Device::Ac97(d) => d.record_read(out), Device::Hda(d) => d.record_read(out) } }
     fn clear_status(&mut self) { match self { Device::Ac97(d) => d.clear_status(), Device::Hda(d) => d.clear_status() } }
     fn interrupt(&mut self) -> usize { match self { Device::Ac97(d) => { d.interrupt(); d.interrupts } Device::Hda(d) => { d.interrupt(); d.interrupts } } }
+    // The levels the device starts with: 0 dB on each side, as `init` and `configure` leave the amplifiers.
+    fn levels(&self) -> Levels {
+        match self {
+            Device::Ac97(d) => Levels { output: Side { amp: d.master, setting: d.master.zero, switch: false, scaled: false },
+                                        capture: Side { amp: AC97_RECORD, setting: 0, switch: false, scaled: false }, boost_qdb: levels::AC97_BOOST_QDB },
+            Device::Hda(d) => {
+                let side = |c: Option<hda::Control>, soft: Amp| match c { Some(c) => Side { amp: c.amp, setting: c.amp.zero, switch: false, scaled: false }, None => Side { amp: soft, setting: soft.zero, switch: false, scaled: true } };
+                let boost_qdb = d.boost_amp.map_or(0, |b| ((b.amp.steps - 1 - b.amp.zero) as u16) * b.amp.step_qdb as u16);
+                Levels { output: side(d.out_amp, levels::SOFT_OUTPUT), capture: side(d.in_amp, levels::SOFT_CAPTURE), boost_qdb }
+            }
+        }
+    }
+    // Sets the output's level on the device, or the samples' factor where it has no amplifier.
+    fn set_volume(&mut self, s: &Side) {
+        match self {
+            Device::Ac97(d) => d.set_volume(s.setting, s.switch),
+            Device::Hda(d) => match d.out_amp {
+                Some(c) => { d.set_amp(c, s.setting, s.switch); d.out_factor = if s.switch && !c.mute { 0 } else { 1 << 15 }; }
+                None => d.out_factor = levels::factor_q15(levels::qdb(s.setting, s.amp), s.switch),
+            },
+        }
+    }
+    fn set_gain(&mut self, s: &Side) {
+        match self {
+            Device::Ac97(d) => d.set_gain(s.setting, s.switch),
+            Device::Hda(d) => {
+                match d.in_amp { Some(c) => d.set_amp(c, s.setting, false), None => d.in_factor = levels::factor_q15(levels::qdb(s.setting, s.amp), false) }
+                if let Some(b) = d.boost_amp { d.set_amp(b, if s.switch { b.amp.steps - 1 } else { b.amp.zero }, false); }
+            }
+        }
+    }
 }
 
 // Clients waiting for ring space: saved reply capability and the number of free buffers needed.
@@ -245,6 +309,8 @@ fn main(_info: &'static BootInfo) {
     let mut overflows = 0u32;
     let mut owner: Option<u64> = None; // the task that owns the microphone capture
     let mut session = Session::default(); // what the current capture gave, for the log
+    let mut set = device.as_ref().map(Device::levels); // the levels as set (1.2)
+    if let Some(l) = &set { l.say("AT START"); }
     match &device {
         Some(Device::Ac97(_)) => { let _ = irq.bind(Endpoint::SERVICE); mind::println!("[AUDIO] AC97 READY: {} HZ STEREO S16, {} DMA BUFFERS", AUDIO_RATE, BUFFERS); }
         Some(Device::Hda(d)) => {
@@ -277,7 +343,7 @@ fn main(_info: &'static BootInfo) {
             continue;
         }
         // idl/audio.wit. PCM and capture travel in the client's lent buffer, mapped only for the call.
-        let sender = request.sender;
+        let (sender, badge) = (request.sender, request.badge);
         // The capture has one owner (1.1); a task that ended owns nothing.
         if owner.is_some_and(|pid| pid != sender && !mind::process::alive(pid)) { owner = None; }
         let foreign = owner.is_some_and(|pid| pid != sender);
@@ -286,6 +352,33 @@ fn main(_info: &'static BootInfo) {
         let _ = match (request, device.as_mut()) {
             (audio::Request::Device, d) => audio::reply_device(call, d.is_some().then_some(AUDIO_RATE as u32)),
             (audio::Request::Overflows, _) => audio::reply_overflows(call, overflows),
+            (audio::Request::Levels, _) => audio::reply_levels(call, set.as_ref().map(Levels::answer).as_ref().ok_or(Error::NotFound)),
+            // Only the shell's client sets the levels (000-KRN-0118); every other gets `rights`, and the log says who.
+            (audio::Request::SetVolume { .. }, _) | (audio::Request::SetGain { .. }, _) if badge != mind::audio::BADGE_LEVELS => {
+                mind::println!("[AUDIO] LEVELS: PID {} HAS NO LEVELS BADGE: REFUSED", sender);
+                match request { audio::Request::SetVolume { .. } => audio::reply_set_volume(call, Err(Error::Rights)), _ => audio::reply_set_gain(call, Err(Error::Rights)) }
+            }
+            (audio::Request::SetVolume { percent, .. }, _) | (audio::Request::SetGain { percent, .. }, _) if percent > 100 => {
+                match request { audio::Request::SetVolume { .. } => audio::reply_set_volume(call, Err(Error::Invalid)), _ => audio::reply_set_gain(call, Err(Error::Invalid)) }
+            }
+            (audio::Request::SetVolume { .. }, None) => audio::reply_set_volume(call, Err(Error::NotFound)),
+            (audio::Request::SetGain { .. }, None) => audio::reply_set_gain(call, Err(Error::NotFound)),
+            (audio::Request::SetVolume { percent, muted }, Some(d)) => {
+                let Some(l) = set.as_mut() else { continue };
+                l.output.setting = levels::setting(percent, l.output.amp);
+                l.output.switch = muted;
+                d.set_volume(&l.output);
+                l.say("SET");
+                audio::reply_set_volume(call, Ok(&l.answer()))
+            }
+            (audio::Request::SetGain { percent, boost }, Some(d)) => {
+                let Some(l) = set.as_mut() else { continue };
+                l.capture.setting = levels::setting(percent, l.capture.amp);
+                l.capture.switch = boost && l.boost_qdb > 0;
+                d.set_gain(&l.capture);
+                l.say("SET");
+                audio::reply_set_gain(call, Ok(&l.answer()))
+            }
             (audio::Request::Wait { buffers }, d) => {
                 let want = (buffers as usize).clamp(1, BUFFERS - 1) as u8;
                 let free = d.map_or(BUFFERS - 1, |d| d.free());

@@ -9,6 +9,22 @@ use crate::sys::{Error, Result};
 // Rights a capability keeps on the wire: all but the right to badge it (000-KRN-0073).
 const PASSED: u8 = !CAP_BADGE;
 
+/// A client's call buffer (000-KRN-0226): its pages overwritten with zeros when it is dropped, on every way out of the
+/// call, before they are freed, so that what the call carried, a secret among it, is not left in freed frames.
+pub struct Wiped(pub Pages);
+impl core::ops::Deref for Wiped { type Target = Pages; fn deref(&self) -> &Pages { &self.0 } }
+impl core::ops::DerefMut for Wiped { fn deref_mut(&mut self) -> &mut Pages { &mut self.0 } }
+impl Drop for Wiped {
+    // Volatile stores, which the compiler keeps although the pages are freed next; by words where the buffer is aligned
+    // to them, as pages are.
+    fn drop(&mut self) {
+        let bytes = self.0.as_mut_slice();
+        let (head, words, tail) = unsafe { bytes.align_to_mut::<u64>() };
+        for word in words { unsafe { core::ptr::write_volatile(word, 0) } }
+        for byte in head.iter_mut().chain(tail) { unsafe { core::ptr::write_volatile(byte, 0) } }
+    }
+}
+
 pub const STATUS_OK: usize = 0;
 pub const STATUS_NONE: usize = 1; // option result: none
 pub const STATUS_ERROR: usize = 2; // result<_, error-code> or result<_, enum>: the error code or case is in word 1

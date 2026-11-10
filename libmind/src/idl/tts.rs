@@ -15,7 +15,7 @@ const MAJOR: usize = 1;
 /// Speaks `text` with `pitch` (Hz, 0: 112) and `rate` (%, 0: 100); returns the speech duration in ms once it is
 /// queued. Error not-found without an audio device, invalid for empty text.
 pub fn say(endpoint: Endpoint, text: &str, pitch: u16, rate: u16) -> Result<u32> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<4000>(text, &mut w).ok_or(Error::Invalid)?;

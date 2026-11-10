@@ -81,7 +81,7 @@ pub fn attach(endpoint: Endpoint, flow: usize) -> Result<core::result::Result<u3
 /// TCP to `address`:`port`, then the TLS 1.3 handshake verifying the server for `name` (a DNS name or an IPv4
 /// address in dotted form).
 pub fn connect(endpoint: Endpoint, session: u32, name: &str, address: u32, port: u16, client_certificate: bool, timeout_ms: u32) -> Result<core::result::Result<Peer, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -101,7 +101,7 @@ pub fn connect(endpoint: Endpoint, session: u32, name: &str, address: u32, port:
 
 /// Encrypts and sends `data`; returns how many bytes were taken.
 pub fn send(endpoint: Endpoint, session: u32, data: &[u8]) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -117,7 +117,7 @@ pub fn send(endpoint: Endpoint, session: u32, data: &[u8]) -> Result<core::resul
 
 /// Up to `length` decrypted bytes. Error again: nothing yet; closed: the peer closed and everything was read.
 pub fn receive(endpoint: Endpoint, session: u32, length: u32, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -142,7 +142,7 @@ pub fn close(endpoint: Endpoint, session: u32) -> Result<core::result::Result<()
 
 /// The device certificate (DER), from the key service.
 pub fn certificate(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -158,7 +158,7 @@ pub fn certificate(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::R
 /// must be `pin` (32 bytes), or the connection is refused (`certificate`). No root, name or validity period is
 /// checked; the handshake's signature by that key is. `name` is sent as the server name.
 pub fn connect_pinned(endpoint: Endpoint, session: u32, name: &str, address: u32, port: u16, pin: &[u8], timeout_ms: u32) -> Result<core::result::Result<Peer, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -182,7 +182,7 @@ pub fn connect_pinned(endpoint: Endpoint, session: u32, name: &str, address: u32
 /// and the handshake's signature by its key. Its issuer is not looked for: a server may send its leaf alone. A
 /// server that matches no pin, or fails a check, is refused (`certificate`).
 pub fn connect_pins(endpoint: Endpoint, session: u32, name: &str, address: u32, port: u16, pins: &[Pin], timeout_ms: u32) -> Result<core::result::Result<Peer, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;

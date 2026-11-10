@@ -189,6 +189,19 @@ cmp /tmp/10M.bin /tmp/10M.back
 
 **What to expect,** an estimate rather than a measurement: a frame takes about 10 bits per byte on the line, so 921 600 baud carries at most about 90 KB/s. Each 1 KiB request waits for its answer, so the result is lower. The rates a real pair reaches are recorded in 800-LNK-0004 when measured.
 
+## On a board's UART
+
+Where the only line out is the board's console UART (the PinePhone's, through the headphone jack), `link` takes it from `uart_serial` rather than from `usb_serial` (100000-LNK-0038). `link` itself does not change: it talks `idl/serial.wit` 1.1 to either.
+
+- **The chip:** `uart_serial` drives what `init` lends it, through `mind::dev::Uart`:
+  - a 16550 at its ports, a PC's COM1;
+  - a PL011's registers, QEMU's `virt`;
+  - the kernel's console as a byte channel, where the UART's registers share a page with other devices', as on the A64 (100000-KRN-0222).
+- **Receiving:** at the line's interrupt when `init` lends one, a 16550's or a PL011's, and every 2 ms besides, into a 64 KiB queue. The channel's bytes wait in the kernel's own 4 KiB ring.
+- **The rate:** a 16550 at ports takes any divisor of its 1.8432 MHz clock, within 3 %. The others keep the rate the firmware left them at, 115200, and refuse another. `mindlink` and `effector485` then run at `--baud 115200`.
+- **The console:** the shell cannot share the line, so the console goes as channel 1 (`link-console`, 800-LNK-0019). The boot's first lines, written before `link` answers, reach `effector485`'s console as text (800-LNK-0039).
+- **Turned on by** the word `uart` in `link.conf`: `init` then starts `uart_serial` with the console UART, gives `link` its client, and lends the shell no serial line (100000-KRN-0221, the kernel session's part).
+
 ## MIND Core in QEMU
 
 QEMU's `-device usb-serial` emulates an FTDI FT232, which MIND Core's `usb_serial` drives. With its line on a pseudo-terminal, `mindlink` reaches the `link` service as it would through a converter:

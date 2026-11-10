@@ -1,0 +1,72 @@
+# 100000-KRN-0221 — `init` starts `uart_serial` on the console UART for `link` (the word `uart`) — done
+
+**Type:** `init` · **Owner:** `KRN` (the kernel session) · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** — (LNK's `uart_serial`, 100000-LNK-0038, in round 105's candidate) · **Main task:** [100000](../issues/100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H, the link · **Constitution:** MC-2.3, MC-3.1, MC-3.3, MC-7.1
+
+**Agreed with** LNK, 2026-11-09 (`KRN/2026-11-09T0445Z-LNK-your-two-requests-are-100000-lnk-0038-and-800-lnk-0039.md` on `internal-dev-messages`), on the kernel session's proposal of 2026-11-08.
+
+## Problem
+
+- **Until Wi-Fi exists, the PinePhone's way to Effector is the link over its console UART,** the headphone jack's (100000, stage 0).
+- **`link` takes one kind of line today:** `idl/serial.wit` in `SLOT_DEV0`, from `usb_serial`. The phone has no USB serial converter on that path.
+- **LNK's answer:** `link` stays as it is, and a small service of LNK's, `uart_serial`, serves `serial.wit` over the UART. Starting it and lending it are `init`'s.
+
+## Plan
+
+- **The word `uart` in `link.conf`** (`BootInfo.link_words`). When it is there, from `init`'s first start:
+  - `init` starts `uart_serial` with the console UART:
+    - on aarch64, the console's platform node (100000-KRN-0171): its registers by `PLATFORM_MMIO` in `SLOT_DEV0` and its line by `PLATFORM_NODE_IRQ` in `SLOT_IRQ`;
+    - on x86, COM1's ports and IRQ 4;
+    - on the A64, whose console page holds three other UARTs and is lent to none, the kernel's channel instead (100000-KRN-0222).
+  - `link` gets `uart_serial`'s client in `SLOT_DEV0`, in place of `usb_serial`'s.
+  - The shell gets no serial line, and says so.
+- **The rate:** 115200, as `link` takes without `baud=`.
+- **Without the word,** nothing changes.
+
+## Acceptance criteria
+
+- **QEMU `virt` (aarch64, the PL011) and x86 (COM1 on a pty),** with `uart` in `link.conf`:
+  - `link` runs over the console UART;
+  - `mindlink` (or `effector485`) on the host reaches it through that pty;
+  - the shell has no serial line.
+- **Without the word,** the shell has its serial line, as now.
+- **docs/profile/bootstrap.md** names the grants.
+
+## Progress (2026-11-09)
+
+- **Made** (e89223b9; handoff 30):
+  - `common/abi.rs`: `uart_serial` is a boot image after `usb_serial`, so the images after it are renumbered. `BOOT_HANDOFF_VERSION` is 30, above every ABI so far; ABI 29 stays. `tests/boot_abi_host.rs` checks both and where `uart_serial` stands.
+  - **`init`, with `uart` in link.conf:**
+    - it starts `uart_serial` with the console UART in slot 2 (`Minted::serial`, as the shell's serial line is chosen) and its line in slot 4 (`serial_irq`: COM1's IRQ 4, the console node's first line);
+    - it gives `link` `uart_serial`'s client in place of `usb_serial`'s;
+    - it leaves `usb_serial` unstarted (`LINK.CONF SAYS uart`), and the shell without a serial line (`[INIT] NO SERIAL LINE: THE CONSOLE UART IS THE LINK'S`).
+  - **`init`, without `uart`:** nothing changes, and `uart_serial` is not started (`NO uart IN LINK.CONF`).
+  - `docs/profile/bootstrap.md` names `uart_serial`'s grants.
+- **Tested** in the kernel session's container (QEMU 8.2.2, TCG, 4 CPUs), the `link` suite's new check:
+  - the VM's console UART on a pseudo-terminal (`VM(serial="pty")`), with link.conf `baud=115200 uart`;
+  - `mindlink` reached `link` through it and put and got 16 KiB, which came back the same;
+  - the system log over the link held `[UART] 16550 AT 115200 BIT/S, 8N1, NO FLOW CONTROL; RECEIVED AT ITS INTERRUPT AND EVERY 2 MS` on x86, and the same with `PL011` on aarch64 `virt`;
+  - the log also held `usb_serial NOT STARTED: LINK.CONF SAYS uart` and the shell's line.
+  - The rest of the `link` suite passed on both, and the host tests `boot_abi`, `services`, `svc`.
+- **The window manager's menu:** round 105 found `uart_serial` under "Other", started with no window, while it was only a program on the disk (LNK's request alone). As a boot image the loader marks it a service, and it is in no list. The `wm` suite passed on this branch on x86 (17 checks).
+- **Not tested:** the A64's case, where `uart_serial` gets the kernel's console channel (100000-KRN-0222), and the phone.
+
+## Resolution
+
+**Its criteria are met in QEMU, on x86 and aarch64 `virt`.** Landed in round 106 (`main` 7415c9a1, 2026-11-09), with LNK's `uart_serial` (100000-LNK-0038), which round 105 had returned for `wm`'s menu.
+- **Handoff 30:** `uart_serial` is a boot image after `usb_serial`. The loader marks it a service, so no list or menu offers it.
+- **With `uart` in link.conf, `init`:**
+  - starts `uart_serial` with the console UART (COM1's ports, the console's node, or the kernel's channel) and its line;
+  - gives `link` its client in place of `usb_serial`'s;
+  - leaves `usb_serial` and the shell's serial line out, and says so.
+- **Without the word,** nothing changed: every other suite.
+- **Evidence:**
+  - the `link` suite's check over the console UART on a pseudo-terminal: `mindlink` put and got 16 KiB through it, `uart_serial` received at its interrupt (16550 on x86, PL011 on `virt`), `usb_serial` was not started, and the shell had no serial line;
+  - the `wm` suite with `uart_serial` off the menu;
+  - every group of round 106's gate.
+
+  QEMU's runs say nothing of the phone (MC-12.1).
+- **Not done:** the A64's case, where `uart_serial` gets the kernel's console channel (100000-KRN-0222), and the phone itself.
+
+## Related
+
+[100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.done) (the console's node), [100000-KRN-0222](../issues/100000-KRN-0222-the-kernels-console-as-a-byte-channel.md) (the A64), [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md), [docs/remote-serial.md](../docs/remote-serial.md).

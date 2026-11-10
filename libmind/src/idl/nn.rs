@@ -78,7 +78,7 @@ impl Wire for Status {
 
 /// Loads the standalone package at `path` (on `models:` or under `data/models/`), which must have model ID `id`.
 pub fn load(endpoint: Endpoint, path: &str, id: &[u8]) -> Result<core::result::Result<Model, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<96>(path, &mut w).ok_or(SysError::Invalid)?;
@@ -94,7 +94,7 @@ pub fn load(endpoint: Endpoint, path: &str, id: &[u8]) -> Result<core::result::R
 
 /// The loaded models, 8 from `start`.
 pub fn models(endpoint: Endpoint, start: u32) -> Result<List<Model, 8>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -108,7 +108,7 @@ pub fn models(endpoint: Endpoint, start: u32) -> Result<List<Model, 8>> {
 
 /// Drops the caller's hold of a model; its memory is freed once no hold and no session is left.
 pub fn unload(endpoint: Endpoint, id: &[u8]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<u8, 32>(id, &mut w).ok_or(SysError::Invalid)?;
@@ -124,7 +124,7 @@ pub fn unload(endpoint: Endpoint, id: &[u8]) -> Result<core::result::Result<(), 
 /// A session of the caller on a loaded model, with its budget: refused (`budget`, `no-memory`) when the service
 /// cannot hold it, never over-committed.
 pub fn open(endpoint: Endpoint, id: &[u8], budget: &Budget) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<u8, 32>(id, &mut w).ok_or(SysError::Invalid)?;
@@ -141,7 +141,7 @@ pub fn open(endpoint: Endpoint, id: &[u8], budget: &Budget) -> Result<core::resu
 /// A job of `rows` input rows, each the model's input width of little-endian f64: the service copies them and
 /// answers the job's number at once.
 pub fn submit(endpoint: Endpoint, session: u32, rows: u32, input: &[u8]) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(65536).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(65536).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -158,7 +158,7 @@ pub fn submit(endpoint: Endpoint, session: u32, rows: u32, input: &[u8]) -> Resu
 
 /// Waits up to `wait-ms` for the job; its output rows, each the model's output width of little-endian f64.
 pub fn wait(endpoint: Endpoint, job: u32, wait_ms: u32, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(65536).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(65536).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         job.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -183,7 +183,7 @@ pub fn cancel(endpoint: Endpoint, job: u32) -> Result<core::result::Result<(), E
 
 /// The session's use of its budget.
 pub fn usage(endpoint: Endpoint, session: u32) -> Result<core::result::Result<Usage, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         session.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -206,7 +206,7 @@ pub fn close(endpoint: Endpoint, session: u32) -> Result<core::result::Result<()
 }
 
 pub fn status(endpoint: Endpoint) -> Result<Status> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

@@ -279,7 +279,7 @@ impl Wire for Rebuilt {
 /// until a name or a pin retains its object (MC-4.11). Errors: invalid (not a node), too-large, full (medium or
 /// index), read-only, device.
 pub fn put(endpoint: Endpoint, codec: Codec, data: &[u8], out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -298,7 +298,7 @@ pub fn put(endpoint: Endpoint, codec: Codec, data: &[u8], out: &mut [u8]) -> Res
 /// a second medium, a block of the volume the store finds damaged, or lacks while the copy holds it, is read from
 /// the copy, checked against its CID, put back in the store and returned; one damaged on both is corrupt (2.5).
 pub fn get(endpoint: Endpoint, cid: &[u8], out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<36>(cid, &mut w).ok_or(SysError::Invalid)?;
@@ -313,7 +313,7 @@ pub fn get(endpoint: Endpoint, cid: &[u8], out: &mut [u8]) -> Result<core::resul
 
 /// Whether the index holds `cid`; the block is not read. Error: unsupported.
 pub fn has(endpoint: Endpoint, cid: &[u8]) -> Result<core::result::Result<bool, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<36>(cid, &mut w).ok_or(SysError::Invalid)?;
@@ -327,7 +327,7 @@ pub fn has(endpoint: Endpoint, cid: &[u8]) -> Result<core::result::Result<bool, 
 }
 
 pub fn stat(endpoint: Endpoint) -> Result<core::result::Result<Stats, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -346,7 +346,7 @@ pub fn stat(endpoint: Endpoint) -> Result<core::result::Result<Stats, Error>> {
 /// take a step leaves it `flushed` and the name behind, brought in step between requests (2.5). So do `unpublish`
 /// and `commit`, whose reply is `copied` only if every name of it has a copy.
 pub fn publish(endpoint: Endpoint, name: &str, expected: u64, root: &[u8]) -> Result<core::result::Result<Published, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -363,7 +363,7 @@ pub fn publish(endpoint: Endpoint, name: &str, expected: u64, root: &[u8]) -> Re
 
 /// The current version of `name` and its root. Errors: not-found, invalid.
 pub fn resolve(endpoint: Endpoint, name: &str) -> Result<core::result::Result<Head, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -380,7 +380,7 @@ pub fn resolve(endpoint: Endpoint, name: &str) -> Result<core::result::Result<He
 /// put, and after the store mounts). Every name's object is walked first; if one lacks a block or holds a corrupt
 /// node, nothing is freed (incomplete, corrupt). A put that finds no room runs one too (1.1).
 pub fn collect(endpoint: Endpoint) -> Result<core::result::Result<Collected, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -396,7 +396,7 @@ pub fn collect(endpoint: Endpoint) -> Result<core::result::Result<Collected, Err
 /// (the objects go when nothing else retains them). Returns that version; publishing from it creates the name again.
 /// Errors: not-found (no such name, or removed), conflict, full, read-only, device (1.2).
 pub fn unpublish(endpoint: Endpoint, name: &str, expected: u64) -> Result<core::result::Result<Published, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -412,7 +412,7 @@ pub fn unpublish(endpoint: Endpoint, name: &str, expected: u64) -> Result<core::
 
 /// The versions `name` keeps, newest first: the current one and up to 3 before it, each retained (1.2).
 pub fn history(endpoint: Endpoint, name: &str) -> Result<core::result::Result<List<Kept, 4>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -428,7 +428,7 @@ pub fn history(endpoint: Endpoint, name: &str) -> Result<core::result::Result<Li
 /// Pins the object `root` for the caller's owner until it unpins it, once every block of it is stored and within
 /// the owner's quota; returns the pin's id. Errors: incomplete, quota, full, invalid, unsupported, read-only (1.2).
 pub fn pin(endpoint: Endpoint, root: &[u8]) -> Result<core::result::Result<PinTaken, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<36>(root, &mut w).ok_or(SysError::Invalid)?;
@@ -452,7 +452,7 @@ pub fn unpin(endpoint: Endpoint, id: u32) -> Result<core::result::Result<(), Err
 
 /// The pins of the caller's owner, at most 32 (1.2).
 pub fn pins(endpoint: Endpoint) -> Result<core::result::Result<List<Pinned, 32>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -466,7 +466,7 @@ pub fn pins(endpoint: Endpoint) -> Result<core::result::Result<List<Pinned, 32>,
 
 /// What the caller's owner retains and may retain (1.2).
 pub fn usage(endpoint: Endpoint) -> Result<core::result::Result<Usage, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -484,7 +484,7 @@ pub fn usage(endpoint: Endpoint) -> Result<core::result::Result<Usage, Error>> {
 /// order. Errors: invalid (a name twice, or 0 or more than 8), conflict, incomplete, not-found (removing what is
 /// not there), quota, full, read-only, device; each changes nothing (1.3).
 pub fn commit(endpoint: Endpoint, updates: &[Update]) -> Result<core::result::Result<Committed, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<Update, 8>(updates, &mut w).ok_or(SysError::Invalid)?;
@@ -500,7 +500,7 @@ pub fn commit(endpoint: Endpoint, updates: &[Update]) -> Result<core::result::Re
 /// The current version and root of up to 8 names, read at one point between commits: version 0 and no root for
 /// a name that does not exist, no root for a removed one (1.3).
 pub fn snapshot(endpoint: Endpoint, names: &[Text<64>]) -> Result<core::result::Result<List<Head, 8>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<Text<64>, 8>(names, &mut w).ok_or(SysError::Invalid)?;
@@ -518,7 +518,7 @@ pub fn snapshot(endpoint: Endpoint, names: &[Text<64>]) -> Result<core::result::
 /// with fewer than 16. Knowing a name grants nothing: reading its object needs the right still (MC-4.7). Error:
 /// invalid (`prefix` or `after` holds a byte no name has) (1.4).
 pub fn names(endpoint: Endpoint, prefix: &str, after: &str) -> Result<core::result::Result<List<Named, 16>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(prefix, &mut w).ok_or(SysError::Invalid)?;
@@ -571,7 +571,7 @@ pub fn domain_forget(endpoint: Endpoint, id: u16) -> Result<core::result::Result
 
 /// The domains of the caller's owner (2.2).
 pub fn domains(endpoint: Endpoint) -> Result<core::result::Result<List<Domain, 32>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -590,7 +590,7 @@ pub fn domains(endpoint: Endpoint) -> Result<core::result::Result<List<Domain, 3
 /// damaged block the index names is repaired from the other medium if that one holds it whole, and a pass that
 /// repaired any ends with a collection on its medium; the reply is still the store's pass (2.5).
 pub fn scrub(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -604,7 +604,7 @@ pub fn scrub(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Error>
 
 /// What the last whole scrub found, by itself or asked for (2.3).
 pub fn scrubbed(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -622,7 +622,7 @@ pub fn scrubbed(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Err
 /// medium until the owner types the new one back (`recovery-keep`). Errors: invalid (the key is in the superblock: a
 /// RAM disk, or no keeper), no-random, full, read-only, device (2.4).
 pub fn recovery_new(endpoint: Endpoint) -> Result<core::result::Result<Text<39>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -638,7 +638,7 @@ pub fn recovery_new(endpoint: Endpoint) -> Result<core::result::Result<Text<39>,
 /// many. Errors: invalid (a typo, told by its check before any record is tried; the key in the superblock), key (it
 /// opens no record; nothing is erased), read-only, device (2.4).
 pub fn recovery_keep(endpoint: Endpoint, key: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<39>(key, &mut w).ok_or(SysError::Invalid)?;
@@ -676,7 +676,7 @@ pub fn recoveries(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>
 /// mounted already; a key in the superblock), key (it opens no record, or no keeper kept the key: nothing is kept),
 /// device, and what the mount answers (2.4).
 pub fn recover(endpoint: Endpoint, key: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<39>(key, &mut w).ok_or(SysError::Invalid)?;
@@ -698,7 +698,7 @@ pub fn recover(endpoint: Endpoint, key: &str) -> Result<core::result::Result<(),
 /// store does not take; and through a domain's client, rights: a domain's records are sealed under its key, which the
 /// copy does not hold), not-found (on: no live version in the store; off: none on the copy), full, quota, device.
 pub fn copy(endpoint: Endpoint, name: &str, on: bool) -> Result<core::result::Result<Durability, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
@@ -715,7 +715,7 @@ pub fn copy(endpoint: Endpoint, name: &str, on: bool) -> Result<core::result::Re
 /// What the copy holds (2.5), also while it is read beside a store not mounted (2.6). Error: no-copy (or the store's
 /// own error, unmounted, without a copy).
 pub fn copy_stat(endpoint: Endpoint) -> Result<core::result::Result<CopyStats, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -733,7 +733,7 @@ pub fn copy_stat(endpoint: Endpoint) -> Result<core::result::Result<CopyStats, E
 /// `unknown`. Errors: no-copy (or the store's own error, unmounted, without a copy), invalid; rights through a
 /// domain's client.
 pub fn copy_names(endpoint: Endpoint, after: &str) -> Result<core::result::Result<List<CopyName, 16>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(after, &mut w).ok_or(SysError::Invalid)?;
@@ -763,7 +763,7 @@ pub fn copy_names(endpoint: Endpoint, after: &str) -> Result<core::result::Resul
 /// invalid, not-found (the copy holds no root of it), conflict, device, full, quota, read-only, and rights through a
 /// domain's client.
 pub fn rebuild(endpoint: Endpoint, name: &str, check: bool) -> Result<core::result::Result<Rebuilt, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;

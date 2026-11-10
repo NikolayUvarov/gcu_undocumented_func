@@ -1,7 +1,9 @@
 /// Audio gateway: 16-bit stereo 48 kHz PCM out of a lent buffer, tones, microphone capture (AC97). 1.1: the microphone
 /// has one owner at a time (issue 079): while a client records, the capture requests of others fail with busy, so
-/// `listen`, `hear` and `voice` never mix streams; a capture whose owner ended can be taken over.
-package mind:audio@1.1.0;
+/// `listen`, `hear` and `voice` never mix streams; a capture whose owner ended can be taken over. 1.2: the levels
+/// (000-DRV-0057): the output's volume and the capture's gain, read by every client, set only by the shell's
+/// (badged `BADGE_LEVELS` by init).
+package mind:audio@1.2.0;
 
 interface audio {
     /// Output sample rate; none without an audio device.
@@ -25,4 +27,18 @@ interface audio {
     record-read: func(capacity: u32, buffer: borrow<memory>) -> result<u32, error-code>;
     /// Capture buffers lost to overflow since capture started.
     overflows: func() -> u32;
+    /// A level's settings, as HD Audio describes an amplifier: `steps` settings, each `step-qdb` quarter dB above the
+    /// one before, setting `zero` at 0 dB; `scaled`: the device has no amplifier there, so the gateway scales the
+    /// samples over that range (1.2).
+    record range { steps: u8, step-qdb: u8, zero: u8, scaled: bool }
+    /// The output's volume in per cent of its range and whether it is muted; the capture's gain in per cent and its
+    /// boost, `boost-qdb` the boost's size in quarter dB (0: the device has none) (1.2).
+    record levels { volume: u8, muted: bool, output: range, gain: u8, boost: bool, boost-qdb: u16, capture: range }
+    /// The levels as set; not-found without an audio device (1.2).
+    levels: func() -> result<levels, error-code>;
+    /// Sets the output's volume (0 to 100 %, the nearest setting) and mute, and answers the levels as set: rights for a
+    /// client without the levels badge, invalid above 100 %, not-found without a device (1.2).
+    set-volume: func(percent: u8, muted: bool) -> result<levels, error-code>;
+    /// Sets the capture's gain (0 to 100 %) and boost (left off where the device has none); answers as set-volume (1.2).
+    set-gain: func(percent: u8, boost: bool) -> result<levels, error-code>;
 }

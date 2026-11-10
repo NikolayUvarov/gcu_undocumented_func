@@ -67,7 +67,7 @@ pub fn ping(endpoint: Endpoint, x: u32, flag: bool) -> Result<u32> {
 
 /// A string argument and a fallible scalar result.
 pub fn find(endpoint: Endpoint, dir: u32, name: &str) -> Result<core::result::Result<u32, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         dir.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -83,7 +83,7 @@ pub fn find(endpoint: Endpoint, dir: u32, name: &str) -> Result<core::result::Re
 
 /// A list of records as the result.
 pub fn list(endpoint: Endpoint, start: u32) -> Result<List<Entry, 16>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         start.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -97,7 +97,7 @@ pub fn list(endpoint: Endpoint, start: u32) -> Result<List<Entry, 16>> {
 
 /// Two bulk arguments and a result without a value.
 pub fn put(endpoint: Endpoint, items: &[u16], note: &[u8]) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_slice::<u16, 8>(items, &mut w).ok_or(SysError::Invalid)?;
@@ -113,7 +113,7 @@ pub fn put(endpoint: Endpoint, items: &[u16], note: &[u8]) -> Result<core::resul
 
 /// An enum argument of a buffer call and a nested record result.
 pub fn info(endpoint: Endpoint, of: Kind) -> Result<Pair> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         of.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -135,7 +135,7 @@ pub fn mode(endpoint: Endpoint, k: Kind) -> Result<Option<Kind>> {
 
 /// Bytes as the result.
 pub fn fetch(endpoint: Endpoint, length: u16, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         length.encode(&mut w).ok_or(SysError::Invalid)?;

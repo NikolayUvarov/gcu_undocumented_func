@@ -26,7 +26,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "restart and process control", "observe privilege", "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input",
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
-    "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own disk (else of ramdisk#1) and of its copy's when there is one; keystore's client for its own secrets", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
+    "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the console UART (COM1's ports, the console's node, or the kernel's console channel) and its line, with link.conf's `uart`", "the serial line's client (a converter's, or the console UART's); a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own disk (else of ramdisk#1) and of its copy's when there is one; keystore's client for its own secrets", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
     "spawn privilege; a VFS client of system/own/ for the programs' own directories; the key service's client for the programs' secrets clients", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
@@ -110,6 +110,12 @@ impl Minted {
     fn serial(&mut self, node: Option<usize>) -> Result<usize> {
         if !cfg!(target_arch = "aarch64") { return self.ports(0x3F8, 8); }
         node.ok_or(Error::NotFound).and_then(|node| self.mint(PLATFORM_MMIO, node, 0)).or_else(|_| self.mint(PLATFORM_CONSOLE, 0, 0))
+    }
+    // The serial line's interrupt: COM1's IRQ 4 on x86 (LEGACY), the console node's first line on aarch64; none for the
+    // kernel's channel, whose interrupt the kernel keeps.
+    fn serial_irq(&mut self, node: Option<usize>) -> Result<usize> {
+        if !cfg!(target_arch = "aarch64") { return self.mint(PLATFORM_IRQ, 4, 0); }
+        self.mint(PLATFORM_NODE_IRQ, node.ok_or(Error::NotFound)?, 0)
     }
     // Kept in escrow: init grants it to the service and cannot use it itself (issue 170).
     fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, PRIVILEGE_ESCROW) }
@@ -543,9 +549,17 @@ impl Init {
             }
             // The link itself: the converter's client, which it alone holds (MC-2.3), a reader of the log (below) and
             // link.conf's words; its files, a client confined to data/link/, come with each start (`spawn`).
+            // The console UART for the link, with link.conf's `uart` (100000-KRN-0221): its line and interrupt, as the shell's
+            // serial line would have them, and its endpoint for link alone.
+            "uart_serial" => {
+                grants.add(SLOT_DEV0, minted.serial(self.nodes.console)?, 0);
+                match minted.serial_irq(self.nodes.console) { Ok(irq) => grants.add(SLOT_IRQ, irq, 0), Err(_) => mind::println!("[INIT] uart_serial: NO LINE OF THE UART'S, IT POLLS") }
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+            }
             "link" => {
-                if !self.running(service_index("usb_serial")) { return Err(Error::NotFound); }
-                self.lend(&mut grants, SLOT_DEV0, "usb_serial")?;
+                let line = if self.link_word("uart") { "uart_serial" } else { "usb_serial" };
+                if !self.running(service_index(line)) { return Err(Error::NotFound); }
+                self.lend(&mut grants, SLOT_DEV0, line)?;
                 // An application's loader client: link starts programs from data/link/ for the master (800-KRN-0132).
                 self.lend(&mut grants, SLOT_LOADER, "loader")?;
                 // The compositor's client that lights the link's mark on the screen, and nothing else of it (800-KRN-0156).
@@ -959,8 +973,11 @@ impl Init {
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 // A PC without COM1 lends none: its ports read all ones, and a shell reading them would never draw (213-KRN-0098).
                 // A board whose console is no PL011 (the A64's 16550) lends none either: the kernel keeps it (100000-KRN-0171).
-                match minted.serial(self.nodes.console) {
-                    Ok(serial) if mind::dev::Uart::open(serial).is_some() => {
+                // With link.conf's `uart` the console UART is the link's (100000-KRN-0221).
+                let line = (!self.link_word("uart")).then(|| minted.serial(self.nodes.console));
+                match line {
+                    None => mind::println!("[INIT] NO SERIAL LINE: THE CONSOLE UART IS THE LINK'S (LINK.CONF SAYS `uart`)"),
+                    Some(Ok(serial)) if mind::dev::Uart::open(serial).is_some() => {
                         if mind::dev::cap_info(serial).0 == CAP_KIND_CONSOLE { mind::println!("[INIT] SERIAL LINE: THE CONSOLE AS THE KERNEL'S BYTE CHANNEL, ITS PAGE LENT TO NONE"); }
                         grants.add(SLOT_SERIAL, serial, 0)
                     }
@@ -1229,7 +1246,7 @@ impl Init {
         use idl_init::Error as E;
         if badge != mind::process::BADGE_DEVELOPER { return Err(refused(sender, badge, "REPLACE", format_args!("REPLACE {}", name), "MC-3.8")); }
         let index = Self::index(name).filter(|&i| i != 0).ok_or(E::NotFound)?;
-        if Self::kept(index) || matches!(unit_name(index), "vfs_server" | "logd" | "usb_serial" | "link") {
+        if Self::kept(index) || matches!(unit_name(index), "vfs_server" | "logd" | "usb_serial" | "uart_serial" | "link") {
             mind::println!("[INIT] REPLACE REFUSED: {} CARRIES THE OPERATOR, THE LOG OR THE LINK", unit_name(index));
             return Err(E::Denied);
         }
@@ -1447,10 +1464,13 @@ impl Init {
     fn user_files(&mut self) -> Result<usize> { let keeper = self.keeper("vfs_server")?; Ok(ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?) }
 
     // The link's developer mode: link.conf's word `dev`, as the bootloader read it (800-KRN-0139).
-    fn link_dev(&self) -> bool {
+    fn link_dev(&self) -> bool { self.link_word("dev") }
+
+    // Whether link.conf, as the bootloader read it, has `word` (`dev`, `uart`).
+    fn link_word(&self, word: &str) -> bool {
         let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
         let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
-        core::str::from_utf8(&words[..length]).unwrap_or("").split_ascii_whitespace().any(|word| word == "dev")
+        core::str::from_utf8(&words[..length]).unwrap_or("").split_ascii_whitespace().any(|w| w == word)
     }
 
     // The owner's Effector policy (750-KRN-0121), read whole at each use, as the gateway reads it; None when it is absent,
@@ -1535,9 +1555,15 @@ impl Init {
         // The Effector services wait for the modes, read once the boot volume is mounted (750-KRN-0143).
         if MODE_SERVICES.contains(&name) { self.placed[index].off = Off::Mode; return true; }
         // The link to another machine only when the boot volume's root holds link.conf, as the bootloader read it.
-        if matches!(name, "usb_serial" | "link") && self.link.is_none() {
+        if matches!(name, "usb_serial" | "uart_serial" | "link") && self.link.is_none() {
             self.missing[index] = true; self.placed[index].off = Off::NoLink;
             mind::println!("[INIT] {} NOT STARTED: NO LINK.CONF", name);
+            return true;
+        }
+        // The link's line: the console UART through uart_serial with link.conf's `uart`, else a USB converter (100000-KRN-0221).
+        if matches!(name, "usb_serial" | "uart_serial") && (name == "uart_serial") != self.link_word("uart") {
+            self.missing[index] = true; self.placed[index].off = Off::NoLink;
+            mind::println!("[INIT] {} NOT STARTED: {}", name, if name == "uart_serial" { "NO `uart` IN LINK.CONF" } else { "LINK.CONF SAYS `uart`" });
             return true;
         }
         // Left out by a safe start, and the station whose radio is (000-KRN-0131), or by data/services.txt: prepared, not

@@ -52,7 +52,7 @@ impl Wire for State {
 
 /// The current layout and switch.
 pub fn state(endpoint: Endpoint) -> Result<State> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
@@ -81,7 +81,7 @@ pub fn set_switch(endpoint: Endpoint, key: SwitchKey) -> Result<()> {
 
 /// The names of the layouts, in `layout` order.
 pub fn layouts(endpoint: Endpoint) -> Result<List<Text<16>, 8>> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

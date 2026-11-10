@@ -229,7 +229,7 @@ This is the part `EFF` hands over to the Effector project. The server's agents a
 
 - **The board's UART from the device tree:** [100000-PRT-0009](../issues-done/100000-PRT-0009-the-board-from-the-device-tree.done).
 - **The 16550 in memory:** [100000-PRT-0010](../issues/100000-PRT-0010-a-16550-uart-in-memory.md). This covers the kernel's lines and the loader's.
-- **The UART lent to `link`** rather than to the shell, when `link.conf` says so: by its node ([100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), done), from `init` ([100000-KRN-0221](../issues/100000-KRN-0221-init-starts-uart-serial-for-link.md)); on the A64, whose console shares its page, as the kernel's byte channel ([100000-KRN-0222](../issues/100000-KRN-0222-the-kernels-console-as-a-byte-channel.md)).
+- **The UART lent to `link`** rather than to the shell, when `link.conf` says so: by its node ([100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), done), from `init` ([100000-KRN-0221](../issues-done/100000-KRN-0221-init-starts-uart-serial-for-link.done)); on the A64, whose console shares its page, as the kernel's byte channel ([100000-KRN-0222](../issues/100000-KRN-0222-the-kernels-console-as-a-byte-channel.md)).
 - **In QEMU first:** `virt` with U-Boot's UEFI and no ACPI (as Tow-Boot gives the phone), its PL011 on a pseudo-terminal. The agent's tests can drive that too.
 
 ## 6. Stages

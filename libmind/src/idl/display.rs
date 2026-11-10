@@ -53,7 +53,7 @@ impl Wire for RemoteState {
 }
 
 pub fn mode(endpoint: Endpoint) -> Result<Mode> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

@@ -52,7 +52,7 @@ impl Wire for State {
 
 /// Adds a record from the caller.
 pub fn write(endpoint: Endpoint, level: u8, text: &str) -> Result<core::result::Result<(), Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         level.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -68,7 +68,7 @@ pub fn write(endpoint: Endpoint, level: u8, text: &str) -> Result<core::result::
 
 /// Records from sequence number `from` on (from the oldest kept if that is later), at most 16.
 pub fn read(endpoint: Endpoint, from: u64) -> Result<core::result::Result<List<Entry, 16>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         from.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -83,7 +83,7 @@ pub fn read(endpoint: Endpoint, from: u64) -> Result<core::result::Result<List<E
 
 /// The state of the ring.
 pub fn state(endpoint: Endpoint) -> Result<core::result::Result<State, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()

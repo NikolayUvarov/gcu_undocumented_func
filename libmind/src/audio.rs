@@ -1,5 +1,5 @@
 //! Client for the audio_gw audio gateway (idl/audio.wit): 16-bit stereo 48 kHz PCM via a buffer lent per call, tones,
-//! microphone capture.
+//! microphone capture, and the levels (1.2).
 use crate::abi::*;
 use crate::idl::audio as idl;
 use crate::ipc::Endpoint;
@@ -117,3 +117,15 @@ pub fn record_read(out: &mut [i16]) -> Result<(usize, bool)> {
     for (i, sample) in out[..samples].iter_mut().enumerate() { *sample = i16::from_le_bytes([data[i * 2], data[i * 2 + 1]]); }
     Ok((samples, overflow))
 }
+
+pub use idl::{Levels, Range};
+
+/// The output's volume and the capture's gain as set (1.2); Err(NotFound) without an audio device.
+pub fn levels() -> Result<Levels> { idl::levels(Endpoint::AUDIO) }
+
+/// Sets the output's volume (0 to 100 % of its range, the nearest setting) and mute, and answers the levels as set.
+/// Only the client badged `BADGE_LEVELS` may (the shell's); any other gets Err(Rights).
+pub fn set_volume(percent: u8, muted: bool) -> Result<Levels> { idl::set_volume(Endpoint::AUDIO, percent, muted) }
+
+/// Sets the capture's gain (0 to 100 %) and its boost (left off where the device has none); as `set_volume`.
+pub fn set_gain(percent: u8, boost: bool) -> Result<Levels> { idl::set_gain(Endpoint::AUDIO, percent, boost) }

@@ -42,7 +42,7 @@ impl Wire for Order {
 /// false when the recognizer refused it — and the next order. The shell answers when it has one: at push-to-talk,
 /// or at once with its reply.
 pub fn next(endpoint: Endpoint, heard: bool, understood: bool, text: &str, intent: &str, slots: &str, confidence: u16) -> Result<Order> {
-    let mut buffer = Pages::new(4096).ok_or(Error::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         heard.encode(&mut w).ok_or(Error::Invalid)?;

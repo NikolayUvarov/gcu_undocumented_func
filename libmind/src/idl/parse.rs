@@ -169,7 +169,7 @@ impl Wire for JsonPage {
 
 /// A channel file (1.1).
 pub fn channel(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<Channel, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<1024>(file, &mut w).ok_or(SysError::Invalid)?;
@@ -184,7 +184,7 @@ pub fn channel(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<C
 
 /// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
 pub fn manifest(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result::Result<Manifest, Error>> {
-    let mut buffer = Pages::new(36864).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(36864).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<32768>(text, &mut w).ok_or(SysError::Invalid)?;
@@ -200,7 +200,7 @@ pub fn manifest(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::res
 
 /// Model `index` of a model disk's MANIFEST.json, read whole, and its files from `start` (1.2).
 pub fn model(endpoint: Endpoint, text: &[u8], index: u32, start: u32) -> Result<core::result::Result<Model, Error>> {
-    let mut buffer = Pages::new(61440).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(61440).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<60000>(text, &mut w).ok_or(SysError::Invalid)?;
@@ -217,7 +217,7 @@ pub fn model(endpoint: Endpoint, text: &[u8], index: u32, start: u32) -> Result<
 
 /// The head of an HTTP response: its status line and header lines, without the blank line that ends them.
 pub fn http_response(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result<HttpResponse, Error>> {
-    let mut buffer = Pages::new(12288).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(12288).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<8192>(head, &mut w).ok_or(SysError::Invalid)?;
@@ -231,7 +231,7 @@ pub fn http_response(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Re
 }
 
 pub fn json(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result::Result<JsonPage, Error>> {
-    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let mut buffer = wire::Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         codec::encode_bytes::<16384>(text, &mut w).ok_or(SysError::Invalid)?;
