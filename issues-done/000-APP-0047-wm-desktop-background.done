@@ -31,7 +31,7 @@ The maintainer's request (2026-10-10): "`wm` needs a configuration of the deskto
 
 ## Related
 
-[000-APP-0048](../issues/000-APP-0048-wm-settings.md) (Settings: the background switched from the top bar), [088](088-text-window-manager.done), [u009](u009-pixel-windows-follow-their-frame.done).
+[000-APP-0048](000-APP-0048-wm-settings.done) (Settings: the background switched from the top bar), [088](088-text-window-manager.done), [u009](u009-pixel-windows-follow-their-frame.done).
 
 ## Resolution
 

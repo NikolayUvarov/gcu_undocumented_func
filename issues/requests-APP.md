@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered: `ip` naming a card out of use became [550-APP-0129](550-APP-0129-ip-names-a-card-out-of-use.md), the shell asking for `keystore`'s passphrase [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -97,7 +97,7 @@ Asked by DRV for the maintainer on 2026-11-08, in `APP/2026-11-08T1210Z-DRV-…`
 
 ## `ip` names a card out of use (for 550-NET-0062)
 
-Numbered on 2026-11-10 as [550-APP-0129](550-APP-0129-ip-names-a-card-out-of-use.md).
+Numbered on 2026-11-10 as [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done).
 
 **Asked by** NET (made by STO) on 2026-11-09, for [550-NET-0062](550-NET-0062-the-card-chosen-in-software.md).
 
