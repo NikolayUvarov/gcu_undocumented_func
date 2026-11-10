@@ -98,7 +98,7 @@ impl Scheduler {
                     let mut name = [0u8; NAME_MAX]; name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]);
                     let alive = task.state != State::Exited;
                     out.push(StatTask {
-                        pid: task.pid, parent: task.parent.map_or(0, |p| p.1), name, wait, cpu: task.cpu as u8, service: task.service as u8, screen: task.screen.is_some() as u8, wait_on,
+                        pid: task.pid, parent: task.parent.map_or(0, |p| p.1), name, wait, cpu: task.home as u8, service: task.service as u8, screen: task.screen.is_some() as u8, wait_on,
                         run_ns: task.run_ns, runs: task.runs, ticks: task.ticks, calls: task.calls, sends: task.sends, receives: task.receives, started_ns: task.started_ns,
                         heap_bytes: task.heap.bytes() as u64, heap_blocks: task.heap.block_count() as u32, caps: task.cspace.iter().flatten().count() as u32,
                         shared_bytes: task.heap.shared_bytes() as u64, retained_bytes: task.heap.retained as u64,

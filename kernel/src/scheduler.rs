@@ -106,6 +106,8 @@ struct Task {
     cspace: Vec<Option<Capability>, Frames>, generations: Vec<u32, Frames>,
     nodes: Vec<Node, Frames>,
     kernel: usize, // bytes of its kernel structures charged to its payers (171-KRN-0032)
+    ran_out: bool, // still ready when its CPU last switched from it, or new: preempted or placed, not woken (000-KRN-0231)
+    home: usize, // the CPU it was placed on; `cpu` differs while it runs on an idle one after a wait (000-KRN-0231)
     pending_cap: Option<Pending>, pending_call: bool, pending_badge: u16, send_seq: u64, // send waiting for a receiver
     reply_to: Option<(usize, u64, u64)>, // slot, PID and call number of the client awaiting a reply
     call_seq: u64, // number of this task's current call; a reply must name it
@@ -285,7 +287,11 @@ impl Scheduler {
             self.release_held(); self.wake_idle(cpu, false);
         }
         let fast = FAST_CALLS[cpu].swap(0, Ordering::Relaxed); self.accounting.interrupts[cpu] += fast;
-        if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); task.run_ns += elapsed; task.consumed += elapsed; task.calls += fast; unsafe { context::save(sp, task.context.ptr() as usize); } }
+        if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); task.ran_out = task.state == State::Ready; task.run_ns += elapsed; task.consumed += elapsed; task.calls += fast; unsafe { context::save(sp, task.context.ptr() as usize); } }
+        // An application that ran on an idle CPU after a wait goes back to its own as it waits again (000-KRN-0231).
+        if let Some(home) = self.tasks[current].as_ref().filter(|t| current != 0 && t.cpu != t.home && !matches!(t.state, State::Ready | State::Exited)).map(|t| t.home) {
+            self.relist(current, cpu, home);
+        }
         // Only this CPU's tasks: three passes over every task of every CPU held the lock long with many (171-KRN-0009).
         let mut mine = core::mem::take(&mut self.on_cpu[cpu]);
         mine.retain(|&slot| slot < self.tasks.len() && self.tasks[slot].as_ref().is_some_and(|t| t.cpu == cpu));
@@ -301,6 +307,7 @@ impl Scheduler {
         };
         self.on_cpu[cpu] = mine;
         self.current[cpu] = next;
+        if next != 0 && self.tasks[next].as_ref().is_some_and(|t| t.band == BAND_SYSTEM as u8) { self.readied.mark(cpu); }
         let (pid, name) = if next == 0 { (0, [0u8; 16]) } else { let task = self.tasks[next].as_ref().unwrap(); let mut name = [0u8; 16]; name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]); (task.pid, name) };
         for (word, value) in cpu::RUNNING[cpu].iter().zip([pid, u64::from_le_bytes(name[..8].try_into().unwrap()), u64::from_le_bytes(name[8..].try_into().unwrap())]) { word.store(value, Ordering::Relaxed); }
         if next != current { self.accounting.switches[cpu] += 1; }
@@ -321,9 +328,43 @@ impl Scheduler {
             for t in self.tasks.iter().flatten().filter(runnable) { ready.mark(t.cpu); }
         }
         if ready.is_empty() { return; }
+        self.move_waiting(&mut ready, count);
         for other in 0..count {
             if ready.has(other) && other != this && self.current[other] == 0 && !self.woken[other] { self.woken[other] = true; unsafe { cpu::wake(other); } }
         }
+    }
+    // An application whose wait ended, ready on a CPU that runs a system-band task, runs on an idle CPU until it waits
+    // again, then goes back (select): the band runs first on its own, and behind the compositor's frame copies a 10 ms
+    // sleep ended 30-60 ms late in QEMU (000-KRN-0231). Its place, which spawn balances and `ps` shows, stays `home`. One
+    // preempted while ready on its own CPU stays and shares it as before; one preempted on the CPU it borrowed, by a task
+    // placed there, may move again. A worker (262-KRN-0163) and a task that runs or is held stay.
+    fn move_waiting(&mut self, ready: &mut Cpus, count: usize) {
+        for from in 0..count {
+            let running = self.current[from];
+            if !ready.has(from) || self.tasks[running].as_ref().is_none_or(|t| running == 0 || t.band != BAND_SYSTEM as u8) { continue; }
+            let mut i = 0;
+            while i < self.on_cpu[from].len() {
+                let slot = self.on_cpu[from][i];
+                if slot == 0 || slot == running || !self.ready(slot, from, BAND_APPLICATION as u8) || self.tasks[slot].as_ref().is_some_and(|t| (t.ran_out && t.cpu == t.home) || t.worker_of.is_some()) { i += 1; continue; }
+                let free = |j: usize| j != from && self.current[j] == 0 && !self.woken[j] && !ready.has(j) && cpu::ONLINE[j].load(Ordering::Acquire);
+                let Some(to) = (0..count).find(|&j| free(j)) else { return };
+                if !self.relist(slot, from, to) { return; }
+                ready.mark(to);
+            }
+        }
+    }
+    // Moves the task in `slot` from CPU `from`'s list to `to`'s, both kept sized to their tasks as spawn and reap keep
+    // them (the kernel heap returns as tasks end); without the memory, false and nothing moved.
+    fn relist(&mut self, slot: usize, from: usize, to: usize) -> bool {
+        let Ok(at) = self.on_cpu[from].binary_search(&slot) else { return false };
+        let into = self.on_cpu[to].binary_search(&slot).err();
+        let mut rest = Vec::new();
+        if rest.try_reserve_exact(self.on_cpu[from].len() - 1).is_err() || into.is_some_and(|_| self.on_cpu[to].try_reserve_exact(1).is_err()) { return false; }
+        rest.extend_from_slice(&self.on_cpu[from][..at]); rest.extend_from_slice(&self.on_cpu[from][at + 1..]);
+        if let Some(i) = into { self.on_cpu[to].insert(i, slot); }
+        self.on_cpu[from] = rest;
+        self.tasks[slot].as_mut().unwrap().cpu = to;
+        true
     }
     // Sleeps and IPC deadlines end on the boot CPU's tick, every millisecond, the source of every other (000-KRN-0083);
     // the tasks are looked at only once the earliest is due. Idle CPUs whose tasks that makes ready get a wake IPI (issue
@@ -943,7 +984,7 @@ impl Scheduler {
         // where neither its creator nor another of its workers runs, while such a CPU is online (262-KRN-0163).
         let family = |t: &Task| worker.is_some_and(|w| t.pid == w.creator.1 || t.worker_of == Some(w.creator));
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| {
-            let here = || self.tasks.iter().flatten().filter(move |t| t.cpu == i && t.state != State::Exited);
+            let here = || self.tasks.iter().flatten().filter(move |t| t.home == i && t.state != State::Exited);
             (here().any(|t| family(t)), here().filter(|t| t.service == service).count())
         }).unwrap_or(0);
         // The fixed slots from the grants, then free kernel-allocated ones; the table grows later as needed (issue 171).
@@ -952,7 +993,7 @@ impl Scheduler {
         if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
         let nodes = table;
-        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, dirty: true, text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, program, worker_of: worker.map(|w| w.creator), kernel: 0 }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
+        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, dirty: true, text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, program, worker_of: worker.map(|w| w.creator), kernel: 0, ran_out: true, home: cpu }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
         // Image, stack, screen and the task's kernel structures are charged to the spawner and every payer above it,
         // after the last fallible step (issue 168, 171-KRN-0032).
         task.kernel = kernel_bytes(&task);
@@ -1360,7 +1401,7 @@ impl Scheduler {
                 for (index, task) in self.tasks.iter().enumerate().skip(1) {
                     let Some(task) = task else { continue };
                     if count >= request.arg2 { break; }
-                    let mut info = TaskInfo { pid: task.pid, name: [0; NAME_MAX], state: [b' '; 8], cpu: task.cpu as u32, focus: (self.foreground == index) as u8, service: task.service as u8, screen: task.screen.is_some() as u8, reserved: 0, runs: task.runs, ticks: task.ticks, calls: task.calls, quota_tasks: task.quota_tasks as u16, used_tasks: 0, quota_endpoints: task.quota_endpoints as u16, used_endpoints: 0 };
+                    let mut info = TaskInfo { pid: task.pid, name: [0; NAME_MAX], state: [b' '; 8], cpu: task.home as u32, focus: (self.foreground == index) as u8, service: task.service as u8, screen: task.screen.is_some() as u8, reserved: 0, runs: task.runs, ticks: task.ticks, calls: task.calls, quota_tasks: task.quota_tasks as u16, used_tasks: 0, quota_endpoints: task.quota_endpoints as u16, used_endpoints: 0 };
                     if task.state != State::Exited { info.used_tasks = self.used_tasks(index) as u16; info.used_endpoints = self.used_endpoints(index) as u16; }
                     info.name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]);
                     let label = if self.current.contains(&index) { "RUNNING" } else { task.state.label() }; info.state[..label.len()].copy_from_slice(label.as_bytes());
