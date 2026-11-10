@@ -85,9 +85,9 @@ fn client(bus: &Arc<Bus>, address: u8, o: &Options) -> Client<BusLine> {
     c
 }
 
-/// A hello to the machine, with `tries`: its name and protocol, or why it did not answer.
-fn connect(c: &mut Client<BusLine>, bus: &Bus, tries: u32) -> Result<String, String> {
-    let all = std::mem::replace(&mut c.master.tries, tries);
+/// A hello to the machine, one try: its name and protocol, or why it did not answer.
+fn connect(c: &mut Client<BusLine>, bus: &Bus) -> Result<String, String> {
+    let all = std::mem::replace(&mut c.master.tries, 1);
     let mut theirs = [0u8; 64];
     let r = c.hello("effector485", &mut theirs);
     c.master.tries = all;
@@ -118,8 +118,11 @@ pub fn work(state: Shared, index: usize, bus: Arc<Bus>, o: Options) {
     let mut console_at = Instant::now();
     loop {
         if !online {
-            // On a shared cable a machine that is not there is asked once each time, so it takes little of the others' line.
-            match connect(&mut c, &bus, if shared { 1 } else { o.tries }) {
+            // A line typed on as a console gets no hello: U-Boot would take a frame's bytes as typed (800-LNK-0043).
+            let hushed = { let mut st = lock(&state); st.expire(now()); st.hushed() };
+            if hushed { std::thread::sleep(Duration::from_millis(200)); continue; }
+            // A machine that is not there is asked once each time, so the line stays free for the others and its console.
+            match connect(&mut c, &bus) {
                 Ok(name) => {
                     eprintln!("effector485: {spec}: {name}");
                     let mut st = lock(&state);

@@ -1,6 +1,6 @@
 # 800-LNK-0043 — effector485: a line with no `link` on it, such as U-Boot's prompt, as a console that takes input
 
-**Type:** tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [800](800-mind-link.md); [100004](100004-two-allwinner-boards-before-the-phone.md) · **Constitution:** MC-7.1, MC-7.4, MC-7.5, MC-12.4
+**Type:** tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-11-10) · **Blocked by:** — · **Main task:** [800](800-mind-link.md); [100004](100004-two-allwinner-boards-before-the-phone.md) · **Constitution:** MC-7.1, MC-7.4, MC-7.5, MC-12.4
 
 ## Problem
 
@@ -30,6 +30,39 @@
 
 - **The host tests pass** on Linux, and the Windows build builds.
 - **On each Allwinner board,** through effector485 from a host: U-Boot's countdown is stopped, `printenv` is read, then `boot` continues to MIND Core, whose boot lines follow in the same console.
+
+## Progress (2026-11-10)
+
+**Plan steps 1 to 5 made** on `claude/LNK-link`, and step 6's host tests:
+- **The mode:** `link` while a machine on the line answers `hello`, `console` while none does. `GET /api/v1/endpoints` and `GET /api/v1/console` give it as `mode`.
+- **The line's raw console:** `POST /api/v1/console/input` to the machine's console on a cable of one, or to `line` on a cable of several.
+  - In `console` mode the daemon's line thread writes it to the port as it is, `pace_ms` after each character (20 by default, 0 to 1000).
+  - The console's `seq` rule holds, and so does the lease rule. On `line`, every lease on the cable holds it.
+  - 503 while the port does not open.
+- **The break:** `POST /api/v1/console/break` with `ms` (250 by default, 10 to 5000), after the input before it. Linux: `TIOCSBRK` and `TIOCCBRK`; Windows: `SetCommBreak` and `ClearCommBreak`; a TCP line: 409 `unsupported`.
+- **The refusal:** in `link` mode, input to `line` and a break get 409 `link_mode`, "the link's frames share this line". A machine's own console still takes input through channel 1, as before.
+- **Two changes in the worker this needed:**
+  - no hello from an input or a break until 60 s after the last one, since U-Boot takes a frame's bytes as typed;
+  - a machine that does not answer is asked with one try every 3 s on a cable of one too. Before, it was 8 tries, some 25 s with their doubled waits at 115200, and a first key would have waited for them; now it waits one try's wait at most, about 0.6 s.
+- **API 1.2,** with its line in `CHANGES`; the help text; [effector485.md](../docs/link/effector485.md) and its Russian version.
+- **The page:** in `console` mode the console pane says so, and an empty line sends its carriage return. `^C` and `break` are beside it. On a cable of several, `show` then shows `line`.
+
+**Tested** on LEG9's WSL2, 2026-11-10:
+- **`cargo test` in `tools/mindlink`:** all pass, three runs of the effector485 tests in a row. The new test, `a_line_without_link_as_a_console`, has a fake U-Boot on a pseudo-terminal that echoes and prints `=> `:
+  - Ctrl-C and `version` written 20 ms apart, and nothing of the daemon's after them; the same `seq` twice written once;
+  - a non-holder's input and break refused under a lease, the holder's taken, and a break answered on the pseudo-terminal;
+  - with `mindlink serve` answering: `link` mode, and a break refused; on a cable of two with one answering, input to `line` refused;
+  - on a TCP line nobody answers: input to `line` written, and a break answered `unsupported`.
+
+  A unit test in `console.rs` paces the typed bytes and shares the input's numbers.
+- **`tools/mindlink/build.sh`:** the Linux and the Windows builds, with no warnings.
+- **`scripts/host_tests.sh`** in full, after `./02_build.sh`, with OpenSSH's server from an unpacked package (`MIND_SSHD`): passed.
+- **The x86 QEMU suite `link`,** since `port_unix.rs` is `mindlink`'s too: passed.
+
+**Not done** (MC-12.3):
+- the boards' run of the acceptance criteria;
+- a break seen on a real line: a pseudo-terminal sends none;
+- whether the daemon's hellos before the first key stop U-Boot's countdown on each board, as any key does.
 
 ## Related
 

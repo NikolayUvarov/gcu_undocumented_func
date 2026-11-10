@@ -28,6 +28,8 @@ extern "system" {
     fn SetCommState(handle: *mut c_void, dcb: *const Dcb) -> i32;
     fn SetCommTimeouts(handle: *mut c_void, timeouts: *const Timeouts) -> i32;
     fn PurgeComm(handle: *mut c_void, flags: u32) -> i32;
+    fn SetCommBreak(handle: *mut c_void) -> i32;
+    fn ClearCommBreak(handle: *mut c_void) -> i32;
 }
 
 // DCB's bit fields: binary mode, DTR and RTS held on; no parity check, no flow control, no error abort.
@@ -87,6 +89,17 @@ impl Port {
 
     /// The FTDI latency timer is a driver setting on Windows (the port's Advanced properties), not read here.
     pub fn latency_ms(&self) -> Option<u32> { None }
+
+    /// A break of `ms` (800-LNK-0043): the line held at space, then let go; a TCP connection has none.
+    #[allow(dead_code)] // effector485's; mindlink sends none
+    pub fn brk(&mut self, ms: u64) -> Result<(), String> {
+        let Stream::Serial { file, .. } = &self.stream else { return Err(format!("{}: a TCP connection has no break", self.name)) };
+        let handle = file.as_raw_handle() as *mut c_void;
+        if unsafe { SetCommBreak(handle) } == 0 { return Err(os(&format!("{}: no break on this line", self.name))); }
+        std::thread::sleep(Duration::from_millis(ms));
+        if unsafe { ClearCommBreak(handle) } == 0 { self.failed = true; return Err(os(&format!("{}: the break did not end", self.name))); }
+        Ok(())
+    }
 }
 
 impl linkproto::Line for Port {

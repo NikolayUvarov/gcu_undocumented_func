@@ -9,8 +9,10 @@ use std::time::{Duration, Instant};
 pub struct Bus {
     spec: String,
     baud: u32,
-    /// The port, opened at the first exchange and again after it failed; why it last would not open.
-    port: Mutex<(Option<Port>, String)>,
+    /// The port, opened at the first exchange and again after it failed.
+    port: Mutex<Option<Port>>,
+    /// Why it last would not open, read without waiting for the port.
+    why: Mutex<String>,
     /// The turns given and the one served: the line goes to the workers in the order they asked.
     turn: Mutex<(u64, u64)>,
     next: Condvar,
@@ -23,8 +25,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.in
 
 impl Bus {
     pub fn new(spec: &str, baud: u32) -> Arc<Bus> {
-        Arc::new(Bus { spec: spec.into(), baud, port: Mutex::new((None, String::new())), turn: Mutex::new((0, 0)), next: Condvar::new(), start: Instant::now(),
-                       stray: Mutex::new(crate::console::Stray::new()) })
+        Arc::new(Bus { spec: spec.into(), baud, port: Mutex::new(None), why: Mutex::new(String::new()), turn: Mutex::new((0, 0)), next: Condvar::new(),
+                       start: Instant::now(), stray: Mutex::new(crate::console::Stray::new()) })
     }
 
     /// A serial port, rather than TCP: its wait for an answer comes from its rate.
@@ -33,7 +35,7 @@ impl Bus {
     pub fn spec(&self) -> &str { &self.spec }
 
     /// Why the port would not open at the last try; empty while it is open.
-    pub fn error(&self) -> String { lock(&self.port).1.clone() }
+    pub fn error(&self) -> String { lock(&self.why).clone() }
 
     pub fn line(self: &Arc<Self>) -> BusLine { BusLine { bus: self.clone(), held: false } }
 
@@ -51,20 +53,39 @@ impl Bus {
         std::mem::take(&mut stray.found)
     }
 
+    /// Bytes typed on a line no machine answers, written as they are with the line taken for them (800-LNK-0043).
+    pub fn type_raw(self: &Arc<Self>, bytes: &[u8]) -> bool {
+        let mut line = self.line();
+        line.claim();
+        let written = line.write(bytes);
+        line.release();
+        written
+    }
+
+    /// A break of `ms` on the line, taken for it; why not, when the port has none or is not open.
+    pub fn brk(self: &Arc<Self>, ms: u64) -> Result<(), String> {
+        let mut line = self.line();
+        line.claim();
+        let r = match lock(&self.port).as_mut() { Some(port) => port.brk(ms), None => Err(self.error()) };
+        line.release();
+        r
+    }
+
     /// The port opened when it is not, or failed.
     fn ready(&self) {
         let mut p = lock(&self.port);
-        if p.0.as_ref().is_some_and(|port| !port.failed()) { return; }
-        p.0 = None;
+        if p.as_ref().is_some_and(|port| !port.failed()) { return; }
+        *p = None;
         match Port::open(&self.spec, self.baud) {
             Ok(mut port) => {
                 port.turnaround = Duration::ZERO;
                 if let Some(l) = port.latency_ms().filter(|&l| self.serial() && l > 2) {
                     eprintln!("effector485: {}: the FTDI latency timer is {l} ms, which slows every answer (mindlink hello says how to lower it)", port.name);
                 }
-                *p = (Some(port), String::new());
+                *p = Some(port);
+                lock(&self.why).clear();
             }
-            Err(e) => p.1 = e,
+            Err(e) => *lock(&self.why) = e,
         }
     }
 }
@@ -74,15 +95,15 @@ pub struct BusLine { bus: Arc<Bus>, held: bool }
 
 impl BusLine {
     /// The port is not open, or failed for good.
-    pub fn failed(&self) -> bool { lock(&self.bus.port).0.as_ref().is_none_or(|p| p.failed()) }
+    pub fn failed(&self) -> bool { lock(&self.bus.port).as_ref().is_none_or(|p| p.failed()) }
 }
 
 impl Line for BusLine {
-    fn write(&mut self, bytes: &[u8]) -> bool { lock(&self.bus.port).0.as_mut().is_some_and(|p| p.write(bytes)) }
+    fn write(&mut self, bytes: &[u8]) -> bool { lock(&self.bus.port).as_mut().is_some_and(|p| p.write(bytes)) }
 
     fn read(&mut self, out: &mut [u8], timeout_ms: u32) -> usize {
         let mut p = lock(&self.bus.port);
-        match p.0.as_mut() {
+        match p.as_mut() {
             Some(port) => { let n = port.read(out, timeout_ms); lock(&self.bus.stray).feed(&out[..n]); n }
             None => { drop(p); std::thread::sleep(Duration::from_millis(timeout_ms.min(100) as u64)); 0 }
         }
