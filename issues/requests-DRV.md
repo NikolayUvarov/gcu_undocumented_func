@@ -10,7 +10,7 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
   - OFDM named in `idl/wlanhw.wit` 1.1: plan item 2 of [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) (2026-10-14);
   - BCM4331's transmit status checking its deadline on every path: [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md) (2026-10-20).
 - **2026-11-09:**
-  - a block client bounded to a range: [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md), made by STO;
+  - a block client bounded to a range: [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done), made by STO;
   - what a flush reaches: [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md);
   - the MacBook Pro's speakers, 551's step 2: [551-DRV-0056](551-DRV-0056-the-macbook-pros-jack-and-internal-microphone.md);
   - `bcm_wifi`'s SPROM: done in [550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done) (valid, CRC good, MAC under Apple's prefix, chip control restored);

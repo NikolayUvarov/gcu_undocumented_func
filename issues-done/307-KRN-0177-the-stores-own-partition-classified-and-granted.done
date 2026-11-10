@@ -1,6 +1,6 @@
 # 307-KRN-0177 — `init` finds the store's own partition and grants `blockstore` a client bounded to it — done
 
-**Type:** `init` (media, grants) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — (the client bounded to a range is [307-DRV-0054](../issues/307-DRV-0054-a-block-client-bounded-to-a-window.md)'s windows, made by STO and about to land; this branch is built on them) · **Main task:** [307](../issues/307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.1
+**Type:** `init` (media, grants) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — (the client bounded to a range is [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.done)'s windows, made by STO and about to land; this branch is built on them) · **Main task:** [307](../issues/307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.1
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-27, "The store's own partition: media classified and a bounded grant (for 307)".
 
