@@ -1,6 +1,6 @@
 # 000-KRN-0227 — The QEMU harness waits 30 s for any `dmesg`, not 8 s
 
-**Type:** tests (the QEMU harness, `tests/qemu_smoke.py`'s `VM.command`) · **Owner:** `KRN` (CI) · **Priority:** P2 · **Status:** in progress (made on the kernel session's branch, 2026-11-09; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (the QEMU harness, `tests/qemu_smoke.py`'s `VM.command`) · **Owner:** `KRN` (CI) · **Priority:** P2 · **Status:** in progress (step 1 landed in round 107, `main` 6989bbe6; step 2 made, the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -35,6 +35,23 @@
 ## Progress (2026-11-09)
 
 - **Made:** step 1, on `claude/youthful-mendel-mf1soy`.
+
+## Progress (2026-11-10)
+
+- **Step 1 landed** in round 107 (`main` 6989bbe6).
+- **The second case came in round 107:** the same group failed on `x32-2` beside `x32`.
+  - **Where:** `slow_radio_check`'s `vm.service_logs("wlan", "[WLAN] COUNTRY ")` read nothing in its 40 tries. Not `dmesg`, and not the shell's prompt: the guest as a whole was late.
+  - **It passed when it ran again alone** (1169 s), as in rounds 105 and 106.
+  - **So three rounds running,** the group failed on an x32-128 lane beside the other lane, each time at another timed wait, and passed there alone each time.
+- **What x32-128 runs besides our lanes,** read through Effector at 23:55 UTC, during the gate:
+  - three libvirt guests (`qemu-system-x86`, up 6 days, about 12 % of a CPU together);
+  - `ksmd`, the kernel's merging of equal pages;
+  - the package at 62 °C, the governor `powersave`.
+  - **These are not ours:** they stay as they are, and nothing here says they are the cause.
+- **Step 2, made:** `scripts/land.py` keeps the group off x32-128 in the pool (`KEPT_OFF`), so it goes to i9, acc-1 or acc-2.
+  - The group runs whole as before, and a failed one still runs again where it failed.
+  - `tests/land_test.py` checks the rule. A dry run of the pool puts the group on acc-2.
+
 
 ## Related
 

@@ -356,11 +356,17 @@ def estimates(work, expected):
     return seconds
 
 
+# Groups a machine does not take in the pool (000-KRN-0227): "x86: network, TLS and Effector" failed on x32-128 beside
+# its other lane in rounds 105, 106 and 107, each time at a different timed wait, and passed there alone each time.
+KEPT_OFF = {"x86: network, TLS and Effector": {"x32"}}
+
+
 def pick(queue, lane, ready, seconds, broken=()):
     """The (part, group) `lane` takes next from `queue`: the longest it can run, so the long groups start first and the
-    short ones fill the ends (in simulation this beat preferring a part already built, by 2 to 3 minutes). An image whose build failed on the lane (`broken`) leaves its groups to the other lanes."""
+    short ones fill the ends (in simulation this beat preferring a part already built, by 2 to 3 minutes). An image whose build failed on the lane (`broken`) leaves its groups to the other lanes; a group KEPT_OFF its machine goes to another."""
     machine = lane.split("-")[0]
-    able = [entry for entry in queue if entry[0] in POOL_PARTS[machine] and BUILT_BY[entry[0]] not in broken]
+    able = [entry for entry in queue if entry[0] in POOL_PARTS[machine] and BUILT_BY[entry[0]] not in broken
+            and machine not in KEPT_OFF.get(entry[1], ())]
     return max(able, key=lambda e: (seconds.get(e[1], DEFAULT_SECONDS), e[1]), default=None)
 
 
