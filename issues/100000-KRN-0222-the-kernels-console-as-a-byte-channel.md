@@ -79,6 +79,28 @@ The kernel has a ring and a blocking read already: a task's text input (`TEXT_QU
 
 **Landed** in round 104 (`main` 9a0b0c8e, 2026-11-09): the restarted shell's check. Every group of the gate passed with it, PCU's `devicetree` suite among them.
 
+## Progress (2026-11-10): what still reaches the line while the channel stands
+
+**Asked by `MOB`** for the two Allwinner boards (its message of 2026-11-10, point 3). On both boards `init` gives `uart_serial` this channel, because it lends a console's node only when it is a PL011 (`init/src/hardware.rs`).
+
+**Found: more than the panic and stop lines still go.** Plan item 4 says only those go while the channel stands. In fact, every line the kernel writes through `PanicSerial` still goes to the UART at once (`kernel/src/main.rs`, `serial_print`), as it does while a PL011 is lent:
+
+- a platform node not lent, because its page holds another node's registers (`scheduler.rs`, PLATFORM_MMIO);
+- a trial boot's confirmation (`trial.rs`) and its restart;
+- a task asking to restart or power off the machine;
+- PCI's BAR lines and an MSI storm, which do not arise on these boards (no PCI, no GICv2m);
+- the fatal reports.
+
+**What `MIRROR_LOGS` stops** is the tasks' log lines and the kernel's log kept in the ring (`dmesg` still shows them).
+
+**What a stray line costs `link`.** A line that comes while a frame is on the line corrupts that frame: `linkproto` frames by COBS with a CRC-32C, and drops a frame that fails it. The master then sends its request again, a bounded number of times (`linkproto/src/endpoint.rs`). So such a line costs one retry, not the link.
+
+**What the channel's code has run on.** Only a PL011: QEMU's `virt` has no 16550, so the 16550 path has run nowhere.
+- That path is the channel's three functions in `serial.rs`: LSR's data ready, LSR's THRE, and IER's bits 0 and 1.
+- 100000-PRT-0010's host test covers it against a register file.
+
+**Not changed, and offered to `MOB`:** holding those lines back while the channel stands, keeping only the fatal and stop lines (about one line of kernel code, against 5 left in the budget).
+
 ## Related
 
 [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [100000-KRN-0221](../issues-done/100000-KRN-0221-init-starts-uart-serial-for-link.done), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md) (the 16550 the kernel drives).
