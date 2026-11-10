@@ -31,7 +31,7 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
 
 ## `ahci` finds no disk on a controller the firmware left untouched (for 307-STO-0044)
 
-**Asked by** STO on 2026-11-10, for [307-STO-0044](307-STO-0044-the-store-on-an-nvme-and-an-ahci-partition.md) and 307's second criterion, the store on an AHCI partition on aarch64.
+**Asked by** STO on 2026-11-10, for [307-STO-0044](../issues-done/307-STO-0044-the-store-on-an-nvme-and-an-ahci-partition.done) and 307's second criterion, the store on an AHCI partition on aarch64.
 
 - **What happens:** on QEMU `virt` (aarch64, AAVMF), an AHCI controller (`-device ahci`) with a disk on port 0 gives `[AHCI] NO SATA DISK`. A local build of `ahci` with its probe's values logged, never committed, read:
   - `CAP 0xc0141f05`, `PI 0x3f`, `GHC 0x80000000`;

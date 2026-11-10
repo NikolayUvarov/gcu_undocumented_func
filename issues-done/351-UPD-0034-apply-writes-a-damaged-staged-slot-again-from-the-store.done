@@ -1,0 +1,44 @@
+# 351-UPD-0034 — `apply` writes a damaged staged slot again from the store — done
+
+**Type:** `updater` · **Owner:** `STO`, by agreement with the update track's owner (the kernel session, 2026-11-10) · **Priority:** P3 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-6.4, MC-9.3
+
+Numbered from STO's offer of 2026-11-09 (`KRN/2026-11-09T1925Z-STO-two-updater-follow-ups-of-351-upd-0033-an-offer.md` on `internal-dev-messages`), the first of 351-UPD-0033's "not done" points. STO makes it.
+
+## Problem
+
+- **Today:** only `rollback` writes a slot again from the store, for the last known good release.
+- **An `apply`** whose staged slot is not as its manifest lists it is refused (`digest`). Only `fetch` writes the slot again, from the source.
+
+## Plan
+
+1. **The store first.** When the store keeps the release the slot was staged with (its version above the running one), `apply` writes the slot from there, with the same checks as a fetch.
+2. **Then the usual steps:** it checks the slot and boots it on trial.
+3. **`update.wit` 1.5** (minor) says so in `apply`'s text.
+
+## Acceptance criteria
+
+- **The `updatestore` suite** (x86, aarch64):
+  - release 6 is staged;
+  - a boot file of slot B is damaged on the disk with the machine off;
+  - `update apply` boots release 6.
+- `docs/update/updater.md` states it.
+
+## Resolution
+
+**Made by STO** on `claude/relaxed-meitner-5bmhpz`, with 351-UPD-0035 in `update.wit` 1.5, as KRN numbered them.
+- **`updater/src/main.rs`:**
+  - `apply`, on a slot that does not check as the bootloader will, calls `restage`;
+  - `restage` writes the release staged there again from the store: only the version staged (the slot's channel at the updater's start, or the last fetch), above the running one, and only if the store keeps it;
+  - `from_store`, shared with `rollback`'s `restore`, reads the release as any source: its channel against the release key and the version, its manifest against the channel and the boot key, every file by size and SHA-256;
+  - then the slot is checked again, and the channel's expiry asked as for any apply. Without such a release the apply is refused as before.
+- **`idl/update.wit` 1.5** says so in `apply`'s text; `docs/update/updater.md` and `_RU` 0.10 and `docs/idl` state it.
+
+**Passed**, on the branch merged with `main` (df5708ea), in this session's container (4 CPUs, QEMU 8.2.2 under TCG):
+- the `updatestore` suite on x86 (in the `updater` group, 6 checks) and on aarch64 (6). Release 6 is staged and kept; with the machine off, a byte of slot B's staged kernel is changed on the disk; with no network, `update apply` writes release 6 back from the store; slot B boots on trial, is confirmed, and its kernel is then as published. The suite's rollback of 351-UPD-0033 passes after it, unchanged.
+- Not run on real hardware.
+
+**Not done:** a staged release the store does not keep, or whose slot's channel cannot be read at the updater's start, is not written back; `fetch` writes it again from the source.
+
+## Related
+
+[351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done), [351-UPD-0035](../issues/351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md).
