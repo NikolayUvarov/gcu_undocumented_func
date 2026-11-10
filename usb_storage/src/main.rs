@@ -7,7 +7,7 @@
 // repeated (reads and rewrites of the same data are idempotent, MC-6.6). A refused command is explained by REQUEST SENSE
 // in the log; a lost device, its return and a reset it reports are logged (211-DRV-0019).
 use mind::abi::{BootInfo, BLOCK_KIND_USB, SLOT_DEV0};
-use mind::block::{self, Driver};
+use mind::block::{self, Driver, DriverError, Outcome};
 use mind::ipc::Endpoint;
 use mind::usb::Host;
 
@@ -137,14 +137,15 @@ impl Storage {
 
     // A command. A refusal is explained in the log and, after a unit attention, the command is repeated once. If the
     // interface was lost, it is claimed again and the command repeated; the loss, the return and a reset are logged.
-    fn run(&mut self, command: &[u8], length: usize, send: bool, at: usize) -> Option<usize> {
+    // Err: Gone when no device or another medium answers the claim, Io for every other failure (000-KRN-0228).
+    fn run(&mut self, command: &[u8], length: usize, send: bool, at: usize) -> Result<usize, DriverError> {
         match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) {
-            Cycle::Done(moved) => return Some(moved),
+            Cycle::Done(moved) => return Ok(moved),
             Cycle::Refused => {
                 let sense = sense(&mut self.host, &mut self.bot);
                 self.refused(command[0], sense);
-                if !sense.is_some_and(Sense::attention) { return None; }
-                return match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Some(moved), _ => None };
+                if !sense.is_some_and(Sense::attention) { return Err(DriverError::Io); }
+                return match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Ok(moved), _ => Err(DriverError::Io) };
             }
             Cycle::Gone => {}
         }
@@ -157,39 +158,39 @@ impl Storage {
         let found = claim(&mut self.host).and_then(|mut bot| capacity(&mut self.host, &mut bot).map(|c| (bot, c)));
         let Some((bot, (sectors, reset))) = found else {
             if !self.lost { mind::println!("[USB] STORAGE: THE DEVICE IS GONE"); self.lost = true; }
-            return None;
+            return Err(DriverError::Gone);
         };
         if sectors != self.sectors {
             if !self.lost { mind::println!("[USB] STORAGE: ANOTHER MEDIUM ({} SECTORS) IS NOT USED", sectors); self.lost = true; }
             let _ = self.host.release(bot.handle);
-            return None;
+            return Err(DriverError::Gone);
         }
         mind::println!("[USB] STORAGE: THE DEVICE IS BACK, THE SAME CAPACITY{}", if reset { "; IT WAS RESET: WRITES IT HAD NOT MADE DURABLE MAY BE LOST" } else { "" });
         self.lost = false;
         self.bot = bot;
-        match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Some(moved), _ => None }
+        match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Ok(moved), _ => Err(DriverError::Io) }
     }
 }
 
 impl Driver for Storage {
     fn sectors(&self) -> u64 { self.sectors }
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool {
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome {
         let lba = (lba as u32).to_be_bytes(); let blocks = (count as u16).to_be_bytes();
         let command = [0x28, 0, lba[0], lba[1], lba[2], lba[3], 0, blocks[0], blocks[1], 0];
-        match self.run(&command, count * 512, false, DATA) {
-            Some(got) if got == count * 512 => { out[..got].copy_from_slice(&self.host.buffer()[DATA..DATA + got]); true }
-            _ => false,
-        }
+        let got = self.run(&command, count * 512, false, DATA)?;
+        if got != count * 512 { return Err(DriverError::Io); } // a short transfer
+        out[..got].copy_from_slice(&self.host.buffer()[DATA..DATA + got]);
+        Ok(())
     }
-    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool {
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome {
         let bytes = count * 512;
         let lba = (lba as u32).to_be_bytes(); let blocks = (count as u16).to_be_bytes();
         let command = [0x2A, 0, lba[0], lba[1], lba[2], lba[3], 0, blocks[0], blocks[1], 0];
         // A repeated write finds its data still in place: probes and sense data use PROBE, not DATA (211-DRV-0019).
         self.host.buffer_mut()[DATA..DATA + bytes].copy_from_slice(&data[..bytes]);
-        self.run(&command, bytes, true, DATA) == Some(bytes)
+        if self.run(&command, bytes, true, DATA)? == bytes { Ok(()) } else { Err(DriverError::Io) }
     }
-    fn flush(&mut self) -> bool { self.run(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false, PROBE).is_some() } // SYNCHRONIZE CACHE(10)
+    fn flush(&mut self) -> Outcome { self.run(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false, PROBE).map(|_| ()) } // SYNCHRONIZE CACHE(10)
     fn read_only(&self) -> bool { self.protected }
 }
 

@@ -1,7 +1,7 @@
 //! Test-only stand-in for vfs_server (QEMU `block` suite): with the block clients init gives vfs_server (badged with
 //! the write right), writes a pattern to 8 sectors near the end of each disk as sealed read-only memory, flushes, reads
 //! them back and reports. The harness then checks the disk image on the host. Never packaged into the normal OS.
-//! The calls of idl/block.wit 1.1 are encoded by hand (word calls: method | major << 8 | fields << 16).
+//! The calls of idl/block.wit 2.0 are encoded by hand (word calls: method | major << 8 | fields << 16).
 #![no_std]
 #![no_main]
 use core::arch::asm;
@@ -26,9 +26,10 @@ unsafe fn ipc(mb: *mut SyscallMailbox, endpoint: usize, data: [usize; 2], cap: u
     [(*mb).msg[2], (*mb).msg[3]]
 }
 
-// idl/block.wit 1.1, major version 1.
-const SECTORS: usize = 1 | 1 << 8; const KIND: usize = 2 | 1 << 8; const ATTACH: usize = 3 | 1 << 8; const READ: usize = 4 | 1 << 8;
-const WRITABLE: usize = 5 | 1 << 8; const WRITE: usize = 6 | 1 << 8; const FLUSH: usize = 7 | 1 << 8;
+// idl/block.wit 2.0 (000-KRN-0228): a server of another major answers 0x81.
+const MAJOR: usize = 2 << 8;
+const SECTORS: usize = 1 | MAJOR; const KIND: usize = 2 | MAJOR; const ATTACH: usize = 3 | MAJOR; const READ: usize = 4 | MAJOR;
+const WRITABLE: usize = 5 | MAJOR; const WRITE: usize = 6 | MAJOR; const FLUSH: usize = 7 | MAJOR;
 fn ok(reply: [usize; 2]) -> bool { reply[0] & 0xFF == 0 }
 
 // A sealed read-only copy of `data`: a detached memory object, a read-only child, the writable object dropped.

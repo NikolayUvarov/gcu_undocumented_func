@@ -8,7 +8,7 @@ use crate::sys::{Error, Result};
 const RECEIVED_CAP: usize = 9;
 pub const BUFFER: usize = BLOCK_MAX_SECTORS * BLOCK_SECTOR;
 
-pub use crate::block_protocol::{badge_for, window_of, Buffers, Driver, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, KIND_RAM, WINDOWS};
+pub use crate::block_protocol::{badge_for, window_of, Buffers, Driver, DriverError, Outcome, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, KIND_RAM, WINDOWS};
 use crate::block_protocol as protocol;
 
 /// Driver loop for idl/block.wit: sectors, kind, attach of the client's buffer, read, and for a client with the write
@@ -66,7 +66,7 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
 /// Block device behind a driver's IPC endpoint (client side, idl/block.wit).
 /// A restarted driver instance has no buffer attached and answers a read with not-found (MC-6.4): the buffer is attached
 /// to the new instance and the read is repeated, which is safe because reads are idempotent (MC-6.6); so is a write of
-/// the same data.
+/// the same data. A drive's failure (io, 000-KRN-0228) is not repeated: the client sees it after one call.
 /// The buffer is a LEASE the client ends with `CAP_REVOKE` on re-attach and on drop; the driver writes into it while
 /// it is attached (a SHARE_RW adapter listed in docs/profile), and the client copies the data out after each reply.
 /// Written data travels as a sealed read-only copy (SHARE_RO), so the driver writes exactly what it was given.

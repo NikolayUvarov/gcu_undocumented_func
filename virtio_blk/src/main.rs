@@ -5,7 +5,7 @@
 // mind::block_protocol) and flushes; a read-only device (VIRTIO_BLK_F_RO) refuses writes. Holds its BAR and DMA only.
 use core::sync::atomic::{fence, Ordering};
 use mind::abi::{BootInfo, BLOCK_KIND_VIRTIO, BLOCK_MAX_SECTORS, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM};
-use mind::block::{self, Driver};
+use mind::block::{self, Driver, DriverError, Outcome};
 use mind::dev::{cap_info, Dma, Mmio};
 use mind::virtio::{Layout, Modern, NO_VECTOR};
 
@@ -75,18 +75,18 @@ impl VirtioBlk {
 
 impl Driver for VirtioBlk {
     fn sectors(&self) -> u64 { self.sectors }
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool {
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome {
         let bytes = count * 512;
-        if !self.request(T_IN, lba, bytes) { return false; }
+        if !self.request(T_IN, lba, bytes) { return Err(DriverError::Io); }
         out[..bytes].copy_from_slice(self.dma.bytes(DATA, bytes));
-        true
+        Ok(())
     }
-    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool {
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome {
         let bytes = count * 512;
         self.dma.bytes(DATA, bytes).copy_from_slice(&data[..bytes]);
-        self.request(T_OUT, lba, bytes)
+        if self.request(T_OUT, lba, bytes) { Ok(()) } else { Err(DriverError::Io) }
     }
-    fn flush(&mut self) -> bool { self.features & F_FLUSH == 0 || self.request(T_FLUSH, 0, 0) }
+    fn flush(&mut self) -> Outcome { if self.features & F_FLUSH == 0 || self.request(T_FLUSH, 0, 0) { Ok(()) } else { Err(DriverError::Io) } }
     fn read_only(&self) -> bool { self.features & F_RO != 0 }
 }
 
