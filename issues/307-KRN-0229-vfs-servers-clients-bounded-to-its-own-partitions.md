@@ -61,7 +61,24 @@ Since 307-KRN-0177:
   - what it writes past the partition (the boot's log, then `write log:past.txt`) is refused at its window's end and named in its log;
   - the write says so;
   - nothing of it reaches the sectors after the partition, the store's.
-- The runs are below once made.
+- **The block suite** (`block_suite`, `tests/block_app.rs`): the raw image gets a blank FAT32 partition after its file system, to the disk's end. Through ATA, AHCI and USB in turn, the test's `vfs_server`:
+  - holds the two partitions as windows 2 and 3 (slots 16 and 17) and no client of the whole disk;
+  - leaves the file system's window alone, and writes, flushes and reads back 8 sectors at the blank one's end;
+  - is refused a sector past each window's end. On the host the first sector past the file system's window is still blank.
+
+**Runs (2026-11-10, this session's container, 4 CPUs, QEMU 8.2.2 under TCG):**
+- **x86, all passed:**
+  - "x86: USB image", with both checks above;
+  - "x86: boot, display, shell, memory, clock";
+  - "x86: services, storage, audio";
+  - "x86: NVMe boot disk".
+- **aarch64, all passed:**
+  - `usb_image_smoke.py --arch aarch64`, with both checks;
+  - "aarch64: boot and fault containment";
+  - "aarch64: files and the block store";
+  - "aarch64: NVMe boot disk".
+- **"x86: files and block writes" failed first, as it should have.** The old block suite looked for a whole disk in slots 2 to 4, and its partitioned disk now comes as windows. The suite is changed as above.
+- **A fault put in by hand, never committed:** `vfs_windows` set each window 256 sectors longer than its partition. The past-the-window boot then wrote past the partition (`WROTE`, `sync` `OK`), and the check failed. Without the fault it passes.
 
 ## Related
 
