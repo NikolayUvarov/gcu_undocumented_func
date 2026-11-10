@@ -1,6 +1,6 @@
 # 308-KRN-0204 — A store client that may recover the volume key, held by the shell alone
 
-**Type:** `init`, the ABI (a request bit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (the kernel session's part in `main` since round 111, ABI 30; the shell's lending in `main` since round 115, 308-APP-0122; a QEMU check of a program without `REQUEST_RECOVER` left) · **Blocked by:** — (STO's `blockstore.wit` 2.4 calls and `BADGE_RECOVER` are in `main`, 9015431c; the kernel session's queue) · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) · **Constitution:** MC-3.1, MC-6.8, MC-9.6, MC-11.9
+**Type:** `init`, the ABI (a request bit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (the kernel session's part in `main` since round 111, ABI 30; the shell's lending in `main` since round 115, 308-APP-0122; a QEMU check of a program without `REQUEST_RECOVER` made on `claude/308-KRN-0204-no-copy-without-the-request`) · **Blocked by:** — (STO's `blockstore.wit` 2.4 calls and `BADGE_RECOVER` are in `main`, 9015431c; the kernel session's queue) · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) · **Constitution:** MC-3.1, MC-6.8, MC-9.6, MC-11.9
 
 **Asked by:** STO, 2026-10-30 and 2026-11-04 (`issues/requests-KRN.md`, taken out of it with this issue). STO asked for the shell and `wm`. APP's program `recovery` (308-APP-0122) has a window of its own, so `wm` needs no copy (`KRN/2026-11-04T0441Z-APP-…`). The client goes to the shell alone, the least authority that serves (MC-3.1).
 
@@ -49,6 +49,10 @@ On the branch `claude/308-KRN-0204-the-recovery-client`, ABI 30:
 - The `tls` suite's `recovery_key_check` shows it in QEMU on both architectures: refused, `recovery` has no client; allowed, it has one and the store answers it.
 
 **Left:** a QEMU check that a program started without `REQUEST_RECOVER` holds no copy. The kernel session adds it to the `services` suite.
+
+**The last check (2026-11-10, `claude/308-KRN-0204-no-copy-without-the-request`).** The `normal` suite's `recover_lending_check` runs on both architectures:
+- the shell holds the store's client badged `BADGE_RECOVER` in slot 43 alone;
+- `clock`, started without `REQUEST_RECOVER`, holds no copy: nothing in slot 43, and no client of `blockstore`'s endpoint with that badge.
 
 ## Related
 
