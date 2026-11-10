@@ -1,6 +1,6 @@
 # 308-KRN-0204 — A store client that may recover the volume key, held by the shell alone
 
-**Type:** `init`, the ABI (a request bit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (the kernel session's part in `main` since round 111, ABI 30; the shell's lending in `main` since round 115, 308-APP-0122; a QEMU check of a program without `REQUEST_RECOVER` left) · **Blocked by:** — (STO's `blockstore.wit` 2.4 calls and `BADGE_RECOVER` are in `main`, 9015431c; the kernel session's queue) · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md) · **Constitution:** MC-3.1, MC-6.8, MC-9.6, MC-11.9
+**Type:** `init`, the ABI (a request bit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (the kernel session's part in `main` since round 111, ABI 30; the shell's lending in `main` since round 115, 308-APP-0122; a QEMU check of a program without `REQUEST_RECOVER` left) · **Blocked by:** — (STO's `blockstore.wit` 2.4 calls and `BADGE_RECOVER` are in `main`, 9015431c; the kernel session's queue) · **Main task:** [308](308-encryption-at-rest.md), for [308-STO-0028](../issues-done/308-STO-0028-a-recovery-key-and-a-passphrase.done) · **Constitution:** MC-3.1, MC-6.8, MC-9.6, MC-11.9
 
 **Asked by:** STO, 2026-10-30 and 2026-11-04 (`issues/requests-KRN.md`, taken out of it with this issue). STO asked for the shell and `wm`. APP's program `recovery` (308-APP-0122) has a window of its own, so `wm` needs no copy (`KRN/2026-11-04T0441Z-APP-…`). The client goes to the shell alone, the least authority that serves (MC-3.1).
 
@@ -52,4 +52,4 @@ On the branch `claude/308-KRN-0204-the-recovery-client`, ABI 30:
 
 ## Related
 
-[308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md), [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done), [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md), [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md), 351-KRN-0115 (`REQUEST_SSH`).
+[308-STO-0028](../issues-done/308-STO-0028-a-recovery-key-and-a-passphrase.done), [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done), [308-NET-0055](../issues-done/308-NET-0055-keystores-passphrase-without-a-tpm.done), [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md), 351-KRN-0115 (`REQUEST_SSH`).

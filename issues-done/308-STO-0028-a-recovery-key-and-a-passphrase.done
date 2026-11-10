@@ -1,8 +1,8 @@
-# 308-STO-0028 — A recovery key and a passphrase for the store's volume key
+# 308-STO-0028 — A recovery key and a passphrase for the store's volume key — done
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md) (a client badged `BADGE_RECOVER`, the shell's alone), [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md) (the key shown and typed back), [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done) and this track's [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md) (the passphrase) · **Main task:** [308](308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** [308-KRN-0204](../issues/308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md) (a client badged `BADGE_RECOVER`, the shell's alone), [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.done) (the key shown and typed back), [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.done) and this track's [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.done) (the passphrase) · **Main task:** [308](../issues/308-encryption-at-rest.md) · **Constitution:** MC-6.8, MC-9.6, MC-11.9
 
-Split from [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done) (2026-10-30): the part that needs the owner, once the volume key is off the medium.
+Split from [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.done) (2026-10-30): the part that needs the owner, once the volume key is off the medium.
 
 ## Problem
 
@@ -63,6 +63,30 @@ Since 308-STO-0022 a medium's volume key is kept by `keystore`, under a key deri
 - **Not run on the platform:** making, keeping, forgetting and recovering with a key. No program holds a client badged `BADGE_RECOVER` until 308-KRN-0204, and none shows a key until 308-APP-0122.
 - **In `main`** e28cfe4d (the landing round of candidate 6fc5b253): `blockstore.wit` 2.4 and its checks, so 308-KRN-0204 and 308-APP-0122 build on `main`.
 
+## Resolution
+
+**All criteria are met.**
+- **Host tests:** `tests/blockstore_host.rs`, the recovery record, its refusals and the rotation (Progress, 2026-10-30).
+- **QEMU, x86 and aarch64,** the `tls` suite on 9c746df6 (10 and 10 checks):
+  - **`recovery_key_check`** (APP's, 308-APP-0122, removing `device.key` alone since 308-NET-0064): the medium stays closed without its recovery key under the machine's new device key, as on another machine, and the recovery key opens it;
+  - **`passphrase_wait_check`** (308-KRN-0205, 308-APP-0130): a wrong passphrase opens nothing, the store not even started. After the right one, the store mounts its disk with the key `keystore` keeps, and an object named at the boot before reads back. STO added that last part.
+- **`docs/storage` 0.31** and the profile's rows (APP's, with 308-APP-0122 and 0130; 308-NET-0064's MC-11.9 clause).
+
+**The parts, all in `main` or in this branch's request:**
+- the store's recovery records and `blockstore.wit` 2.4 (STO);
+- the client badged `BADGE_RECOVER`, the shell's alone (308-KRN-0204);
+- `recovery` (308-APP-0122);
+- `keystore`'s passphrase (308-NET-0055) and the boot waiting for it (308-KRN-0205);
+- the shell's prompt (308-APP-0130);
+- the old secrets set aside (308-NET-0064).
+
+**Not done:**
+- **Real hardware.**
+- **What an erased record leaves:** a flash medium's spare blocks may keep it.
+- **A forgotten passphrase** loses the device key. The store's media then open only with their recovery keys, and the programs' secrets are lost.
+
+These are tests of the configurations named, not a proof (MC-12.2).
+
 ## Related
 
-[308](308-encryption-at-rest.md), [308-STO-0022](../issues-done/308-STO-0022-the-volume-key-held-by-keystore.done), 351-NET-0006, [305](../issues-done/305-recovery-without-the-store.done).
+[308](../issues/308-encryption-at-rest.md), [308-STO-0022](308-STO-0022-the-volume-key-held-by-keystore.done), 351-NET-0006, [305](305-recovery-without-the-store.done).
