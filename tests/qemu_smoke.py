@@ -12950,8 +12950,8 @@ def recovery_key_check(args, cpu):
         held = subprocess.run(["mtype", "-i", part, "::/data/recovery.txt"], env=MTOOLS_ENV, capture_output=True, text=True).stdout.splitlines()
         assert len(held) == 2 and held[0] == "MIND CORE RECOVERY KEY 1" and re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){7}", held[1]), held
         key = held[1]
-        # The device key lost on this machine: keystore makes a new one, under which the volume key is not kept. The
-        # store's secrets sealed under the old key stay on the volume and are set aside (308-NET-0064).
+        # As on another machine: keystore makes a new device key, under which the volume key is not kept; the block
+        # store's secrets sealed under the old one it sets aside (308-NET-0064), so the recovered key is kept anew.
         subprocess.run(["mdel", "-i", part, "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
         vm = boot()
         try:
