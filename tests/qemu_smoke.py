@@ -9104,17 +9104,20 @@ def tts_holdings_check(vm, models):
 def tts_suite(vm, wav, asr_model=None):
     require(vm.service_logs("tts", "[TTS] FORMANT SYNTHESIZER READY"), "AUDIO=true")
     tts_holdings_check(vm, models=True)  # the suite's machine has the model disk
-    require(vm.command("run say &"), "PID=1 NAME=say BACKGROUND")
+    # tts's restarts above took task numbers, so say's is read from the reply.
+    started = vm.command("run say &")
+    say = re.search(r"PID=(\d+) NAME=say BACKGROUND", started)
+    assert say, started
     output = ""
     for _ in range(80):
-        output += vm.command("logs 1")
+        output += vm.command(f"logs {say[1]}")
         if "[SAY] DONE" in output:
             break
         time.sleep(.25)
     spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
     assert 2500 < spoken < 9000, spoken
     time.sleep(spoken / 1000 + 1)  # wait for DMA ring playback to finish
-    vm.command("kill 1")
+    vm.command(f"kill {say[1]}")
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
