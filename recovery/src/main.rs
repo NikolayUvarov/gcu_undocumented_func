@@ -95,20 +95,20 @@ fn without_screen(command: Command, store: &mut dyn Store) -> u32 {
     }
 }
 
-fn write(path: &str, bytes: &[u8]) -> Result<(), &'static str> {
-    let mut file = mind::fs::File::create(path).map_err(|_| "it cannot be created")?;
-    file.write(bytes).map_err(|_| "it cannot be written")?;
-    file.flush().map_err(|_| "it cannot be flushed")
+fn write(path: &str, bytes: &[u8]) -> Result<(), String> {
+    let mut file = mind::fs::File::create(path).map_err(|e| alloc::format!("it cannot be created: {:?}", e))?;
+    file.write(bytes).map_err(|e| alloc::format!("it cannot be written: {:?}", e))?;
+    file.flush().map_err(|e| alloc::format!("it cannot be flushed: {:?}", e))
 }
 
 // The key the file at `path` holds, or why it holds none; what was read is wiped.
-fn read_key(path: &str) -> Result<Result<String, String>, &'static str> {
-    let mut file = mind::fs::File::open(path).map_err(|_| "it cannot be opened")?;
+fn read_key(path: &str) -> Result<Result<String, String>, String> {
+    let mut file = mind::fs::File::open(path).map_err(|e| alloc::format!("it cannot be opened: {:?}", e))?;
     let mut bytes: Vec<u8> = alloc::vec![0u8; file.size().min(512)];
     let mut at = 0;
-    while at < bytes.len() { match file.read(&mut bytes[at..]) { Ok(0) => break, Ok(n) => at += n, Err(_) => { keyfile::wipe_bytes(&mut bytes); return Err("it cannot be read") } } }
+    while at < bytes.len() { match file.read(&mut bytes[at..]) { Ok(0) => break, Ok(n) => at += n, Err(e) => { keyfile::wipe_bytes(&mut bytes); return Err(alloc::format!("it cannot be read: {:?}", e)) } } }
     bytes.truncate(at);
-    let parsed = core::str::from_utf8(&bytes).map(keyfile::parse).map_err(|_| "not text");
+    let parsed = core::str::from_utf8(&bytes).map(keyfile::parse).map_err(|_| String::from("not text"));
     keyfile::wipe_bytes(&mut bytes);
     parsed
 }
