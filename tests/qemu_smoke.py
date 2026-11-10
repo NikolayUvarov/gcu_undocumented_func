@@ -958,6 +958,29 @@ def fill_suite(args):
           f"mapped read-only, its SHA-256 the host's; a worker's read-only mapping gave the same, another's write faulted (QEMU, not a machine's figure)", flush=True)
 
 
+def recover_lending_check(vm):
+    """308-KRN-0204: the store's client that may recover the volume key (BADGE_RECOVER, 8) is the shell's, in SLOT_RECOVER
+    (43); a program started without REQUEST_RECOVER holds no copy, as the shell lends one only for that request
+    (308-APP-0122)."""
+    real = vm.services()
+    if "blockstore" not in real:
+        return
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    recovers = lambda held: [m for m in re.finditer(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", held, re.M)
+                             if servers.get(int(m[3])) == real["blockstore"] and int(m[2]) & 8]
+    shell = vm.command(f"stat caps {real['shell']}", raw=True)
+    assert [m[1] for m in recovers(shell)] == ["43"], shell
+    shown = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    task = int(re.search(r"^(\d+) clock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    held = vm.command(f"stat caps {task}", raw=True)
+    require(held, "STAT CAPS VERSION=")
+    assert not recovers(held) and not re.search(r"^SLOT=43 ", held, re.M), held
+    require(vm.command(f"kill {shown}"), f"KILLED PID={shown}")
+    task_rows_reaped(vm)
+    print("PASS: the store's recovery client is the shell's alone, in slot 43; a program started without REQUEST_RECOVER "
+          "holds no copy (308-KRN-0204)", flush=True)
+
+
 def hardware_report_check(vm):
     """174-KRN-0038: init asks the kernel for the hardware report at boot; without a log volume it writes nothing (ram:
     and data/ are the user's) and says how large the report was. usb_image_smoke.py reads one from a log volume."""
@@ -1163,6 +1186,7 @@ def normal_suite(vm):
         for pid in holders:
             vm.command(f"kill {pid}")
     stack_check(vm)
+    recover_lending_check(vm)
     # 211-KRN-0044: init's first line names the branch and commit built (02_build.sh). Last: dmesg takes a PID.
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
