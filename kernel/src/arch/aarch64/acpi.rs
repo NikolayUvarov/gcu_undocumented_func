@@ -95,9 +95,9 @@ pub unsafe fn init(rsdp: u64) {
     if !ecam { serial_print("MIND CORE KERNEL: ACPI: NO MCFG\n"); }
     for &address in &definitions[..count] { if let Some(block) = table(address).filter(|t| t.len() > 36) { pins(&block[36..]); } }
     use core::fmt::Write;
-    let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: BOARD GICV{} GICD={:#x} GICR={:#x} ITS={:#x} UART={:#x} LINE {} TIMER PPI {} CPUS {}\r",
+    let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: BOARD GICV{} GICD={:#x} GICR={:#x} ITS={:#x} UART={:#x} LINE {} TIMER PPI {} CPUS {} ENTERED AT EL{}\r",
                      board::get(&board::GIC_VERSION), board::get(&board::GICD), board::get(&board::GICR), board::get(&board::GITS), board::get(&board::UART),
-                     board::get(&board::UART_LINE), board::get(&board::TIMER_PPI), CPU_COUNT.load(Ordering::Acquire));
+                     board::get(&board::UART_LINE), board::get(&board::TIMER_PPI), CPU_COUNT.load(Ordering::Acquire), board::get(&board::ENTRY_EL));
     report_pins();
     if CPU_COUNT.load(Ordering::Acquire) == 0 { serial_print("MIND CORE KERNEL: ACPI: NO GICC IN THE MADT, ONE CPU\n"); }
 }

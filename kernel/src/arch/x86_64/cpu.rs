@@ -393,6 +393,8 @@ pub unsafe fn write_back(start: usize, len: usize) {
 /// Sleeps until an interrupt with interrupts enabled only meanwhile.
 pub unsafe fn wait_for_interrupt() { asm!("sti", "hlt", "cli"); }
 pub unsafe fn disable_interrupts() { asm!("cli"); }
+/// The kernel's privilege level at entry: ring 0 already on x86 (aarch64 leaves EL2, 100004-PRT-0014).
+pub unsafe fn kernel_level() {}
 /// Stops this CPU for good.
 pub unsafe fn halt_here() -> ! { asm!("cli"); loop { asm!("hlt"); } }
 

@@ -67,7 +67,8 @@ pub fn pan() -> bool { let mmfr1: u64; unsafe { asm!("mrs {}, id_aa64mmfr1_el1",
 
 // A secondary CPU starts at ap_boot with its MMU and caches off and x0 = its record: the boot CPU's translation
 // registers and system control, its stack, its index and the Rust entry. It turns the MMU on like the boot CPU's and
-// jumps; the kernel is identity-mapped, so addresses do not change.
+// jumps; the kernel is identity-mapped, so addresses do not change. One the firmware started at EL2 (TF-A starts them
+// there where the core has EL2) goes on at EL1 (100004-PRT-0014).
 #[repr(C, align(64))]
 struct Record { mair: u64, tcr: u64, ttbr0: u64, sctlr: u64, stack: u64, index: u64, entry: u64 }
 static mut RECORDS: [Record; MAX] = [const { Record { mair: 0, tcr: 0, ttbr0: 0, sctlr: 0, stack: 0, index: 0, entry: 0 } }; MAX];
@@ -94,10 +95,109 @@ ap_boot:
     mov sp, x1
     ldr x2, [x0, #48]
     ldr x0, [x0, #40]
-    br x2
+    mrs x3, CurrentEL
+    cmp x3, #8
+    b.ne 3f
+    bl el2_for_el1
+    msr sp_el1, x1
+    mov x3, #0x3c5
+    msr spsr_el2, x3
+    msr elr_el2, x2
+    eret
+3:  br x2
+
+// EL2 set for a kernel at EL1 (100004-PRT-0014), here so that a CPU with its caches off reads it as written: EL1 runs
+// AArch64 and nothing traps to EL2; EL1 has the physical counter and timer, and the virtual count is the physical; no
+// stage 2; FP and SIMD untrapped; the GICv3 system registers EL1's where the core has them (ICC_SRE_EL2, ICH_HCR_EL2);
+// the CPU's own ID registers. Clobbers x9.
+el2_for_el1:
+    mov x9, #0x80000000
+    msr hcr_el2, x9
+    mov x9, #3
+    msr cnthctl_el2, x9
+    msr cntvoff_el2, xzr
+    msr vttbr_el2, xzr
+    mov x9, #0x33ff
+    msr cptr_el2, x9
+    msr hstr_el2, xzr
+    mrs x9, midr_el1
+    msr vpidr_el2, x9
+    mrs x9, mpidr_el1
+    msr vmpidr_el2, x9
+    mrs x9, id_aa64pfr0_el1
+    ubfx x9, x9, #24, #4
+    cbz x9, 1f
+    mrs x9, S3_4_C12_C9_5
+    orr x9, x9, #1
+    orr x9, x9, #8
+    msr S3_4_C12_C9_5, x9
+    msr S3_4_C12_C11_0, xzr
+1:  isb
+    ret
+
+// The boot CPU entered at EL2 (U-Boot's and EDK2's EFI applications where the core has EL2): EL1 gets EL1_BOOT's map,
+// the kernel's MAIR and TCR (mmu.rs) and its MMU and caches on, EL2 the above, and the CPU goes on at EL1 at the
+// return address on the same stack. x0: the EL it was entered at. Clobbers x9 and x10.
+    .global to_el1
+to_el1:
+    mrs x0, CurrentEL
+    lsr x0, x0, #2
+    cmp x0, #2
+    b.ne 2f
+    mov x10, x30
+    bl el2_for_el1
+    mov x30, x10
+    adrp x9, EL1_BOOT_L1
+    orr x10, x9, #3
+    adrp x9, EL1_BOOT_L0
+    str x10, [x9]
+    dsb ish
+    msr ttbr0_el1, x9
+    mov x9, #0xff00
+    movk x9, #0x44, lsl #16
+    msr mair_el1, x9
+    mrs x9, id_aa64mmfr0_el1
+    and x9, x9, #0xf
+    mov x10, #5
+    cmp x9, x10
+    csel x9, x9, x10, lo
+    lsl x9, x9, #32
+    mov x10, #0x3510
+    movk x10, #0x80, lsl #16
+    orr x9, x9, x10
+    msr tcr_el1, x9
+    isb
+    tlbi vmalle1
+    dsb nsh
+    mov x9, #0xd91d
+    movk x9, #0x34d5, lsl #16
+    msr sctlr_el1, x9
+    mov x9, sp
+    msr sp_el1, x9
+    mov x9, #0x3c5
+    msr spsr_el2, x9
+    msr elr_el2, x30
+    eret
+2:  ret
 ap_boot_end:
     .previous
 "#);
+
+// EL1's map from leaving EL2 until mmu::init takes over (100004-PRT-0014), as the kernel's own map treats memory: the
+// first GiB device memory, the next 511 normal, in 1 GiB blocks, EL1 only; the root's entry 0 is written on the way.
+#[repr(C, align(4096))]
+struct BootTable([u64; 512]);
+#[no_mangle]
+static EL1_BOOT_L1: BootTable = BootTable({ let (mut t, mut i) = ([0; 512], 0); while i < 512 { t[i] = (i as u64) << 30 | 1 << 10 | 1 | if i == 0 { 3 << 53 } else { 1 << 2 | 3 << 8 | 1 << 54 }; i += 1; } t });
+#[no_mangle]
+static mut EL1_BOOT_L0: BootTable = BootTable([0; 512]);
+
+/// At entry: a boot CPU entered at EL2 goes on at EL1, and the EL it was entered at is kept for the board's line.
+pub unsafe fn kernel_level() {
+    let el: usize;
+    asm!("bl to_el1", out("x0") el, out("x9") _, out("x10") _, out("lr") _);
+    super::board::set(&super::board::ENTRY_EL, el);
+}
 unsafe extern "C" { static ap_boot: u8; static ap_boot_end: u8; }
 
 // Writes the data cache lines of [start, start + len) back to memory, for a CPU that reads it with caches off.

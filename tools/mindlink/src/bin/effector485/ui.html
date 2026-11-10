@@ -104,6 +104,7 @@ small { color: var(--dim); }
     <div>
       <h2>Console</h2>
       <div class="row"><button id="consolego" title="the machine's console in the pane below: channel 1 and the lines outside frames (800-LNK-0039)">show</button><input id="cline" placeholder="a line for its console (Enter sends it)"><button id="csend">send</button></div>
+      <div class="row"><button id="cctrl" title="Ctrl-C, which clears U-Boot's line">^C</button><button id="cbreak" title="a break of 250 ms on the line, while no machine answers it (800-LNK-0043)">break</button><small id="cmode"></small></div>
     </div>
     <div>
       <h2>Program</h2>
@@ -355,8 +356,11 @@ $("#keyset").onclick = () => {
   if (ws) ws.close();
 };
 // The console (800-LNK-0039): read from the API every half second while it is the pane's; each line sent gets a number
-// that grows across reloads, so a line sent twice is written once.
-let consoleAt = 0, consoleSeq = Date.now();
+// that grows across reloads, so a line sent twice is written once. While no machine answers, the line's console takes
+// the typing as it is, U-Boot's prompt for one (800-LNK-0043): on a cable of several it is `line`.
+let consoleAt = 0, consoleSeq = Date.now(), consoleMode = "";
+const consoleName = () => links.length > 1 && !links.some(l => l.online) ? "line" : (agent || "link");
+const consoleWho = () => following && following.startsWith("console:") ? following.slice(8) : consoleName();
 async function readConsole(who) {
   if (following !== "console:" + who) return;
   try {
@@ -370,21 +374,26 @@ async function readConsole(who) {
       consoleAt = v.next;
       $("#out").textContent = outText;
       if ($("#follow").checked) $("#out").scrollTop = $("#out").scrollHeight;
-      $("#outstate").textContent = `${v.next} bytes` + (v.offered ? "" : " · it does not offer its console on the link");
+      consoleMode = v.mode;
+      $("#cmode").textContent = v.mode === "console" ? "console mode: no machine answers, typing goes to the line as it is" : "";
+      $("#outstate").textContent = `${v.next} bytes · ${v.mode}` + (v.offered || v.mode === "console" ? "" : " · it does not offer its console on the link");
     }
   } catch (e) {}
   setTimeout(() => readConsole(who), 500);
 }
 $("#consolego").onclick = () => {
-  const who = agent || "link";
+  const who = consoleName();
   following = "console:" + who; consoleAt = 0; outText = ""; $("#out").textContent = "";
   $("#outid").textContent = `the console of ${who}`; $("#outstate").textContent = "";
   readConsole(who);
 };
+// In console mode an empty line is sent too: its carriage return stops U-Boot's countdown.
 $("#csend").onclick = async () => {
-  const text = $("#cline").value; if (!text) return;
-  if (await post("/api/v1/console/input", { agent_id: agent || "link", seq: ++consoleSeq, text: text + "\r" })) $("#cline").value = "";
+  const text = $("#cline").value; if (!text && consoleMode !== "console") return;
+  if (await post("/api/v1/console/input", { agent_id: consoleWho(), seq: ++consoleSeq, text: text + "\r" })) $("#cline").value = "";
 };
+$("#cctrl").onclick = () => post("/api/v1/console/input", { agent_id: consoleWho(), seq: ++consoleSeq, text: "\u0003" });
+$("#cbreak").onclick = () => post("/api/v1/console/break", { agent_id: consoleWho(), ms: 250 });
 $("#cline").onkeydown = e => { if (e.key === "Enter") $("#csend").click(); };
 $("#outcopy").onclick = () => navigator.clipboard && navigator.clipboard.writeText(outText);
 if (location.hash.length > 1) follow(decodeURIComponent(location.hash.slice(1)));
