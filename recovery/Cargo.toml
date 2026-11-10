@@ -1,0 +1,22 @@
+[package]
+name = "recovery"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# recovery (308-APP-0122): a recovery key of the store's volume key made, shown once and typed back, and a store opened
+# with one; the screen, the key file and the store's calls in the library, tested on the host (tests/recovery_host.rs).
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "recovery"
+path = "src/main.rs"
+
+[dependencies]
+libmind = { path = "../libmind", features = ["alloc"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

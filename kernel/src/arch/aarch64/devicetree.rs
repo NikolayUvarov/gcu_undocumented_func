@@ -75,11 +75,11 @@ pub unsafe fn init(address: u64) -> bool {
     let uart = match (board::get(&board::UART_KIND), board::get(&board::UART_SHIFT), board::get(&board::UART_WIDTH)) {
         (board::UART_16550, shift, width) => ("16550", shift, width), _ => ("PL011", 0, 4),
     };
-    let _ = writeln!(out, "MIND CORE KERNEL: BOARD FROM THE DEVICE TREE: GICV{} GICD={:#x} GICC={:#x} GICR={:#x} ITS={:#x} V2M={:#x} UART={:#x} {} SHIFT {} WIDTH {} LINE {} TIMER PPI {} CPUS {} PSCI {} RTC={:#x} ECAM {} RESERVED {}\r",
+    let _ = writeln!(out, "MIND CORE KERNEL: BOARD FROM THE DEVICE TREE: GICV{} GICD={:#x} GICC={:#x} GICR={:#x} ITS={:#x} V2M={:#x} UART={:#x} {} SHIFT {} WIDTH {} LINE {} TIMER PPI {} CPUS {} PSCI {} RTC={:#x} ECAM {} RESERVED {} ENTERED AT EL{}\r",
         board::get(&board::GIC_VERSION), board::get(&board::GICD), board::get(&board::GICC), board::get(&board::GICR), board::get(&board::GITS), board::get(&board::V2M),
         board::get(&board::UART), uart.0, uart.1, uart.2, board::get(&board::UART_LINE), board::get(&board::TIMER_PPI), started,
         match b.psci { Some(fdt::Conduit::Smc) => "SMC", Some(fdt::Conduit::Hvc) => "HVC", None => "NONE" }, board::get(&board::RTC),
-        if b.ecam.is_some() { "YES" } else { "NONE" }, reserved);
+        if b.ecam.is_some() { "YES" } else { "NONE" }, reserved, board::get(&board::ENTRY_EL));
     let _ = writeln!(out, "MIND CORE KERNEL: DEVICE TREE: {} DEVICE NODES TO LEND{}, {} OF THEM SHARING A PAGE WITH ANOTHER: THOSE PAGES ARE LENT TO NONE\r",
         nodes.count(), if nodes.left_out() > 0 { " (MORE LEFT OUT)" } else { "" }, shared);
     if b.console.is_none() { crate::serial_print("MIND CORE KERNEL: DEVICE TREE: NO CONSOLE THIS KERNEL DRIVES IN stdout-path\n"); }
