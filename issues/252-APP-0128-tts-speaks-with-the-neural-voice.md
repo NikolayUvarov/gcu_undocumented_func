@@ -1,6 +1,6 @@
 # 252-APP-0128 — `tts` speaks Russian with the neural voice from `models:`, the formant voice its fallback
 
-**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (made and run on QEMU x86 with `main`'s grant; a voice control answer, a later phrase's latency, aarch64's run and the MacBook Pro left, 2026-11-10) · **Blocked by:** — ([252-KRN-0230](../issues-done/252-KRN-0230-tts-reads-the-neural-voice.done) in `main`, round 110) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
+**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done on QEMU x86 with `main`'s grant, a later phrase and a voice control answer included; aarch64 and the MacBook Pro left, 2026-11-10) · **Blocked by:** — ([252-KRN-0230](../issues-done/252-KRN-0230-tts-reads-the-neural-voice.done) in `main`, round 110) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
 
 **Numbered by:** the tools track, 2026-11-09, from [252-APP-0041](252-APP-0041-russian-speech-on-the-macbook.md)'s measurements.
 
@@ -61,11 +61,15 @@
 - **On `main`'s `init`** (6894fa27, `main` 7c496688 merged in, 2026-11-10), with no local edit:
   - the `tts` suite passed with KRN's holdings check: a read-only scope of `models:` in slot 7, `tts 48` read at a restart, 16 MiB without a line;
   - `ttsneural` passed, with the same disk and `tts 320`: the voice was ready in 19.5 s, the whole took 165 s for 1544 ms of speech (TCG, MC-12.1), and Vosk's small model heard `говорит разум корабля`.
+- **A later phrase and a voice control answer** (b0a3d32b, the same machine and disk, 2026-11-10):
+  - `tts` logs how long after a request the neural voice's first sound was handed to the audio stream;
+  - `ttsneural` says a second sentence, then asks voice control «который час» from a WAV file made by the host build of `tts`, and its answer (the time in words) goes through `tts` like any client's;
+  - all three were the neural voice's, with no fallback in the log;
+  - the first sound came after 172.6 s for the first sentence (22.2 s of it the voice's load), 197.6 s for `Система готова к работе.` (1904 ms of speech), and 245.5 s for the answer (2380 ms);
+  - these are TCG's times, about two minutes of emulation for each second of speech. They say nothing about a machine's latency (MC-12.1), which the MacBook Pro's run is to measure.
 - **Left:**
-  - a voice control answer;
-  - the latency of a later phrase;
-  - aarch64, whose programs are soft-float, so emulated synthesis there would take far longer;
-  - the MacBook Pro.
+  - **aarch64:** QEMU's `virt` machine in the suites has no sound device, and its programs are soft-float, so emulated synthesis would take far longer still;
+  - **the MacBook Pro:** the maintainer's hearing, and the first and later phrases' latency on a machine.
 
 ## Related
 
