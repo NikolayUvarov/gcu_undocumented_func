@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered: the shell's `update kept` became [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -143,6 +143,8 @@ Numbered on 2026-11-10 as [351-APP-0132](../issues-done/351-APP-0132-update-kept
 - **Checked by:** the `updatestore` suite, which then reads the kept releases through the shell before and after the apply (351-UPD-0035's second criterion).
 
 ## The shell's prompt above the output of a program that ended before it was in front (for 000-NET-0065)
+
+Numbered on 2026-11-10 as [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done).
 
 **Asked by** NET on 2026-11-10, for [000-NET-0065](000-NET-0065-the-wifi-checks-lines-after-an-early-prompt.md). Seen in round 117's gate and in the kernel session's container.
 
