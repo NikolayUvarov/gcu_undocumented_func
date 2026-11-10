@@ -46,6 +46,26 @@ pub const SOUND_STEP: u8 = 5;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sound { pub volume: u8, pub muted: bool, pub gain: u8, pub boost: Option<bool>, pub lines: [String; 2] }
 
+// `text` in lines of at most `width` characters, broken at spaces.
+fn wrapped(text: &str, width: usize) -> Vec<String> {
+    let (mut lines, mut line) = (Vec::new(), String::new());
+    for word in text.split(' ') {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width { lines.push(core::mem::take(&mut line)); }
+        if !line.is_empty() { line.push(' '); }
+        line.push_str(word);
+    }
+    if !line.is_empty() { lines.push(line); }
+    lines
+}
+
+/// What the sound page says of its meter: the microphone is a sensor of the user's surroundings (MC-11.4).
+pub const METER_NOTE: &str = "The microphone records only while this page is open.";
+
+/// The meter's line: half a second's peak and RMS and the noise floor, in dBFS as `hear` gives them (000-APP-0053).
+pub fn meter_line(peak: i32, rms: i32, floor: i32) -> String {
+    format!("Microphone: peak {} dBFS, RMS {} dBFS; noise floor {} dBFS", peak, rms, floor)
+}
+
 /// The levels from `volume`'s and `mic`'s lines (`VOLUME 51 % (…), NOT MUTED`, `MIC 60 % (…), BOOST OFF (+20.00 DB)`);
 /// None for lines that are not theirs (an error's).
 pub fn sound(volume: &str, mic: &str) -> Option<Sound> {
@@ -91,6 +111,8 @@ pub struct Settings {
     /// On the sound page: the levels as the shell last answered (None: not read), the shell's line when it gave none
     /// (no device), and its row.
     pub sound: Option<Sound>, pub sound_note: Option<String>, pub sound_row: usize,
+    /// On the sound page: the microphone's meter while wm records for it, or why it does not (000-APP-0077); None: off.
+    pub meter: Option<String>,
     /// The picture's file chosen by browsing (000-APP-0072), and how a directory is read: its entries (name, directory).
     pub browser: Option<Browser>, pub lister: Lister,
     /// On the network page: the Wi-Fi station's country as `wm` last read it through its client (550-APP-0082); None:
@@ -203,7 +225,7 @@ impl Settings {
         let mut file = InputLine::new();
         if let Some(name) = config.picture.file() { for ch in name.chars() { file.insert(ch); } }
         Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, zone: 0, message: None, shell: false,
-               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, sound: None, sound_note: None, sound_row: 0, browser: None, lister: no_files, country: None, machine: None, hostname: InputLine::new() }
+               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, sound: None, sound_note: None, sound_row: 0, meter: None, browser: None, lister: no_files, country: None, machine: None, hostname: InputLine::new() }
     }
 
     /// The grid became `screen` cells at `scale` (000-APP-0061): the window is centred on it anew.
@@ -740,7 +762,14 @@ impl Settings {
             let none = self.sound_note.clone().unwrap_or_else(|| String::from("The shell has not answered for the levels yet."));
             let lines = self.sound.as_ref().map_or([none, String::from("Kept in data/sound.conf, set again at the shell's start.")], |s| [s.lines[0].clone(), s.lines[1].clone()]);
             for (i, line) in lines.iter().enumerate() { grid.text_max(x, below + i, line, w, theme.dialog); }
-            if let Some(message) = &self.message { grid.text_max(x, below + lines.len() + 1, message, w, theme.accent); }
+            let mut next = below + lines.len() + 1;
+            if let Some(meter) = &self.meter {
+                grid.text_max(x, next, meter, w, theme.dialog);
+                grid.text_max(x, next + 1, METER_NOTE, w, theme.dialog);
+                next += 3;
+            }
+            // The shell's whole line, as it says where the levels are kept.
+            if let Some(message) = &self.message { for (i, line) in wrapped(message, w).iter().enumerate() { grid.text_max(x, next + i, line, w, theme.accent); } }
         } else if self.page == SCREEN {
             let (cw, ch) = crate::scale::cell(self.scale);
             let (cols, rows) = crate::scale::cells(self.scale, self.pixels);
