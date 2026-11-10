@@ -68,7 +68,7 @@
 
 **The fix (`kernel/src/scheduler.rs`: `move_waiting`, `relist`, and the return in `select`).** An application whose wait ended borrows an idle CPU while its own runs a system-band task, and goes back when it waits again.
 - **Who borrows:** an application whose wait ended (a sleep, a message, a reply), ready on a CPU that runs a system-band task.
-- **Which CPU:** an idle one, if one is online and holds no application.
+- **Which CPU:** an idle one, if one is online. Sleeping applications placed there stay placed there.
   - It runs there until it waits again, then goes back to its own CPU (`home`).
   - `ps` and `stat` show `home`, and spawn's balance counts it.
 - **When it is looked at:**
@@ -91,7 +91,18 @@
 - the busy loop took 1.00 of the time other tasks leave its CPU;
 - the heap suite's stress programs were on all four CPUs.
 - **A third run of the `bench` suite** failed `kbench_check`'s bound on the empty call, 10.3 µs against 10 µs; the two runs after it gave 2.8 and 4.6 µs. Nothing of this change is on that call's path, which takes no lock. It is noted as seen once.
-- **One number to watch:** the revocation check's longest 10 ms sleep was 77 ms in this run, where two runs before the change gave 14 ms. Its bound is 1000 ms; one sample says nothing yet.
+- **The revocation check's longest 10 ms sleep** was 77 ms in one run and 21 ms in the next, where two runs before the change gave 14 ms. Its bound is 1000 ms.
+- **With the relaxed rule,** the same four x86 groups passed again: `kbench`'s `sleep 10 ms` median 10.8 ms, the busy loop 1.00 of the time other tasks leave its CPU.
+
+**On aarch64,** in this container, the first build of this fix required the idle CPU to hold no application. With it, "aarch64: programs, shell and four CPUs" failed once in the `nnd` suite: `nncheck`'s cancel came after the job in 15 of 16 tries.
+- **How the check works:** `nncheck` waits for nnd's reply ("pending" at the deadline), then cancels. A reply that reaches `nncheck` behind the job's worker comes too late.
+- **Two runs of the `nnd` suite alone, each build:**
+  - this fix: 0 late cancels, then 0;
+  - `main` 3fc93b93: 1 late cancel before the partway one, then 0.
+- So the late cancel is `main`'s too, and the rule was relaxed to any idle CPU.
+- **With the relaxed rule:** both aarch64 groups passed, and three runs of the `nnd` suite alone passed, with 7, 0 and 0 late cancels before the partway one.
+  - When the job's rows run on every CPU's worker, no CPU is idle and nothing can move, on `main` as with this fix.
+  - Whether borrowing makes late cancels more frequent is not known from so few runs. Placement and `ps` keep to `home`, so the heap suite's spread no longer depends on where a borrower runs.
 
 **Not done:**
 - An application behind another application is not moved; the slices share that CPU, as before.
