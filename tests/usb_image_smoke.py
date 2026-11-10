@@ -329,16 +329,20 @@ def run(args, booted):
         assert heap_used(vm) == baseline, (heap_used(vm), baseline)
         # Files are read from the same USB drive: xHCI -> usb_host -> usb_storage -> vfs_server (issue 164).
         require(vm.service_logs("usb_host", "SUPER SPEED"), "(SUPER SPEED)")
-        require(vm.service_logs("usb_storage", "[USB] MASS STORAGE: "), "[USB] MASS STORAGE: ")
+        usb = vm.service_logs("usb_storage", "[USB] MASS STORAGE: ")
+        require(usb, "[USB] MASS STORAGE: ")
         require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM USB"), "[VFS] MOUNTED FAT16 FROM USB")
-        # 307-KRN-0177: the store on its own partition, window 1 of the usb_storage vfs_server reads its volumes from.
+        # 307-KRN-0177: the store on its own partition, window 1 of the usb_storage vfs_server reads its volumes from. Read
+        # with `logs`, a built-in (`logs` drains, so usb_storage's window line is in the output read above): the PIDs the
+        # next checks expect stay free.
         entries, signature = partitions(booted)
         _, _, store_first, store_count = entries[2]
-        ready, init = store_lines(vm)
+        ready = vm.service_logs("blockstore", "[BLOCKSTORE] READY")
+        init = vm.service_logs("init", "[INIT] THE BLOCK STORE'S PARTITION")
         require(init, "[INIT] usb_storage: MBR, 3 PARTITIONS")
         require(init, f"[INIT] usb_storage PARTITION 3: TYPE 7F, {store_count} SECTORS FROM {store_first}, PARTUUID {signature:08x}-03")
         require(init, f"[INIT] THE BLOCK STORE'S PARTITION: usb_storage PARTITION 3 (ITS TYPE AND SUPERBLOCK), {store_count} SECTORS FROM {store_first}, WINDOW 1")
-        require(vm.command("dmesg -s usb_storage", raw=True), f"[BLOCK] WINDOW 1 SET: {store_count} SECTORS FROM {store_first}")
+        require(usb + vm.service_logs("usb_storage"), f"[BLOCK] WINDOW 1 SET: {store_count} SECTORS FROM {store_first}")
         require(ready, f"SECTORS=1/{store_count} ")
         require(vm.command("run files &"), "PID=5 NAME=files BACKGROUND")
         files_check(vm, 5)
