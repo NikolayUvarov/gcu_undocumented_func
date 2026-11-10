@@ -95,7 +95,7 @@ No real machine is needed.
 
 `ERR_IO` needs the protocol to tell a driver's timeout from a lost driver. That is libmind's core, KRN's.
 
-**The failure's code, answered (2026-11-10)** by [000-KRN-0228](000-KRN-0228-a-block-drivers-failure-reaches-the-client-as-io.md) and DRV's port of the six block drivers to its `Outcome`, in one landing request:
+**The failure's code, answered (2026-11-10)** by [000-KRN-0228](../issues-done/000-KRN-0228-a-block-drivers-failure-reaches-the-client-as-io.done) and DRV's port of the six block drivers to its `Outcome`, in one landing request:
 - `ata`'s `Busy`, `NoData` and `Error` and `ahci`'s failed command (timed out or a task-file error) answer `DriverError::Io`, which reaches the client as `io` (`ERR_IO`) after one call, never as `peer`;
 - a request the driver's own checks refuse answers `Range`, which is `invalid`.
 

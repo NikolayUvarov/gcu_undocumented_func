@@ -1,8 +1,8 @@
-# 000-KRN-0228 — A block driver's failure reaches the client as `io`, not as `peer`
+# 000-KRN-0228 — A block driver's failure reaches the client as `io`, not as `peer` — done
 
-**Type:** libmind (the block protocol's server side, `libmind/src/block_protocol.rs`, `block.rs`; `idl/block.wit` 2.0) · **Owner:** `KRN` (libmind's core) · **Priority:** P2 · **Status:** in progress (libmind's part made on `claude/000-KRN-0228-block-driver-errors`, 2026-11-10; the drivers move on DRV's branch) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-6.4, MC-6.6, MC-12.4
+**Type:** libmind (the block protocol's server side, `libmind/src/block_protocol.rs`, `block.rs`; `idl/block.wit` 2.0) · **Owner:** `KRN` (libmind's core) · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-6.4, MC-6.6, MC-12.4
 
-DRV's request of 2026-11-09 (`KRN/2026-11-09T2324Z-DRV-a-request-a-drivers-io-failure-reaches-the-client-as-io-not-peer.md` on `internal-dev-messages`), for its [000-DRV-0064](000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md)'s second criterion.
+DRV's request of 2026-11-09 (`KRN/2026-11-09T2324Z-DRV-a-request-a-drivers-io-failure-reaches-the-client-as-io-not-peer.md` on `internal-dev-messages`), for its [000-DRV-0064](../issues/000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md)'s second criterion.
 
 ## Problem
 
@@ -59,8 +59,19 @@ So a drive that fails or does not answer looks like a restart:
   None of them makes a drive fail.
 - **Sent to DRV and STO:** `ALL/2026-11-10T0214Z-KRN-the-block-drivers-failure-as-io-is-000-krn-0228-libminds-part-is-ready.md`. The third criterion is DRV's branch's.
 
+## Resolution
+
+**All criteria are met.** It landed in round 111 (`main` 08cdd8d8, 2026-11-10), through DRV's request, which carried the kernel session's branch.
+- **The wire.** `idl/block.wit` 2.0 answers a driver's failure as `io`, a request outside the device or the window as `invalid`, and a device that went away as `not-found`. A failure is never answered as `peer`. The bindings are regenerated.
+- **The drivers.** `block_protocol::Driver` returns `Outcome` (`DriverError` Io, Range, Gone), and `block::serve` maps it. The six drivers are ported (DRV's 000-DRV-0064): `ahci`, `ata`, `nvme`, `virtio_blk`, `usb_storage` and `ramdisk`.
+- **The client.** `block::Device` does not repeat an `io`: the client sees it after one call.
+- **Evidence:**
+  - `tests/block_host.rs` checks `read`, `write` and `flush`, on the whole device and through a window;
+  - round 111's gate passed in every group, the block, disk, store and USB suites on x86 and aarch64 among them.
+- **Not tested:** no QEMU suite makes a drive fail, so the `io` answer is shown by the host tests and `ata_ahci_waits_host.rs` alone.
+
 ## Related
 
-- [000-DRV-0064](000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md): `ata` and `ahci` wait to deadlines; its second criterion needs this.
-- [000-DRV-0058](000-DRV-0058-usb-storage-reports-a-device-that-came-back.md): `Driver::returned()`, beside it in `block_protocol`.
-- [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md): the windows, which this builds on (block.wit 1.2).
+- [000-DRV-0064](../issues/000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md): `ata` and `ahci` wait to deadlines; its second criterion needs this.
+- [000-DRV-0058](../issues/000-DRV-0058-usb-storage-reports-a-device-that-came-back.md): `Driver::returned()`, beside it in `block_protocol`.
+- [307-DRV-0054](../issues/307-DRV-0054-a-block-client-bounded-to-a-window.md): the windows, which this builds on (block.wit 1.2).
