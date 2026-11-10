@@ -109,6 +109,29 @@ tries 3                                   # tries of a trial boot for an automat
 - **The source** may be an HTTPS server or a directory with the layout of `scripts/release.py`. Both go through the same checks.
 - **HTTPS** runs over the flow grant the network policy gives `updater`, so `netpolicy.txt` must name the server.
 
+### A release's own period: period.txt (351-UPD-0036)
+
+`every` is no anchor of trust, as `source` and `pin` are, so a release may carry it. Then an update, over the cable, through Effector or from the server, changes it, and the stick need not be written again.
+
+- **Where:** `period.txt` in the slot (`MIND/<slot>/period.txt`), listed in the slot's signed manifest. It is not `update.txt`, which is the root's: a release's `update.txt` would be a file of the root (`plan::kind`).
+- **What it holds:** one line `every SECONDS`, with `#` comments and blank lines around it (`plan::period`). Any other line, a second `every` or none refuses the file.
+- **What the updater does at start,** for the slot it booted:
+  - The slot's manifest must be the one booted, its digest the launch record's.
+  - `period.txt` must match the manifest's line (size and SHA-256).
+  - It must hold `every` alone.
+  - Then its period replaces `update.txt`'s: `[UPDATER] EVERY 60 S, BY SLOT B'S period.txt (update.txt'S: 21600 S)`.
+  - Otherwise `update.txt`'s stays, and the log says why: `… IS NOT AS THE MANIFEST LISTS IT`, `… REFUSED (source …)`, or a manifest that is not the one booted.
+  - `source`, `pin`, `channel`, `automatic` and `tries` stay the root's alone.
+- **Staged and applied** as the slot's other files:
+  - `fetch` stages it with them, and removes a slot's old one that the new manifest does not list.
+  - `apply` checks it as listed and holding `every` alone, and refuses a slot with one the manifest does not list.
+  - A release whose period is refused is not booted: `[UPDATER] SLOT B: period.txt REFUSED (…)`.
+  - The block store keeps it with the release's other slot files (351-UPD-0033).
+- **The build writes it when asked:** `MIND_UPDATE_EVERY=60 ./02_build.sh` (and `scripts/build_aarch64.sh`) writes `period.txt` before the manifest is signed.
+  - Without the variable, a stale one is removed.
+  - `make_usb_image.py --slots` and `boot_slots.py layout` put it in slot A.
+  - `release.py` publishes it as a blob, as it does every listed file.
+
 ## Tested
 
 - **The `update` check** (part of the `updater` suite; x86, aarch64). The image holds release 5 in slot A, confirmed, with its channel kept there. `update.txt` names the test server (`scripts/serve_release.py`) over HTTPS, trusted by its pinned key, with `automatic apply` every 20 s.
