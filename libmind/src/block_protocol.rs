@@ -50,6 +50,9 @@ pub trait Driver {
     fn flush(&mut self) -> Outcome { Ok(()) }
     /// The medium is write-protected, or the driver cannot write.
     fn read_only(&self) -> bool { true }
+    /// The medium went away and came back while the driver ran, so it may be another one (000-KRN-0085): `block::serve`
+    /// answers the request not-found and ends the instance for a fresh one. A driver that cannot tell keeps the default.
+    fn returned(&mut self) -> bool { false }
 }
 
 /// Clients of one driver instance that hold a buffer at once, each badge its own (307-KRN-0177): clients that share a
