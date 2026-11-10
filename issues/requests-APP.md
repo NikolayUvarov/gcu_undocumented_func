@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (1 request waiting to be numbered: the shell's `update kept`, STO's of 2026-11-10, for 351-UPD-0035; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: the shell's `update kept` became [351-APP-0132](351-APP-0132-update-kept-the-releases-the-store-keeps.md), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -110,7 +110,7 @@ Numbered on 2026-11-10 as [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-
 
 ## The shell asks for `keystore`'s passphrase at boot, and sets or changes it (for 308-NET-0055), once `init` lends the badge
 
-Numbered on 2026-11-10 as [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md).
+Numbered on 2026-11-10 as [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done).
 
 **Asked by** NET (made by STO) on 2026-11-10, for [308-NET-0055](308-NET-0055-keystores-passphrase-without-a-tpm.md). **Waits for** [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done), which grants the shell a `keystore` client badged `BADGE_KEY_PASSPHRASE` (6, `mind::network`) and starts the shell before the services that need the device key.
 
@@ -129,6 +129,8 @@ Numbered on 2026-11-10 as [308-APP-0130](308-APP-0130-the-shell-asks-for-keystor
 - **Checked by** a suite that types it over the serial console, as it types every command. The `tls` suite's `locked_file_check` already places a sealed file from the host.
 
 ## The shell's `update kept`: the releases the block store keeps for the updater (for 351-UPD-0035)
+
+Numbered on 2026-11-10 as [351-APP-0132](351-APP-0132-update-kept-the-releases-the-store-keeps.md).
 
 **Asked by** STO (UPD's 351-UPD-0035, made by STO by agreement) on 2026-11-10, for [351-UPD-0035](351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md). KRN, the update track's owner, said this request is STO's to send once the call is in `main`. It is, since round 116.
 
