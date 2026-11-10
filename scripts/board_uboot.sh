@@ -2,6 +2,8 @@
 # U-Boot with TF-A's BL31 for an Allwinner board's card (100004-MOB-0001): pinned tags, built once into a cache, no root.
 # Usage: scripts/board_uboot.sh [--fetch-tools] orangepi-zero-plus2|orangepi-zero3   (prints u-boot-sunxi-with-spl.bin's path)
 # U-Boot's network is off (CONFIG_NO_NET): no DHCP, PXE or TFTP boot runs before our loader (351-KRN-0195).
+# Its countdown stops only on the typed word `stop` (CONFIG_AUTOBOOT_KEYED): the console is also the link's line, whose
+# frames would stop it as any key does.
 # Needs aarch64-linux-gnu-gcc, make, bison, flex, swig, bc, python3 with setuptools and pyelftools, OpenSSL's headers.
 # --fetch-tools: bison, swig and pyelftools as Ubuntu packages unpacked into the cache (apt-get download, no root).
 # MIND_BOARD_UBOOT=<file> uses that file instead; the cache is ${XDG_CACHE_HOME:-$HOME/.cache}/mind-board-uboot.
@@ -10,6 +12,7 @@ TFA_TAG=v2.15.0 TFA_COMMIT=da738d5eae93af342fdc4995dd3c05acb4c9d757
 TFA_URLS=("https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git" "https://github.com/ARM-software/arm-trusted-firmware.git")
 UBOOT_TAG=v2026.10 UBOOT_COMMIT=5508406582f6f7120dce0c4b3059819a41788db2
 UBOOT_URLS=("https://source.denx.de/u-boot/u-boot.git" "https://github.com/u-boot/u-boot.git")
+SETTINGS=2  # the settings below; a new number builds again instead of taking the cached files
 
 FETCH_TOOLS=0
 [[ ${1:-} == --fetch-tools ]] && { FETCH_TOOLS=1; shift; }
@@ -17,14 +20,14 @@ BOARD=${1:-}
 # The board: TF-A's platform, U-Boot's defconfig, and the bytes this script made on Ubuntu 24.04's cross gcc 13.3.0.
 case $BOARD in
     orangepi-zero-plus2) PLAT=sun50i_a64 DEFCONFIG=orangepi_zero_plus2_defconfig
-                         KNOWN=f229497abae79a12cf3e406defe240e01bc20a71fa1a5dd80048dc66496b9e1f ;;
+                         KNOWN=eca0f636f497cd524bc1f6d1863517da700b8d5d598e9ea73124b702414f4c54 ;;
     orangepi-zero3) PLAT=sun50i_h616 DEFCONFIG=orangepi_zero3_defconfig
-                    KNOWN=6902f66c911e637f40e8f87ef59cb248d98182a81737ccd94efdefe7d03e7d24 ;;
+                    KNOWN=73bcdf3f7e0698f0983ff15a2026b28796fd87b93688543dbd6dff92d838d842 ;;
     *) echo "usage: $0 [--fetch-tools] orangepi-zero-plus2|orangepi-zero3" >&2; exit 2 ;;
 esac
 if [[ -n ${MIND_BOARD_UBOOT:-} ]]; then [[ -f $MIND_BOARD_UBOOT ]] || { echo "MIND_BOARD_UBOOT=$MIND_BOARD_UBOOT: no such file" >&2; exit 1; }; echo "$MIND_BOARD_UBOOT"; exit 0; fi
 CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/mind-board-uboot
-OUT=$CACHE/$UBOOT_TAG-$TFA_TAG/$BOARD
+OUT=$CACHE/$UBOOT_TAG-$TFA_TAG-s$SETTINGS/$BOARD
 BIN=$OUT/u-boot-sunxi-with-spl.bin
 [[ -f $BIN ]] && { echo "$BIN"; exit 0; }
 
@@ -69,7 +72,7 @@ fetch "$SRC/u-boot-$UBOOT_TAG" "$UBOOT_TAG" "$UBOOT_COMMIT" "${UBOOT_URLS[@]}"
 
 # The build: each tree's commit time as its time, a fixed locale and zone, outside the sources.
 export LC_ALL=C TZ=UTC KBUILD_BUILD_USER=mind KBUILD_BUILD_HOST=mind-build CROSS_COMPILE=aarch64-linux-gnu-
-WORK=$CACHE/build/$UBOOT_TAG-$TFA_TAG/$BOARD
+WORK=$CACHE/build/$UBOOT_TAG-$TFA_TAG-s$SETTINGS/$BOARD
 rm -rf "$WORK"
 mkdir -p "$WORK" "$OUT"
 SOURCE_DATE_EPOCH=$(git -C "$SRC/tf-a-$TFA_TAG" log -1 --format=%ct) \
@@ -78,11 +81,13 @@ BL31=$WORK/tf-a/$PLAT/release/bl31.bin
 UB=(make -s -C "$SRC/u-boot-$UBOOT_TAG" O="$WORK/u-boot" BL31="$BL31" SCP=/dev/null)
 export SOURCE_DATE_EPOCH=$(git -C "$SRC/u-boot-$UBOOT_TAG" log -1 --format=%ct)
 "${UB[@]}" "$DEFCONFIG" >&2
-# No network in the firmware; no capsule tool, which would need GnuTLS's headers.
-"$SRC/u-boot-$UBOOT_TAG/scripts/config" --file "$WORK/u-boot/.config" --enable NO_NET --disable TOOLS_MKEFICAPSULE
+# No network in the firmware; the countdown stopped by `stop` only; no capsule tool, which would need GnuTLS's headers.
+"$SRC/u-boot-$UBOOT_TAG/scripts/config" --file "$WORK/u-boot/.config" --enable NO_NET --disable TOOLS_MKEFICAPSULE \
+    --enable AUTOBOOT_KEYED --set-str AUTOBOOT_STOP_STR stop --set-str AUTOBOOT_PROMPT 'Autoboot in %d s: type stop for the U-Boot prompt\n'
 "${UB[@]}" olddefconfig >&2
 "${UB[@]}" -j"$(nproc)" all u-boot-initial-env >&2
 grep -q '^CONFIG_EFI_LOADER=y' "$WORK/u-boot/.config" || { echo "board_uboot: $DEFCONFIG has no UEFI loader" >&2; exit 1; }
+grep -q '^CONFIG_AUTOBOOT_STOP_STR="stop"' "$WORK/u-boot/.config" || { echo "board_uboot: the countdown would stop on any key" >&2; exit 1; }
 if grep -a -q -E '^boot_targets=.*\b(pxe|dhcp)\b' "$WORK/u-boot/u-boot-initial-env"; then echo "board_uboot: U-Boot still boots from the network" >&2; exit 1; fi
 cp "$WORK/u-boot/.config" "$OUT/u-boot.config"
 cp "$WORK/u-boot/u-boot-initial-env" "$OUT/"

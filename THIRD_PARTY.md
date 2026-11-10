@@ -128,6 +128,7 @@ The RTL8821C Bluetooth controller's `rtl_bt/rtl8821c_fw.bin` and `rtl_bt/rtl8821
 | [U-Boot](https://source.denx.de/u-boot/u-boot) (the SPL and U-Boot, with their device trees), Copyright (C) the U-Boot contributors | v2026.10, commit `5508406582f6f7120dce0c4b3059819a41788db2` | GPL-2.0 (most files GPL-2.0+; its device trees mostly GPL-2.0+ OR MIT) |
 | [Trusted Firmware-A](https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git) (BL31: PSCI and the secure monitor), Copyright (c) Arm Limited and Contributors | v2.15.0, commit `da738d5eae93af342fdc4995dd3c05acb4c9d757` | BSD-3-Clause |
 
+- **Settings changed from the boards' defconfigs:** the network off (`CONFIG_NO_NET`), the countdown stopped only by the word `stop` (`CONFIG_AUTOBOOT_KEYED`), no capsule tool.
 - **Built with** the host's cross compiler. On Ubuntu 24.04's `gcc-aarch64-linux-gnu` 13.3.0 both boards' files came out the same on two runs, and the script says when its bytes differ from those.
 - **`--fetch-tools`** unpacks Ubuntu's `bison`, `swig` and `python3-pyelftools` packages into the cache instead of installing them; they run only at build time.
 - **No proprietary file** is needed by either board's firmware.

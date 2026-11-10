@@ -46,10 +46,11 @@ U-Boot and TF-A are free software (GPL-2.0+ and BSD-3-Clause). Neither enters th
   - the pinned tags U-Boot v2026.10 (`55084065`) and TF-A v2.15.0 (`da738d5e`), each checked against its commit;
   - built into a cache with each tree's commit time and a fixed locale;
   - `--fetch-tools` unpacks Ubuntu's `bison`, `swig` and `python3-pyelftools` without root;
-  - the network is off in U-Boot (`CONFIG_NO_NET`), so `boot_targets` is `fel mmc0 usb0` on the Zero 3 and `fel mmc_auto usb0` on the H5, and the script refuses a build that still has `pxe` or `dhcp`. The UEFI loader stays on.
-- **The bytes** (Ubuntu 24.04, `gcc-aarch64-linux-gnu` 13.3.0): the same in a second build of the same tags in another directory (the base defconfigs, by a helper session) and again through the script with the network off:
-  - Orange Pi Zero Plus 2: 761269 bytes, SHA-256 `f229497a…6b9e1f`;
-  - Orange Pi Zero 3: 815961 bytes, SHA-256 `6902f66c…7d24`;
+  - the network is off in U-Boot (`CONFIG_NO_NET`), so `boot_targets` is `fel mmc0 usb0` on the Zero 3 and `fel mmc_auto usb0` on the H5, and the script refuses a build that still has `pxe` or `dhcp`. The UEFI loader stays on;
+  - the countdown (2 s) stops only on the typed word `stop` (`CONFIG_AUTOBOOT_KEYED`), and U-Boot says so. The console is also the link's line: effector485's hellos to a machine that does not answer yet would stop it as any key does, and every reboot would wait at U-Boot's prompt.
+- **The bytes** (Ubuntu 24.04, `gcc-aarch64-linux-gnu` 13.3.0), the same in two builds in separate caches:
+  - Orange Pi Zero Plus 2: 761269 bytes, SHA-256 `eca0f636…4f4c54`;
+  - Orange Pi Zero 3: 820057 bytes, SHA-256 `73bcdf3f…38d842`;
   - both end below 1 MiB at 8 KiB, so a boot partition at 4 MiB leaves room.
 - **`scripts/board_image.py`:**
   - the image's three partitions moved past U-Boot, the boot one to 4 MiB;
@@ -68,8 +69,8 @@ U-Boot and TF-A are free software (GPL-2.0+ and BSD-3-Clause). Neither enters th
 - **TF-A hands over to U-Boot at EL2, and U-Boot starts EFI applications at EL2:** see 100004-MOB-0002.
 
 **The first cards** (2026-11-10, the tree of d012aa0f, `main` b3fc86bb with this track's text) are on the maintainer's machine:
-- `dist/boards/mind-orangepi-zero-plus2-h5.img`, SHA-256 `467d236c…af88e94`;
-- `dist/boards/mind-orangepi-zero3.img`, SHA-256 `5e99172997…2861f1e`.
+- `dist/boards/mind-orangepi-zero-plus2-h5.img`, SHA-256 `806fa981…af3b48`;
+- `dist/boards/mind-orangepi-zero3.img`, SHA-256 `6e0970ef…dafdd30`.
 
 They show U-Boot, the loader and the kernel's first lines, and stop at `INIT STARTED` until the kernel leaves EL2 (100004-MOB-0002).
 
