@@ -9062,6 +9062,8 @@ def tts_suite(vm, wav, asr_model=None):
         time.sleep(.25)
     spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
     assert 2500 < spoken < 9000, spoken
+    # 252-APP-0128: no model disk, so the greeting's Russian is the formant voice's, and the log says why once.
+    require(vm.command("dmesg -s tts", raw=True), "[TTS] THE FORMANT VOICE SPEAKS RUSSIAN: NO SCOPE OF models:")
     time.sleep(spoken / 1000 + 1)  # wait for DMA ring playback to finish
     vm.command("kill 1")
     vm.close()
@@ -9095,6 +9097,66 @@ def tts_suite(vm, wav, asr_model=None):
         print(f"ASR: {heard!r}", flush=True)
         assert sum(word in heard for word in ("разум", "корабля", "система", "работе")) >= 3, heard
     print(f"PASS: text to speech in ring 3: {spoken} ms of speech through audio_gw, voiced pitch {sum(voiced) / len(voiced):.0f} Hz" + (", recognized by ASR" if asr_model else ""), flush=True)
+
+
+def tts_neural_suite(args, disk):
+    """252-APP-0128: with a model disk holding Vosk TTS 0.7 (--tts-models-disk: voice.bin from
+    scripts/voice_dictate/convert.py, russian.dic from scripts/voice_tts/dictionary.py, both listed in its MANIFEST.json)
+    and `tts 320` in data/memory.conf, tts says a Russian sentence with the neural voice: its log says so, and the
+    speech captured from QEMU's AC97 is the sentence's length and, with --asr-model, heard by the host's recognizer.
+    Emulated: the voice's load and synthesis times are TCG's, not a machine's (MC-12.1)."""
+    if not getattr(args, "tts_models_disk", None):
+        print("SKIP: tts's neural voice (252-APP-0128): no --tts-models-disk", flush=True)
+        return
+    import copy, json, struct, wave
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "data/memory.conf").write_text("tts 320\n")
+    machine = copy.copy(args)
+    if gibibytes(getattr(args, "memory", None)) < 2:
+        machine.memory = "2G"
+    wav = Path(tempfile.gettempdir()) / "mind-core-ttsneural.wav"
+    vm = VM(machine, disk.relative_to(ROOT).as_posix(), audio=str(wav),
+            extra=["-drive", f"if=none,id=models,format=raw,readonly=on,file={args.tts_models_disk}", "-device", "virtio-blk-pci,drive=models"])
+    sentence = "Говорит разум корабля."
+    try:
+        require(vm.service_logs("tts", "[TTS] FORMANT SYNTHESIZER READY"), "AUDIO=true")
+        require(vm.command("dmesg -s vfs_server", raw=True), "AS MODELS:")
+        vm.send_bytes(f"run say {sentence} &\n".encode())
+        started = time.monotonic()
+        for _ in range(300):  # the voice's load and its synthesis, emulated: minutes
+            log = vm.command("dmesg -s tts", raw=True)
+            if "[TTS] SPOKE" in log or "[TTS] ERROR" in log:
+                break
+            time.sleep(5)
+        took = time.monotonic() - started
+        require(log, "[TTS] THE NEURAL VOICE SPEAKS RUSSIAN: ")
+        assert "THE FORMANT VOICE SPEAKS RUSSIAN" not in log, log[-2000:]
+        spoken = int(re.search(r"\[TTS\] SPOKE \d+ BYTES, (\d+) MS", log)[1])
+        assert 800 < spoken < 4000, spoken
+        time.sleep(spoken / 1000 + 2)  # the DMA ring's playback
+    finally:
+        vm.close()
+    with wave.open(str(wav)) as audio:
+        frames, rate = audio.readframes(audio.getnframes()), audio.getframerate()
+    left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
+    loud = [i for i, sample in enumerate(left) if abs(sample) > 300]
+    assert loud, "the neural voice gave no audio"
+    seconds = (loud[-1] - loud[0]) / rate
+    assert abs(seconds * 1000 - spoken) < 1000, (seconds, spoken)
+    heard = ""
+    if args.asr_model:
+        import vosk
+        vosk.SetLogLevel(-1)
+        step = rate / 16000
+        mono = [left[int(i * step)] for i in range(int(len(left) / step))]
+        recognizer = vosk.KaldiRecognizer(vosk.Model(args.asr_model), 16000)
+        recognizer.AcceptWaveform(struct.pack(f"<{len(mono)}h", *mono))
+        heard = json.loads(recognizer.FinalResult())["text"]
+        print(f"ASR: {heard!r}", flush=True)
+        assert sum(word in heard for word in ("говорит", "разум", "корабля")) >= 2, heard
+    ready = re.search(r"READY IN (\d+) MS", log)[1]
+    print(f"PASS: tts's neural voice (252-APP-0128): {sentence} said with Vosk TTS 0.7 from the model disk, {spoken} ms of speech; "
+          f"the voice ready in {ready} ms and the whole in {took:.0f} s of emulation (TCG, not a machine's)" + (f"; heard as {heard!r}" if heard else ""), flush=True)
 
 
 def large_bss(path):
@@ -15068,6 +15130,7 @@ def main():
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
+    parser.add_argument("--tts-models-disk", help="a model disk holding tts-ru-vosk-0.7/voice.bin and russian.dic in its MANIFEST.json, for the ttsneural suite (252-APP-0128)")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
     global IMAGE, BOOT_EFI, BOOT_DRIVE, BOOT_DRIVER
@@ -15311,6 +15374,9 @@ def main():
                 continue
             if suite == "devicetree":
                 devicetree_suite(args, disk)
+                continue
+            if suite == "ttsneural":  # 252-APP-0128: with a model disk of its own; named only, in no gate group
+                tts_neural_suite(args, disk)
                 continue
             if suite == "efivar":  # aarch64 (AAVMF); on x86 the boot suite runs it
                 efivar_check(args, disk)
