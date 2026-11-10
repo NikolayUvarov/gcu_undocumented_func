@@ -8232,7 +8232,9 @@ def update_store_suite(args):
     Applied and confirmed, the store keeps both: the shell's client is refused
     their pins, and after a collection both trees read back whole, every block checked. With the machine off, slot A's
     kernel and loader are damaged on the disk: `update rollback` writes release 5 back into slot A from the store,
-    checked as a fetch, and slot A boots on trial and is confirmed, as published."""
+    checked as a fetch, and slot A boots on trial and is confirmed, as published. 351-UPD-0034: before the apply, with
+    the machine off, a byte of slot B's staged kernel is changed on the disk; with no network, `update apply` writes
+    release 6 back into slot B from the store, and slot B boots on trial and is confirmed, its kernel as published."""
     if not raw_tools() or not shutil.which("openssl"):
         print("SKIP: updatestore suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
         return
@@ -8306,6 +8308,18 @@ def update_store_suite(args):
         require(vm.command("blocks pins", raw=True), "0 PINS")
         for pin in (pin5, pin6):
             require(vm.command(f"blocks unpin {pin}", raw=True), f"blocks: unpin {pin}: Rights")
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-{args.cpus}cpu.log").write_text(vm.log)
+    # 351-UPD-0034: slot B's staged kernel damaged on the disk with the machine off; no network, so only the store has it.
+    staged = bytearray(image.read("MIND/B/kernel.elf"))
+    staged[len(staged) // 2] ^= 1
+    image.write("MIND/B/kernel.elf", bytes(staged))
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none", *disks])
+    try:
+        log = logged(vm, "[UPDATER] STORE KEEPS VERSIONS 6, 5", 300)
+        require(log, "[UPDATER] SLOT A, VERSION 5")
         vm.collect(); vm.output = ""
         since = len(vm.log)
         vm.send("update apply 3\n")
@@ -8331,8 +8345,10 @@ def update_store_suite(args):
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
-        https.shutdown()
-        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-{args.cpus}cpu.log").write_text(vm.log)
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-apply-{args.cpus}cpu.log").write_text(vm.log)
+    # Slot B's kernel is release 6's as published: written back from the store by the apply.
+    kernel6 = [digest for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf"]
+    assert kernel6 and hashlib.sha256(image.read("MIND/B/kernel.elf")).hexdigest() == kernel6[0], "slot B's kernel not written back"
     # Slot A damaged on the disk: a byte of its kernel and of its loader changed.
     damaged = ["kernel.elf", boot_slots.LOADERS[BOOT_EFI]]
     for name in damaged:
@@ -8371,7 +8387,9 @@ def update_store_suite(args):
           f"release 6 kept once staged with {taken6} of its {files6} files taken from release 5's tree; applied and "
           "confirmed, the store keeps both, the shell's client is refused their pins, and after a collection both trees "
           "read back whole; slot A's kernel and loader damaged on the disk, `update rollback` writes release 5 back from "
-          "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033)", flush=True)
+          "the store and slot A boots on trial and is confirmed, as published (351-UPD-0033); slot B's staged kernel "
+          "damaged before the apply, `update apply` with no network writes release 6 back from the store, and slot B boots "
+          "on trial and is confirmed, its kernel as published (351-UPD-0034)", flush=True)
 
 
 def install_suite(args, stub_elf):
