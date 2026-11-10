@@ -1,8 +1,8 @@
-# 307-KRN-0229 — `vfs_server`'s clients of the store's disk bounded to its own partitions
+# 307-KRN-0229 — `vfs_server`'s clients of the store's disk bounded to its own partitions — done
 
-**Type:** `init` (grants), `vfs_server` (mounts) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (made on a branch, ABI 32, 2026-11-10; QEMU runs left) · **Blocked by:** — · **Main task:** [307](307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.3
+**Type:** `init` (grants), `vfs_server` (mounts) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** [307](../issues/307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.3
 
-Split from [307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done), plan step 3's second half: "`vfs_server` gets none of that partition".
+Split from [307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.done), plan step 3's second half: "`vfs_server` gets none of that partition".
 
 ## Problem
 
@@ -83,6 +83,23 @@ Since 307-KRN-0177:
   - **The group then passed** (1055 s): the block suite through ATA, AHCI and USB, and every other suite of the group.
 - **A fault put in by hand, never committed:** `vfs_windows` set each window 256 sectors longer than its partition. The past-the-window boot then wrote past the partition (`WROTE`, `sync` `OK`), and the check failed. Without the fault it passes.
 
+## Resolution
+
+**All criteria are met. It landed in round 114 (`main` 60ba280e, 2026-11-10), with ABI 32.** Every group of the gate passed with it.
+- **The design.** The plan's order could not hold, so the change is wider than planned (Progress above).
+  - Every disk with a partition table comes to `vfs_server` as windows of the partitions it mounts, never whole. The store's disk is one of them.
+  - `vfs_server` sees such a disk through its windows as one disk, with one cache and one medium identity.
+  - What its driver refuses past a window's end is dropped and named in the log.
+- **The criteria:**
+  - **No whole disk, on x86 and aarch64.** `tests/usb_image_smoke.py` shows `vfs_server` holding the stick's boot and log partitions as windows 2 and 3 (slots 16 and 17, badges 5 and 7) and no client of the whole disk. It passed in the gate ("x86: USB image") and, for aarch64, in this session's container (`--arch aarch64`); GitHub CI runs the aarch64 one on `main`.
+  - **Everything as before.** The boot volume, `log:`, the update zone, the unplugged stick and another medium in its place all pass in the same suite.
+  - **A write past a window's end is refused.**
+    - A `log:` volume claims 256 sectors past its partition. `vfs_server`'s writes there are refused at its window's end, named, and never reach the store's sectors.
+    - The block suite is refused a sector past each window's end, through ATA, AHCI and USB.
+    - With the windows made 256 sectors longer by hand, the check failed.
+  - **`docs/profile/tcb.md`'s disk-integrity row** names `vfs_server` as outside the store's sectors by its capabilities.
+- **Two groups failed once in the gate and passed alone:** "x86: RAM above 4 GiB" on x32, and "x86: keys, shell, tools" on acc-2. They are now [000-KRN-0232](../issues/000-KRN-0232-a-program-start-sent-nothing-in-8-s-in-the-wifi-check.md) and [000-KRN-0231](../issues/000-KRN-0231-kbenchs-ten-ms-sleep-past-40-ms-on-a-loaded-host.md).
+
 ## Related
 
-[307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done), [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done), [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md).
+[307-KRN-0177](307-KRN-0177-the-stores-own-partition-classified-and-granted.done), [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.done), [000-KRN-0085](../issues/000-KRN-0085-a-returned-device-reported-to-its-block-client.md).

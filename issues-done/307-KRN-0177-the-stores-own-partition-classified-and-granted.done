@@ -120,7 +120,7 @@ Run on acc-1 through Effector, x86, at bfd38a3e: the group "x86: USB image" pass
   - In this suite the store wrote nothing then, so the copy stayed untouched, but nothing stopped it.
   - Clearing the windows on a return, and `init`'s checked re-set, are added to [000-KRN-0085](../issues/000-KRN-0085-a-returned-device-reported-to-its-block-client.md)'s plan.
   - A byte-identical copy of the stick would pass any check of its contents.
-- **`vfs_server` still holds the stick whole** for its FAT partitions, so the store's sectors are inside its reach. That is [307-KRN-0229](../issues/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.md), split from plan step 3.
+- **`vfs_server` still holds the stick whole** for its FAT partitions, so the store's sectors are inside its reach. That is [307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done), split from plan step 3.
 
 ### aarch64 and the other suites, at bfd38a3e
 
@@ -154,7 +154,7 @@ Run on acc-1 through Effector, x86, at bfd38a3e: the group "x86: USB image" pass
 
   QEMU's runs say nothing of a real machine's disks (MC-12.1).
 - **Not done:**
-  - `vfs_server` still holds the stick whole: [307-KRN-0229](../issues/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.md);
+  - `vfs_server` still holds the stick whole: [307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done);
   - the windows after a device that comes back: [000-KRN-0085](../issues/000-KRN-0085-a-returned-device-reported-to-its-block-client.md), step 5;
   - a real machine's stick: 307's own criteria.
 

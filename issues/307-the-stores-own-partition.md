@@ -1,6 +1,6 @@
 # 307 — A durable medium on real machines: the store's own partition (track B, eighth step)
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md) (what a flush reaches), [307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.md) (`vfs_server` off the store's partition) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-4.8, MC-12.1, preamble ("preservation of state"), Appendix B.3
+**Type:** main task · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md) (what a flush reaches), [307-KRN-0229](../issues-done/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done) (`vfs_server` off the store's partition) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-4.8, MC-12.1, preamble ("preservation of state"), Appendix B.3
 
 From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-as-a-minds-memory.md` on `internal-dev-messages`), taken by the storage session at the maintainer's word (2026-10-27). Everything here is plan, not a guarantee (MC-12.3).
 
@@ -74,7 +74,7 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 
 **Left besides:**
 - [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md): what a flush reaches, per driver;
-- [307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.md): `vfs_server` still holds the stick whole;
+- [307-KRN-0229](../issues-done/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done): `vfs_server` still holds the stick whole;
 - [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md), step 5: a medium that comes back keeps its windows;
 - the copy's medium on a real machine;
 - the MacBook Pro's and the Ryzen's sticks, and the profile's Article 4 row.
