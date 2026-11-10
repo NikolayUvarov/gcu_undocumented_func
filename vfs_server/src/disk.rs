@@ -8,6 +8,7 @@ use core::cell::RefCell;
 use mind::abi::BLOCK_MAX_SECTORS;
 use mind::block::Device;
 use mind::mem::Pages;
+use mind::sys::{Error, Result};
 
 const LINES: usize = 64;
 const READ_AHEAD: usize = 32;
@@ -15,18 +16,39 @@ const SLOW_MS: u64 = 1000; // a failure that took this long: the drive does not 
 const QUIET_MS: u64 = 10_000; // then requests fail at once for this long, before the drive is asked again (211-KRN-0050)
 const IDENTITY: usize = 256; // at most this many sectors read while mounting are kept, by hash, as the medium's identity
 
-// `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted; `identity`:
-// the sectors read while mounting (the boot manifest's among them), by hash, until `mounted`; `replaced`: the drive came
-// back with another medium (000-KRN-0079). `at`: where the device's sector 0 lies on its disk, a window's first (307-KRN-0229).
-pub struct Disk { device: Device, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64, first: Option<[u8; SECTOR]>, identity: alloc::vec::Vec<(u32, [u8; 32])>, recording: bool, replaced: bool, at: u64 }
+// `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted (none through
+// windows); `identity`: the sectors read while mounting (the boot manifest's among them), by hash, until `mounted`;
+// `replaced`: the drive came back with another medium (000-KRN-0079).
+pub struct Disk { device: Io, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64, first: Option<[u8; SECTOR]>, identity: alloc::vec::Vec<(u32, [u8; 32])>, recording: bool, replaced: bool }
+
+/// A disk as vfs_server reaches it: the whole device, or windows of a partitioned one, each at its first sector on the
+/// disk (307-KRN-0229). A sector is asked of the window that starts last at or before it, so one past that window's end
+/// reaches its driver, which refuses it; one before every window is refused here.
+pub enum Io { Whole(Device), Windows(alloc::vec::Vec<(u64, Device)>) }
+
+impl Io {
+    fn at(&mut self, lba: u64) -> Option<(&mut Device, u64)> {
+        match self {
+            Io::Whole(device) => Some((device, lba)),
+            Io::Windows(windows) => windows.iter_mut().rev().find(|(first, _)| *first <= lba).map(|(first, device)| (device, lba - *first)),
+        }
+    }
+    fn devices(&self) -> impl Iterator<Item = &Device> { let (whole, windows) = match self { Io::Whole(device) => (Some(device), &[][..]), Io::Windows(windows) => (None, &windows[..]) }; whole.into_iter().chain(windows.iter().map(|(_, device)| device)) }
+    pub fn read(&mut self, lba: u64, count: usize) -> Result<&[u8]> { let (device, lba) = self.at(lba).ok_or(Error::Invalid)?; device.read(lba, count) }
+    pub fn write(&mut self, lba: u64, data: &[u8]) -> Result<usize> { let (device, lba) = self.at(lba).ok_or(Error::Invalid)?; device.write(lba, data) }
+    // One drive behind every window: one flush empties its cache.
+    pub fn flush(&mut self) -> Result<()> { match self { Io::Whole(device) => device.flush(), Io::Windows(windows) => windows.first_mut().ok_or(Error::NotFound)?.1.flush() } }
+    pub fn kind(&self) -> usize { self.devices().next().map_or(0, Device::kind) }
+    pub fn read_only(&self) -> bool { self.devices().any(Device::read_only) }
+    /// Up to the end of the last window.
+    pub fn sectors(&self) -> u64 { match self { Io::Whole(device) => device.sectors(), Io::Windows(windows) => windows.iter().map(|(first, device)| first + device.sectors()).max().unwrap_or(0) } }
+}
 
 impl Disk {
-    pub fn new(mut device: Device) -> Option<Self> {
+    pub fn new(mut device: Io) -> Option<Self> {
         let first = device.read(0, 1).ok().and_then(|data| data.get(..SECTOR).map(|s| { let mut sector = [0u8; SECTOR]; sector.copy_from_slice(s); sector }));
-        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false, at: 0 })
+        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false })
     }
-    /// A window of a disk whose sector 0 is the disk's sector `at`.
-    pub fn window(mut self, at: u64) -> Self { self.at = at; self }
     pub fn kind(&self) -> usize { self.device.kind() }
     /// The volumes are mounted: sectors read from now on are not part of the medium's identity.
     pub fn mounted(&mut self) { self.recording = false; }
@@ -35,7 +57,7 @@ impl Disk {
     // drive's own timeout (an unplugged USB disk, 211-KRN-0050). Cached sectors are still read.
     fn quiet(&self) -> bool { self.silent_until != 0 && (mind::time::uptime_ms() as u64) < self.silent_until }
     // Runs one request to the drive and notes whether it answered.
-    fn ask<T>(&mut self, request: impl FnOnce(&mut Device) -> Option<T>) -> Option<T> {
+    fn ask<T>(&mut self, request: impl FnOnce(&mut Io) -> Option<T>) -> Option<T> {
         if self.quiet() || self.replaced { return None; }
         // Back after it did not answer: the medium compared before anything is asked of it; a read that fails there
         // means the drive still does not answer.
@@ -92,7 +114,9 @@ impl Disk {
         Some(index)
     }
 
-    // Writes the changed lines in LBA order, neighbours in one write. A run that fails stays dirty.
+    // Writes the changed lines in LBA order, neighbours in one write. A run that fails stays dirty; what lies past the
+    // driver's reach (the device's end, or its window's, 307-KRN-0229) can never be written: it is dropped, named in the
+    // log, and one flush fails for it, this one or the next.
     fn write_dirty(&mut self) -> bool {
         let mut order: [usize; LINES] = core::array::from_fn(|i| i);
         order.sort_unstable_by_key(|&i| self.tags[i]);
@@ -104,9 +128,15 @@ impl Disk {
             while end < dirty.len() && self.tags[dirty[end]] == self.tags[dirty[end - 1]] + 1 { end += 1; }
             run.clear();
             for &index in &dirty[at..end] { run.extend_from_slice(self.line(index)); }
-            let lba = self.tags[dirty[at]] as u64;
-            if self.ask(|device| (device.write(lba, &run) == Ok(end - at)).then_some(())).is_none() { return false; }
-            for &index in &dirty[at..end] { self.dirty[index] = false; }
+            let (lba, count) = (self.tags[dirty[at]] as u64, end - at);
+            // The sectors written: fewer when the run was clipped at the end of the driver's reach, none when it began past it.
+            let Some(written) = self.ask(|device| match device.write(lba, &run) { Ok(n) => Some(n.min(count)), Err(Error::Invalid) => Some(0), Err(_) => None }) else { return false };
+            for &index in &dirty[at..at + written] { self.dirty[index] = false; }
+            if written < count {
+                mind::println!("[VFS] THE {} DRIVE REFUSED {} SECTORS FROM LBA {}: PAST ITS REACH, NOT WRITTEN", crate::device_name(self.device.kind()), count - written, lba + written as u64);
+                for &index in &dirty[at + written..end] { (self.tags[index], self.dirty[index]) = (u32::MAX, false); }
+                self.failed = true;
+            }
             at = end;
         }
         true
@@ -122,7 +152,7 @@ impl Sectors for Disk {
         if let Some(cached) = (1..count).find(|&i| self.tags.contains(&(lba + i as u32))) { count = cached; }
         if count == 0 { return false; }
         let mut sectors = [[0u8; SECTOR]; READ_AHEAD];
-        let read = |device: &mut Device| device.read(lba as u64, count).ok().map(|data| {
+        let read = |device: &mut Io| device.read(lba as u64, count).ok().map(|data| {
             for (i, sector) in data.chunks_exact(SECTOR).take(READ_AHEAD).enumerate() { sectors[i].copy_from_slice(sector); }
             (data.len() / SECTOR).min(READ_AHEAD)
         });
@@ -166,7 +196,7 @@ impl Sectors for Disk {
         while at < count {
             let (from, want) = (lba as u64 + at as u64, (count - at).min(BLOCK_MAX_SECTORS));
             let chunk = &mut out[at * SECTOR..(at + want) * SECTOR];
-            let read = |device: &mut Device| device.read(from, want).ok().map(|data| {
+            let read = |device: &mut Io| device.read(from, want).ok().map(|data| {
                 let got = (data.len() / SECTOR).min(want);
                 chunk[..got * SECTOR].copy_from_slice(&data[..got * SECTOR]);
                 got
@@ -218,8 +248,6 @@ impl Shared {
     pub fn new(disk: Disk) -> Self { Self(Rc::new(RefCell::new(disk))) }
     pub fn kind(&self) -> usize { self.0.borrow().kind() }
     pub fn mounted(&self) { self.0.borrow_mut().mounted() }
-    /// Where the device's sector `lba` lies on its disk, as the log names it.
-    pub fn place(&self, lba: u32) -> u64 { self.0.borrow().at + lba as u64 }
 }
 
 impl Sectors for Shared {

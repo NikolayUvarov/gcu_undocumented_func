@@ -40,17 +40,28 @@ Since 307-KRN-0177:
 - **Its arguments say where each window lies:** `parts`, then, for each disk, its MBR signature in hex (0 on GPT) and its windows' first sectors, `S:F,F`.
 - **What stays whole.** A disk without a table (blank, or one FAT volume over the whole disk), or one that did not answer `init`, is still given whole, in slots 2 to 4.
 - **What the store may not take.** The store takes no partition of a disk `vfs_server` holds whole, and none whose sectors one of `vfs_server`'s windows covers; `vfs_windows` sets no window over the store's partition.
-- **`vfs_server`.** It mounts a window at its sector 0 and names it by where it lies on its disk: the boot volume's MBR signature and start, `log:` as another window of the same disk, the `AT LBA` of its lines.
-  - Nothing else read the table: the update zone and the boot records are files on the boot volume.
+- **`vfs_server` sees such a disk through its windows, at their places** (`disk::Io::Windows`).
+  - **One disk, as before.** The boot volume and `log:` keep one cache and one medium identity (000-KRN-0079): a stick put back with another boot manifest closes `log:` too.
+  - **Volumes start where they lie on the disk:** the `AT LBA` of its lines, the boot volume's start and MBR signature as the firmware names them, `log:` as another window of the same disk.
+  - **Routing.** A sector goes to the window that starts last at or before it. So a sector past that window's end reaches the driver, which refuses it; one before every window is refused by `vfs_server` itself.
+  - **What else read the table: nothing.** The update zone and the boot records are files on the boot volume.
+- **What the driver refuses is dropped** (`disk.rs`, `write_dirty`).
+  - **The rule.** Changed sectors past the driver's reach (a window's end, or the device's) can never be written. They are dropped, named in the log (`[VFS] THE … DRIVE REFUSED n SECTORS FROM LBA x: PAST ITS REACH, NOT WRITTEN`), and one flush fails for them.
+  - **Why.** Kept dirty, they would make every later flush of the disk fail, the boot volume's too.
 - **After a driver starts again,** `init` sets each of `vfs_server`'s windows on it again while the partition is still there with the same number, PARTUUID and sectors (`vfs_windows_again`), as it does the store's. A returned medium (000-KRN-0085) ends its driver, so the same check covers it.
 
 **Tested so far:**
 - host tests: `partition_host.rs` (12, the FAT types and the overlap among them), `runtime.rs` (46), `boot_abi_host.rs` (9), `block_host.rs` (8);
 - `init` and `vfs_server` built with no warning.
 
-**The criterion "a write by `vfs_server` past a window's end is refused":**
-- **What shows it:** the drivers' common loop, tested on the host (`block_host.rs`, `a_windows_client_sees_its_window_as_the_device`: `Invalid` past the end).
-- **What does not show it yet:** a QEMU run in which `vfs_server` itself writes there. A FAT volume whose boot sector claims more sectors than its partition would; `Volume::mount_at` does not check its size against the device's.
+**The QEMU checks** (`tests/usb_image_smoke.py`):
+- **On the stick:** `vfs_server` holds the boot and log partitions as windows 2 and 3, in its slots 16 and 17 (badges 5 and 7), and no client of the whole disk.
+- **A `log:` volume whose boot sector claims 256 sectors past its partition**, with every free cluster inside it marked bad:
+  - `vfs_server` mounts it at the size it claims;
+  - what it writes past the partition (the boot's log, then `write log:past.txt`) is refused at its window's end and named in its log;
+  - the write says so;
+  - nothing of it reaches the sectors after the partition, the store's.
+- The runs are below once made.
 
 ## Related
 
