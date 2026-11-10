@@ -85,7 +85,7 @@ def store_partition_check(args, work):
     assert kind == 0x7F, entries
     taken = f"[INIT] THE BLOCK STORE'S PARTITION: usb_storage PARTITION 3 ({{}}), {count} SECTORS FROM {first}, WINDOW 1"
 
-    def boot(name, extra=None, change=None):
+    def boot(name, extra=None, change=None, during=None):
         stick = work / f"stick-{name}.img"
         shutil.copyfile(args.image, stick)
         if change:
@@ -93,7 +93,8 @@ def store_partition_check(args, work):
         nvme = ("-drive", f"format=raw,file={qemu_path(extra, args.qemu)},if=none,id=storecheck", "-device", "nvme,serial=storecheck,drive=storecheck") if extra else ()
         vm = VM(args, qemu_path(stick, args.qemu), usb=True, snapshot=False, extra=nvme)
         try:
-            return (stick, *store_lines(vm))
+            lines = store_lines(vm)
+            return (stick, *lines, during(vm)) if during else (stick, *lines)
         finally:
             vm.close()
 
@@ -142,8 +143,51 @@ def store_partition_check(args, work):
     require(init, taken.format("NAMED IN STORE.TXT"))
     require(ready, f"SECTORS=1/{count} ")
     assert sector(stick, first).startswith(b"MIND-STO"), "the store did not format the partition store.txt names"
+    # 307-KRN-0229: log:'s boot sector claims 256 sectors past its partition, and every free cluster inside it is marked
+    # bad, so the first free one lies in the store's partition. vfs_server mounts it at the size it claims; what it writes
+    # there (this boot's log, then a file) is refused at its window's end, named in its log and dropped, the write says
+    # so, and nothing of it reaches the sectors after the partition.
+    _, _, log_first, log_count = entries[1]
+    marker, extra = b"PAST-THE-WINDOW-307-KRN-0229", 256
+    claimed = {}
+    def past(image):
+        with Path(image).open("r+b") as f:
+            f.seek(log_first * 512)
+            boot_sector = bytearray(f.read(512))
+            spc, fats = boot_sector[13], boot_sector[16]
+            (reserved,), (roots,), (fat_size,) = (struct.unpack_from("<H", boot_sector, at) for at in (14, 17, 22))
+            data = reserved + fats * fat_size + roots * 32 // 512
+            assert struct.unpack_from("<H", boot_sector, 19)[0] == 0, "a FAT16 volume's sectors in the 32-bit field"
+            struct.pack_into("<I", boot_sector, 32, log_count + extra)
+            claimed["clusters"] = (log_count + extra - data) // spc
+            assert (claimed["clusters"] + 2) * 2 <= fat_size * 512, "the FAT has no entries for the clusters claimed"
+            outside = -(-(log_count - data) // spc) + 2  # the first cluster wholly past the partition's end
+            f.seek(log_first * 512)
+            f.write(boot_sector)
+            for copy in range(fats):
+                f.seek((log_first + reserved + copy * fat_size) * 512)
+                fat = bytearray(f.read(fat_size * 512))
+                for cluster in range(2, outside):
+                    if struct.unpack_from("<H", fat, cluster * 2)[0] == 0:
+                        struct.pack_into("<H", fat, cluster * 2, 0xFFF7)
+                f.seek((log_first + reserved + copy * fat_size) * 512)
+                f.write(fat)
+            claimed["kb"] = claimed["clusters"] * spc * 512 // 1024
+    def write_past(vm):
+        wrote = vm.command(f"write log:past.txt {marker.decode()}")
+        return wrote + vm.command("sync"), vm.command("dmesg -s vfs_server", raw=True)
+    stick, ready, init, (answers, vfs) = boot("past", change=past, during=write_past)
+    require(vfs, f"[VFS] MOUNTED FAT16 AT LBA {log_first} AS LOG: ({claimed['kb']} KB)")
+    require(init, f"[INIT] usb_storage PARTITION 2: WINDOW 3 FOR VFS_SERVER, {log_count} SECTORS FROM {log_first}")
+    assert "ERROR" in answers, answers
+    refused = [int(lba) for lba in re.findall(r"\[VFS\] THE USB DRIVE REFUSED \d+ SECTORS FROM LBA (\d+): PAST ITS REACH, NOT WRITTEN", vfs)]
+    assert refused and min(refused) >= log_first + log_count, vfs[-2000:]
+    with stick.open("rb") as f:
+        f.seek((log_first + log_count) * 512)
+        assert marker not in f.read(), "vfs_server wrote past its window"
     print(f"PASS ({args.arch}): the store's own partition (307-KRN-0177): a blank NVMe disk not given to it; two candidates refused, "
-          "both named, neither written; a blank partition of its type not taken, then taken and formatted once store.txt names it", flush=True)
+          "both named, neither written; a blank partition of its type not taken, then taken and formatted once store.txt names it; "
+          "a log: volume claiming sectors past its partition written to and refused at vfs_server's window (307-KRN-0229)", flush=True)
 
 
 def _blank(image, lba):
@@ -343,6 +387,17 @@ def run(args, booted):
         require(init, f"[INIT] usb_storage PARTITION 3: TYPE 7F, {store_count} SECTORS FROM {store_first}, PARTUUID {signature:08x}-03")
         require(init, f"[INIT] THE BLOCK STORE'S PARTITION: usb_storage PARTITION 3 (ITS TYPE AND SUPERBLOCK), {store_count} SECTORS FROM {store_first}, WINDOW 1")
         require(usb + vm.service_logs("usb_storage"), f"[BLOCK] WINDOW 1 SET: {store_count} SECTORS FROM {store_first}")
+        # 307-KRN-0229: vfs_server holds the boot and log partitions as windows 2 and 3 of the same driver, its slots 16 and
+        # 17, written through (badges 5 and 7), and no client of the whole disk.
+        for (number, _, first, count), window in zip(entries[:2], (2, 3)):
+            require(init, f"[INIT] usb_storage PARTITION {number}: WINDOW {window} FOR VFS_SERVER, {count} SECTORS FROM {first}")
+            require(usb + vm.service_logs("usb_storage"), f"[BLOCK] WINDOW {window} SET: {count} SECTORS FROM {first}")
+        real = vm.services()
+        held = lambda name: re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", vm.command(f"stat caps {real[name]}", raw=True), re.M)
+        stick = {ep for slot, _, ep in held("blockstore") if slot == "2"}
+        assert len(stick) == 1, held("blockstore")
+        vfs_held = sorted((int(slot), int(badge)) for slot, badge, ep in held("vfs_server") if ep in stick)
+        assert vfs_held == [(16, 5), (17, 7)], vfs_held
         require(ready, f"SECTORS=1/{store_count} ")
         require(vm.command("run files &"), "PID=5 NAME=files BACKGROUND")
         files_check(vm, 5)
@@ -411,7 +466,8 @@ def run(args, booted):
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
           "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
           "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host; "
-          "log: in help, df, fsck and fm; the block store on the stick's partition 3, window 1 of the same drive, its key in its superblock, the boot volume clean")
+          "log: in help, df, fsck and fm; the block store on the stick's partition 3, window 1 of the same drive, its key in its superblock, the boot volume clean; "
+          "vfs_server's boot and log partitions as windows 2 and 3, no client of the whole stick")
 
 
 def log_tools_check(vm, name):

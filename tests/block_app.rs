@@ -1,6 +1,7 @@
 //! Test-only stand-in for vfs_server (QEMU `block` suite): with the block clients init gives vfs_server (badged with
-//! the write right), writes a pattern to 8 sectors near the end of each disk as sealed read-only memory, flushes, reads
-//! them back and reports. The harness then checks the disk image on the host. Never packaged into the normal OS.
+//! the write right; a partitioned disk's windows, 307-KRN-0229), writes a pattern to 8 sectors near the end of each one
+//! that holds no file system as sealed read-only memory, flushes, reads them back and reports; on each, a write past its
+//! end is refused. The harness then checks the disk image on the host. Never packaged into the normal OS.
 //! The calls of idl/block.wit 2.0 are encoded by hand (word calls: method | major << 8 | fields << 16).
 #![no_std]
 #![no_main]
@@ -44,7 +45,7 @@ unsafe fn sealed(mb: *mut SyscallMailbox, data: &[u8]) -> usize {
     child
 }
 
-struct Line { bytes: [u8; 160], len: usize }
+struct Line { bytes: [u8; 200], len: usize }
 impl Line {
     fn text(&mut self, text: &[u8]) -> &mut Self { for &b in text { if self.len < self.bytes.len() { self.bytes[self.len] = b; self.len += 1; } } self }
     fn number(&mut self, mut value: usize) -> &mut Self {
@@ -74,11 +75,11 @@ pub extern "sysv64" fn _start(_: &BootInfo, mb: *mut SyscallMailbox) {
         let shared = call(mb, SYSCALL_MEM_SHARE, buffer, 0);
         if buffer == 0 || shared >= ERR_FIRST { print(mb, b"[BLOCKTEST] NO MEMORY\n"); return; }
         let data = core::slice::from_raw_parts_mut(buffer as *mut u8, 8 * BLOCK_SECTOR);
-        for slot in SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES {
+        for slot in (SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES).chain(SLOT_VFS_PARTS_FIRST..SLOT_VFS_PARTS_FIRST + VFS_PARTS) {
             if call(mb, SYSCALL_CAP_INFO, slot, 0) != CAP_KIND_ENDPOINT { continue; }
             let badge = (*mb).arg2;
             let info = ipc(mb, slot, [SECTORS, 0], 0, false);
-            let mut line = Line { bytes: [0; 160], len: 0 };
+            let mut line = Line { bytes: [0; 200], len: 0 };
             line.text(b"[BLOCKTEST] SLOT=").number(slot).text(b" BADGE=").number(badge);
             if !ok(info) { line.text(b" NO DEVICE\n"); print(mb, &line.bytes[..line.len]); continue; }
             let sectors = info[1];
@@ -86,6 +87,16 @@ pub extern "sysv64" fn _start(_: &BootInfo, mb: *mut SyscallMailbox) {
             let writable = ipc(mb, slot, [WRITABLE, 0], 0, false)[0] >> 16 & 1 != 0;
             line.text(b" KIND=").number(kind).text(b" SECTORS=").number(sectors).text(if writable { b" WRITABLE" } else { b" READ-ONLY" });
             let attached = ok(ipc(mb, slot, [ATTACH, 0], shared, false));
+            // A sector past the device's end, or its window's, is refused (307-KRN-0229).
+            let past = ipc(mb, slot, [WRITE | 1 << 16, sectors], sealed(mb, &[0x5A; BLOCK_SECTOR]), true);
+            line.text(if ok(past) { b" PAST=WRITTEN" } else { b" PAST=REFUSED" });
+            // A window over a file system (the boot volume) is left alone.
+            data.fill(0);
+            if ok(ipc(mb, slot, [READ | 1 << 16, 0], 0, false)) && data[510] == 0x55 && data[511] == 0xAA {
+                line.text(b" A FILE SYSTEM: LEFT ALONE\n");
+                print(mb, &line.bytes[..line.len]);
+                continue;
+            }
             // Each kind writes its own 8 sectors at the end of the disk (outside the test image's file system).
             let lba = sectors - 8 * kind;
             let mut pattern_data = [0u8; 8 * BLOCK_SECTOR];
