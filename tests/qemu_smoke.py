@@ -9208,8 +9208,10 @@ def tts_suite(vm, wav, asr_model=None):
         time.sleep(.25)
     spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
     assert 2500 < spoken < 9000, spoken
-    # 252-APP-0128: no model disk, so the greeting's Russian is the formant voice's, and the log says why once.
-    require(vm.command("dmesg -s tts", raw=True), "[TTS] THE FORMANT VOICE SPEAKS RUSSIAN: NO SCOPE OF models:")
+    # 252-APP-0128: no voice here, so the greeting's Russian is the formant voice's, and the log says why once: no scope
+    # of models: without init's grant (252-KRN-0230), or no voice's file on a model disk that holds none.
+    why = re.findall(r"\[TTS\] THE FORMANT VOICE SPEAKS RUSSIAN: (.*?)\r?$", vm.command("dmesg -s tts", raw=True), re.M)
+    assert why and (why[-1].startswith("NO SCOPE OF models:") or why[-1].startswith("models:tts-ru-vosk-0.7/voice.bin: ")), why
     time.sleep(spoken / 1000 + 1)  # wait for DMA ring playback to finish
     vm.command("kill 1")
     vm.close()
