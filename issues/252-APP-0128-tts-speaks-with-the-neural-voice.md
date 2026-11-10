@@ -1,6 +1,6 @@
 # 252-APP-0128 — `tts` speaks Russian with the neural voice from `models:`, the formant voice its fallback
 
-**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`tts`'s side made and run on QEMU with the asked grant applied locally; KRN's grant left, 2026-11-10) · **Blocked by:** `KRN`: `tts`'s scope of `models:` and its memory line ([requests-KRN.md](requests-KRN.md), 2026-11-10) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
+**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`tts`'s side made and run on QEMU with the asked grant applied locally; KRN's grant left, 2026-11-10) · **Blocked by:** [252-KRN-0230](252-KRN-0230-tts-reads-the-neural-voice.md) (`tts`'s scope of `models:` and its memory line) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
 
 **Numbered by:** the tools track, 2026-11-09, from [252-APP-0041](252-APP-0041-russian-speech-on-the-macbook.md)'s measurements.
 
@@ -57,7 +57,7 @@
     - the voice was ready in 23.9 s, and the whole took 176 s, for 1544 ms of speech: emulated, not a machine's times (MC-12.1);
     - from the audio captured at QEMU's AC'97, Vosk's small model and Vosk 0.54's transducer both heard `говорит разум корабля`.
 - **Left:**
-  - KRN's grant, then the same run on `main`'s `init`;
+  - KRN's grant ([252-KRN-0230](252-KRN-0230-tts-reads-the-neural-voice.md)), then the same run on `main`'s `init`;
   - a voice control answer;
   - the latency of a later phrase;
   - aarch64, whose programs are soft-float, so emulated synthesis there would take far longer;
