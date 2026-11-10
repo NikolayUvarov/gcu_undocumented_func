@@ -7808,6 +7808,15 @@ def disk_suite(args):
         models_check(args, image, temp)
 
 
+def model_disk(temp):
+    """A model disk from scripts/fat32.py holding its manifest alone, empty of models (252-KRN-0230)."""
+    tree, image = temp / "models", temp / "models.img"
+    tree.mkdir(parents=True, exist_ok=True)
+    (tree / "MANIFEST.json").write_bytes(b'{"models": []}\n')
+    subprocess.run([sys.executable, str(ROOT / "scripts/fat32.py"), str(image), str(tree)], check=True, capture_output=True)
+    return image
+
+
 def models_check(args, boot, temp):
     """Issue 251: a model disk from scripts/fat32.py on a read-only VirtIO disk next to the boot disk is models:, read-only
     for the user too; sha256 in the system gives the host's hash of each file, and fsck finds it clean."""
@@ -9090,12 +9099,57 @@ def voice_control(vm):
     require(vm.command("voice x"), "USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN")
 
 
+def tts_holdings_check(vm, models):
+    """252-KRN-0230: tts holds a read-only scope of models: in SLOT_FILE (7) where the model disk is, and its quota by its
+    line of data/memory.conf, read at each start, the default without one. Built-in commands alone (kill, stat, logs,
+    write, rm), so that the PIDs the suite's programs expect stay free."""
+    def quota(pid):
+        found = re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=\d+/(\d+)", vm.command(f"stat {pid}", raw=True))
+        assert found, vm.command(f"stat {pid}", raw=True)
+        return int(found[1]) >> 20
+
+    def restart(old):
+        require(vm.command(f"kill {old}", raw=True), "KILLED PID=")
+        for _ in range(60):
+            pid = vm.services().get("tts")
+            if pid and pid != old:
+                require(vm.service_logs("tts", "[TTS] FORMANT SYNTHESIZER READY"), "AUDIO=true")
+                return pid
+            time.sleep(.5)
+        raise AssertionError(vm.command("ps", raw=True))
+
+    pid = vm.services()["tts"]
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    caps = vm.command(f"stat caps {pid}", raw=True)
+    held = {int(slot): (int(badge), servers.get(int(ep))) for slot, badge, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)}
+    if models:  # a scope of vfs_server's, badged from 0x100 as each scope is
+        assert 7 in held and held[7][1] == vm.services()["vfs_server"] and held[7][0] >= 0x100, (held, caps)
+    else:
+        assert 7 not in held, (held, caps)
+    default = quota(pid)
+    vm.command("mkdir data")
+    require(vm.command("write data/memory.conf tts 48"), "WROTE 7 BYTES")
+    pid = restart(pid)
+    require(vm.service_logs("init", "[INIT] tts: 48 MIB"), "[INIT] tts: 48 MIB BY data/memory.conf")
+    assert quota(pid) == 48, quota(pid)
+    require(vm.command("rm data/memory.conf"), "OK")
+    pid = restart(pid)
+    require(vm.service_logs("init", "[INIT] tts: NO LINE"), "[INIT] tts: NO LINE IN data/memory.conf: THE DEFAULT QUOTA")
+    assert quota(pid) == default, (quota(pid), default)
+    print(f"PASS: tts's holdings (252-KRN-0230): {'a read-only scope of models: in slot 7' if models else 'no scope without the model disk'}; "
+          f"48 MiB by its line of data/memory.conf, read at a restart, and {default} MiB without one", flush=True)
+
+
 def tts_suite(vm, wav, asr_model=None):
     require(vm.service_logs("tts", "[TTS] FORMANT SYNTHESIZER READY"), "AUDIO=true")
-    require(vm.command("run say &"), "PID=1 NAME=say BACKGROUND")
+    tts_holdings_check(vm, models=True)  # the suite's machine has the model disk
+    # tts's restarts above took task numbers, so say's is read from the reply.
+    started = vm.command("run say &")
+    say = re.search(r"PID=(\d+) NAME=say BACKGROUND", started)
+    assert say, started
     output = ""
     for _ in range(80):
-        output += vm.command("logs 1")
+        output += vm.command(f"logs {say[1]}")
         if "[SAY] DONE" in output:
             break
         time.sleep(.25)
@@ -9104,7 +9158,7 @@ def tts_suite(vm, wav, asr_model=None):
     # 252-APP-0128: no model disk, so the greeting's Russian is the formant voice's, and the log says why once.
     require(vm.command("dmesg -s tts", raw=True), "[TTS] THE FORMANT VOICE SPEAKS RUSSIAN: NO SCOPE OF models:")
     time.sleep(spoken / 1000 + 1)  # wait for DMA ring playback to finish
-    vm.command("kill 1")
+    vm.command(f"kill {say[1]}")
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
@@ -15426,12 +15480,16 @@ def main():
                 store_copy_disk_check(args, disk)
                 store_rebuild_check(args, disk)  # another, the store's disk replaced by a blank one (309-STO-0041)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
+            # The tts suite's model disk (252-KRN-0230): its manifest alone, read-only, as models: holds it.
+            models = model_disk(Path(tempfile.mkdtemp(prefix="mind-tts-models-"))) if suite == "tts" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
             # its end (309-STO-0031): its RAM disk store starts blank, and the snapshot overlay keeps the boot volume's files.
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
-                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults" else (), tablet=suite == "tablet", usb_input=suite == "usb",
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults"
+                    else ["-drive", f"if=none,id=models,format=raw,readonly=on,file={models}", "-device", "virtio-blk-pci,drive=models"] if models else (),
+                    tablet=suite == "tablet", usb_input=suite == "usb",
                     reboot=suite == "store")
             try:
                 if suite == "audio":
