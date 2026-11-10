@@ -234,6 +234,7 @@ pub const REQUEST_SECRETS: u32 = 67108864; // its own secrets' client of keystor
 pub const REQUEST_NN: u32 = 134217728; // the model service's client in SLOT_NN, badged for this start by the shell (262-KRN-0178, for 262-APP-0112)
 pub const REQUEST_WIFI_READ: u32 = 268435456; // the Wi-Fi station's reading client (BADGE_WIFI, which wlan mints) in SLOT_WIFI (550-KRN-0213, for 550-NET-0058)
 pub const REQUEST_SECRET_LINE: u32 = 536870912; // a console program's client of the shell badged BADGE_SHELL_SECRET in SLOT_SHELL: one secret line typed at its console (000-KRN-0224, for 000-APP-0126)
+pub const REQUEST_RECOVER: u32 = 1073741824; // the block store's client badged BADGE_RECOVER in SLOT_RECOVER, a copy of the shell's, the user asked each time (308-KRN-0204, for 308-APP-0122)
 /// The badge of the updater's client init gives the Effector gateway (update.wit 1.2, 751-KRN-0185): `fetch`, `apply`
 /// and `rollback` only while init's `remote-update` counts, which the updater asks at each.
 pub const BADGE_UPDATE_GATEWAY: u16 = 1;
