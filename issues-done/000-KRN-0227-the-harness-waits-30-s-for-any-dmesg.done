@@ -71,4 +71,4 @@
 
 ## Related
 
-[000-NET-0063](../issues/000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.md) (round 102, the Wi-Fi checks), [000-KRN-0225](000-KRN-0225-the-revocation-check-saw-no-refusal-on-a-loaded-host.done) (round 103, another check on a loaded host).
+[000-NET-0063](000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.done) (round 102, the Wi-Fi checks), [000-KRN-0225](000-KRN-0225-the-revocation-check-saw-no-refusal-on-a-loaded-host.done) (round 103, another check on a loaded host).

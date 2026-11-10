@@ -5,7 +5,8 @@
 //! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031); `ping`'s options and
 //! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029); the badges of
 //! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112); a program's question about a flow (shell/src/flowask.rs,
-//! 000-APP-0120); a console program's secret line (shell/src/secret.rs, 000-APP-0126); `nn run`'s rows (shell/src/nnrows.rs, 262-APP-0112).
+//! 000-APP-0120); a console program's secret line (shell/src/secret.rs, 000-APP-0126); `nn run`'s rows (shell/src/nnrows.rs, 262-APP-0112); `volume`, `mic` and data/sound.conf (shell/src/sound.rs,
+//! 000-APP-0076, 000-APP-0077).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -44,6 +45,8 @@ mod wifilend;
 mod secret;
 #[path = "../shell/src/nnrows.rs"]
 mod nnrows;
+#[path = "../shell/src/sound.rs"]
+mod sound;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -696,4 +699,49 @@ fn nn_run_reads_rows_and_shows_outputs() {
     assert_eq!(row_text(&encode(&[0.1, -2.0, 1e-7])), "0.1 -2 0.0000001");
     assert_eq!(rate(256, 100), 2560);
     assert_eq!(rate(5, 0), 5000, "under a millisecond counts as one");
+}
+
+#[test]
+fn volume_and_mic_read_their_words_and_keep_the_levels() {
+    // 000-APP-0076, 000-APP-0077: the words; the dB of a per cent as audio_gw takes it; data/sound.conf read and written,
+    // a damaged line skipped and the rest kept.
+    use sound::{db, mic, parse, qdb, render, volume, Amp, Kept, Mic, Volume};
+    assert_eq!(volume(""), Ok(Volume::Show));
+    assert_eq!(volume("50"), Ok(Volume::Set(50)));
+    assert_eq!(volume("0"), Ok(Volume::Set(0)));
+    assert_eq!(volume("100"), Ok(Volume::Set(100)));
+    assert_eq!(volume("MUTE"), Ok(Volume::Mute(true)));
+    assert_eq!(volume("unmute"), Ok(Volume::Mute(false)));
+    for wrong in ["101", "loud", "-5", "50 60", "5.5", "0100"] { assert!(volume(wrong).is_err(), "{}", wrong); }
+    assert_eq!(mic("60"), Ok(Mic::Set(60)));
+    assert_eq!(mic("boost on"), Ok(Mic::Boost(true)));
+    assert_eq!(mic("BOOST OFF"), Ok(Mic::Boost(false)));
+    assert!(mic("boost").is_err() && mic("boost maybe").is_err() && mic("200").is_err());
+    // AC'97's master: 32 settings, 1.5 dB apart, 0 dB at the top; its record gain: 16, 0 dB at the bottom.
+    let master = Amp { steps: 32, step_qdb: 6, zero: 31 };
+    let record = Amp { steps: 16, step_qdb: 6, zero: 0 };
+    assert_eq!((qdb(100, master), qdb(0, master), qdb(50, master)), (0, -186, -90));
+    assert_eq!((qdb(0, record), qdb(100, record)), (0, 90));
+    assert_eq!((db(-90), db(0), db(90), db(-1)), ("-22.50 DB".to_string(), "0.00 DB".to_string(), "+22.50 DB".to_string(), "-0.25 DB".to_string()));
+    assert_eq!(sound::volume_line(50, false, master, false), "VOLUME 50 % (-22.50 DB OF 32 SETTINGS), NOT MUTED");
+    assert_eq!(sound::mic_line(100, true, 80, record, false), "MIC 100 % (+22.50 DB OF 16 SETTINGS), BOOST ON (+20.00 DB)");
+    assert_eq!(sound::mic_line(0, false, 0, record, true), "MIC 0 % (0.00 DB OF 16 SETTINGS, SCALED BY THE GATEWAY: NO AMPLIFIER), NO BOOST");
+    let kept = Kept { volume: Some(50), muted: Some(false), gain: Some(60), boost: Some(true) };
+    assert_eq!(parse(&render(&kept)), kept);
+    assert_eq!(parse("volume 30\nmuted perhaps\ngain 700\n# a note\nboost off\nnoise 9\n"), Kept { volume: Some(30), muted: None, gain: None, boost: Some(false) });
+    assert_eq!(parse(""), Kept::default());
+    assert_eq!(render(&Kept { volume: Some(40), ..Kept::default() }).lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>(), vec!["volume 40"]);
+}
+
+#[test]
+fn ip_names_a_card_out_of_use() {
+    // 550-APP-0129: after the card's kind, DOWN, PREFERRED and DEFAULT as before (550-APP-0085), then OFF for a card the
+    // policy took out of use, a bit each in socket.wit 2.11's `withdrawn`.
+    use netstat::{card_words, off};
+    assert_eq!(card_words(false, false, false, false, true), " WIRED OFF");
+    assert_eq!(card_words(true, false, true, true, false), " WI-FI PREFERRED DEFAULT");
+    assert_eq!(card_words(false, true, false, false, true), " WIRED DOWN OFF");
+    assert_eq!(card_words(false, false, false, true, false), " WIRED DEFAULT");
+    assert!(off(0b01, 0) && !off(0b01, 1) && off(0b10, 1) && !off(0, 0));
+    assert!(!off(0xFF, 8), "no ninth card");
 }

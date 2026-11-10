@@ -7,6 +7,8 @@ mod dsp;
 mod phonemes;
 #[path = "../tts/src/synth.rs"]
 mod synth;
+#[path = "../tts/src/route.rs"]
+mod route;
 #[path = "../phonetics/src/text.rs"]
 mod text;
 
@@ -76,4 +78,15 @@ fn sounds_start_without_a_step() {
             }
         }
     }
+}
+
+/// 252-APP-0128: a sentence with a Cyrillic letter takes the neural voice where it is; any other the formant voice.
+#[test]
+fn russian_sentences_take_the_neural_voice() {
+    assert!(route::russian("Говорит разум корабля."));
+    assert!(route::russian("Открой файл readme.txt"), "a Russian sentence with a Latin word");
+    assert!(route::russian("Ёлка"));
+    assert!(!route::russian("Hello world."));
+    assert!(!route::russian("12:30, 42 %"));
+    assert!(!route::russian(""));
 }

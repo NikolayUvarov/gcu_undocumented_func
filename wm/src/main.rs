@@ -6,6 +6,7 @@
 // screen, and only what wm holds and they ask for: the user's files, system information. The windows belong to the
 // broker: when wm leaves (Alt+Q) or dies, the programs keep running and the next wm shows them where they were.
 extern crate alloc;
+mod meter;
 
 use alloc::format;
 use alloc::string::String;
@@ -137,6 +138,10 @@ impl Programs {
 
 // A program wm started: what to tell the user, its process, the window lent to it to see (issue u014).
 struct Started { message: String, pid: u64, window: Option<u32> }
+
+// The Sound page's test tone after a change of the volume (000-APP-0076).
+const TONE_HZ: usize = 880;
+const TONE_MS: usize = 150;
 
 // Starts `command` in a new window with a plain broker client and, of what it asks for, what wm holds. A program that
 // asks for the display (`record -w`) sees window `front`, the one in front when the user started it.
@@ -532,6 +537,31 @@ fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colou
 
 mind::entry!(main);
 
+// A line of the shell's commands (shell.wit `run`): its last line of output, or why there is none.
+fn shell_line(line: &str) -> Result<String, String> {
+    let mut out = alloc::vec![0u8; 512];
+    match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::run(Endpoint(SLOT_SHELL), line, &mut out)) {
+        Ok(Ok(n)) => Ok(String::from(core::str::from_utf8(&out[..n.min(out.len())]).unwrap_or("").lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim())),
+        Ok(Err(error)) => Err(format!("The shell did not run {} ({:?})", line, error)),
+        Err(error) => Err(format!("The shell did not answer {} ({:?})", line, error)),
+    }
+}
+
+// The levels as the shell's `volume` and `mic` say them, or the line saying why there are none (no device).
+fn sound_levels() -> Result<wm::settings::Sound, String> {
+    if !holds(SLOT_SHELL) { return Err(String::from("Reading the levels needs the shell's commands, which wm does not hold")); }
+    let volume = shell_line("volume")?;
+    wm::settings::sound(&volume, &shell_line("mic")?).ok_or(volume)
+}
+
+// The sound page's levels, or the shell's line.
+fn show_sound(settings: &mut wm::settings::Settings) -> bool {
+    let (sound, note) = match sound_levels() { Ok(s) => (Some(s), None), Err(why) => (None, Some(why)) };
+    let changed = sound != settings.sound || note != settings.sound_note;
+    (settings.sound, settings.sound_note) = (sound, note);
+    changed
+}
+
 // The machine's name as the shell says it (shell.wit 1.11, 000-APP-0123); None without its commands or an answer.
 fn machine_name() -> Option<String> {
     if !holds(SLOT_SHELL) { return None; }
@@ -589,6 +619,10 @@ fn main(info: &'static BootInfo) {
     let mut frame_times = FrameTimes::default();
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
     let mut next_country = 0usize; // when Settings' network page reads the station's country again
+    let mut next_sound = 0usize; // when its sound page reads the levels again
+    // The sound page's microphone meter while it records (000-APP-0077), when it tries to start again, and whether its
+    // first level was logged.
+    let (mut mic_meter, mut next_meter, mut metered): (Option<meter::Meter>, usize, bool) = (None, 0, false);
     let mut keymap_asked = false; // whether Settings' keyboard page asked the shell for the layout, this time it is open
     let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
@@ -753,6 +787,22 @@ fn main(info: &'static BootInfo) {
                     }
                     manager.wm.notice = Some(text);
                 }
+                Action::Level(line) => {
+                    // The sound page's levels through the shell's `volume` and `mic` (000-APP-0076, 000-APP-0077): taken at
+                    // once, they change no authority; the shell keeps them in data/sound.conf.
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the levels needs the shell's commands, which wm does not hold") }
+                        else { shell_line(&line).unwrap_or_else(|why| why) };
+                    mind::println!("[WM] SOUND PAGE {}: {}", line, text);
+                    // A test tone at the new volume (000-APP-0076), through wm's own client, which only plays.
+                    if (line.starts_with("volume ") && line != "volume mute") && text.starts_with("VOLUME ") && mind::audio::tone(TONE_HZ, TONE_MS).is_ok() {
+                        mind::println!("[WM] SOUND PAGE TONE {} HZ, {} MS", TONE_HZ, TONE_MS);
+                    }
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        show_sound(settings);
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                }
                 Action::SetHostname(name) => {
                     // The machine's name through the shell, at once as the clock (shell.wit 1.11, 000-APP-0123); the shell
                     // checks it is a name and keeps it in data/machine/name.
@@ -877,6 +927,32 @@ fn main(info: &'static BootInfo) {
                     relayout = true;
                 }
             }
+            // The sound page's levels as the shell says them, read every 2 s (000-APP-0076, 000-APP-0077).
+            if settings.page == wm::settings::SOUND && now >= next_sound {
+                next_sound = now + COUNTRY_MS;
+                if show_sound(settings) { relayout = true; }
+            }
+            // Its microphone's meter, recorded through wm's own client only while the page shows it (000-APP-0077,
+            // MC-11.4); another program's recording is waited for.
+            if settings.page == wm::settings::SOUND {
+                if mic_meter.is_none() && now >= next_meter {
+                    next_meter = now + COUNTRY_MS;
+                    let note = match meter::Meter::start() {
+                        Ok(m) => { mic_meter = Some(m); mind::println!("[WM] SOUND PAGE METER STARTED: {}", wm::settings::METER_NOTE); String::from("Microphone: listening...") }
+                        Err(why) => { if settings.meter.as_deref() != Some(why.as_str()) { mind::println!("[WM] SOUND PAGE METER: {}", why); } why }
+                    };
+                    if settings.meter.as_deref() != Some(note.as_str()) { settings.meter = Some(note); relayout = true; }
+                }
+                if let Some((peak, rms, floor)) = mic_meter.as_mut().and_then(|m| m.poll()) {
+                    let line = wm::settings::meter_line(peak, rms, floor);
+                    if !metered { metered = true; mind::println!("[WM] SOUND PAGE {}", line); }
+                    settings.meter = Some(line);
+                    relayout = true;
+                }
+            } else if mic_meter.take().is_some() {
+                (settings.meter, metered, next_meter) = (None, false, 0);
+                mind::println!("[WM] SOUND PAGE METER STOPPED");
+            }
             // The network page names the station's country and why it applies (550-APP-0082), read every 2 s.
             if settings.page == wm::settings::NETWORK && now >= next_country {
                 next_country = now + COUNTRY_MS;
@@ -897,6 +973,9 @@ fn main(info: &'static BootInfo) {
         } else {
             keymap_asked = false;
             next_country = 0;
+            next_sound = 0;
+            if mic_meter.take().is_some() { mind::println!("[WM] SOUND PAGE METER STOPPED"); }
+            (metered, next_meter) = (false, 0);
         }
         let pattern_due = backdrop.moving() && now >= next_pattern;
         if backdrop.shown() && (pattern_due || now >= next_info) {
