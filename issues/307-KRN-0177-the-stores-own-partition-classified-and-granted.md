@@ -1,6 +1,6 @@
 # 307-KRN-0177 — `init` finds the store's own partition and grants `blockstore` a client bounded to it
 
-**Type:** `init` (media, grants) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** the drivers track's client bounded to a range ([requests-DRV.md](requests-DRV.md), "A block client bounded to a range", 2026-10-27) · **Main task:** [307](307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.1
+**Type:** `init` (media, grants) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (step 1 made on `claude/307-KRN-0177-store-partition`, 2026-11-10) · **Blocked by:** — (the client bounded to a range is [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md)'s windows, made by STO and about to land; this branch is built on them) · **Main task:** [307](307-the-stores-own-partition.md) (STO's) · **Constitution:** MC-3.1, MC-5.1, MC-12.1
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-27, "The store's own partition: media classified and a bounded grant (for 307)".
 
@@ -33,6 +33,40 @@
   - a blank NVMe disk on x86 is not given to the store.
 - **Host tests:** the partition table parser on GPT and MBR samples, including one with no store partition, one of type `0x7F` without the superblock, and `store.txt`'s line in both forms.
 - **The `store` suite** passes as before on its VirtIO disk.
+
+## Progress (2026-11-10)
+
+**Step 1, made: the tables and the rule, without `init` yet.** `libmind/src/partition.rs`, built on STO's branch at c3938027 (the windows):
+- **The tables:** `read_table` reads a disk's MBR or GPT through any sector source.
+  - GPT's header and entries are taken only when both CRCs match. A table without them gives no partition.
+  - A partition outside the disk is left out and named.
+  - A FAT volume over the whole disk, or a blank disk, has no table.
+  - Up to 16 partitions are kept per disk; the rest are counted.
+- **A partition** carries its number, type (MBR byte or GPT GUID), first sector, count, PARTUUID and GPT's name.
+- **The rule:** `candidate` takes the store's type with the store's superblock both, or the partition `store.txt` names, which may be blank. No label is matched.
+- **`store.txt`:** `named` reads its line `partition <PARTUUID>` in either form, and refuses anything else with a reason. `parse_id` and `id_text` read and write a PARTUUID as Linux writes it.
+
+**Tested on the host:** `tests/partition_host.rs`, 11 tests, in `scripts/host_tests.sh`.
+- **Samples:**
+  - the stick's MBR (two FAT partitions and the store's);
+  - the store's type without its superblock, which is taken only when named;
+  - a superblock on another type;
+  - a disk with no store partition;
+  - a GPT disk with labels;
+  - GPTs with a wrong header CRC, a wrong entries CRC or no header;
+  - partitions past the end;
+  - more than 16 partitions;
+  - `store.txt` in both forms and seven malformed lines.
+- **The test's own CRC** is checked against the standard's check value first.
+- **Five faults put in by hand were each caught:**
+  - either CRC check skipped;
+  - the superblock not required;
+  - a GUID's byte order;
+  - an MBR bound.
+
+**Left:**
+- **Step 2:** `init` classifies the disks, sets the window and grants `blockstore` its client. It sets the windows again after a driver's restart.
+- **Step 3:** the QEMU checks of the acceptance criteria, on x86 and aarch64.
 
 ## Related
 
