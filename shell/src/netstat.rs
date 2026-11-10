@@ -20,3 +20,16 @@ pub fn line(row: &Row) -> String {
 pub fn state(code: usize) -> &'static str {
     ["-", "CLOSED", "LISTEN", "SYN-SENT", "SYN-RECEIVED", "ESTABLISHED", "FIN-WAIT-1", "FIN-WAIT-2", "CLOSE-WAIT", "CLOSING", "LAST-ACK", "TIME-WAIT"].get(code).copied().unwrap_or("?")
 }
+
+/// What `ip` says of a card after its kind (550-APP-0085, 550-APP-0129): `DOWN`, `PREFERRED`, `DEFAULT` and `OFF`,
+/// a card the policy took out of use (`socket.wit` 2.11 `withdrawn`), where they apply.
+pub fn card_words(wireless: bool, down: bool, preferred: bool, default: bool, off: bool) -> String {
+    let mut words = String::from(if wireless { " WI-FI" } else { " WIRED" });
+    for (on, word) in [(down, " DOWN"), (preferred, " PREFERRED"), (default, " DEFAULT"), (off, " OFF")] {
+        if on { words.push_str(word); }
+    }
+    words
+}
+
+/// Whether card `card` is out of use in `withdrawn`'s answer, a bit each.
+pub fn off(withdrawn: u8, card: u8) -> bool { card < 8 && withdrawn >> card & 1 != 0 }

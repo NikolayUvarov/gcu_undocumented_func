@@ -9306,6 +9306,10 @@ def one_network_cards_check(args, disk):
         cards = vm.command("netcheck cards")
         require(cards, "NETCHECK CARD 0 Wired PRESENT UP OFF")
         require(cards, "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT")
+        # The shell's `ip` names it too (550-APP-0129), after its kind; card 1 has no OFF.
+        shown = vm.command("ip")
+        assert re.search(r"^CARD 0 .* WIRED[A-Z ]* OFF\s*$", shown, re.M), shown
+        assert not re.search(r"^CARD 1 .* OFF\s*$", shown, re.M), shown
         # A grant may not take a card out of use; the refusal names its badge.
         require(vm.command("netcheck withdraw:2"), "NETCHECK withdraw:2 Denied")
         require(vm.command("dmesg -s netstack"), "WITHDRAW REFUSED FOR BADGE")
@@ -9338,6 +9342,8 @@ def one_network_cards_check(args, disk):
         else:
             raise AssertionError(("no lease again on card 0", vm.command("dmesg -s netstack")[-3000:]))
         require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] CARDS OUT OF USE FROM THE POLICY: NONE")
+        shown = vm.command("ip")
+        assert not re.search(r"^CARD \d .* OFF\s*$", shown, re.M), shown
         network_sends(0)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:

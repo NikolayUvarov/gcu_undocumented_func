@@ -112,15 +112,17 @@ pub fn ip(out: &mut impl Write, args: &[u8]) {
     // the default one (socket.wit 2.5, 550-APP-0085); a card the stack has a slot for but no driver yet, by its kind.
     let cards = match socket::cards(STACK) { Ok(Ok(cards)) => cards, _ => Default::default() };
     let interfaces = match socket::interfaces(STACK) { Ok(Ok(interfaces)) => interfaces, _ => Default::default() };
+    // The cards the policy took out of use (socket.wit 2.11, 550-APP-0129); an older stack names none.
+    let withdrawn = match socket::withdrawn(STACK) { Ok(Ok(bits)) => bits, _ => 0 };
     for i in interfaces.as_slice() {
         let _ = write!(out, "CARD {} MAC ", i.card); mac(out, &i.mac.to_be_bytes()[2..]);
         let _ = write!(out, " IP "); dotted(out, i.address); let _ = write!(out, "/{} GATEWAY ", i.prefix); dotted(out, i.gateway);
         let _ = write!(out, " SENT={} RECEIVED={}", i.sent, i.received);
-        if let Some(card) = cards.as_slice().iter().find(|c| c.card == i.card) { state(out, card); }
+        if let Some(card) = cards.as_slice().iter().find(|c| c.card == i.card) { state(out, card, withdrawn); }
         let _ = writeln!(out);
     }
     for card in cards.as_slice().iter().filter(|c| !interfaces.as_slice().iter().any(|i| i.card == c.card)) {
-        let _ = write!(out, "CARD {}", card.card); state(out, card);
+        let _ = write!(out, "CARD {}", card.card); state(out, card, withdrawn);
         let _ = writeln!(out, "{}", if card.present { "" } else { " NOT THERE" });
     }
 }
@@ -144,12 +146,10 @@ pub fn card_counters() -> Result<mind::idl::codec::List<mind::idl::shell::CardCo
     Ok(list)
 }
 
-// A card's kind, then DOWN, PREFERRED and DEFAULT where they apply.
-fn state(out: &mut impl Write, card: &socket::Card) {
-    let _ = write!(out, " {}", match card.kind { socket::CardKind::Wired => "WIRED", socket::CardKind::Wireless => "WI-FI" });
-    for (on, word) in [(card.present && !card.up, " DOWN"), (card.preferred, " PREFERRED"), (card.default, " DEFAULT")] {
-        if on { let _ = write!(out, "{}", word); }
-    }
+// A card's kind, then DOWN, PREFERRED, DEFAULT and OFF where they apply.
+fn state(out: &mut impl Write, card: &socket::Card, withdrawn: u8) {
+    let _ = write!(out, "{}", crate::netstat::card_words(card.kind == socket::CardKind::Wireless, card.present && !card.up, card.preferred, card.default,
+        crate::netstat::off(withdrawn, card.card)));
 }
 
 // `ping [-c count] [-i seconds] [-w seconds] [-f] [-s bytes] [-p hex] host` (000-APP-0095): each line on the screen as
