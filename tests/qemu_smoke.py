@@ -7864,7 +7864,8 @@ def block_suite(args, block_elf):
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, **options)
             try:
                 output = vm.service_logs("vfs_server", "[BLOCKTEST] DONE")
-                lines = [l for l in output.splitlines() if l.startswith("[BLOCKTEST] SLOT=")]
+                # A driver that runs without a device (ata beside AHCI) still lends its client whole: it holds no disk.
+                lines = [l for l in output.splitlines() if l.startswith("[BLOCKTEST] SLOT=") and not l.endswith(" NO DEVICE")]
                 assert [l.split()[1] for l in lines] == ["SLOT=16", "SLOT=17"], output
                 held, line = lines
                 assert f"BADGE=5 KIND={kind} SECTORS={fs_sectors} WRITABLE PAST=REFUSED A FILE SYSTEM: LEFT ALONE" in held, held
