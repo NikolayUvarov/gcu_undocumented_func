@@ -11912,12 +11912,15 @@ def tls_suite(args, disk):
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
         # loader's, badged BADGE_KEY_LOADER in its slot 8, asks only for programs' secrets clients (000-KRN-0182); the
-        # block store's, badged BADGE_KEY_BLOCKSTORE in its slot 3, reaches only its own secrets (308-KRN-0183).
+        # block store's, badged BADGE_KEY_BLOCKSTORE in its slot 3, reaches only its own secrets (308-KRN-0183); the shell's,
+        # badged BADGE_KEY_PASSPHRASE in SLOT_PASSPHRASE (44), types the owner's passphrase alone (308-KRN-0205).
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         real = vm.services()
         keystore = [ep for ep, server in servers.items() if server == real["keystore"]]
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
-        assert {"tls", "ssh", "loader", "blockstore"} <= set(holders) <= {"tls", "ssh", "wlan", "loader", "blockstore"}, holders
+        assert {"tls", "ssh", "loader", "blockstore", "shell"} <= set(holders) <= {"tls", "ssh", "wlan", "loader", "blockstore", "shell"}, holders
+        shell_keys = re.findall(fr"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP={keystore[0]}\b", vm.command(f"stat caps {real['shell']}", raw=True), re.M)
+        assert shell_keys == [("44", "6")], shell_keys
         assert re.search(fr"^SLOT=8 GEN=\d+ KIND=1 .*BADGE=4 EP={keystore[0]}\b", vm.command(f"stat caps {real['loader']}", raw=True), re.M)
         assert re.search(fr"^SLOT=3 GEN=\d+ KIND=1 .*BADGE=5 EP={keystore[0]}\b", vm.command(f"stat caps {real['blockstore']}", raw=True), re.M)
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
