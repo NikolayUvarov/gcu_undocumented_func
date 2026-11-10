@@ -37,6 +37,20 @@ So a drive that fails or does not answer looks like a restart:
 2. `idl/block.wit` 1.3 states it, and the bindings are regenerated.
 3. The drivers' change on DRV's branch builds, and the block, disk, store and USB suites pass with it on x86 and aarch64. That is the landing request's evidence.
 
+## Progress (2026-11-10)
+
+- **Made:** libmind's part, at 7de1af60 on `claude/000-KRN-0228-block-driver-errors`, on STO's branch at c3938027.
+- **Criteria 1 and 2 are met:**
+  - `tests/block_host.rs` passes, 7 of 7;
+  - `idl/block.wit` is 1.3, and the bindings are regenerated.
+- **A local check, not evidence for the drivers' change** (MC-12.1). A mechanical port of the six drivers, kept in this session and not pushed, was built in the kernel session's container (QEMU 8.2.2, TCG, 4 CPUs). Three groups passed on it:
+  - "x86: services, storage, audio", 738 s;
+  - "x86: files and block writes", 1055 s;
+  - "x86: NVMe boot disk", 111 s.
+
+  None of them makes a drive fail.
+- **Sent to DRV and STO:** `ALL/2026-11-10T0214Z-KRN-the-block-drivers-failure-as-io-is-000-krn-0228-libminds-part-is-ready.md`. The third criterion is DRV's branch's.
+
 ## Related
 
 - [000-DRV-0064](000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md): `ata` and `ahci` wait to deadlines; its second criterion needs this.
