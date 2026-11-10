@@ -138,6 +138,10 @@ impl Programs {
 // A program wm started: what to tell the user, its process, the window lent to it to see (issue u014).
 struct Started { message: String, pid: u64, window: Option<u32> }
 
+// The Sound page's test tone after a change of the volume (000-APP-0076).
+const TONE_HZ: usize = 880;
+const TONE_MS: usize = 150;
+
 // Starts `command` in a new window with a plain broker client and, of what it asks for, what wm holds. A program that
 // asks for the display (`record -w`) sees window `front`, the one in front when the user started it.
 fn launch(command: &str, front: Option<u32>) -> Result<Started, String> { start(command, front, false) }
@@ -785,6 +789,10 @@ fn main(info: &'static BootInfo) {
                     let text = if !holds(SLOT_SHELL) { String::from("Setting the levels needs the shell's commands, which wm does not hold") }
                         else { shell_line(&line).unwrap_or_else(|why| why) };
                     mind::println!("[WM] SOUND PAGE {}: {}", line, text);
+                    // A test tone at the new volume (000-APP-0076), through wm's own client, which only plays.
+                    if (line.starts_with("volume ") && line != "volume mute") && text.starts_with("VOLUME ") && mind::audio::tone(TONE_HZ, TONE_MS).is_ok() {
+                        mind::println!("[WM] SOUND PAGE TONE {} HZ, {} MS", TONE_HZ, TONE_MS);
+                    }
                     if let Mode::Settings(settings) = &mut manager.wm.mode {
                         show_sound(settings);
                         settings.message = Some(text.clone());
