@@ -1,6 +1,6 @@
 # 100004-PRT-0014 — A kernel entered at EL2 goes on at EL1
 
-**Type:** porting (kernel, aarch64) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** open (made and tested in QEMU, 2026-11-10; landing and the boards' runs left) · **Blocked by:** — · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md); [100000](100000-a-phone-the-pinephone-first.md), stage 1 · **Roadmap:** track H · **Constitution:** MC-1.2, MC-1.3, MC-12.1
+**Type:** porting (kernel, aarch64) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** open (in `main` since round 111, 2026-11-10; the boards' runs left) · **Blocked by:** — · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md); [100000](100000-a-phone-the-pinephone-first.md), stage 1 · **Roadmap:** track H · **Constitution:** MC-1.2, MC-1.3, MC-12.1
 
 ## Problem
 
@@ -67,6 +67,8 @@ On the branch `claude/100004-PRT-0014-leave-el2`.
 - **RAM in the first GiB.** The map before `mmu::init` makes the first GiB device memory, so a board whose kernel lies there (the Raspberry Pi 4's RAM starts at 0) needs more than this. None of the boards in 100004 or 100000 is such a board.
 - **A firmware that names PSCI by HVC while starting the kernel at EL2** would be answered by its own EL2 vectors. TF-A and QEMU name SMC then.
 - **The boards' runs** (100004-MOB-0002, 0003): no real core has run this yet.
+
+**Landed** in round 111 (`main` 08cdd8d8, 2026-11-10): every group of the gate passed, the two at EL2 among them. They ran on PCU: "aarch64: the board from a device tree, under U-Boot" and "aarch64: RAM, ACPI and PCI above 4 GiB". **Left:** the boards' first boots (100004-MOB-0002, 0003).
 
 ## Related
 
