@@ -95,6 +95,12 @@ No real machine is needed.
 
 `ERR_IO` needs the protocol to tell a driver's timeout from a lost driver. That is libmind's core, KRN's.
 
+**The failure's code, answered (2026-11-10)** by [000-KRN-0228](000-KRN-0228-a-block-drivers-failure-reaches-the-client-as-io.md) and DRV's port of the six block drivers to its `Outcome`, in one landing request:
+- `ata`'s `Busy`, `NoData` and `Error` and `ahci`'s failed command (timed out or a task-file error) answer `DriverError::Io`, which reaches the client as `io` (`ERR_IO`) after one call, never as `peer`;
+- a request the driver's own checks refuse answers `Range`, which is `invalid`.
+
+What shows it: `tests/ata_ahci_waits_host.rs` (the 10 s `Busy`) and `tests/block_host.rs` (`Io` as `io`, never `peer`), each its half. No QEMU suite makes a drive fail. The issue closes once that request is in `main`.
+
 ## Related
 
 [issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), [000-DRV-0065](../issues-done/000-DRV-0065-virtio-blk-waits-a-whole-tick.done).

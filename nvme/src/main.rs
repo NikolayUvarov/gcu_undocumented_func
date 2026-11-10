@@ -6,7 +6,7 @@
 // badge, mind::block_protocol) and flushes, 512-byte sectors only. Holds its BAR and DMA only.
 use core::sync::atomic::{fence, Ordering};
 use mind::abi::{BootInfo, BLOCK_KIND_NVME, BLOCK_MAX_SECTORS, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM};
-use mind::block::{self, Driver};
+use mind::block::{self, Driver, DriverError, Outcome};
 use mind::dev::{cap_info, Dma, Mmio};
 
 const CAP: usize = 0x00; const CC: usize = 0x14; const CSTS: usize = 0x1C; const AQA: usize = 0x24; const ASQ: usize = 0x28; const ACQ: usize = 0x30;
@@ -121,24 +121,25 @@ fn wait_ms(ms: usize, mut done: impl FnMut() -> bool) -> bool {
 
 impl Driver for Nvme {
     fn sectors(&self) -> u64 { self.sectors }
-    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool {
+    fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome {
         let bytes = count * 512;
-        if count == 0 || !self.transfer(OP_READ, lba, count) { return false; }
+        if count == 0 { return Err(DriverError::Range); }
+        if !self.transfer(OP_READ, lba, count) { return Err(DriverError::Io); }
         out[..bytes].copy_from_slice(self.dma.bytes(DATA, bytes));
-        true
+        Ok(())
     }
-    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool {
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome {
         let bytes = count * 512;
-        if count == 0 { return false; }
+        if count == 0 { return Err(DriverError::Range); }
         self.dma.bytes(DATA, bytes).copy_from_slice(&data[..bytes]);
-        self.transfer(OP_WRITE, lba, count)
+        if self.transfer(OP_WRITE, lba, count) { Ok(()) } else { Err(DriverError::Io) }
     }
-    fn flush(&mut self) -> bool {
-        if !self.flush { return true; }
+    fn flush(&mut self) -> Outcome {
+        if !self.flush { return Ok(()); }
         let mut queue = core::mem::replace(&mut self.io, Queue { sq: 0, cq: 0, tail: 0, head: 0, phase: true, sq_bell: 0, cq_bell: 0, id: 0 });
         let done = self.submit(&mut queue, OP_FLUSH, 1, 0, 0, [0; 6]).is_some();
         self.io = queue;
-        done
+        if done { Ok(()) } else { Err(DriverError::Io) }
     }
     fn read_only(&self) -> bool { false }
 }
