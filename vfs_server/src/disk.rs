@@ -17,14 +17,16 @@ const IDENTITY: usize = 256; // at most this many sectors read while mounting ar
 
 // `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted; `identity`:
 // the sectors read while mounting (the boot manifest's among them), by hash, until `mounted`; `replaced`: the drive came
-// back with another medium (000-KRN-0079).
-pub struct Disk { device: Device, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64, first: Option<[u8; SECTOR]>, identity: alloc::vec::Vec<(u32, [u8; 32])>, recording: bool, replaced: bool }
+// back with another medium (000-KRN-0079). `at`: where the device's sector 0 lies on its disk, a window's first (307-KRN-0229).
+pub struct Disk { device: Device, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64, first: Option<[u8; SECTOR]>, identity: alloc::vec::Vec<(u32, [u8; 32])>, recording: bool, replaced: bool, at: u64 }
 
 impl Disk {
     pub fn new(mut device: Device) -> Option<Self> {
         let first = device.read(0, 1).ok().and_then(|data| data.get(..SECTOR).map(|s| { let mut sector = [0u8; SECTOR]; sector.copy_from_slice(s); sector }));
-        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false })
+        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false, at: 0 })
     }
+    /// A window of a disk whose sector 0 is the disk's sector `at`.
+    pub fn window(mut self, at: u64) -> Self { self.at = at; self }
     pub fn kind(&self) -> usize { self.device.kind() }
     /// The volumes are mounted: sectors read from now on are not part of the medium's identity.
     pub fn mounted(&mut self) { self.recording = false; }
@@ -216,6 +218,8 @@ impl Shared {
     pub fn new(disk: Disk) -> Self { Self(Rc::new(RefCell::new(disk))) }
     pub fn kind(&self) -> usize { self.0.borrow().kind() }
     pub fn mounted(&self) { self.0.borrow_mut().mounted() }
+    /// Where the device's sector `lba` lies on its disk, as the log names it.
+    pub fn place(&self, lba: u32) -> u64 { self.0.borrow().at + lba as u64 }
 }
 
 impl Sectors for Shared {

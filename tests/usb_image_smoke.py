@@ -343,6 +343,17 @@ def run(args, booted):
         require(init, f"[INIT] usb_storage PARTITION 3: TYPE 7F, {store_count} SECTORS FROM {store_first}, PARTUUID {signature:08x}-03")
         require(init, f"[INIT] THE BLOCK STORE'S PARTITION: usb_storage PARTITION 3 (ITS TYPE AND SUPERBLOCK), {store_count} SECTORS FROM {store_first}, WINDOW 1")
         require(usb + vm.service_logs("usb_storage"), f"[BLOCK] WINDOW 1 SET: {store_count} SECTORS FROM {store_first}")
+        # 307-KRN-0229: vfs_server holds the boot and log partitions as windows 2 and 3 of the same driver, its slots 16 and
+        # 17, written through (badges 5 and 7), and no client of the whole disk.
+        for (number, _, first, count), window in zip(entries[:2], (2, 3)):
+            require(init, f"[INIT] usb_storage PARTITION {number}: WINDOW {window} FOR VFS_SERVER, {count} SECTORS FROM {first}")
+            require(usb + vm.service_logs("usb_storage"), f"[BLOCK] WINDOW {window} SET: {count} SECTORS FROM {first}")
+        real = vm.services()
+        held = lambda name: re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", vm.command(f"stat caps {real[name]}", raw=True), re.M)
+        stick = {ep for slot, _, ep in held("blockstore") if slot == "2"}
+        assert len(stick) == 1, held("blockstore")
+        vfs_held = sorted((int(slot), int(badge)) for slot, badge, ep in held("vfs_server") if ep in stick)
+        assert vfs_held == [(16, 5), (17, 7)], vfs_held
         require(ready, f"SECTORS=1/{store_count} ")
         require(vm.command("run files &"), "PID=5 NAME=files BACKGROUND")
         files_check(vm, 5)
@@ -411,7 +422,8 @@ def run(args, booted):
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
           "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
           "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host; "
-          "log: in help, df, fsck and fm; the block store on the stick's partition 3, window 1 of the same drive, its key in its superblock, the boot volume clean")
+          "log: in help, df, fsck and fm; the block store on the stick's partition 3, window 1 of the same drive, its key in its superblock, the boot volume clean; "
+          "vfs_server's boot and log partitions as windows 2 and 3, no client of the whole stick")
 
 
 def log_tools_check(vm, name):

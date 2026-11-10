@@ -1,6 +1,6 @@
 # MIND Core API
 
-**Version:** ABI 31 (`ABI_VERSION` in `common/abi.rs`; 308-KRN-0205: `SLOT_PASSPHRASE` 44, the shell's client of `keystore` that types the owner's passphrase, and `SLOT_DYNAMIC` 45; ABI 30, 308-KRN-0204: `SLOT_RECOVER` 43, the shell's client of the block store that may recover the volume key, `REQUEST_RECOVER`, and `SLOT_DYNAMIC` 44; ABI 29, 100000-KRN-0222: the console as a byte channel, `PLATFORM_CONSOLE` and `CAP_KIND_CONSOLE`, read with `TEXT_READ` and written with `TEXT_WRITE`) · **Stability:** unstable, see [Stability](#stability)
+**Version:** ABI 32 (`ABI_VERSION` in `common/abi.rs`; 307-KRN-0229: `SLOT_VFS_PARTS_FIRST` 16 and `VFS_PARTS` 6, `vfs_server`'s windows of a partitioned disk's partitions in place of the whole disk; ABI 31, 308-KRN-0205: `SLOT_PASSPHRASE` 44, the shell's client of `keystore` that types the owner's passphrase, and `SLOT_DYNAMIC` 45; ABI 30, 308-KRN-0204: `SLOT_RECOVER` 43, the shell's client of the block store that may recover the volume key, `REQUEST_RECOVER`, and `SLOT_DYNAMIC` 44; ABI 29, 100000-KRN-0222: the console as a byte channel, `PLATFORM_CONSOLE` and `CAP_KIND_CONSOLE`, read with `TEXT_READ` and written with `TEXT_WRITE`) · **Stability:** unstable, see [Stability](#stability)
 
 Programs reach MIND Core through three layers:
 

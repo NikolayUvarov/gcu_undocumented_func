@@ -67,12 +67,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // written with TEXT_WRITE, read as the holder's text input) where its node cannot be lent by its page (100000-KRN-0222).
 // ABI 30 moves SLOT_DYNAMIC to 44 for SLOT_RECOVER, the shell's client of the block store that may recover the volume
 // key, and adds REQUEST_RECOVER for a copy of it (308-KRN-0204). ABI 31 moves it to 45 for SLOT_PASSPHRASE, the shell's
-// client of keystore that types the owner's passphrase (308-KRN-0205).
+// client of keystore that types the owner's passphrase (308-KRN-0205). ABI 32 gives vfs_server windows of a partitioned
+// disk's partitions in SLOT_VFS_PARTS_FIRST.. in place of the whole disk (307-KRN-0229).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 31;
+pub const ABI_VERSION: u32 = 32;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -343,6 +344,10 @@ pub const SLOT_BLOCK_FIRST: usize = 2;
 pub const BLOCK_DEVICES: usize = 3;
 pub const SLOT_RAMDISK: usize = 5;
 pub const SLOT_VFS_RTC: usize = 6;
+// For vfs_server, slots 16..21: on a disk with a partition table, a window of each partition it may mount, in place of
+// the whole disk (307-KRN-0229); its arguments say where each lies (`parts`, init's vfs_windows).
+pub const SLOT_VFS_PARTS_FIRST: usize = 16;
+pub const VFS_PARTS: usize = 6;
 // Shell: application slots plus process control, the input privilege and the COM1 port range.
 pub const SLOT_CONTROL: usize = 7;
 pub const SLOT_INPUT: usize = 8;
