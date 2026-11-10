@@ -11968,7 +11968,10 @@ def passphrase_wait_check(args, cpu):
                 extra=["-cpu", cpu, "-nic", "none", "-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"])
         try:
             require(vm.service_logs("keystore", "IT WAITS FOR IT"), "[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN system/keystore/device.locked: IT WAITS FOR IT")
-            log = vm.service_logs("init", "WAITS FOR keystore'S PASSPHRASE")
+            # init's lines from the system log, whole: the service's own log keeps its last 4 KiB only.
+            deadline, log = time.monotonic() + 60, ""
+            while "WAITS FOR keystore'S PASSPHRASE" not in log and time.monotonic() < deadline:
+                log = vm.command("dmesg -s init", raw=True)
             waited = re.findall(r"\[INIT\] (\S+) WAITS FOR keystore'S PASSPHRASE: PREPARED, STARTED ONCE THE DEVICE KEY IS OPENED", log)
             assert {"blockstore", "storefs", "tls", "ssh"} <= set(waited), (waited, log[-3000:])
             services = vm.services()
