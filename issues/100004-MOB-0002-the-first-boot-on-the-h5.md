@@ -1,6 +1,6 @@
 # 100004-MOB-0002 — The first boot on the Orange Pi Zero Plus 2 H5
 
-**Type:** porting (a board) · **Owner:** `MOB` · **Priority:** P1 · **Status:** open · **Blocked by:** [100004-MOB-0001](100004-MOB-0001-the-boards-sd-card.md) (the card); the board wired to a host ([issues-human, section 14](../issues-human/README.md#14-the-two-allwinner-boards-on-the-bench)); for the console past the kernel's lines, the kernel session's answer on the busy-detect and the console channel (100004's message to `KRN`) · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md) · **Constitution:** MC-1.3, MC-12.1, MC-12.3
+**Type:** porting (a board) · **Owner:** `MOB` · **Priority:** P1 · **Status:** open · **Blocked by:** [100004-MOB-0001](100004-MOB-0001-the-boards-sd-card.md) (the card); the kernel leaving EL2 (asked of `KRN`, 2026-11-10); the board wired to a host ([issues-human, section 14](../issues-human/README.md#14-the-two-allwinner-boards-on-the-bench)); for the console past the kernel's lines, the kernel session's answer on the busy-detect and the console channel (100004's message to `KRN`) · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md) · **Constitution:** MC-1.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -30,6 +30,21 @@ MIND Core's aarch64 image has run only in QEMU. The H5 board is the nearest thin
   - U-Boot's and TF-A's versions;
   - the card;
   - the adapter and the host (MC-12.1).
+
+## Progress (2026-11-10)
+
+**Found before the board: entered at EL2, the kernel stops at `init`'s first system call.**
+- **Why EL2:** TF-A hands over to U-Boot at EL2, and U-Boot's defconfigs for both boards do not set `ARMV8_SWITCH_TO_EL1`. So `BOOTAA64.EFI` and the kernel start at EL2.
+- **What the code has:** nothing in `bootloader/src` or `kernel/src/arch/aarch64` reads `CurrentEL` or drops to EL1.
+- **Reproduced in QEMU** (8.2.2, TCG): the U-Boot group with `virtualization=on` added (`--machine virt,acpi=off,gic-version=2,highmem=off,virtualization=on`).
+  - The loader, the kernel's `BOARD` line and `INIT STARTED` come as usual.
+  - Then U-Boot's handler reports `"Synchronous Abort" handler, esr 0x56000000`: an SVC taken to EL2, where `VBAR_EL2` is still U-Boot's. The machine resets.
+- **Without `virtualization=on`** the same tree passes: `virt` has no EL2 then.
+- **Asked of the kernel session** (`KRN/2026-11-10T0700Z-MOB-entered-at-el2-…`): the drop to EL1 for every CPU, and a CI group with `virtualization=on`.
+
+**Without a GOP** (the H618's case), under U-Boot in QEMU, the system boots to `MIND>` and starts programs. The `normal` suite then fails only on its expectation of `PID=1` for the first program.
+
+**The card** for this board is 100004-MOB-0001's `dist/boards/mind-orangepi-zero-plus2-h5.img`.
 
 ## Related
 

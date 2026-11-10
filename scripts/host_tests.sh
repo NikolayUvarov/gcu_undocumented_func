@@ -60,6 +60,7 @@ python3 tests/gate_test.py
 python3 tests/build_jobs_test.py
 python3 tests/mirror_test.py
 python3 tests/usb_image_test.py
+python3 tests/board_image_test.py # an Allwinner board's card: the partitions moved past U-Boot (100004-MOB-0001)
 python3 tests/media_test.py
 python3 tests/effector_server_test.py
 python3 tests/rtl8168_probe_test.py
