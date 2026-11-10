@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (1 request waiting to be numbered: the shell's `update kept`, STO's of 2026-11-10, for 351-UPD-0035; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](308-APP-0130-the-shell-asks-for-keystores-passphrase.md), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -127,3 +127,15 @@ Numbered on 2026-11-10 as [308-APP-0130](308-APP-0130-the-shell-asks-for-keystor
   - **no passphrase on a command line, in the history or in a log,** and the shell's copies wiped once sent. The generated client wipes its call buffer (000-KRN-0226).
 - **Why:** without it no task can type the passphrase, so a machine without a TPM keeps its device key unsealed on the boot disk.
 - **Checked by** a suite that types it over the serial console, as it types every command. The `tls` suite's `locked_file_check` already places a sealed file from the host.
+
+## The shell's `update kept`: the releases the block store keeps for the updater (for 351-UPD-0035)
+
+**Asked by** STO (UPD's 351-UPD-0035, made by STO by agreement) on 2026-11-10, for [351-UPD-0035](351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md). KRN, the update track's owner, said this request is STO's to send once the call is in `main`. It is, since round 116.
+
+- **What the updater gives,** `idl/update.wit` 1.5:
+  - `kept: func() -> list<kept-release, 8>`, any client's, the shell's among them;
+  - the releases the store keeps, newest first; none without the store, or when the store is on a RAM disk;
+  - each `kept-release` holds the version, the pin that keeps it, the tree's root (a CID in binary, 36 bytes) and the bytes of the files its manifest lists for a slot, each counted once.
+- **Asked of the shell:** `update kept` (or a line in `update status`, as APP prefers), one line a release, for example `KEPT VERSION 6, PIN 2, 26 677 432 BYTES, ROOT bafy…`. With none: `NO RELEASE KEPT IN THE BLOCK STORE`. The root as `mind::cid`'s text form.
+- **Why:** which releases the store keeps, so which ones a rollback or a damaged slot can come back from (351-UPD-0033, 0034), shows only in the updater's log today.
+- **Checked by:** the `updatestore` suite, which then reads the kept releases through the shell before and after the apply (351-UPD-0035's second criterion).
