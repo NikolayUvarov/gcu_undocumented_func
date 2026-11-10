@@ -8807,6 +8807,7 @@ def audio_suite(vm, wav):
     require_all(vm.command("mic 60"), "MIC 60 % (+13.50 DB OF 16 SETTINGS), BOOST OFF", "KEPT IN data/sound.conf")
     require(vm.command("mic boost on"), "BOOST ON (+20.00 DB)")
     require(vm.command("mic 120"), "ERROR: MIC [0-100 | BOOST ON | BOOST OFF]")
+    require(vm.command("mic 101"), "ERROR: MIC [0-100 | BOOST ON | BOOST OFF]")
     require_all(vm.command("cat data/sound.conf"), f"volume {half}", "muted no", "gain 60", "boost on")
     # wm's Sound page (000-APP-0076): it reads the levels through the shell every 2 s, and ← on its first row sets the
     # volume 5 % lower through the shell's `volume`, which the shell then reads back.
@@ -8828,6 +8829,13 @@ def audio_suite(vm, wav):
     vm.serial(enter=False)
     vm.logged(f"[WM] SOUND PAGE volume {half - 5}: VOLUME {lower} % (", since)
     vm.logged("[WM] SOUND PAGE TONE 880 HZ, 150 MS", since)
+    # Two rows down, the microphone's gain: → sets it 5 % higher through the shell's `mic` (000-APP-0077).
+    since = len(vm.log)
+    for key in ("down", "down", "right"):
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("[WM] SOUND PAGE mic 65: MIC 67 % (+15.00 DB OF 16 SETTINGS), BOOST ON (+20.00 DB)", since)  # setting 10 of 15
     vm.hmp("sendkey esc")
     time.sleep(.2)
     since = len(vm.log)
@@ -8836,7 +8844,7 @@ def audio_suite(vm, wav):
     require(vm.command("volume"), f"VOLUME {lower} %")
     print(f"PASS: volume and mic (000-APP-0076, 000-APP-0077): set, muted and read back through the shell's badged client "
           f"(50 % reads as {half} % of {settings} settings), 101 and loud refused, kept in data/sound.conf; wm's Sound page "
-          f"set {lower} % with ←", flush=True)
+          f"set {lower} % with ← and the gain 65 % with → (67 %, the nearest setting)", flush=True)
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
