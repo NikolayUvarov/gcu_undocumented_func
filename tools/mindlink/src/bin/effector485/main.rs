@@ -29,11 +29,20 @@ use std::time::Duration;
 const AT: &str = "127.0.0.1:8485";
 
 /// The API's version (800-LNK-0039): a change of its fields makes a new one (MC-12.4), and CHANGES says what each brought.
-const API_VERSION: &str = "1.1";
-const CHANGES: [(&str, &str); 2] = [
+const API_VERSION: &str = "1.2";
+const CHANGES: [(&str, &str); 3] = [
     ("1.0", "operations, endpoints, terminal reservations, the page's stream (800-LNK-0011 to 0033)"),
     ("1.1", "GET /api/v1/version; the console: GET /api/v1/console, POST /api/v1/console/input; daemon --supervised (800-LNK-0039)"),
+    ("1.2", "the line's \"mode\" in GET /api/v1/endpoints and GET /api/v1/console: console while no machine answers, then its input is \
+             written as it is with \"pace_ms\"; POST /api/v1/console/break; both refused (409, link_mode) while one answers; \
+             \"hello_held\" in GET /api/v1/endpoints, typed or printing (800-LNK-0043)"),
 ];
+
+/// A console input's pause between characters on a line no machine answers, by default and at most; a break's length.
+const PACE_MS: u64 = 20;
+const PACE_MAX: u64 = 1000;
+const BREAK_MS: u64 = 250;
+const BREAK_RANGE: std::ops::RangeInclusive<u64> = 10..=5000;
 
 const USAGE: &str = "usage: effector485 daemon <port> [--baud <rate>] [--payload <bytes>] [--timeout <ms>] [--tries <n>]
                           [--addresses <n>[,<n>...]] [--listen <host:port>] [--state <dir>] [--key-file <file>] [--supervised]
@@ -90,7 +99,11 @@ commands: submit <kind> [<field>=<value>...] --key <idempotency key> --reason <r
           reservations                   the lease held: session, owner, reason, expiry, seconds left
 
 submit and cancel carry the lease of --reservation SESSION:PIN, or of EFFECTOR485_RESERVATION; renew and release take
-it from there when it is not given.";
+it from there when it is not given.
+
+The console (the API: GET /api/v1/console, POST /api/v1/console/input and /api/v1/console/break): while no machine on
+the line answers (mode console, such as U-Boot's prompt), input is written as it is, a character every pace_ms (default
+20), and a break may be sent; while one answers (mode link), both are refused: the link's frames share the line.";
 
 fn die(msg: impl std::fmt::Display) -> ! {
     eprintln!("effector485: {msg}");
@@ -171,23 +184,44 @@ fn daemon(spec: String, o: worker::Options, addresses: &[u8], listen: &str, dir:
         let (state, bus) = (state.clone(), bus.clone());
         std::thread::spawn(move || worker::work(state, index, bus, o));
     }
-    // The bytes outside frames, read between exchanges: a boot's lines appear as they come (800-LNK-0039).
+    // The bytes outside frames, read between exchanges: a boot's lines appear as they come (800-LNK-0039). Input typed
+    // on a line no machine answers is written as it is, pace_ms after each character (800-LNK-0043).
     {
         let (state, bus) = (state.clone(), bus.clone());
         std::thread::spawn(move || loop {
             let found = bus.drain();
-            if !found.is_empty() {
+            let typed = {
                 let mut st = worker::lock(&state);
                 let at = st.stray_console();
-                for (time, bytes) in found { st.consoles[at].push(&bytes, time); }
-                st.changed();
+                if !found.is_empty() {
+                    for (time, bytes) in found { st.consoles[at].push(&bytes, time); }
+                    st.changed();
+                }
+                // A machine answers now: typed bytes would mix with its frames.
+                let link = st.mode() == "link";
+                let console = &mut st.consoles[at];
+                if link && !console.typed.is_empty() {
+                    eprintln!("effector485: {}: {} typed bytes not written: a machine answers the link now", bus.spec(), console.typed.len());
+                    console.typed.clear();
+                }
+                console.next_typed()
+            };
+            match typed {
+                Some((bytes, pace)) if bus.type_raw(&bytes) => std::thread::sleep(Duration::from_millis(pace)),
+                // The port failed: the rest goes with it, said once.
+                Some((bytes, _)) => {
+                    let mut st = worker::lock(&state);
+                    let at = st.stray_console();
+                    let lost = bytes.len() + std::mem::take(&mut st.consoles[at].typed).len();
+                    eprintln!("effector485: {}: {lost} typed bytes not written: {}", bus.spec(), bus.error());
+                }
+                None => std::thread::sleep(Duration::from_millis(100)),
             }
-            std::thread::sleep(Duration::from_millis(100));
         });
     }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        let (state, key, changes) = (state.clone(), key.clone(), changes.clone());
+        let (state, bus, key, changes) = (state.clone(), bus.clone(), key.clone(), changes.clone());
         let bound = bound.clone();
         std::thread::spawn(move || {
             let request = match http::read_request(&mut stream) { Ok(r) => r, Err(e) => return http::respond(&mut stream, 400, "text/plain", &e) };
@@ -201,7 +235,7 @@ fn daemon(spec: String, o: worker::Options, addresses: &[u8], listen: &str, dir:
                 if ws::handshake(&mut stream, websocket).is_ok() { feed::serve(stream, state, changes, key, place); }
                 return;
             }
-            let (status, body) = if key.is_some() && request.key != key { (401, error("the X-API-Key header is missing or wrong")) } else { route(&state, &request) };
+            let (status, body) = if key.is_some() && request.key != key { (401, error("the X-API-Key header is missing or wrong")) } else { route(&state, &bus, &request) };
             http::respond(&mut stream, status, "application/json", &body.text());
         });
     }
@@ -248,7 +282,40 @@ fn same_site(r: &http::Request, bound: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
+/// The console a call names: a machine's, or on a cable of several `line`, the bytes outside frames.
+fn console_named(st: &State, request: &Value) -> Result<String, String> {
+    if request.str("agent_id") == Some(ops::LINE) && st.links.len() > 1 { return Ok(ops::LINE.into()); }
+    st.agent_of(request)
+}
+
+/// A console takes its lease holder's input alone: the machine's lease, or on `line` every lease on the cable.
+fn console_held(st: &State, r: &http::Request, request: &Value, agent: &str, t: u64) -> Result<(), Value> {
+    let line = agent == ops::LINE;
+    for lease in st.leases.iter().filter(|l| l.expires > t && (line || l.agent == agent)) {
+        if credentials(r, request).is_some_and(|(session, pin)| st.holds(&lease.agent, &session, &pin, t).is_ok()) { continue; }
+        let what = if line { "the line" } else { "its console" };
+        return Err(not_held(&format!("{} is reserved by {} ({}): {what} takes the holder's input only", lease.agent, lease.session, lease.reason)));
+    }
+    Ok(())
+}
+
+/// Why a raw write or a break is refused while a machine answers (800-LNK-0043).
+fn link_mode(st: &State) -> Value {
+    let on: Vec<&str> = st.links.iter().filter(|l| l.online).map(|l| l.agent.as_str()).collect();
+    let text = format!("{} answers the link: the link's frames share this line, so it takes no raw input or break", on.join(", "));
+    obj(vec![("error", s(&text)), ("code", s("link_mode"))])
+}
+
+/// A whole number from `range` in field `name`, or `default` when there is none.
+fn whole(request: &Value, name: &str, default: u64, range: std::ops::RangeInclusive<u64>) -> Result<u64, String> {
+    match request.get(name) {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::Num(n)) if n.fract() == 0.0 && (*range.start() as f64..=*range.end() as f64).contains(n) => Ok(*n as u64),
+        _ => Err(format!("\"{name}\" is a whole number from {} to {}", range.start(), range.end())),
+    }
+}
+
+fn route(state: &Arc<Mutex<State>>, bus: &Arc<bus::Bus>, r: &http::Request) -> (u16, Value) {
     let mut st = worker::lock(state);
     let t = now();
     st.expire(t);
@@ -364,29 +431,62 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
             let read = console.read(from, max);
             let pieces = read.pieces.iter().map(|&(offset, time)| obj(vec![("offset", Value::Num(offset as f64)), ("time_ms", Value::Num(time as f64))])).collect();
             (200, obj(vec![("agent_id", s(agent.as_deref().unwrap_or(""))), ("from", Value::Num(read.from as f64)), ("next", Value::Num(read.next as f64)),
-                           ("gap", Value::Num(read.gap as f64)), ("offered", Value::Bool(console.offered || i >= st.links.len())),
+                           ("gap", Value::Num(read.gap as f64)), ("offered", Value::Bool(console.offered || i >= st.links.len())), ("mode", s(st.mode())),
                            ("input_seq", console.seq().map_or(Value::Null, |n| Value::Num(n as f64))), ("data", s(&ws::base64(&read.data))),
                            ("text", s(&String::from_utf8_lossy(&read.data))), ("pieces", Value::Arr(pieces))]))
         }
         ("POST", "/api/v1/console/input") => {
             let request = match json::parse(&r.body) { Ok(v) => v, Err(e) => return (400, error(&e)) };
-            let agent = match st.agent_of(&request) { Ok(a) => a, Err(e) => return (400, error(&e)) };
+            let agent = match console_named(&st, &request) { Ok(a) => a, Err(e) => return (400, error(&e)) };
             let Some(seq) = request.num("seq").filter(|n| n.fract() == 0.0 && *n >= 0.0).map(|n| n as u64) else { return (400, error("an input needs \"seq\", a whole number that grows")) };
             let bytes = match (request.str("text"), request.str("data")) {
                 (Some(text), None) => text.as_bytes().to_vec(),
                 (None, Some(data)) => match console::base64_decode(data) { Some(b) => b, None => return (400, error("\"data\" is not base64")) },
                 _ => return (400, error("an input carries \"text\" or \"data\" (base64), one of them")),
             };
+            let pace = match whole(&request, "pace_ms", PACE_MS, 0..=PACE_MAX) { Ok(p) => p, Err(e) => return (400, error(&e)) };
             // As an operation that changes the machine: a lease that is not the caller's holds it back.
-            if let Some(lease) = st.lease_at(&agent, t) {
-                let held = credentials(r, &request).is_some_and(|(session, pin)| st.holds(&agent, &session, &pin, t).is_ok());
-                if !held { return (409, not_held(&format!("{agent} is reserved by {} ({}): its console takes the holder's input only", lease.session, lease.reason))); }
-            }
+            if let Err(e) = console_held(&st, r, &request, &agent, t) { return (409, e); }
             let i = st.console_of(&agent).unwrap_or(0);
+            let answer = |written: bool, mode: &str| obj(vec![("agent_id", s(&agent)), ("seq", Value::Num(seq as f64)), ("written", Value::Bool(written)), ("mode", s(mode))]);
+            // The line no machine answers takes the bytes as they are, U-Boot's prompt for one (800-LNK-0043).
+            if i == st.stray_console() && st.mode() == "console" {
+                let closed = bus.error();
+                if !closed.is_empty() { return (503, error(&closed)); }
+                return match st.consoles[i].type_raw(seq, &bytes, pace) { Ok(written) => (200, answer(written, "console")), Err(e) => (400, error(&e)) };
+            }
+            if agent == ops::LINE { return (409, link_mode(&st)); }
             if !st.consoles[i].offered { return (409, error(&format!("{agent} does not offer its console on the link (on MIND Core: link-console, 800-LNK-0019)"))); }
             match st.consoles[i].input(seq, &bytes) {
-                Ok(written) => (200, obj(vec![("agent_id", s(&agent)), ("seq", Value::Num(seq as f64)), ("written", Value::Bool(written))])),
+                Ok(written) => (200, answer(written, "link")),
                 Err(e) => (400, error(&e)),
+            }
+        }
+        ("POST", "/api/v1/console/break") => {
+            let request = match json::parse(&r.body) { Ok(v) => v, Err(e) => return (400, error(&e)) };
+            let agent = match console_named(&st, &request) { Ok(a) => a, Err(e) => return (400, error(&e)) };
+            let ms = match whole(&request, "ms", BREAK_MS, BREAK_RANGE) { Ok(m) => m, Err(e) => return (400, error(&e)) };
+            if let Err(e) = console_held(&st, r, &request, &agent, t) { return (409, e); }
+            let i = st.console_of(&agent).unwrap_or(0);
+            if i != st.stray_console() { return (400, error(&format!("a break is the line's: name \"{}\"", ops::LINE))); }
+            if st.mode() != "console" { return (409, link_mode(&st)); }
+            if !bus.serial() { return (409, obj(vec![("error", s(&format!("{}: a TCP connection has no break", bus.spec()))), ("code", s("unsupported"))])); }
+            let closed = bus.error();
+            if !closed.is_empty() { return (503, error(&closed)); }
+            st.consoles[i].typed_at = Some(std::time::Instant::now());
+            drop(st);
+            // The input before it goes first, as writes go out in order.
+            let until = std::time::Instant::now() + Duration::from_secs(5);
+            while !worker::lock(state).consoles[i].typed.is_empty() {
+                if std::time::Instant::now() > until { return (409, error("the input before the break is still being written: try again")); }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            match bus.brk(ms) {
+                Ok(()) => {
+                    eprintln!("effector485: {}: a break of {ms} ms", bus.spec());
+                    (200, obj(vec![("agent_id", s(&agent)), ("ms", Value::Num(ms as f64)), ("sent", Value::Bool(true))]))
+                }
+                Err(e) => (409, obj(vec![("error", s(&e)), ("code", s("unsupported"))])),
             }
         }
         _ => (404, error(&format!("no route {} {}", r.method, r.path))),
@@ -557,7 +657,8 @@ mod tests {
         let Ok(Submitted::New(_)) = st.submit(&r, None) else { panic!("the queued one") };
         let id = st.ops.last().unwrap().id.clone();
         let state = Arc::new(Mutex::new(st));
-        let ask = |method: &str, path: &str, body: &str| route(&state, &http::Request {
+        let bus = bus::Bus::new("test", 115_200);
+        let ask = |method: &str, path: &str, body: &str| route(&state, &bus, &http::Request {
             method: method.into(), path: path.into(), query: Vec::new(), key: None, body: body.into(), origin: None, host: None,
             websocket: None, session: None, pin: None,
         });
