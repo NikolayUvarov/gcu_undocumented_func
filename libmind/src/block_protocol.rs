@@ -2,7 +2,7 @@
 //! rule of Appendix B.6 (writing needs `BADGE_WRITE` in the badge of the client's capability and a writable medium).
 //! A client may be bounded to a window of the device's sectors, named by its badge (307-DRV-0054): it sees the window as
 //! the whole device, and nothing outside it. A driver's failure reaches the client as `io`, `invalid` or `not-found`,
-//! never as `peer`, which is for a restart (block.wit 1.3, 000-KRN-0228). Builds on the host for tests
+//! never as `peer`, which is for a restart (block.wit 2.0, 000-KRN-0228). Builds on the host for tests
 //! (tests/block_host.rs).
 use crate::abi::*;
 use crate::sys::{Error, Result};

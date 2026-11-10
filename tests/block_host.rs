@@ -1,4 +1,4 @@
-//! Host tests of the block protocol's server side (libmind/src/block_protocol.rs, idl/block.wit 1.3): writing needs
+//! Host tests of the block protocol's server side (libmind/src/block_protocol.rs, idl/block.wit 2.0): writing needs
 //! the write badge on the client's capability and a writable medium (Appendix B.6); the data must hold every sector
 //! written; reads, clipping at the end, errors. A client of a window (307-DRV-0054) sees the window as the device and
 //! nothing outside it; only init's windows badge sets one; a window not set gives nothing. A driver's failure reaches
