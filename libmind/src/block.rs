@@ -21,6 +21,14 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
         let badge = request.badge;
+        // A medium that came back may be another one (000-KRN-0085): the request is answered as without a device, and the
+        // instance ends after it. init starts a fresh one, which holds no client's buffer or window, so every client
+        // attaches again and checks what it reaches (000-KRN-0079), and init sets a window again only after its own check.
+        let returned = driver.as_deref_mut().is_some_and(|device| device.returned());
+        if returned {
+            crate::println!("[BLOCK] THE MEDIUM WENT AWAY AND CAME BACK: THIS REQUEST ANSWERED NOT-FOUND, AND THE DRIVER ENDS FOR A FRESH START");
+            driver = None;
+        }
         let _ = match block::decode(&request, RECEIVED_CAP) {
             Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
             Ok((block::Request::Kind, call)) => block::reply_kind(call, kind as u8),
@@ -60,6 +68,7 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
                 block::reply_window(call, set)
             }
         };
+        if returned { crate::process::exit(); }
     }
 }
 
