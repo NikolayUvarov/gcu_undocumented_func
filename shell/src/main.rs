@@ -888,12 +888,17 @@ impl Shell {
         let store_named = (storefs && !needs.files && !(needs.file && !needs.files) && (granted("file") || granted("files")))
             .then(|| storescope::named(args)).flatten();
         let firmware_granted = granted("firmware") && !help;
+        let recover_granted = granted("recover") && !help;
         // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
         // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
         let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera");
         // The firmware's variables (the boot order) only when the user agrees, asked every time (351-KRN-0027).
         let firmware = requests & mind::process::REQUEST_FIRMWARE != 0 && mind::dev::cap_info(SLOT_FIRMWARE).0 != 0 && firmware_granted
             && msh::ask(self, &alloc::format!("{} ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW?", name.to_ascii_uppercase()));
+        // The store's recovery client (308-APP-0122, 308-KRN-0204): a copy of the shell's, which makes and takes the keys
+        // that open the medium anywhere, only when the user agrees, asked every time.
+        let recover = requests & mind::process::REQUEST_RECOVER != 0 && mind::dev::cap_info(SLOT_RECOVER).0 != 0 && recover_granted
+            && msh::ask(self, &alloc::format!("{} ASKS TO MAKE OR USE A RECOVERY KEY, WHICH OPENS THE STORE'S MEDIUM ON ANY MACHINE. ALLOW?", name.to_ascii_uppercase()));
         let session = loader::begin(Endpoint::LOADER, name, args)?.map_err(failed)?;
         // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
         // writable where the user may write; one that asks for the user's files gets the shell's own client.
@@ -911,7 +916,7 @@ impl Shell {
                       (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT), (window, SLOT_WINDOW, SLOT_WINDOWS), (window_manager, SLOT_WINDOW, SLOT_WINDOW_MANAGER),
                       (display, SLOT_DISPLAY, SLOT_DISPLAY), (gpio, SLOT_GPIO, SLOT_GPIO), (camera, SLOT_CAMERA, SLOT_CAMERA), (blockstore, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE),
                       (blockstore_read, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ), (firmware, SLOT_FIRMWARE, SLOT_FIRMWARE), (parse, SLOT_PARSE, SLOT_PARSE),
-                      (wifi, SLOT_WIFI, SLOT_WIFI)];
+                      (wifi, SLOT_WIFI, SLOT_WIFI), (recover, SLOT_RECOVER, SLOT_RECOVER)];
         let lent = wanted.iter().filter(|w| w.0).map(|&(_, slot, cap)| (slot, cap)).chain(extra.iter().copied())
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now

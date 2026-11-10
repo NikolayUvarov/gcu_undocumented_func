@@ -12201,6 +12201,7 @@ def tls_suite(args, disk):
           f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
     device_key_check(args, with_entropy)
     tpm_check(args, with_entropy)
+    recovery_key_check(args, with_entropy)
 
 
 def device_key_check(args, cpu):
@@ -12594,6 +12595,90 @@ def tpm_check(args, cpu):
     print(f"PASS: the store's volume key kept by keystore under the device key (308-STO-0022): its disk made at a boot without a TPM "
           f"({volume[1]}) mounts and reads back an object put then after TPM A sealed the device key, and twice under A; under "
           "TPM B's new device key it is not mounted and the object is not read", flush=True)
+
+
+def recovery_key_check(args, cpu):
+    """308-APP-0122: `recovery`, through the store's client badged BADGE_RECOVER that the shell lends only when the
+    user agrees, each time (REQUEST_RECOVER, 308-KRN-0204). On a raw image with a store disk whose volume key keystore
+    keeps: refused, it gets no client; allowed, `recovery new --key-file` makes a key, writes it to the file and keeps
+    it. With keystore's device key gone, as on another machine, the store is not mounted; `recovery open --key-file`
+    opens it, the object put at the first boot reads back, and at the next boot it mounts as this machine's own. The
+    key's text is on no serial line."""
+    if not raw_tools():
+        print("SKIP: the recovery key check needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-recovery-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        image, start, fs_sectors = raw_fat_image(temp, extra={"data/readme.txt": b"the recovery check's directory\n"})
+        part = f"{image}@@{start * 512}"
+        store = temp / "store.img"
+        with store.open("wb") as f:
+            f.truncate(32 << 20)
+        disk = ["-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
+        serial = []
+
+        def boot():
+            return VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *disk])
+
+        def close(vm):
+            serial.append(vm.log)
+            vm.close()
+
+        def recovery(vm, words, answer, line):
+            # `run recovery …`, the shell's question answered; recovery's line, from the serial line or its log.
+            vm.send(f"run recovery {words}\n")
+            vm.expect("(Y/N)", timeout=30)
+            vm.send(answer)
+            out = vm.expect("MIND> ", timeout=120)
+            for _ in range(20):
+                if line in out:
+                    return out
+                out += vm.command("dmesg -s recovery", raw=True)
+                time.sleep(.5)
+            raise AssertionError((line, out))
+        vm = boot()
+        try:
+            log = service_log(vm, "blockstore", "[BLOCKSTORE] READY")
+            require(log, "SEALED, KEY KEPT BY KEYSTORE")
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.command("dmesg -s blockstore", raw=True)
+            root = put[1]
+            require(vm.command(f"blocks publish kept {root}"), "PUBLISHED kept VERSION 1")
+            require(vm.command("blocks recovery"), "RECOVERY RECORDS 0")
+            asked = recovery(vm, "new --key-file data/recovery.txt", "n", "this program holds no recovery client")
+            require(asked, "RECOVERY ASKS TO MAKE OR USE A RECOVERY KEY, WHICH OPENS THE STORE'S MEDIUM ON ANY MACHINE. ALLOW?")
+            require(vm.command("blocks recovery"), "RECOVERY RECORDS 0")
+            recovery(vm, "new --key-file data/recovery.txt", "y", "[RECOVERY] A KEY MADE, WRITTEN TO data/recovery.txt AND KEPT: 0 OLDER RECOVERY RECORD(S) ERASED")
+            require(vm.command("blocks recovery"), "RECOVERY RECORDS 1")
+            vm.command("sync")
+        finally:
+            close(vm)
+        held = subprocess.run(["mtype", "-i", part, "::/data/recovery.txt"], env=MTOOLS_ENV, capture_output=True, text=True).stdout.splitlines()
+        assert len(held) == 2 and held[0] == "MIND CORE RECOVERY KEY 1" and re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){7}", held[1]), held
+        key = held[1]
+        # As on another machine: keystore makes a new device key, under which the volume key is not kept.
+        subprocess.run(["mdel", "-i", part, "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
+        vm = boot()
+        try:
+            refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
+            require(refused, "[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS ")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
+            recovery(vm, "open --key-file data/recovery.txt", "y", "[RECOVERY] THE STORE OPENED WITH THE KEY FROM data/recovery.txt: THIS MACHINE'S KEYSTORE KEEPS ITS VOLUME KEY NOW")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+        finally:
+            close(vm)
+        vm = boot()
+        try:
+            require(service_log(vm, "blockstore", "[BLOCKSTORE] READY"), "SEALED, KEY KEPT BY KEYSTORE")
+            require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+        finally:
+            close(vm)
+        fsck_volume(image, start, fs_sectors)
+    for log in serial:
+        assert key not in log and key.replace("-", "") not in log and key[:9] not in log, "the key on the serial line"
+    print("PASS: a recovery key (308-APP-0122): the shell asked; refused, recovery had no client; allowed, it made a key, "
+          "wrote it to its file and kept it; with keystore's device key gone the store was not mounted, the key file "
+          "opened it and the object read back, and it mounted again at the next boot; the key on no serial line", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):

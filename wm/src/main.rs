@@ -186,6 +186,7 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_AUTHORITY != 0 { missing.push("authority"); }
     else if needs.sysinfo { if holds(SLOT_SYSINFO) && grant(SLOT_SYSINFO, SLOT_SYSINFO) { lent.push("sysinfo"); } else { missing.push("sysinfo"); } }
     if needs.lifecycle { missing.push("lifecycle"); }
+    if requests & mind::process::REQUEST_RECOVER != 0 { missing.push("recover"); } // the shell's alone, asked each time (308-APP-0122)
     if needs.log { missing.push("log"); }
     if requests & mind::process::REQUEST_NETWORK != 0 { missing.push("network"); }
     if requests & mind::process::REQUEST_TLS != 0 { missing.push("tls"); }
