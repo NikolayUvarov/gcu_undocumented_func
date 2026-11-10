@@ -1,5 +1,9 @@
-/// Block devices with 512-byte sectors: drivers serve it, vfs_server is the client (MIND IDL, word calls).
-package mind:block@1.1.0;
+/// Block devices with 512-byte sectors: drivers serve it, vfs_server is the client (MIND IDL, word calls). A client may
+/// be bounded to a window of the device's sectors (1.2, 307-DRV-0054): its badge names the window in bits 1 to 3
+/// (`mind::block::BADGE_WINDOW`; 0 is the whole device), and it sees the window as the device: `sectors` is the
+/// window's count, and `read` and `write` take sectors from the window's first, clipped at its end. Until the window is
+/// set, after a driver's restart too, every call of its client is not-found, never the whole device.
+package mind:block@1.2.0;
 
 interface block {
     /// Number of sectors; error not-found without a drive.
@@ -21,4 +25,9 @@ interface block {
     write: func(data: own<memory>, count: u16, lba: u64) -> result<u16, error-code>;
     /// Empties the drive's write cache; error rights without the write badge (1.1).
     flush: func() -> result<_, error-code>;
+    /// Window `index` (1 to 7) is the `count` sectors from `first` (1.2, 307-DRV-0054); set again, it moves. A window
+    /// holds at most 2^32 sectors (2 TiB), as many as the block store addresses. Only the client badged
+    /// `mind::block::BADGE_WINDOWS`, `init`'s own, may: rights for any other, named in the log; invalid for an index out
+    /// of range, a count of 0, or a range past the device; not-found without a drive.
+    window: func(index: u8, count: u32, first: u64) -> result<_, error-code>;
 }
