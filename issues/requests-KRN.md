@@ -10,7 +10,7 @@ NET's station endpoint with the badge right (for 550-NET-0058) became [550-KRN-0
 
 The store's own partition (STO, for 307) became [307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done), and the model service `nnd` (APP, for 262-APP-0112) [262-KRN-0178](262-KRN-0178-nnd-as-a-boot-service.md) with the wait on a shared word [262-KRN-0179](262-KRN-0179-a-wait-on-a-shared-word.md) (2026-10-28).
 
-## `tts` reads the neural voice: a read-only scope of `models:tts-ru-vosk-0.7/`, and its memory by `data/memory.conf` (for 252-APP-0128)
+## `tts` reads the neural voice: a read-only scope of `models:`, and its memory by `data/memory.conf` (for 252-APP-0128)
 
 **Recorded by:** the tools track (`APP`), 2026-11-10, for [252-APP-0128](252-APP-0128-tts-speaks-with-the-neural-voice.md). Asked in `ALL/2026-11-09T1852Z-APP-tts-with-the-neural-voice-which-way.md` (with NRL's way through `nnd` beside it).
 
@@ -22,7 +22,9 @@ The store's own partition (STO, for 307) became [307-KRN-0177](../issues-done/30
 ### Plan (a proposal; the kernel track decides)
 
 As `init` gives `nnd` its models and its memory (262-KRN-0178), for `tts`:
-- **A read-only scope of `models:tts-ru-vosk-0.7/`** in `SLOT_FILE`, never made. Without the model disk, there is none, and `tts` speaks with the formant voice as now.
+- **A read-only scope of `models:`** in `SLOT_FILE`, never made, as `nnd`'s second scope.
+  - Not of `tts-ru-vosk-0.7/` alone: `mind::model_file::read` takes a file only if its SHA-256 is the one `models:MANIFEST.json` lists (MC-4.2), and the manifest is at the disk's root.
+  - Without the model disk there is none, and `tts` speaks with the formant voice as now.
 - **Its quota from a line `tts <MiB>` of `data/memory.conf`,** read at each start, the owner's choice. Without a line, the default as now, and the formant voice.
 - **Nothing else:** no network, no workers, no other volume.
 
