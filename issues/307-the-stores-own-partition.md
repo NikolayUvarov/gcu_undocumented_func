@@ -72,11 +72,11 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 - a blank partition is taken only once `store.txt` names it, and the store then formats it through the window, as the host reads back.
 
 **What the `store` suite shows** (307-STO-0044):
-- the store on an NVMe partition (GPT) on x86 and aarch64, and on an AHCI partition (MBR) on x86;
+- the store on an NVMe partition (GPT) and on an AHCI partition (MBR), on x86 and on aarch64 (the latter since 307-DRV-0068);
 - an object and a name found after a reboot;
 - on the host, every sector outside the store's partition as written, another system's partitions before and after it and the disk beside it among them.
 
-**Left for the second criterion:** the store on an AHCI partition on aarch64. Under AAVMF `ahci` finds no disk, which DRV has as [307-DRV-0068](307-DRV-0068-ahci-on-a-controller-the-firmware-left-untouched.md).
+**The second criterion is met in QEMU,** on x86 and aarch64: the NVMe and AHCI partitions here, and the USB stick's partition, a blank disk and two candidates never written in 307-KRN-0177's USB image suite.
 
 **Left besides:**
 - [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md): what a flush reaches, per driver;

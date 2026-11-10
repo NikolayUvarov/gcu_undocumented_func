@@ -58,9 +58,12 @@ A check in the `store` suite (`tests/qemu_smoke.py`), on both architectures, in 
 
   Both were caught by the store's own checks before the host's comparison. That comparison stays the check of what the store cannot see.
 
-**Not done:**
-- **AHCI on aarch64.** Under AAVMF `ahci` finds no disk: `PxSIG` reads `0xffffffff` because the probe reads it before FIS receive is enabled, and on x86 OVMF has started the port first. Asked of DRV on 2026-11-10 and numbered [307-DRV-0068](../issues/307-DRV-0068-ahci-on-a-controller-the-firmware-left-untouched.md). The check skips that machine on aarch64, with a line naming the request.
-- **A real machine's disks:** QEMU's runs say nothing of them (MC-12.1).
+**AHCI on aarch64, after the first runs.**
+- Under AAVMF `ahci` found no disk at first: `PxSIG` read `0xffffffff` because the probe read it before FIS receive was enabled, and on x86 OVMF had started the port first.
+- Asked of DRV on 2026-11-10, it became [307-DRV-0068](../issues/307-DRV-0068-ahci-on-a-controller-the-firmware-left-untouched.md), which landed in round 113. The check skipped that machine on aarch64 until then, naming the request.
+- With round 113 merged, the skip is gone, and both machines run on aarch64 as on x86, the NVMe one with its AHCI disk beside it: the `store` suite, 31 checks, with no skip.
+
+**Not done:** a real machine's disks. QEMU's runs say nothing of them (MC-12.1).
 
 ## Related
 
