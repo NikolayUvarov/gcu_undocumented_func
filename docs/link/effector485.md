@@ -117,7 +117,7 @@ JSON over HTTP, as Effector's:
 | `GET /api/v1/operations`, `?status=active`, `&agent_id=<machine>` | all, or those not ended, or one machine's, without their output |
 | `GET /api/v1/operations/output?id=<id>&from=<n>` | the output from byte `n`: `text`, `from`, `next`, `status` |
 | `POST /api/v1/operations/cancel` with `operation_id`, `idempotency_key`, `reason` | the operation. A queued one is cancelled at once; a running one when the daemon next reaches it |
-| `GET /api/v1/endpoints` | each machine on the cable: `agent_id`, `address`, `online`, `name`, `last_seen`, `error`, `queued`, `running`; the line's `mode`, `link` or `console` (below); the cable's bytes since the daemon started, `sent_bytes` and `received_bytes`; its lease, `reservation` (`null` when there is none) |
+| `GET /api/v1/endpoints` | each machine on the cable: `agent_id`, `address`, `online`, `name`, `last_seen`, `error`, `queued`, `running`; the line's `mode`, `link` or `console` (below); for a machine that does not answer, `hello_held`: why it gets no hello now, `typed`, `printing` or `null` (below); the cable's bytes since the daemon started, `sent_bytes` and `received_bytes`; its lease, `reservation` (`null` when there is none) |
 | `GET`, `POST`, `PATCH`, `DELETE /api/v1/terminal-reservations` | the lease on the machine (below) |
 | `GET /api/v1/api-key` | `valid`: the key is right |
 | `GET /api/v1/version` | `api_version`, `program`; `kinds`, each with its `required` fields and whether it only `reads`; `changes`, what each version brought |
@@ -129,7 +129,7 @@ JSON over HTTP, as Effector's:
 
 **The output** keeps the last 256 KiB of each operation.
 
-**The API's version** is 1.2 (800-LNK-0043). A change of its fields makes a new one (MC-12.4), and `GET /api/v1/version` lists what each version brought: 1.0 is the operations, the endpoints, the reservations and the page's feed; 1.1 adds the version, the console and `--supervised` (800-LNK-0039); 1.2 adds the line's `mode`, the input written to it as it is with `pace_ms`, and the break.
+**The API's version** is 1.2 (800-LNK-0043). A change of its fields makes a new one (MC-12.4), and `GET /api/v1/version` lists what each version brought: 1.0 is the operations, the endpoints, the reservations and the page's feed; 1.1 adds the version, the console and `--supervised` (800-LNK-0039); 1.2 adds the line's `mode`, the input written to it as it is with `pace_ms`, the break, and `hello_held`.
 
 **The console** (800-LNK-0039), for an agent's console session ([remote-serial.md](../remote-serial.md), section 4.3):
 - **What it holds:** for each machine, a ring of 1 MiB with absolute byte offsets, the oldest dropped first, each piece with the time it came (`pieces`: `offset`, `time_ms` on the host's clock). It is kept in memory only.
@@ -149,8 +149,15 @@ JSON over HTTP, as Effector's:
   - a TCP line has none: 409 `unsupported`. A pseudo-terminal takes the call and sends nothing.
 - **No hello while it is typed on.** From an input or a break until 60 s after the last one, the daemon says no `hello` on the line, since U-Boot would take a frame's bytes as typed. So:
   - a machine booted from the prompt is found up to 60 s after the last key;
-  - before the first key, the daemon's hellos may have left bytes at the prompt: Ctrl-C clears U-Boot's line;
-  - a hello during U-Boot's countdown may stop it, as any key does. Whether it does on each board is not tested yet.
+  - before the first key, the daemon's hellos may have left bytes at the prompt: Ctrl-C clears U-Boot's line.
+- **No hello while the line prints.** A machine that does not answer gets no `hello` while the line has carried bytes outside frames within the last 3 s. The hellos start again once it has been quiet that long. So:
+  - U-Boot's countdown, which prints each second, is not stopped by a frame. Nor does a frame's `0x1B` or `s` land in the loader's `ESC OR S WITHIN 1 S: A SAFE START` window, which follows its own line, or among a boot's lines;
+  - a hello sent in the moment before a board starts to print may still reach its firmware;
+  - a line that never stays quiet for 3 s gets no hello at all: its machine is found once it does;
+  - on a cable of several the rule is the line's, as its bytes outside frames are no one machine's;
+  - a machine that answers is not affected.
+
+  `hello_held` in `GET /api/v1/endpoints` says why a machine that does not answer gets no hello now: `typed`, `printing`, or `null`. The daemon's log says when a hold begins and when it ends, once each.
 - **While a machine answers** (`link`), input to `line` and a break are refused, 409 `link_mode`, "the link's frames share this line": a frame and typed bytes must not mix. A machine's own console still takes input through channel 1. Typed bytes still waiting when a machine starts to answer are dropped, and the daemon's log says so.
 
 **Cancel** stops a put or a get between frames. It stops a running program with STOP, where the other end can: MIND Core's `link` does, through the loader (800-KRN-0138). Where it cannot, the cancel is recorded as `cancel_error` and the program goes on.
@@ -223,7 +230,7 @@ Open the daemon's address, `http://127.0.0.1:8485/`, in a browser on the same ma
 - **What it shows, live:** the cable's other end (online, its name, when it last answered), the lease (who holds the machine, why, until when), the bytes sent ↑ and received ↓ since the daemon started with the speed each way over the last seconds and how busy the line is, the queue, the newest 200 operations with the reason each waiting one waits, and the output of the one clicked as it comes. The address keeps the operation followed (`#<id>`), so a reload or a link shows it again.
 - **Its buttons:** `hello`, the log (new since the last read, or all of it), the shell's `ip`, `netstat -i` and `ps`, a shell line, a program with arguments, a directory's list, a service replaced or put back, and a reboot. Each is an operation like any other, with its own idempotency key and the reason typed on the page. Those that change the machine ask first.
 - **The console** (800-LNK-0039): `show` puts the machine's console in the output pane, read every half second from `/api/v1/console`. A line typed beside it goes to `/api/v1/console/input` with a carriage return and a number that grows across reloads.
-  - **In `console` mode** (800-LNK-0043) the pane says so, and its typing goes to the line as it is: on a cable of several, `show` then shows `line`. An empty line sends the carriage return alone, which stops U-Boot's countdown. `^C` sends Ctrl-C, and `break` a break of 250 ms.
+  - **In `console` mode** (800-LNK-0043) the pane says so, and its typing goes to the line as it is: on a cable of several, `show` then shows `line`. An empty line sends the carriage return alone, which stops the countdown of firmware that stops on any key. The boards' U-Boot from `scripts/board_uboot.sh` (MOB, main task 100004) is to stop only on the typed word `stop` (`CONFIG_AUTOBOOT_KEYED`): there, type `stop`. `^C` sends Ctrl-C, and `break` a break of 250 ms.
 - **The feed** is a WebSocket at `/api/v1/stream`. Its messages are JSON: `hello` (whether the key is needed), `traffic` (every second: `sent`, `received`, the daemon's clock `ms` and `baud`; read with no lock), `links` (at least every 2 s: the machines on the cable, each with its lease as `reservation`), `ops` (when the list changes, each with its `waiting`) and `output` (for the operation the page follows with `{"follow": "<id>", "from": <byte>}`).
 - **The cable comes first.** A feed never waits for the daemon's state: when the queue's worker holds it, the feed skips that turn. The feed holds it only to copy a few fields and at most 48 KiB of output, and writes to the browser afterwards. A browser that stops reading for 2 s is dropped, and at most 8 pages are served at once.
 - **The key.** With `--key-file`, the page asks for the key once. It keeps it for the tab (`sessionStorage`), sends it in `X-API-Key` with each call, and as the feed's first message.
@@ -244,8 +251,9 @@ Open the daemon's address, `http://127.0.0.1:8485/`, in a browser on the same ma
   - Ctrl-C and `version` written as they are, 20 ms apart, and nothing of the daemon's after them; the same `seq` twice written once;
   - a non-holder's input and break refused while a lease is held, the holder's taken, and a break of 100 ms answered on the pseudo-terminal;
   - with `mindlink serve` answering: `link` mode and a break refused; on a cable of two with one answering, input to `line` refused;
-  - on a TCP line with none answering: input to `line` written, a break answered `unsupported`.
+  - on a TCP line with none answering: input to `line` written, a break answered `unsupported`;
+  - while the fake U-Boot prints a countdown line every 500 ms for 5 s, no frame reaching it and `hello_held` `printing`; a hello no sooner than 2.5 s after its last line, and within 3 s and a round.
 
-  A unit test in `console.rs` paces the typed bytes and shares the input's numbers.
+  Unit tests in `console.rs` pace the typed bytes, share the input's numbers, and tell when the line last printed outside frames.
 
 `scripts/host_tests.sh` runs it. It says nothing about a real cable or a MIND Core machine (MC-12.1); [800-LNK-0011](../../issues/800-LNK-0011-effector485.md) records what has run on them.

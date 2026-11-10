@@ -516,8 +516,13 @@ mod uboot {
 
     const O_RDWR_NOCTTY: c_int = 2 | 0o400;
 
-    /// The board's line for the daemon, held open and raw so it never hangs up; each byte the board got, with its time.
-    pub struct Board { pub path: String, _held: File, pub got: Arc<Mutex<Vec<(u8, Instant)>>> }
+    /// The board's line for the daemon, held open and raw so it never hangs up; each byte the board got, with its time;
+    /// its side of the line, for what the test has it print.
+    pub struct Board { pub path: String, _held: File, pub got: Arc<Mutex<Vec<(u8, Instant)>>>, out: Mutex<File> }
+
+    impl Board {
+        pub fn say(&self, text: &str) { self.out.lock().unwrap().write_all(text.as_bytes()).unwrap(); }
+    }
 
     pub fn board() -> Board {
         let fd = unsafe { posix_openpt(O_RDWR_NOCTTY) };
@@ -534,6 +539,7 @@ mod uboot {
         let got = Arc::new(Mutex::new(Vec::new()));
         let seen = got.clone();
         let mut out = master.try_clone().unwrap();
+        let say = Mutex::new(master.try_clone().unwrap());
         std::thread::spawn(move || {
             let (mut line, mut buf) = (String::new(), [0u8; 256]);
             while let Ok(n) = master.read(&mut buf) {
@@ -558,7 +564,7 @@ mod uboot {
                 }
             }
         });
-        Board { path, _held: held, got }
+        Board { path, _held: held, got, out: say }
     }
 }
 
@@ -649,5 +655,43 @@ fn a_line_without_link_as_a_console() {
     let (head, body) = post(&at4, brk, r#"{"agent_id":"line"}"#);
     assert!(head.starts_with("HTTP/1.1 409") && body.contains("\"code\":\"unsupported\""), "{head} {body}");
     assert!(post(&at4, brk, r#"{"agent_id":"link-1"}"#).0.starts_with("HTTP/1.1 400"));
+    std::fs::remove_dir_all(&d).ok();
+}
+
+// 800-LNK-0043: while the line prints, as U-Boot's countdown does each second, no hello reaches it; once it has been
+// quiet for 3 s, one does within a round.
+#[cfg(target_os = "linux")]
+#[test]
+fn no_hello_while_the_line_prints() {
+    use std::time::{Duration, Instant};
+    let d = std::env::temp_dir().join(format!("effector485-quiet-{}", std::process::id()));
+    std::fs::remove_dir_all(&d).ok();
+    std::fs::create_dir_all(d.join("state")).unwrap();
+    let board = uboot::board();
+    let (_daemon, at) = daemon(&board.path, &d.join("state"));
+    let got = || board.got.lock().unwrap().len();
+    let wait = |until: Duration, done: &dyn Fn() -> bool| { let start = Instant::now(); while !done() && start.elapsed() < until { std::thread::sleep(Duration::from_millis(20)); } };
+
+    // The first hello, on a quiet line, then the countdown: a line every 500 ms for 5 s, and no frame meanwhile.
+    wait(Duration::from_secs(10), &|| got() > 0);
+    std::thread::sleep(Duration::from_millis(200));
+    let before = got();
+    assert!(before > 0, "no hello on a quiet line");
+    let mut last = Instant::now();
+    for left in (1..=10).rev() {
+        board.say(&format!("\rHit any key to stop autoboot: {left:2} "));
+        last = Instant::now();
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert_eq!(got(), before, "a frame reached the board while it printed");
+    let endpoints = raw(&at, &format!("GET /api/v1/endpoints HTTP/1.1\r\nHost: {at}")).1;
+    assert!(endpoints.contains("\"hello_held\":\"printing\""), "{endpoints}");
+    assert!(console_until(&at, 0, "autoboot:  1").contains("autoboot:  1"));
+
+    // Quiet: no hello before 3 s, and one within 3 s and a round of about 3.6 s.
+    wait(Duration::from_millis(2500).saturating_sub(last.elapsed()), &|| got() > before);
+    assert_eq!(got(), before, "a hello {:?} after the last line", last.elapsed());
+    wait(Duration::from_millis(3000 + 3600 + 1000), &|| got() > before);
+    assert!(got() > before, "no hello {:?} after the line went quiet", last.elapsed());
     std::fs::remove_dir_all(&d).ok();
 }

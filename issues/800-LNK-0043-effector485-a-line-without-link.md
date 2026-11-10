@@ -44,25 +44,29 @@
 - **Two changes in the worker this needed:**
   - no hello from an input or a break until 60 s after the last one, since U-Boot takes a frame's bytes as typed;
   - a machine that does not answer is asked with one try every 3 s on a cable of one too. Before, it was 8 tries, some 25 s with their doubled waits at 115200, and a first key would have waited for them; now it waits one try's wait at most, about 0.6 s.
+- **No hello while the line prints** (a second commit, for the Allwinner boards, whose console UART is the link's line): a machine that does not answer gets no hello while the line carried bytes outside frames within the last 3 s.
+  - It keeps frames out of U-Boot's countdown and the loader's `ESC OR S WITHIN 1 S` window, where a frame's byte could stop the boot or start a safe one.
+  - The rule is the line's on a cable of several. A machine that answers is not affected.
+  - `hello_held` in `GET /api/v1/endpoints` (`typed`, `printing` or `null`), and one log line when a hold begins and one when it ends.
 - **API 1.2,** with its line in `CHANGES`; the help text; [effector485.md](../docs/link/effector485.md) and its Russian version.
 - **The page:** in `console` mode the console pane says so, and an empty line sends its carriage return. `^C` and `break` are beside it. On a cable of several, `show` then shows `line`.
 
 **Tested** on LEG9's WSL2, 2026-11-10:
-- **`cargo test` in `tools/mindlink`:** all pass, three runs of the effector485 tests in a row. The new test, `a_line_without_link_as_a_console`, has a fake U-Boot on a pseudo-terminal that echoes and prints `=> `:
+- **`cargo test` in `tools/mindlink`:** all pass: three runs in a row of the effector485 tests with the first commit, and of the whole `cargo test` with the second. The new test, `a_line_without_link_as_a_console`, has a fake U-Boot on a pseudo-terminal that echoes and prints `=> `:
   - Ctrl-C and `version` written 20 ms apart, and nothing of the daemon's after them; the same `seq` twice written once;
   - a non-holder's input and break refused under a lease, the holder's taken, and a break answered on the pseudo-terminal;
   - with `mindlink serve` answering: `link` mode, and a break refused; on a cable of two with one answering, input to `line` refused;
   - on a TCP line nobody answers: input to `line` written, and a break answered `unsupported`.
 
-  A unit test in `console.rs` paces the typed bytes and shares the input's numbers.
-- **`tools/mindlink/build.sh`:** the Linux and the Windows builds, with no warnings.
-- **`scripts/host_tests.sh`** in full, after `./02_build.sh`, with OpenSSH's server from an unpacked package (`MIND_SSHD`): passed.
-- **The x86 QEMU suite `link`,** since `port_unix.rs` is `mindlink`'s too: passed.
+  `no_hello_while_the_line_prints`: while the fake prints a countdown line every 500 ms for 5 s, no frame reaches it and `hello_held` is `printing`; a hello comes no sooner than 2.5 s after its last line and within 3 s and a round (3.0 s in a run). Unit tests in `console.rs` pace the typed bytes, share the input's numbers, and tell when the line last printed.
+- **`tools/mindlink/build.sh`:** the Linux and the Windows builds, with no warnings, with each commit.
+- **`scripts/host_tests.sh`** in full, after `./02_build.sh`, with OpenSSH's server from an unpacked package (`MIND_SSHD`): passed, with each commit.
+- **The x86 QEMU suite `link`,** since `port_unix.rs` is `mindlink`'s too: passed, with each commit.
 
 **Not done** (MC-12.3):
 - the boards' run of the acceptance criteria;
 - a break seen on a real line: a pseudo-terminal sends none;
-- whether the daemon's hellos before the first key stop U-Boot's countdown on each board, as any key does.
+- on each board, that the hold keeps the daemon's hellos out of U-Boot's countdown and the loader's window.
 
 ## Related
 

@@ -34,7 +34,8 @@ const CHANGES: [(&str, &str); 3] = [
     ("1.0", "operations, endpoints, terminal reservations, the page's stream (800-LNK-0011 to 0033)"),
     ("1.1", "GET /api/v1/version; the console: GET /api/v1/console, POST /api/v1/console/input; daemon --supervised (800-LNK-0039)"),
     ("1.2", "the line's \"mode\" in GET /api/v1/endpoints and GET /api/v1/console: console while no machine answers, then its input is \
-             written as it is with \"pace_ms\"; POST /api/v1/console/break; both refused (409, link_mode) while one answers (800-LNK-0043)"),
+             written as it is with \"pace_ms\"; POST /api/v1/console/break; both refused (409, link_mode) while one answers; \
+             \"hello_held\" in GET /api/v1/endpoints, typed or printing (800-LNK-0043)"),
 ];
 
 /// A console input's pause between characters on a line no machine answers, by default and at most; a break's length.

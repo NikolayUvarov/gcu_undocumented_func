@@ -13,6 +13,9 @@ pub const INPUT_MAX: usize = 4096;
 const PENDING_MAX: usize = 4 * INPUT_MAX;
 /// How long after the line was last typed on no hello goes out: U-Boot would take a frame's bytes as typed.
 pub const HUSH: Duration = Duration::from_secs(60);
+/// How long the line must be quiet of bytes outside frames before a hello: U-Boot's countdown, the loader's safe-start
+/// window and a boot's lines take a frame's bytes as keys.
+pub const QUIET: Duration = Duration::from_millis(3000);
 
 /// Milliseconds since the epoch, the host's clock.
 pub fn now_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0) }
@@ -105,19 +108,24 @@ impl Console {
 }
 
 /// The cable's bytes that are no frame: a boot's lines before `link` answers, or a console beside it. Each run of bytes
-/// between zeros that does not decode is one; so is a run longer than any frame, and one the line left idle.
-pub struct Stray { decoder: Decoder, run: Vec<u8>, long: bool, pub found: Vec<(u64, Vec<u8>)> }
+/// between zeros that does not decode is one; so is a run longer than any frame, and one the line left idle. `run_at`:
+/// when the run's last byte came; `printed`: when the last byte of a run found no frame came.
+pub struct Stray { decoder: Decoder, run: Vec<u8>, long: bool, pub found: Vec<(u64, Vec<u8>)>, run_at: Option<Instant>, printed: Option<Instant> }
 
 impl Default for Stray { fn default() -> Self { Self::new() } }
 
 impl Stray {
-    pub fn new() -> Self { Stray { decoder: Decoder::new(), run: Vec::new(), long: false, found: Vec::new() } }
+    pub fn new() -> Self { Stray { decoder: Decoder::new(), run: Vec::new(), long: false, found: Vec::new(), run_at: None, printed: None } }
+
+    /// When the line last carried bytes that may be no frame: a run found none, or one not ended yet.
+    pub fn printed(&self) -> Option<Instant> { self.printed.max(if self.run.is_empty() { None } else { self.run_at }) }
 
     pub fn feed(&mut self, bytes: &[u8]) {
         for &b in bytes {
             let frame = self.decoder.push(b).is_some();
             if b != 0 {
                 self.run.push(b);
+                self.run_at = Some(Instant::now());
                 if self.run.len() > MAX_RUN { self.long = true; self.flush(); }
                 continue;
             }
@@ -134,7 +142,11 @@ impl Stray {
         self.long = false;
     }
 
-    fn flush(&mut self) { if !self.run.is_empty() { self.found.push((now_ms(), std::mem::take(&mut self.run))); } }
+    fn flush(&mut self) {
+        if self.run.is_empty() { return; }
+        self.found.push((now_ms(), std::mem::take(&mut self.run)));
+        self.printed = self.run_at;
+    }
 }
 
 /// Base64 text to bytes; None when it is not base64.
@@ -226,6 +238,23 @@ mod tests {
         assert!(s.found.is_empty());
         s.idle();
         assert_eq!(s.found[0].1, b"login: ");
+    }
+
+    // 800-LNK-0043: a frame is no printing; a run that is no frame is, ended or not.
+    #[test]
+    fn when_the_line_printed() {
+        let mut wire = [0u8; linkproto::frame::MAX_WIRE];
+        let h = linkproto::frame::Header { address: 0, channel: 0, kind: 1, flags: 0, seq: 7 };
+        let n = linkproto::frame::encode(&h, b"hi", &mut wire).unwrap();
+        let mut s = Stray::new();
+        s.feed(&wire[..n]);
+        assert!(s.printed().is_none());
+        s.feed(b"Hit any key to stop autoboot:  2");
+        let at = s.printed().unwrap();
+        s.idle();
+        assert_eq!(s.printed(), Some(at));
+        s.feed(&wire[..n]);
+        assert_eq!(s.printed(), Some(at));
     }
 
     #[test]

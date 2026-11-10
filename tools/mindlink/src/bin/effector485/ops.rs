@@ -224,9 +224,10 @@ pub struct Link { pub agent: String, pub address: u8, pub port: String, pub onli
 /// `changes` counts the changes, so that the page's feeds see one without taking the lock. `links` are the machines
 /// on the cable, one for each address the daemon serves; `leases` at most one for each, kept in reservation.json (the
 /// machine `link`'s) or reservation-<agent>.json beside the operations. `consoles`: one for each machine, kept only in
-/// memory, and on a cable of several one more, `line`, for the bytes outside frames (800-LNK-0039).
+/// memory, and on a cable of several one more, `line`, for the bytes outside frames (800-LNK-0039). `hello_held`: why
+/// the machines that do not answer get no hello now, `typed` or `printing` (800-LNK-0043).
 pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub links: Vec<Link>, dirty: bool, pub changes: Arc<AtomicU64>, pub leases: Vec<Lease>,
-                   pub consoles: Vec<crate::console::Console> }
+                   pub consoles: Vec<crate::console::Console>, pub hello_held: Option<&'static str> }
 
 /// The console of the bytes outside frames on a cable of several machines.
 pub const LINE: &str = "line";
@@ -275,7 +276,7 @@ impl State {
             leases.push(l);
         }
         let consoles = (0..links.len() + usize::from(links.len() > 1)).map(|_| crate::console::Console::new()).collect();
-        Ok(State { ops, next, file, links, dirty: false, changes: Arc::default(), leases, consoles })
+        Ok(State { ops, next, file, links, dirty: false, changes: Arc::default(), leases, consoles, hello_held: None })
     }
 
     /// Writes the state file when something changed: a new file renamed over the old, so a crash leaves one whole.
@@ -401,6 +402,7 @@ impl State {
     pub fn endpoints(&self, now: u64) -> Vec<Value> {
         self.links.iter().map(|l| obj(vec![
             ("agent_id", s(&l.agent)), ("address", Value::Num(l.address as f64)), ("port", s(&l.port)), ("online", Value::Bool(l.online)), ("mode", s(self.mode())),
+            ("hello_held", if l.online { Value::Null } else { self.hello_held.map_or(Value::Null, s) }),
             ("name", s(&l.name)), ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)), ("parallel_limit", Value::Num(1.0)),
             ("queued", Value::Num(self.queued(&l.agent) as f64)), ("running", Value::Num(self.running(&l.agent) as f64)),
             ("reservation", self.lease_at(&l.agent, now).map_or(Value::Null, |lease| lease.json(now))),
