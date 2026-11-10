@@ -1,0 +1,47 @@
+# 000-APP-0133 — No prompt before the exit notice of a program that ended before it was in front — done
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.3
+
+**Asked by:** NET, for 000-NET-0065 (on NET's branch), in [requests-APP.md](../issues/requests-APP.md), 2026-11-10, from round 117's gate. Numbered on 2026-11-10.
+
+## Problem
+
+A program with a screen starts in front (`start_front`, issue 160). When it ends before the shell's `started()` calls `control::focus`, the focus fails, and the shell prints its prompt at once: the program's lines and its exit notice come under that prompt.
+
+```
+MIND> wifi scan
+STARTED PID=40 NAME=wifi FOREGROUND
+MIND> [PID 40] [WIFI] NETWORK "MIND-TEST" ... JOINED
+[PID 40] [WIFI] SCAN: 1 NETWORK
+
+PID=40 EXITED. SHELL RESUMED.
+MIND>
+```
+
+It is rare on `main`, and frequent with 000-KRN-0231's change, which lets an application run on an idle CPU beside the shell. The tests read the output up to the prompt after the exit notice (000-NET-0065), so they do not depend on this.
+
+## Plan
+
+- **When the focus fails because the program has ended,** the shell takes it as in front all the same: no prompt until its exit notice, which shows its lines and `SHELL RESUMED.` as when the focus succeeds.
+- **Where no notice comes** within 2 s, the shell says the program exited and gives its prompt back, so a lost notice cannot leave it without one.
+- **The shell's log** says when it met the race.
+
+## Acceptance criteria
+
+- **QEMU, the `shell` suite:** a program with a screen that ends at once (`wifi scan` with no station), run 8 times, has no prompt between its start and its exit notice; how often it ended before its focus is counted.
+- The `shell` suite passes as before.
+
+## Resolution
+
+- **The shell** (`shell/src/main.rs`, `started()`):
+  - **When the focus fails and the program has ended,** the shell sets it as the session's program in front all the same, and logs `[SHELL] PID n ENDED BEFORE IT WAS IN FRONT: ITS EXIT NOTICE COMES BEFORE THE PROMPT`. Its lines are mirrored, and the exit notice gives `PID=n EXITED. SHELL RESUMED.` and the prompt, as when the focus succeeds.
+  - **Where no notice comes** within `NOTICE_MS` (2 s), `tend()` says `PID=n EXITED. SHELL RESUMED.` and gives the prompt back.
+  - A focus that fails while the program still runs is as before.
+- **Tests:** the `shell` suite's `early_end_check` runs `wifi scan` with no station 8 times. Each time no prompt comes between `STARTED PID=n NAME=wifi FOREGROUND` and `PID=n EXITED. SHELL RESUMED.`, and wifi's line comes before it. The count of the shell's log line says how often the race was met.
+  - **QEMU x86, 4 CPUs, TCG,** in this track's container, 2026-11-10: the race was met once in 8, and the suite passed (16 checks).
+  - **aarch64 (`virt`):** met 0 times in 8, and the suite passed (16 checks).
+- Not run on real hardware (MC-12.1).
+
+## Related
+
+[requests-APP.md](../issues/requests-APP.md) (NET's request); issue 160 (a program in front from its start); 000-KRN-0231 (on KRN's branch).
