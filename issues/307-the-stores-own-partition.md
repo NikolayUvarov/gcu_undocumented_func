@@ -1,6 +1,6 @@
 # 307 — A durable medium on real machines: the store's own partition (track B, eighth step)
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done) (`init`'s grant, which waits for `DRV`'s bounded client) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-4.8, MC-12.1, preamble ("preservation of state"), Appendix B.3
+**Type:** main task · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md) (what a flush reaches), [307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.md) (`vfs_server` off the store's partition) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-4.8, MC-12.1, preamble ("preservation of state"), Appendix B.3
 
 From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-as-a-minds-memory.md` on `internal-dev-messages`), taken by the storage session at the maintainer's word (2026-10-27). Everything here is plan, not a guarantee (MC-12.3).
 
@@ -54,6 +54,30 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 
   A partition the owner names may be blank: the store formats it, by that word. Any other partition is taken only with the type and the superblock. A blank disk or partition is never taken.
 - **Two or more candidates:** `init` takes none and logs each, rather than choose.
+
+## Progress (2026-11-10)
+
+**Done:**
+- [307-STO-0019](../issues-done/307-STO-0019-how-far-a-write-reached.done): the durability classes, `blockstore.wit` 2.0.
+- [307-STO-0020](../issues-done/307-STO-0020-the-stores-partition-on-the-stick.done): the store's partition on the stick, with its superblock.
+- [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done): a block client bounded to a window of sectors, in every driver's serve loop.
+- [307-KRN-0177](../issues-done/307-KRN-0177-the-stores-own-partition-classified-and-granted.done): `init` finds the store's partition and gives `blockstore` window 1 of its driver.
+- [307-STO-0042](../issues-done/307-STO-0042-a-pass-over-the-medium-reads-ahead.done): a pass over the medium reads ahead, for the partition's size.
+
+**What QEMU has shown,** on x86 and aarch64 (`tests/usb_image_smoke.py`, 307-KRN-0177):
+- the store mounts the stick's partition through window 1, its size the partition's, while `vfs_server` reads its volumes on the same drive;
+- a blank NVMe disk is not given and not written;
+- two candidates are refused and neither is written;
+- a blank partition is taken only once `store.txt` names it, and the store then formats it through the window, as the host reads back.
+
+**Left for the second criterion:** the store on a partition of an NVMe and of an AHCI disk, and an object found on a partition after a reboot. No suite checks these yet.
+
+**Left besides:**
+- [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md): what a flush reaches, per driver;
+- [307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.md): `vfs_server` still holds the stick whole;
+- [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md), step 5: a medium that comes back keeps its windows;
+- the copy's medium on a real machine;
+- the MacBook Pro's and the Ryzen's sticks, and the profile's Article 4 row.
 
 ## Related
 

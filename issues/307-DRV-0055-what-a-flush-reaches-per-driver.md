@@ -2,7 +2,7 @@
 
 **Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [307](307-the-stores-own-partition.md) · **Constitution:** MC-6.6, MC-12.1, MC-12.3
 
-Numbered from STO's request of 2026-10-27 in `requests-DRV.md`, its second half. The first half is [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md).
+Numbered from STO's request of 2026-10-27 in `requests-DRV.md`, its second half. The first half is [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done).
 
 ## Problem
 
@@ -33,4 +33,4 @@ The store reports `flushed` only when a device said its flush was done, and the 
 
 ## Related
 
-[307](307-the-stores-own-partition.md), [307-DRV-0054](307-DRV-0054-a-block-client-bounded-to-a-window.md), [211-DRV-0053](211-DRV-0053-a-usb-disk-that-missed-a-transfer-comes-back.md).
+[307](307-the-stores-own-partition.md), [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done), [211-DRV-0053](211-DRV-0053-a-usb-disk-that-missed-a-transfer-comes-back.md).
