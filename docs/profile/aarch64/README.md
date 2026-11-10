@@ -73,7 +73,7 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 
 | Requirement | Status here | Difference |
 |---|---|---|
-| MC-1.5 DMA boundary | **not met — declared** | No SMMU is used (QEMU `virt` has none unless `iommu=smmuv3`): `virtio_blk`, `nvme`, `virtio_net`, `virtio_input`, `usb_host` and their devices can read and write all physical memory and are in the TCB of every memory guarantee. Unlike x86 the ITS keys each MSI by the device's requester ID, so a device can raise only the LPIs mapped for its own events; this does not help against DMA. |
+| MC-1.5 DMA boundary | **not met — declared** | No SMMU is used (QEMU `virt` has none unless `iommu=smmuv3`): `virtio_blk`, `nvme`, `ahci`, `virtio_net`, `virtio_input`, `usb_host` and their devices can read and write all physical memory and are in the TCB of every memory guarantee. Unlike x86 the ITS keys each MSI by the device's requester ID, so a device can raise only the LPIs mapped for its own events; this does not help against DMA. |
 | MC-2.6 transfer modes | as on x86 | `block.attach` also goes to `virtio_blk` (the same SHARE_RW adapter). |
 | MC-5.1–5.5 budgets | as on x86 | Evidence: `busy` and `smp` suites on four CPUs. |
 | MC-5.6 explicit clocks | met (measurement) | The generic timer's virtual count; calendar time from the PL031 (`rtc`), seconds since 1970 in UTC. |
