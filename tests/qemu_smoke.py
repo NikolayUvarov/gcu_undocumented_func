@@ -12378,6 +12378,10 @@ def passphrase_wait_check(args, cpu):
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=extra)
         try:
             require(vm.service_logs("keystore", "NOT SEALED"), "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
+            # 308-STO-0028: an object named on the store's disk, its volume key kept by keystore under the device key.
+            require(service_log(vm, "blockstore", "[BLOCKSTORE] READY"), "SEALED, KEY KEPT BY KEYSTORE")
+            kept = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))[1]
+            require(vm.command(f"blocks publish pass {kept}", raw=True), "PUBLISHED pass VERSION 1 (FLUSHED)")
             # Set: the one set is none, so Enter alone; the new one checked, then typed again.
             asked(vm, "passphrase", "THE PASSPHRASE SET (NO ECHO; ENTER ALONE WHEN NONE IS SET YET, ESC: NOTHING CHANGES): ")
             typed(vm, "", "THE NEW PASSPHRASE, 8 TO 128 BYTES (NO ECHO): ")
@@ -12464,6 +12468,11 @@ def passphrase_wait_check(args, cpu):
             while not {"blockstore", "storefs", "tls", "ssh"} <= set(services := vm.services()) and time.monotonic() < deadline:
                 time.sleep(1)
             assert {"blockstore", "storefs", "tls", "ssh"} <= set(services), services
+            # 308-STO-0028: the right passphrase opens the store: it mounts its disk with the volume key keystore keeps under
+            # the device key, and the object named at the first boot reads back.
+            require(service_log(vm, "blockstore", "[BLOCKSTORE] READY"), "SEALED, KEY KEPT BY KEYSTORE")
+            require(vm.command("blocks resolve pass", raw=True), f"pass VERSION 1 ROOT {kept}")
+            require(vm.command(f"blocks check {kept} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
             require_all(vm.command("dmesg -s keystore", raw=True), "REFUSED UNLOCK FOR PID ", "A WRONG PASSPHRASE (2 IN A ROW",
                         "[KEYSTORE] DEVICE KEY FROM system/keystore/device.locked (SEALED UNDER THE PASSPHRASE), OPENED FOR PID ")
             require_all(vm.command("dmesg -s shell", raw=True), "[SHELL] THE BOOT WAITS FOR keystore'S PASSPHRASE: ASKED ON CONSOLE 1",
@@ -12482,7 +12491,8 @@ def passphrase_wait_check(args, cpu):
           "(typed with no echo, the new one twice, a short one and two that differ asked again, a wrong one set refused); "
           f"at the next boot the services that need the device key ({', '.join(sorted(set(waited)))}) wait for it, prepared, "
           "while the shell asks in place of its first prompt holding keystore's client badged for it in slot 44; a wrong one "
-          "refused, the right one opens the key and init starts them; no passphrase on the serial line, in a log or the history", flush=True)
+          "refused, the right one opens the key and init starts them, the store mounting its disk with the key keystore keeps and "
+          "the object named at the first boot reading back (308-STO-0028); no passphrase on the serial line, in a log or the history", flush=True)
 
 
 def device_key_check(args, cpu):
@@ -12938,9 +12948,9 @@ def recovery_key_check(args, cpu):
     """308-APP-0122: `recovery`, through the store's client badged BADGE_RECOVER that the shell lends only when the
     user agrees, each time (REQUEST_RECOVER, 308-KRN-0204). On a raw image with a store disk whose volume key keystore
     keeps: refused, it gets no client; allowed, `recovery new --key-file` makes a key, writes it to the file and keeps
-    it. With keystore's device key gone, as on another machine, the store is not mounted; `recovery open --key-file`
-    opens it, the object put at the first boot reads back, and at the next boot it mounts as this machine's own. The
-    key's text is on no serial line."""
+    it. With keystore's device key lost on the machine, its old secrets set aside (308-NET-0064), the store is not
+    mounted; `recovery open --key-file` opens it, the object put at the first boot reads back, and at the next boot it
+    mounts as this machine's own. The key's text is on no serial line."""
     if not raw_tools():
         print("SKIP: the recovery key check needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
@@ -13020,6 +13030,7 @@ def recovery_key_check(args, cpu):
         try:
             refused = service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED")
             require(refused, "[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS ")
+            require(service_log(vm, "keystore", "SET ASIDE"), "[KEYSTORE] SECRETS OF SERVICE blockstore MADE UNDER AN EARLIER DEVICE KEY: SET ASIDE AS system/keystore/services/blockstore.kept.before")
             require(vm.command(f"blocks check {root} pattern", raw=True), "Key")
             recovery(vm, "open --key-file data/recovery.txt", "y", "[RECOVERY] THE STORE OPENED WITH THE KEY FROM data/recovery.txt: THIS MACHINE'S KEYSTORE KEEPS ITS VOLUME KEY NOW")
             require(vm.command(f"blocks check {root} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
@@ -13037,8 +13048,9 @@ def recovery_key_check(args, cpu):
         for k in (key, screen_key):
             assert k not in log and k.lower() not in log and k.replace("-", "") not in log and k[:9] not in log, "a key on the serial line"
     print("PASS: a recovery key (308-APP-0122): the shell asked; refused, recovery had no client; allowed, its screen "
-          "showed a key the store made, kept once typed back; without a screen it made another, wrote it to its file and kept it; with keystore's device key gone the store was not mounted, the key file "
-          "opened it and the object read back, and it mounted again at the next boot; the key on no serial line", flush=True)
+          "showed a key the store made, kept once typed back; without a screen it made another, wrote it to its file and kept it; with keystore's device key lost on the machine "
+          "and its old secrets set aside (308-NET-0064), the store was not mounted, the key file opened it and the object read back, "
+          "and it mounted again at the next boot; the key on no serial line", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
