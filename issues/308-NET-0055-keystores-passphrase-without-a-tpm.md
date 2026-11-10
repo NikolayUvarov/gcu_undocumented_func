@@ -137,4 +137,4 @@ Made while building it:
 
 ## Related
 
-[308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.md), [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md), [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md).
+[308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done), [308-KRN-0204](308-KRN-0204-a-store-client-that-may-recover-the-volume-key.md), [308-STO-0028](308-STO-0028-a-recovery-key-and-a-passphrase.md).
