@@ -113,12 +113,14 @@ A64_GROUPS=(
     "aarch64: the updater and the modes|$A64 --suites updater,modes"
     "aarch64: an update through the link|$A64 --suites linkupdate"
     "aarch64: the link|$A64 --suites link"
-    "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,fill --machine virt,gic-version=3,highmem=on --memory 6G"
+    # At EL2 as well (100004-PRT-0014): AAVMF starts the loader there when the guest has it, with the GICv3 system registers.
+    "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,fill --machine virt,gic-version=3,highmem=on,virtualization=on --memory 6G"
     "aarch64: network above 4 GiB|$A64 --suites net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
     # U-Boot's UEFI and no ACPI, as Tow-Boot gives the PinePhone: the board from the device tree (100000-PRT-0009), on the
-    # phone's core: no PAN, and no RNDR, so no device key for net's SFTP login (net runs on the other groups).
-    "aarch64: the board from a device tree, under U-Boot|$A64 --suites normal,smp --uboot \$(scripts/fetch_uboot.sh) --machine virt,acpi=off,gic-version=2,highmem=off --cpu-model cortex-a53"
+    # phone's core: no PAN, and no RNDR, so no device key for net's SFTP login (net runs on the other groups). At EL2, where
+    # U-Boot starts EFI applications on the Allwinner boards and the phone (100004-PRT-0014).
+    "aarch64: the board from a device tree, under U-Boot|$A64 --suites normal,smp --uboot \$(scripts/fetch_uboot.sh) --machine virt,acpi=off,gic-version=2,highmem=off,virtualization=on --cpu-model cortex-a53"
     "aarch64: NVMe boot disk|$A64 --suites vfs --disk nvme"
     "aarch64: 16 CPUs|$A64 --cpus 16 --suites normal"
 )

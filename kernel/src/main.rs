@@ -101,6 +101,7 @@ fn serial_print(text: &str) { serial_only(text); screen::print(text); klog::keep
 pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
     unsafe {
         cpu::disable_interrupts();
+        cpu::kernel_level();
         init_serial();
         // Read the fixed ABI 10 prefix before any heap, firmware, memory-map or appended-image pointer is used.
         let Some(version) = BootInfo::read_abi_version(raw_info) else {

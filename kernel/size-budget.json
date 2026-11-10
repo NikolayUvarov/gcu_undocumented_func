@@ -1,5 +1,5 @@
 {
-  "budget": 7400,
+  "budget": 7500,
   "unit": "lines of Rust in kernel/src, without blank lines and comments, both architectures (scripts/kernel_budget.py)",
   "measured": {
     "date": "2026-10-21",
@@ -25,6 +25,11 @@
       "date": "2026-11-09",
       "to": 7400,
       "why": "100000-KRN-0171 (about 70 lines in kernel/src; the table itself is common/nodes.rs, outside it): the platform nodes' table, built from the device tree or the firmware's tables, and the checks of PLATFORM_MMIO and PLATFORM_NODE_IRQ. Which registers and lines a task may hold is the kernel's grant (MC-3.1, MC-3.3), and the check that a page holds no other device's registers, no RAM and none the kernel drives needs the kernel's view of all of them, so it cannot live in user space. 000-KRN-0220 (10 lines): each CPU turning its caches on and its CR0 recorded are processor state only the kernel sets. 7320 lines after both; about 80 of room."
+    },
+    {
+      "date": "2026-11-10",
+      "to": 7500,
+      "why": "100004-PRT-0014 (about 87 lines in kernel/src/arch/aarch64/cpu.rs, most of them assembly): a kernel entered at EL2 leaves it for EL1, the boot CPU and the secondaries alike, since U-Boot with TF-A starts EFI applications at EL2 on the Allwinner boards and the PinePhone, and EDK2 does where the core has EL2. Setting EL2's controls (HCR_EL2, the counter's, stage 2 off, the GICv3 system registers, the ID registers EL1 reads), giving EL1 a map and its MMU before the kernel's own, and the eret to EL1 are the processor's state below the kernel, which only the kernel at entry can set (MC-1.2). 7482 lines after it; about 18 of room."
     }
   ]
 }

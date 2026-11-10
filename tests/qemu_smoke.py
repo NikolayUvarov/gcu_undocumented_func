@@ -951,6 +951,10 @@ def normal_suite(vm):
         if not tree: require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
         else: require(vm.log, "[GPIO] pl061 WITH 8 PINS")
         require(vm.log, "[INIT] battery NOT STARTED: NO DEVICE")
+        # 100004-PRT-0014: with virtualization=on the firmware starts the loader at EL2, as U-Boot does on the boards;
+        # the kernel left it for EL1, and init's system calls reached the kernel's vectors (the suite runs past them).
+        el = 2 if "virtualization=on" in (getattr(vm.args, "machine", None) or "") else 1
+        assert re.search(rf"MIND CORE KERNEL: BOARD [^\n]* ENTERED AT EL{el}\r*\n", vm.log), vm.log[-3000:]
     else:
         # 211-PRT-0003: the tick from the LAPIC timer, measured on the ACPI PM timer (QEMU's chipsets have one).
         tick = re.search(r"MIND CORE KERNEL: TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC \d+ MHZ; PIT (NOT )?COUNTING\n",
@@ -14727,7 +14731,9 @@ def devicetree_suite(args, disk):
         assert board, vm.log[-3000:]
         version = "2" if "gic-version=2" in machine else "3"
         # AAVMF keeps the PL031 for its own GetTime and hands on a tree where it is not enabled: no RTC is read from it.
-        assert board.groups() == (version, "0x8000000", "0x9000000", "1", "27", str(vm.cpus), "HVC", "0x0", "YES"), board.groups()
+        # QEMU's PSCI is SMC once the guest has EL2 (virtualization=on, 100004-PRT-0014).
+        conduit = "SMC" if "virtualization=on" in machine else "HVC"
+        assert board.groups() == (version, "0x8000000", "0x9000000", "1", "27", str(vm.cpus), conduit, "0x0", "YES"), board.groups()
         online = vm.command("cpus")
         assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
         # 100000-KRN-0171: the tree's device nodes, the PL011 lent to the shell through its node (the commands above came

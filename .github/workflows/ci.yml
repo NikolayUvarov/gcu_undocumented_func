@@ -191,8 +191,9 @@ jobs:
             # dev's grants, and none of its input in a safe start (800-KRN-0191)
             suites: link
           - group: RAM, ACPI and PCI above 4 GiB
+            # AAVMF starts the loader at EL2 when the guest has it; the kernel leaves it (100004-PRT-0014)
             suites: normal,fill
-            machine: virt,gic-version=3,highmem=on
+            machine: virt,gic-version=3,highmem=on,virtualization=on
             memory: 6G
           - group: network above 4 GiB
             suites: net
@@ -201,10 +202,11 @@ jobs:
           - group: GICv2 with GICv2m (a Raspberry Pi 4's interrupt controller)
             suites: normal,smp,net
             machine: virt,gic-version=2,highmem=off
-          - group: the board from a device tree, under U-Boot's UEFI without ACPI (as Tow-Boot gives the PinePhone)
-            # the phone's core, Cortex-A53: no PAN, no RNDR (so no device key for net's SFTP login)
+          - group: the board from a device tree, under U-Boot's UEFI without ACPI at EL2 (as Tow-Boot gives the PinePhone)
+            # the phone's core, Cortex-A53: no PAN, no RNDR (so no device key for net's SFTP login); U-Boot starts EFI
+            # applications at EL2 on the Allwinner boards and the phone, and the kernel leaves it (100004-PRT-0014)
             suites: normal,smp
-            machine: virt,acpi=off,gic-version=2,highmem=off
+            machine: virt,acpi=off,gic-version=2,highmem=off,virtualization=on
             uboot: true
             cpu_model: cortex-a53
           - group: NVMe boot disk
