@@ -201,3 +201,17 @@ Task [351-KRN-0195](../issues-done/351-KRN-0195-no-firmware-network-boot-before-
 - [ ] On each machine that boots MIND Core (the Intel PC, the MacBook Pro if its firmware offers it, and any Effector machine that boots a MIND Core disk): in the firmware's setup, turn off PXE or "Network Stack", "UEFI Network" and HTTP boot. Note the machine, the firmware's version and the setting's name here.
 
 Done when every such machine is listed with its setting off.
+
+## 14. The two Allwinner boards on the bench
+
+Main task [100004](../issues/100004-two-allwinner-boards-before-the-phone.md): the Orange Pi Zero Plus 2 H5 and the Orange Pi Zero 3 (H618, 2 GB) as stand-ins for the PinePhone. They are reached only through their debug UART until MIND Core drives their storage and network.
+
+- [ ] **A 3.3 V USB-UART adapter for each board,** on the board's 3-pin debug header: the board's TX to the adapter's RX, RX to TX, GND to GND. Never connect the adapter's VCC. Note the adapter's chip:
+  - MIND Core drives the FTDI FT232R and the WCH CH340 today;
+  - the CP2102 and the PL2303 come with [800-LNK-0041](../issues/800-LNK-0041-usb-serial-cp210x-pl2303-and-several-converters.md).
+- [ ] **Which host each adapter is plugged into** (the DEXP, the Ryzen or the MacBook), and the port's name under Windows (`COMn`) or Linux (`/dev/serial/by-id/…`).
+- [ ] **Power:** a 5 V supply of 2 A or more for each board (the Zero 3 through USB-C). Wanted: a way for agents to power-cycle a hung board, such as a USB hub with per-port power switching or a relay ([section 10](#10-a-test-rig-for-real-machines-keyboard-and-mouse-the-screen-power)). Say whether agents may power-cycle the boards.
+- [ ] **Two or more microSD cards** for each board.
+- [ ] **Writing the card** with the image of [100004-MOB-0001](../issues/100004-MOB-0001-the-boards-sd-card.md), when it is ready. Writing a card stays the maintainer's act.
+
+Done when each board's U-Boot banner is read over its adapter by an agent, and the adapters, hosts and ports are recorded in 100004.
