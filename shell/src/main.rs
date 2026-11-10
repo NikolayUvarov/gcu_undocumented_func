@@ -36,6 +36,8 @@ mod release;
 mod ring;
 mod safe;
 mod screenshot;
+mod passctl;
+mod passphrase;
 mod secret;
 mod secretctl;
 mod sound;
@@ -64,11 +66,11 @@ use mind::script::Interpreter;
 use mind::sys::Error;
 
 // The shell's commands (`help`); `help <name>` shows the lines that name it.
-const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name|path> [args] [&]: new instance; a path up to 63 bytes, as an installed application's (run data/apps/<name>/<file>)\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time, the vector state each task keeps (FPU=XSAVE+AVX, +AVX512, +AMX)\n- free: the machine's memory (the frame pool programs run in), then the kernel's arena by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time in the time zone; date set YYYY-MM-DD HH:MM[:SS]: set the clock, in that zone (the RTC keeps UTC); date zone [+HH:MM|-HH:MM|UTC]: the zone every clock shows, kept in data/clock.conf (no summer time)\n- hostname [name]: the machine's name (mindcore when none is set); with a name, sets it: 1 to 63 of a-z 0-9 -, neither first nor last a hyphen, kept in data/machine/name and logged\n- volume [0-100|mute|unmute], mic [0-100|boost on|off]: the output's level and the microphone's gain in per cent of their range, with their dB; a change kept in data/sound.conf and set again at the shell's start\n- battery: the battery's charge, on the mains or not, the time left or to full, voltage, current, capacity and cycles (the battery service, where the firmware names one)\n- cd [directory], pwd: the current directory, named in the prompt (MIND diag>): paths that name no volume start there, in every command and in a program's arguments; cd alone: the boot disk's root; cd ..: up\n- ls [path], cat <file>: files (ram: is the RAM disk; log: the boot disk's log partition, with each boot's system log; models: the model disk, read-only)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram:, on log: and in data/\n- > <file>, >> <file>: after a command, what it prints goes into the file (>> adds to it), taken from the current directory; a line that starts ERROR: stays on the screen (ls data > ram:list.txt, dmesg >> data/boot.txt)\n- <command> | <program> [| <program>]: what the command prints is the program's text input, and what that one prints the next one's (ps | grep wm, dmesg | grep SHELL | grep -c START)\n- <program> < <file>: the file, taken from the current directory, is the program's text input (grep wm < ram:ps.txt; sha256 < notes.txt); before the first |\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id|name>: foreground; a name takes the program called so (or whose name holds it), several are listed by PID\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card with its kind (WIRED, WI-FI) and DEFAULT, PREFERRED or DOWN; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netstat [-i]: the open sockets (protocol, ports, remote address, TCP state, bytes each way, the program), then the cards; -i: the cards alone\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- a running program's question about the network (NETWORK: ... ASKS TO REACH host:port): N no (the default), O once, S for this run, A always (a line of the policy); shown on the console it was started from, unanswered in 60 s refused (000-APP-0120)\n- mode [development|maintenance on|off [reason]]: the machine's modes, in which init runs the Effector agent's services (data/mode.conf); on after you agree to it at this console, off at once\n- ping [-c count] [-i seconds] [-w seconds] [-f] [-s bytes] [-p hex] <host>: echo requests, 3 a second apart, each waiting 1 s for its reply (-c 0: until Esc); -f: the next at once, a dot for each one lost, 100 by default; -s: 0 to 1472 data bytes, -p: 1 to 16 bytes repeated over them (56 bytes with -p alone), each reply's data checked\n- nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- nn [status], nn models: the model service (nnd): its memory, workers, models, sessions and badges, and the badges the shell lent to programs that asked for it; nn load <path> <id>, nn unload <id>: a model on models: or under data/models/, its ID 64 hex digits; nn run <id> <file>: the file's rows (numbers apart by spaces or commas, one row a line) through it, each output row as a line; nn bench <id>: rows a second and the session's memory, for this machine only (262-APP-0112)\n- tpm [seal <text>]: the TPM (manufacturer, interface); seal: a check that the shell may not seal\n- release <file>: a release channel file or a boot manifest as the parser service reads it, shown only if its answer makes the file\n- update [status|check|fetch|apply [tries]|rollback]: the updater (update.txt): the running slot and version, the boot record, what is staged, and the channel it holds; check reads the source's channel, fetch stages a newer release in the other slot (the shell waits for it), apply and rollback boot the other slot on trial after you agree (tries 1 to 9, 3 by default)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [-d seconds] [file]: the screen as a BMP (data/media/screen-NNN.bmp, ram: when data/ cannot be written); -d: that many seconds later, the shell going on; PrintScreen or Ctrl+Alt+F6: one at once, whatever is in front\n- reboot [-f] [--off], poweroff [-f], shutdown [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine; --off, poweroff and shutdown turn it off (ACPI S5 on x86, PSCI on aarch64)\n- check [group …], kbench [group …] [--quick], bench [group …] [--quick]: a self-test, the kernel's and the components' performance, each a table; the full log on log: (also in wm's menu, Tests and performance)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too; autorun.msh at the boot volume's root runs once at start\n- stop\nCTRL+ALT+F5 OR SHELL IN WM'S MENU (A RIGHT CLICK ON THE DESKTOP, ALT+P): ANOTHER WINDOW OF THE SHELL EACH TIME (SHELL, SHELL 2…), EACH A SESSION OF ITS OWN; IT TAKES EVERY COMMAND BUT FG (REBOOT, POWEROFF AND STOP ASK FIRST); PROGRAMS STARTED THERE OPEN IN WINDOWS (PS: CONSOLE=5 AND ON). CONSOLE IN WM IS A TERMINAL FOR PROGRAMS WITH WHAT WM HOLDS, NOT A SECOND SHELL: THE SHELL ALONE HOLDS THE OPERATOR'S AUTHORITY.\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES A COMMAND, A PROGRAM OR A PATH (AGAIN: THE CHOICES), ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
+const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name|path> [args] [&]: new instance; a path up to 63 bytes, as an installed application's (run data/apps/<name>/<file>)\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time, the vector state each task keeps (FPU=XSAVE+AVX, +AVX512, +AMX)\n- free: the machine's memory (the frame pool programs run in), then the kernel's arena by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time in the time zone; date set YYYY-MM-DD HH:MM[:SS]: set the clock, in that zone (the RTC keeps UTC); date zone [+HH:MM|-HH:MM|UTC]: the zone every clock shows, kept in data/clock.conf (no summer time)\n- hostname [name]: the machine's name (mindcore when none is set); with a name, sets it: 1 to 63 of a-z 0-9 -, neither first nor last a hyphen, kept in data/machine/name and logged\n- volume [0-100|mute|unmute], mic [0-100|boost on|off]: the output's level and the microphone's gain in per cent of their range, with their dB; a change kept in data/sound.conf and set again at the shell's start\n- battery: the battery's charge, on the mains or not, the time left or to full, voltage, current, capacity and cycles (the battery service, where the firmware names one)\n- cd [directory], pwd: the current directory, named in the prompt (MIND diag>): paths that name no volume start there, in every command and in a program's arguments; cd alone: the boot disk's root; cd ..: up\n- ls [path], cat <file>: files (ram: is the RAM disk; log: the boot disk's log partition, with each boot's system log; models: the model disk, read-only)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram:, on log: and in data/\n- > <file>, >> <file>: after a command, what it prints goes into the file (>> adds to it), taken from the current directory; a line that starts ERROR: stays on the screen (ls data > ram:list.txt, dmesg >> data/boot.txt)\n- <command> | <program> [| <program>]: what the command prints is the program's text input, and what that one prints the next one's (ps | grep wm, dmesg | grep SHELL | grep -c START)\n- <program> < <file>: the file, taken from the current directory, is the program's text input (grep wm < ram:ps.txt; sha256 < notes.txt); before the first |\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id|name>: foreground; a name takes the program called so (or whose name holds it), several are listed by PID\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card with its kind (WIRED, WI-FI) and DEFAULT, PREFERRED or DOWN; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netstat [-i]: the open sockets (protocol, ports, remote address, TCP state, bytes each way, the program), then the cards; -i: the cards alone\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- a running program's question about the network (NETWORK: ... ASKS TO REACH host:port): N no (the default), O once, S for this run, A always (a line of the policy); shown on the console it was started from, unanswered in 60 s refused (000-APP-0120)\n- mode [development|maintenance on|off [reason]]: the machine's modes, in which init runs the Effector agent's services (data/mode.conf); on after you agree to it at this console, off at once\n- ping [-c count] [-i seconds] [-w seconds] [-f] [-s bytes] [-p hex] <host>: echo requests, 3 a second apart, each waiting 1 s for its reply (-c 0: until Esc); -f: the next at once, a dot for each one lost, 100 by default; -s: 0 to 1472 data bytes, -p: 1 to 16 bytes repeated over them (56 bytes with -p alone), each reply's data checked\n- nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- nn [status], nn models: the model service (nnd): its memory, workers, models, sessions and badges, and the badges the shell lent to programs that asked for it; nn load <path> <id>, nn unload <id>: a model on models: or under data/models/, its ID 64 hex digits; nn run <id> <file>: the file's rows (numbers apart by spaces or commas, one row a line) through it, each output row as a line; nn bench <id>: rows a second and the session's memory, for this machine only (262-APP-0112)\n- tpm [seal <text>]: the TPM (manufacturer, interface); seal: a check that the shell may not seal\n- passphrase: keystore's passphrase, which seals the device key where no TPM does, typed with no echo at a console or the shell's window (never in a script or for a program): while the boot waits for it, it opens the key; else it sets one (the one set: Enter alone the first time) or changes it, the new one typed twice, 8 to 128 bytes\n- release <file>: a release channel file or a boot manifest as the parser service reads it, shown only if its answer makes the file\n- update [status|check|fetch|apply [tries]|rollback]: the updater (update.txt): the running slot and version, the boot record, what is staged, and the channel it holds; check reads the source's channel, fetch stages a newer release in the other slot (the shell waits for it), apply and rollback boot the other slot on trial after you agree (tries 1 to 9, 3 by default)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [-d seconds] [file]: the screen as a BMP (data/media/screen-NNN.bmp, ram: when data/ cannot be written); -d: that many seconds later, the shell going on; PrintScreen or Ctrl+Alt+F6: one at once, whatever is in front\n- reboot [-f] [--off], poweroff [-f], shutdown [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine; --off, poweroff and shutdown turn it off (ACPI S5 on x86, PSCI on aarch64)\n- check [group …], kbench [group …] [--quick], bench [group …] [--quick]: a self-test, the kernel's and the components' performance, each a table; the full log on log: (also in wm's menu, Tests and performance)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too; autorun.msh at the boot volume's root runs once at start\n- stop\nCTRL+ALT+F5 OR SHELL IN WM'S MENU (A RIGHT CLICK ON THE DESKTOP, ALT+P): ANOTHER WINDOW OF THE SHELL EACH TIME (SHELL, SHELL 2…), EACH A SESSION OF ITS OWN; IT TAKES EVERY COMMAND BUT FG (REBOOT, POWEROFF AND STOP ASK FIRST); PROGRAMS STARTED THERE OPEN IN WINDOWS (PS: CONSOLE=5 AND ON). CONSOLE IN WM IS A TERMINAL FOR PROGRAMS WITH WHAT WM HOLDS, NOT A SECOND SHELL: THE SHELL ALONE HOLDS THE OPERATOR'S AUTHORITY.\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES A COMMAND, A PROGRAM OR A PATH (AGAIN: THE CHOICES), ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
 const BOOT_LOG_LINES: usize = 24;
-const COMMANDS: [&str; 61] = ["battery", "boot", "budget", "caps", "cat", "cd", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mic", "mkdir", "mode", "msh", "mv", "net", "netgrants", "netpolicy", "netrevoke", "netstat", "nn", "nslookup", "physmap", "ping", "pmap", "poweroff", "ps", "pwd", "quotas", "reboot", "release", "rm", "run", "screenshot", "shutdown", "stat", "stop", "sync", "time", "tls", "tpm", "update", "voice", "volume", "write"];
+const COMMANDS: [&str; 62] = ["battery", "boot", "budget", "caps", "cat", "cd", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mic", "mkdir", "mode", "msh", "mv", "net", "netgrants", "netpolicy", "netrevoke", "netstat", "nn", "nslookup", "passphrase", "physmap", "ping", "pmap", "poweroff", "ps", "pwd", "quotas", "reboot", "release", "rm", "run", "screenshot", "shutdown", "stat", "stop", "sync", "time", "tls", "tpm", "update", "voice", "volume", "write"];
 const NAMES: usize = 128; // as many as the loader lists (loader.wit 1.4)
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
@@ -179,6 +181,7 @@ struct Shell {
     nn: nnclients::Badges, nn_due: u64, // the badged clients of `nnd` lent, and when their retirements are next tended (262-APP-0112)
     asking: Option<flowctl::Asking>, flow_due: u64, // a program's question about a flow shown, and when the broker is next asked (000-APP-0120)
     secret: Option<secretctl::Typing>, // a console program's secret line being typed (000-APP-0126)
+    pass: passctl::State, // keystore's passphrase typed, and the boot's wait for it looked for (308-APP-0130)
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -592,7 +595,7 @@ impl Shell {
                 let wheel = mind::abi::pointer_absolute_fields(word).map_or(0, |(_, _, _, wheel)| wheel);
                 if wheel != 0 { self.term.scroll(wheel < 0); } // away from the user: back
             } else if let Some(key) = Key::from_event(word) {
-                if flowctl::waits_on(self, session) && flowctl::key(self, key) {} else if secretctl::waits_on(self, session) && secretctl::key(self, key) {} else if self.focused.is_none() { self.key(key); }
+                if flowctl::waits_on(self, session) && flowctl::key(self, key) {} else if secretctl::waits_on(self, session) && secretctl::key(self, key) {} else if passctl::waits_on(self, session) && passctl::key(self, key) {} else if self.focused.is_none() { self.key(key); }
             }
         }
         let cursor = (self.focused.is_none() && self.console.is_none()).then(|| self.cursor());
@@ -722,6 +725,7 @@ impl Shell {
 
     fn prompt(&mut self) {
         if self.script.is_some() || self.redirecting { return; } // a script's commands, or one sent into a file, do not prompt
+        if passctl::waits_on(self, self.active) { return; } // keystore's passphrase is typed here (308-APP-0130)
         let prompt = self.prompt_text();
         let _ = write!(self.term, "{}", prompt);
         self.prompt_at = self.term.position();
@@ -888,12 +892,17 @@ impl Shell {
         let store_named = (storefs && !needs.files && !(needs.file && !needs.files) && (granted("file") || granted("files")))
             .then(|| storescope::named(args)).flatten();
         let firmware_granted = granted("firmware") && !help;
+        let recover_granted = granted("recover") && !help;
         // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
         // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
         let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera");
         // The firmware's variables (the boot order) only when the user agrees, asked every time (351-KRN-0027).
         let firmware = requests & mind::process::REQUEST_FIRMWARE != 0 && mind::dev::cap_info(SLOT_FIRMWARE).0 != 0 && firmware_granted
             && msh::ask(self, &alloc::format!("{} ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW?", name.to_ascii_uppercase()));
+        // The store's recovery client (308-APP-0122, 308-KRN-0204): a copy of the shell's, which makes and takes the keys
+        // that open the medium anywhere, only when the user agrees, asked every time.
+        let recover = requests & mind::process::REQUEST_RECOVER != 0 && mind::dev::cap_info(SLOT_RECOVER).0 != 0 && recover_granted
+            && msh::ask(self, &alloc::format!("{} ASKS TO MAKE OR USE A RECOVERY KEY, WHICH OPENS THE STORE'S MEDIUM ON ANY MACHINE. ALLOW?", name.to_ascii_uppercase()));
         let session = loader::begin(Endpoint::LOADER, name, args)?.map_err(failed)?;
         // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
         // writable where the user may write; one that asks for the user's files gets the shell's own client.
@@ -911,7 +920,7 @@ impl Shell {
                       (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT), (window, SLOT_WINDOW, SLOT_WINDOWS), (window_manager, SLOT_WINDOW, SLOT_WINDOW_MANAGER),
                       (display, SLOT_DISPLAY, SLOT_DISPLAY), (gpio, SLOT_GPIO, SLOT_GPIO), (camera, SLOT_CAMERA, SLOT_CAMERA), (blockstore, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE),
                       (blockstore_read, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ), (firmware, SLOT_FIRMWARE, SLOT_FIRMWARE), (parse, SLOT_PARSE, SLOT_PARSE),
-                      (wifi, SLOT_WIFI, SLOT_WIFI)];
+                      (wifi, SLOT_WIFI, SLOT_WIFI), (recover, SLOT_RECOVER, SLOT_RECOVER)];
         let lent = wanted.iter().filter(|w| w.0).map(|&(_, slot, cap)| (slot, cap)).chain(extra.iter().copied())
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
@@ -1408,6 +1417,9 @@ impl Shell {
             nnctl::command(&mut self.term, &self.nn, args, file);
         } else if is(b"hostname") {
             self.hostname(args);
+        } else if is(b"passphrase") {
+            // keystore's passphrase, typed with no echo after it (308-APP-0130).
+            passctl::command(self, args);
         } else if is(b"volume") || is(b"mic") {
             // The levels through the shell's audio client (000-APP-0076, 000-APP-0077), kept in data/sound.conf.
             match soundctl::command(is(b"mic"), core::str::from_utf8(args).unwrap_or("")) {
@@ -1600,7 +1612,8 @@ impl Shell {
             Edit::Submit => {
                 let mut copy = [0u8; 256];
                 let text = self.line.as_str(); let len = text.len(); copy[..len].copy_from_slice(text.as_bytes());
-                self.history.push(core::str::from_utf8(&copy[..len]).unwrap_or(""));
+                // A passphrase typed on the line by mistake stays out of the history (308-APP-0130).
+                if !passphrase::on_line(text) { self.history.push(core::str::from_utf8(&copy[..len]).unwrap_or("")); }
                 self.line.clear();
                 self.term.print_char(b'\n');
                 self.command(&copy[..len]);
@@ -1632,6 +1645,8 @@ impl Shell {
         if let Event::Key(word) = event { if flowctl::waits_on(self, self.active) && flowctl::key(self, Key(word)) { return; } }
         // A secret line typed there takes them next, never shown (000-APP-0126).
         if let Event::Key(word) = event { if secretctl::waits_on(self, self.active) && secretctl::key(self, Key(word)) { return; } }
+        // keystore's passphrase typed there too (308-APP-0130).
+        if let Event::Key(word) = event { if passctl::waits_on(self, self.active) && passctl::key(self, Key(word)) { return; } }
         match event {
             Event::Key(word) if self.focused.is_some() => { if shown { let _ = input_key(word, word, false); } }
             Event::Key(word) => self.key(Key(word)),
@@ -1679,7 +1694,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), gave_up: 0, managers: alloc::vec::Vec::new(), unasked: false, console_link: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None })
+                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64) })
 }
 
 mind::entry!(main);
@@ -1713,7 +1728,8 @@ fn main(info: &'static BootInfo) {
     // A mode that runs the Effector agent, said above the first prompt (750-EFF-0013).
     modectl::notice(&mut shell);
     shell.beat.0 = shell.term.position().line;
-    shell.prompt();
+    // Where the boot waits for keystore's passphrase, it is asked in place of the first prompt (308-APP-0130).
+    if !passctl::start(&mut shell) { shell.prompt(); }
     // A shell init restarted gives the screen back to the window manager still running (the maintainer: "wm must not fall
     // in such cases", 2026-10-22), and does not run the start script again (EFF's report: its Wi-Fi join, a second time).
     let starts = starts();
@@ -1721,7 +1737,7 @@ fn main(info: &'static BootInfo) {
     let mut vt = Vt::new();
     let mut events = Events::new();
     // The start script: tried once a second after the first frame, for a minute at most (000-APP-0079); once a boot.
-    let (mut autorun, autorun_until) = (Some(0u64).filter(|_| starts <= 1), mind::time::uptime_ms() as u64 + 60_000);
+    let (mut autorun, mut autorun_until) = (Some(0u64).filter(|_| starts <= 1), mind::time::uptime_ms() as u64 + 60_000);
     if starts > 1 { mind::println!("[SHELL] START {} OF THIS BOOT: AUTORUN.MSH RAN AT THE FIRST, NOT AGAIN", starts); }
     // The time zone from data/clock.conf, tried as the start script is, before it (000-APP-0099).
     let mut zone_next = Some(0u64);
@@ -1771,6 +1787,7 @@ fn main(info: &'static BootInfo) {
                 _ if mind::abi::event_key(key.0) == KEY_PRINT_SCREEN && !key.ctrl() && !key.alt() => shell.screenshot_now(String::new(), "PRINTSCREEN"),
                 _ if flowctl::waits_on(&shell, shell.shown) && flowctl::key(&mut shell, key) => {}
                 _ if secretctl::waits_on(&shell, shell.shown) && secretctl::key(&mut shell, key) => {}
+                _ if passctl::waits_on(&shell, shell.shown) && passctl::key(&mut shell, key) => {}
                 _ if shell.focused.is_none() => shell.key(key),
                 Code::F(12) => { shell.voice_key(key); }
                 _ => {}
@@ -1795,7 +1812,10 @@ fn main(info: &'static BootInfo) {
         if let Some(next) = sound_next.filter(|&next| now >= next) {
             sound_next = match soundctl::load(now >= autorun_until) { clockzone::Load::Later => Some(next.max(now) + 1000), clockzone::Load::Done => None };
         }
-        if let Some(next) = autorun.filter(|&next| zone_next.is_none() && start.drawn() && now >= next) {
+        // While the boot asks for keystore's passphrase the start script waits, as what it starts may need the device
+        // key, and has its minute after (308-APP-0130).
+        if passctl::boot_asks(&shell) { autorun_until = autorun_until.max(now + 60_000); }
+        if let Some(next) = autorun.filter(|&next| zone_next.is_none() && start.drawn() && !passctl::boot_asks(&shell) && now >= next) {
             autorun = match msh::autorun(&mut shell, now >= autorun_until) {
                 msh::Autorun::Later => Some(next.max(now) + 1000),
                 msh::Autorun::Done(ran) => { if ran { shell.prompt(); } None }
@@ -1808,6 +1828,8 @@ fn main(info: &'static BootInfo) {
         flowctl::tend(&mut shell, now);
         // A secret line whose program ended or stopped waiting (000-APP-0126).
         secretctl::tend(&mut shell);
+        // The boot's wait for keystore's passphrase, and its prompt after keystore's wait (308-APP-0130).
+        passctl::tend(&mut shell, now);
         // Wait for the next tick, or for the voice program's call or the window manager's.
         match shell.voice.endpoint {
             Some(endpoint) => {

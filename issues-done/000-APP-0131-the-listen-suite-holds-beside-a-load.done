@@ -1,0 +1,38 @@
+# 000-APP-0131 — The `listen` suite's checks after the recording hold beside a build load — done
+
+**Type:** tools (tests: the `listen` suite) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-10) · **Blocked by:** — · **Main task:** [000-APP-0114](../issues/000-APP-0114-hear-waits-for-a-whole-command.md) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.2
+
+**Numbered by:** the tools track, 2026-11-10, from DRV's note on [000-DRV-0066](000-DRV-0066-the-ac97-capture-ring-overflows.done) (`internal-dev-messages`, `APP/2026-11-09T2217Z-DRV-…`).
+
+## Problem
+
+- **DRV's fix** keeps AC'97's capture in `audio_gw`'s own copy, so the suite's recording no longer overflows: none in 20 runs beside a build loop (load 65–75 on 24 CPUs).
+- **The suite still failed** in 11 of those 20, after the recording, in this track's checks:
+  - 8 timed out waiting for the shell's prompt after `hear --wav nosuch.wav`, `voice on --wav`, `hear x y` and `run keys`. `vm.command`'s wait is 8 s;
+  - 3 failed `HEAR: THE MICROPHONE IS BUSY`. The check starts `listen 10` in the background and runs `hear 1` at once. If `hear` asks before `listen` holds the microphone, or after its 10 s, the microphone is free.
+- **What these checks test** is an answer's text, not its time: a longer wait does not change what passes.
+
+## Plan
+
+- **The microphone's one owner:** `hear 1` runs only after `listen`'s `[LISTEN] RECORDING` line, and `listen` records long enough to be killed while it still does.
+- **The waits** of the checks after the recording come from one constant of the suite, long enough for such a load. No check's expected text changes.
+- **The recording's checks** stay as they are: `OVERFLOWS 0` included.
+
+## Acceptance criteria
+
+- **QEMU x86, 4 CPUs, TCG:** the `listen` suite passes 20 runs in a row beside a build loop, the machine and its load named (MC-12.1).
+- **Without the load,** the suite passes as before, and takes no longer when nothing is slow.
+
+## Resolution
+
+- **The waits** (`tests/qemu_smoke.py`, commit 963194cdf): `VM.wait` is the default of `command` and `expect`, 8 s as before; the `listen` suite sets it to `LOADED_WAIT` (60 s) for every check after the recording. A wait ends at its answer, so no expected text changed.
+- **The microphone's one owner:** the busy check runs `listen --vad 60` in the background and runs `hear 1` only after its `LISTENING FOR SPEECH 60 S` line, so `hear` asks while `listen` holds the microphone. The recording's checks, `OVERFLOWS 0` included, are as they were.
+- **Beside a load:** QEMU x86, 4 CPUs, TCG, in this track's container (4 vCPUs of an Intel Xeon at 2.10 GHz), 2026-11-10. The suite passed 20 runs in a row, 281 to 341 s each.
+  - **The load:** a loop building `tts` (`cargo build --release -j 8`) and 8 busy Python loops, about 3 runnable threads per CPU, as DRV's build loop gave (load 65 to 75 on 24 CPUs).
+  - **The load average** while the runs ran, sampled every 10 s: 597 samples, 7.71 to 14.10, median 12.07; 11 or more but for the first run's first 90 s, while the one-minute average climbed.
+- **Without the load,** on the same image, alternating: before the change 106 and 109 s, after it 105 and 107 s. Both passed.
+- Not run on real hardware: these are waits of a test on an emulator (MC-12.1).
+
+## Related
+
+[000-DRV-0066](000-DRV-0066-the-ac97-capture-ring-overflows.done), [000-APP-0114](../issues/000-APP-0114-hear-waits-for-a-whole-command.md).
