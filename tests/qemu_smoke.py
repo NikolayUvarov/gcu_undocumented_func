@@ -14498,6 +14498,127 @@ def store_rebuild_check(args, disk):
           f"THE STORE'S and the name resolves at the same root (309-STO-0041)", flush=True)
 
 
+GPT_STORE_TYPE = "27d2c2a1-7133-4d3d-a6ed-1de599cabdb7"  # libmind/src/partition.rs GPT_STORE
+GPT_BASIC_DATA = "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"  # Microsoft basic data: another system's
+GPT_LINUX_DATA = "0fc63daf-8483-4772-8e79-3d69d8477de4"  # Linux filesystem data: another system's
+
+
+def partitioned_image(path, sectors, scheme, parts, seed):
+    """A raw disk of `sectors` with an MBR or a GPT (primary and backup) of `parts`, each (kind, first, count): an MBR type
+    byte or a GPT type GUID. Every partition holds seeded random bytes, but one of the store's type, which holds the
+    store's superblock and zeros. Returns the image's bytes as written."""
+    import random
+    import uuid
+    from make_usb_image import store_superblock
+    rand = random.Random(seed)
+    image = bytearray(sectors * 512)
+    if scheme == "mbr":
+        image[440:444] = struct.pack("<I", rand.getrandbits(32))
+        for i, (kind, first, count) in enumerate(parts):
+            image[446 + 16 * i:462 + 16 * i] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", kind, b"\xfe\xff\xff", first, count)
+    else:
+        image[446:462] = struct.pack("<B3sB3sII", 0, b"\x00\x02\x00", 0xEE, b"\xff\xff\xff", 1, min(sectors - 1, 0xFFFFFFFF))
+        entries = bytearray(128 * 128)
+        for i, (kind, first, count) in enumerate(parts):
+            entries[i * 128:(i + 1) * 128] = (uuid.UUID(kind).bytes_le + uuid.UUID(int=rand.getrandbits(128)).bytes_le
+                                              + struct.pack("<QQQ", first, first + count - 1, 0) + f"part{i + 1}".encode("utf-16-le").ljust(72, b"\0"))
+        guid = uuid.UUID(int=rand.getrandbits(128)).bytes_le
+
+        def header(current, backup, at):
+            head = bytearray(struct.pack("<8sIIIIQQQQ16sQIII", b"EFI PART", 0x10000, 92, 0, 0, current, backup, 34, sectors - 34,
+                                         guid, at, 128, 128, zlib.crc32(entries)))
+            head[16:20] = struct.pack("<I", zlib.crc32(head))
+            return bytes(head)
+        image[512:604] = header(1, sectors - 1, 2)
+        image[1024:1024 + len(entries)] = entries
+        image[(sectors - 33) * 512:(sectors - 1) * 512] = entries
+        image[(sectors - 1) * 512:(sectors - 1) * 512 + 92] = header(sectors - 1, 1, sectors - 33)
+    image[510:512] = b"\x55\xaa"
+    for kind, first, count in parts:
+        if kind in (0x7F, GPT_STORE_TYPE):
+            image[first * 512:(first + 1) * 512] = store_superblock()
+        else:
+            image[first * 512:(first + count) * 512] = rand.randbytes(count * 512)
+    path.write_bytes(image)
+    return bytes(image)
+
+
+def store_partition_disk_check(args, disk):
+    """307-STO-0044: the block store on a partition of an NVMe disk (GPT) and, in a second machine, of an AHCI disk (MBR):
+    another system's partition before the store's and after it, and beside it a disk of the other bus that is wholly
+    another system's. init takes the store's partition, window 1 of its driver; an object put and a name published there
+    are found after a reboot. On the host afterwards, every sector outside the store's partition on both disks is as it
+    was written, and the store has written inside its own past the superblock. The images are written in place."""
+    if getattr(args, "disk", "default") != "default":
+        print("SKIP: the store on an NVMe and an AHCI partition (307-STO-0044): the boot disk is on one of those buses", flush=True)
+        return
+    first, count = 2048, 32768  # the store's partition: 16 MiB from the first MiB, after another system's 8 MiB
+    layouts = (("nvme", "gpt", (GPT_BASIC_DATA, GPT_STORE_TYPE, GPT_LINUX_DATA), "ahci", "mbr", (0x07,)),
+               ("ahci", "mbr", (0x07, 0x7F, 0x83), "nvme", "gpt", (GPT_BASIC_DATA,)))
+    shown = []
+    for bus, scheme, kinds, other_bus, other_scheme, other_kinds in layouts:
+        with tempfile.TemporaryDirectory(prefix="mind-store-part-") as temp:
+            own, other = Path(temp) / "store.img", Path(temp) / "other.img"
+            spans = ((first, 16384), (first + 16384, count), (first + 16384 + count, 16384))
+            written = partitioned_image(own, 81920, scheme, [(k, a, n) for k, (a, n) in zip(kinds, spans)], seed=f"{bus} store")
+            elsewhere = partitioned_image(other, 32768, other_scheme, [(other_kinds[0], 2048, 28672)], seed=f"{other_bus} other")
+            store_first = spans[1][0]
+            extra = []
+            for image, on, name in ((own, bus, "own"), (other, other_bus, "other")):
+                extra += ["-drive", f"format=raw,file={image},if=none,id={name},snapshot=off"]
+                extra += (["-device", f"nvme,serial={name},drive={name}"] if on == "nvme"
+                          else ["-device", f"ahci,id=sata{name}", "-device", f"ide-hd,drive={name},bus=sata{name}.0"])
+            # RDRAND on x86, so that the volume key is random.
+            if getattr(args, "arch", None) != "aarch64":
+                extra += ["-cpu", "qemu64,+rdrand"]
+            vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+
+            def blocks(command, *expected, timeout=60):
+                out = vm.command(f"blocks {command}", raw=True, timeout=timeout)
+                for e in expected:
+                    require(out, e)
+                return out
+
+            def mounted():
+                init = ready = ""
+                for _ in range(60):
+                    init, ready = vm.command("dmesg -s init", raw=True), vm.command("dmesg -s blockstore", raw=True)
+                    if "[BLOCKSTORE] READY" in ready or "[BLOCKSTORE] NOT MOUNTED" in ready:
+                        break
+                    time.sleep(2)
+                require(init, f"[INIT] {bus}: {scheme.upper()}, 3 PARTITIONS")
+                require(init, f"[INIT] {other_bus}: {other_scheme.upper()}, 1 PARTITIONS")
+                require(init, f"[INIT] THE BLOCK STORE'S PARTITION: {bus} PARTITION 2 (ITS TYPE AND SUPERBLOCK), {count} SECTORS FROM {store_first}, WINDOW 1")
+                require(ready, f"/{count} ")
+                require(ready, "DURABILITY=FLUSHED")
+
+            try:
+                mounted()
+                require(vm.service_logs(bus, "WINDOW 1 SET"), f"[BLOCK] WINDOW 1 SET: {count} SECTORS FROM {store_first}")
+                put = re.search(r"PUT (\S+) SIZE 5000", blocks("pattern 5000"))[1]
+                blocks(f"publish part {put}", "PUBLISHED part VERSION 1 (FLUSHED)")
+                vm.send("reboot\n")
+                vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+                vm.expect("MIND>", timeout=60)
+                time.sleep(1); vm.collect(); vm.output = ""
+                mounted()
+                blocks("resolve part", f"part VERSION 1 ROOT {put}")
+                blocks(f"check {put} pattern", "CHECKED 5000 BYTES = PATTERN")
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-store-part-{bus}-{args.cpus}cpu.log").write_text(vm.log)
+            now, start, end = own.read_bytes(), store_first * 512, (store_first + count) * 512
+            assert now[:start] == written[:start], f"{bus}: the table or the partition before the store's was written"
+            assert now[end:] == written[end:], f"{bus}: the partition after the store's, or GPT's backup, was written"
+            assert any(now[start + 512:end]), f"{bus}: the store wrote nothing past its superblock, so the comparison shows nothing"
+            assert other.read_bytes() == elsewhere, f"{other_bus}: another system's disk was written"
+            shown.append(f"{bus} ({scheme.upper()}) beside {other_bus} ({other_scheme.upper()})")
+    print(f"PASS: the store on its own partition of {' and of '.join(shown)}: init takes partition 2, window 1 of its "
+          "driver; an object and a name found after a reboot (FLUSHED); on the host every sector outside the store's "
+          "partition is as written, another system's partition before and after it and GPT's backup, and the disk beside "
+          "it untouched, while the store wrote inside its own (307-STO-0044)", flush=True)
+
+
 def store_disk_check(args, disk):
     """300-KRN-0025: a blank VirtIO disk is the block store's own: the store formats it, vfs_server never gets it,
     and an object put there is found after a reboot (the snapshot overlay outlives the guest's reboot)."""
@@ -15320,6 +15441,7 @@ def main():
             if suite == "store":  # its own machine with two store disks, booted twice (309-KRN-0209)
                 store_copy_disk_check(args, disk)
                 store_rebuild_check(args, disk)  # another, the store's disk replaced by a blank one (309-STO-0041)
+                store_partition_disk_check(args, disk)  # two more, the store on an NVMe and an AHCI partition (307-STO-0044)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
