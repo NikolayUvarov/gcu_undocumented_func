@@ -186,17 +186,10 @@ struct Scheduler {
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
-// Each task's state as text, rewritten each second by the boot CPU's tick: a test whose wait ran out copies it through
-// QEMU's monitor from the address printed at boot, where a stuck shell cannot be asked (000-KRN-0232).
+// Each task's state, rewritten each second by the boot CPU's tick: a test whose wait ran out copies it through QEMU's
+// monitor from the address printed at boot, where a stuck shell cannot be asked, and reads it (000-KRN-0232).
 const STATES_BYTES: usize = 16384;
 static mut STATES: [u8; STATES_BYTES] = [0; STATES_BYTES];
-struct StatesText<'a> { bytes: &'a mut [u8], at: usize }
-impl core::fmt::Write for StatesText<'_> {
-    fn write_str(&mut self, text: &str) -> core::fmt::Result {
-        let n = text.len().min(self.bytes.len() - 1 - self.at); // the last byte stays 0, the text's end
-        self.bytes[self.at..self.at + n].copy_from_slice(&text.as_bytes()[..n]); self.at += n; Ok(())
-    }
-}
 // Test-and-set, with a turn for a CPU that waited long (000-KRN-0219): none waits behind one that takes it again and again,
 // as CPU 0 did in round 91's gate, nor for the host to run one vCPU, as a ticket lock did in round 95's. Taken with
 // interrupts off, never twice by one CPU.
@@ -387,7 +380,7 @@ impl Scheduler {
             }
         }
         if now >= self.next_expiry { self.expire(now); }
-        if now / 1000 != self.states_second { self.states_second = now / 1000; self.write_states(now, ns); }
+        if now / 1000 != self.states_second { self.states_second = now / 1000; self.write_states(now); }
         if let Some((_, pid, _, _)) = self.held.filter(|&(_, _, since, _)| ns.saturating_sub(since) >= HOLD_NS) {
             // Kept in the ring, not printed: under load it came in the middle of the echo of a typed command.
             let _ = core::fmt::Write::write_fmt(&mut crate::klog::Kept, format_args!("MIND CORE KERNEL: PID {} HELD FOR THE COMPOSITOR'S COPY {} MS, LET GO\n", pid, HOLD_NS / 1_000_000));
@@ -396,28 +389,19 @@ impl Scheduler {
         self.wake_idle(cpu, every);
         crate::trial::check(now);
     }
-    // STATES: a line a task, and for one that waits whom or what it waits for.
-    fn write_states(&self, now: u64, ns: u64) {
-        use core::fmt::Write;
-        let mut text = StatesText { bytes: unsafe { &mut *core::ptr::addr_of_mut!(STATES) }, at: 0 };
-        let name = |slot: usize| (slot < self.tasks.len()).then(|| self.tasks[slot].as_ref()).flatten().map_or((0, ""), |t| (t.pid, core::str::from_utf8(&t.name.bytes[..t.name.len as usize]).unwrap_or("?")));
-        let _ = write!(text, "AT {} MS\n", now);
-        for (slot, task) in self.tasks.iter().enumerate().skip(1) {
-            let Some(task) = task else { continue };
-            let (pid, own) = name(slot);
-            let state = if self.current.contains(&slot) { "RUNNING" } else { task.state.label() };
-            let _ = write!(text, "{} {} CPU {} {}", pid, own, task.cpu, state);
-            let _ = match task.state {
-                State::Sleeping(deadline) => write!(text, " {} MS LEFT", deadline.saturating_sub(ns) / 1_000_000),
-                State::BlockedRecv(ep) => write!(text, " RECEIVE ON {}", ep),
-                State::BlockedSend(ep) => { let (p, n) = self.endpoint_owner.get(ep).copied().flatten().map_or((0, ""), |(s, _)| name(s)); write!(text, " SEND TO {} OF {} {}", ep, p, n) }
-                State::BlockedReply(server) => { let (p, n) = name(server); write!(text, " REPLY FROM {} {}", p, n) }
-                State::BlockedIrq(line) => write!(text, " IRQ {}", line),
-                _ => Ok(()),
-            };
-            let _ = text.write_str("\n");
+    // STATES: b"TASKS v1" and the time in ms, then 32 bytes a task: PID, CPU, `stat tasks`' wait and what it waits on, and
+    // its name; a zero PID ends it.
+    fn write_states(&self, now: u64) {
+        let page = unsafe { &mut *core::ptr::addr_of_mut!(STATES) };
+        page[..8].copy_from_slice(b"TASKS v1"); page[8..16].copy_from_slice(&now.to_le_bytes());
+        let mut rows = page[32..].chunks_exact_mut(32);
+        for (index, task) in self.tasks.iter().enumerate().skip(1).filter_map(|(i, t)| Some((i, t.as_ref()?))) {
+            let Some(row) = rows.next() else { return };
+            let (wait, on) = stat::wait_of(task.state, self.current.contains(&index), &self.tasks);
+            row.fill(0); row[..4].copy_from_slice(&(task.pid as u32).to_le_bytes()); row[4] = task.cpu as u8; row[5] = wait;
+            row[8..12].copy_from_slice(&on.to_le_bytes()); row[12..12 + task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]);
         }
-        let at = text.at; text.bytes[at] = 0;
+        if let Some(row) = rows.next() { row.fill(0); }
     }
     // Quota use of the task in `slot` (MC-1.7, MC-5.1): tasks reserved by its live children and endpoints it created or
     // delegated.
