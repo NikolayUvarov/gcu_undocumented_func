@@ -4056,7 +4056,15 @@ def blockstore_check(vm):
     found = re.search(r"^SLOT=25 GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE=7 EP=(\d+)", caps, re.M)
     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
     assert found and servers.get(int(found[1])) == real["blockstore"], caps
-    print("PASS: the block store runs over ramdisk#1 (empty, 8 MiB); the shell holds its client with get, put and publish", flush=True)
+    # 308-KRN-0204: the client that may recover the volume key (BADGE_RECOVER, 8) in SLOT_RECOVER, the shell's alone.
+    recover = re.search(r"^SLOT=43 GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE=8 EP=(\d+)", caps, re.M)
+    assert recover and servers.get(int(recover[1])) == real["blockstore"], caps
+    for name in ("updater", "storefs", "effector"):
+        if name in real:
+            held = vm.command(f"stat caps {real[name]}", raw=True)
+            assert not any(servers.get(int(ep)) == real["blockstore"] and int(badge) & 8 for badge, ep in re.findall(r"BADGE=(\d+) EP=(\d+)", held)), (name, held)
+    print("PASS: the block store runs over ramdisk#1 (empty, 8 MiB); the shell holds its client with get, put and publish, and "
+          "the one that may recover the volume key (308-KRN-0204), which no service holds", flush=True)
 
 
 def cid_raw(data):
