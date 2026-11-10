@@ -6,7 +6,7 @@
 
 ## Problem
 
-The background's `Image file` row in Settings ([000-APP-0048](../issues/000-APP-0048-wm-settings.md), [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done)) takes only a typed path. One has to know the file's name and directory, and a typo leaves the pattern with a notice.
+The background's `Image file` row in Settings ([000-APP-0048](000-APP-0048-wm-settings.done), [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done)) takes only a typed path. One has to know the file's name and directory, and a typo leaves the pattern with a notice.
 
 ## Plan
 
@@ -31,7 +31,7 @@ The background's `Image file` row in Settings ([000-APP-0048](../issues/000-APP-
 
 ## Related
 
-[000-APP-0048](../issues/000-APP-0048-wm-settings.md) (Settings), [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done) (pictures), [000-APP-0056](../issues-done/000-APP-0056-every-entry-of-wms-menu-reacts.done) (every row reacts).
+[000-APP-0048](000-APP-0048-wm-settings.done) (Settings), [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done) (pictures), [000-APP-0056](../issues-done/000-APP-0056-every-entry-of-wms-menu-reacts.done) (every row reacts).
 
 ## Resolution
 

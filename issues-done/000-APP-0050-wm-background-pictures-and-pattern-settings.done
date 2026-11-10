@@ -2,7 +2,7 @@
 
 **Type:** tools (`wm`, `libmind`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
-The maintainer's requests (2026-10-10), after [000-APP-0047](000-APP-0047-wm-desktop-background.done) and [000-APP-0048](../issues/000-APP-0048-wm-settings.md):
+The maintainer's requests (2026-10-10), after [000-APP-0047](000-APP-0047-wm-desktop-background.done) and [000-APP-0048](000-APP-0048-wm-settings.done):
 
 - "Add PNG and JPEG for the background picture."
 - "Add a setting for how fast the background changes (it is very slow now: right for work, but a demo needs it faster) and contrast settings."
@@ -75,5 +75,5 @@ Not done here: the network traffic ([000-APP-0049](../issues-done/000-APP-0049-n
 ## Related
 
 - [000-APP-0047](000-APP-0047-wm-desktop-background.done): the background.
-- [000-APP-0048](../issues/000-APP-0048-wm-settings.md): Settings.
+- [000-APP-0048](000-APP-0048-wm-settings.done): Settings.
 - [000-APP-0049](../issues-done/000-APP-0049-network-traffic-on-wms-background.done): the network traffic.

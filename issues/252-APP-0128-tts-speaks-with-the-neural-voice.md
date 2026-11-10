@@ -1,6 +1,6 @@
 # 252-APP-0128 — `tts` speaks Russian with the neural voice from `models:`, the formant voice its fallback
 
-**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the way to settle first) · **Blocked by:** — for the design; `KRN` for `tts`'s grants once it is chosen · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
+**Type:** tools (`tts`, voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done on QEMU x86 with `main`'s grant, a later phrase and a voice control answer included; aarch64 and the MacBook Pro left, 2026-11-10) · **Blocked by:** — ([252-KRN-0230](../issues-done/252-KRN-0230-tts-reads-the-neural-voice.done) in `main`, round 110) · **Main task:** [252](252-neural-speech-synthesis.md), step 5 · **Roadmap:** track G (voice) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1
 
 **Numbered by:** the tools track, 2026-11-09, from [252-APP-0041](252-APP-0041-russian-speech-on-the-macbook.md)'s measurements.
 
@@ -37,6 +37,39 @@
 - **Without the model disk:** the formant voice, as before, and the log says so.
 - **The latency** of the first and a later phrase is measured, and the configuration is named (MC-12.1).
 - **The maintainer** hears it on the MacBook Pro.
+
+## Progress (2026-11-10): `tts`'s side, and a run with the grant applied locally
+
+- **The way:** the first one, in `tts` itself, asked of KRN as a concrete step (`requests-KRN.md`). It leaves `nnd` for later: `tts`'s side is the same up to the synthesis call. NRL has not answered the question of 2026-11-09 yet.
+- **`tts`** (`tts/src/neural.rs`, `route.rs`, `main.rs`):
+  - **The build:** for the float target, as `speak`, with `libmind`'s heap.
+  - **The load,** at the first Russian sentence, when it holds a read-only scope of `models:` in `SLOT_FILE`:
+    - it probes the memory for `voice.bin`, `russian.dic` and 96 MiB of workspace first, as a failed heap allocation would end the service;
+    - it reads both files through `mind::model_file`, which checks each against the disk's `MANIFEST.json`.
+  - **Who speaks:** each sentence with a Cyrillic letter goes to Vosk TTS 0.7's speaker 3, resampled to 48 kHz. Any other sentence, a sentence the voice fails on, and every sentence with no voice loaded go to the formant voice as before.
+  - **The log** says once which voice speaks Russian, and why.
+- **`02_build.sh`** takes the newer of a crate's two builds, so `tts`'s old `x86_64-unknown-none` build is not copied any more.
+- **Tests:**
+  - **Host:** `tests/tts_host.rs`, the sentence's route.
+  - **The `tts` suite,** without a model disk: the greeting's Russian is the formant voice's as before (5731 ms), and the log says `NO SCOPE OF models:`.
+  - **The new `ttsneural` suite** (named only, `--tts-models-disk`), on QEMU x86, 4 CPUs, TCG. The disk held `voice.bin` (128 351 372 bytes, from `scripts/voice_dictate/convert.py`) and `russian.dic` (13 373 144 bytes, from `scripts/voice_tts/dictionary.py`), and `data/memory.conf` said `tts 320`. Run with init edited locally as the request asks, which is not committed:
+    - `say Говорит разум корабля.` was the neural voice's;
+    - the voice was ready in 23.9 s, and the whole took 176 s, for 1544 ms of speech: emulated, not a machine's times (MC-12.1);
+    - from the audio captured at QEMU's AC'97, Vosk's small model and Vosk 0.54's transducer both heard `говорит разум корабля`.
+- **With KRN's grant** (252-KRN-0230, in `main` since round 110): the `tts` suite's machine gets a model disk holding only its manifest. The suite takes either reason for the formant voice: no scope of `models:`, or no voice's file on such a disk. `git merge-tree` of the two branches has no conflict.
+- **aarch64:** `tts` builds for `aarch64-unknown-none-softfloat` through its `.cargo/config.toml`, and the image's `normal` and `shell` suites pass on QEMU (4 CPUs, TCG), 2026-11-10. The voice is not run there.
+- **On `main`'s `init`** (6894fa27, `main` 7c496688 merged in, 2026-11-10), with no local edit:
+  - the `tts` suite passed with KRN's holdings check: a read-only scope of `models:` in slot 7, `tts 48` read at a restart, 16 MiB without a line;
+  - `ttsneural` passed, with the same disk and `tts 320`: the voice was ready in 19.5 s, the whole took 165 s for 1544 ms of speech (TCG, MC-12.1), and Vosk's small model heard `говорит разум корабля`.
+- **A later phrase and a voice control answer** (b0a3d32b, the same machine and disk, 2026-11-10):
+  - `tts` logs how long after a request the neural voice's first sound was handed to the audio stream;
+  - `ttsneural` says a second sentence, then asks voice control «который час» from a WAV file made by the host build of `tts`, and its answer (the time in words) goes through `tts` like any client's;
+  - all three were the neural voice's, with no fallback in the log;
+  - the first sound came after 172.6 s for the first sentence (22.2 s of it the voice's load), 197.6 s for `Система готова к работе.` (1904 ms of speech), and 245.5 s for the answer (2380 ms);
+  - these are TCG's times, about two minutes of emulation for each second of speech. They say nothing about a machine's latency (MC-12.1), which the MacBook Pro's run is to measure.
+- **Left:**
+  - **aarch64:** QEMU's `virt` machine in the suites has no sound device, and its programs are soft-float, so emulated synthesis would take far longer still;
+  - **the MacBook Pro:** the maintainer's hearing, and the first and later phrases' latency on a machine.
 
 ## Related
 

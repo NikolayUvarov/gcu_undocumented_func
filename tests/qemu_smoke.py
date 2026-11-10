@@ -63,6 +63,9 @@ BASE = 0
 # How long `dmesg` is waited for unless a check says (000-NET-0063, 000-KRN-0227): it reads the whole ring, 16 records to
 # a call, which took more than 8 s beside another gate lane on the same machine (rounds 102 and 106).
 DMESG_WAIT = 30
+# How long the listen suite waits for an answer whose text it checks, beside a build load (000-APP-0131): DRV saw the
+# shell's prompt take more than 8 s there; the wait ends at the answer, so an unloaded run takes no longer.
+LOADED_WAIT = 60
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
@@ -76,6 +79,8 @@ def to_ordinal(text):
 
 
 class VM:
+    wait = 8  # s: how long command() and expect() wait by default; a suite may set its own
+
     def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio"):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
@@ -231,9 +236,9 @@ class VM:
             except queue.Empty:
                 return
 
-    def expect(self, text, timeout=8, after=None):
+    def expect(self, text, timeout=None, after=None):
         """Waits for `text` (after the first `after`, when given) in the output since the last match."""
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + (self.wait if timeout is None else timeout)
         while time.monotonic() < deadline:
             self.collect()
             clean = to_ordinal(ANSI.sub("", self.output).replace("\r", ""))
@@ -281,7 +286,7 @@ class VM:
 
     def command(self, text, raw=False, timeout=None):
         if timeout is None:
-            timeout = DMESG_WAIT if text.split()[:1] == ["dmesg"] else 8
+            timeout = DMESG_WAIT if text.split()[:1] == ["dmesg"] else self.wait
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
         return self.expect("MIND> ", timeout=timeout, after=to_ordinal(text if raw else to_real(text)) + "\n")
@@ -8712,6 +8717,73 @@ def beep_demo_tones(left, rate, first):
         assert tone_power(left, rate, start, hz) > 5 * max(tone_power(left, rate, start, other) for other in (523, 659, 784) if other != hz), hz
 
 
+def sound_kept_check(args, disk):
+    """000-APP-0076, 000-APP-0077: the levels `volume` and `mic` set are kept in data/sound.conf, and the shell sets them
+    again when it starts after a reboot, on AC'97 and on HD Audio (QEMU's hda-duplex codec)."""
+    def nearest(percent, line):
+        # The per cent a level reads back as: the nearest setting (audio_gw/src/levels.rs's arithmetic).
+        top = int(re.search(r"OF (\d+) SETTINGS", line)[1]) - 1
+        return ((percent * top + 50) // 100 * 100 + top // 2) // top
+    cards = []
+    for card in ("AC97", "HDA"):
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), audio="none", audio_card=card, reboot=True)
+        try:
+            volume, mic = nearest(50, vm.command("volume")), nearest(80, vm.command("mic"))
+            require_all(vm.command("volume 50"), f"VOLUME {volume} % (", "KEPT IN data/sound.conf")
+            require_all(vm.command("mic 80"), f"MIC {mic} % (", "KEPT IN data/sound.conf")
+            require_all(vm.command("volume mute"), "), MUTED", "KEPT IN data/sound.conf")
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=180)
+            vm.expect("MIND>", timeout=120)
+            time.sleep(1); vm.collect(); vm.output = ""
+            require(vm.command("dmesg -s shell", raw=True), f"[SHELL] THE LEVELS FROM data/sound.conf: VOLUME {volume} % (")
+            require_all(vm.command("volume"), f"VOLUME {volume} % (", "), MUTED")
+            require(vm.command("mic"), f"MIC {mic} % (")
+            cards.append(f"{card} {volume} % and {mic} %")
+            if card == "AC97":
+                meter = sound_meter_check(vm)
+        finally:
+            vm.close()
+    print(f"PASS: the levels kept across a reboot (000-APP-0076, 000-APP-0077): volume 50, muted, and mic 80 set again "
+          f"from data/sound.conf at the shell's start ({', '.join(cards)}); wm's Sound page metered the microphone ({meter}) "
+          "and its capture stopped with the page", flush=True)
+
+
+def sound_meter_check(vm):
+    """000-APP-0077: wm's Sound page records the microphone through wm's own client only while it shows: a level from
+    QEMU's silent input, then the capture stopped when Settings close, and the microphone free for another program."""
+    vm.send("wm\n")
+    started = vm.expect("[WM] READY", timeout=180)
+    wm = int(re.findall(r"STARTED PID=(\d+) NAME=wm FOREGROUND", started)[-1])
+    since = len(vm.log)
+    vm.hmp("sendkey alt-s")
+    time.sleep(.3)
+    for key in ["down"] * 4:  # to the sound page (settings::SOUND): it shows while the pages' list is in front
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("[WM] SOUND PAGE METER STARTED: The microphone records only while this page is open.", since)
+    vm.logged("[WM] SOUND PAGE Microphone: peak ", since)
+    level = re.search(r"\[WM\] SOUND PAGE (Microphone: peak -?\d+ dBFS, RMS -?\d+ dBFS; noise floor -?\d+ dBFS)", ANSI.sub("", vm.log[since:]))[1]
+    time.sleep(1)  # drawn by now
+    shown = screen_text(vm)
+    vm.serial(enter=False)  # the screenshot was taken in QEMU's monitor
+    assert any("Microphone: peak " in row for row in shown) and any("The microphone records only while this page is open." in row for row in shown), shown
+    since = len(vm.log)
+    vm.hmp("sendkey esc")
+    vm.serial(enter=False)
+    vm.logged("[WM] SOUND PAGE METER STOPPED", since)
+    since = len(vm.log)
+    vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+    vm.logged("SHELL RESUMED.", since)
+    gateway = vm.service_logs("audio_gw", "CAPTURE STOPPED")
+    require(gateway, f"[AUDIO] CAPTURE STARTED FOR PID {wm}")
+    assert gateway.rfind("[AUDIO] CAPTURE STOPPED") > gateway.rfind(f"[AUDIO] CAPTURE STARTED FOR PID {wm}"), gateway[-2000:]
+    vm.send("hear 1\n")
+    assert "THE MICROPHONE IS BUSY" not in vm.expect("MIND> ", timeout=120, after="hear 1\n")
+    return level
+
+
 def audio_suite(vm, wav):
     # The levels (audio.wit 1.2, 000-DRV-0057): AC'97's master at 0 dB, 1.5 dB a setting, and its record gain at 0 dB;
     # a program's plain client reads them and is refused setting them.
@@ -8742,6 +8814,63 @@ def audio_suite(vm, wav):
         require(vm.service_logs("audio_gw", "HAS NO LEVELS BADGE"), "[AUDIO] LEVELS: PID ")
     else:
         print("SKIP: the levels through a plain client (000-DRV-0057): no tests/levels_stub build (scripts/x86_fixtures.sh)", flush=True)
+    # 000-APP-0076, 000-APP-0077: the shell's volume and mic through its badged client, kept in data/sound.conf; after the
+    # notes, so that the captured audio below is at the levels as they started.
+    settings = int(levels[1])
+    # A level is the nearest setting: 50 % of 64 settings reads back as 51 % (audio_gw/src/levels.rs's arithmetic).
+    top = settings - 1
+    half = ((50 * top + 50) // 100 * 100 + top // 2) // top
+    require(vm.command("volume"), f"VOLUME 100 % (0.00 DB OF {settings} SETTINGS), NOT MUTED")
+    require_all(vm.command("volume 50"), f"VOLUME {half} % (-", f" DB OF {settings} SETTINGS), NOT MUTED; KEPT IN data/sound.conf")
+    require(vm.command("volume"), f"VOLUME {half} %")
+    require(vm.service_logs("audio_gw", f"VOLUME {half} %"), "[AUDIO] LEVELS")
+    for wrong in ("volume 101", "volume loud"):
+        require(vm.command(wrong), "ERROR: VOLUME [0-100 | MUTE | UNMUTE]")
+    require(vm.command("volume mute"), f"VOLUME {half} % (")
+    require(vm.command("volume"), "), MUTED")
+    require(vm.command("volume unmute"), "NOT MUTED")
+    require(vm.command("mic"), "MIC 0 % (0.00 DB OF 16 SETTINGS), BOOST OFF (+20.00 DB)")
+    require_all(vm.command("mic 60"), "MIC 60 % (+13.50 DB OF 16 SETTINGS), BOOST OFF", "KEPT IN data/sound.conf")
+    require(vm.command("mic boost on"), "BOOST ON (+20.00 DB)")
+    require(vm.command("mic 120"), "ERROR: MIC [0-100 | BOOST ON | BOOST OFF]")
+    require(vm.command("mic 101"), "ERROR: MIC [0-100 | BOOST ON | BOOST OFF]")
+    require_all(vm.command("cat data/sound.conf"), f"volume {half}", "muted no", "gain 60", "boost on")
+    # wm's Sound page (000-APP-0076): it reads the levels through the shell every 2 s, and ← on its first row sets the
+    # volume 5 % lower through the shell's `volume`, which the shell then reads back.
+    lower = ((half - 5) * top + 50) // 100 * 100 + top // 2
+    lower //= top
+    vm.send("wm\n")
+    vm.expect("[WM] READY", timeout=180)  # wm logs its state line at each key, not at its start
+    since = len(vm.log)
+    vm.hmp("sendkey alt-s")
+    time.sleep(.3)
+    for key in ["down"] * 4 + ["ret"]:  # to the sound page (settings::SOUND), and into it
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("SETTINGS=Sound:Volume", since)
+    time.sleep(2.5)  # the page's first reading of the levels
+    since = len(vm.log)
+    vm.hmp("sendkey left")
+    vm.serial(enter=False)
+    vm.logged(f"[WM] SOUND PAGE volume {half - 5}: VOLUME {lower} % (", since)
+    vm.logged("[WM] SOUND PAGE TONE 880 HZ, 150 MS", since)
+    # Two rows down, the microphone's gain: → sets it 5 % higher through the shell's `mic` (000-APP-0077).
+    since = len(vm.log)
+    for key in ("down", "down", "right"):
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.1)
+    vm.serial(enter=False)
+    vm.logged("[WM] SOUND PAGE mic 65: MIC 67 % (+15.00 DB OF 16 SETTINGS), BOOST ON (+20.00 DB)", since)  # setting 10 of 15
+    vm.hmp("sendkey esc")
+    time.sleep(.2)
+    since = len(vm.log)
+    vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+    vm.logged("SHELL RESUMED.", since)
+    require(vm.command("volume"), f"VOLUME {lower} %")
+    print(f"PASS: volume and mic (000-APP-0076, 000-APP-0077): set, muted and read back through the shell's badged client "
+          f"(50 % reads as {half} % of {settings} settings), 101 and loud refused, kept in data/sound.conf; wm's Sound page "
+          f"set {lower} % with ← and the gain 65 % with → (67 %, the nearest setting)", flush=True)
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
@@ -8750,9 +8879,11 @@ def audio_suite(vm, wav):
     left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
     loud = [i for i, sample in enumerate(left) if sample]
     assert loud, "AC97 produced no audio"
-    # The demo, then after a second of silence the notes.
-    gap = next(k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate)
-    demo, notes = loud[:gap], loud[gap:]
+    # The demo, then after a second of silence the notes, then wm's test tone (000-APP-0076).
+    gaps = [k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate] + [len(loud)]
+    assert len(gaps) >= 3, [round(loud[k] / rate, 2) for k in gaps[:-1]]
+    gap = gaps[0]
+    demo, notes, tone = loud[:gap], loud[gap:gaps[1]], loud[gaps[1]:gaps[2]]
     seconds = (demo[-1] - demo[0]) / rate
     assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
@@ -8765,8 +8896,16 @@ def audio_suite(vm, wav):
     assert power(first, 440) > 5 * power(first, 880) and power(second, 880) > 5 * power(second, 440)
     pause = notes[0] + int(rate * 0.22)
     assert not any(left[pause:pause + int(rate * 0.06)]), "the pause is silent"
+    # wm's tone after ← on the Sound page: 880 Hz for 150 ms, at the volume it set.
+    seconds = (tone[-1] - tone[0]) / rate
+    assert 0.12 < seconds < 0.2, seconds
+    middle = tone[0] + int(rate * 0.05)
+    assert power(middle, 880) > 5 * power(middle, 440)
+    peak = lambda part: max(abs(left[i]) for i in part)
+    below = 20 * math.log10(peak(notes[int(len(notes) * 0.7):]) / max(peak(tone), 1))
     print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
-          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them", flush=True)
+          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
+          f"wm's test tone at {lower} %, its peak {below:.1f} dB below beep's 880 Hz at 100 %", flush=True)
 
 
 SPEECH = ("открой файлы", "который час", "hello world")
@@ -8890,6 +9029,7 @@ def hda_suite(args):
 
 
 def listen_suite(vm, starts):
+    vm.wait = LOADED_WAIT
     # The network card the launchers add shares the sound card's interrupt line: both drivers hear it (issue 159);
     # audio_gw would also play without interrupts, looking at the ring while a client waits (096).
     lines = dict(re.findall(r"(Ethernet|audio \(AC97\)) IRQ=(\d+)", vm.command("devices")))
@@ -8983,15 +9123,21 @@ def listen_suite(vm, starts):
     require(heard, "SAVED THE FIRST UTTERANCE TO ram:first.wav: ")
     vm.send("hear --wav ram:first.wav\n")
     require(vm.expect("MIND> ", timeout=180, after="hear --wav ram:first.wav\n"), 'HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=')
-    # The microphone's silence: the level meter while it listens, then the noise floor rather than a bare "nothing".
+    # The microphone's silence: the level meter while it listens, then the noise floor rather than a bare "nothing"; the
+    # gain it hears at, as the shell's `mic` set it (000-APP-0077), then set back.
+    require(vm.command("mic 60"), "MIC 60 % (+13.50 DB OF 16 SETTINGS)")
     vm.send("hear 1\n")
     quiet = vm.expect("MIND> ", timeout=60, after="hear 1\n")
+    require(vm.command("mic 0"), "MIC 0 % (0.00 DB OF 16 SETTINGS)")
+    assert re.search(r"^GAIN 60 % \(\+13\.50 DB\), BOOST OFF \(\+20\.00 DB\)\r?$", quiet, re.M), quiet
     require(quiet, "LEVEL: PEAK ")
     assert re.search(r"NOTHING HEARD: (DIGITAL SILENCE FOR \d+ S|NOISE FLOOR -\d+ DBFS, PEAK -\d+ DBFS OVER \d+ S; SPEECH STARTS AT -\d+ DBFS)", quiet), quiet
     require(vm.command("hear --wav nosuch.wav"), "HEAR: CANNOT READ nosuch.wav: File(NotFound)")
     require(vm.command("hear x y"), "USAGE: HEAR [SECONDS] [--save FILE] | HEAR --wav FILE [--save FILE]")
-    # The microphone has one owner at a time (idl/audio.wit 1.1): hear cannot record while listen does.
-    pid = re.search(r"STARTED PID=(\d+) NAME=listen", vm.command("run listen 10 &"))[1]
+    # The microphone has one owner at a time (idl/audio.wit 1.1): hear cannot record while listen does. hear asks once
+    # listen holds it, for up to 60 s (000-APP-0131: on a loaded machine hear came before listen, or after its 10 s).
+    pid = re.search(r"STARTED PID=(\d+) NAME=listen", vm.command("run listen --vad 60 &"))[1]
+    require(logs(pid, "[LISTEN] LISTENING FOR SPEECH 60 S"), "[LISTEN] LISTENING FOR SPEECH 60 S")
     vm.send("hear 1\n")
     require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "HEAR: THE MICROPHONE IS BUSY (ANOTHER PROGRAM RECORDS)")
     vm.command(f"kill {pid}")
@@ -9164,6 +9310,10 @@ def tts_suite(vm, wav, asr_model=None):
         time.sleep(.25)
     spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
     assert 2500 < spoken < 9000, spoken
+    # 252-APP-0128: no voice here, so the greeting's Russian is the formant voice's, and the log says why once: no scope
+    # of models: without init's grant (252-KRN-0230), or no voice's file on a model disk that holds none.
+    why = re.findall(r"\[TTS\] THE FORMANT VOICE SPEAKS RUSSIAN: (.*?)\r?$", vm.command("dmesg -s tts", raw=True), re.M)
+    assert why and (why[-1].startswith("NO SCOPE OF models:") or why[-1].startswith("models:tts-ru-vosk-0.7/voice.bin: ")), why
     time.sleep(spoken / 1000 + 1)  # wait for DMA ring playback to finish
     vm.command(f"kill {say[1]}")
     vm.close()
@@ -9197,6 +9347,103 @@ def tts_suite(vm, wav, asr_model=None):
         print(f"ASR: {heard!r}", flush=True)
         assert sum(word in heard for word in ("разум", "корабля", "система", "работе")) >= 3, heard
     print(f"PASS: text to speech in ring 3: {spoken} ms of speech through audio_gw, voiced pitch {sum(voiced) / len(voiced):.0f} Hz" + (", recognized by ASR" if asr_model else ""), flush=True)
+
+
+def tts_neural_suite(args, disk):
+    """252-APP-0128: with a model disk holding Vosk TTS 0.7 (--tts-models-disk: voice.bin from
+    scripts/voice_dictate/convert.py, russian.dic from scripts/voice_tts/dictionary.py, both listed in its MANIFEST.json)
+    and `tts 320` in data/memory.conf, tts says a Russian sentence with the neural voice: its log says so, and the
+    speech captured from QEMU's AC97 is the sentence's length and, with --asr-model, heard by the host's recognizer.
+    Then a later phrase, and voice control's answer to «который час» from a WAV file, take the neural voice too; tts
+    logs when each first sound went out. Emulated: the voice's load and synthesis times are TCG's, not a machine's
+    (MC-12.1)."""
+    if not getattr(args, "tts_models_disk", None):
+        print("SKIP: tts's neural voice (252-APP-0128): no --tts-models-disk", flush=True)
+        return
+    import copy, json, struct, wave
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "data/memory.conf").write_text("tts 320\n")
+    (disk / "voice.wav").write_bytes(speech_wav(("который час",))[0])  # voice control's question
+    machine = copy.copy(args)
+    if gibibytes(getattr(args, "memory", None)) < 2:
+        machine.memory = "2G"
+    wav = Path(tempfile.gettempdir()) / "mind-core-ttsneural.wav"
+    vm = VM(machine, disk.relative_to(ROOT).as_posix(), audio=str(wav),
+            extra=["-drive", f"if=none,id=models,format=raw,readonly=on,file={args.tts_models_disk}", "-device", "virtio-blk-pci,drive=models"])
+    sentence, later = "Говорит разум корабля.", "Система готова к работе."
+
+    def spoken_lines(count, timeout):
+        # tts's log once it has said `count` texts: the voice's load and its synthesis, emulated, take minutes.
+        for _ in range(timeout // 5):
+            log = vm.command("dmesg -s tts", raw=True)
+            if log.count("[TTS] SPOKE") >= count or "[TTS] ERROR" in log:
+                return log
+            time.sleep(5)
+        raise AssertionError(log[-2000:])
+    try:
+        require(vm.service_logs("tts", "[TTS] FORMANT SYNTHESIZER READY"), "AUDIO=true")
+        require(vm.command("dmesg -s vfs_server", raw=True), "AS MODELS:")
+        vm.send_bytes(f"run say {sentence} &\n".encode())
+        started = time.monotonic()
+        log = spoken_lines(1, 1500)
+        took = time.monotonic() - started
+        require(log, "[TTS] THE NEURAL VOICE SPEAKS RUSSIAN: ")
+        assert "THE FORMANT VOICE SPEAKS RUSSIAN" not in log, log[-2000:]
+        spoken = int(re.search(r"\[TTS\] SPOKE \d+ BYTES, (\d+) MS", log)[1])
+        assert 800 < spoken < 4000, spoken
+        time.sleep(spoken / 1000 + 2)  # the DMA ring's playback
+        # A later phrase: the voice is loaded, so its first sound waits for its synthesis alone.
+        vm.send_bytes(f"run say {later} &\n".encode())
+        log = spoken_lines(2, 1500)
+        # Voice control's answer (the time in words) through tts, as any client's.
+        on = vm.command("voice on --wav voice.wav")
+        require(on, "VOICE CONTROL ON")
+        pid = re.search(r"STARTED PID=(\d+) NAME=voice BACKGROUND", on)[1]
+        voice = ""
+        for _ in range(240):
+            voice += vm.command(f"logs {pid}")
+            if "[VOICE] READY" in voice:
+                break
+            time.sleep(.5)
+        require(voice, "[VOICE] READY")
+        vm.send("voice listen\n")
+        answer = vm.expect(" минут", timeout=1500)  # voice reports once it has heard; tts may still synthesize the answer
+        require(answer, 'VOICE: "который час" (')
+        log = spoken_lines(3, 1500)
+        firsts = [int(ms) for ms in re.findall(r"THE NEURAL VOICE'S FIRST SOUND AFTER (\d+) MS", log)]
+        assert len(firsts) == 3 and "THE FORMANT VOICE SPEAKS RUSSIAN" not in log and "THE NEURAL VOICE FAILED" not in log, log[-3000:]
+        lengths = [int(ms) for ms in re.findall(r"\[TTS\] SPOKE \d+ BYTES, (\d+) MS", log)]
+        time.sleep(lengths[-1] / 1000 + 2)
+        require(vm.command("voice off"), "VOICE CONTROL OFF")
+    finally:
+        vm.close()
+    with wave.open(str(wav)) as audio:
+        frames, rate = audio.readframes(audio.getnframes()), audio.getframerate()
+    left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
+    loud = [i for i, sample in enumerate(left) if abs(sample) > 300]
+    assert loud, "the neural voice gave no audio"
+    # The first sentence: the sound up to the first second of quiet, which the later ones come after.
+    gaps = [k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate] + [len(loud)]
+    phrases, loud = len(gaps), loud[:gaps[0]]
+    seconds = (loud[-1] - loud[0]) / rate
+    assert abs(seconds * 1000 - spoken) < 1000, (seconds, spoken)
+    heard = ""
+    if args.asr_model:
+        import vosk
+        vosk.SetLogLevel(-1)
+        step = rate / 16000
+        first = left[max(0, loud[0] - rate // 2):loud[-1] + rate // 2]
+        mono = [first[int(i * step)] for i in range(int(len(first) / step))]
+        recognizer = vosk.KaldiRecognizer(vosk.Model(args.asr_model), 16000)
+        recognizer.AcceptWaveform(struct.pack(f"<{len(mono)}h", *mono))
+        heard = json.loads(recognizer.FinalResult())["text"]
+        print(f"ASR: {heard!r}", flush=True)
+        assert sum(word in heard for word in ("говорит", "разум", "корабля")) >= 2, heard
+    ready = re.search(r"READY IN (\d+) MS", log)[1]
+    print(f"PASS: tts's neural voice (252-APP-0128): {sentence} said with Vosk TTS 0.7 from the model disk, {spoken} ms of speech; "
+          f"the voice ready in {ready} ms and the whole in {took:.0f} s of emulation (TCG, not a machine's)" + (f"; heard as {heard!r}" if heard else "") +
+          f"; the first sound after {firsts[0]} ms, the load included, then {firsts[1]} ms for {later} ({lengths[1]} ms) and {firsts[2]} ms for "
+          f"voice control's answer ({lengths[2]} ms); {phrases} stretches of sound captured", flush=True)
 
 
 def large_bss(path):
@@ -9298,6 +9545,10 @@ def one_network_cards_check(args, disk):
         cards = vm.command("netcheck cards")
         require(cards, "NETCHECK CARD 0 Wired PRESENT UP OFF")
         require(cards, "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED DEFAULT")
+        # The shell's `ip` names it too (550-APP-0129), after its kind; card 1 has no OFF.
+        shown = vm.command("ip")
+        assert re.search(r"^CARD 0 .* WIRED[A-Z ]* OFF\s*$", shown, re.M), shown
+        assert not re.search(r"^CARD 1 .* OFF\s*$", shown, re.M), shown
         # A grant may not take a card out of use; the refusal names its badge.
         require(vm.command("netcheck withdraw:2"), "NETCHECK withdraw:2 Denied")
         require(vm.command("dmesg -s netstack"), "WITHDRAW REFUSED FOR BADGE")
@@ -9330,6 +9581,8 @@ def one_network_cards_check(args, disk):
         else:
             raise AssertionError(("no lease again on card 0", vm.command("dmesg -s netstack")[-3000:]))
         require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] CARDS OUT OF USE FROM THE POLICY: NONE")
+        shown = vm.command("ip")
+        assert not re.search(r"^CARD \d .* OFF\s*$", shown, re.M), shown
         network_sends(0)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
@@ -13395,14 +13648,19 @@ def wm_suite(vm):
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
             changed += 1
         keys("tab", text="SETTINGS=Background")
-        # The keyboard page is entered (000-APP-0048, keyboard_from_settings); the sound page is to read (the screen page
+        # The keyboard page is entered (000-APP-0048, keyboard_from_settings); the sound page too (000-APP-0076): with no
+        # sound card here, it shows the shell's line saying so (the audio suite sets a level from it; the screen page
         # sets the scale, 000-APP-0061, scale_from_settings).
         keys("down", text="SETTINGS=Keyboard")
         keys("ret", text="SETTINGS=Keyboard:Layout")
         keys("tab", text="SETTINGS=Keyboard")
         keys(*["down"] * 3, text="SETTINGS=Sound")
-        keys("ret")
-        screen_has("Sound: a page to read; nothing is set here yet")
+        keys("ret", text="SETTINGS=Sound:Volume")
+        time.sleep(2.5)  # the page's first reading of the levels
+        screen_has("NO AUDIO DEVICE")
+        screen_has("No microphone to read.")  # the meter (000-APP-0077): no capture without a device
+        until("[WM] SOUND PAGE METER: No microphone to read.")
+        keys("tab", text="SETTINGS=Sound")
         # The network page (550-APP-0033) names what each row opens; Enter on Wi-Fi closes Settings and starts wifi in a
         # window, which says there is no station here.
         keys("up", text="SETTINGS=Network")
@@ -15172,6 +15430,7 @@ def main():
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
+    parser.add_argument("--tts-models-disk", help="a model disk holding tts-ru-vosk-0.7/voice.bin and russian.dic in its MANIFEST.json, for the ttsneural suite (252-APP-0128)")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
     global IMAGE, BOOT_EFI, BOOT_DRIVE, BOOT_DRIVER
@@ -15415,6 +15674,11 @@ def main():
                 continue
             if suite == "devicetree":
                 devicetree_suite(args, disk)
+                continue
+            if suite == "audio":  # the levels across a reboot, on machines of their own first (000-APP-0076, 000-APP-0077)
+                sound_kept_check(args, disk)
+            if suite == "ttsneural":  # 252-APP-0128: with a model disk of its own; named only, in no gate group
+                tts_neural_suite(args, disk)
                 continue
             if suite == "efivar":  # aarch64 (AAVMF); on x86 the boot suite runs it
                 efivar_check(args, disk)

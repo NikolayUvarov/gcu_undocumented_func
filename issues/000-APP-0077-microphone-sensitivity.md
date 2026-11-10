@@ -1,6 +1,6 @@
 # 000-APP-0077 — The microphone's sensitivity: `mic` in the shell and on `wm`'s Sound page
 
-**Type:** tools (`shell`, `wm`, `hear`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer, 2026-10-30: "the microphone in `listen` is very quiet on playback; the sound's and the microphone's levels are needed") · **Status:** open (planned; waits for DRV and KRN) · **Blocked by:** `DRV`: the levels in `audio.wit` ([requests-DRV.md](requests-DRV.md), "The output volume and the microphone's sensitivity in `audio.wit`"); `KRN`: the shell's right to change them ([requests-KRN.md](requests-KRN.md), "The shell's audio client that may change the levels") · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.4, MC-11.5
+**Type:** tools (`shell`, `wm`, `hear`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer, 2026-10-30: "the microphone in `listen` is very quiet on playback; the sound's and the microphone's levels are needed") · **Status:** in progress (done in QEMU on x86; the MacBook Pro's check left, 2026-11-10) · **Blocked by:** — (`audio.wit` 1.2's levels, 000-DRV-0057, and the shell's badged client, 000-KRN-0118, are in `main`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.4, MC-11.5
 
 **Recorded by:** the tools track (APP), 2026-10-14, at the maintainer's request: "the output volume and the microphone's sensitivity need settings". The output's part is [000-APP-0076](000-APP-0076-output-volume.md).
 
@@ -46,6 +46,37 @@ Once `audio.wit` has the capture's gain and the shell may change it:
   - speech at arm's length reaches `hear`'s speech threshold at a gain the page sets;
   - `hear`'s level rises with `mic`.
 
+## Progress (2026-11-10): done in QEMU
+
+- **The shell's `mic`:**
+  - `mic`, `mic <0–100>`, `mic boost on` and `mic boost off`, beside `volume` (000-APP-0076), in the same files;
+  - the line names the gain, its dB and the boost, as `MIC 60 % (+13.50 DB OF 16 SETTINGS), BOOST OFF (+20.00 DB)`, or `NO BOOST`;
+  - a boost the device does not have is refused.
+- **Kept** in `data/sound.conf` (`gain`, `boost`) and set again at the shell's start.
+- **`wm`'s Sound page:**
+  - a slider for the gain and a box for the boost;
+  - a live meter while the page shows: each half second's peak and RMS and the noise floor in dBFS, as `hear` measures them, through `wm`'s own audio client (`wm/src/meter.rs`);
+  - under it, `The microphone records only while this page is open.` (MC-11.4). The capture stops when the page goes, and when `wm` ends;
+  - another program's recording is waited for, and no device is named.
+- **`hear`** names the gain it hears at, read through its plain client: `GAIN 60 % (+13.50 DB), BOOST OFF (+20.00 DB)`.
+- **Authority:** only the shell's client may change the gain. A program that records, `wm` and `hear` among them, reads the levels and is refused setting them.
+- **Docs:** `docs/tools` and `docs/voice` (EN, RU).
+- **Tests** (QEMU x86, 4 CPUs, TCG, this track's container, 2026-11-10):
+  - **host:** `tests/shell_host.rs` (the microphone's lines in `data/sound.conf`, a damaged file) and `tests/wm_host.rs` (the page with its meter);
+  - **the `audio` suite, AC'97:**
+    - `mic 60` reads back as 60 % (+13.50 dB of 16 settings), the boost on and off, `mic 120` and `mic 101` refused;
+    - the Sound page's → set 65 %, which the shell read back as 67 %, the nearest setting;
+    - the drivers track's checks of the gain at the device, and a plain client refused, in the same run.
+  - **After a reboot,** on AC'97 and on HD Audio: `mic 80` set again from the file, read as 80 %.
+  - **The meter,** on an AC'97 machine with QEMU's silent input:
+    - it read -90 dBFS, digital silence, on the page and in the log;
+    - `audio_gw` started the capture for `wm` and stopped it when Settings closed;
+    - `hear` then recorded, so the microphone was free.
+  - **The `wm` suite,** with no device: `No microphone to read.`
+  - **The `listen` suite:** after `mic 60`, `hear 1`'s report names the gain.
+- **aarch64:** the image builds with these programs, and its `normal` and `shell` suites pass on QEMU (4 CPUs, TCG). QEMU's aarch64 machine has no sound device, so the levels are not checked there.
+- **Left:** the MacBook Pro: speech at arm's length reaching `hear`'s threshold at a gain the page sets, and `hear`'s level rising with `mic`.
+
 ## Related
 
-[000-APP-0076](000-APP-0076-output-volume.md) (the volume), [000-APP-0053](000-APP-0053-hear-shows-what-it-heard.md) (`hear`'s levels), [000-APP-0048](000-APP-0048-wm-settings.md) (`wm`'s Settings), [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md) (HDA capture), [551](551-sound-on-pcs.md) (sound on PCs).
+[000-APP-0076](000-APP-0076-output-volume.md) (the volume), [000-APP-0053](000-APP-0053-hear-shows-what-it-heard.md) (`hear`'s levels), [000-APP-0048](../issues-done/000-APP-0048-wm-settings.done) (`wm`'s Settings), [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md) (HDA capture), [551](551-sound-on-pcs.md) (sound on PCs).

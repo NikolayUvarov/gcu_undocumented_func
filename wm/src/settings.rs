@@ -34,6 +34,46 @@ pub const SCREEN: usize = 5;
 pub const SCREEN_ROWS: [&str; 3] = ["Scale", "Pointer", "Colour"];
 /// The network page (550-APP-0033) and its rows: a name, what Enter starts, and what it is for.
 pub const NETWORK: usize = 3;
+/// The sound page (000-APP-0076, 000-APP-0077) and its rows: the levels, set at once through the shell's `volume` and
+/// `mic`, which keep them in data/sound.conf.
+pub const SOUND: usize = 4;
+pub const SOUND_ROWS: [&str; 4] = ["Volume", "Muted", "Microphone", "Boost"];
+/// A slider's step, in per cent.
+pub const SOUND_STEP: u8 = 5;
+
+/// The levels as the shell's `volume` and `mic` print them: per cent, mute and boost (None: the device has none), and
+/// their two lines.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sound { pub volume: u8, pub muted: bool, pub gain: u8, pub boost: Option<bool>, pub lines: [String; 2] }
+
+// `text` in lines of at most `width` characters, broken at spaces.
+fn wrapped(text: &str, width: usize) -> Vec<String> {
+    let (mut lines, mut line) = (Vec::new(), String::new());
+    for word in text.split(' ') {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width { lines.push(core::mem::take(&mut line)); }
+        if !line.is_empty() { line.push(' '); }
+        line.push_str(word);
+    }
+    if !line.is_empty() { lines.push(line); }
+    lines
+}
+
+/// What the sound page says of its meter: the microphone is a sensor of the user's surroundings (MC-11.4).
+pub const METER_NOTE: &str = "The microphone records only while this page is open.";
+
+/// The meter's line: half a second's peak and RMS and the noise floor, in dBFS as `hear` gives them (000-APP-0053).
+pub fn meter_line(peak: i32, rms: i32, floor: i32) -> String {
+    format!("Microphone: peak {} dBFS, RMS {} dBFS; noise floor {} dBFS", peak, rms, floor)
+}
+
+/// The levels from `volume`'s and `mic`'s lines (`VOLUME 51 % (…), NOT MUTED`, `MIC 60 % (…), BOOST OFF (+20.00 DB)`);
+/// None for lines that are not theirs (an error's).
+pub fn sound(volume: &str, mic: &str) -> Option<Sound> {
+    let percent = |line: &str, word: &str| line.strip_prefix(word)?.split_whitespace().next()?.parse::<u8>().ok().filter(|&p| p <= 100);
+    let (v, g) = (percent(volume, "VOLUME ")?, percent(mic, "MIC ")?);
+    let boost = if mic.contains("NO BOOST") { None } else if mic.contains("BOOST ON") { Some(true) } else if mic.contains("BOOST OFF") { Some(false) } else { return None };
+    Some(Sound { volume: v, muted: volume.ends_with("), MUTED") || volume.contains("), MUTED;"), gain: g, boost, lines: [String::from(volume), String::from(mic)] })
+}
 pub const NETWORK_ROWS: [(&str, &str, &str); 6] = [
     ("Wi-Fi", "wifi", "the networks around; join one"),
     ("Country", "wifi --countries", "the radio's country, its channels"),
@@ -68,6 +108,11 @@ pub struct Settings {
     /// On the keyboard page: the layout and switch as the shell last answered (indices in `LAYOUTS` and `SWITCHES`;
     /// None: not read), and its row.
     pub keymap: Option<(usize, usize)>, pub key_row: usize,
+    /// On the sound page: the levels as the shell last answered (None: not read), the shell's line when it gave none
+    /// (no device), and its row.
+    pub sound: Option<Sound>, pub sound_note: Option<String>, pub sound_row: usize,
+    /// On the sound page: the microphone's meter while wm records for it, or why it does not (000-APP-0077); None: off.
+    pub meter: Option<String>,
     /// The picture's file chosen by browsing (000-APP-0072), and how a directory is read: its entries (name, directory).
     pub browser: Option<Browser>, pub lister: Lister,
     /// On the network page: the Wi-Fi station's country as `wm` last read it through its client (550-APP-0082); None:
@@ -154,7 +199,7 @@ impl Browser {
 
 /// What a key or a click did.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, SetZone { west: bool, minutes: u32 }, SetKeymap { layout: usize, switch: usize }, Run(String), SetHostname(String) }
+pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, SetZone { west: bool, minutes: u32 }, SetKeymap { layout: usize, switch: usize }, Run(String), SetHostname(String), Level(String) }
 
 /// A zone's name: `UTC`, `UTC+03:00`, `UTC-05:30`.
 pub fn zone_name(minutes: i32) -> String {
@@ -180,7 +225,7 @@ impl Settings {
         let mut file = InputLine::new();
         if let Some(name) = config.picture.file() { for ch in name.chars() { file.insert(ch); } }
         Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, zone: 0, message: None, shell: false,
-               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, browser: None, lister: no_files, country: None, machine: None, hostname: InputLine::new() }
+               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, keymap: None, key_row: 0, sound: None, sound_note: None, sound_row: 0, meter: None, browser: None, lister: no_files, country: None, machine: None, hostname: InputLine::new() }
     }
 
     /// The grid became `screen` cells at `scale` (000-APP-0061): the window is centred on it anew.
@@ -338,7 +383,7 @@ impl Settings {
     pub fn key(&mut self, key: Key, config: &Config) -> Outcome {
         if self.browser.is_some() { return self.browse_key(key, config); }
         if key.code() == Code::Esc || (key.alt() && key.letter() == Some('s')) { return Outcome::Close; }
-        let enterable = [0, KEYBOARD, DATE, NETWORK, SCREEN].contains(&self.page);
+        let enterable = [0, KEYBOARD, DATE, NETWORK, SOUND, SCREEN].contains(&self.page);
         if key.code() == Code::Tab { self.on_pages = !self.on_pages || !enterable; return Outcome::Stay; }
         if self.on_pages {
             match key.code() {
@@ -384,6 +429,17 @@ impl Settings {
                 _ => {}
             }
             return Outcome::Stay;
+        }
+        if self.page == SOUND {
+            let step = match key.code() {
+                Code::Up => { (self.sound_row, self.message) = (self.sound_row.saturating_sub(1), None); return Outcome::Stay }
+                Code::Down => { (self.sound_row, self.message) = ((self.sound_row + 1).min(SOUND_ROWS.len() - 1), None); return Outcome::Stay }
+                Code::Left => -1,
+                Code::Right | Code::Enter => 1,
+                Code::Char if key.char() == Some(' ') => 1,
+                _ => return Outcome::Stay,
+            };
+            return self.sound_step(self.sound_row, step);
         }
         if self.page == SCREEN {
             let step = match key.code() {
@@ -518,6 +574,32 @@ impl Settings {
     }
 
     // Enter or a click on a page that is only to read: it says so.
+    // Row `row` of the sound page stepped (a slider by SOUND_STEP, a box ticked over): the shell's line that sets it.
+    fn sound_step(&mut self, row: usize, step: i32) -> Outcome {
+        if !self.shell { self.message = Some(String::from("Setting the levels needs the shell's commands, which wm does not hold")); return Outcome::Stay; }
+        let Some(sound) = &self.sound else { self.message = Some(String::from("The levels cannot be read through the shell")); return Outcome::Stay };
+        let slide = |now: u8| if step < 0 { now.saturating_sub(SOUND_STEP) } else { now.saturating_add(SOUND_STEP).min(100) };
+        let line = match row {
+            0 => format!("volume {}", slide(sound.volume)),
+            1 => String::from(if sound.muted { "volume unmute" } else { "volume mute" }),
+            2 => format!("mic {}", slide(sound.gain)),
+            _ => match sound.boost {
+                Some(on) => String::from(if on { "mic boost off" } else { "mic boost on" }),
+                None => { self.message = Some(String::from("This microphone has no boost")); return Outcome::Stay; }
+            },
+        };
+        self.message = None;
+        Outcome::Level(line)
+    }
+
+    /// The sound page's rows: each with its value.
+    pub fn sound_rows(&self) -> Vec<(&'static str, String)> {
+        let Some(s) = &self.sound else { return SOUND_ROWS.iter().map(|&r| (r, String::from("?"))).collect() };
+        let tick = |on: bool| String::from(if on { "[x]" } else { "[ ]" });
+        Vec::from([(SOUND_ROWS[0], format!("< {:>3} % >", s.volume)), (SOUND_ROWS[1], tick(s.muted)), (SOUND_ROWS[2], format!("< {:>3} % >", s.gain)),
+                   (SOUND_ROWS[3], s.boost.map_or(String::from("none on this device"), tick))])
+    }
+
     fn to_read(&mut self) {
         self.message = Some(format!("{}: a page to read; nothing is set here yet", PAGES[self.page]));
     }
@@ -582,7 +664,12 @@ impl Settings {
             if self.change(config, FILE, 0).is_none() { return self.take_file(config); }
         }
         // A page to read says so.
-        if ![0, KEYBOARD, DATE, NETWORK, SCREEN].contains(&self.page) { self.to_read(); }
+        if ![0, KEYBOARD, DATE, NETWORK, SOUND, SCREEN].contains(&self.page) { self.to_read(); }
+        // The sound page: a click on a row chooses it and steps it on.
+        if self.page == SOUND && (1..=SOUND_ROWS.len()).contains(&cy) {
+            (self.sound_row, self.on_pages) = (cy - 1, false);
+            return self.sound_step(self.sound_row, 1);
+        }
         // The keyboard page: a click on a row chooses it and steps it on.
         if self.page == KEYBOARD && (1..=KEYBOARD_ROWS.len()).contains(&cy) {
             (self.key_row, self.on_pages) = (cy - 1, false);
@@ -665,6 +752,24 @@ impl Settings {
                 if chosen && i == FILE { cursor = Some((x + 12 + self.file.cursor_chars(), inner.y + 1 + i)); }
             }
             if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + ROWS.len(), message, w, theme.accent); }
+        } else if self.page == SOUND {
+            grid.text_max(x, inner.y, "The levels, set at once through the shell (volume, mic):", w, theme.dialog);
+            for (i, (name, value)) in self.sound_rows().iter().enumerate() {
+                let chosen = !self.on_pages && self.sound_row == i;
+                grid.text_padded(x, inner.y + 1 + i, &format!("{:<11} {}", name, value), w, if chosen { theme.selected } else { theme.dialog });
+            }
+            let below = inner.y + 2 + SOUND_ROWS.len();
+            let none = self.sound_note.clone().unwrap_or_else(|| String::from("The shell has not answered for the levels yet."));
+            let lines = self.sound.as_ref().map_or([none, String::from("Kept in data/sound.conf, set again at the shell's start.")], |s| [s.lines[0].clone(), s.lines[1].clone()]);
+            for (i, line) in lines.iter().enumerate() { grid.text_max(x, below + i, line, w, theme.dialog); }
+            let mut next = below + lines.len() + 1;
+            if let Some(meter) = &self.meter {
+                grid.text_max(x, next, meter, w, theme.dialog);
+                grid.text_max(x, next + 1, METER_NOTE, w, theme.dialog);
+                next += 3;
+            }
+            // The shell's whole line, as it says where the levels are kept.
+            if let Some(message) = &self.message { for (i, line) in wrapped(message, w).iter().enumerate() { grid.text_max(x, next + i, line, w, theme.accent); } }
         } else if self.page == SCREEN {
             let (cw, ch) = crate::scale::cell(self.scale);
             let (cols, rows) = crate::scale::cells(self.scale, self.pixels);
@@ -734,7 +839,8 @@ impl Settings {
             if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + lines.len(), message, w, theme.accent); }
         }
         let help = if self.browser.is_some() { "↑↓: choose · Enter: open it or take the picture · Backspace: up · Esc: back" }
-            else if self.on_pages && ![0, KEYBOARD, DATE, NETWORK, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
+            else if self.on_pages && ![0, KEYBOARD, DATE, NETWORK, SOUND, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
+            else if !self.on_pages && self.page == SOUND { "↑↓: rows · ← →: the level by 5 % · Enter Space: tick, at once through the shell · Tab: pages · Esc: close" }
             else if !self.on_pages && self.page == KEYBOARD { "↑↓: rows · ← → Enter Space: change, at once through the shell · Tab: pages · Esc: close" }
             else if !self.on_pages && self.page == NETWORK && self.net_row == NAME_ROW { "type the machine's name · Enter: set it, through the shell · ↑: rows · Esc: close" }
             else if !self.on_pages && self.page == NETWORK { "↑↓: rows · Enter: open it in a window · Tab: pages · Esc: close" }
@@ -747,7 +853,7 @@ impl Settings {
 
     /// The pages to read: a first line that says so, then where the setting is made today.
     pub fn page_text(&self) -> Vec<String> {
-        let lines: Vec<&str> = Vec::from(["To read: the sound has no volume to set yet.", "audio.wit has none (asked of the drivers track for this page);", "beep and say play at the level they make."]);
+        let lines: Vec<&str> = Vec::from(["To read: nothing is set on this page yet."]);
         lines.iter().map(|s| String::from(*s)).collect()
     }
 }

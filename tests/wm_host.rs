@@ -1558,7 +1558,7 @@ fn every_page_and_row_of_settings_reacts() {
         let mut s = Settings::new(&config, (160, 50));
         for _ in 0..page { s.key(key(KEY_DOWN), &config); }
         assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
-        if page == 0 || page == DATE || page == settings::SCREEN || page == settings::NETWORK || page == settings::KEYBOARD { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
+        if page == 0 || page == DATE || page == settings::SCREEN || page == settings::NETWORK || page == settings::KEYBOARD || page == settings::SOUND { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
         assert!(s.on_pages && s.message.as_deref().is_some_and(|m| m.contains("a page to read")), "{}: {:?}", PAGES[page], s.message);
         assert!(s.page_text()[0].starts_with("To read:"), "{:?}", s.page_text());
         assert!(screen(&s).contains(&format!("{}: a page to read", PAGES[page])));
@@ -1597,6 +1597,49 @@ fn every_page_and_row_of_settings_reacts() {
         assert_eq!(s.click(inner.x + 30, inner.y + 1, &config), Outcome::SetKeymap { layout: 1, switch: 0 });
         assert_eq!(s.key_row, 0);
         for line in screen(&s).lines() { assert!(!line.contains("To read:"), "{}", line); }
+    }
+    // The sound page (000-APP-0076, 000-APP-0077): the levels the shell's `volume` and `mic` print, a slider stepped by
+    // 5 % and a box ticked over, each set at once through the shell; without its answer or a boost, a line says why.
+    {
+        use settings::{sound, Outcome, SOUND};
+        assert_eq!(sound("VOLUME 51 % (-46.50 DB OF 64 SETTINGS), NOT MUTED", "MIC 60 % (+13.50 DB OF 16 SETTINGS), BOOST OFF (+20.00 DB)").map(|s| (s.volume, s.muted, s.gain, s.boost)),
+                   Some((51, false, 60, Some(false))));
+        assert_eq!(sound("VOLUME 0 % (-94.50 DB OF 64 SETTINGS), MUTED", "MIC 0 % (0.00 DB OF 16 SETTINGS), NO BOOST").map(|s| (s.muted, s.boost)), Some((true, None)));
+        assert_eq!(sound("VOLUME 51 % (-46.50 DB OF 64 SETTINGS), MUTED; KEPT IN data/sound.conf", "MIC 5 % (0.00 DB OF 16 SETTINGS), BOOST ON (+20.00 DB)").map(|s| (s.muted, s.boost)), Some((true, Some(true))));
+        assert_eq!(sound("ERROR: NO AUDIO DEVICE", "ERROR: NO AUDIO DEVICE"), None);
+        let mut s = Settings::new(&config, (160, 50));
+        for _ in 0..SOUND { s.key(key(KEY_DOWN), &config); }
+        s.key(key(KEY_ENTER), &config);
+        assert!(!s.on_pages && s.page == SOUND);
+        assert!(screen(&s).contains("Volume      ?") && screen(&s).contains("The shell has not answered for the levels yet."), "not read yet");
+        assert_eq!(s.key(key(KEY_RIGHT), &config), Outcome::Stay);
+        assert_eq!(s.message.as_deref(), Some("Setting the levels needs the shell's commands, which wm does not hold"));
+        s.shell = true;
+        s.key(key(KEY_RIGHT), &config);
+        assert_eq!(s.message.as_deref(), Some("The levels cannot be read through the shell"));
+        s.sound = sound("VOLUME 98 % (-1.50 DB OF 64 SETTINGS), NOT MUTED", "MIC 3 % (0.00 DB OF 16 SETTINGS), NO BOOST");
+        assert!(screen(&s).contains("Volume      <  98 % >") && screen(&s).contains("Boost       none on this device"), "{}", screen(&s));
+        assert_eq!(s.key(key(KEY_RIGHT), &config), Outcome::Level(String::from("volume 100")), "up by 5 %, at most 100");
+        assert_eq!(s.key(key(KEY_LEFT), &config), Outcome::Level(String::from("volume 93")));
+        s.key(key(KEY_DOWN), &config);
+        assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Level(String::from("volume mute")));
+        s.key(key(KEY_DOWN), &config);
+        assert_eq!(s.key(key(KEY_LEFT), &config), Outcome::Level(String::from("mic 0")), "down by 5 %, at least 0");
+        s.key(key(KEY_DOWN), &config);
+        assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+        assert_eq!(s.message.as_deref(), Some("This microphone has no boost"));
+        let inner = s.area().inner();
+        assert_eq!(s.click(inner.x + 30, inner.y + 3, &config), Outcome::Level(String::from("mic 8")), "a click on a slider steps it up");
+        assert_eq!(s.sound_row, 2);
+        for line in screen(&s).lines() { assert!(!line.contains("To read:"), "{}", line); }
+        // The microphone's meter (000-APP-0077): its level and that it records only while the page is open.
+        assert!(!screen(&s).contains(settings::METER_NOTE), "no meter, no note");
+        assert_eq!(settings::meter_line(-41, -52, -60), "Microphone: peak -41 dBFS, RMS -52 dBFS; noise floor -60 dBFS");
+        s.meter = Some(settings::meter_line(-41, -52, -60));
+        s.message = Some(String::from("VOLUME 46 % (-25.50 DB OF 64 SETTINGS), NOT MUTED; KEPT IN data/sound.conf"));
+        let shown = screen(&s);
+        assert!(shown.contains("Microphone: peak -41 dBFS, RMS -52 dBFS; noise floor -60 dBFS") && shown.contains(settings::METER_NOTE), "{}", shown);
+        assert!(shown.contains("NOT MUTED; KEPT IN ") && shown.contains("│ data/sound.conf "), "the whole message, wrapped, below the meter: {}", shown);
     }
     // The network page (550-APP-0033): each row starts what it opens, by Enter and by a click; ← goes back to the pages.
     for (row, (name, command, what)) in settings::NETWORK_ROWS.iter().enumerate() {
