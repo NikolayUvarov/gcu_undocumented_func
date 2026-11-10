@@ -1,6 +1,6 @@
 # Serial ports through Effector: the console over RS-232 and RS-485, and MIND Link to MIND Core
 
-**Version:** 0.1 (2026-11-08), a proposal · **Asked by:** the maintainer, 2026-11-08 · **Written by:** the kernel session (`KRN`, `PRT`) · **Owners of the parts:** `EFF` (section 4: hands it over to the Effector project; section 5.2), `LNK` (section 5.1), the kernel session (section 5.3) · **Constitution:** MC-7.1, MC-7.4, MC-7.5, MC-7.6, MC-12.1, MC-12.3, MC-12.4 · **Russian version:** [remote-serial_RU.md](remote-serial_RU.md) (kept in sync; the English text is the reference)
+**Version:** 0.2 (2026-11-10), a proposal; 0.1 of 2026-11-08 · **0.2:** link mode refuses the signal controls (LNK, agreed with KRN); effector485's part of 5.1 is made (800-LNK-0039); section 4 is the Effector project's task 108 · **Asked by:** the maintainer, 2026-11-08 · **Written by:** the kernel session (`KRN`, `PRT`) · **Owners of the parts:** `EFF` (section 4: hands it over to the Effector project; section 5.2), `LNK` (section 5.1), the kernel session (section 5.3) · **Constitution:** MC-7.1, MC-7.4, MC-7.5, MC-7.6, MC-12.1, MC-12.3, MC-12.4 · **Russian version:** [remote-serial_RU.md](remote-serial_RU.md) (kept in sync; the English text is the reference)
 
 **Nothing on this page exists yet.** It says what is to be built and by whom (MC-12.3). Each part's owner turns it into tasks and may change the design. A change of what this page calls decided goes back to the maintainer.
 
@@ -132,7 +132,7 @@ This is the part `EFF` hands over to the Effector project. The server's agents a
 ### 4.4 The link mode
 
 - **One implementation of the protocol stays,** `LNK`'s. The agent adds no second one.
-  - **Proposed:** the agent runs `effector485 daemon <port> --baud … --addresses … --listen 127.0.0.1:<its port> --key-file <a file only the agent's user reads>` as a supervised child, one for each port in `link` mode, and calls its API ([effector485.md](link/effector485.md), "The API").
+  - **Proposed:** the agent runs `effector485 daemon <port> --supervised --baud … --addresses … --listen 127.0.0.1:<its port> --key-file <a file only the agent's user reads>` as a supervised child, one for each port in `link` mode, and calls its API ([effector485.md](link/effector485.md), "The API").
   - effector485 is built for Linux and Windows already (`tools/mindlink/build.sh`).
   - An agent written in Rust could link the `mindlink` crate instead (MIT OR Apache-2.0).
 - **What the server sees:** each machine on the cable as an endpoint of its own.
@@ -147,7 +147,11 @@ This is the part `EFF` hands over to the Effector project. The server's agents a
 - **Leases.** Effector's lease on such an endpoint is effector485's lease on that machine, with effector485's rules:
   - the work of others waits in the queue, saying for whom;
   - reads pass.
-- **The console in `link` mode** is the machine's channel 1 through effector485. The agent offers it as a console session with the API of section 4.3. That needs a console stream in effector485's API (section 5.1).
+- **The console in `link` mode** is the machine's channel 1 through effector485. The agent offers it as a console session with the API of section 4.3, over effector485's console stream (API 1.1, section 5.1).
+- **The signal controls are refused on a port in `link` mode** (0.2, LNK, agreed with KRN on 2026-11-09):
+  - a break, DTR and RTS set or pulsed, and any change of the line's settings are answered `denied`, with the reason "the link's frames share this line";
+  - why: a break or a changed rate cuts the link's frames under way, and a converter that drives RS-485's direction from RTS stops sending;
+  - the console session's output and input still pass, as channel 1.
 - **Two locks:**
   - **On the host:** the agent refuses a kind its owner's policy does not list (`denied`, with the reason), before effector485 sees it.
   - **On the machine:** MIND Core's own `link.conf` (`run`, `dev`) still decides what runs there.
@@ -198,7 +202,7 @@ This is the part `EFF` hands over to the Effector project. The server's agents a
 - **Asked already (2026-11-08, [requests-LNK.md](../issues/requests-LNK.md)):** `link` on a board's console UART, with:
   - the shell's console as channel 1 ([800-LNK-0019](../issues/800-LNK-0019-the-link-as-the-owners-console.md));
   - the boot's first lines readable before the link answers.
-- **effector485 as the agent's engine** (asked with this page):
+- **effector485 as the agent's engine** (asked with this page; in `main` through [800-LNK-0039](../issues/800-LNK-0039-effector485-as-the-effector-agents-engine.md), API 1.1: `GET /api/v1/version`, `GET /api/v1/console?agent_id=&from=`, `POST /api/v1/console/input` with `seq`, `daemon --supervised`):
   - **A console stream for each machine** in its API: channel 1's output with byte offsets from a cursor, and input with sequence numbers. The agent and effector485's own page can both show it.
   - **Bytes outside frames**, the boot's lines, delivered as console text with offsets.
   - **A supervised mode:**
@@ -215,7 +219,7 @@ This is the part `EFF` hands over to the Effector project. The server's agents a
 
 ### 5.2 `EFF`: the hand-over, and MIND Core's own agent
 
-- **To the Effector project:** section 4, as a task of its own (beside its task 81 for the MIND Core agent).
+- **To the Effector project:** section 4, as a task of its own (beside its task 81 for the MIND Core agent). Handed over on 2026-11-10 as its `issues/108-serial-ports-console-and-mind-link.task.md` (sst-test-deploy f5eae2c), with 0.2's link-mode refusals; EFF's record is [100000-EFF-0026](../issues/100000-EFF-0026-serial-ports-through-effector.md).
 - **Back from it:**
   - the names it chose, and how streams travel between the server and the agent;
   - the agent's revision;
