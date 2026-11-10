@@ -8710,7 +8710,7 @@ def audio_suite(vm, wav):
     lower = ((half - 5) * top + 50) // 100 * 100 + top // 2
     lower //= top
     vm.send("wm\n")
-    vm.expect("[WM] MODE=", timeout=180)
+    vm.expect("[WM] READY", timeout=180)  # wm logs its state line at each key, not at its start
     since = len(vm.log)
     vm.hmp("sendkey alt-s")
     time.sleep(.3)
