@@ -41,7 +41,8 @@
   | the wake IPI sent whatever `woken` says (a shorter run) | 3 of 5 past 41 | 1 of 10 at 50.7 |
   | the compositor's hold (000-KRN-0086, 0186) off, two runs | 25 between 10.1 and 12.1, 25 between 40.4 and 75.2, each run | 88 between 1.1 and 2.3, 12 between 37.6 and 67.8, each run |
   | the first fix (2cc88f4a, below) | all 50 between 10.1 and 11.3, median 11.0 | all 100 between 1.6 and 2.1 |
-  | **the fix below (the move)** | **all 50 between 10.0 and 11.2, median 11.0** | **all 100 between 1.0 and 2.7** |
+  | a move for good (d0f292c8, below) | all 50 between 10.0 and 11.2, median 11.0 | all 100 between 1.0 and 2.7 |
+  | **the fix below, two runs** | **all 50 between 10.5 and 13.1, and between 10.2 and 12.8; median 11.0 each** | **all 100 between 1.1 and 2.6, and between 1.0 and 2.1** |
 
 - **Every late wake** (51 in one run) was on CPU 0, and the task that ran there meanwhile was the compositor (50 of 51; `tls` once). In the 40 lines read, no other task was ready there.
 - **The chain:**
@@ -55,29 +56,46 @@
 **A first fix, replaced (2cc88f4a).** It placed a new application, of the CPUs with the fewest, on the one whose services had run least.
 - `kbench` was on time with it (its row above).
 - The `nnd` suite then failed. `nncheck`'s cancel of a 131 ms job came after the job had ended in all 16 tries, even at 0 ms.
-- **Why, as read from the code (not measured):** `nnd`'s worker is a service, placed by service count alone. It can go to the CPU `nncheck` was given, and `nncheck` then waits behind it, as `kbench` had behind the compositor. The fix below passed the same check.
+- **Why, as read from the code (not measured):** `nnd`'s worker is a service, placed by service count alone. It can go to the CPU `nncheck` was given, and `nncheck` then waits behind it, as `kbench` had behind the compositor. The fix below passes the same check.
 - A placement made at the start cannot know which service will be busy later.
 
-**The fix (`kernel/src/scheduler.rs`, `move_waiting`).** An application that is ready on a CPU running a system-band task moves to an idle CPU, if one is online, and that CPU is woken.
+**Two more tries, replaced (d0f292c8 and after, in this container's x86 groups):**
+- **A move for good:**
+  - An application ready behind a system-band task moved to an idle CPU and stayed there.
+  - **The kernel heap check failed:** "task teardown leaked resources", in the `normal` suite with 16 CPUs and in the `keys` suite, on i9 too. The old CPU's list kept the slot and its room, which reap does not trim.
+  - **Then the `busy` suite failed:** its CPU-bound loop moved, and the check, which reads the loop's CPU, read 0.56 of the time other tasks leave.
+  - **Then the `heap` suite's spread failed:** its four stress programs no longer covered every CPU, because an application that moved for good changed where spawn's balance put the next ones.
+
+**The fix (`kernel/src/scheduler.rs`: `move_waiting`, `relist`, and the return in `select`).** An application whose wait ended borrows an idle CPU while its own runs a system-band task, and goes back when it waits again.
+- **Who borrows:** an application whose wait ended (a sleep, a message, a reply), ready on a CPU that runs a system-band task.
+- **Which CPU:** an idle one, if one is online and holds no application.
+  - It runs there until it waits again, then goes back to its own CPU (`home`).
+  - `ps` and `stat` show `home`, and spawn's balance counts it.
 - **When it is looked at:**
-  - when it becomes ready;
+  - when the task becomes ready;
   - when a `select` puts a system-band task first;
   - at each slice's end.
 - **What is not moved:**
+  - a task still ready when its CPU last switched from it (preempted), or one that has not run yet;
   - a worker, which stays where 262-KRN-0163 placed it;
   - a task that runs, is held for the compositor's copy, or has no budget left;
   - a service.
-- **Unchanged:** the band order (the system band still runs first on its CPU, MC-5.5), the placement, the sleep, and `kbench_check`'s 40 ms bound (MC-12.5).
+- **Each CPU's list stays sized to its tasks,** as spawn and reap keep it, so the kernel heap returns as tasks end.
+- **Unchanged:** the band order (the system band still runs first on its CPU, MC-5.5), the sleep, and `kbench_check`'s 40 ms bound (MC-12.5).
 - **Why the move is safe:** each switch reloads the address space and flushes that CPU's TLB (no PCID on x86, no ASIDs on aarch64). A task's registers and FP state are saved in the task at each switch on both architectures.
 
-**With it,** in the same container:
-- `kbench`'s `sleep 10 ms` was on time (its row above; the `bench` suite's own run gave a median of 10.8 ms);
-- `nncheck`'s cancel came partway on its first try (40 ms);
-- the `bench` and `nnd` suites passed.
+**With it,** in this container, x86, 4 CPUs:
+- "x86: scheduling, isolation, heap", "x86: keys, shell, tools", "x86: 16 CPUs" and "x86: one CPU" all passed;
+- `kbench`'s `sleep 10 ms` median was 11.0 ms;
+- `nncheck`'s cancel came partway;
+- the busy loop took 1.00 of the time other tasks leave its CPU;
+- the heap suite's stress programs were on all four CPUs.
+- **A third run of the `bench` suite** failed `kbench_check`'s bound on the empty call, 10.3 µs against 10 µs; the two runs after it gave 2.8 and 4.6 µs. Nothing of this change is on that call's path, which takes no lock. It is noted as seen once.
+- **One number to watch:** the revocation check's longest 10 ms sleep was 77 ms in this run, where two runs before the change gave 14 ms. Its bound is 1000 ms; one sample says nothing yet.
 
 **Not done:**
 - An application behind another application is not moved; the slices share that CPU, as before.
-- With no idle CPU, an application still waits behind the system band.
+- With no idle CPU free of applications, an application still waits behind the system band.
 
 ## Related
 
