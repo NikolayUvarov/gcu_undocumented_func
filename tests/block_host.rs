@@ -48,6 +48,12 @@ const WRITER: u16 = BADGE_WRITE;
 const WHOLE: Windows = Windows::new();
 
 #[test]
+fn a_driver_that_cannot_tell_reports_no_return() {
+    // 000-KRN-0085: only a driver that notices its medium going and coming back answers true, and serve then ends it.
+    assert!(!Memory::new(8).returned() && !ReadOnly.returned());
+}
+
+#[test]
 fn writing_needs_the_badge() {
     let mut disk = Memory::new(64);
     let data = vec![0xA5u8; 4 * BLOCK_SECTOR];
