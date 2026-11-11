@@ -166,6 +166,8 @@ unsafe fn frame(sp: usize) -> &'static mut [u64; 37] { &mut *(sp as *mut [u64; 3
 
 /// A task's data abort on a translation fault (EC 0x24, DFSC 0b0001xx): whether it was a write (WnR).
 pub fn missing_page(code: u64, error: u64) -> Option<bool> { (code == 0x24 && error & 0x3C == 0x04).then_some(error & 1 << 6 != 0) }
+/// Whether a data abort was a write refused by a page's permissions (DFSC 0b0011xx, WnR).
+pub fn write_protected(code: u64, error: u64) -> bool { code == 0x24 && error & 0x3C == 0x0C && error & 1 << 6 != 0 }
 
 // What an entry into the kernel was, decoded from the frame (the generic kernel knows no vector numbers).
 pub enum Event {
