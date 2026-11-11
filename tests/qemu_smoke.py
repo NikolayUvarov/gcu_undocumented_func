@@ -52,6 +52,7 @@ SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
+IDLE_SAMPLES = 50  # each CPU's state sampled this many times once it halted, about 20 ms apart (000-KRN-0233)
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -3102,6 +3103,8 @@ def smp_suite(vm):
         idle = f"WFI (a thread runnable {idle_check(vm):.0%})"
     else:
         # A CPU still drawing the last output (the compositor's frame copy) halts once it is done; one that spins never.
+        # Then it stays halted in most samples: a screen compared again each time the shell woke kept CPU 0 busy about
+        # 70 % of the time with nothing to show (000-KRN-0233).
         for cpu in range(vm.cpus):
             vm.hmp(f"cpu {cpu}")
             deadline = time.monotonic() + IDLE_HALT_SECONDS
@@ -3109,6 +3112,9 @@ def smp_suite(vm):
                 time.sleep(.02)
             if "HLT=1" not in regs:
                 raise AssertionError(f"CPU {cpu} did not halt when idle: {regs}")
+            samples = [("HLT=1" in vm.hmp("info registers"), time.sleep(.02))[0] for _ in range(IDLE_SAMPLES)]
+            if sum(samples) * 2 < len(samples):
+                raise AssertionError(f"CPU {cpu} halted in {sum(samples)} of {len(samples)} samples when idle: {vm.hmp('info registers')}")
         vm.serial()
     print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, {kept} preservation, supervisor reserve under load, remote kill, all CPUs {idle}", flush=True)
     revocation_steps_check(vm)

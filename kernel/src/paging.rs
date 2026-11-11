@@ -21,6 +21,9 @@ const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 
 pub struct Space {
     tables: alloc::vec::Vec<Region, Frames>,
+    // A range kept read-only until it is written (a task's screen, 000-KRN-0233), and whether the kernel wrote it meanwhile.
+    kept: Option<(usize, usize)>,
+    touched: core::cell::Cell<bool>,
 }
 
 // How a range is filled: 4 KiB pages, the largest pages that fit (262-KRN-0161), or one frame at every page.
@@ -159,9 +162,7 @@ mod tests {
 
 impl Space {
     pub fn new() -> Result<Self, &'static str> {
-        let mut space = Self {
-            tables: alloc::vec::Vec::new_in(Frames),
-        };
+        let mut space = Self { tables: alloc::vec::Vec::new_in(Frames), kept: None, touched: core::cell::Cell::new(false) };
         let root = space.table()?;
         unsafe {
             for index in 0..mmu::KERNEL_ENTRIES { (root as *mut u64).add(index).write(mmu::kernel_entry(index)); }
@@ -366,7 +367,7 @@ impl Space {
         let mut address = USER_IMAGE;
         while address < USER_END {
             let (leaf, span) = match self.find(address) {
-                Ok((entry, size)) => (Some(mmu::attributes(entry)), size - (address & (size - 1))),
+                Ok((entry, size)) => { let (w, x, d) = mmu::attributes(entry); (Some((w || self.in_kept(address), x, d)), size - (address & (size - 1))) }
                 Err(absent) => (None, absent),
             };
             match (run, leaf) {
@@ -380,6 +381,34 @@ impl Space {
     }
 
     fn flush(&self) { mmu::flush(self.root()); }
+
+    /// Keeps a writable range read-only until it is written: the task's first write faults, and `written` gives it back.
+    pub fn keep(&mut self, start: usize, size: usize) { self.set_write(start, size, false); self.kept = Some((start, size)); self.touched.set(false); }
+    /// Whether the kept range is still as it was when it was kept: neither the task nor the kernel wrote it.
+    pub fn unwritten(&self) -> bool { self.kept.is_some() && !self.touched.get() }
+    fn in_kept(&self, address: usize) -> bool { self.kept.is_some_and(|(start, size)| (start..start + size).contains(&address)) }
+    /// A write that faulted at `address`: in the kept range, the range is writable again (true); elsewhere nothing changes.
+    pub fn written(&mut self, address: usize) -> bool {
+        let Some((start, size)) = self.kept.filter(|_| self.in_kept(address)) else { return false };
+        self.kept = None; self.set_write(start, size, true); true
+    }
+    // Every page of the range, large ones whole, writable or read-only; then this CPU's translations are dropped.
+    fn set_write(&mut self, start: usize, size: usize, writable: bool) {
+        let mut address = start;
+        while address < start + size {
+            let (mut table, mut step) = (self.root(), PAGE);
+            for shift in [39, 30, 21, 12] {
+                let entry = unsafe { (table as *mut u64).add((address >> shift) & 511) };
+                let value = unsafe { entry.read() };
+                step = (1usize << shift) - (address & ((1usize << shift) - 1));
+                if value & mmu::VALID == 0 { break; }
+                if shift == 12 || (shift <= 30 && mmu::large(value)) { unsafe { entry.write(mmu::with_write(value, writable)); } break; }
+                table = (value & ADDRESS) as usize;
+            }
+            address += step;
+        }
+        self.flush();
+    }
     // Drops this CPU's cached translations of the space, before an access that faulted is tried again.
     pub fn forget_cached(&self) { self.flush(); }
 
@@ -393,7 +422,10 @@ impl Space {
     // Like readable, but only for writable pages (buffers filled by the kernel).
     pub fn writable(&self, address: usize) -> Option<usize> {
         let (entry, size) = self.user_page(address)?;
-        mmu::user_writable(entry).then(|| ((entry & ADDRESS) as usize & !(size - 1)) | (address & (size - 1)))
+        // The kept range is writable to the kernel, which writes through its own map: the write is noted instead.
+        let kept = self.in_kept(address) && mmu::user_readable(entry);
+        if kept { self.touched.set(true); }
+        (mmu::user_writable(entry) || kept).then(|| ((entry & ADDRESS) as usize & !(size - 1)) | (address & (size - 1)))
     }
 
     // The page of the task's window that holds `address`: its entry in a 4 KiB page's form and its size.

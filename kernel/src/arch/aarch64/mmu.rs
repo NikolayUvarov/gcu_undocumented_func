@@ -46,6 +46,8 @@ pub fn user_readable(entry: u64) -> bool { entry & 3 == PAGE_DESC && entry & AP_
 pub fn user_writable(entry: u64) -> bool { user_readable(entry) && entry & AP_RO == 0 }
 /// (writable, executable, device) of a user page.
 pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & AP_RO == 0, entry & UXN == 0, entry & ATTR_MASK == ATTR_DEVICE) }
+/// A user page's or block's entry made writable or read-only.
+pub fn with_write(entry: u64, writable: bool) -> u64 { if writable { entry & !AP_RO } else { entry | AP_RO } }
 /// Whether a valid entry at level 1 or 2 maps memory itself: a 1 GiB or 2 MiB block (262-KRN-0161).
 pub fn large(entry: u64) -> bool { entry & 3 == BLOCK }
 /// A user page's descriptor as a block with the same attributes.
