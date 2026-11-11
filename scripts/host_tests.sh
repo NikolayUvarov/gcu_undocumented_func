@@ -21,6 +21,7 @@ cargo test --quiet --manifest-path nnpkg/Cargo.toml --target-dir "$OUT/nnpkg-tar
 cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target" # the deadlines (550-NET-0031) and a listening port's backlog (110-NET-0052, tests/listen_host.rs)
 cargo test --quiet --manifest-path linkproto/Cargo.toml --target-dir "$OUT/linkproto-target" # the link protocol (800-LNK-0001)
 cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/linkproto-target" # its Linux end and effector485, over a pty and TCP (800-LNK-0004, 0011)
+cargo test --quiet --manifest-path tools/httpd/Cargo.toml --target-dir "$OUT/httpd-target" # the release server: the layout, ranges, limits, the log (110-NET-0066)
 # The multi-device firmware's logic: frames between the boards, credits, control commands, the LED (800-LNK-0005).
 cc -std=c11 -Wall -Wextra -Werror -O1 -o "$OUT/rp2-link-tests" devices/rp2-link/tests/host_test.c devices/rp2-link/src/bridge.c devices/rp2-link/src/control.c devices/rp2-link/src/led.c
 "$OUT/rp2-link-tests"
