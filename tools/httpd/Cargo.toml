@@ -1,0 +1,9 @@
+[package]
+name = "httpd"
+version = "0.1.0"
+edition = "2021"
+description = "The project's own web server for releases, on Linux: the release layout read-only over HTTP/1.1 (110, stage 1)"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]

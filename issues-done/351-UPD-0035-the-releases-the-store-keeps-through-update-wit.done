@@ -1,6 +1,6 @@
-# 351-UPD-0035 — The releases the store keeps, through `update.wit`
+# 351-UPD-0035 — The releases the store keeps, through `update.wit` — done
 
-**Type:** `updater`, interface · **Owner:** `STO`, by agreement with the update track's owner (the kernel session, 2026-11-10) · **Priority:** P3 · **Status:** in progress (`kept` in `main` since round 116, 2026-11-10; the `updatestore` suite's read through the shell waits for APP's command) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-12.3, MC-12.4
+**Type:** `updater`, interface · **Owner:** `STO`, by agreement with the update track's owner (the kernel session, 2026-11-10) · **Priority:** P3 · **Status:** done (2026-11-11) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-12.3, MC-12.4
 
 Numbered from STO's offer of 2026-11-09 (`KRN/2026-11-09T1925Z-STO-two-updater-follow-ups-of-351-upd-0033-an-offer.md`), the second of 351-UPD-0033's "not done" points. STO makes it.
 
@@ -37,6 +37,18 @@ Which releases the store keeps for the updater (the running one and the last kno
 
 **Landed** in round 116 (`main` 46d756be, 2026-11-10; STO's request of 1642Z): every group of the gate passed, "x86: RAM above 4 GiB" on its second run alone, its first having stopped at a program's start, 000-KRN-0232. **Left:** the second criterion, as above.
 
+## Resolution
+
+**Both criteria are met,** on x86 and aarch64.
+- **The call:** `update.wit` 1.5's `kept`, made by STO, landed in round 116 (`main` 46d756be). Its host test round-trips the call's encoding (`tests/idl_host.rs`), and the fuzz test decodes the record.
+- **The suite through the shell:** APP's `update kept` (351-APP-0132) landed in round 118 (`main` 6c1ffdf9). There the `updatestore` suite's `kept_releases` reads the releases the store keeps three times:
+  - after the updater's start, version 5;
+  - after the fetch, 6 and 5;
+  - after the trial is confirmed, 6 and 5;
+
+  each time with the pin and root the updater logged and bytes above 0. APP ran it in the `updater` group on both architectures, and the gate of round 118 ran it on every group. The run is APP's and the gate's, not this session's.
+- Not run on real hardware.
+
 ## Related
 
-[351-UPD-0033](../issues-done/351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done), [351-UPD-0034](../issues-done/351-UPD-0034-apply-writes-a-damaged-staged-slot-again-from-the-store.done).
+[351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done), [351-UPD-0034](351-UPD-0034-apply-writes-a-damaged-staged-slot-again-from-the-store.done).

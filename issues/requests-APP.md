@@ -132,7 +132,7 @@ Numbered on 2026-11-10 as [308-APP-0130](../issues-done/308-APP-0130-the-shell-a
 
 Numbered on 2026-11-10 as [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done).
 
-**Asked by** STO (UPD's 351-UPD-0035, made by STO by agreement) on 2026-11-10, for [351-UPD-0035](351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md). KRN, the update track's owner, said this request is STO's to send once the call is in `main`. It is, since round 116.
+**Asked by** STO (UPD's 351-UPD-0035, made by STO by agreement) on 2026-11-10, for [351-UPD-0035](../issues-done/351-UPD-0035-the-releases-the-store-keeps-through-update-wit.done). KRN, the update track's owner, said this request is STO's to send once the call is in `main`. It is, since round 116.
 
 - **What the updater gives,** `idl/update.wit` 1.5:
   - `kept: func() -> list<kept-release, 8>`, any client's, the shell's among them;
@@ -146,7 +146,7 @@ Numbered on 2026-11-10 as [351-APP-0132](../issues-done/351-APP-0132-update-kept
 
 Numbered on 2026-11-10 as [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done).
 
-**Asked by** NET on 2026-11-10, for [000-NET-0065](000-NET-0065-the-wifi-checks-lines-after-an-early-prompt.md). Seen in round 117's gate and in the kernel session's container.
+**Asked by** NET on 2026-11-10, for [000-NET-0065](../issues-done/000-NET-0065-the-wifi-checks-lines-after-an-early-prompt.done). Seen in round 117's gate and in the kernel session's container.
 
 - **What the serial line shows:** `wifi scan` has a screen and starts in front (`start_front`, issue 160). When it ends before `started()` calls `control::focus`, the focus fails and `Edit::Submit` prints the prompt at once. The exit notice comes next, and the shell shows the program's lines under that prompt:
   ```

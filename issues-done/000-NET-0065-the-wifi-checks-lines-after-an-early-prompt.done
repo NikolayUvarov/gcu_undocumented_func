@@ -1,6 +1,6 @@
-# 000-NET-0065 — The Wi-Fi checks read `wifi`'s lines that come after an early prompt
+# 000-NET-0065 — The Wi-Fi checks read `wifi`'s lines that come after an early prompt — done
 
-**Type:** tests (`wifi_join_check`, `world_country_check` and `slow_radio_check`, `tests/qemu_smoke.py`) · **Owner:** `NET` · **Priority:** P2 · **Status:** open (made on `claude/000-NET-0065-wifi-lines-after-an-early-prompt`, 2026-11-10; landing left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D · **Constitution:** MC-12.2
+**Type:** tests (`wifi_join_check`, `world_country_check` and `slow_radio_check`, `tests/qemu_smoke.py`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-11) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -64,7 +64,7 @@ The comment above `run()` names this race (the gates of ASR and NET, 2026-10-20)
 
 ## Progress
 
-**Made (2026-11-10)** on `claude/000-NET-0065-wifi-lines-after-an-early-prompt`: steps 1 to 3, in `tests/qemu_smoke.py`. Step 4 is APP's [000-APP-0133](000-APP-0133-no-prompt-before-an-early-exits-notice.md).
+**Made (2026-11-10)** on `claude/000-NET-0065-wifi-lines-after-an-early-prompt`: steps 1 to 3, in `tests/qemu_smoke.py`. Step 4 is APP's [000-APP-0133](000-APP-0133-no-prompt-before-an-early-exits-notice.done).
 
 **Tested in this container** (4 CPUs, QEMU 8.2.2 under TCG), with 000-KRN-0231's branch, which makes the race frequent:
 - **x86, the `net` suite, 4 runs: all passed.** Without this change the same branch failed 2 of 4.
@@ -72,6 +72,15 @@ The comment above `run()` names this race (the gates of ASR and NET, 2026-10-20)
 - **aarch64, the `net` suite:** passed.
 - These runs predate `slow_radio_check`'s change. **A fifth x86 run with it** (`main` e84f1018 merged) passed, with 4 early prompts.
 
+## Resolution
+
+**Both criteria are met. It landed in round 119 (`main` b3f62ab1, 2026-11-11).**
+- **`front_command`** (`tests/qemu_smoke.py`) reads a `wifi` command up to the prompt after the shell's exit notice (`SHELL RESUMED.`). `wifi_join_check`'s `run()`, `world_country_check` and `slow_radio_check`'s join use it; the `dmesg -s wifi` fallbacks are gone, as `wifi` holds no log client.
+- **Evidence:**
+  - this container, on 000-KRN-0231's branch, which makes the race frequent: the `net` suite passed 5 times in 5 on x86 (2 of 4 had failed without the change), the early prompt in every run; once on aarch64;
+  - round 119's gate, with 000-KRN-0231 in the candidate: "x86: network, TLS and Effector", "x86: RAM above 4 GiB" and "aarch64: network, TLS and Effector" passed.
+- **The shell's side** is APP's [000-APP-0133](000-APP-0133-no-prompt-before-an-early-exits-notice.done), in `main` since the same round. Its check failed once in that round's gate, for a program reaped before `started()` (told to APP, 2026-11-11). The NET checks do not depend on it.
+
 ## Related
 
-[000-KRN-0231](000-KRN-0231-kbenchs-ten-ms-sleep-past-40-ms-on-a-loaded-host.md) (whose change made this race frequent), [000-NET-0063](../issues-done/000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.done), [000-NET-0053](../issues-done/000-NET-0053-the-wi-fi-rejoin-check-waits-for-its-lease.done), [550-APP-0033](550-APP-0033-wifi-setup-program.md).
+[000-KRN-0231](../issues/000-KRN-0231-kbenchs-ten-ms-sleep-past-40-ms-on-a-loaded-host.md) (whose change made this race frequent), [000-NET-0063](000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.done), [000-NET-0053](000-NET-0053-the-wi-fi-rejoin-check-waits-for-its-lease.done), [550-APP-0033](../issues/550-APP-0033-wifi-setup-program.md).
