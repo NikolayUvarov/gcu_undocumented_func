@@ -185,6 +185,7 @@ struct Shell {
     secret: Option<secretctl::Typing>, // a console program's secret line being typed (000-APP-0126)
     pass: passctl::State, // keystore's passphrase typed, and the boot's wait for it looked for (308-APP-0130)
     gone_front: Option<(u64, u64)>, // a program started in front that ended before its focus, and when (000-APP-0133)
+    screened: Option<u64>, // the last program started that has a screen, not a console program (000-APP-0133)
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -1014,6 +1015,8 @@ impl Shell {
             self.managers.push(pid);
         }
         self.windowed = in_window.then_some(pid);
+        // Whether it has a screen, as the loader's notes say: one ended and reaped before `started()` is told by it.
+        self.screened = (!needs.console && !mind::process::console_run(requests, args)).then_some(pid);
         Ok(pid)
     }
 
@@ -1060,18 +1063,20 @@ impl Shell {
         self.owners[self.next_owner] = (pid, self.active as u8);
         self.next_owner = (self.next_owner + 1) % OWNERS;
         if background || windowed { return; }
+        // One with a screen that ended, and was perhaps reaped already, before it was in front (NET's reports,
+        // 000-APP-0133): its lines and its exit notice come before the prompt, as when the focus succeeds; the notice is
+        // waited for NOTICE_MS at most.
+        let screened = self.screened.take() == Some(pid);
+        let gone = |shell: &mut Self| {
+            shell.focused = Some(pid); shell.line_start = true;
+            shell.gone_front = Some((pid, mind::time::uptime_ms() as u64));
+            mind::println!("[SHELL] PID {} ENDED BEFORE IT WAS IN FRONT: ITS EXIT NOTICE COMES BEFORE THE PROMPT", pid);
+        };
         match task {
             Some(t) if t.screen != 0 && is_window(self.active) => {} // behind the manager: `fg` from a console
-            Some(t) if t.screen != 0 => {
-                // One that ended before it was in front (NET's report, 000-APP-0133): its lines and its exit notice come
-                // before the prompt, as when the focus succeeds; the notice is waited for NOTICE_MS at most.
-                if self.focus(pid, true).is_err() && !mind::process::alive(pid) {
-                    self.focused = Some(pid); self.line_start = true;
-                    self.gone_front = Some((pid, mind::time::uptime_ms() as u64));
-                    mind::println!("[SHELL] PID {} ENDED BEFORE IT WAS IN FRONT: ITS EXIT NOTICE COMES BEFORE THE PROMPT", pid);
-                }
-            }
+            Some(t) if t.screen != 0 => { if self.focus(pid, true).is_err() && !mind::process::alive(pid) { gone(self); } }
             Some(t) if t.service != 0 => {}
+            None if screened && !is_window(self.active) => gone(self),
             _ => self.console = Some(pid),
         }
     }
@@ -1713,7 +1718,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), gave_up: 0, managers: alloc::vec::Vec::new(), unasked: false, console_link: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64), gone_front: None })
+                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64), gone_front: None, screened: None })
 }
 
 mind::entry!(main);

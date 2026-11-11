@@ -40,6 +40,9 @@ It is rare on `main`, and frequent with 000-KRN-0231's change, which lets an app
 - **Tests:** the `shell` suite's `early_end_check` runs `wifi scan` with no station 8 times. Each time no prompt comes between `STARTED PID=n NAME=wifi FOREGROUND` and `PID=n EXITED. SHELL RESUMED.`, and wifi's line comes before it. The count of the shell's log line says how often the race was met.
   - **QEMU x86, 4 CPUs, TCG,** in this track's container, 2026-11-10: the race was met once in 8, and the suite passed (16 checks).
   - **aarch64 (`virt`):** met 0 times in 8, and the suite passed (16 checks).
+- **Round 119** (NET's second report, `APP/2026-11-11T0103Z-NET-…`): with 000-KRN-0231 a program could end and be reaped before `started()` listed the tasks, and was then taken as a console program, so the prompt came before its notice again (once in round 119's gate, on x32-2).
+  - `start_with` now notes whether the program has a screen, from the loader's notes as for a window. `started()` takes such a one that `tasks()` no longer lists as gone before its focus too.
+  - Run on `main` c595debe (000-KRN-0231 in), x86, 4 CPUs, TCG, this container, 2026-11-11: `early_end_check` 5 times over (40 runs), each passed, the race met once; the `shell` suite passed (16 checks).
 - Not run on real hardware (MC-12.1).
 
 ## Related
