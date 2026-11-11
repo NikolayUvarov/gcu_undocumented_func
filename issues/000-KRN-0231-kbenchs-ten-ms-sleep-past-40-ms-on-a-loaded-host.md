@@ -1,6 +1,6 @@
 # 000-KRN-0231 — `kbench`'s 10 ms sleep past 40 ms on a loaded host
 
-**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (in `main` since round 119, b3f62ab1; the ten runs of "x86: keys, shell, tools" on acc-2 beside a loaded lane left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (in `main` since round 119, b3f62ab1; the ten runs on acc-2: 9 of 10, the failure APP's `early_end_check`, whose fix is in `main` since round 120, b1693b08; ten again left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -119,6 +119,11 @@
 - With no idle CPU free of applications, an application still waits behind the system band.
 
 **Landed** in round 119 (`main` b3f62ab1, 2026-11-11), with 000-NET-0065 and APP's 000-APP-0133. Every group passed; "x86: keys, shell, tools" failed once on x32-2, in APP's new `early_end_check` (a program reaped before the shell's `started()`, told to APP), and passed when run again alone. The kernel is 7533 lines against its budget of 7600. **Left:** the second criterion, ten runs of "x86: keys, shell, tools" on acc-2 beside a loaded lane.
+
+**The ten runs (2026-11-11).** "x86: keys, shell, tools" ran ten times on acc-2 (lane acc2), at `main` b3f62ab1, beside the acc2-2 lane running "x86: services, storage, audio" five times (755 to 770 s each), about the series' first 3800 s of 5100.
+- **Nine passed,** kbench with them: 812, 538, 517, 522, 521, 520, 525, 528 and 540 s.
+- **Run 2 failed after 108 s,** at `wifi scan` in APP's `early_end_check`: a program with a screen reaped before the shell's `started()`, the case that failed once in round 119's gate. kbench did not fail. The log is on acc-2 in `mind-core/KRN/logs/krn0231-ten/acc2-02`.
+- **So "ten in a row" is not met.** APP's fix of that case (000-APP-0133, ee9fd1d9) is in the landing queue. **Left:** ten runs again once it is in `main`.
 
 ## Related
 

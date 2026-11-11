@@ -1,6 +1,6 @@
-# 000-KRN-0232 — A program's start sent nothing in 8 s in the Wi-Fi check (round 114, x32)
+# 000-KRN-0232 — A program's start sent nothing in 8 s in the Wi-Fi check (round 114, x32) — done
 
-**Type:** tests and the program start (shell, `loader`, `vfs_server`, `netpolicy`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (step 1, the tasks' states in the record, in `main` since round 118, 6c1ffdf9; step 2 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
+**Type:** tests and the program start (shell, `loader`, `vfs_server`, `netpolicy`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-11) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -56,6 +56,13 @@
 
 **Step 1 landed** in round 118 (`main` 6c1ffdf9, 2026-11-10), every group of the gate passing; the kernel is 7500 lines, within its budget. **Left:** step 2, ten runs of "x86: RAM above 4 GiB" on x32 beside the other lane, with the record.
 
+## Resolution
+
+**The second criterion is met; the cause is not named.**
+- **Step 1, the tasks' states in the record,** is in `main` since round 118 (6c1ffdf9) and stays: a wait of 5 s or more that runs out is recorded with each task's wait, as `stat tasks` names it.
+- **Step 2:** "x86: RAM above 4 GiB" ran ten times on x32 (x32-128), at `main` e84f1018, 2026-11-11, beside the x32-2 lane, busy with gate groups and three runs of "x86: keys, shell, tools". **All ten passed,** in 1250 to 1462 s.
+- **Neither start that waited came back** (round 114's `wifiping`, round 116's 16th `memtest endpoints`), so what they waited for is not known. The next one is recorded with the tasks' states, and opens a new issue naming this one.
+
 ## Related
 
-[307-KRN-0229](../issues-done/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done), [000-KRN-0214](../issues-done/000-KRN-0214-the-shell-stopped-answering-during-the-effector-screenshot.done) (the record), [000-KRN-0208](000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another start that waited past 8 s, seen once).
+[307-KRN-0229](307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done), [000-KRN-0214](000-KRN-0214-the-shell-stopped-answering-during-the-effector-screenshot.done) (the record), [000-KRN-0208](../issues/000-KRN-0208-a-run-after-forty-kills-waited-past-8-s.md) (another start that waited past 8 s, seen once).

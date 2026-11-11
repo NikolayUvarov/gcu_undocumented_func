@@ -14,8 +14,8 @@ build-std = ["core", "alloc", "compiler_builtins"]
 build-std-features = ["compiler-builtins-mem"]
 json-target-spec = true
 
-# aarch64 (issue 201): the same static PIE with 4 KiB segment alignment. FP/SIMD stays off at EL0 there (requests-KRN.md),
-# so the engine computes in soft float until the kernel track enables it.
+# aarch64 (issue 201): the same static PIE with 4 KiB segment alignment. scripts/build_aarch64.sh builds every program for
+# this one target, so the engine computes in soft float there; the kernel does not trap FP/SIMD at EL0 (CPACR_EL1.FPEN).
 [target.aarch64-unknown-none-softfloat]
 rustflags = [
     "-C", "relocation-model=pic",

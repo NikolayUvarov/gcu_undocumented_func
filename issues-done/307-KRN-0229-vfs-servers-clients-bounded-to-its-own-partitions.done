@@ -98,7 +98,7 @@ Since 307-KRN-0177:
     - The block suite is refused a sector past each window's end, through ATA, AHCI and USB.
     - With the windows made 256 sectors longer by hand, the check failed.
   - **`docs/profile/tcb.md`'s disk-integrity row** names `vfs_server` as outside the store's sectors by its capabilities.
-- **Two groups failed once in the gate and passed alone:** "x86: RAM above 4 GiB" on x32, and "x86: keys, shell, tools" on acc-2. They are now [000-KRN-0232](../issues/000-KRN-0232-a-program-start-sent-nothing-in-8-s-in-the-wifi-check.md) and [000-KRN-0231](../issues/000-KRN-0231-kbenchs-ten-ms-sleep-past-40-ms-on-a-loaded-host.md).
+- **Two groups failed once in the gate and passed alone:** "x86: RAM above 4 GiB" on x32, and "x86: keys, shell, tools" on acc-2. They are now [000-KRN-0232](000-KRN-0232-a-program-start-sent-nothing-in-8-s-in-the-wifi-check.done) and [000-KRN-0231](../issues/000-KRN-0231-kbenchs-ten-ms-sleep-past-40-ms-on-a-loaded-host.md).
 
 ## Related
 

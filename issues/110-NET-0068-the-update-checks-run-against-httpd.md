@@ -1,6 +1,6 @@
 # 110-NET-0068 — The QEMU update checks run against `httpd` (stage 1, its third part)
 
-**Type:** network and tests (`tools/httpd/`, `tests/qemu_smoke.py`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (made on `claude/110-NET-0068-update-checks-against-httpd`, 2026-11-11; landing left, after 110-NET-0067) · **Blocked by:** [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md) (its base) · **Main task:** [110](110-our-own-web-server.md) · **Roadmap:** track D · **Constitution:** MC-9.6, MC-12.1, MC-12.2, MC-12.3
+**Type:** network and tests (`tools/httpd/`, `tests/qemu_smoke.py`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (made on `claude/110-NET-0068-update-checks-against-httpd`, 2026-11-11; landing left) · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) · **Roadmap:** track D · **Constitution:** MC-9.6, MC-12.1, MC-12.2, MC-12.3
 
 ## Problem
 
@@ -45,4 +45,4 @@
 
 ## Related
 
-[110](110-our-own-web-server.md), [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.md), [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md), [docs/update/updater.md](../docs/update/updater.md) (the `update` check), [docs/update/server.md](../docs/update/server.md).
+[110](110-our-own-web-server.md), [110-NET-0066](../issues-done/110-NET-0066-httpd-serves-the-release-layout-over-http.done), [110-NET-0067](../issues-done/110-NET-0067-httpd-over-tls-with-a-pinned-key.done), [docs/update/updater.md](../docs/update/updater.md) (the `update` check), [docs/update/server.md](../docs/update/server.md).
