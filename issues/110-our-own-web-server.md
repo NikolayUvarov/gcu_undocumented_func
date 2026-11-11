@@ -80,7 +80,7 @@
 
 **Stage 1, its first part (2026-11-11):** [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.md), `tools/httpd/`: the release layout over HTTP/1.1, `std` only. 
 
-**Stage 1, its second part (2026-11-11):** [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md): TLS 1.3, the library's choice recorded (rustls over the RustCrypto crates, as `tls`), the pinned SPKI printed, renewals read again; the guide, [docs/update/server.md](../docs/update/server.md). **Left of stage 1:** the QEMU `update` and `linkupdate` checks against it; the fuzz target; the maintainer's server.
+**Stage 1, its second part (2026-11-11):** [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md): TLS 1.3, the library's choice recorded (rustls over the RustCrypto crates, as `tls`), the pinned SPKI printed, renewals read again; the guide, [docs/update/server.md](../docs/update/server.md); the fuzz target. **Left of stage 1:** the QEMU `update` and `linkupdate` checks against it; the maintainer's server.
 
 ## Related
 

@@ -25,6 +25,7 @@ The updater fetches releases over HTTPS and pins the server's key (`update.txt`'
   - another key is said aloud, since a device pinning only the old one refuses the server;
   - a pair that does not load leaves the last one serving.
 - **Refusals over TLS:** a connection over the limits is closed before its handshake. A failed handshake (TLS 1.2, plain HTTP) ends its connection alone and is logged.
+- **A fuzz target** for the request's head, path and range parsers, `tools/httpd/tests/fuzz.rs`, seeded as 500-ASR-0001's harness is (`MIND_FUZZ_SEED`, `MIND_FUZZ_ITERATIONS`): nothing panics, an accepted path is the layout's, a range stays inside its file.
 - **The guide,** [docs/update/server.md](../docs/update/server.md) and [server_RU.md](../docs/update/server_RU.md): build, run, the root, TLS and the pin, renewals, limits, the log.
 
 ## Acceptance criteria
@@ -35,13 +36,15 @@ The updater fetches releases over HTTPS and pins the server's key (`update.txt`'
   - the SPKI's hash is the one `openssl` gives for the certificate's public key;
   - an RSA key without `--allow-rsa`, and a key that is not the certificate's, are refused;
   - a certificate renewed over the same key is taken by new connections, and one that does not load leaves the last.
+- The fuzz target runs in the host tests: 200 000 inputs by default.
 - THIRD_PARTY.md names `tools/httpd` beside `tls` for each crate, and the RSA note says where RUSTSEC-2023-0071 applies.
 
 ## Progress
 
 **Made (2026-11-11)** on `claude/110-NET-0067-httpd-over-tls`, on 110-NET-0066's branch:
 - `tools/httpd/src/tls.rs`, the server's flags, the guide and THIRD_PARTY.md;
-- `cargo test`: 5 unit tests, 7 over plain HTTP, 4 over TLS, all passed; no warning;
+- `cargo test`: 5 unit tests, 7 over plain HTTP, 4 over TLS and the fuzz target, all passed; no warning;
+- the fuzz target: 200 000 inputs at its seed (51 532 heads parsed, 22 645 paths resolved, 12 090 ranges), and 1 000 000 at seed 12345;
 - `curl` fetched a blob with `--pinnedpubkey` set from the printed SPKI and was refused with a wrong one.
 
 ## Related
