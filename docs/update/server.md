@@ -52,5 +52,4 @@ Each refusal names the limit it met, in the response and in the log.
 ## Not done yet
 
 - the `update` and `linkupdate` checks in QEMU against `httpd`, and a device updated from the maintainer's server (110, stage 1);
-- a fuzz target for the request parser;
 - the same server as a MIND Core service (stage 2).

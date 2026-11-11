@@ -52,5 +52,4 @@ target/release/httpd /srv/mind --cert chain.pem --key key.pem --listen 0.0.0.0:4
 ## Чего ещё нет
 
 - проверок `update` и `linkupdate` в QEMU против `httpd` и устройства, обновлённого с сервера сопровождающего (110, этап 1);
-- цели фаззинга для разбора запроса;
 - того же сервера как службы MIND Core (этап 2).
