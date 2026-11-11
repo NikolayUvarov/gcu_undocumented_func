@@ -1,10 +1,10 @@
-# 110-NET-0066 — `httpd` serves the release layout over HTTP/1.1 (stage 1, its first part)
+# 110-NET-0066 — `httpd` serves the release layout over HTTP/1.1 (stage 1, its first part) — done
 
-**Type:** network (a host program, `tools/httpd/`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (made on `claude/110-NET-0066-httpd-over-http`, 2026-11-11; landing left) · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) · **Roadmap:** track D · **Constitution:** MC-5.1, MC-5.2, MC-10.3, MC-12.3
+**Type:** network (a host program, `tools/httpd/`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-11) · **Blocked by:** — · **Main task:** [110](../issues/110-our-own-web-server.md) · **Roadmap:** track D · **Constitution:** MC-5.1, MC-5.2, MC-10.3, MC-12.3
 
 ## Problem
 
-Stage 1 of [110](110-our-own-web-server.md) is the project's own web server for releases, a host program for Linux. Nothing of it was written. Its parts are:
+Stage 1 of [110](../issues/110-our-own-web-server.md) is the project's own web server for releases, a host program for Linux. Nothing of it was written. Its parts are:
 1. HTTP/1.1 over the release layout, with the limits and the log (this task);
 2. TLS 1.3, with the key kept across renewals, and the choice of the TLS library recorded;
 3. the `update` and `linkupdate` checks in QEMU run against it instead of `scripts/serve_release.py`, and the guide.
@@ -43,6 +43,13 @@ Stage 1 of [110](110-our-own-web-server.md) is the project's own web server for 
 - Host tests: every path refusal, the ranges, the limits (each of the five), a channel renamed during a read, and the log without a query string or a header's value.
 - No dependency beyond `std`.
 
+## Resolution
+
+**Its criteria are met. It landed in round 120 (`main` b1693b08, 2026-11-11), with 110-NET-0067 on it.**
+- **`tools/httpd/`**, `std` only: the release layout's names alone, refused with their reasons otherwise; `GET` and `HEAD` with keep-alive; one `Range`; `ETag`, `Last-Modified`, `If-None-Match`; the five limits; the log, a file a day, with no query string or header's value.
+- **Evidence:** the host tests (`scripts/host_tests.sh`): the modules' own tests and `tests/serve.rs` over a real socket (every path refusal, the ranges, each limit, a channel renamed during a read, the log). They passed in this container and in round 120's gate, "host tests" on x32-2.
+- **Not tested:** a server facing the Internet; the maintainer's server is [110](../issues/110-our-own-web-server.md)'s last step of stage 1.
+
 ## Related
 
-[110](110-our-own-web-server.md), [docs/update/publishing.md](../docs/update/publishing.md), [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done) (the updater resumes with `Range`), [110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done) (stage 2's listening sockets).
+[110](../issues/110-our-own-web-server.md), [docs/update/publishing.md](../docs/update/publishing.md), [351-NET-0001](351-NET-0001-http-downloads.done) (the updater resumes with `Range`), [110-NET-0052](110-NET-0052-listening-tcp-sockets.done) (stage 2's listening sockets).
