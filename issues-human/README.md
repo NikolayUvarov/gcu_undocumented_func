@@ -215,3 +215,16 @@ Main task [100004](../issues/100004-two-allwinner-boards-before-the-phone.md): t
 - [ ] **Writing the card** with the image of [100004-MOB-0001](../issues/100004-MOB-0001-the-boards-sd-card.md), when it is ready. Writing a card stays the maintainer's act.
 
 Done when each board's U-Boot banner is read over its adapter by an agent, and the adapters, hosts and ports are recorded in 100004.
+
+## 15. The release server on the maintainer's server
+
+Main task [110](../issues/110-our-own-web-server.md), stage 1's last criterion: a device updated from the project's own server, `httpd`, on the maintainer's machine, the configuration named (MC-12.1). The server and its tests are in `main` since round 121; how to build and run it is in [docs/update/server.md](../docs/update/server.md) ([server_RU.md](../docs/update/server_RU.md)).
+
+- [ ] **On the server:** `cd tools/httpd && cargo build --release` (no feature: the tests' hooks are not built in).
+- [ ] **A key that devices pin:** ECDSA P-256 or Ed25519, with its certificate chain (an RSA key is for tests only). Keep the key across renewals ([351-UPD-0031](../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md)).
+- [ ] **The root:** the directory `scripts/release.py publish` writes (`blobs/`, `releases/`, `channels/`).
+- [ ] **Run it:** `target/release/httpd ROOT --cert chain.pem --key key.pem --listen 0.0.0.0:443 --log /var/log/mind-httpd`. It prints `HTTPD: TLS 1.3, THE KEY'S SPKI SHA-256 <hex>`.
+- [ ] **A device:** its `update.txt` names `source https://<the server>` and `pin <that hex>`; `update check`, then `update fetch` and `update apply` (or `automatic apply`).
+- [ ] **Note for 110:** the server's OS, `httpd`'s commit, the key's kind, the device and its release before and after, and the lines the updater and `httpd`'s log wrote.
+
+Done when one device was updated from it and those notes are in 110.
