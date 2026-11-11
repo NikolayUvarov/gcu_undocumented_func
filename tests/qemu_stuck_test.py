@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host test of qemu_smoke.py's record of a wait that ran out (000-KRN-0214): every CPU's registers through the monitor,
-each task's state from the kernel's page of them (000-KRN-0232) and the console's end, kept as mind-core-stuck-*.log in
-the temporary directory, at most twice a VM (a scripted VM)."""
+each task's state from the kernel's page of them (000-KRN-0232) and the drives' counts, both twice (000-KRN-0234), and the
+console's end, kept as mind-core-stuck-*.log in the temporary directory, at most twice a VM (a scripted VM)."""
 import importlib.util, os, pathlib, sys, tempfile, unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -37,6 +37,7 @@ class Hung:
     expect = smoke.VM.expect
     stuck = smoke.VM.stuck
     task_states = smoke.VM.task_states
+    drives = smoke.VM.drives
 
 
 BOOT = "MIND CORE KERNEL: INIT STARTED\r\nMIND CORE KERNEL: TASK STATES AT 0x3A5000, 16384 BYTES, EACH SECOND\r\n"
@@ -55,7 +56,7 @@ class Stuck(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.before = tempfile.tempdir
         tempfile.tempdir = self.temp.name
-        smoke.STUCK_AFTER = 0.05
+        smoke.STUCK_AFTER, smoke.STUCK_AGAIN = 0.05, 0
 
     def tearDown(self):
         tempfile.tempdir = self.before
@@ -68,10 +69,12 @@ class Stuck(unittest.TestCase):
         vm = Hung("CPU#0\nRIP=ffffffff80001234 RFL=00000246\nCPU#1\nRIP=ffffffff80005678")
         with self.assertRaises(AssertionError):
             vm.expect("MIND> ", timeout=0.1, after="dmesg -s blockstore\n")
-        self.assertEqual(vm.asked, ["info registers -a"])
+        self.assertEqual(vm.asked, ["info registers -a", "info blockstats", "info blockstats"])
         [record] = self.records()
         text = record.read_text()
         self.assertIn("waiting for 'MIND> '", text)
+        self.assertIn("--- the drives (info blockstats)\nCPU#0", text)
+        self.assertIn("--- the drives, 0 s later\nCPU#0", text)
         self.assertIn("RIP=ffffffff80001234", text)
         self.assertIn("RIP=ffffffff80005678", text)
         self.assertIn("dmesg -s blockstore", text)
@@ -82,7 +85,7 @@ class Stuck(unittest.TestCase):
             vm.expect("MIND> ", timeout=0.1, after="dmesg -s blockstore\n")
         self.assertEqual(vm.asked[0], "info registers -a")
         self.assertRegex(vm.asked[1], r'^memsave 0x3a5000 16384 ".*mind-core-states-\d+\.bin"$')
-        self.assertEqual(len(vm.asked), 2)
+        self.assertEqual([command.split()[0] for command in vm.asked[2:]], ["info", "memsave", "info"])
         [record] = self.records()
         text = record.read_text()
         self.assertIn("--- the tasks\nAT 41000 MS\n1 init CPU 0 RECEIVE ON ENDPOINT 1\n", text)
@@ -90,13 +93,14 @@ class Stuck(unittest.TestCase):
         self.assertIn("30 loader CPU 1 SEND TO ENDPOINT 9\n", text)
         self.assertIn("77 clock CPU 3 SLEEP\n", text)
         self.assertNotIn("garbage", text)
+        self.assertIn("--- the tasks, 0 s later\nAT 41000 MS\n1 init CPU 0 RECEIVE ON ENDPOINT 1\n", text)
         self.assertEqual(list(pathlib.Path(self.temp.name).glob("mind-core-states-*")), [])
 
     def test_a_page_not_mapped_is_read_by_its_physical_address(self):
         vm = Hung("CPU#0", log=BOOT, memory={"memsave": b"\xff\xff", "pmemsave": STATES})
         with self.assertRaises(AssertionError):
             vm.expect("MIND> ", timeout=0.1, after="dmesg -s blockstore\n")
-        self.assertEqual([command.split()[0] for command in vm.asked], ["info", "memsave", "pmemsave"])
+        self.assertEqual([command.split()[0] for command in vm.asked], ["info", "memsave", "pmemsave", "info", "memsave", "pmemsave", "info"])
         [record] = self.records()
         self.assertIn("52 shell CPU 2 REPLY FROM PID 30", record.read_text())
 
@@ -104,7 +108,7 @@ class Stuck(unittest.TestCase):
         vm = Hung("CPU#0")
         with self.assertRaises(AssertionError):
             vm.expect("MIND> ", timeout=0.1, after="dmesg -s blockstore\n")
-        self.assertEqual(vm.asked, ["info registers -a"])
+        self.assertEqual(vm.asked, ["info registers -a", "info blockstats", "info blockstats"])
         [record] = self.records()
         self.assertIn("--- the tasks\nthe kernel printed no address for them\n", record.read_text())
 
@@ -119,7 +123,7 @@ class Stuck(unittest.TestCase):
         for _ in range(4):
             with self.assertRaises(AssertionError):
                 vm.expect("MIND> ", timeout=0.1, after="dmesg -s blockstore\n")
-        self.assertEqual((len(vm.asked), len(self.records())), (2, 2))
+        self.assertEqual((len(vm.asked), len(self.records())), (6, 2))
 
     def test_a_monitor_that_does_not_answer_is_recorded_as_such(self):
         vm = Hung(OSError("the monitor's socket is closed"))
