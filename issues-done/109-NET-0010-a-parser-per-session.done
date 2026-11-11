@@ -42,7 +42,7 @@ The update suite boots a disk with boot slots (351-UPD-0016), and there the load
 ## Resolution
 
 - **Downloads** parse their heads in a parser of their own since 2026-10-12 (above), checked by `session_parsers_check` and `parser_restart_check`.
-- **On a disk with boot slots** the loader starts helpers from the booted slot ([109-KRN-0133](../issues/109-KRN-0133-helpers-from-the-booted-slot.md)).
+- **On a disk with boot slots** the loader starts helpers from the booted slot ([109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.done)).
 - **The updater's checks** use a parser of their own there too ([109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.done), [109-UPD-0022](109-UPD-0022-the-slots-channels-through-one-parser.done)).
 - **A program with one endpoint** opens one session after another ([109-NET-0037](109-NET-0037-a-parser-session-waits-for-its-helper.done)).
 - **All of it in `main`** through landing round 8 (a1488f4d, merged as 50bc8bd6; candidate aa50204e gated in full).

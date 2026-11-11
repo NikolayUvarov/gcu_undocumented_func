@@ -1,10 +1,10 @@
-# 110-NET-0068 — The QEMU update checks run against `httpd` (stage 1, its third part)
+# 110-NET-0068 — The QEMU update checks run against `httpd` (stage 1, its third part) — done
 
-**Type:** network and tests (`tools/httpd/`, `tests/qemu_smoke.py`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (made on `claude/110-NET-0068-update-checks-against-httpd`, 2026-11-11; landing left) · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) · **Roadmap:** track D · **Constitution:** MC-9.6, MC-12.1, MC-12.2, MC-12.3
+**Type:** network and tests (`tools/httpd/`, `tests/qemu_smoke.py`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-11) · **Blocked by:** — · **Main task:** [110](../issues/110-our-own-web-server.md) · **Roadmap:** track D · **Constitution:** MC-9.6, MC-12.1, MC-12.2, MC-12.3
 
 ## Problem
 
-[110](110-our-own-web-server.md)'s stage 1 asks that the update checks in QEMU, x86 and aarch64, run against `httpd` instead of `scripts/serve_release.py`: release 6 fetched, a cut download resumed, an expired channel refused.
+[110](../issues/110-our-own-web-server.md)'s stage 1 asks that the update checks in QEMU, x86 and aarch64, run against `httpd` instead of `scripts/serve_release.py`: release 6 fetched, a cut download resumed, an expired channel refused.
 
 - **The checks that fetch from a release server** are the `update` suite and the `update_store` suite (the "updater" groups). Both start `serve_release.serve` over HTTPS with the test CA's P-256 certificate.
 - **The `linkupdate` suite,** which 110 also names, fetches nothing over HTTP: `mindlink` puts release 6 on the machine through the link. It has no server to replace, so it stays as it is.
@@ -43,6 +43,15 @@
 - **aarch64, the same two suites: passed.** The cut was at byte 659 800, resumed the same way.
 - Not run on the gate machines yet.
 
+## Resolution
+
+**Its criteria are met. It landed in round 121 (`main` db6a8e6f, 2026-11-11).**
+- **`httpd`'s test hooks** behind the Cargo feature `test-hooks`, the deadlines as flags, and `scripts/serve_httpd.py`; the `update` and `update_store` suites run against `httpd`.
+- **Evidence:**
+  - this container: the host tests with and without the feature; `update` and `update_store` on x86 (the cut at byte 695 484, resumed from it) and aarch64 (the cut at 659 800);
+  - round 121's gate: "host tests", "x86: the updater and an update through the link" and "aarch64: the updater and the modes" passed, `httpd` built with its hooks on each lane.
+- **[110](../issues/110-our-own-web-server.md)'s criterion** names `update_store` in place of `linkupdate`, which fetches nothing over HTTP.
+
 ## Related
 
-[110](110-our-own-web-server.md), [110-NET-0066](../issues-done/110-NET-0066-httpd-serves-the-release-layout-over-http.done), [110-NET-0067](../issues-done/110-NET-0067-httpd-over-tls-with-a-pinned-key.done), [docs/update/updater.md](../docs/update/updater.md) (the `update` check), [docs/update/server.md](../docs/update/server.md).
+[110](../issues/110-our-own-web-server.md), [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.done), [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.done), [docs/update/updater.md](../docs/update/updater.md) (the `update` check), [docs/update/server.md](../docs/update/server.md).

@@ -1,6 +1,6 @@
 # 110 — Our own web server, `httpd`: releases first, on Linux and then on MIND Core
 
-**Type:** network (main task: a server) · **Owner:** `NET` (the kernel session), with `UPD` for the release side · **Priority:** P1 · **Status:** open (stage 1: HTTP/1.1 and TLS 1.3 in `main` since round 120, b1693b08; the QEMU update checks against it made, [110-NET-0068](110-NET-0068-the-update-checks-run-against-httpd.md); the maintainer's server left) · **Blocked by:** — for stage 1; stage 2 by its own tasks: listening sockets and the listening grant ([110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done)), the TLS server role · **Roadmap:** track C (update and distribution), track D (network) · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-9.6, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
+**Type:** network (main task: a server) · **Owner:** `NET` (the kernel session), with `UPD` for the release side · **Priority:** P1 · **Status:** open (stage 1 in `main` since round 121, db6a8e6f: HTTP/1.1, TLS 1.3 and the QEMU update checks against it; the maintainer's server left) · **Blocked by:** — for stage 1; stage 2 by its own tasks: listening sockets and the listening grant ([110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done)), the TLS server role · **Roadmap:** track C (update and distribution), track D (network) · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-9.6, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
 
 **Recorded by:** the kernel session, 2026-10-25, at the maintainer's request: "we must have our own web server, so that we can serve updates".
 
@@ -71,7 +71,7 @@
 - **Stage 1:**
   - host tests: the path rules (every refusal), `Range` parsing, the limits, a channel renamed during reads;
   - a fuzz target for the request parser (`ASR`'s harness);
-  - the `update` and `update_store` checks in QEMU, x86 and aarch64, run against `httpd` instead of `scripts/serve_release.py`: release 6 fetched, a cut download resumed, an expired channel refused. (This criterion first named `linkupdate`, which fetches nothing over HTTP: `mindlink` puts the release on the machine through the link. `update_store` is the other check that fetches from a release server; corrected 2026-11-11, [110-NET-0068](110-NET-0068-the-update-checks-run-against-httpd.md).)
+  - the `update` and `update_store` checks in QEMU, x86 and aarch64, run against `httpd` instead of `scripts/serve_release.py`: release 6 fetched, a cut download resumed, an expired channel refused. (This criterion first named `linkupdate`, which fetches nothing over HTTP: `mindlink` puts the release on the machine through the link. `update_store` is the other check that fetches from a release server; corrected 2026-11-11, [110-NET-0068](../issues-done/110-NET-0068-the-update-checks-run-against-httpd.done).)
   - on the maintainer's server: a device updated from it, the configuration named (MC-12.1).
 - **Stage 2:** a QEMU suite with two MIND machines on one network, where one serves a release and the other fetches it, boots it on trial and confirms it; a port outside the listening grant refused.
 - **The profile** (Article 9) and docs/update say what the server is trusted with.
@@ -80,9 +80,11 @@
 
 **Stage 1, its first part (2026-11-11):** [110-NET-0066](../issues-done/110-NET-0066-httpd-serves-the-release-layout-over-http.done), `tools/httpd/`: the release layout over HTTP/1.1, `std` only. 
 
-**Stage 1, its second part (2026-11-11):** [110-NET-0067](../issues-done/110-NET-0067-httpd-over-tls-with-a-pinned-key.done): TLS 1.3, the library's choice recorded (rustls over the RustCrypto crates, as `tls`), the pinned SPKI printed, renewals read again; the guide, [docs/update/server.md](../docs/update/server.md); the fuzz target. **Left of stage 1:** the QEMU `update` and `update_store` checks against it ([110-NET-0068](110-NET-0068-the-update-checks-run-against-httpd.md)); the maintainer's server.
+**Stage 1, its second part (2026-11-11):** [110-NET-0067](../issues-done/110-NET-0067-httpd-over-tls-with-a-pinned-key.done): TLS 1.3, the library's choice recorded (rustls over the RustCrypto crates, as `tls`), the pinned SPKI printed, renewals read again; the guide, [docs/update/server.md](../docs/update/server.md); the fuzz target. **Left of stage 1:** the QEMU `update` and `update_store` checks against it ([110-NET-0068](../issues-done/110-NET-0068-the-update-checks-run-against-httpd.done)); the maintainer's server.
 
 **Landed** in round 120 (`main` b1693b08, 2026-11-11): 110-NET-0066 and 110-NET-0067, both closed; the host tests passed in the gate.
+
+**Landed** in round 121 (`main` db6a8e6f, 2026-11-11): 110-NET-0068, closed. **Left of stage 1:** a device updated from the maintainer's server, the configuration named (MC-12.1).
 
 ## Related
 

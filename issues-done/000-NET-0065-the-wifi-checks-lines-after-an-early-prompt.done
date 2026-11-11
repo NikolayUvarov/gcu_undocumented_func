@@ -83,4 +83,4 @@ The comment above `run()` names this race (the gates of ASR and NET, 2026-10-20)
 
 ## Related
 
-[000-KRN-0231](../issues/000-KRN-0231-kbenchs-ten-ms-sleep-past-40-ms-on-a-loaded-host.md) (whose change made this race frequent), [000-NET-0063](000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.done), [000-NET-0053](000-NET-0053-the-wi-fi-rejoin-check-waits-for-its-lease.done), [550-APP-0033](../issues/550-APP-0033-wifi-setup-program.md).
+[000-KRN-0231](000-KRN-0231-kbenchs-ten-ms-sleep-past-40-ms-on-a-loaded-host.done) (whose change made this race frequent), [000-NET-0063](000-NET-0063-the-wifi-checks-dmesg-waited-8-s-on-a-loaded-host.done), [000-NET-0053](000-NET-0053-the-wi-fi-rejoin-check-waits-for-its-lease.done), [550-APP-0033](../issues/550-APP-0033-wifi-setup-program.md).

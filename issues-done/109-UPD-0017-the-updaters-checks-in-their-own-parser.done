@@ -34,7 +34,7 @@ Built for x86_64 and aarch64 (`updater/src/main.rs`, `updater/src/source.rs`). T
 
 ## Resolution
 
-- **Done** once the loader started helpers from the booted slot ([109-KRN-0133](../issues/109-KRN-0133-helpers-from-the-booted-slot.md)) and the updater read both slots' channels through one session ([109-UPD-0022](109-UPD-0022-the-slots-channels-through-one-parser.done)).
+- **Done** once the loader started helpers from the booted slot ([109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.done)) and the updater read both slots' channels through one session ([109-UPD-0022](109-UPD-0022-the-slots-channels-through-one-parser.done)).
 - **`updater_parser_check`** is back in the `update` suite: during a check, one `parse` beside the shared service holds only its endpoint in slot 1 (`stat caps`), and it is gone with the check.
 - **Runs:** x86 in this session's container and aarch64 on un-rizen through Effector; in `main` through landing round 8 (a1488f4d, merged as 50bc8bd6; candidate aa50204e gated in full).
 
