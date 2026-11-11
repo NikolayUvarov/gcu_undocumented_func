@@ -1,11 +1,12 @@
-//! httpd ROOT [--cert CHAIN.pem --key KEY.pem [--allow-rsa]] [--listen ADDR:PORT] [--connections N] [--per-client N] [--per-minute N] [--log DIR] [--log-days N]
+//! httpd ROOT [--cert CHAIN.pem --key KEY.pem [--allow-rsa]] [--listen ADDR:PORT] [--connections N] [--per-client N] [--per-minute N]
+//!       [--head-timeout S] [--idle-timeout S] [--send-timeout S] [--log DIR] [--log-days N]; with feature `test-hooks`, [--test-hooks DIR]
 
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::exit;
 
 fn usage(why: &str) -> ! {
-    eprintln!("httpd: {why}\nusage: httpd ROOT [--cert CHAIN.pem --key KEY.pem [--allow-rsa]] [--listen 127.0.0.1:8080] [--connections 64] [--per-client 8] [--per-minute 600] [--log DIR] [--log-days 30]");
+    eprintln!("httpd: {why}\nusage: httpd ROOT [--cert CHAIN.pem --key KEY.pem [--allow-rsa]] [--listen 127.0.0.1:8080] [--connections 64] [--per-client 8] [--per-minute 600] [--head-timeout 10] [--idle-timeout 10] [--send-timeout 30] [--log DIR] [--log-days 30]");
     exit(2)
 }
 
@@ -23,6 +24,11 @@ fn main() {
             "--connections" => config.connections = number(value()) as usize,
             "--per-client" => config.per_client = number(value()) as usize,
             "--per-minute" => config.per_minute = number(value()).min(u32::MAX as u64) as u32,
+            "--head-timeout" => config.head_timeout = std::time::Duration::from_secs(number(value())),
+            "--idle-timeout" => config.idle_timeout = std::time::Duration::from_secs(number(value())),
+            "--send-timeout" => config.send_timeout = std::time::Duration::from_secs(number(value())),
+            #[cfg(feature = "test-hooks")]
+            "--test-hooks" => config.hooks = Some(std::sync::Arc::new(httpd::hooks::Hooks::new(PathBuf::from(value())).unwrap_or_else(|e| usage(&format!("--test-hooks: {e}"))))),
             "--log" => log_dir = Some(PathBuf::from(value())),
             "--log-days" => days = number(value()),
             "--cert" => cert = Some(PathBuf::from(value())),

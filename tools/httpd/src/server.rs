@@ -22,15 +22,21 @@ pub struct Config {
     pub per_minute: u32,
     pub head_timeout: Duration,
     pub idle_timeout: Duration,
+    pub send_timeout: Duration,
     pub requests_per_connection: usize,
     /// TLS 1.3 when given: the configuration new connections take (`tls::Reloading`).
     pub tls: Option<Arc<crate::tls::Reloading>>,
+    /// The tests' cuts, holds and record of requests (feature `test-hooks`, 110-NET-0068).
+    #[cfg(feature = "test-hooks")]
+    pub hooks: Option<Arc<crate::hooks::Hooks>>,
 }
 
 impl Config {
     pub fn new(root: PathBuf) -> Config {
         Config { root, connections: 64, per_client: 8, per_minute: 600, head_timeout: Duration::from_secs(10),
-                 idle_timeout: Duration::from_secs(10), requests_per_connection: 1000, tls: None }
+                 idle_timeout: Duration::from_secs(10), send_timeout: Duration::from_secs(30), requests_per_connection: 1000, tls: None,
+                 #[cfg(feature = "test-hooks")]
+                 hooks: None }
     }
 }
 
@@ -100,7 +106,7 @@ fn refuse<W: Write>(stream: &mut W, status: u16, why: &str, extra: &[(&str, Stri
 fn connection(server: &Server, stream: TcpStream, client: IpAddr) {
     let config = &server.config;
     let _ = stream.set_read_timeout(Some(config.idle_timeout));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+    let _ = stream.set_write_timeout(Some(config.send_timeout));
     let _ = stream.set_nodelay(true);
     let Some(tls) = &config.tls else { let mut stream = stream; return requests(server, &mut stream, client) };
     let Ok(session) = rustls::ServerConnection::new(tls.config()) else { return };
@@ -172,6 +178,8 @@ fn requests<S: Read + Write>(server: &Server, stream: &mut S, client: IpAddr) {
             server.log.line(SystemTime::now(), &who, method, &request.target, 429, sent, started.elapsed(), &why);
             return;
         }
+        #[cfg(feature = "test-hooks")]
+        if let Some(hooks) = &config.hooks { hooks.asked(&request.target, request.header("range")); hooks.hold(&request.target); }
         match respond(server, stream, &request) {
             Ok((status, sent, why, keep)) => {
                 server.log.line(SystemTime::now(), &who, method, &request.target, status, sent, started.elapsed(), why);
@@ -232,10 +240,20 @@ fn respond<W: Write>(server: &Server, stream: &mut W, request: &Request) -> io::
     };
     stream.write_all(format!("HTTP/1.1 {status} {}\r\n{head}Content-Type: application/octet-stream\r\nContent-Length: {count}\r\n\r\n", reason(status)).as_bytes())?;
     if request.method == Method::Head { return Ok((status, 0, "", true)); }
-    let sent = copy(&mut file, start, count, stream)?;
+    let limit = cut_at(server, &request.target, count);
+    let sent = copy(&mut file, start, limit, stream)?;
     // A file cut shorter while it was read cannot give the length promised: the connection ends there.
-    if sent < count { return Ok((status, sent, "the file was shorter than when it was opened", false)); }
+    if sent < limit { return Ok((status, sent, "the file was shorter than when it was opened", false)); }
+    if sent < count { return Ok((status, sent, "cut by a test hook", false)); }
     Ok((status, sent, "", true))
+}
+
+// The body bytes to send: all of them, or fewer when a test hook cuts this response (feature `test-hooks`).
+fn cut_at(server: &Server, target: &str, count: u64) -> u64 {
+    #[cfg(feature = "test-hooks")]
+    if let Some(cut) = server.config.hooks.as_ref().and_then(|h| h.cut(target)) { return count.min(cut); }
+    let _ = (server, target);
+    count
 }
 
 // The bytes `start..start+count` of the file opened for this request, as they were when it was opened.

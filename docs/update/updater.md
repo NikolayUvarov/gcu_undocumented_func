@@ -136,7 +136,7 @@ tries 3                                   # tries of a trial boot for an automat
 
 ## Tested
 
-- **The `update` check** (part of the `updater` suite; x86, aarch64). The image holds release 5 in slot A, confirmed, with its channel kept there. `update.txt` names the test server (`scripts/serve_release.py`) over HTTPS, trusted by its pinned key, with `automatic apply` every 20 s.
+- **The `update` check** (part of the `updater` suite; x86, aarch64). The image holds release 5 in slot A, confirmed, with its channel kept there. `update.txt` names the test server (`httpd` with its test hooks, [server.md](server.md)) over HTTPS, trusted by its pinned key, with `automatic apply` every 20 s.
   - Each of these is refused, and the boot records stay as they were (the final sequence numbers show it):
     - an expired channel;
     - a channel with a bad signature;

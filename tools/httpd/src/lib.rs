@@ -2,6 +2,8 @@
 
 pub mod date;
 pub mod head;
+#[cfg(feature = "test-hooks")]
+pub mod hooks;
 pub mod layout;
 pub mod log;
 pub mod range;

@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
+import serve_httpd  # noqa: E402
 import serve_release  # noqa: E402
 import http_api_stub  # noqa: E402
 import release as release_tool  # noqa: E402
@@ -8192,7 +8193,8 @@ def update_suite(args):
     certificates = temp / "tls"
     certificates.mkdir()
     _certificates(certificates)
-    https = serve_release.serve(server, certificates / "server.pem", certificates / "server.key")
+    # The project's own release server, with its test hooks (110-NET-0068).
+    https = serve_httpd.serve(server, certificates / "server.pem", certificates / "server.key")
     port = https.server_address[1]
     # The image: release 5 in slot A, confirmed, with its channel; the policy's flow and update.txt at the root.
     layout = temp / "layout"
@@ -8350,6 +8352,7 @@ def update_suite(args):
         vm.close()
         https.shutdown()
         (Path(tempfile.gettempdir()) / f"mind-core-update-{args.cpus}cpu.log").write_text(vm.log)
+        (Path(tempfile.gettempdir()) / f"mind-core-update-httpd-{args.cpus}cpu.log").write_text(https.log())
     records = boot_slots.records(image.path)
     assert first[0]["sequence"] == 1 and first[1] is None, first
     assert boot_slots.newest(records)[1] == {"sequence": 5, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 6}, records
@@ -8444,7 +8447,8 @@ def update_store_suite(args):
     certificates = temp / "tls"
     certificates.mkdir()
     _certificates(certificates)
-    https = serve_release.serve(server, certificates / "server.pem", certificates / "server.key")
+    # The project's own release server, with its test hooks (110-NET-0068).
+    https = serve_httpd.serve(server, certificates / "server.pem", certificates / "server.key")
     port = https.server_address[1]
     layout = temp / "layout"
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
@@ -8519,6 +8523,7 @@ def update_store_suite(args):
         vm.close()
         https.shutdown()
         (Path(tempfile.gettempdir()) / f"mind-core-updatestore-{args.cpus}cpu.log").write_text(vm.log)
+        (Path(tempfile.gettempdir()) / f"mind-core-updatestore-httpd-{args.cpus}cpu.log").write_text(https.log())
     # 351-UPD-0034: slot B's staged kernel damaged on the disk with the machine off; no network, so only the store has it.
     staged = bytearray(image.read("MIND/B/kernel.elf"))
     staged[len(staged) // 2] ^= 1

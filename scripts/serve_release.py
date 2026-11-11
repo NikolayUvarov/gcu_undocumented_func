@@ -2,7 +2,8 @@
 """Serves a release directory for tests (351-UPD-0005, docs/update/publishing.md): the layout of scripts/release.py,
 read-only, over HTTPS with a certificate the caller gives (the TLS suite's test CA, or any), or over plain HTTP. Single
 byte ranges (`Range: bytes=N-` or `N-M`) are answered with 206, so downloads resume (351-NET-0001). Not a production
-server: a real one is any static web server over the same directory.
+server: the project's own is tools/httpd (docs/update/server.md), which the update checks use (scripts/serve_httpd.py);
+this one stays for the download checks, whose malformed head no real server sends.
 
 Usage: serve_release.py DIR (--cert CERT.pem --key KEY.pem | --plain) [--port 8443] [--host 127.0.0.1]
 """

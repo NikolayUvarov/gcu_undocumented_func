@@ -1,0 +1,48 @@
+# 110-NET-0068 — The QEMU update checks run against `httpd` (stage 1, its third part)
+
+**Type:** network and tests (`tools/httpd/`, `tests/qemu_smoke.py`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (made on `claude/110-NET-0068-update-checks-against-httpd`, 2026-11-11; landing left, after 110-NET-0067) · **Blocked by:** [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md) (its base) · **Main task:** [110](110-our-own-web-server.md) · **Roadmap:** track D · **Constitution:** MC-9.6, MC-12.1, MC-12.2, MC-12.3
+
+## Problem
+
+[110](110-our-own-web-server.md)'s stage 1 asks that the update checks in QEMU, x86 and aarch64, run against `httpd` instead of `scripts/serve_release.py`: release 6 fetched, a cut download resumed, an expired channel refused.
+
+- **The checks that fetch from a release server** are the `update` suite and the `update_store` suite (the "updater" groups). Both start `serve_release.serve` over HTTPS with the test CA's P-256 certificate.
+- **The `linkupdate` suite,** which 110 also names, fetches nothing over HTTP: `mindlink` puts release 6 on the machine through the link. It has no server to replace, so it stays as it is.
+- **What the `update` suite needs from its server:**
+  - `cuts`: the next response for a path is cut after a number of body bytes, so the updater resumes it;
+  - `holds`: the next response for a path waits, at most 10 s, while the check reads the parser helper's capabilities (109-UPD-0017);
+  - `requests`: each GET's path and `Range` header, to show the resume and which blobs were fetched.
+- **`httpd` has none of these,** and it should not have them where it serves releases.
+
+## Plan
+
+1. **Test hooks in `httpd`,** behind a Cargo feature, `test-hooks`, which a server built for use does not have. With it, `--test-hooks DIR`:
+   - `DIR/cut/<name>` holds a byte count: the next response for that path is cut after that many body bytes, and its connection closed;
+   - `DIR/hold/<name>` holds the next response for that path: the server moves it to `DIR/held/<name>` and waits while that file is there, at most 10 s;
+   - `DIR/requests` gets a line for each request: its path and its `Range` header, or `-`;
+   - `<name>` is the path without its first `/`, each `/` as `+`, which no name of the layout holds.
+2. **The deadlines as flags:** `--head-timeout`, `--idle-timeout` and `--send-timeout`, in seconds, for slow links and the tests' emulated machines.
+3. **`scripts/serve_httpd.py`** builds `httpd` with the feature, starts it over a directory, and gives the interface of `serve_release.serve`'s server: `server_address`, `cuts`, `holds`, `requests` and `shutdown()`.
+4. **The `update` and `update_store` suites** start it in place of `serve_release.serve`. `serve_release.py` stays for the `net` suite's download checks, which need a malformed head no real server sends, and for `release_test.py`.
+
+## Acceptance criteria
+
+- Host tests: each hook (a cut resumed with `Range`, a hold released and one that runs out, the requests recorded), and a build without the feature refuses `--test-hooks`.
+- The `update` suite passes against `httpd`, x86 and aarch64: release 6 fetched, its largest boot file cut and resumed from the byte it was cut at, the expired channel refused.
+- The `update_store` suite passes against `httpd`, x86 and aarch64.
+
+## Progress
+
+**Made (2026-11-11)** on `claude/110-NET-0068-update-checks-against-httpd`, on 110-NET-0067's branch: steps 1 to 4, and the guide's section on the hooks ([docs/update/server.md](../docs/update/server.md)).
+
+**Tested in this container** (4 CPUs, QEMU 8.2.2 under TCG):
+- **Host:** `cargo test` with the feature (the hooks' tests and the unit tests) and without it (every test, the refusal of `--test-hooks` among them): all passed, no warning.
+- **x86, the `update` and `update_store` suites against `httpd`: passed.**
+  - The largest boot file was cut at byte 695 484 and resumed from it: `httpd`'s log has the cut response (`cut by a test hook`) and a 206 for the rest.
+  - The parser check held the channel's response and read the helper's capabilities.
+- **aarch64, the same two suites: passed.** The cut was at byte 659 800, resumed the same way.
+- Not run on the gate machines yet.
+
+## Related
+
+[110](110-our-own-web-server.md), [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.md), [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md), [docs/update/updater.md](../docs/update/updater.md) (the `update` check), [docs/update/server.md](../docs/update/server.md).

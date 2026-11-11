@@ -25,5 +25,9 @@ signature = { version = "2", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 spki = { version = "0.7", default-features = false, features = ["alloc"] }
 
+[features]
+# The QEMU checks' cuts, holds and record of requests (110-NET-0068); a server built for use has none of them.
+test-hooks = []
+
 [dev-dependencies]
 sha2 = { version = "0.10", default-features = false }
