@@ -1,6 +1,6 @@
 # 000-NET-0054 — QEMU's static setup on QEMU's cards alone, never a real card on a real network
 
-**Type:** network · **Owner:** kernel session (`NET`) · **Priority:** P1 · **Status:** in progress (made; QEMU here, then the gate) · **Blocked by:** — · **Roadmap:** the network track · **Constitution:** MC-12.1
+**Type:** network · **Owner:** kernel session (`NET`) · **Priority:** P1 · **Status:** in progress (in `main` since round 78; the tap run passed, 2026-11-11; the Ryzen's run left) · **Blocked by:** — · **Roadmap:** the network track · **Constitution:** MC-12.1
 
 ## Problem
 
@@ -31,8 +31,10 @@ DRV's report from the Ryzen 9 5900HX (2026-11-03, `ALL/2026-11-03T1817Z-DRV-…`
 Round 78's gate (candidate 6fc5b253, `main` e28cfe4d) passed the `net` suite with `static_setup_check` on x86 (x32-2) and aarch64 (pcu).
 
 **Left:**
-- the `netbench` suite with `--tap`, which needs a tap interface and is not in the gate;
+- ~~the `netbench` suite with `--tap`~~: passed, below;
 - the Ryzen: a card that waits for its lease with no `STATIC 10.0.2.15` line.
+
+**The tap run (2026-11-11),** in the kernel session's container (4 CPUs, QEMU 8.2.2 under TCG), on the image built at 57900749 (`main` f8a5220a with 110-NET-0068; `netstack` as in `main` today): a tap interface `mindtap0` at 10.0.2.2/24 with no DHCP server on it, `--suites netbench --tap mindtap0 --bench-runs 2`. **Passed:** `netstack` logged `STATIC 10.0.2.15/24` on QEMU's card (52:54:00:…), and the TCP and UDP benchmark ran over it with checksum offload off and on (TCP down 3.6 to 4.3 MiB/s, up 0.8 MiB/s: QEMU's figures, not a machine's).
 
 ## Related
 
