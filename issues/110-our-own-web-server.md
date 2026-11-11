@@ -1,6 +1,6 @@
 # 110 — Our own web server, `httpd`: releases first, on Linux and then on MIND Core
 
-**Type:** network (main task: a server) · **Owner:** `NET` (the kernel session), with `UPD` for the release side · **Priority:** P1 · **Status:** open (stage 1's first part, HTTP/1.1, made in [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.md), 2026-11-11) · **Blocked by:** — for stage 1; stage 2 by its own tasks: listening sockets and the listening grant ([110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done)), the TLS server role · **Roadmap:** track C (update and distribution), track D (network) · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-9.6, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
+**Type:** network (main task: a server) · **Owner:** `NET` (the kernel session), with `UPD` for the release side · **Priority:** P1 · **Status:** open (stage 1's first two parts made: HTTP/1.1 in [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.md), TLS 1.3 in [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md), 2026-11-11) · **Blocked by:** — for stage 1; stage 2 by its own tasks: listening sockets and the listening grant ([110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done)), the TLS server role · **Roadmap:** track C (update and distribution), track D (network) · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-9.6, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
 
 **Recorded by:** the kernel session, 2026-10-25, at the maintainer's request: "we must have our own web server, so that we can serve updates".
 
@@ -78,7 +78,9 @@
 
 ## Progress
 
-**Stage 1, its first part (2026-11-11):** [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.md), `tools/httpd/`: the release layout over HTTP/1.1, `std` only. **Left of stage 1:** TLS 1.3 with the library's choice recorded; the QEMU `update` and `linkupdate` checks against it; the fuzz target; the guide; the maintainer's server.
+**Stage 1, its first part (2026-11-11):** [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.md), `tools/httpd/`: the release layout over HTTP/1.1, `std` only. 
+
+**Stage 1, its second part (2026-11-11):** [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md): TLS 1.3, the library's choice recorded (rustls over the RustCrypto crates, as `tls`), the pinned SPKI printed, renewals read again; the guide, [docs/update/server.md](../docs/update/server.md); the fuzz target. **Left of stage 1:** the QEMU `update` and `linkupdate` checks against it; the maintainer's server.
 
 ## Related
 

@@ -23,12 +23,14 @@ pub struct Config {
     pub head_timeout: Duration,
     pub idle_timeout: Duration,
     pub requests_per_connection: usize,
+    /// TLS 1.3 when given: the configuration new connections take (`tls::Reloading`).
+    pub tls: Option<Arc<crate::tls::Reloading>>,
 }
 
 impl Config {
     pub fn new(root: PathBuf) -> Config {
         Config { root, connections: 64, per_client: 8, per_minute: 600, head_timeout: Duration::from_secs(10),
-                 idle_timeout: Duration::from_secs(10), requests_per_connection: 1000 }
+                 idle_timeout: Duration::from_secs(10), requests_per_connection: 1000, tls: None }
     }
 }
 
@@ -62,9 +64,10 @@ pub fn run(listener: TcpListener, config: Config, log: Log) -> io::Result<()> {
             else { counts.0 += 1; counts.1.entry(client).or_default().connections += 1; None }
         };
         if let Some(why) = refused {
+            // Over TLS a refused connection is closed before its handshake, which would cost more than the answer.
             let mut stream = stream;
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-            let _ = refuse(&mut stream, 503, &why, &[]);
+            if server.config.tls.is_none() { let _ = refuse(&mut stream, 503, &why, &[]); }
             server.log.line(SystemTime::now(), &client.to_string(), "-", "-", 503, 0, Duration::ZERO, &why);
             continue;
         }
@@ -83,7 +86,7 @@ fn reason(status: u16) -> &'static str {
 }
 
 // A refusal's whole response: the reason as text, the connection closed after it.
-fn refuse(stream: &mut TcpStream, status: u16, why: &str, extra: &[(&str, String)]) -> io::Result<u64> {
+fn refuse<W: Write>(stream: &mut W, status: u16, why: &str, extra: &[(&str, String)]) -> io::Result<u64> {
     let body = format!("{why}\n");
     let mut head = format!("HTTP/1.1 {status} {}\r\nDate: {}\r\nServer: mind-httpd\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n",
                            reason(status), crate::date::http(SystemTime::now()), body.len());
@@ -94,11 +97,22 @@ fn refuse(stream: &mut TcpStream, status: u16, why: &str, extra: &[(&str, String
     Ok(body.len() as u64)
 }
 
-fn connection(server: &Server, mut stream: TcpStream, client: IpAddr) {
+fn connection(server: &Server, stream: TcpStream, client: IpAddr) {
     let config = &server.config;
     let _ = stream.set_read_timeout(Some(config.idle_timeout));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
     let _ = stream.set_nodelay(true);
+    let Some(tls) = &config.tls else { let mut stream = stream; return requests(server, &mut stream, client) };
+    let Ok(session) = rustls::ServerConnection::new(tls.config()) else { return };
+    let mut stream = rustls::StreamOwned::new(session, stream);
+    requests(server, &mut stream, client);
+    stream.conn.send_close_notify();
+    let _ = stream.flush();
+}
+
+// The requests of one connection, plain or over TLS (whose handshake runs within the first read).
+fn requests<S: Read + Write>(server: &Server, stream: &mut S, client: IpAddr) {
+    let config = &server.config;
     let who = client.to_string();
     let mut buf: Vec<u8> = Vec::new();
     for _ in 0..config.requests_per_connection {
@@ -110,7 +124,7 @@ fn connection(server: &Server, mut stream: TcpStream, client: IpAddr) {
             if buf.len() > head::HEAD_MAX || late {
                 let (status, why) = if late { (408, format!("the request head took longer than {} s", config.head_timeout.as_secs())) }
                                     else { (431, format!("the request head is larger than {} bytes", head::HEAD_MAX)) };
-                let sent = refuse(&mut stream, status, &why, &[]).unwrap_or(0);
+                let sent = refuse(stream, status, &why, &[]).unwrap_or(0);
                 server.log.line(SystemTime::now(), &who, "-", "-", status, sent, started.elapsed(), &why);
                 return;
             }
@@ -118,10 +132,15 @@ fn connection(server: &Server, mut stream: TcpStream, client: IpAddr) {
             match stream.read(&mut chunk) {
                 Ok(0) => return,
                 Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                // A handshake refused (TLS 1.2, a cipher or a key it lacks) ends its connection alone.
+                Err(e) if e.kind() == io::ErrorKind::InvalidData && buf.is_empty() => {
+                    server.log.line(SystemTime::now(), &who, "-", "-", 0, 0, started.elapsed(), &format!("the TLS handshake failed: {e}"));
+                    return;
+                }
                 Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
                     if buf.is_empty() { return; }
                     let why = format!("no byte of the request head for {} s", config.idle_timeout.as_secs());
-                    let sent = refuse(&mut stream, 408, &why, &[]).unwrap_or(0);
+                    let sent = refuse(stream, 408, &why, &[]).unwrap_or(0);
                     server.log.line(SystemTime::now(), &who, "-", "-", 408, sent, started.elapsed(), &why);
                     return;
                 }
@@ -134,7 +153,7 @@ fn connection(server: &Server, mut stream: TcpStream, client: IpAddr) {
             Ok(r) => r,
             Err(bad) => {
                 let allow = if bad == head::Bad::Method { vec![("Allow", "GET, HEAD".to_string())] } else { vec![] };
-                let sent = refuse(&mut stream, bad.status(), bad.text(), &allow).unwrap_or(0);
+                let sent = refuse(stream, bad.status(), bad.text(), &allow).unwrap_or(0);
                 server.log.line(SystemTime::now(), &who, "-", "-", bad.status(), sent, started.elapsed(), bad.text());
                 return;
             }
@@ -143,17 +162,17 @@ fn connection(server: &Server, mut stream: TcpStream, client: IpAddr) {
         // A request with a body is not read: it is refused, and the connection with it.
         if request.header("content-length").is_some_and(|v| v.trim() != "0") || request.header("transfer-encoding").is_some() {
             let why = "a request with a body";
-            let sent = refuse(&mut stream, 400, why, &[]).unwrap_or(0);
+            let sent = refuse(stream, 400, why, &[]).unwrap_or(0);
             server.log.line(SystemTime::now(), &who, method, &request.target, 400, sent, started.elapsed(), why);
             return;
         }
         if let Some((window, limit)) = over_rate(server, client) {
             let why = format!("more than {limit} requests a minute from this address");
-            let sent = refuse(&mut stream, 429, &why, &[("Retry-After", window.to_string())]).unwrap_or(0);
+            let sent = refuse(stream, 429, &why, &[("Retry-After", window.to_string())]).unwrap_or(0);
             server.log.line(SystemTime::now(), &who, method, &request.target, 429, sent, started.elapsed(), &why);
             return;
         }
-        match respond(server, &mut stream, &request) {
+        match respond(server, stream, &request) {
             Ok((status, sent, why, keep)) => {
                 server.log.line(SystemTime::now(), &who, method, &request.target, status, sent, started.elapsed(), why);
                 if !keep || !request.keep_alive() { return; }
@@ -179,7 +198,7 @@ fn matches_tag(header: Option<&str>, tag: &str) -> bool {
 }
 
 // The response to a parsed request: its status, the body bytes sent, the refusal's reason, whether to keep the connection.
-fn respond(server: &Server, stream: &mut TcpStream, request: &Request) -> io::Result<(u16, u64, &'static str, bool)> {
+fn respond<W: Write>(server: &Server, stream: &mut W, request: &Request) -> io::Result<(u16, u64, &'static str, bool)> {
     let (relative, kind) = match layout::resolve(&request.target) {
         Ok(found) => found,
         Err(why) => { let sent = refuse(stream, why.status(), why.text(), &[])?; return Ok((why.status(), sent, why.text(), false)); }
@@ -220,7 +239,7 @@ fn respond(server: &Server, stream: &mut TcpStream, request: &Request) -> io::Re
 }
 
 // The bytes `start..start+count` of the file opened for this request, as they were when it was opened.
-fn copy(file: &mut File, start: u64, count: u64, out: &mut TcpStream) -> io::Result<u64> {
+fn copy<W: Write>(file: &mut File, start: u64, count: u64, out: &mut W) -> io::Result<u64> {
     file.seek(SeekFrom::Start(start))?;
     let mut buf = vec![0u8; 64 * 1024];
     let mut sent = 0;

@@ -65,7 +65,7 @@ python3 scripts/release.py bundle /srv/mind /tmp/mind-7.zip --arch x86_64   # on
 
 ## Setting up a server
 
-Any static web server over the directory serves a channel over HTTPS. The project's own server, `httpd`, is planned in main task [110](../../issues/110-our-own-web-server.md): first a host program for Linux, then a MIND Core service. The SSH account that publishes needs only write access to that directory. For tests, `scripts/serve_release.py DIR --cert … --key …` serves a directory over TLS 1.3 with a certificate the test gives.
+Any static web server over the directory serves a channel over HTTPS. The project's own server, `httpd` ([server.md](server.md)), is stage 1 of main task [110](../../issues/110-our-own-web-server.md): a host program for Linux, TLS 1.3 with a pinned key; a MIND Core service is stage 2. The SSH account that publishes needs only write access to that directory. For tests, `scripts/serve_release.py DIR --cert … --key …` serves a directory over TLS 1.3 with a certificate the test gives.
 
 ## Not provided yet
 
