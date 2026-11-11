@@ -2,7 +2,7 @@
 
 **Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-11-10) · **Blocked by:** — (`update.wit` 1.5 `kept` is in `main` since round 116) · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track G · **Constitution:** MC-9.2, MC-12.3
 
-**Asked by:** STO, for [351-UPD-0035](../issues/351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md), in [requests-APP.md](../issues/requests-APP.md), 2026-11-10. Numbered on 2026-11-10.
+**Asked by:** STO, for [351-UPD-0035](351-UPD-0035-the-releases-the-store-keeps-through-update-wit.done), in [requests-APP.md](../issues/requests-APP.md), 2026-11-10. Numbered on 2026-11-10.
 
 ## Problem
 
@@ -40,4 +40,4 @@ Which releases the block store keeps for the updater, so which ones a rollback o
 
 ## Related
 
-[351-UPD-0035](../issues/351-UPD-0035-the-releases-the-store-keeps-through-update-wit.md), [351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done), [351-APP-0029](351-APP-0029-update-in-the-shell.done).
+[351-UPD-0035](351-UPD-0035-the-releases-the-store-keeps-through-update-wit.done), [351-UPD-0033](351-UPD-0033-the-updater-keeps-its-releases-in-the-store.done), [351-APP-0029](351-APP-0029-update-in-the-shell.done).
