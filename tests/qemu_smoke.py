@@ -48,6 +48,7 @@ FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_referenc
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # 000-KRN-0214: a wait of at least this many seconds that runs out records the CPUs' state, at most twice a VM.
 STUCK_AFTER, STUCK_RECORDS = 5, 2
+STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
@@ -302,7 +303,9 @@ class VM:
 
     def stuck(self, text, clean):
         """000-KRN-0214: what the CPUs were doing when a wait ran out, kept beside the suites' logs (the gate copies
-        mind-core-*.log): every CPU's registers through QEMU's monitor, and the console's end. At most STUCK_RECORDS a VM."""
+        mind-core-*.log): every CPU's registers through QEMU's monitor, and the console's end. At most STUCK_RECORDS a VM.
+        000-KRN-0234: the tasks' states and the drives' counts twice, STUCK_AGAIN s apart: whether a task that waits goes
+        on waking, and whether a drive's reads advance."""
         self.stuck_records = getattr(self, "stuck_records", 0) + 1
         if self.stuck_records > STUCK_RECORDS:
             return
@@ -311,8 +314,19 @@ class VM:
         except Exception as error:  # QEMU gone, or its monitor not answering: the record says so
             cpus = f"no answer from the monitor: {error!r}"
         path = Path(tempfile.gettempdir()) / f"mind-core-stuck-{os.getpid()}-{self.stuck_records}.log"
-        path.write_text(f"{time.strftime('%H:%M:%S')} waiting for {text!r}\n--- the CPUs\n{cpus}\n--- the tasks\n{self.task_states()}\n--- the console's end\n{clean[-3000:]}\n")
+        tasks, drives = self.task_states(), self.drives()
+        time.sleep(STUCK_AGAIN)
+        again = f"--- the tasks, {STUCK_AGAIN} s later\n{self.task_states()}\n--- the drives, {STUCK_AGAIN} s later\n{self.drives()}\n"
+        path.write_text(f"{time.strftime('%H:%M:%S')} waiting for {text!r}\n--- the CPUs\n{cpus}\n--- the tasks\n{tasks}\n--- the drives (info blockstats)\n{drives}\n"
+                        f"{again}--- the console's end\n{clean[-3000:]}\n")
         print(f"NOTE: a wait for {text!r} ran out; the CPUs' state is in {path}", flush=True)
+
+    def drives(self):
+        """000-KRN-0234: each drive's reads and writes as QEMU counts them (info blockstats)."""
+        try:
+            return self.hmp("info blockstats")
+        except Exception as error:  # QEMU gone, or its monitor not answering
+            return f"no answer from the monitor: {error!r}"
 
     def task_states(self):
         """000-KRN-0232: each task's state, whom it waits for, as the kernel wrote it in the last second: copied through
