@@ -1,6 +1,6 @@
 # 109-UPD-0022 — The updater reads both slots' channels through one parser session — done
 
-**Type:** update (service) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [109](../issues-done/109-session-parsers.done), for [109-KRN-0133](../issues/109-KRN-0133-helpers-from-the-booted-slot.md) · **Roadmap:** track C, D · **Constitution:** MC-9.3, MC-11.11, Appendix B.6
+**Type:** update (service) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [109](../issues-done/109-session-parsers.done), for [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.done) · **Roadmap:** track C, D · **Constitution:** MC-9.3, MC-11.11, Appendix B.6
 
 From the kernel track's request "A parser session ends before its helper does (109-KRN-0133)" in requests-UPD.md (2026-10-20), which this task takes from that file. The network track's half of the same request is [109-NET-0037](109-NET-0037-a-parser-session-waits-for-its-helper.done).
 
@@ -44,5 +44,5 @@ From the kernel track's request "A parser session ends before its helper does (1
 
 ## Related
 
-- [109-KRN-0133](../issues/109-KRN-0133-helpers-from-the-booted-slot.md), [109-KRN-0117](../issues/109-KRN-0117-a-loader-client-that-only-starts-helpers.md).
+- [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.done), [109-KRN-0117](../issues/109-KRN-0117-a-loader-client-that-only-starts-helpers.md).
 - [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.done): the updater's checks in a parser of their own.

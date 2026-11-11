@@ -77,5 +77,5 @@ The link track builds every release it puts through the link from a tree at leas
 ## Related
 
 - [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done): slots A and B.
-- [109-KRN-0133](../issues/109-KRN-0133-helpers-from-the-booted-slot.md): helpers from the booted slot, the loader's rule this extends to applications.
+- [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.done): helpers from the booted slot, the loader's rule this extends to applications.
 - [750-UPD-0019](../issues/750-UPD-0019-signed-application-packages.md): applications installed apart from a release; this task covers only those a release carries.
