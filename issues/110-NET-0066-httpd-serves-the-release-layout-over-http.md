@@ -1,0 +1,48 @@
+# 110-NET-0066 — `httpd` serves the release layout over HTTP/1.1 (stage 1, its first part)
+
+**Type:** network (a host program, `tools/httpd/`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (made on `claude/110-NET-0066-httpd-over-http`, 2026-11-11; landing left) · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) · **Roadmap:** track D · **Constitution:** MC-5.1, MC-5.2, MC-10.3, MC-12.3
+
+## Problem
+
+Stage 1 of [110](110-our-own-web-server.md) is the project's own web server for releases, a host program for Linux. Nothing of it was written. Its parts are:
+1. HTTP/1.1 over the release layout, with the limits and the log (this task);
+2. TLS 1.3, with the key kept across renewals, and the choice of the TLS library recorded;
+3. the `update` and `linkupdate` checks in QEMU run against it instead of `scripts/serve_release.py`, and the guide.
+
+## Plan
+
+- **A Rust program with no dependency beyond `std`,** `tools/httpd/`, as `tools/mindlink` is. No third-party code.
+- **What it serves:** `scripts/release.py`'s layout alone, read only, each name checked against its pattern:
+  - `blobs/<64 lowercase hex digits>`;
+  - `releases/<decimal version>/<x86_64|aarch64>/MANIFEST` and `MANIFEST.SIG`;
+  - `channels/<name>`, the name from `a-z 0-9 . _ -`, not starting with `.`, `_` or `-`.
+- **What it refuses, each with its reason in the response and the log:**
+  - a query string;
+  - a byte outside `A-Z a-z 0-9 . _ - /`, so no percent-encoding and no backslash;
+  - an empty name, or one starting with a dot;
+  - any other path, and directories (no listings);
+  - a symbolic link anywhere on the way;
+  - a file swapped for another between the check and the open.
+- **HTTP/1.1:**
+  - `GET` and `HEAD`, with keep-alive and pipelining; HTTP/1.0 too;
+  - one `Range` per request (206, and 416 with `Content-Range: bytes */len`); several ranges or a malformed one give the whole file, as RFC 9110 allows;
+  - `ETag` (a blob's is its digest), `Last-Modified`, `If-None-Match` (304);
+  - `Cache-Control`: blobs and manifests are immutable, a channel is `no-cache`;
+  - a request with a body is refused.
+- **A channel renamed while it is read:** each request opens the file once and sends what it opened, so a reader gets the old channel or the new one whole.
+- **The limits** (MC-5.1, 5.2), each refusal naming the one it met, the defaults set by flags:
+  - connections at once (64), and per client address (8): 503;
+  - the head's size (8 KiB): 431, and its header lines (64);
+  - the head's deadline (10 s) and between bytes (10 s): 408;
+  - requests a minute per client address (600): 429 with `Retry-After`.
+- **The log** (MC-10.3): one line a request (time, client, method, path, status, bytes, duration, and a refusal's reason), a file a day in `--log DIR`, files older than `--log-days` (30) removed. It never holds a query string or a header's value; bytes outside the names' alphabet show as `?`.
+- **Tests on the host,** in `scripts/host_tests.sh`: the modules' own tests, and `tests/serve.rs` over a real socket.
+
+## Acceptance criteria
+
+- Host tests: every path refusal, the ranges, the limits (each of the five), a channel renamed during a read, and the log without a query string or a header's value.
+- No dependency beyond `std`.
+
+## Related
+
+[110](110-our-own-web-server.md), [docs/update/publishing.md](../docs/update/publishing.md), [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done) (the updater resumes with `Range`), [110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done) (stage 2's listening sockets).
