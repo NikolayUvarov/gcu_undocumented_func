@@ -28,6 +28,8 @@ pub fn user_readable(entry: u64) -> bool { entry & (VALID | USER) == VALID | USE
 pub fn user_writable(entry: u64) -> bool { entry & (VALID | USER | WRITE) == VALID | USER | WRITE }
 /// (writable, executable, device) of a user page.
 pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & WRITE != 0, entry & NX == 0, entry & UNCACHED == UNCACHED) }
+/// A user page's entry made writable or read-only.
+pub fn with_write(entry: u64, writable: bool) -> u64 { if writable { entry | WRITE } else { entry & !WRITE } }
 const PS: u64 = 1 << 7; // a 2 MiB or 1 GiB page (262-KRN-0161)
 static HUGE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(cfg!(test));
 /// Whether a valid entry one or two levels above the 4 KiB pages maps memory itself: a 2 MiB or 1 GiB page.

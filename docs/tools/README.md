@@ -107,7 +107,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - Widgets: frame, scrollable list with selection (a panel), table with columns and sort, menu bar with drop-down menus, dialogs (message, confirm, input), input line with editing and history, status line and F-key bar, progress bar, gauge, time-series graph from block elements.
 - Event loop: wait for a key event or a timeout (`WAIT` already wakes early on input).
 - Host-testable: rendering into an in-memory grid, tests compare grids.
-- Optional later (track G): the compositor scans the whole screen on every dirty frame; a damage-rectangle hint would cut that for text tools.
+- Optional later (track G): the compositor scans the whole screen on every dirty frame, a frame its task wrote since the last copy (000-KRN-0233); a damage-rectangle hint would cut that for text tools.
 
 ### F4. Key events
 

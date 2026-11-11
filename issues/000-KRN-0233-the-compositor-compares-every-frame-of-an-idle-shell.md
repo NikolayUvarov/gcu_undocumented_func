@@ -1,6 +1,6 @@
 # 000-KRN-0233 — The compositor compares a whole frame each time the shell wakes, so an idle machine's CPU 0 seldom halts
 
-**Type:** kernel (the screen's dirty mark, `kernel/src/scheduler.rs`) and the compositor · **Owner:** `KRN` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.2, MC-5.1, MC-12.2
+**Type:** kernel (the screen's dirty mark, `kernel/src/scheduler.rs`) and the compositor · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (made on `claude/000-KRN-0233-screen-written`, 2026-11-11; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.2, MC-5.1, MC-12.2
 
 ## Problem
 
@@ -43,6 +43,25 @@ The check's loop, made to sample each CPU's registers for 10 s (every 20 ms or s
 - The display checks still pass: whole frames (000-KRN-0086, 000-KRN-0186), the screen shown after a program draws it, the boot's first frame.
 - "x86: x2APIC" passes ten times on acc-2 beside a loaded lane.
 - The share of one CPU the compositor takes at idle, measured on one real machine before and after, is recorded for that machine only (MC-12.1).
+
+## Progress
+
+**Made (2026-11-11)** on `claude/000-KRN-0233-screen-written`, steps 1 and 2:
+- **`kernel/src/paging.rs`:** a space keeps one range read-only until it is written (`keep`, `written`, `unwritten`). `STAT VMAP` still shows the range writable, as the task may write it, and a write by the kernel itself through `writable` is noted as a change.
+- **`mmu::with_write`** and **`context::write_protected`** on both architectures: a page made writable or read-only; a write refused by a page's permissions (x86 error code P and W; aarch64 DFSC 0b0011xx with WnR).
+- **`kernel/src/scheduler.rs`:**
+  - a task's `dirty` mark, set at each block, sleep and tick, is gone;
+  - a pull counts the screen changed unless it is kept and untouched; a screen copied while its task does not run is kept;
+  - a write fault in the kept screen makes it writable again and is retried.
+- **The idle check** (`smp_suite`, x86): once a CPU halts, its state is sampled 50 times, and it must be halted in at least half of them.
+- **The host test** `a_kept_range_is_read_only_until_written` (`tests/runtime.rs`).
+- **The kernel's size:** 7566 lines against its budget of 7600.
+
+**Tested in this container** (4 CPUs, QEMU 8.2.2 under TCG), x86:
+- **The probe at idle, 3 s after the boot's prompt:** CPU 0 halted in 28 of 30 samples and 26 of 30 after a command, where `main` gave 10 of 30 and 8 of 30. The compositor drew 2 frames in its first watched second, where `main` drew 16.
+- **The suites:** boot, display, normal, memory, dzen and power (39 checks); busy, smp, isolation and heap (8: all CPUs halted under the stricter check, whole frames copied: 443 screens); wm (17). All passed.
+- **aarch64, the `normal`, `shell`, `smp` and `busy` suites: passed** (27 checks; all CPUs in WFI, a QEMU thread runnable 5 to 6 % of the time).
+- **Left:** the gate; the ten runs of "x86: x2APIC" on acc-2 beside a loaded lane; the real machine's measure.
 
 ## Related
 

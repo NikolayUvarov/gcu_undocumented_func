@@ -52,6 +52,27 @@ fn phys(kind: u32, start: u64, end: u64) -> abi::StatPhys {
     abi::StatPhys { kind, index: 0, start, pages: (end - start) / 4096 }
 }
 
+// 000-KRN-0233: a task's screen kept read-only after a copy; its first write gives it back, the kernel's write is noted.
+#[test]
+fn a_kept_range_is_read_only_until_written() {
+    use paging::{Space, PAGE, USER_SCREEN};
+    let screen = memory::Region::new(2 * PAGE, PAGE).unwrap();
+    let physical = screen.ptr() as usize;
+    let mut space = Space::new().unwrap();
+    space.map(USER_SCREEN, physical, 2 * PAGE, true, false).unwrap();
+    space.keep(USER_SCREEN, 2 * PAGE);
+    assert!(space.unwritten());
+    // STAT VMAP shows what the task may do: read and write.
+    let mut regions = Vec::new();
+    space.regions(|start, size, w, x, d| regions.push((start, size, w, x, d)));
+    assert_eq!(regions, [(USER_SCREEN, 2 * PAGE, true, false, false)]);
+    assert!(!space.written(USER_SCREEN - 1) && space.unwritten());
+    assert!(space.written(USER_SCREEN + PAGE + 8) && !space.unwritten());
+    space.keep(USER_SCREEN, 2 * PAGE);
+    assert_eq!(space.writable(USER_SCREEN + 4), Some(physical + 4));
+    assert!(!space.unwritten());
+}
+
 #[test]
 fn realtek_probe_mapping_accepts_only_present_uncached_identity_leaves() {
     let pdpt = memory::Region::new(4096, 4096).unwrap();

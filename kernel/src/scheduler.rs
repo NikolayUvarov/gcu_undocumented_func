@@ -100,7 +100,7 @@ struct Task {
     pid: u64, name: Name, service: bool, state: State, sp: usize, cpu: usize,
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
-    input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, console_read_ns: u64, dirty: bool,
+    input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, console_read_ns: u64,
     text: Option<alloc::boxed::Box<Text, Frames>>, // its text input, if it was started with one (SPAWN_TEXT)
     // Capability table, grown on demand up to CAP_SLOTS_MAX (issue 171); the generation of each kernel-allocated slot.
     cspace: Vec<Option<Capability>, Frames>, generations: Vec<u32, Frames>,
@@ -993,7 +993,7 @@ impl Scheduler {
         if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
         let nodes = table;
-        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, dirty: true, text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, program, worker_of: worker.map(|w| w.creator), kernel: 0, ran_out: true, home: cpu }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
+        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, program, worker_of: worker.map(|w| w.creator), kernel: 0, ran_out: true, home: cpu }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
         // Image, stack, screen and the task's kernel structures are charged to the spawner and every payer above it,
         // after the last fallible step (issue 168, 171-KRN-0032).
         task.kernel = kernel_bytes(&task);
@@ -1203,7 +1203,6 @@ impl Scheduler {
         } else {
             self.tasks[slot].as_mut().unwrap().state = State::BlockedSend(ep);
         }
-        self.tasks[slot].as_mut().unwrap().dirty = true;
         Ok(Some(self.select(sp, cpu)))
     }
     unsafe fn ipc_recv(&mut self, slot: usize, sp: usize, cpu: usize, request: &SyscallMailbox) -> Result<Option<usize>, usize> {
@@ -1216,7 +1215,7 @@ impl Scheduler {
         let sender = (1..self.tasks.len()).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
         let deadline = self.deadline(request.arg2);
-        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = deadline;
+        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.deadline = deadline;
         Ok(Some(self.select(sp, cpu)))
     }
     // Reply to the last client or to the client from a saved reply capability (arg1 is its slot).
@@ -1562,7 +1561,7 @@ impl Scheduler {
                         core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), ERR_BUSY);
                         let deadline = crate::clock::now_ns() + TEXT_WAIT_MS * 1_000_000;
                         let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
-                        task.state = State::Sleeping(deadline); task.dirty = true; self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
+                        task.state = State::Sleeping(deadline); self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
                     }
                 }
                 Some(Capability::Console) => Err(ERR_PEER),
@@ -1586,7 +1585,7 @@ impl Scheduler {
                         text.waiting = true;
                         core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), ERR_BUSY);
                         let deadline = crate::clock::now_ns() + TEXT_WAIT_MS * 1_000_000;
-                        task.state = State::Sleeping(deadline); task.dirty = true; self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
+                        task.state = State::Sleeping(deadline); self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
                     }
                 }
             }
@@ -1622,7 +1621,7 @@ impl Scheduler {
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), now as usize);
                 let deadline = crate::clock::now_ns() + duration + crate::clock::resolution_ns();
                 task.state = if task.input.is_empty() { State::Sleeping(deadline) } else { State::Ready };
-                task.dirty = true; self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
+                self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
             }
             SYSCALL_EXIT => { self.terminate(slot, true, EXIT_NORMAL | (request.arg1 & 0xFF_FFFF) << 8); return self.select(sp, cpu); }
             SYSCALL_ENDPOINT_CREATE => match (self.new_endpoint(), Self::room(task)) {
@@ -1862,14 +1861,17 @@ impl Scheduler {
                             // New capability only on screen change: the compositor keeps the mapping across frames.
                             // The compositor's first frame covers the whole screen: the kernel's boot lines and logs stop
                             // there, not when it is given the framebuffer (211-KRN-0017).
+                            // A screen is written since its last copy unless it is kept read-only and untouched (000-KRN-0233):
+                            // it is kept at a copy while its task does not run, and its first write marks it again.
                             if source != self.composited {
-                                t.dirty = drawing; self.dirty = false;
+                                self.dirty = false; if t.state != State::Ready || held { t.space.keep(paging::USER_SCREEN, frame_bytes(&self.boot)); }
                                 crate::screen::take(); self.composited = source; self.remove(slot, request.arg1); let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot), CAP_READ)); task.nodes[request.arg1] = self.root(); Ok(2)
                             } else if drawing {
                                 // Held at its next wait, where a frame ends, and copied at the next pull (000-KRN-0186).
-                                if t.dirty || self.dirty { self.wanted = Some((focused, t.pid, slot)); Ok(COMPOSITOR_BUSY) } else { Ok(0) }
+                                if !t.space.unwritten() || self.dirty { self.wanted = Some((focused, t.pid, slot)); Ok(COMPOSITOR_BUSY) } else { Ok(0) }
                             } else {
-                                let dirty = core::mem::take(&mut t.dirty) | core::mem::take(&mut self.dirty);
+                                let dirty = !t.space.unwritten() | core::mem::take(&mut self.dirty);
+                                if dirty && (t.state != State::Ready || held) { t.space.keep(paging::USER_SCREEN, frame_bytes(&self.boot)); }
                                 self.wanted = None;
                                 if dirty && request.arg2 == COMPOSITOR_FRAME && !held { self.held = Some((focused, t.pid, crate::clock::now_ns(), slot)); }
                                 if !dirty && held { self.release_held(); self.wake_idle(cpu, false); }
@@ -1973,11 +1975,16 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                 Event::Tick => {
                     cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed);
                     if cpu == 0 { s.timers(cpu, true); }
-                    if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
+                    if slot == 0 && cpu == 0 { return sp; } if slot != 0 { s.tasks[slot].as_mut().unwrap().ticks += 1; }
                     s.select(sp, cpu)
                 }
                 Event::Wake => if slot == 0 || s.flush[cpu] || s.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { s.select(sp, cpu) } else { sp },
                 Event::Fault { code, error, pc, address } => {
+                    // A write to a screen kept read-only since its copy (000-KRN-0233), or a page made writable meanwhile.
+                    if context::write_protected(code, error) {
+                        let space = &mut s.tasks[slot].as_mut().unwrap().space;
+                        if space.written(address as usize) || space.writable(address as usize).is_some() { space.forget_cached(); return sp; }
+                    }
                     // A page replaced while this CPU reached it (a revoked lease, 000-KRN-0152): mapped by now, so retried.
                     if let Some(write) = context::missing_page(code, error) {
                         let space = &s.tasks[slot].as_ref().unwrap().space;
