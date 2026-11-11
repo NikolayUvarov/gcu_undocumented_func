@@ -71,7 +71,7 @@
 - **Stage 1:**
   - host tests: the path rules (every refusal), `Range` parsing, the limits, a channel renamed during reads;
   - a fuzz target for the request parser (`ASR`'s harness);
-  - the `update` and `linkupdate` checks in QEMU, x86 and aarch64, run against `httpd` instead of `scripts/serve_release.py`: release 6 fetched, a cut download resumed, an expired channel refused;
+  - the `update` and `update_store` checks in QEMU, x86 and aarch64, run against `httpd` instead of `scripts/serve_release.py`: release 6 fetched, a cut download resumed, an expired channel refused. (This criterion first named `linkupdate`, which fetches nothing over HTTP: `mindlink` puts the release on the machine through the link. `update_store` is the other check that fetches from a release server; corrected 2026-11-11, [110-NET-0068](110-NET-0068-the-update-checks-run-against-httpd.md).)
   - on the maintainer's server: a device updated from it, the configuration named (MC-12.1).
 - **Stage 2:** a QEMU suite with two MIND machines on one network, where one serves a release and the other fetches it, boots it on trial and confirms it; a port outside the listening grant refused.
 - **The profile** (Article 9) and docs/update say what the server is trusted with.
@@ -80,7 +80,7 @@
 
 **Stage 1, its first part (2026-11-11):** [110-NET-0066](110-NET-0066-httpd-serves-the-release-layout-over-http.md), `tools/httpd/`: the release layout over HTTP/1.1, `std` only. 
 
-**Stage 1, its second part (2026-11-11):** [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md): TLS 1.3, the library's choice recorded (rustls over the RustCrypto crates, as `tls`), the pinned SPKI printed, renewals read again; the guide, [docs/update/server.md](../docs/update/server.md); the fuzz target. **Left of stage 1:** the QEMU `update` and `linkupdate` checks against it; the maintainer's server.
+**Stage 1, its second part (2026-11-11):** [110-NET-0067](110-NET-0067-httpd-over-tls-with-a-pinned-key.md): TLS 1.3, the library's choice recorded (rustls over the RustCrypto crates, as `tls`), the pinned SPKI printed, renewals read again; the guide, [docs/update/server.md](../docs/update/server.md); the fuzz target. **Left of stage 1:** the QEMU `update` and `update_store` checks against it ([110-NET-0068](110-NET-0068-the-update-checks-run-against-httpd.md)); the maintainer's server.
 
 ## Related
 

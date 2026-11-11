@@ -1,8 +1,8 @@
 # The release server, `httpd`
 
-**Version:** 0.1 (2026-11-11) · **Track:** `NET` ([TRACKS.md](../../TRACKS.md)), main task [110](../../issues/110-our-own-web-server.md) · **Russian:** [server_RU.md](server_RU.md)
+**Version:** 0.2 (2026-11-11) · **Track:** `NET` ([TRACKS.md](../../TRACKS.md)), main task [110](../../issues/110-our-own-web-server.md) · **Russian:** [server_RU.md](server_RU.md)
 
-`tools/httpd` is the project's own web server for releases: a host program for Linux that serves `scripts/release.py`'s layout read-only. This is stage 1 of [110](../../issues/110-our-own-web-server.md). The `update` checks in QEMU still run against `scripts/serve_release.py`, and no device has been updated from `httpd` yet.
+`tools/httpd` is the project's own web server for releases: a host program for Linux that serves `scripts/release.py`'s layout read-only. This is stage 1 of [110](../../issues/110-our-own-web-server.md). The `update` and `update_store` checks in QEMU run against it ([110-NET-0068](../../issues/110-NET-0068-the-update-checks-run-against-httpd.md)); no device has been updated from it on a real machine yet.
 
 ## What it is trusted with, and what not
 
@@ -41,7 +41,9 @@ Each refusal names the limit it met, in the response and in the log.
 | `--per-client` | 8 at once per address | 503 (as above) |
 | `--per-minute` | 600 requests per address | 429, with `Retry-After` |
 | (fixed) | a head of 8 KiB, 64 header lines | 431 |
-| (fixed) | 10 s for a head, 10 s between bytes | 408 |
+| `--head-timeout` | 10 s for a request's head | 408 |
+| `--idle-timeout` | 10 s between a head's bytes | 408; a kept-alive connection idle that long is closed |
+| `--send-timeout` | 30 s for a write the client does not take | the connection is closed |
 
 ## The log
 
@@ -49,7 +51,18 @@ Each refusal names the limit it met, in the response and in the log.
 - One file a day, `httpd-YYYY-MM-DD.log`, in `--log`; files older than `--log-days` (30) are removed. Without `--log`, lines go to standard error.
 - It never holds a query string or a header's value; bytes outside the names' alphabet show as `?`.
 
+## The tests' hooks
+
+The QEMU checks need a server that cuts a download midway, holds a response and records what was asked ([110-NET-0068](../../issues/110-NET-0068-the-update-checks-run-against-httpd.md)). Those hooks are built only with the Cargo feature `test-hooks`; a server built without it refuses `--test-hooks`.
+
+- **`--test-hooks DIR`.** A path's name there is the path without its first `/`, each `/` as `+`.
+  - `DIR/cut/<name>` holds a byte count: the next response for that path is cut after that many body bytes, and its connection closed.
+  - `DIR/hold/<name>`: the next response for that path waits while the server's `DIR/held/<name>` is there, at most 10 s.
+  - `DIR/requests`: a line a request, its path and its `Range` header (`-` without one).
+- **`scripts/serve_httpd.py`** builds it so and runs it for the `update` and `update_store` suites. They set its deadlines to 60 s, since the emulated machines of a loaded host are slow.
+- `scripts/serve_release.py` stays for the `net` suite's download checks, which need a malformed head no real server sends.
+
 ## Not done yet
 
-- the `update` and `linkupdate` checks in QEMU against `httpd`, and a device updated from the maintainer's server (110, stage 1);
+- a device updated from the maintainer's server (110, stage 1);
 - the same server as a MIND Core service (stage 2).
