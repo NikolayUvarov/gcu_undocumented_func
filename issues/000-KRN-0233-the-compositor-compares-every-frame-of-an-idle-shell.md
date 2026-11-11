@@ -1,6 +1,6 @@
 # 000-KRN-0233 — The compositor compares a whole frame each time the shell wakes, so an idle machine's CPU 0 seldom halts
 
-**Type:** kernel (the screen's dirty mark, `kernel/src/scheduler.rs`) and the compositor · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (made on `claude/000-KRN-0233-screen-written`, 2026-11-11; aarch64 and the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.2, MC-5.1, MC-12.2
+**Type:** kernel (the screen's dirty mark, `kernel/src/scheduler.rs`) and the compositor · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (made on `claude/000-KRN-0233-screen-written`, 2026-11-11; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.2, MC-5.1, MC-12.2
 
 ## Problem
 
@@ -60,7 +60,8 @@ The check's loop, made to sample each CPU's registers for 10 s (every 20 ms or s
 **Tested in this container** (4 CPUs, QEMU 8.2.2 under TCG), x86:
 - **The probe at idle, 3 s after the boot's prompt:** CPU 0 halted in 28 of 30 samples and 26 of 30 after a command, where `main` gave 10 of 30 and 8 of 30. The compositor drew 2 frames in its first watched second, where `main` drew 16.
 - **The suites:** boot, display, normal, memory, dzen and power (39 checks); busy, smp, isolation and heap (8: all CPUs halted under the stricter check, whole frames copied: 443 screens); wm (17). All passed.
-- **Left:** aarch64; the gate; the ten runs of "x86: x2APIC" on acc-2; the real machine's measure.
+- **aarch64, the `normal`, `shell`, `smp` and `busy` suites: passed** (27 checks; all CPUs in WFI, a QEMU thread runnable 5 to 6 % of the time).
+- **Left:** the gate; the ten runs of "x86: x2APIC" on acc-2 beside a loaded lane; the real machine's measure.
 
 ## Related
 
