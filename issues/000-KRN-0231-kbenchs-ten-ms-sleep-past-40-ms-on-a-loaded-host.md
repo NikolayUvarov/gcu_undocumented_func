@@ -1,6 +1,6 @@
 # 000-KRN-0231 — `kbench`'s 10 ms sleep past 40 ms on a loaded host
 
-**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (in `main` since round 119, b3f62ab1; the ten runs on acc-2: 9 of 10, the failure APP's `early_end_check`; ten again once APP's fix is in `main`) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`kbench_check`) and the kernel's sleep · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (in `main` since round 119, b3f62ab1; the ten runs on acc-2: 9 of 10, the failure APP's `early_end_check`, whose fix is in `main` since round 120, b1693b08; ten again left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
