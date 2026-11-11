@@ -1,6 +1,6 @@
 # 000-KRN-0234 — A program's start waited past 8 s, the chain ending at `ata` (round 121, x32)
 
-**Type:** tests (the stuck record) and the boot disk's path · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
+**Type:** tests (the stuck record) and the boot disk's path · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (step 1 made on `claude/000-KRN-0234-stuck-record-drives`, 2026-11-11; step 2 left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -34,6 +34,12 @@ The slowest single start under load was 1.3 to 1.4 s with either. What a loaded 
 ## Acceptance criteria
 
 - The cause is named, with the record that shows it, or ten runs on x32 beside a busy lane pass with the record added, which then stays.
+
+## Progress
+
+**Step 1 (2026-11-11),** `tests/qemu_smoke.py`: the stuck record holds the tasks' states and `info blockstats` (each drive's operations, bytes and total time) twice, `STUCK_AGAIN` (1 s) apart.
+- **`tests/qemu_stuck_test.py`:** both readings in the record, in the monitor commands' order, and the drives' section when the kernel printed no address.
+- **In a VM here** (x86, QEMU 8.2.2): the record of a probe held `ide0-hd0`'s counts twice and the tasks twice.
 
 ## Related
 
