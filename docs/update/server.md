@@ -2,7 +2,7 @@
 
 **Version:** 0.2 (2026-11-11) · **Track:** `NET` ([TRACKS.md](../../TRACKS.md)), main task [110](../../issues/110-our-own-web-server.md) · **Russian:** [server_RU.md](server_RU.md)
 
-`tools/httpd` is the project's own web server for releases: a host program for Linux that serves `scripts/release.py`'s layout read-only. This is stage 1 of [110](../../issues/110-our-own-web-server.md). The `update` and `update_store` checks in QEMU run against it ([110-NET-0068](../../issues/110-NET-0068-the-update-checks-run-against-httpd.md)); no device has been updated from it on a real machine yet.
+`tools/httpd` is the project's own web server for releases: a host program for Linux that serves `scripts/release.py`'s layout read-only. This is stage 1 of [110](../../issues/110-our-own-web-server.md). The `update` and `update_store` checks in QEMU run against it ([110-NET-0068](../../issues-done/110-NET-0068-the-update-checks-run-against-httpd.done)); no device has been updated from it on a real machine yet.
 
 ## What it is trusted with, and what not
 
@@ -53,7 +53,7 @@ Each refusal names the limit it met, in the response and in the log.
 
 ## The tests' hooks
 
-The QEMU checks need a server that cuts a download midway, holds a response and records what was asked ([110-NET-0068](../../issues/110-NET-0068-the-update-checks-run-against-httpd.md)). Those hooks are built only with the Cargo feature `test-hooks`; a server built without it refuses `--test-hooks`.
+The QEMU checks need a server that cuts a download midway, holds a response and records what was asked ([110-NET-0068](../../issues-done/110-NET-0068-the-update-checks-run-against-httpd.done)). Those hooks are built only with the Cargo feature `test-hooks`; a server built without it refuses `--test-hooks`.
 
 - **`--test-hooks DIR`.** A path's name there is the path without its first `/`, each `/` as `+`.
   - `DIR/cut/<name>` holds a byte count: the next response for that path is cut after that many body bytes, and its connection closed.
