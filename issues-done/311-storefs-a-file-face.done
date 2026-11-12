@@ -51,7 +51,7 @@ A cut inside a flush's writes to the medium runs in the host tests only (Progres
 
 **What the plan names that is not this track's, split off on 2026-11-12:**
 - **`fm` over a store volume** (APP's): asked in [requests-APP.md](../issues/requests-APP.md). The shell's part is done (311-APP-0121).
-- **A program's own data directory in the store** (the loader's, KRN's): asked in [requests-KRN.md](../issues/requests-KRN.md). 000-KRN-0170 gives it on the boot volume's FAT today. STO's check follows once the loader can give a `storefs` scope.
+- **A program's own data directory in the store** (the loader's, KRN's): asked on 2026-11-12, [311-KRN-0237](../issues/311-KRN-0237-a-programs-own-directory-in-the-store.md). 000-KRN-0170 gives it on the boot volume's FAT today. STO's check follows once the loader can give a `storefs` scope.
 
 **Not done here:** sharded directories, which a directory past one block would need (docs/storage, "Directories as objects"). No program writes one yet, so no task is open for it.
 
