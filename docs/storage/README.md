@@ -746,7 +746,7 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 
 The `storefaults` suite (x86 and aarch64, 300-STO-0005) damages the record of a name's second version on the medium. A new instance counts it corrupt, with a chunk's corrupt copy left from before (`CORRUPT=2`), and the first version is current.
 
-## Sealed records — run on the platform, the key not yet protected (308-STO-0021)
+## Sealed records — run on the platform; a medium read without its key shows nothing in QEMU (308-STO-0021, 0045)
 
 Every record is sealed with ChaCha20-Poly1305 (RFC 8439; the RustCrypto `chacha20poly1305` crate on the platform). What is in the clear on the medium is the superblock and, for each record, its frame of 44 bytes:
 
@@ -777,6 +777,10 @@ Evidence: `tests/blockstore_host.rs` over a stand-in cipher (a keystream of spli
 - `a_partition_holding_only_the_superblock_mounts_and_gets_a_key`, `without_a_random_source_the_key_is_derived_and_said_so`, and `hmac_sha256_matches_rfc_4231`.
 
 The platform's cipher is the crate, tested by its own project. On the platform, the QEMU `store` suite (x86 and aarch64) puts, reads and names objects through sealed records, and finds them again after a restart without making a key again. The `storefaults` suite finds each record it damages by opening frames (above), and shows a wrong key refused.
+
+**A medium read without its key** (308-STO-0045): the `store` suite's partition check (307-STO-0044), on x86 and aarch64, reads the store's NVMe and AHCI partitions on the host after the machine is off, as a disk taken elsewhere would be read. The volume key is kept by `keystore`.
+- Nowhere in them: 64 bytes of the object put, the name it was published under, and the object's CID as text, in binary and as its digest.
+- The records' frames are found there, so the bytes read are the store's.
 
 **Not provided:** confidentiality of a medium whose key is in the clear. What sealing protects and what it does not is in [the threat model](../profile/threat-model.md) (308-STO-0024).
 
@@ -1115,7 +1119,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 | Main task | What | Order |
 |---|---|---|
 | [307](../../issues/307-the-stores-own-partition.md) | A partition of the store's own on real machines; durability classes `volatile`, `flushed`, `copied` (`blockstore.wit` 2.0) | first: until then nothing survives a reset on a real machine |
-| [308](../../issues/308-encryption-at-rest.md) | Sealed records, a key per memory domain, the volume key from the TPM or a passphrase | before any personal data |
+| [308](../../issues-done/308-encryption-at-rest.done) | Sealed records, a key per memory domain, the volume key from the TPM or a passphrase | before any personal data |
 | [309](../../issues-done/309-copies-scrub-and-repair.done) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), copies in a file with repair from them ([309-STO-0031](../../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)), and copies of chosen names on a second medium with repair from either, host-tested and run in QEMU on x86 and aarch64 (309-STO-0040, above); on real machines after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues-done/311-storefs-a-file-face.done) | `storefs`: a file view of a named root, with snapshots and history | after 307 |

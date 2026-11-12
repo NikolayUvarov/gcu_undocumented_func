@@ -4,7 +4,7 @@
 
 Split from [312](../issues/312-the-minds-memory.md) (2026-10-31), its second step: "derived indexes: full text … an exact scan first … an index is never authority or proof that a version is current, and may be dropped and rebuilt (MC-4.12)". Vectors wait for `NRL`'s embeddings; assertions are a later task of 312.
 
-No personal data is written before [308](../issues/308-encryption-at-rest.md) is done: the tests and the pilot index test text only.
+No personal data is written before [308](308-encryption-at-rest.done) is done: the tests and the pilot index test text only.
 
 ## Problem
 
