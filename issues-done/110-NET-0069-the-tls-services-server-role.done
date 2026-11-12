@@ -1,10 +1,10 @@
-# 110-NET-0069 — The TLS service's server role: TLS 1.3 with the device key, which stays in `keystore`
+# 110-NET-0069 — The TLS service's server role: TLS 1.3 with the device key, which stays in `keystore` — done
 
-**Type:** network (`tls`, `keystore`, `idl/tls.wit`, `idl/keystore.wit`) · **Owner:** `NET` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) (stage 2) · **Roadmap:** track C, track D · **Constitution:** MC-5.1, MC-5.2, MC-11.6, MC-11.9, MC-11.11, MC-12.3, MC-12.4
+**Type:** network (`tls`, `keystore`, `idl/tls.wit`, `idl/keystore.wit`) · **Owner:** `NET` · **Priority:** P1 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [110](../issues/110-our-own-web-server.md) (stage 2) · **Roadmap:** track C, track D · **Constitution:** MC-5.1, MC-5.2, MC-11.6, MC-11.9, MC-11.11, MC-12.3, MC-12.4
 
 ## Problem
 
-Stage 2 of [110](110-our-own-web-server.md) has a MIND machine serve its updates over HTTPS. Three things are missing:
+Stage 2 of [110](../issues/110-our-own-web-server.md) has a MIND machine serve its updates over HTTPS. Three things are missing:
 
 - **`tls` is a client only** (`tls.wit` 1.2).
 - **The device key signs only what a client signs.** `keystore` signs a TLS 1.3 client CertificateVerify and an SSH login, nothing else (MC-11.9).
@@ -38,13 +38,13 @@ Stage 2 of [110](110-our-own-web-server.md) has a MIND machine serve its updates
    - The IDL table.
 
 **Not in this task:**
-- **The first client that serves.** That is `httpd` as a MIND Core service ([110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.md)): `init` lends it a TLS client with the right to the device certificate and its listening flow. Its QEMU check is this task's QEMU evidence.
+- **The first client that serves.** That is `httpd` as a MIND Core service ([110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.done)): `init` lends it a TLS client with the right to the device certificate and its listening flow. Its QEMU check is this task's QEMU evidence.
 - **An ECDSA key.** Browsers (Chrome, Firefox) do not accept an Ed25519 server certificate. This role serves machines: curl and OpenSSL, and MIND Core's own client by its pin.
 
 ## Acceptance criteria
 
 - **Host:** `keystore` signs a CertificateVerify's content of its own side alone, with a 32- or 48-byte hash: each other form is refused (`tests/tls_forms_host.rs`).
-- **QEMU, x86 and aarch64**, through [110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.md)'s service:
+- **QEMU, x86 and aarch64**, through [110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.done)'s service:
   - a TLS 1.3 client on the host (Python's `ssl`) finishes a handshake on the port the listening grant names;
   - it receives the device certificate, the one `tls cert` prints, and exchanges data;
   - `keystore` logs `SIGNED TlsServer`;
@@ -83,7 +83,11 @@ Stage 2 of [110](110-our-own-web-server.md) has a MIND machine serve its updates
 
 ## Related
 
-- [110](110-our-own-web-server.md): stage 2.
+- [110](../issues/110-our-own-web-server.md): stage 2.
 - [110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done): listening sockets and the listening grant.
-- [110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.md): the first client that serves.
+- [110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.done): the first client that serves.
 - [351-NET-0022](../issues-done/351-NET-0022-tls-without-the-device-certificate.done): `BADGE_TLS_NO_DEVICE`.
+
+## Resolution
+
+The TLS service's server role in `main` (round 124, 60b995bd): `tls.wit` 1.3 (`listen`, `accept`, `served`), `keystore.wit` 1.7 (`tls-server`, the signer's badge, 120 a minute), `tls/src/device.rs`'s served certificate; `tests/tls_forms_host.rs`. Both TLS groups passed on the maintainer's machines (212d3497), and the gate of round 124's candidate, 45 groups.

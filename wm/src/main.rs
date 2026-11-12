@@ -33,7 +33,7 @@ use wm::menu::{self, Kind as ProgramKind};
 // SLOT_WIFI: a copy of the shell's client of the Wi-Fi station (shell.wit 1.5), passed on to wifi from Settings (550-APP-0033).
 // 64 MiB: the desktop background's frame and picture (000-APP-0047, 000-APP-0050), up to 4 MiB each, and a picture's
 // file of up to 32 MiB as it is decoded, beside the rest.
-mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_BATTERY | REQUEST_NET_COUNTERS, memory: 64);
+mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_BATTERY | REQUEST_NET_COUNTERS | REQUEST_CLIPBOARD, memory: 64);
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
@@ -197,6 +197,14 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_BATTERY != 0 { if holds(SLOT_BATTERY) && grant(SLOT_BATTERY, SLOT_BATTERY) { lent.push("battery"); } else { missing.push("battery"); } }
     if requests & mind::process::REQUEST_WIFI != 0 { if holds(SLOT_WIFI) && grant(SLOT_WIFI, SLOT_WIFI) { lent.push("wifi"); } else { missing.push("wifi"); } }
     if requests & mind::process::REQUEST_NET_COUNTERS != 0 { if holds(SLOT_NET) && grant(SLOT_NET, SLOT_NET) { lent.push("net-counters"); } else { missing.push("net-counters"); } }
+    // The clipboard (000-APP-0032): a program's copy, minted from the client the shell lent wm, which may badge. With
+    // none, there is no clipboard to lend, and the program keeps its own copy buffer, as the shell's do.
+    if requests & mind::process::REQUEST_CLIPBOARD != 0 && holds(SLOT_CLIPBOARD) {
+        match ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE | CAP_GRANT, mind::clipboard::BADGE_PROGRAM) {
+            Ok(copy) => { if grant(SLOT_CLIPBOARD, copy) { lent.push("clipboard"); } else { missing.push("clipboard"); } let _ = ipc::drop_cap(copy); }
+            Err(_) => missing.push("clipboard"),
+        }
+    }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
     let mut window = None;
     if let Some(id) = front.filter(|_| pass || display) {
@@ -682,10 +690,18 @@ fn main(info: &'static BootInfo) {
     let mut last_sync = 0usize;
     let mut shell_window: Option<u32> = None; // the shell's window, to be brought to the front once it shows
     let mut first = true;
+    // The clipboard's manager copy (000-APP-0032): wm names the program of the window in front, 0 while its own menus,
+    // Settings or a move have the keys.
+    let clip = holds(SLOT_CLIPBOARD).then(|| ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE, mind::clipboard::BADGE_MANAGER).ok()).flatten().map(Endpoint);
+    let mut clip_front: Option<u64> = None;
     loop {
         let mut relayout = first;
         let mut busy = false;
         first = false;
+        if let Some(clip) = clip {
+            let front = if matches!(manager.wm.mode, Mode::Normal) { manager.wm.desk.focused().map_or(0, |w| w.owner) } else { 0 };
+            if clip_front != Some(front) && mind::clipboard::front(clip, front).is_ok() { clip_front = Some(front); }
+        }
         while let Some(input) = mind::input::read_input() {
             busy = true; relayout = true;
             let action = match input {

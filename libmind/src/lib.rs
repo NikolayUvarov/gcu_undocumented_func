@@ -22,6 +22,7 @@ pub mod block_protocol;
 pub mod blockstore;
 pub mod car;
 pub mod checkpoint;
+pub mod clipboard; // the system clipboard's client (000-APP-0032); paste needs alloc
 pub mod cid;
 pub mod control;
 pub mod dag;
@@ -62,6 +63,7 @@ pub mod partition; // MBR and GPT, and the block store's own partition (307-KRN-
 pub mod release;
 pub mod json;
 pub mod models;
+pub mod model_object; // a model as one object of the block store (251-STO-0014, 0015)
 pub mod tpm;
 pub mod netring;
 pub mod output;

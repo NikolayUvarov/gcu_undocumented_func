@@ -1,6 +1,6 @@
 # 312 — The Mind's memory: a journal, assertions and derived indexes
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([308](../issues-done/308-encryption-at-rest.done), sealing before personal data, is done); for its QEMU criterion, a program started in a memory domain ([requests-APP.md](requests-APP.md), 2026-11-12) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.5, MC-4.7, MC-4.8, MC-4.11, MC-4.12, MC-10.3, MC-11.5, Appendix B.3
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([308](../issues-done/308-encryption-at-rest.done), sealing before personal data, is done); for its QEMU criterion, a program started in a memory domain ([312-APP-0134](312-APP-0134-a-program-started-in-a-memory-domain.md)) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.5, MC-4.7, MC-4.8, MC-4.11, MC-4.12, MC-10.3, MC-11.5, Appendix B.3
 
 From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-as-a-minds-memory.md` on `internal-dev-messages`), taken by the storage session at the maintainer's word (2026-10-27). Everything here is plan, not a guarantee (MC-12.3).
 
@@ -30,7 +30,7 @@ A Mind needs memory with an explicit history, deliberate and accounted forgettin
 ## Progress (2026-11-12)
 
 - **The host criteria** are met by 312-STO-0034 (the journal's check from its head) and 312-STO-0035 and 0047 (an index rebuilt equal to itself, a stale one detected).
-- **The QEMU criterion** waits for a program that holds a memory domain's client alone. Asked of the shell on 2026-11-12 (`requests-APP.md`); STO's check follows with `blocks` so started as the stand-in agent. The parts already run in QEMU are the `store` suite's domains check: two domains, one forgotten and its records collected, the other whole, a domain's client refused every domain call.
+- **The QEMU criterion** waits for a program that holds a memory domain's client alone. Asked of the shell on 2026-11-12, now [312-APP-0134](312-APP-0134-a-program-started-in-a-memory-domain.md) (`run -d`); STO's check follows with `blocks` so started as the stand-in agent. The parts already run in QEMU are the `store` suite's domains check: two domains, one forgotten and its records collected, the other whole, a domain's client refused every domain call.
 - **What the plan has that is not built:**
   - **A domain's term.** The termination condition MC-4.11 accepts in its place is there, `domain-forget`. A term the store keeps itself needs a calendar clock in `blockstore`, which holds no `rtc` client.
   - **Signed assertions** where provenance crosses a trust zone (Appendix B.3): none crosses one before [315](315-memory-across-machines.md).

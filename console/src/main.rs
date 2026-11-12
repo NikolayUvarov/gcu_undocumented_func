@@ -23,7 +23,7 @@ use screen::{parse, Command, Kind, Screen};
 
 // The network only for its own `ping`: a flow grant the policy names for console, when the shell starts it. The camera
 // to pass on to camera (158-APP-0043). The shell's commands, to send it its own (211-APP-0044).
-mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_NETWORK | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL);
+mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_NETWORK | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_CLIPBOARD);
 
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const HELP: &str = "Type a program and its arguments: uptime, df, find ram: -name *.txt, grep -i word docs/notes.txt, fm, …\n\
@@ -274,6 +274,16 @@ fn main(info: &'static BootInfo) {
                 Input::Key(event) => {
                     let Some(key) = Key::from_event(event.to_word()) else { continue };
                     if key.code() == mind::keys::Code::Tab { complete(&mut screen); dirty = true; continue; }
+                    // The system clipboard's first line into the line (000-APP-0032): Ctrl+V or Shift+Insert.
+                    if key.is_ctrl('v') || (key.code() == mind::keys::Code::Insert && key.shift()) {
+                        match mind::clipboard::paste() {
+                            Ok(text) => screen.paste(&text),
+                            Err(mind::clipboard::Error::NoClient) => {}
+                            Err(error) => mind::println!("[CONSOLE] NOT PASTED: {}", error.text()),
+                        }
+                        dirty = true;
+                        continue;
+                    }
                     dirty = true;
                     // One line at a time (000-APP-0113): the keys after its Enter wait in the queue until it has run.
                     if let Some(line) = screen.key(key, page) { pending = Some((line, false)); break; }
