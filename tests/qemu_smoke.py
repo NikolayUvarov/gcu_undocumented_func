@@ -5421,7 +5421,8 @@ def store_domains_check(vm):
     `max`), a domain is made; its blocks, names and journal (312-STO-0034) are its own, a domain's client makes no
     domain, and a forgotten domain is gone at once, its journal with it and its records then collected, while another
     domain stands. 312-STO-0046: a domain made with a limit of 8 KiB refuses a publish past it, while the volume takes
-    the same object, and says what it retains. Without a random source (x86's qemu64), no domain is made, and the store
+    the same object, and says what it retains. 312-STO-0049: a client of a domain that may only read (`blocks -dr`)
+    reads its name and block and is refused a put and a publish; through the shell's read-only client, none is lent. Without a random source (x86's qemu64), no domain is made, and the store
     says why."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
@@ -5446,6 +5447,19 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 312-STO-0049: a client of the domain that may only read (`-dr`, domain-client-with): the name resolved and the
+    # block read; a put and a publish refused, each logged with its badge. The shell's read-only client is another owner.
+    require(blocks(f"-dr {first} resolve secret"), f"secret VERSION 1 ROOT {note}")
+    require(blocks(f"-dr {first} get {note} ram:ro.txt"), "GOT 12 BYTES")
+    out = blocks(f"-dr {first} put ram:dom.txt")
+    require(out, "blocks: put:"); require(out, "Rights")
+    require(blocks(f"-dr {first} publish other {note}"), "blocks: publish other: Rights")
+    # `logs` drains the log: read once, up to its last line, the refused publish.
+    log = vm.service_logs("blockstore", "REFUSED Publish")
+    assert re.search(rf"\[BLOCKSTORE\] DOMAIN {first}'S CLIENT LENT TO PID \d+ \(BADGE \d+\) WITH RIGHTS 1\r?$", log, re.M), log
+    refusals = re.findall(r"\[BLOCKSTORE\] REFUSED (Put|Publish) FOR PID \d+ \(BADGE (\d+)\)", log)
+    assert {"Put", "Publish"} <= {op for op, badge in refusals if int(badge) >= 0x100}, log
+    require(vm.command(f"blocksro -dr {first} resolve secret"), f"blocks: domain {first}: Rights")
     # 312-STO-0046: a domain with a limit of its own: 5000 bytes fit in 8 KiB, 4000 more do not; the volume is not bound.
     limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", blocks("domain new 8"))[1])
     require(vm.service_logs("blockstore", "RETAINING AT MOST"), f"[BLOCKSTORE] DOMAIN {limited} MADE FOR BADGE")
@@ -5475,6 +5489,7 @@ def store_domains_check(vm):
     require(blocks(f"domain forget {first}"), f"DOMAIN {first} FORGOTTEN")
     require(vm.service_logs("blockstore", "FORGOTTEN BY PID"), f"[BLOCKSTORE] DOMAIN {first} FORGOTTEN BY PID")
     require(blocks(f"-d {first} resolve secret"), f"blocks: domain {first}: NotFound")
+    require(blocks(f"-dr {first} resolve secret"), f"blocks: domain {first}: NotFound")
     require(blocks(f"-d {first} journal check log"), f"blocks: domain {first}: NotFound")
     require(blocks("domains"), f"DOMAIN {first} FORGOTTEN")
     collected = blocks("collect")
@@ -5484,7 +5499,8 @@ def store_domains_check(vm):
     require(blocks(f"-d {second} get {note} ram:again.txt"), "GOT 12 BYTES")
     print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
           "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
-          "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046)", flush=True)
+          "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046); a "
+          "client of a domain that may only read reads it and is refused a put and a publish (312-STO-0049)", flush=True)
 
 
 def run_in_domain_check(vm, first=None, second=None, note=None):

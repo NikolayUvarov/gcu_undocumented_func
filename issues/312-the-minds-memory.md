@@ -26,6 +26,7 @@ A Mind needs memory with an explicit history, deliberate and accounted forgettin
 - [312-STO-0038](../issues-done/312-STO-0038-assertions-about-objects.done): assertions about objects, each with its type, source and interpretation, kept in a journal apart from content, mentioning its subject without retaining it; `blocks assert` as the pilot. Done 2026-10-31.
 - [312-STO-0046](../issues-done/312-STO-0046-a-memory-domains-own-limit.done): a memory domain's own limit, set when it is made (MC-4.11, `blockstore.wit` 2.7). Done 2026-11-12.
 - [312-STO-0047](../issues-done/312-STO-0047-a-vector-index-of-a-journals-embeddings.done): a vector index of a journal's embeddings by one model, an exact scan; `blocks vector` as the pilot. Done 2026-11-12.
+- [312-STO-0049](312-STO-0049-a-domains-client-with-fewer-rights.md): a domain's client with fewer rights than its owner's (`blockstore.wit` 2.8), for a read-only `run -d` (312-APP-0134).
 
 ## Progress (2026-11-12)
 
