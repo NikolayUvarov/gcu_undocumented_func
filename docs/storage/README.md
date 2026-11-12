@@ -305,6 +305,7 @@ A store of layout 1 to 3 is refused and left as it is (MC-4.13), with `device` o
   - **The index** is a hash table with open addressing (251-STO-0013), 56 bytes a slot. The service sizes it from the medium at mount: room for a block per 8 sectors and at least 4096 blocks, at most 2^20 slots (`slots_for`). It takes as many slots as its memory quota allows, halving down to the least, and logs `[BLOCKSTORE] INDEX: <slots> SLOTS (<KiB> KiB) FOR <sectors> SECTORS`. A large index takes seven eighths of its slots, a small one all of them; `stat` gives that as `CAPACITY`. A medium of more than 2^32 sectors (2 TiB) is refused with `too-large`, since an entry names a sector in 32 bits.
   - An insert or a lookup does not move other entries; a removal moves back only those of its run (deletion without tombstones). 100 000 blocks go in, are found after a remount, and half of them collected leave the rest found (`tests/blockstore_host.rs`).
   - A put that finds no room collects once (below); if there is still none, it is refused with `full`. A store with more blocks than the index holds is not mounted at all.
+  - **The blank runs** a put takes its room from are a list in memory, 512 on the platform. A scan adds the runs it meets in the medium's order, and a collection the sectors it frees. Past the list, its shortest run gives way to a longer one, so the list keeps the longest met (310-STO-0048); a shorter one dropped is found again by the next scan. Before, every run past the list was dropped: a medium with more small gaps than the list holds before its free tail, as a long journal's superseded name records leave after a collection, refused every block of two sectors or more (`full`) while most of it was free.
   - Bytes already held are not written again.
   - **One framing.** A client's bytes are sealed, so none of them is on the medium in the clear, and a scan that resumes after a damaged frame cannot take them for a record. A frame they might look like does not open without the key. Any bytes can be stored (layout 2 refused some at offsets 428 + 512k of a block).
 - **Durability.** A put returns once the device has flushed the record. On the RAM disk that means until the next reset, nothing more.
@@ -316,6 +317,7 @@ Evidence: `tests/blockstore_host.rs`.
 - A flipped byte refused when mounting and when reading.
 - A damaged frame and a torn write each lose only their own record, and a record is written only over blank sectors.
 - Full medium, full index, foreign medium, layout 2, a wrong key, read-only medium and a failed write are each refused with their error.
+- More gaps than the list of runs holds (8 in the test, 20 gaps of a sector): the list keeps the rest of the medium, and a block of many sectors finds room, also after a mount; without 310-STO-0048's change the test fails.
 - A random sequence of puts, gets and remounts matches a model.
 
 These are host tests of the logic on a simulated medium.

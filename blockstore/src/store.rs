@@ -1067,13 +1067,27 @@ impl<'a, D: Device> Store<'a, D> {
         self.end = self.end.max(here + n);
     }
 
+    // A blank run a scan met, after every run it met before.
     fn hole(&mut self, start: u64, len: u64) {
-        if len > 0 && self.runs < self.holes.len() { self.holes[self.runs] = Extent { start, len }; self.runs += 1; }
+        if len == 0 || !self.make_way(len) { return; }
+        self.holes[self.runs] = Extent { start, len };
+        self.runs += 1;
     }
 
-    // Sectors made blank outside a scan: back among the runs, in order (dropped if the list is full until the next scan).
+    // Room in the list of runs for one of `len` sectors: if the list is full, its shortest run (the first of them) gives
+    // way to a longer one, so the list keeps the longest met (310-STO-0048); false if each kept is as long.
+    fn make_way(&mut self, len: u64) -> bool {
+        if self.runs < self.holes.len() { return true; }
+        let Some(i) = (0..self.runs).min_by_key(|&i| self.holes[i].len) else { return false };
+        if self.holes[i].len >= len { return false; }
+        self.holes.copy_within(i + 1..self.runs, i);
+        self.runs -= 1;
+        true
+    }
+
+    // Sectors made blank outside a scan: back among the runs, in order, as a scan's are kept.
     fn release(&mut self, start: u64, len: u64) {
-        if self.runs == self.holes.len() { return; }
+        if !self.make_way(len) { return; }
         let at = self.holes[..self.runs].iter().position(|h| h.start > start).unwrap_or(self.runs);
         self.holes.copy_within(at..self.runs, at + 1);
         self.holes[at] = Extent { start, len };
