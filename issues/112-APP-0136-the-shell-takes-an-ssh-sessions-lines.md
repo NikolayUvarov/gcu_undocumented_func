@@ -30,7 +30,7 @@
 - **Never asked:** `msh::ask` answers no to a line of the link or of an SSH session and logs `[SHELL] A LINE TYPED ELSEWHERE WAS NOT ASKED: …`; no command either client gets asks today, so this changes nothing the link ran.
 - **`run` alone:** another call through the remote copy is refused and logged (`shell/src/main.rs`, `serve_commands`).
 - **Logged:** `[SHELL] FOR AN SSH SESSION THE SHELL RAN PS` (or `REFUSED`, `DID NOT RUN`).
-- **Tested:** `tests/shell_host.rs`'s `an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file`, beside the link's tests. No client is badged 3 yet, so the remote path itself has not run in QEMU.
+- **Tested:** `tests/shell_host.rs`'s `an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file`, beside the link's tests. On x86 (4 CPUs) the `shell` and `wm` suites (33 checks), `link` (the shell's lines over the link, the policy refused, the link's console) and `modes` (7) pass with it: the link's rule is unchanged. No client is badged 3 yet, so the remote path itself has not run in QEMU.
 - **Left:** the badge from `mind::process` once 112-NET-0072 is in `main`; KRN's `sshd_check` criteria once `init` mints the client.
 
 ## Related
