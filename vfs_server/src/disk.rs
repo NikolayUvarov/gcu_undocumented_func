@@ -14,7 +14,7 @@ const LINES: usize = 64;
 const READ_AHEAD: usize = 32;
 const SLOW_MS: u64 = 1000; // a failure that took this long: the drive does not answer (unplugged), not a bad sector
 const QUIET_MS: u64 = 10_000; // then requests fail at once for this long, before the drive is asked again (211-KRN-0050)
-const BACK_MS: u64 = 3000; // a driver that answered as a fresh instance is waited for this long, and init's windows with it
+const BACK_MS: u64 = 6000; // a driver that answered as a fresh instance is waited for this long, and init's windows with it (3 s in QEMU)
 const IDENTITY: usize = 256; // at most this many sectors read while mounting are kept, by hash, as the medium's identity
 
 // `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted (none through
@@ -80,9 +80,13 @@ impl Disk {
             return None;
         }
         if !self.device.returned() { return None; }
-        mind::println!("[VFS] THE {} DRIVE ANSWERED AS A DRIVER STARTED AGAIN: ITS MEDIUM IS COMPARED BEFORE ANYTHING ELSE IS ASKED OF IT", crate::device_name(self.device.kind()));
-        if !self.back() { return None; }
-        request(&mut self.device)
+        // "Not found": a driver started again, one whose medium went away and came back, or a device gone.
+        mind::println!("[VFS] THE {} DRIVE ANSWERED NOT FOUND: ITS MEDIUM IS COMPARED BEFORE ANYTHING ELSE IS ASKED OF IT", crate::device_name(self.device.kind()));
+        if self.back() { return request(&mut self.device); }
+        if !self.replaced {
+            mind::println!("[VFS] THE {} DRIVE DOES NOT ANSWER: REQUESTS FAIL AT ONCE, IT IS ASKED AGAIN EVERY {} S", crate::device_name(self.device.kind()), QUIET_MS / 1000);
+        }
+        None
     }
 
     // Back after it did not answer, or after a return: the buffer lent to the driver's current instance (waiting up to

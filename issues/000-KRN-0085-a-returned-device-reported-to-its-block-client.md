@@ -59,6 +59,22 @@
 
 **Landed** in round 113 (`main` d8d52c57, 2026-11-10): step 1, every group of the gate passed with it. **Left:** `usb_storage`'s `returned` (the request in `requests-DRV.md`) and the QEMU check that swaps a stick.
 
+## Progress (2026-11-12): steps 2 and 3
+
+**Made** on `claude/000-KRN-0085-returns-checked`, on DRV's `claude/000-DRV-0058-a-returned-usb-disk` (f7090144), whose `usb_storage` reports a return (plan step 4):
+- **`block::Device`** (`libmind/src/block.rs`):
+  - `check_returns()`: after "not found" or "peer" the request is not repeated; the device is marked returned and refuses every request until `reattach()`;
+  - `returned()`, and `reattach()`, which lends the buffer to the driver's current instance and asks its size again;
+  - a client that does not ask for it re-attaches and repeats, as before (MC-6.4).
+- **`vfs_server`** (`vfs_server/src/disk.rs`) asks for it on every disk. On a return, or when a drive that did not answer is asked again (`back`):
+  - it re-attaches every window's client, waiting up to 6 s for the fresh instance and for `init`'s windows (3 s in QEMU);
+  - another size is another medium;
+  - otherwise it compares sector 0, the identity and the cached sectors (000-KRN-0079), once more if the comparison's own reads met a return;
+  - the same medium: `THE … DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM`, and the request is repeated;
+  - another one: its volumes close, nothing cached is written (`CAME BACK WITH ANOTHER MEDIUM`);
+  - neither yet (a device gone answers "not found" too): `DOES NOT ANSWER`, requests fail for 10 s, then it is asked again.
+- **`tests/usb_image_smoke.py`,** in the slots check: the stick swapped at once for a copy with another manifest while `vfs_server` asks nothing. The test requires `DRIVE ANSWERED NOT FOUND`, `CAME BACK WITH ANOTHER MEDIUM`, no `DOES NOT ANSWER`, `usb_storage`'s `ENUMERATED AGAIN`, and the copy unchanged after a write and a `sync`.
+
 ## Related
 
 [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [211-DRV-0019](../issues-done/211-DRV-0019-usb-storage-refusals-and-resets.done).

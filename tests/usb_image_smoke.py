@@ -395,7 +395,7 @@ def swapped_unasked(vm, image):
         if "ANOTHER MEDIUM" in log:
             break
         time.sleep(1)
-    require(log, "ANSWERED AS A DRIVER STARTED AGAIN")
+    require(log, "DRIVE ANSWERED NOT FOUND")
     require(log, "CAME BACK WITH ANOTHER MEDIUM")
     assert "DOES NOT ANSWER" not in log, "vfs_server saw the drive not answer: the swap was not made unasked"
     require(vm.service_logs("usb_storage", "ENUMERATED AGAIN"), "[USB] STORAGE: A DEVICE CAME BACK, ENUMERATED AGAIN")
