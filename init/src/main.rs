@@ -44,6 +44,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
     "the flow of program httpd (its listening grant); a TLS client with the right to the device certificate; the parser; RTC; a read-only scope of data/releases/",
+    "the flow of program sshd (its listening grant); keystore's client for its key exchanges' signatures; a writable scope of data/",
     "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
@@ -1197,6 +1198,15 @@ impl Init {
                 self.lend(&mut grants, SLOT_PARSE, "parse")?;
                 self.lend(&mut grants, SLOT_RTC, "rtc")?;
             }
+            // The SSH server (112-NET-0072): the flow the policy gives program `sshd`, whose listening grant names its port;
+            // keystore's client for `ssh-host` alone (the device key signs each key exchange and stays in keystore); a writable
+            // scope of data/ (scopes_of), where its keys file and its files are. No shell client yet: its console waits for
+            // the shell to take a remote session's lines on their own rule (requests-APP.md). Not started without the flow.
+            "sshd" => {
+                let Some(flow) = self.flow(&mut minted, "sshd") else { return Err(Error::NotFound) };
+                grants.add(SLOT_NETWORK, flow, CLIENT);
+                grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SSH_HOST)?, CLIENT);
+            }
             // The SSH service (351-KRN-0115) has no network either: clients lend their flows. It alone may ask the key
             // service to sign an SSH login.
             "ssh" => {
@@ -2082,7 +2092,7 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
 
 // Why a service whose plan found nothing to drive is not started: its device, or for timed its time servers.
 fn not_found(name: &str) -> &'static str {
-    match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" => "THE POLICY GIVES IT NO LISTENING GRANT", _ => "NO DEVICE" }
+    match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" | "sshd" => "THE POLICY GIVES IT NO LISTENING GRANT", _ => "NO DEVICE" }
 }
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
@@ -2106,6 +2116,8 @@ fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
         "tts" => &[(SLOT_FILE, mind::fs::BADGE_USER, "models:", false, false)],
         // The releases httpd serves (110-NET-0070), read-only and never made: a boot writes nothing for it.
         "httpd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data/releases", false, false)],
+        // The SSH server's files and its keys (112-NET-0072): data/, writable; sshd itself keeps SFTP off data/ssh/.
+        "sshd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data", true, false)],
         _ => &[],
     }
 }

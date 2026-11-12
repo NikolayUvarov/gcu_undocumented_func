@@ -96,6 +96,26 @@ A client serves TLS 1.3 as the device (110-NET-0069). The release server `httpd`
 - **Who may serve:** a client with the right to the device certificate. One badged `BADGE_TLS_NO_DEVICE`, the copy the shell lends a program, is denied `listen`, and `tls` logs it.
 - **Not provided:** TLS 1.2, resumption (no tickets), client certificates, ALPN, and a key other than the device's.
 
+## The SSH server (`sshd`, 112-NET-0072)
+
+`sshd` takes SSH logins and file copies (OpenSSH's `scp` since 9.0, and `sftp`). The protocol is the `ssh` crate's server role (112-NET-0071): curve25519-sha256 with strict key exchange, chacha20-poly1305@openssh.com, an ssh-ed25519 host key, public keys only.
+
+- **Off by default.** `init` starts it only when the policy gives program `sshd` a flow, whose listening grant names TCP 22: `listen sshd tcp 22 from 192.168.1.0/24`. It listens only once its keys file lists a key.
+- **The host key is the device key.** `keystore` signs each key exchange's hash (`keystore.wit` 1.8 `ssh-host`, at most 60 a minute); the key never enters `sshd`. Its fingerprint is in the log: `[SSHD] HOST KEY: THE DEVICE KEY, SHA256:…`, and `keystore` logs the key in the `known_hosts` form at boot.
+- **The owner's keys: `data/ssh/authorized_keys`,** read at each connection. Each line names what its key may do, then the key as OpenSSH writes it:
+
+  ```text
+  files ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI… owner@laptop
+  console,files ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI… owner@desktop
+  ```
+
+  A line without a right (`console`, `files` or both), with another key type or an OpenSSH option is left out, and the log names its number and why. The user is `mind`: `ssh mind@<machine>`.
+- **Files:** SFTP version 3 over `data/`; `data/ssh/` is refused, so the files' right never reaches another key. `scp -s` or OpenSSH 9's `scp`, and `sftp`: read, write, list, make and remove directories, rename, remove.
+- **The console:** the shell's commands, once the shell takes a remote session's lines on their own rule (requests-APP.md). Until then a key's console right is not used: `ssh mind@<machine> ps` is refused.
+- **Limits:** one session at a time; a login within 30 s; 10 min of silence; 10 connections a minute from one address; 1 GiB written and 8 open files a session.
+- **The log:** each login with its key's fingerprint and comment, each refusal and why, each console command's word, each file written or removed, each session's end. No session's data.
+- **Not provided:** passwords, keyboard-interactive, port forwarding, an agent, X11, the old SCP protocol (`scp -O`), rekeying (a client's rekey ends the session; OpenSSH asks for one after some gigabytes).
+
 ## JSON read by the parser service (`idl/parse.wit` 1.4)
 
 - **`json(text, start)`.** `parse` reads a whole JSON text (RFC 8259, UTF-8, up to 16 KiB) with `mind::json` and answers its values in document order, 16 at a time from `start`, with how many there are. Each value comes with:

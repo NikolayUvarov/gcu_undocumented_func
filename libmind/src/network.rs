@@ -49,6 +49,9 @@ pub const BADGE_KEY_BLOCKSTORE: u16 = 5;
 /// The key service's passphrase (idl/keystore.wit 1.6, 308-NET-0055): the client that may `unlock` the device key sealed
 /// under the owner's passphrase and set or change that passphrase; init is to lend it to the shell alone (308-KRN-0205).
 pub const BADGE_KEY_PASSPHRASE: u16 = 6;
+/// The badge of keystore's client init lends the SSH server, `sshd` (keystore.wit 1.8, 112-NET-0072): `sign` for
+/// `ssh-host` alone, an SSH key exchange's hash, so the device key serves as the host key without leaving keystore.
+pub const BADGE_KEY_SSH_HOST: u16 = 7;
 
 /// Whether `address` (IPv4, its first byte in bits 24-31) is a public unicast address, which a browsing grant's rule
 /// reaches (idl/socket.wit 2.7, a rule's address 0, 000-NET-0049). Not public: this network (0/8), the private ranges

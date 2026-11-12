@@ -7,7 +7,8 @@
 // starts without the key (`key-state` waiting) and holds it, with all that opens under it, once `unlock` opens it.
 // Never exported. Serves
 // idl/keystore.wit: the certificate and the public key to anyone; signatures only to the signer's badge (the TLS
-// service) for TLS, a client's and (1.7) a server's, and to the SSH service's badge for SSH logins (1.2), only for data
+// service) for TLS, a client's and (1.7) a server's, to the SSH service's badge for SSH logins (1.2) and to the SSH
+// server's for its key exchanges (1.8), only for data
 // of the form the purpose names, and within each one's budget (per boot; a TLS server's, a minute); the Wi-Fi station's remembered networks (1.1, wifi.rs) and its country (1.3) only to the station's badge;
 // each program's secrets (1.4, secrets.rs) only to the client the loader got for that program, and the block store's own
 // (1.5) only to the client init badged for it; `key-state` to anyone, `unlock` and `passphrase-set` only to the
@@ -32,25 +33,26 @@ use mind::idl::wire;
 use mind::fs::File;
 use mind::ipc::Endpoint;
 use mind::idl::codec::List;
-use mind::network::{BADGE_KEY_SIGNER, BADGE_KEY_SSH, BADGE_KEY_STATION};
+use mind::network::{BADGE_KEY_SIGNER, BADGE_KEY_SSH, BADGE_KEY_SSH_HOST, BADGE_KEY_STATION};
 
 const RECEIVED: usize = 9;
 const BUDGET: u32 = 4096; // TLS signatures per boot
 const SSH_BUDGET: u32 = 256; // SSH logins per boot (1.2)
 const SERVER_BUDGET: u32 = 120; // TLS server signatures a minute (1.7)
+const HOST_BUDGET: u32 = 60; // SSH host signatures a minute (1.8): one each key exchange
 const MINUTE_MS: usize = 60_000;
 
 struct Keys {
     key: Option<SigningKey>, certificate: Vec<u8>, usage: Usage, ssh_logins: u32, wifi: Option<wifi::Wifi>, secrets: secrets::Clients,
-    // The TLS server signatures of the minute that started at `minute` (1.7).
-    served: u32, minute: usize,
+    // The TLS server and SSH host signatures of the minute that started at `minute` (1.7, 1.8).
+    served: u32, hosted: u32, minute: usize,
     // The device key sealed under a passphrase (1.6); whether a TPM seals it instead; the certificate's serial.
     lock: lock::Lock, tpm: bool, serial: [u8; 16],
 }
 
 impl Keys {
     fn new() -> Self {
-        let mut keys = Self { key: None, certificate: Vec::new(), usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, ssh_logins: 0, wifi: None, served: 0, minute: mind::time::uptime_ms(),
+        let mut keys = Self { key: None, certificate: Vec::new(), usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, ssh_logins: 0, wifi: None, served: 0, hosted: 0, minute: mind::time::uptime_ms(),
                               secrets: secrets::Clients::new(), lock: lock::Lock::new(), tpm: stored::tpm(), serial: [0; 16] };
         // Without the random source no key is made or used: the service fails closed, as the TLS service does.
         if !random(&mut keys.serial) { return keys; }
@@ -226,17 +228,20 @@ impl Keys {
             Purpose::TlsClient => form::certificate_verify(data, form::CLIENT),
             Purpose::TlsServer => form::certificate_verify(data, form::SERVER),
             Purpose::SshLogin => ssh::login::fits(data, &key.verifying_key().to_bytes()),
+            // An exchange hash alone: no other form the device key signs is 32 bytes long.
+            Purpose::SshHost => data.len() == 32,
         }
     }
 
-    // The badge a purpose is for, and its signatures and budget this boot (`tls-server`: this minute).
+    // The badge a purpose is for, and its signatures and budget this boot (`tls-server`, `ssh-host`: this minute).
     fn allowance(&mut self, purpose: Purpose) -> (u16, &'static str, u32, u32) {
         let now = mind::time::uptime_ms();
-        if now - self.minute >= MINUTE_MS { (self.minute, self.served) = (now, 0); }
+        if now - self.minute >= MINUTE_MS { (self.minute, self.served, self.hosted) = (now, 0, 0); }
         match purpose {
             Purpose::TlsClient => (BADGE_KEY_SIGNER, "NOT THE SIGNER", self.usage.signatures, self.usage.budget),
             Purpose::SshLogin => (BADGE_KEY_SSH, "NOT THE SSH SERVICE", self.ssh_logins, SSH_BUDGET),
             Purpose::TlsServer => (BADGE_KEY_SIGNER, "NOT THE SIGNER", self.served, SERVER_BUDGET),
+            Purpose::SshHost => (BADGE_KEY_SSH_HOST, "NOT THE SSH SERVER", self.hosted, HOST_BUDGET),
         }
     }
 
@@ -249,8 +254,8 @@ impl Keys {
             else { Ok(()) };
         match (result, &self.key) {
             (Ok(()), Some(key)) => {
-                match purpose { Purpose::TlsClient => self.usage.signatures += 1, Purpose::SshLogin => self.ssh_logins += 1, Purpose::TlsServer => self.served += 1 }
-                let period = if purpose == Purpose::TlsServer { " THIS MINUTE" } else { "" };
+                match purpose { Purpose::TlsClient => self.usage.signatures += 1, Purpose::SshLogin => self.ssh_logins += 1, Purpose::TlsServer => self.served += 1, Purpose::SshHost => self.hosted += 1 }
+                let period = if matches!(purpose, Purpose::TlsServer | Purpose::SshHost) { " THIS MINUTE" } else { "" };
                 mind::println!("[KEYSTORE] SIGNED {:?} FOR PID {} ({} OF {}{})", purpose, pid, made + 1, budget, period);
                 Ok(key.sign(data).to_bytes())
             }
