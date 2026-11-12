@@ -49,6 +49,15 @@ unsafe fn read64(address: usize) -> u64 { core::ptr::read_volatile(address as *c
 pub fn advance(ticks: u64) -> bool {
     let slice = QUANTUM_MS / TICK_MS;
     let before = TICKS.fetch_add(ticks, Ordering::Relaxed);
+    let second = 1000 / TICK_MS;
+    if before / second != (before + ticks) / second {
+        super::watchdog::feed();
+        // A test kernel stops every CPU for good 20 s after each boot: the watchdog must restart it (100004-PRT-0015).
+        if cfg!(feature = "watchdog-test") && (before + ticks) / second == 20 {
+            crate::serial_print("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD\n");
+            super::cpu::freeze();
+        }
+    }
     before / slice != (before + ticks) / slice
 }
 pub fn milliseconds() -> u64 { TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS) }
@@ -96,6 +105,7 @@ pub unsafe fn init() {
     NEXT_TICK.store(now, Ordering::Relaxed);
     rearm();
     asm!("msr cntv_ctl_el0, {}", in(reg) 1u64); // enabled, not masked
+    super::watchdog::start();
 }
 
 /// This CPU's redistributor: the one whose GICR_TYPER names the CPU's affinity (issue 203).

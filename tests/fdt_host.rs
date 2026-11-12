@@ -34,6 +34,7 @@ fn qemus_gicv2_tree_through_u_boot() {
     assert_eq!(b.rtc, Some((0x0901_0000, Some(2))));
     assert_eq!(b.ecam, Some((0x3F00_0000, 0, 15)));
     assert_eq!(b.framebuffer, None);
+    assert_eq!(b.watchdog, None, "QEMU's virt has no watchdog (100004-PRT-0015)");
     assert_eq!(mpidrs(&tree), (vec![0, 1, 2, 3], 0));
     assert_eq!(tree.at_path(b"/memory@40000000").unwrap().first_reg(), Some((0x4000_0000, 0x8000_0000)));
     assert_eq!(tree.at_path(b"/chosen").unwrap().string("u-boot,version"), Some(&b"2025.10-0ubuntu0.24.04.4"[..]));
@@ -58,6 +59,7 @@ fn the_pinephones_tree() {
     assert_eq!((gic.version, gic.distributor, gic.cpu_interface, gic.v2m), (2, 0x01C8_1000, 0x01C8_2000, 0));
     assert_eq!(b.timer, Some(27));
     assert_eq!(b.timer_erratum, Some(fdt::Erratum::Sun50iA64), "the A64's counter erratum is named");
+    assert_eq!(b.watchdog, Some(0x01C2_0CA0), "the A64's watchdog, the A31's (100004-PRT-0015)");
     assert_eq!(b.psci, Some(Conduit::Smc));
     // UART0 through the alias serial0, a DesignWare 16550 with 32-bit registers, SPI 0, 115200 from stdout-path.
     assert_eq!(b.console, Some(Uart { base: 0x01C2_8000, kind: UartKind::Ns16550 { shift: 2, width: 4, designware: true }, spi: Some(0), speed: Some(115_200) }));
@@ -85,6 +87,7 @@ fn the_orange_pi_zero_plus2s_tree() {
     assert_eq!((gic.version, gic.distributor, gic.cpu_interface, gic.v2m, gic.redistributor, gic.its), (2, 0x01C8_1000, 0x01C8_2000, 0, 0, 0));
     assert_eq!(b.timer, Some(27), "the virtual timer, PPI 11");
     assert_eq!(b.timer_erratum, None, "the A64's counter erratum is the A64's alone");
+    assert_eq!(b.watchdog, Some(0x01C2_0CA0), "the H5's watchdog, the A31's alone in its compatible (100004-PRT-0015)");
     assert_eq!(b.psci, Some(Conduit::Smc));
     // UART0 through serial0, a DesignWare 16550 with 32-bit registers 4 bytes apart, SPI 0, 115200 from stdout-path.
     assert_eq!(b.console, Some(Uart { base: 0x01C2_8000, kind: UartKind::Ns16550 { shift: 2, width: 4, designware: true }, spi: Some(0), speed: Some(115_200) }));
@@ -110,6 +113,8 @@ fn the_orange_pi_zero3s_tree() {
     assert_eq!(b.console, Some(Uart { base: 0x0500_0000, kind: UartKind::Ns16550 { shift: 2, width: 4, designware: true }, spi: Some(0), speed: Some(115_200) }));
     assert_eq!(console(&tree), b.console);
     assert_eq!((b.rtc, b.ecam, b.framebuffer), (None, None, None));
+    // The H616's watchdog, named after its own compatible as the A31's (100004-PRT-0015).
+    assert_eq!(b.watchdog, Some(0x0300_90A0));
     assert_eq!(mpidrs(&tree), (vec![0, 1, 2, 3], 0));
     assert!(tree.at_path(b"/memory").is_none());
     // UART1 to UART5 share UART0's page, all disabled in this tree.

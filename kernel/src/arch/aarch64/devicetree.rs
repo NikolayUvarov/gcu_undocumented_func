@@ -53,6 +53,7 @@ pub unsafe fn init(address: u64) -> bool {
     if let Some(conduit) = b.psci { acpi::set_conduit(conduit == fdt::Conduit::Smc); }
     if let Some((base, spi)) = b.rtc { board::set(&board::RTC, mapped(base)); if let Some(spi) = spi { board::set(&board::RTC_LINE, spi as usize); } }
     if let Some((base, first, last)) = b.ecam { crate::pcicfg::configure(base, first, last); }
+    if let Some(base) = b.watchdog { board::set(&board::WATCHDOG, mapped(base)); }
     let mut count = 0;
     let (started, left) = fdt::cpus(&tree, |mpidr| {
         if count < acpi::CPUS.len() {
