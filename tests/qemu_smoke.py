@@ -9346,6 +9346,51 @@ def listen_suite(vm, starts):
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)
 
 
+def voice_at_start_check(args, disk, wav):
+    """000-APP-0052: with data/voice.conf on the boot volume, as `voice enable` writes it, a machine's start turns voice
+    control on with no command: the shell starts voice with the file's words, a WAV standing in for the microphone.
+    Its first phrase opens a program; the second asks before a reboot, and the third's no leaves the machine running."""
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "voice-start.wav").write_bytes(speech_wav(("открой файлы", "перезагрузи систему", "нет"))[0])
+    (disk / "data/voice.conf").write_text("# voice control at the shell's start (000-APP-0052)\non --wav voice-start.wav\n")
+    try:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), audio=wav, extra=["-nic", "user,model=virtio-net-pci"])
+        try:
+            vm.wait = LOADED_WAIT
+            start = vm.expect("VOICE CONTROL ON. F12 OR VOICE LISTEN", timeout=120)
+            pid = re.search(r"STARTED PID=(\d+) NAME=voice BACKGROUND", start)[1]
+            require(vm.command("dmesg -s shell", raw=True), "[SHELL] VOICE CONTROL ON AT THE SHELL'S START, AS data/voice.conf SAYS")
+            log = ""
+            for _ in range(240):
+                log += vm.command(f"logs {pid}")
+                if "[VOICE] READY" in log:
+                    break
+                time.sleep(.25)
+            require(log, "3 UTTERANCES FROM voice-start.wav")
+            vm.send("voice listen\n")
+            output = vm.expect("NAME=fm FOREGROUND", timeout=180)
+            require(output, 'VOICE: "открой файлы" (')
+            fm = re.search(r"STARTED PID=(\d+) NAME=fm FOREGROUND", output)[1]
+            vm.background(fm)
+            vm.command(f"kill {fm}")
+            # The reboot is asked about; "нет" cancels it, and the machine keeps running.
+            vm.send("voice listen\n")
+            output = vm.expect("-> Отменено", timeout=180)
+            require(output, 'VOICE: "перезагрузи систему" (')
+            require(output, "-> Перезагрузить систему?")
+            require(output, 'VOICE: "нет" (')
+            assert vm.process.poll() is None, "the machine restarted (QEMU runs with -no-reboot)"
+            require(vm.command("voice off"), "VOICE CONTROL OFF")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+    finally:
+        (disk / "data/voice.conf").unlink(missing_ok=True)
+        (disk / "voice-start.wav").unlink(missing_ok=True)
+    print("PASS: voice control at the shell's start (000-APP-0052): with data/voice.conf the shell turned it on with no "
+          "command; by voice a program opened, and a reboot was asked about and cancelled", flush=True)
+
+
 def voice_control(vm):
     """Voice control (issue 079): the shell starts voice with a WAV file standing in for the microphone; each
     push-to-talk takes the file's next utterance, and the shell's questions take the one after."""
@@ -9440,7 +9485,14 @@ def voice_control(vm):
         raise AssertionError("voice did not quit")
     require(vm.command("voice"), "VOICE CONTROL OFF")
     require(vm.command("voice listen"), "ERROR: VOICE CONTROL IS OFF (VOICE ON)")
-    require(vm.command("voice x"), "USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN")
+    require(vm.command("voice x"), "USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN | VOICE ENABLE [--wav FILE] [SECONDS] | VOICE DISABLE")
+    # 000-APP-0052: `voice enable` keeps voice on's words in data/voice.conf for the shell's next start; words voice on
+    # would not take are refused; `voice disable` removes the file.
+    require(vm.command("voice enable --wav voice.wav 99999"), "USAGE: VOICE ON [--wav FILE]")
+    require(vm.command("voice enable --wav voice.wav"), "VOICE CONTROL ON AT EACH START OF THE SHELL, KEPT IN data/voice.conf; VOICE ON TURNS IT ON NOW")
+    require(vm.command("cat data/voice.conf"), "on --wav voice.wav")
+    require(vm.command("voice disable"), "VOICE CONTROL OFF AT THE SHELL'S START")
+    require(vm.command("cat data/voice.conf"), "NOT FOUND")
 
 
 def tts_holdings_check(vm, models):
@@ -16337,6 +16389,8 @@ def main():
                     tts_suite(vm, wav, args.asr_model)
                 elif suite == "listen":
                     listen_suite(vm, starts)
+                    vm.close()
+                    voice_at_start_check(args, disk, wav)
                 elif suite == "tablet":
                     tablet_suite(vm, wav)
                 elif suite == "serialload":  # 000-KRN-0188, named only, in no gate group

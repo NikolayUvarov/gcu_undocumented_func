@@ -48,6 +48,7 @@ mod tpm;
 mod updatectl;
 mod updates;
 mod wifilend;
+mod voiceconf;
 mod voicectl;
 
 use alloc::string::String;
@@ -1767,6 +1768,8 @@ fn main(info: &'static BootInfo) {
     let mut zone_next = Some(0u64);
     // The levels from data/sound.conf, tried the same way (000-APP-0076, 000-APP-0077).
     let mut sound_next = Some(0u64);
+    // Voice control from data/voice.conf, tried the same way once the boot's passphrase is answered (000-APP-0052).
+    let mut voice_next = Some(0u64);
     loop {
         for index in 0..SESSIONS { if shell.activate(index) { shell.tend(); } }
         shell.tend_window();
@@ -1836,6 +1839,13 @@ fn main(info: &'static BootInfo) {
         }
         if let Some(next) = sound_next.filter(|&next| now >= next) {
             sound_next = match soundctl::load(now >= autorun_until) { clockzone::Load::Later => Some(next.max(now) + 1000), clockzone::Load::Done => None };
+        }
+        if let Some(next) = voice_next.filter(|&next| now >= next && !passctl::boot_asks(&shell)) {
+            shell.activate(0);
+            voice_next = match shell.voice_load(now >= autorun_until) {
+                (clockzone::Load::Later, _) => Some(next.max(now) + 1000),
+                (clockzone::Load::Done, printed) => { if printed { shell.prompt(); } None }
+            };
         }
         // While the boot asks for keystore's passphrase the start script waits, as what it starts may need the device
         // key, and has its minute after (308-APP-0130).
