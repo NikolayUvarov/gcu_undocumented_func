@@ -5,6 +5,7 @@ use crate::abi::{CAP_KIND_ENDPOINT, SLOT_CLIPBOARD};
 use crate::idl::clipboard as api;
 use crate::idl::wire;
 use crate::ipc::Endpoint;
+#[cfg(feature = "alloc")]
 use alloc::string::String;
 
 /// A manager's client: the shell, and the window manager it started; it names the program in front.
@@ -62,6 +63,7 @@ pub fn copy_through(client: Endpoint, text: &str) -> Result<u32, Error> {
 }
 
 /// The clipboard's text through `client`, read again from its start when it is set meanwhile (three tries).
+#[cfg(feature = "alloc")]
 pub fn paste_through(client: Endpoint) -> Result<String, Error> {
     'tries: for _ in 0..3 {
         let first = call(|| api::get_part(client, 0, 0))?;
@@ -85,6 +87,7 @@ pub fn paste_through(client: Endpoint) -> Result<String, Error> {
 pub fn copy(text: &str) -> Result<u32, Error> { copy_through(client().ok_or(Error::NoClient)?, text) }
 
 /// The clipboard's text, through the client the shell lent.
+#[cfg(feature = "alloc")]
 pub fn paste() -> Result<String, Error> { paste_through(client().ok_or(Error::NoClient)?) }
 
 /// A manager's word: `pid` is the program in front (0: none).

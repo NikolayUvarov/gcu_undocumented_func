@@ -744,6 +744,13 @@ impl<'b> Fm<'b> {
     fn command_key(&mut self, key: Key, disk: &mut dyn Disk) -> Option<Outcome> {
         if key.is_ctrl('o') { let shown = !self.hidden[0] || !self.hidden[1]; self.hidden = [shown, shown]; self.fix_active(disk); return Some(Outcome::Redraw); }
         if key.is_ctrl('p') { self.hidden[1 - self.active] = !self.hidden[1 - self.active]; return Some(Outcome::Redraw); }
+        // The system clipboard's first line into the command line (000-APP-0032): Ctrl+V or Shift+Insert.
+        if key.is_ctrl('v') || (key.code() == Code::Insert && key.shift()) {
+            let Ok(text) = disk.paste() else { return Some(Outcome::Redraw) };
+            let text = String::from_utf8_lossy(&text);
+            for ch in text.split(['\n', '\r']).next().unwrap_or("").chars().filter(|c| !c.is_control()) { if !self.command.insert(ch) { break; } }
+            return Some(Outcome::Redraw);
+        }
         match key.code() {
             Code::F(n @ 1..=2) if key.ctrl() => { let side = n as usize - 1; self.hidden[side] = !self.hidden[side]; self.fix_active(disk); return Some(Outcome::Redraw); }
             Code::Enter if key.alt() || key.ctrl() => {
