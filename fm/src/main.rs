@@ -192,6 +192,13 @@ impl Disk for Vfs {
     fn remove(&mut self, path: &str) -> Result<(), Failure> { fs::remove(path).map_err(failure) }
     fn rename(&mut self, from: &str, to: &str) -> Result<(), Failure> { fs::rename(from, to).map_err(failure) }
     fn writable(&mut self, path: &str) -> bool { File::open_mode(path, fs::MODE_WRITE).is_ok() }
+    // The store volumes storefs serves (311-APP-0135): the store's names under `fs/`, one page, where fm holds storefs's
+    // client (the shell lends it with the user's files); one vfs_server has is that one's.
+    fn store_volumes(&mut self) -> Vec<String> {
+        if mind::dev::cap_info(SLOT_STOREFS).0 != CAP_KIND_ENDPOINT { return Vec::new(); }
+        let Ok(Ok(page)) = blockstore::names(STORE, "fs/", "") else { return Vec::new() };
+        page.as_slice().iter().filter_map(|n| panel::store_volume(n.name.as_str())).filter(|v| !fs::on_vfs(v.trim_end_matches(':'))).collect()
+    }
     fn volume(&mut self, path: &str) -> Option<VolumeInfo> {
         let name = panel::volume(path).0.trim_end_matches(':');
         fs::volume(name).ok().map(|v| VolumeInfo { label: String::from(v.label()), fat_bits: v.fat_bits, bytes: v.bytes, free: v.free })

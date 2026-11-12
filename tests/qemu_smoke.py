@@ -2832,6 +2832,54 @@ def secret_line_check(vm):
           "another command through its badged copy refused; none for a script's program", flush=True)
 
 
+def fm_store_volume_check(vm):
+    """311-APP-0135: fm's volume menu lists the store volumes storefs serves after the disks (the store's names under
+    fs/), opens one as a disk's through the storefs client the shell lends with the user's files, and a file copies from
+    it to ram: and from ram: to it."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+
+    def to(name):
+        line = keys(b"\x1b[H", "CURRENT=")  # Home
+        for _ in range(30):
+            if f"CURRENT={name} " in line:
+                return
+            line = keys(b"\x1b[B", "CURRENT=")
+        raise AssertionError(line)
+    require(vm.command("write ram:fromram.txt to the store volume"), "WROTE 20 BYTES")
+    vm.send("fm ram:\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/ram: ")
+    line = keys(b"\x1b[12;3~", "DIALOG=VOLUME")  # Alt+F2: the right panel's volume
+    for _ in range(12):
+        if "DIALOG=VOLUME:/notes: " in line:
+            break
+        line = keys(b"\x1b[B", "DIALOG=VOLUME")
+    require(line, "DIALOG=VOLUME:/notes: ")
+    keys(b"\r", "RIGHT=/notes: ")
+    keys(b"\t", "ACTIVE=R")
+    to("docs")
+    keys(b"\r", "RIGHT=/notes:docs ")
+    to("a.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to the other panel, ram:
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    keys(b"\t", "ACTIVE=L")
+    to("fromram.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to notes:docs
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("cat ram:a.txt"), "from the store")
+    require(vm.command("cat notes:docs/fromram.txt"), "to the store volume")
+    for path in ("ram:a.txt", "ram:fromram.txt", "notes:docs/fromram.txt"):
+        require(vm.command(f"rm {path}"), "OK")
+    print("PASS: fm lists the store volume notes: after the disks, opens it through the shell's storefs client, and a file "
+          "copies from it to ram: and from ram: to it (311-APP-0135)", flush=True)
+
+
 def storefs_check(vm):
     """311-KRN-0190: storefs runs at boot with the block store's client, and the shell reaches a store volume through the
     same mind::fs calls as a FAT one; a program without storefs's client finds no store volume, and asks nobody."""
@@ -2905,6 +2953,7 @@ def storefs_check(vm):
     scopes = vm.service_logs("storefs", "ENDED")
     made = list(re.finditer(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes))
     assert len(made) == 2 and f"[STOREFS] SCOPE {made[0][1]} ENDED" in scopes[made[0].end():], scopes[-1500:]  # after it was made
+    fm_store_volume_check(vm)
     require(vm.command("rm notes:docs/b.txt"), "OK")
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
