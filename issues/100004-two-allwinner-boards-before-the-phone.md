@@ -77,6 +77,9 @@ These addresses are the handoff's. Each one is checked against the board's devic
 - [100004-MOB-0008](100004-MOB-0008-memory-and-ipc-on-the-boards.md): the existing suites on the boards; MIND Core in 512 MiB and in 2 GiB.
 - [100004-MOB-0006](100004-MOB-0006-i2c-and-the-h5s-sensors.md): the I2C controller (TWI) and sensors on the H5's header, a stand-in for the phone's sensor bus.
 - [100004-MOB-0007](100004-MOB-0007-the-axp313a-pmic.md): the AXP313a PMIC, with an interface ready for the phone's AXP803.
+- **When a board hangs:**
+  - the SoC's watchdog restarts a running system that froze, in the kernel as on x86 (asked of `PRT`, 2026-11-12);
+  - [100004-MOB-0009](100004-MOB-0009-the-benchs-power-switched-by-agents.md): the bench's power, switched by agents, for U-Boot, a bad card or a wedged chip.
 - **Later, when a driver needs it:**
   - the clock and reset controller as a service ([100000](100000-a-phone-the-pinephone-first.md), stage 2);
   - `usb_host` on the EHCI and OHCI in memory, a `DRV` task, for the boards' USB ports and then the phone's modem ([100001](100001-telephony-sms-and-calls-through-the-modem.md)).
