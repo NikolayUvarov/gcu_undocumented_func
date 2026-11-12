@@ -43,7 +43,8 @@
 - **Docs:** `docs/network/services.md` (the SSH server), the profile's MC-11.9 row, `tcb.md`, `bootstrap.md`, the IDL table.
 - **Tested** (this container, x86, QEMU 8.2.2 under TCG, OpenSSH 9.6p1's client): `--suites sshd` passed: the host key matched the device key's known_hosts line and fingerprint; scp up and down 300 000 bytes with equal SHA-256; sftp's mkdir, put, ls, rename, rm and rmdir; `data/ssh/`, `/SSH/` and `../../x` refused, and scp into `data/ssh/`; an unlisted key and a password refused with `Permission denied (publickey)`; `ps` refused to both keys (no console lent); the log lines; `SIGNED SshHost`. The host tests the change touches pass (`keys`, `server_openssh`, `server_fuzz`, `boot_abi`, `services`, `idl_fuzz`).
 - **The console lent** (2026-11-12, after 112-APP-0136, APP's answer `KRN/2026-11-12T2125Z`): `init` gives `sshd` the shell's client badged `BADGE_SHELL_REMOTE` in `SLOT_SHELL`; `sshd_check` runs `ps` and `update` through the console key. Docs: `docs/network/services.md`, `tcb.md`, `bootstrap.md`. Tested (this container, x86, QEMU under TCG, on this branch with APP's 6159739a merged in a throwaway tree, not pushed): `--suites sshd` passed, the console key's `ps` listed the processes through the shell and `update` was refused, both logged by `sshd` and the shell. Its first run found that the suite's 11th connection within a minute met `sshd`'s limit of 10 from one address (the files' part makes 7): the suite now waits out the minute before the last 5.
-- **Left:** `--suites sshd` once `main` holds 112-APP-0136; the `tls` suite on x86 and aarch64 on the maintainer's machines; the gate.
+- **On the maintainer's machines** (Effector, QEMU under TCG), at d95c55c5 (`main` 60b995bd with 112-APP-0136 merged): "x86: network, TLS and Effector" passed on x32 (1357 s), "aarch64: network, TLS and Effector" on acc-1 (1145 s), `sshd_check` with the console among them.
+- **Left:** the gate.
 
 ## Related
 
