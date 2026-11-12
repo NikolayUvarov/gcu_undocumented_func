@@ -1,0 +1,62 @@
+#![no_std]
+#![no_main]
+// clipboard (000-APP-0032, idl/clipboard.wit 1.0): one text the user copied, in this service's memory only. The badge of
+// a client says who calls: a manager (the shell, the window manager it started) or a program the shell lent a copy;
+// a program is answered only while a manager names it in front. Each text set and read is logged, never the text.
+extern crate alloc;
+
+use clipboard::state::{Clipboard, Refusal, Who, PART};
+use mind::abi::BootInfo;
+use mind::clipboard::{BADGE_MANAGER, BADGE_PROGRAM};
+use mind::idl::{clipboard as api, wire};
+use mind::ipc::Endpoint;
+
+const RECEIVED: usize = 9;
+
+fn who(badge: u16) -> Who {
+    match badge { BADGE_MANAGER => Who::Manager, BADGE_PROGRAM => Who::Program, _ => Who::Other }
+}
+
+fn error(refusal: Refusal) -> api::Error {
+    match refusal { Refusal::Behind => api::Error::Behind, Refusal::Refused => api::Error::Refused, Refusal::Invalid => api::Error::Invalid, Refusal::Changed => api::Error::Changed }
+}
+
+mind::entry!(main);
+fn main(_info: &'static BootInfo) {
+    let mut clipboard = Clipboard::new();
+    mind::println!("[CLIPBOARD] READY: ONE TEXT IN MEMORY, UP TO {} BYTES, IN PARTS OF {}", clipboard::state::MAX, PART);
+    loop {
+        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        if !request.is_call { continue; }
+        let (caller, pid) = (who(request.badge), request.sender);
+        let _ = match api::decode(&request, RECEIVED) {
+            Err(reason) => wire::reject(reason),
+            Ok((api::Request::SetPart { at, text, last }, call)) => {
+                let set = clipboard.set_part(caller, pid, at as usize, text.as_str().as_bytes(), last);
+                match set {
+                    Ok(generation) if last => mind::println!("[CLIPBOARD] SET BY PID {}: {} BYTES, GENERATION {}", pid, clipboard.length(), generation),
+                    Err(refusal) => mind::println!("[CLIPBOARD] SET REFUSED TO PID {}: {:?}", pid, refusal),
+                    Ok(_) => {}
+                }
+                api::reply_set_part(call, set.map_err(error))
+            }
+            Ok((api::Request::GetPart { generation, at }, call)) => match clipboard.get_part(caller, pid, generation, at as usize) {
+                Ok((generation, length, part)) => {
+                    if at == 0 { mind::println!("[CLIPBOARD] READ BY PID {}: {} BYTES, GENERATION {}", pid, length, generation); }
+                    let text = core::str::from_utf8(part).ok().and_then(|s| mind::idl::codec::Text::<4000>::new(s));
+                    match text {
+                        Some(text) => api::reply_get_part(call, Ok(&api::Part { generation, length: length as u32, text })),
+                        None => api::reply_get_part(call, Err(api::Error::Invalid)),
+                    }
+                }
+                Err(refusal) => { mind::println!("[CLIPBOARD] READ REFUSED TO PID {}: {:?}", pid, refusal); api::reply_get_part(call, Err(error(refusal))) }
+            },
+            Ok((api::Request::Generation, call)) => api::reply_generation(call, clipboard.generation_for(caller).map_err(error)),
+            Ok((api::Request::Front { pid: front }, call)) => {
+                let set = clipboard.set_front(caller, front);
+                if set.is_ok() && clipboard.in_front() != 0 { mind::println!("[CLIPBOARD] IN FRONT: PID {} (NAMED BY PID {})", front, pid); }
+                api::reply_front(call, set.map_err(error))
+            }
+        };
+    }
+}

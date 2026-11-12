@@ -45,6 +45,8 @@ mod wifilend;
 mod secret;
 #[path = "../shell/src/passphrase.rs"]
 mod passphrase;
+#[path = "../shell/src/voiceconf.rs"]
+mod voiceconf;
 #[path = "../shell/src/nnrows.rs"]
 mod nnrows;
 #[path = "../shell/src/sound.rs"]
@@ -739,6 +741,22 @@ fn keystores_passphrase_is_typed_in_steps_and_checked_before_it_is_sent() {
     // A passphrase typed on the line by mistake stays out of the history; `passphrase` alone goes in.
     assert!(on_line("passphrase correct horse") && on_line("  PASSPHRASE x"));
     assert!(!on_line("passphrase") && !on_line("passphrase   ") && !on_line("passphrases x") && !on_line("help passphrase"));
+}
+
+#[test]
+fn voice_control_at_the_shells_start_is_kept_in_voice_conf() {
+    // 000-APP-0052: `voice enable` writes voice on's words after `on`; the file read back gives them, and a line voice on
+    // would not take, `off` or none leave voice control off.
+    use voiceconf::{parse, render, words_ok};
+    assert_eq!(render(""), "# voice control at the shell's start (000-APP-0052); `voice disable` removes this file\non\n");
+    assert_eq!(parse(&render("")), Some(""));
+    assert_eq!(parse(&render("--wav voice.wav 30")), Some("--wav voice.wav 30"));
+    assert_eq!(parse("\n# a note\n  on --wav x.wav  \n"), Some("--wav x.wav"));
+    for text in ["", "# on\n", "off\n", "onward\n", "on --wav\n", "on 0\n", "on 3601\n", "on --wav a b c\n", "on --x\n"] {
+        assert_eq!(parse(text), None, "{:?}", text);
+    }
+    for words in ["", "--wav voice.wav", "--wav voice.wav 10", "60"] { assert!(words_ok(words), "{:?}", words); }
+    for words in ["--wav", "--wav -x", "10 20", "abc", &format!("--wav {}", "f".repeat(64))] { assert!(!words_ok(words), "{:?}", words); }
 }
 
 #[test]
