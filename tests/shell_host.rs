@@ -15,6 +15,8 @@ mod ring;
 mod redirect;
 #[path = "../shell/src/clients.rs"]
 mod clients;
+#[path = "../shell/src/domainrun.rs"]
+mod domainrun;
 #[path = "../shell/src/start.rs"]
 mod start;
 #[path = "../shell/src/safe.rs"]
@@ -204,6 +206,26 @@ fn an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file() {
     // Nothing a remote line gets is asked.
     for line in ["kill 7", "reboot", "hostname dexp", "date set 2026-11-12 12:00", "logs 7"] { assert_ne!(remote(line), Taken::Asked, "{}", line); }
     assert_eq!(clients::BADGE_REMOTE, 3);
+}
+
+#[test]
+fn run_d_names_a_memory_domain_before_the_program() {
+    // 312-APP-0134: `run -d <domain> <program> [arguments] [&]`.
+    use domainrun::split;
+    assert_eq!(split("blocks names"), Ok(None));
+    assert_eq!(split("-d 3 blocks names m/"), Ok(Some((3, "blocks names m/"))));
+    assert_eq!(split("  -d   0   blocks"), Ok(Some((0, "blocks"))));
+    assert_eq!(split("-d 65535 data/apps/agent/agent.elf -v"), Ok(Some((65535, "data/apps/agent/agent.elf -v"))));
+    // A word that starts with -d is no option; a program's own -d after its name is its argument.
+    assert_eq!(split("-dx blocks"), Ok(None));
+    assert_eq!(split("blocks -d 3 names"), Ok(None));
+    // No number, one too big or not one, or no program.
+    for words in ["-d", "-d blocks", "-d 65536 blocks", "-d -1 blocks", "-d 3", "-d 3   ", "-d x3 blocks"] { assert_eq!(split(words), Err(()), "{:?}", words); }
+    // Each refusal has its text, and no other code has one.
+    for code in [domainrun::NOT_ASKED, domainrun::NOT_LENT, domainrun::NOT_FOUND, domainrun::NOT_OURS, domainrun::FULL, domainrun::NO_CLIENT, domainrun::SERVICE] {
+        assert!(domainrun::text(code).is_some_and(|t| t.starts_with("RUN -D")), "{}", code);
+    }
+    assert_eq!(domainrun::text(usize::MAX - 9), None);
 }
 
 #[test]

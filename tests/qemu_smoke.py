@@ -5230,6 +5230,7 @@ def store_domains_check(vm):
         require(made, "blocks: domain new: NoRandom")
         require(vm.service_logs("blockstore", "NO DOMAIN FOR PID"), "AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED")
         print("PASS: memory domains: none made without a random source, and the store says why", flush=True)
+        run_in_domain_check(vm)
         return
     first = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
     second = int(re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))[1])
@@ -5244,6 +5245,7 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    run_in_domain_check(vm, first, second, note)
     # 312-STO-0034: a journal in a domain is written through the domain's client, and is the domain's alone.
     require(blocks(f"-d {first} journal append log note in a domain"), "APPENDED log SEQUENCE 1 BOOT 1 ENTRY")
     require(blocks(f"-d {first} journal check log"), "CHECKED log: 1 ENTRIES, SEQUENCE 1 TO 1, AT VERSION 1: WHOLE")
@@ -5267,6 +5269,33 @@ def store_domains_check(vm):
     require(blocks(f"-d {second} get {note} ram:again.txt"), "GOT 12 BYTES")
     print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
           "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole", flush=True)
+
+
+def run_in_domain_check(vm, first=None, second=None, note=None):
+    """312-APP-0134: `run -d <domain> <program>` gives the program, in place of the shell's client of the volume, the
+    client of the shell's memory domain the store mints. Refused before the start: no number, a domain that is not live,
+    a program that asks for no block store, a service. With domains (a random source), `blocks` started in the first
+    holds that domain's client alone: it reads the first's name, which neither the volume nor the second shows, and
+    makes no domain through it."""
+    def run(args, timeout=240):
+        vm.send(f"run {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"run {args}\n")
+    require(run("-d blocks stat"), "USAGE: RUN [-D <DOMAIN>] <NAME> [ARGUMENTS] [&]")
+    require(run("-d 999 blocks stat"), "RUN -D: NO LIVE MEMORY DOMAIN OF THE SHELL'S HAS THAT NUMBER")
+    require(run("-d 0 clock"), "RUN -D: THE PROGRAM ASKS FOR NO BLOCK STORE")
+    require(run("-d 0 blockstore"), "RUN -D STARTS A PROGRAM, NOT A SERVICE")
+    if first is None:
+        print("PASS: run -d: refused without a number, for a domain that is not live, a program that asks for no block "
+              "store and a service (no domain without a random source)", flush=True)
+        return
+    require(run(f"-d {first} blocks resolve secret"), f"secret VERSION 1 ROOT {note}")
+    vm.logged(f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}, READ AND WRITE", 0)
+    require(run(f"-d {second} blocks resolve secret"), "blocks: resolve secret: NotFound")
+    require(run(f"-d {first} blocks domain new"), "blocks: domain new: Rights")
+    require(run(f"-d {first} blocks domains"), "blocks: domains: Rights")
+    print("PASS: run -d: blocks started in a memory domain reads that domain's name, not the other's, and makes no "
+          "domain; refused without a number, for a domain that is not live, a program that asks for no block store and a "
+          "service", flush=True)
 
 
 def fm_store_check(vm):
