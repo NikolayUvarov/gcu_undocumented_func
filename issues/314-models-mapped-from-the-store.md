@@ -6,11 +6,18 @@ From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-
 
 ## Problem
 
-Speech models are objects in the store (251-STO-0010), but a model is read into a program's memory by copying. [251-STO-0015](251-STO-0015-a-model-read-into-memory.md) reads one into memory; `NRL`'s runtime needs to map large models read-only without a second copy.
+Speech models are objects in the store (251-STO-0010), but a model is read into a program's memory by copying. [251-STO-0015](../issues-done/251-STO-0015-a-model-read-into-memory.done) reads one into memory; `NRL`'s runtime needs to map large models read-only without a second copy.
 
 ## Plan
 
 - 251-STO-0015 widened: a model read once into a memory object that `NRL`'s runtime maps read-only, checked against its CID, without a second copy.
+
+## Progress (2026-11-12)
+
+- **The way is there:** [251-STO-0015](../issues-done/251-STO-0015-a-model-read-into-memory.done) reads a model's file once into a memory object sealed read-only, every chunk checked against its CID and the whole against the manifest's SHA-256 (`mind::model_object`, `blocks models map`). The `vfs` suite times it on a file of 2 MiB.
+- **Left:**
+  - `NRL`'s runtime mapping such an object: `nnd` is the tools track's (262-APP-0112);
+  - a large model mapped, waiting for 307's medium.
 
 ## Acceptance criteria
 
@@ -18,4 +25,4 @@ Speech models are objects in the store (251-STO-0010), but a model is read into 
 
 ## Related
 
-[251-STO-0015](251-STO-0015-a-model-read-into-memory.md), [251-STO-0010](../issues-done/251-STO-0010-speech-models-in-the-store.done), 262-KRN-0162 (`vfs.wit` 2.4 `fill`), 900 (`NRL`).
+[251-STO-0015](../issues-done/251-STO-0015-a-model-read-into-memory.done), [251-STO-0010](../issues-done/251-STO-0010-speech-models-in-the-store.done), 262-KRN-0162 (`vfs.wit` 2.4 `fill`), 900 (`NRL`).
