@@ -12,6 +12,9 @@ for test in heap keys tui viewer idl record rtc sysmon monitor fm block partitio
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
+# The clipboard service's state: its parts, who is answered, the generation (000-APP-0032).
+rustc --edition=2021 --test tests/clipboard_host.rs -o "$OUT/clipboard-tests"
+"$OUT/clipboard-tests"
 # The WPA2-PSK library uses RustCrypto crates, so Cargo builds its tests and the station's (550-NET-0016, 0017).
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)

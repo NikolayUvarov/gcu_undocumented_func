@@ -16,7 +16,7 @@ use mind::script::{parse, Host, Interpreter, Script, Value};
 /// The functions the shell gives scripts (beside mind::script's).
 pub const HOST_FUNCTIONS: [&str; 8] = ["capture", "ps", "services", "files", "glob", "log", "sleep", "now"];
 // `firmware` and `camera` still ask the user each time; declaring them only lets a program ask (211-APP-0013).
-const WORDS: [&str; 22] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera", "blockstore", "firmware", "tls", "parse", "battery", "wifi", "ssh", "nn", "recover"];
+const WORDS: [&str; 23] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera", "blockstore", "firmware", "tls", "parse", "battery", "wifi", "ssh", "nn", "recover", "clipboard"];
 const MAX_SCRIPT: usize = 64 * 1024;
 
 // The shell's commands that need a declared word in a script.
@@ -231,6 +231,12 @@ pub(super) fn ask(shell: &mut Shell, question: &str) -> bool {
         let _ = writeln!(shell.term, "{} (Y/N) Y (THE LINK'S CONSOLE)", question);
         mind::println!("[SHELL] THE LINK'S CONSOLE ANSWERED YES: {}", question);
         return true;
+    }
+    // A line of the link or of an SSH session (800-APP-0102, 112-APP-0136) is never asked: no one there typed it.
+    if shell.unasked {
+        let _ = writeln!(shell.term, "{} (Y/N) N (NOT ASKED: NO ONE AT THE SCREEN TYPED THIS LINE)", question);
+        mind::println!("[SHELL] A LINE TYPED ELSEWHERE WAS NOT ASKED: {}", question);
+        return false;
     }
     let _ = write!(shell.term, "{} (Y/N) ", question);
     shell.term.render(None);

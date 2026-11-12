@@ -137,3 +137,23 @@ fn invalid_utf8_and_tabs() {
     let mut cells = vec![Cell::BLANK; 60 * 12];
     assert_eq!(draw(&mut viewer, &mut cells)[1], "a       b\u{FFFD}\u{FFFD}c");
 }
+
+#[test]
+fn ctrl_c_takes_the_line_found_or_the_top_one() {
+    // 000-APP-0032: view copies the line holding the text found, else the top row's line, without its line end, as much
+    // as the buffer holds.
+    let mut buf = vec![0u8; 512];
+    let mut viewer = Viewer::new(Memory(text_file(200), 0), &mut buf, "t");
+    let mut cells = vec![Cell::BLANK; 60 * 12];
+    draw(&mut viewer, &mut cells);
+    let mut line = [0u8; 64];
+    let n = viewer.copied_line(&mut line);
+    assert_eq!(core::str::from_utf8(&line[..n]).unwrap(), "строка 1 line 1");
+    viewer.key(k(KEY_F1 + 6)); // F7
+    for ch in "line 150".chars() { viewer.key(Key(event(0, ch as u32, 0))); }
+    viewer.key(Key(event(KEY_ENTER, 10, 0)));
+    let n = viewer.copied_line(&mut line);
+    assert_eq!(core::str::from_utf8(&line[..n]).unwrap(), "строка 150 line 150");
+    let mut short = [0u8; 4];
+    assert_eq!(viewer.copied_line(&mut short), 4, "as much as the buffer holds");
+}

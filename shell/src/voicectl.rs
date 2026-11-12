@@ -317,8 +317,63 @@ impl Shell {
                 Some(pid) => { let _ = writeln!(self.term, "VOICE CONTROL ON PID={}{}", pid, if self.voice.listening { " LISTENING" } else { "" }); }
                 None => { let _ = writeln!(self.term, "VOICE CONTROL OFF"); }
             },
-            _ => self.report("USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN"),
+            // Voice control at each start of the shell (000-APP-0052): `voice on`'s words kept in data/voice.conf.
+            b"enable" => {
+                let words = core::str::from_utf8(rest).unwrap_or("");
+                if !crate::voiceconf::words_ok(words) { return self.report(crate::voiceconf::USAGE); }
+                let _ = mind::fs::Dir::create("data"); // a boot volume written without it
+                let kept = mind::fs::File::create(crate::voiceconf::FILE).and_then(|mut file| {
+                    file.write(crate::voiceconf::render(words).as_bytes())?;
+                    file.flush()
+                });
+                match kept {
+                    Ok(()) => {
+                        mind::println!("[SHELL] VOICE CONTROL ON AT EACH START OF THE SHELL ({}: on {})", crate::voiceconf::FILE, words);
+                        let _ = writeln!(self.term, "VOICE CONTROL ON AT EACH START OF THE SHELL, KEPT IN {}{}", crate::voiceconf::FILE, if on { "" } else { "; VOICE ON TURNS IT ON NOW" });
+                    }
+                    Err(error) => self.report(&alloc::format!("{} NOT WRITTEN: {}", crate::voiceconf::FILE, crate::files::text(error))),
+                }
+            }
+            b"disable" if rest.is_empty() => match mind::fs::remove(crate::voiceconf::FILE) {
+                Ok(()) | Err(mind::fs::Error::NotFound) => {
+                    mind::println!("[SHELL] VOICE CONTROL OFF AT THE SHELL'S START ({} REMOVED)", crate::voiceconf::FILE);
+                    let _ = writeln!(self.term, "VOICE CONTROL OFF AT THE SHELL'S START{}", if on { "; VOICE OFF STOPS IT NOW" } else { "" });
+                }
+                Err(error) => self.report(&alloc::format!("{} NOT REMOVED: {}", crate::voiceconf::FILE, crate::files::text(error))),
+            },
+            _ => self.report(crate::voiceconf::USAGE),
         }
+    }
+
+    /// At the shell's start: voice control turned on when data/voice.conf says so (000-APP-0052). `Later` while the
+    /// volume does not answer, unless `last`; true in `Done` when it printed, so the prompt is given again.
+    pub fn voice_load(&mut self, last: bool) -> (crate::clockzone::Load, bool) {
+        use crate::clockzone::Load;
+        let read = wire::with_timeout(200, || -> Result<alloc::string::String, mind::fs::Error> {
+            let mut file = mind::fs::File::open(crate::voiceconf::FILE)?;
+            let mut bytes = alloc::vec![0u8; file.size().min(512)];
+            let mut at = 0;
+            while at < bytes.len() { match file.read(&mut bytes[at..])? { 0 => break, n => at += n } }
+            bytes.truncate(at);
+            Ok(alloc::string::String::from_utf8(bytes).unwrap_or_default())
+        });
+        let text = match read {
+            Ok(text) => text,
+            Err(mind::fs::Error::NotFound) => return (Load::Done, false),
+            Err(error) if !last && crate::files::text(error) == "VFS NOT AVAILABLE" => return (Load::Later, false),
+            Err(error) => { mind::println!("[SHELL] {} NOT READ: {}", crate::voiceconf::FILE, crate::files::text(error)); return (Load::Done, false); }
+        };
+        let Some(words) = crate::voiceconf::parse(&text) else {
+            mind::println!("[SHELL] {} HOLDS NO `on` LINE OF voice on'S WORDS: VOICE CONTROL STAYS OFF", crate::voiceconf::FILE);
+            return (Load::Done, false);
+        };
+        if self.voice_on() { return (Load::Done, false); }
+        mind::println!("[SHELL] VOICE CONTROL ON AT THE SHELL'S START, AS {} SAYS", crate::voiceconf::FILE);
+        let mut args = alloc::vec::Vec::from(&b"on"[..]);
+        if !words.is_empty() { args.push(b' '); args.extend_from_slice(words.as_bytes()); }
+        if self.term.position().col != 0 { self.term.print_char(b'\n'); }
+        self.voice_command(&args);
+        (Load::Done, true)
     }
 
     /// Push-to-talk: voice listens for one utterance (now, or after what it is saying).

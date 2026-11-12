@@ -1,6 +1,6 @@
 # 112-APP-0136 — The shell takes an SSH session's lines
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — (the client `init` mints for `sshd`: KRN's, after 112-NET-0072) · **Main task:** [112](112-our-own-ssh-server.md) · **Roadmap:** track D · **Constitution:** MC-3.1, MC-5.1, MC-11.4, MC-11.6
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the shell's part done, 2026-11-12; its QEMU criterion waits for the client `init` mints) · **Blocked by:** — (the client `init` mints for `sshd`: KRN's, after 112-NET-0072) · **Main task:** [112](112-our-own-ssh-server.md) · **Roadmap:** track D · **Constitution:** MC-3.1, MC-5.1, MC-11.4, MC-11.6
 
 **Asked by:** KRN (the kernel session, `NET`), for 112-NET-0072's console, in [requests-APP.md](requests-APP.md), 2026-11-12. Numbered on 2026-11-12.
 
@@ -23,6 +23,15 @@
 
 - **Host tests:** the remote rule's lists, beside the link's.
 - **QEMU (`tls` suite's `sshd_check`, KRN's after `init` lends the client):** `ssh mind@… ps` answers the shell's `ps`; a refused command says so; the log names its word.
+
+## Progress (2026-11-12)
+
+- **The rule** (`shell/src/clients.rs`, `Client::Remote`, the badge `BADGE_REMOTE` = 3): at once what the link's client in developer mode runs at once; refused as for the link the policy's changes, `mode`, scripts, the screen's commands, programs and the commands no client gets; refused besides a line with `>` or `>>` and `tpm`.
+- **Never asked:** `msh::ask` answers no to a line of the link or of an SSH session and logs `[SHELL] A LINE TYPED ELSEWHERE WAS NOT ASKED: …`; no command either client gets asks today, so this changes nothing the link ran.
+- **`run` alone:** another call through the remote copy is refused and logged (`shell/src/main.rs`, `serve_commands`).
+- **Logged:** `[SHELL] FOR AN SSH SESSION THE SHELL RAN PS` (or `REFUSED`, `DID NOT RUN`).
+- **Tested:** `tests/shell_host.rs`'s `an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file`, beside the link's tests. On x86 (4 CPUs) the `shell` and `wm` suites (33 checks), `link` (the shell's lines over the link, the policy refused, the link's console) and `modes` (7) pass with it: the link's rule is unchanged. No client is badged 3 yet, so the remote path itself has not run in QEMU.
+- **Left:** the badge from `mind::process` once 112-NET-0072 is in `main`; KRN's `sshd_check` criteria once `init` mints the client.
 
 ## Related
 

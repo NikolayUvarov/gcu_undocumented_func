@@ -25,7 +25,7 @@ use mind::tui::{Terminal, CLASSIC};
 
 // The user's files to work on; system information only to lend to the monitors it starts; the block store as the
 // volume `store:` (300-APP-0038); the shell's commands, to run a script in the shell's window (000-APP-0067).
-mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_BLOCKSTORE | REQUEST_SHELL);
+mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_BLOCKSTORE | REQUEST_SHELL | REQUEST_CLIPBOARD);
 
 struct DiskFile(File);
 impl Source for DiskFile {
@@ -192,11 +192,27 @@ impl Disk for Vfs {
     fn remove(&mut self, path: &str) -> Result<(), Failure> { fs::remove(path).map_err(failure) }
     fn rename(&mut self, from: &str, to: &str) -> Result<(), Failure> { fs::rename(from, to).map_err(failure) }
     fn writable(&mut self, path: &str) -> bool { File::open_mode(path, fs::MODE_WRITE).is_ok() }
+    // The store volumes storefs serves (311-APP-0135): the store's names under `fs/`, one page, where fm holds storefs's
+    // client (the shell lends it with the user's files); one vfs_server has is that one's.
+    fn store_volumes(&mut self) -> Vec<String> {
+        if mind::dev::cap_info(SLOT_STOREFS).0 != CAP_KIND_ENDPOINT { return Vec::new(); }
+        let Ok(Ok(page)) = blockstore::names(STORE, "fs/", "") else { return Vec::new() };
+        page.as_slice().iter().filter_map(|n| panel::store_volume(n.name.as_str())).filter(|v| !fs::on_vfs(v.trim_end_matches(':'))).collect()
+    }
     fn volume(&mut self, path: &str) -> Option<VolumeInfo> {
         let name = panel::volume(path).0.trim_end_matches(':');
         fs::volume(name).ok().map(|v| VolumeInfo { label: String::from(v.label()), fat_bits: v.fat_bits, bytes: v.bytes, free: v.free })
     }
     fn flush(&mut self, path: &str) -> Result<(), Failure> { fs::Dir::root(panel::volume(path).0.trim_end_matches(':')).and_then(|root| root.flush()).map_err(failure) }
+    // The system clipboard, where the shell lent it (000-APP-0032).
+    fn clipboard(&mut self) -> bool { mind::clipboard::client().is_some() }
+    fn copy(&mut self, text: &[u8]) -> Result<(), String> {
+        let text = core::str::from_utf8(text).map_err(|_| String::from("not UTF-8"))?;
+        mind::clipboard::copy(text).map(|g| mind::println!("[FM] COPIED {} BYTES TO THE CLIPBOARD, GENERATION {}", text.len(), g)).map_err(|e| String::from(e.text()))
+    }
+    fn paste(&mut self) -> Result<Vec<u8>, String> {
+        mind::clipboard::paste().map(|text| { mind::println!("[FM] PASTED {} BYTES FROM THE CLIPBOARD", text.len()); text.into_bytes() }).map_err(|e| String::from(e.text()))
+    }
 }
 
 mind::entry!(main);

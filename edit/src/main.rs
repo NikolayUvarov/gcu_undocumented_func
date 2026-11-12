@@ -17,7 +17,7 @@ use mind::input::KeyOrPointer;
 use mind::ipc::Endpoint;
 use mind::tui::{Terminal, CLASSIC};
 
-mind::request!(REQUEST_FILE);
+mind::request!(REQUEST_FILE | REQUEST_CLIPBOARD);
 mind::entry!(main);
 
 fn describe(error: Error) -> String {
@@ -93,6 +93,8 @@ fn main(info: &'static mind::BootInfo) {
     };
     let Some(mut term) = Terminal::open(info, "edit") else { return };
     let mut editor = Editor::new(text, path, read_only);
+    // The system clipboard where the shell lent it (000-APP-0032); else the editor keeps its own copy, as before.
+    editor.system = mind::clipboard::client().is_some();
     mind::println!("[EDIT] READY {} RO={}", editor.status(), read_only as u8);
     // The mouse: the key bar's buttons, the menu, the text, the wheel (issue u013).
     mind::input::pointer(true);
@@ -112,6 +114,20 @@ fn main(info: &'static mind::BootInfo) {
             },
         };
         let (path, quit) = match outcome {
+            Outcome::Copy(text) => {
+                match core::str::from_utf8(&text).map_err(|_| mind::clipboard::Error::Invalid).and_then(mind::clipboard::copy) {
+                    Ok(generation) => mind::println!("[EDIT] COPIED {} BYTES TO THE CLIPBOARD, GENERATION {}", text.len(), generation),
+                    Err(error) => { mind::println!("[EDIT] NOT COPIED TO THE CLIPBOARD: {}", error.text()); editor.notice = Some(String::from("Copied here only: the clipboard did not take it")); }
+                }
+                continue;
+            }
+            Outcome::Paste => {
+                match mind::clipboard::paste() {
+                    Ok(text) => { mind::println!("[EDIT] PASTED {} BYTES FROM THE CLIPBOARD", text.len()); editor.paste_text(text.as_bytes()); }
+                    Err(error) => { mind::println!("[EDIT] NOT PASTED FROM THE CLIPBOARD: {}", error.text()); editor.paste(); }
+                }
+                continue;
+            }
             Outcome::Quit => break,
             Outcome::Save(path) => (path, false),
             Outcome::SaveAndQuit(path) => (path, true),

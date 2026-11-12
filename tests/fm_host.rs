@@ -74,13 +74,13 @@ impl Sink for MemSink {
 }
 
 struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, args: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String>,
-             log: Vec<String>, fail_flushes: usize, pass_flushes: usize, scripts: Vec<String>, shell: bool } // removals and flushes in order; flushes that fail after those that pass; scripts run, the shell's commands held
+             log: Vec<String>, fail_flushes: usize, pass_flushes: usize, scripts: Vec<String>, shell: bool, clip: Option<Vec<u8>>, stores: Vec<String> } // removals and flushes in order; flushes that fail after those that pass; scripts run, the shell's commands held; storefs's volumes
 
 const RAM: u64 = 64 * 1024;
 
 impl Mem {
     fn sample() -> Self {
-        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new(), log: Vec::new(), fail_flushes: 0, pass_flushes: 0, scripts: Vec::new(), shell: true };
+        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new(), log: Vec::new(), fail_flushes: 0, pass_flushes: 0, scripts: Vec::new(), shell: true, clip: None, stores: Vec::new() };
         disk.dirs = vec!["EFI".into(), "EFI/BOOT".into(), "docs".into(), "docs/old".into()];
         for (path, bytes, time) in [("kernel.elf", vec![0x7F, b'E', b'L', b'F'], STAMP), ("top.elf", vec![1; 3000], STAMP - 1), ("readme.txt", "Hello\nПривет, мир\n".as_bytes().to_vec(), STAMP + 1),
                                     ("EFI/BOOT/BOOTX64.EFI", vec![b'M', b'Z'], 0), ("docs/notes.txt", b"notes".to_vec(), 0), ("docs/old/notes.md", b"old".to_vec(), 0),
@@ -92,8 +92,8 @@ impl Mem {
     }
     fn file(&self, path: &str) -> Option<Vec<u8>> { self.files.iter().find(|f| f.0.eq_ignore_ascii_case(path)).map(|f| f.1.borrow().clone()) }
     fn is_dir(&self, path: &str) -> bool { is_root(path) || self.dirs.iter().any(|d| d.eq_ignore_ascii_case(path)) }
-    // As vfs_server allows the shell: ram: and data/ of the boot disk.
-    fn allowed(path: &str) -> bool { inside(path, "ram:") || inside(path, "data") }
+    // As vfs_server allows the shell: ram: and data/ of the boot disk; and storefs a store volume (311-APP-0135).
+    fn allowed(path: &str) -> bool { inside(path, "ram:") || inside(path, "data") || inside(path, "notes:") }
     fn add_file(&mut self, path: &str, bytes: &[u8]) { self.files.push((path.into(), data(bytes), STAMP, 0)); }
 }
 
@@ -176,6 +176,11 @@ impl Disk for Mem {
              else if path.starts_with("log:") { VolumeInfo { label: "MIND LOG".into(), fat_bits: 16, bytes: 16 << 20, free: 15 << 20 } }
              else { VolumeInfo { label: "MINDTEST".into(), fat_bits: 16, bytes: 60 << 20, free: 50 << 20 } })
     }
+    fn store_volumes(&mut self) -> Vec<String> { self.stores.clone() }
+    // A stand-in system clipboard where the test gives one (000-APP-0032).
+    fn clipboard(&mut self) -> bool { self.clip.is_some() }
+    fn copy(&mut self, text: &[u8]) -> Result<(), String> { match self.clip.as_mut() { Some(clip) => { *clip = text.to_vec(); Ok(()) } None => Err("no clipboard".into()) } }
+    fn paste(&mut self) -> Result<Vec<u8>, String> { self.clip.clone().ok_or_else(|| String::from("no clipboard")) }
     fn flush(&mut self, path: &str) -> Result<(), Failure> {
         self.flushes += 1;
         self.log.push(format!("flush {}", panel::volume(path).0));
@@ -408,6 +413,47 @@ fn quick_view_info_find_and_menu() {
     assert_eq!(fm.panels[0].path, "");
     let screen = draw(&mut fm, 100, 30);
     assert!(screen_has(&screen, "nothing: NotFound"), "{:#?}", screen);
+}
+
+#[test]
+fn the_volume_menu_lists_the_store_volumes_and_opens_one() {
+    // 311-APP-0135: storefs's volumes, the store's names `fs/<volume>`, after the disks; Enter opens one as a disk's, and
+    // a file copies there and back.
+    assert_eq!(panel::store_volume("fs/notes").as_deref(), Some("notes:"));
+    assert_eq!(panel::store_volume("fs/Docs.2026_a-b").as_deref(), Some("Docs.2026_a-b:"));
+    for name in ["fs/", "fs/a/b", "fs/a:b", "notes", "fs/abcdefghijklmnopq", "fs/a b", "store/fs/x"] { assert_eq!(panel::store_volume(name), None, "{}", name); }
+    let mut disk = Mem::sample();
+    disk.stores = vec!["notes:".into(), "RAM:".into()];
+    disk.add_file("notes:todo.txt", b"buy milk\n");
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    ram_panel(&mut fm, &mut disk);
+    fm.key(alt_f(1), &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "notes: store volume MINDTEST"), "{:#?}", screen);
+    // A store volume named as a disk's is that disk's, listed once.
+    assert_eq!(screen.iter().filter(|l| l.contains("RAM disk")).count(), 1, "{:#?}", screen);
+    assert!(!screen_has(&screen, "RAM: store volume"), "{:#?}", screen);
+    // The boot disk, ram:, log:, store:, then notes:.
+    // The status line names the line under the cursor as a panel's path.
+    assert!(fm.status().contains(" DIALOG=VOLUME:/ MENU="), "{}", fm.status());
+    for _ in 0..4 { fm.key(code(KEY_DOWN), &mut disk); }
+    assert!(fm.status().contains(" DIALOG=VOLUME:/notes: MENU="), "{}", fm.status());
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!((fm.panels[0].path.as_str(), fm.panels[0].current().map(|e| e.name.as_str())), ("notes:", Some("todo.txt")));
+    // From the store volume to ram: and back under another name.
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("ram:todo.txt").unwrap(), b"buy milk\n");
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.panels[1].arrange(Some("todo.txt"));
+    fm.key(f(5), &mut disk);
+    clear_line(&mut fm, &mut disk);
+    typed(&mut fm, &mut disk, "notes:back.txt");
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("notes:back.txt").unwrap(), b"buy milk\n");
 }
 
 #[test]
@@ -1118,6 +1164,21 @@ impl FakeStore {
 }
 
 #[test]
+fn the_store_wrapper_passes_on_what_it_does_not_hold() {
+    // fm's disk is wrapped with store:, and the system clipboard and storefs's volumes are the disk's (000-APP-0032,
+    // 311-APP-0135).
+    let mut mem = Mem::sample();
+    mem.clip = Some(b"copied".to_vec());
+    mem.stores = vec!["notes:".into()];
+    let mut disk = store::WithStore { disk: mem, store: Some(store::Volume::new(FakeStore::default())) };
+    assert!(disk.clipboard());
+    assert_eq!(disk.paste().unwrap(), b"copied");
+    disk.copy(b"again").unwrap();
+    assert_eq!(disk.disk.clip.as_deref(), Some(&b"again"[..]));
+    assert_eq!(disk.store_volumes(), ["notes:"]);
+}
+
+#[test]
 fn the_block_store_panel() {
     // 300-APP-0038: store: beside the disks; a copy there publishes a name, F3 reads an object back with every block
     // checked, F6 renames in one commit, F8 unpublishes; names fm has not seen show once the store can list them.
@@ -1359,4 +1420,39 @@ fn a_new_directory_outside_data_goes_into_data() {
     assert_eq!(mkdir_target("", "/new"), (String::from("new"), false));
     assert_eq!(mkdir_target("ram:", "new"), (String::from("ram:new"), false));
     assert_eq!(mkdir_target("", "ram:new"), (String::from("ram:new"), false));
+}
+
+#[test]
+fn the_system_clipboard_in_fms_editor_and_command_line() {
+    // 000-APP-0032: where fm holds the clipboard, its editor's copy goes there and its paste comes from it; Ctrl+V on the
+    // command line takes the clipboard's first line. Without one, both keep to themselves.
+    let mut disk = Mem::sample();
+    disk.clip = Some(b"cd docs\nrm all".to_vec());
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    draw(&mut fm, 100, 30);
+    fm.key(ctrl('v'), &mut disk);
+    assert!(fm.status().ends_with(" CMD=cd docs"), "{}", fm.status());
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.edit("ram:clip.txt", true, &mut disk);
+    assert!(fm.editor.as_ref().unwrap().system);
+    typed(&mut fm, &mut disk, "hello");
+    fm.key(ctrl('a'), &mut disk);
+    fm.key(ctrl('c'), &mut disk);
+    let text = fm.editor.as_ref().unwrap().buffer.text();
+    assert_eq!(disk.clip.as_deref(), Some(&text[..]), "copied to the clipboard");
+    disk.clip = Some("Жук".as_bytes().to_vec());
+    fm.key(ctrl('x'), &mut disk);
+    assert_eq!(disk.clip.as_deref(), Some(&text[..]), "cut: the text to the clipboard");
+    fm.key(ctrl('v'), &mut disk);
+    assert_eq!(fm.editor.as_ref().unwrap().buffer.text(), text, "pasted back from it");
+    // Without a clipboard: the editor's own copy, and nothing on the command line.
+    let mut plain = Mem::sample();
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut plain);
+    draw(&mut fm, 100, 30);
+    fm.key(ctrl('v'), &mut plain);
+    assert!(fm.command.is_empty());
+    fm.edit("ram:clip.txt", true, &mut plain);
+    assert!(!fm.editor.as_ref().unwrap().system);
 }

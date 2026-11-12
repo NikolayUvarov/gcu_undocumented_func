@@ -74,6 +74,18 @@ impl<'b, S: Source> Viewer<'b, S> {
                query: [0; 128], query_len: 0, found: None, prompt: None, note: None, help: false, line_mark: (0, 1), modifiers: 0 }
     }
     pub fn top(&self) -> u64 { self.top }
+    /// The line a copy takes (000-APP-0032): the one holding the text found, else the top row's, without its line end;
+    /// as many bytes as `out` holds. Its length.
+    pub fn copied_line(&mut self, out: &mut [u8]) -> usize {
+        let at = self.found.map_or(self.top, |(at, _)| at);
+        let (mut pos, mut len) = (if self.mode == Mode::Text { self.line_start(at) } else { at - at % HEX_ROW }, 0);
+        while len < out.len() {
+            match self.cache.byte(pos) { None | Some(b'\n') => break, Some(b'\r') => {} Some(b) => { out[len] = b; len += 1; } }
+            pos += 1;
+            if self.mode == Mode::Hex && pos % HEX_ROW == 0 { break; }
+        }
+        len
+    }
     pub fn size(&self) -> u64 { self.cache.size() }
     /// Closes the viewer and gives its window buffer back.
     pub fn into_buffer(self) -> &'b mut [u8] { self.cache.into_buffer() }
