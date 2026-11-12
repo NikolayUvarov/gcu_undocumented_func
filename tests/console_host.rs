@@ -200,3 +200,13 @@ fn a_carriage_return_writes_the_line_again() {
     screen.output(b"\r\nnext\r\n");
     assert_eq!(rows(&screen), ["started", "ab:00:01  2026-10-06", "next"]);
 }
+
+#[test]
+fn a_pasted_text_gives_the_line_its_first_line() {
+    // 000-APP-0032: Ctrl+V's text goes into the line up to its first line end, its control characters left out.
+    let mut s = screen::Screen::new();
+    s.paste("ls data\tx\nrm everything\n");
+    assert_eq!(s.line.as_str(), "ls datax");
+    s.paste(" и ещё");
+    assert_eq!(s.line.as_str(), "ls datax и ещё");
+}

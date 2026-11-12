@@ -22,8 +22,7 @@ pub mod block_protocol;
 pub mod blockstore;
 pub mod car;
 pub mod checkpoint;
-#[cfg(feature = "alloc")]
-pub mod clipboard; // the system clipboard's client (000-APP-0032)
+pub mod clipboard; // the system clipboard's client (000-APP-0032); paste needs alloc
 pub mod cid;
 pub mod control;
 pub mod dag;

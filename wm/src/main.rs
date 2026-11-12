@@ -197,11 +197,12 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_BATTERY != 0 { if holds(SLOT_BATTERY) && grant(SLOT_BATTERY, SLOT_BATTERY) { lent.push("battery"); } else { missing.push("battery"); } }
     if requests & mind::process::REQUEST_WIFI != 0 { if holds(SLOT_WIFI) && grant(SLOT_WIFI, SLOT_WIFI) { lent.push("wifi"); } else { missing.push("wifi"); } }
     if requests & mind::process::REQUEST_NET_COUNTERS != 0 { if holds(SLOT_NET) && grant(SLOT_NET, SLOT_NET) { lent.push("net-counters"); } else { missing.push("net-counters"); } }
-    // The clipboard (000-APP-0032): a program's copy, minted from the client the shell lent wm, which may badge.
-    if requests & mind::process::REQUEST_CLIPBOARD != 0 {
-        match holds(SLOT_CLIPBOARD).then(|| ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE | CAP_GRANT, mind::clipboard::BADGE_PROGRAM).ok()).flatten() {
-            Some(copy) => { if grant(SLOT_CLIPBOARD, copy) { lent.push("clipboard"); } else { missing.push("clipboard"); } let _ = ipc::drop_cap(copy); }
-            None => missing.push("clipboard"),
+    // The clipboard (000-APP-0032): a program's copy, minted from the client the shell lent wm, which may badge. With
+    // none, there is no clipboard to lend, and the program keeps its own copy buffer, as the shell's do.
+    if requests & mind::process::REQUEST_CLIPBOARD != 0 && holds(SLOT_CLIPBOARD) {
+        match ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE | CAP_GRANT, mind::clipboard::BADGE_PROGRAM) {
+            Ok(copy) => { if grant(SLOT_CLIPBOARD, copy) { lent.push("clipboard"); } else { missing.push("clipboard"); } let _ = ipc::drop_cap(copy); }
+            Err(_) => missing.push("clipboard"),
         }
     }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
