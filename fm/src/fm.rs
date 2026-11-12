@@ -68,6 +68,12 @@ pub trait Disk {
     fn volume(&mut self, path: &str) -> Option<VolumeInfo>;
     /// Writes what is cached for the volume of `path` to its medium; an error means it may not be there (175-APP-0036).
     fn flush(&mut self, path: &str) -> Result<(), Failure>;
+    /// Whether fm holds the system clipboard (000-APP-0032); without it the editor keeps its own copy.
+    fn clipboard(&mut self) -> bool { false }
+    /// A text to the system clipboard: why not, when it did not take it.
+    fn copy(&mut self, _text: &[u8]) -> Result<(), String> { Err(String::from("no clipboard")) }
+    /// The system clipboard's text: why not, when it gave none.
+    fn paste(&mut self) -> Result<Vec<u8>, String> { Err(String::from("no clipboard")) }
 }
 
 /// Where a program fm started shows itself.
@@ -457,6 +463,7 @@ impl<'b> Fm<'b> {
         };
         let read_only = !new && !disk.writable(path);
         let mut editor = Editor::new(text, path, read_only);
+        editor.system = disk.clipboard();
         // Where the user may write: ram:, log: and data/ on the boot disk.
         if read_only { editor.notice = Some(String::from("READ-ONLY: on the boot disk only data/ may be changed, and ram: and log: (Shift+F2 saves a copy)")); }
         self.editor = Some(editor);
@@ -516,6 +523,15 @@ impl<'b> Fm<'b> {
             EditOutcome::SaveAndQuit(path) => (path, true),
             EditOutcome::Redraw => return Outcome::Redraw,
             EditOutcome::Ignored => return Outcome::Ignored,
+            // Through the system clipboard (000-APP-0032); the editor's own copy where it does not answer.
+            EditOutcome::Copy(text) => {
+                if let Err(why) = disk.copy(&text) { editor.notice = Some(format!("Copied here only: {}", why)); }
+                return Outcome::Redraw;
+            }
+            EditOutcome::Paste => {
+                match disk.paste() { Ok(text) => editor.paste_text(&text), Err(_) => editor.paste() }
+                return Outcome::Redraw;
+            }
         };
         let result = Self::save(&path, &editor.buffer.text(), disk);
         let saved = result.is_ok();

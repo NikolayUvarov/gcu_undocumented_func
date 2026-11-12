@@ -9,6 +9,7 @@ extern crate alloc;
 
 mod bmp;
 mod clients;
+mod clipctl;
 mod clockzone;
 mod console;
 mod files;
@@ -187,6 +188,7 @@ struct Shell {
     pass: passctl::State, // keystore's passphrase typed, and the boot's wait for it looked for (308-APP-0130)
     gone_front: Option<(u64, u64)>, // a program started in front that ended before its focus, and when (000-APP-0133)
     screened: Option<u64>, // the last program started that has a screen, not a console program (000-APP-0133)
+    clip: clipctl::Clip, // the system clipboard's manager copy, and who it was told is in front (000-APP-0032)
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -794,6 +796,25 @@ impl Shell {
         }
     }
 
+    // The clipboard's first line into the line being typed (000-APP-0032); without a clipboard, or refused, nothing.
+    fn paste_line(&mut self) {
+        match self.clip.paste() {
+            Ok(text) => { for ch in clipctl::line_of(&text) { if !self.line.insert(ch) { break; } } self.redraw_input(true); }
+            Err(mind::clipboard::Error::NoClient) => {}
+            Err(error) => mind::println!("[SHELL] NOT PASTED: {}", error.text()),
+        }
+    }
+
+    // The line being typed to the clipboard (000-APP-0032).
+    fn copy_line(&mut self) {
+        let text = alloc::string::String::from(self.line.as_str());
+        match self.clip.copy(&text) {
+            Ok(generation) => mind::println!("[SHELL] THE LINE COPIED: {} BYTES, GENERATION {}", text.len(), generation),
+            Err(mind::clipboard::Error::NoClient) => {}
+            Err(error) => mind::println!("[SHELL] NOT COPIED: {}", error.text()),
+        }
+    }
+
     // A program to the foreground of the active console; it gets the keyboard if that console is shown. A program in
     // the foreground of another console leaves it.
     fn focus(&mut self, pid: u64, keep_output: bool) -> Result<(), Error> {
@@ -906,6 +927,8 @@ impl Shell {
             .then(|| storescope::named(args)).flatten();
         let firmware_granted = granted("firmware") && !help;
         let recover_granted = granted("recover") && !help;
+        // The clipboard's client (000-APP-0032), lent below: as decided before any question takes `self`.
+        let clip_wanted = requests & mind::process::REQUEST_CLIPBOARD != 0 && granted("clipboard");
         // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
         // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
         let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera");
@@ -939,6 +962,11 @@ impl Shell {
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
         if let Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         // Not needed to start: without them the program finds no store volume, as before.
+        // The clipboard's client for a program that asks (000-APP-0032): a program's copy, or for a window manager one
+        // that may badge its own and its windows' copies. Not needed to start.
+        if clip_wanted {
+            if let Some(copy) = self.clip.lend(window_manager) { let _ = lend(SLOT_CLIPBOARD, copy); let _ = mind::ipc::drop_cap(copy); }
+        }
         if store_files {
             if let Ok(copy) = mind::ipc::mint(SLOT_STOREFS, CAP_WRITE | CAP_GRANT, 0, 0) { let _ = lend(SLOT_STOREFS, copy); let _ = mind::ipc::drop_cap(copy); }
         } else if let Some(volume) = &store_named {
@@ -1630,6 +1658,9 @@ impl Shell {
         if key.shift() && matches!(key.code(), Code::PageUp | Code::PageDown) { self.term.scroll(key.code() == Code::PageUp); return; }
         self.term.unscroll();
         if key.is_ctrl('l') { self.term.clear(); let prompt = self.prompt_text(); let _ = write!(self.term, "{}", prompt); self.prompt_at = self.term.position(); self.redraw_input(true); return; }
+        // The system clipboard on the line (000-APP-0032): Ctrl+V or Shift+Insert pastes its first line, Ctrl+Insert copies the line.
+        if key.is_ctrl('v') || (key.code() == Code::Insert && key.shift()) { self.paste_line(); return; }
+        if key.code() == Code::Insert && key.ctrl() { self.copy_line(); return; }
         if self.history.key(key, &mut self.line) { self.redraw_input(true); return; }
         if key.code() == Code::Tab { self.complete(); return; }
         let (old_len, old_at_end) = (self.line.as_str().len(), self.line.cursor_chars() == self.line.as_str().chars().count());
@@ -1719,7 +1750,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), gave_up: 0, managers: alloc::vec::Vec::new(), unasked: false, console_link: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64), gone_front: None, screened: None })
+                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64), gone_front: None, screened: None, clip: clipctl::Clip::new() })
 }
 
 mind::entry!(main);
@@ -1822,6 +1853,9 @@ fn main(info: &'static BootInfo) {
             }
         }
         step(&mut start, "THE KEYS AND THE COMMANDS TYPED");
+        // The program in front of the console shown, for the clipboard (000-APP-0032): the shell itself (0) at its
+        // prompt; in a window of the shell, the window manager names the window in front.
+        if !is_window(shell.shown) { shell.activate(shell.shown); let front = shell.focused.or(shell.console).unwrap_or(0); shell.clip.front(front); }
         let cursor = (shell.focused.is_none() && shell.console.is_none()).then(|| shell.cursor());
         if shell.term.render(cursor) && !start.drawn() {
             step(&mut start, "DRAWING THE FIRST FRAME");

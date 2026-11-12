@@ -12,7 +12,11 @@ use alloc::vec::Vec;
 
 /// What a key asks of the program.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Outcome { Redraw, Ignored, Quit, Save(String), SaveAndQuit(String) }
+pub enum Outcome { Redraw, Ignored, Quit, Save(String), SaveAndQuit(String),
+    /// With the system clipboard (000-APP-0032): the text copied, for the program to give it; the editor kept it too.
+    Copy(Vec<u8>),
+    /// With the system clipboard: the program pastes its text with `paste_text`, or the editor's own with `paste`.
+    Paste }
 
 pub enum Dialog { Find(InputLine), Replace { find: InputLine, with: InputLine, second: bool }, Goto(InputLine), SaveAs(InputLine, bool), Unsaved(usize), Help }
 
@@ -50,6 +54,8 @@ pub struct Editor {
     pub overwrite: bool,
     pub tab: usize,
     clipboard: Vec<u8>,
+    /// Whether the program holds the system clipboard (000-APP-0032): copies and pastes go through it then.
+    pub system: bool,
     pub menu: MenuBar<'static>,
     pub dialog: Option<Dialog>,
     pub notice: Option<String>,
@@ -74,7 +80,7 @@ impl Editor {
     pub fn new(text: Vec<u8>, path: &str, read_only: bool) -> Self {
         let notice = read_only.then(|| String::from(READ_ONLY));
         Self { buffer: Buffer::new(text), cursor: 0, anchor: None, goal: None, top: 0, left: 0, path: String::from(path), read_only, overwrite: false, tab: 4,
-               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, done: false, query: String::new(), height: 20, width: 80, modifiers: 0, buttons: 0,
+               clipboard: Vec::new(), system: false, menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, done: false, query: String::new(), height: 20, width: 80, modifiers: 0, buttons: 0,
                syntax: syntax::for_path(path), colours: true, states: alloc::vec![State::Normal] }
     }
 
@@ -216,11 +222,32 @@ impl Editor {
         match self.selection() { Some((s, e)) => { self.clipboard = self.buffer.bytes(s, e); true } None => false }
     }
 
-    fn paste(&mut self) {
+    /// The editor's own copy pasted: without the system clipboard, or where it did not answer.
+    pub fn paste(&mut self) {
         if !self.writable() || self.clipboard.is_empty() { return; }
         self.buffer.close_group();
         let text = self.clipboard.clone();
         self.put(&text, false);
+    }
+
+    /// `text` from the system clipboard pasted, and kept as the editor's own copy (000-APP-0032).
+    pub fn paste_text(&mut self, text: &[u8]) {
+        if !self.writable() || text.is_empty() { return; }
+        self.clipboard = text.to_vec();
+        self.buffer.close_group();
+        self.put(text, false);
+    }
+
+    // Copy, cut and paste, through the system clipboard where the program holds it.
+    fn copied(&mut self, cut: bool) -> Outcome {
+        if !self.copy() { return Outcome::Redraw; }
+        if cut && self.writable() { self.delete_selection(); }
+        if self.system { Outcome::Copy(self.clipboard.clone()) } else { Outcome::Redraw }
+    }
+    fn pasted(&mut self) -> Outcome {
+        if self.system && self.writable() { return Outcome::Paste; }
+        self.paste();
+        Outcome::Redraw
     }
 
     fn find_next(&mut self) {
@@ -261,9 +288,9 @@ impl Editor {
             (0, _) => return self.quit(),
             (1, 0) => if let Some(at) = self.buffer.undo() { self.cursor = at.min(self.buffer.len()); self.anchor = None; },
             (1, 1) => if let Some(at) = self.buffer.redo() { self.cursor = at.min(self.buffer.len()); self.anchor = None; },
-            (1, 2) => { if self.copy() && self.writable() { self.delete_selection(); } }
-            (1, 3) => { self.copy(); }
-            (1, 4) => self.paste(),
+            (1, 2) => return self.copied(true),
+            (1, 3) => return self.copied(false),
+            (1, 4) => return self.pasted(),
             (1, _) => { self.anchor = Some(0); self.cursor = self.buffer.len(); }
             (2, 0) => { let mut line = InputLine::new(); line.set(&self.query.clone()); self.dialog = Some(Dialog::Find(line)); }
             (2, 1) => self.find_next(),
@@ -426,9 +453,9 @@ impl Editor {
             Code::F(8) if alt => return self.command(2, 3),
             Code::F(9) => { self.menu.open = true; self.menu.menu = 0; self.menu.item = 0; }
             Code::Char if ctrl => match key.char().map(|c| c.to_ascii_lowercase()) {
-                Some('c') => { self.copy(); }
-                Some('x') => { if self.copy() && self.writable() { self.delete_selection(); } }
-                Some('v') => self.paste(),
+                Some('c') => return self.copied(false),
+                Some('x') => return self.copied(true),
+                Some('v') => return self.pasted(),
                 Some('a') => { self.anchor = Some(0); self.cursor = self.buffer.len(); }
                 Some('u') => return self.command(1, 0),
                 Some('y') => return self.command(1, 1),
