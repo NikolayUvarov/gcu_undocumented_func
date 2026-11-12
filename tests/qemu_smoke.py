@@ -2832,6 +2832,55 @@ def secret_line_check(vm):
           "another command through its badged copy refused; none for a script's program", flush=True)
 
 
+def fm_store_volume_check(vm):
+    """311-APP-0135: fm's volume menu lists the store volumes storefs serves after the disks (the store's names under
+    fs/), opens one as a disk's through the storefs client the shell lends with the user's files, and a file copies from
+    it to ram: and from ram: to it."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+
+    def to(name):
+        line = keys(b"\x1b[H", "CURRENT=")  # Home
+        for _ in range(30):
+            if f"CURRENT={name} " in line:
+                return
+            line = keys(b"\x1b[B", "CURRENT=")
+        raise AssertionError(line)
+    require(vm.command("write ram:fromram.txt to the store volume"), "WROTE 20 BYTES")
+    require(vm.command("write notes:docs/fromstore.txt from the store volume"), "WROTE 22 BYTES")
+    vm.send("fm ram:\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/ram: ")
+    line = keys(b"\x1b[12;3~", "DIALOG=VOLUME")  # Alt+F2: the right panel's volume
+    for _ in range(12):
+        if "DIALOG=VOLUME:/notes: " in line:
+            break
+        line = keys(b"\x1b[B", "DIALOG=VOLUME")
+    require(line, "DIALOG=VOLUME:/notes: ")
+    keys(b"\r", "RIGHT=/notes: ")
+    keys(b"\t", "ACTIVE=R")
+    to("docs")
+    keys(b"\r", "RIGHT=/notes:docs ")
+    to("fromstore.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to the other panel, ram:
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    keys(b"\t", "ACTIVE=L")
+    to("fromram.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to notes:docs
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("cat ram:fromstore.txt"), "from the store volume")
+    require(vm.command("cat notes:docs/fromram.txt"), "to the store volume")
+    for path in ("ram:fromstore.txt", "ram:fromram.txt", "notes:docs/fromstore.txt", "notes:docs/fromram.txt"):
+        require(vm.command(f"rm {path}"), "OK")
+    print("PASS: fm lists the store volume notes: after the disks, opens it through the shell's storefs client, and a file "
+          "copies from it to ram: and from ram: to it (311-APP-0135)", flush=True)
+
+
 def storefs_check(vm):
     """311-KRN-0190: storefs runs at boot with the block store's client, and the shell reaches a store volume through the
     same mind::fs calls as a FAT one; a program without storefs's client finds no store volume, and asks nobody."""
@@ -2905,6 +2954,7 @@ def storefs_check(vm):
     scopes = vm.service_logs("storefs", "ENDED")
     made = list(re.finditer(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes))
     assert len(made) == 2 and f"[STOREFS] SCOPE {made[0][1]} ENDED" in scopes[made[0].end():], scopes[-1500:]  # after it was made
+    fm_store_volume_check(vm)
     require(vm.command("rm notes:docs/b.txt"), "OK")
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
@@ -5359,6 +5409,7 @@ def store_domains_check(vm):
         require(made, "blocks: domain new: NoRandom")
         require(vm.service_logs("blockstore", "NO DOMAIN FOR PID"), "AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED")
         print("PASS: memory domains: none made without a random source, and the store says why", flush=True)
+        run_in_domain_check(vm)
         return
     first = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
     second = int(re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))[1])
@@ -5395,6 +5446,8 @@ def store_domains_check(vm):
     out = blocks("domains")
     for line in (f"DOMAIN {first} LIVE", f"DOMAIN {second} LIVE"):
         require(out, line)
+    # 312-APP-0134: the shell's `run -d` in the two live domains.
+    run_in_domain_check(vm, first, second, note)
     # The same bytes in the other domain are its own block; forgetting the first leaves it.
     require(blocks(f"-d {second} put ram:dom.txt"), f"PUT {note} SIZE 12")
     require(blocks(f"domain forget {first}"), f"DOMAIN {first} FORGOTTEN")
@@ -5410,6 +5463,37 @@ def store_domains_check(vm):
     print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
           "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
           "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046)", flush=True)
+
+
+def run_in_domain_check(vm, first=None, second=None, note=None):
+    """312-APP-0134: `run -d <domain> <program>` gives the program, in place of the shell's client of the volume, the
+    client of the shell's memory domain the store mints. Refused before the start: no number, a domain that is not live,
+    a program that asks for no block store, a service. With domains (a random source), `blocks` started in the first
+    holds that domain's client alone: it reads the first's name, which neither the volume nor the second shows, and
+    makes no domain through it; `blocksro`, which asks only to read, is refused until the store mints a domain's client
+    with fewer rights."""
+    def run(args, timeout=240):
+        vm.send(f"run {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"run {args}\n")
+    require(run("-d blocks stat"), "USAGE: RUN [-D <DOMAIN>] <NAME> [ARGUMENTS] [&]")
+    require(run("-d 999 blocks stat"), "RUN -D: NO LIVE MEMORY DOMAIN OF THE SHELL'S HAS THAT NUMBER")
+    require(run("-d 0 clock"), "RUN -D: THE PROGRAM ASKS FOR NO BLOCK STORE")
+    require(run("-d 0 blockstore"), "RUN -D STARTS A PROGRAM, NOT A SERVICE")
+    if first is None:
+        print("PASS: run -d: refused without a number, for a domain that is not live, a program that asks for no block "
+              "store and a service (no domain without a random source)", flush=True)
+        return
+    require(run(f"-d {first} blocks resolve secret"), f"secret VERSION 1 ROOT {note}")
+    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}")
+    require(run(f"-d {second} blocks resolve secret"), "blocks: resolve secret: NotFound")
+    require(run(f"-d {first} blocks domain new"), "blocks: domain new: Rights")
+    require(run(f"-d {first} blocks domains"), "blocks: domains: Rights")
+    # Not yet a read-only start: blocksro asks for the get badge alone, and the store mints a domain's client with the
+    # asking client's rights and owner, while the shell's domains are its writing client's (requests-STO.md).
+    require(run(f"-d {first} blocksro resolve secret"), "RUN -D: NOT YET FOR A PROGRAM THAT ONLY READS")
+    print("PASS: run -d: blocks started in a memory domain reads that domain's name, not the other's, and makes no "
+          "domain; refused without a number, for a domain that is not live, a program that asks for no block store or "
+          "only to read, and a service", flush=True)
 
 
 def fm_store_check(vm):
@@ -7703,11 +7787,14 @@ def disks_check(args, boot, temp):
     """251-KRN-0031: a model disk and a store disk next to the boot disk each reach their own service: the blank VirtIO
     disk the block store (init routes it by its first sector), the FAT32 disk labelled MIND MODELS vfs_server as models:,
     and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks.
-    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart."""
+    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart.
+    251-STO-0015: a model's file mapped by the model's name, copied once into a sealed memory object, timed beside `get`."""
     models, store = temp / "models-disk.img", temp / "store-disk.img"
     # Two models as scripts/models.py lists them (251-STO-0014): one whole, one whose file differs from its SHA-256.
     tree = temp / "models-tree"
+    # A third, of one file of 2 MiB, before the one that differs: an import stops at that one.
     files = {"asr-test": {"am/encoder.int8.onnx": bytes(range(256)) * 160 + b"tail", "tokens.txt": "ёлка 1\n".encode() * 50},
+             "map-test": {"weights.bin": b"".join(hashlib.sha256(i.to_bytes(4, "little")).digest() for i in range(65536))},
              "tts-bad": {"voice.bin": b"not the voice the manifest names"}}
     entries = []
     for model_id, model_files in files.items():
@@ -7747,6 +7834,8 @@ def disks_check(args, boot, temp):
         encoder, tokens = files["asr-test"]["am/encoder.int8.onnx"], files["asr-test"]["tokens.txt"]
         require(out, f"IMPORTED asr-test: 2 FILES, {len(encoder) + len(tokens)} BYTES, OBJECT ")
         require(out, "AS models/asr-test VERSION 1")
+        weights = files["map-test"]["weights.bin"]
+        require(out, f"IMPORTED map-test: 1 FILES, {len(weights)} BYTES, OBJECT ")
         require(out, "blocks: models: models:tts-bad/voice.bin is not as the manifest says (32 bytes read of 32): tts-bad not imported")
         require(vm.command("blocks resolve models/tts-bad", raw=True), "blocks: resolve models/tts-bad: NotFound")
 
@@ -7757,6 +7846,27 @@ def disks_check(args, boot, temp):
             require(vm.command("sha256 ram:got.bin"), f"{hashlib.sha256(data).hexdigest()}  ram:got.bin")
         get_back("am/encoder.int8.onnx", encoder)
         get_back("tokens.txt", tokens)
+        # 251-STO-0015: a file copied once into a sealed memory object and mapped, as a recognizer would map it, beside
+        # `get` to the RAM disk; the times are this configuration's (QEMU under TCG), not a machine's.
+        def timed(command):
+            started = time.monotonic()
+            vm.send(f"{command}\n")
+            out = vm.expect("MIND> ", timeout=240, after=f"{command}\n")
+            return out, time.monotonic() - started
+        sha = hashlib.sha256(weights).hexdigest()
+        out, got = timed("blocks models get map-test weights.bin ram:w.bin")
+        require(out, f"GOT weights.bin OF models/map-test: {len(weights)} BYTES, SHA-256 {sha}")
+        vm.command("rm ram:w.bin")
+        out, mapped = timed("blocks models map map-test weights.bin")
+        copied = re.search(rf"^MAPPED weights.bin OF models/map-test: {len(weights)} BYTES, SEALED, SHA-256 {sha}, COPIED IN (\d+) MS\r?$", out, re.M)
+        assert copied, out
+        require(timed("blocks models map asr-test tokens.txt")[0], f"MAPPED tokens.txt OF models/asr-test: {len(tokens)} BYTES, SEALED, SHA-256 {hashlib.sha256(tokens).hexdigest()}, COPIED IN ")
+        require(vm.command("blocks models map asr-test nothing"), "blocks: models: models/asr-test has no file nothing")
+        require(vm.command("blocks models map nothing tokens.txt"), "blocks: models: models/nothing: NotFound")
+        print(f"NOTE: a model's file of {len(weights)} bytes from the store: `get` to the RAM disk {got:.1f} s, `map` {mapped:.1f} s "
+              f"(its copy into memory {int(copied[1]) / 1000:.1f} s), QEMU under TCG", flush=True)
+        print("PASS: a model's file mapped from the store by the model's name (251-STO-0015): copied once into a memory object, "
+              "sealed, mapped by the stand-in for a recognizer, its bytes the manifest's SHA-256; a path or a model not there refused", flush=True)
         # A restarted store finds the model again on its disk.
         pid = vm.services()["blockstore"]
         require(vm.command(f"kill {pid}", raw=True), f"KILLED PID={pid}")
@@ -9489,6 +9599,52 @@ def listen_suite(vm, starts):
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)
 
 
+def voice_at_start_check(args, disk, wav):
+    """000-APP-0052: with data/voice.conf on the boot volume, as `voice enable` writes it, a machine's start turns voice
+    control on with no command: the shell starts voice with the file's words, a WAV standing in for the microphone.
+    Its first phrase opens a program; the second asks before a reboot, and the third's no leaves the machine running."""
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "voice-start.wav").write_bytes(speech_wav(("открой файлы", "перезагрузи систему", "нет"))[0])
+    (disk / "data/voice.conf").write_text("# voice control at the shell's start (000-APP-0052)\non --wav voice-start.wav\n")
+    try:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), audio=wav, extra=["-nic", "user,model=virtio-net-pci"])
+        try:
+            vm.wait = LOADED_WAIT
+            # From the whole log: the VM's own first commands may have taken it from the output.
+            vm.logged("VOICE CONTROL ON. F12 OR VOICE LISTEN", 0, timeout=120)
+            pid = re.search(r"STARTED PID=(\d+) NAME=voice BACKGROUND", ANSI.sub("", vm.log))[1]
+            require(vm.command("dmesg -s shell", raw=True), "[SHELL] VOICE CONTROL ON AT THE SHELL'S START, AS data/voice.conf SAYS")
+            log = ""
+            for _ in range(240):
+                log += vm.command(f"logs {pid}", raw=True)  # a PID from the raw log
+                if "[VOICE] READY" in log:
+                    break
+                time.sleep(.25)
+            require(log, "3 UTTERANCES FROM voice-start.wav")
+            vm.send("voice listen\n")
+            output = vm.expect("NAME=fm FOREGROUND", timeout=180)
+            require(output, 'VOICE: "открой файлы" (')
+            fm = re.search(r"STARTED PID=(\d+) NAME=fm FOREGROUND", output)[1]
+            vm.background(fm)
+            vm.command(f"kill {fm}")
+            # The reboot is asked about; "нет" cancels it, and the machine keeps running.
+            vm.send("voice listen\n")
+            output = vm.expect("-> Отменено", timeout=180)
+            require(output, 'VOICE: "перезагрузи систему" (')
+            require(output, "-> Перезагрузить систему?")
+            require(output, 'VOICE: "нет" (')
+            assert vm.process.poll() is None, "the machine restarted (QEMU runs with -no-reboot)"
+            require(vm.command("voice off"), "VOICE CONTROL OFF")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+    finally:
+        (disk / "data/voice.conf").unlink(missing_ok=True)
+        (disk / "voice-start.wav").unlink(missing_ok=True)
+    print("PASS: voice control at the shell's start (000-APP-0052): with data/voice.conf the shell turned it on with no "
+          "command; by voice a program opened, and a reboot was asked about and cancelled", flush=True)
+
+
 def voice_control(vm):
     """Voice control (issue 079): the shell starts voice with a WAV file standing in for the microphone; each
     push-to-talk takes the file's next utterance, and the shell's questions take the one after."""
@@ -9583,7 +9739,14 @@ def voice_control(vm):
         raise AssertionError("voice did not quit")
     require(vm.command("voice"), "VOICE CONTROL OFF")
     require(vm.command("voice listen"), "ERROR: VOICE CONTROL IS OFF (VOICE ON)")
-    require(vm.command("voice x"), "USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN")
+    require(vm.command("voice x"), "USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN | VOICE ENABLE [--wav FILE] [SECONDS] | VOICE DISABLE")
+    # 000-APP-0052: `voice enable` keeps voice on's words in data/voice.conf for the shell's next start; words voice on
+    # would not take are refused; `voice disable` removes the file.
+    require(vm.command("voice enable --wav voice.wav 99999"), "USAGE: VOICE ON [--wav FILE]")
+    require(vm.command("voice enable --wav voice.wav"), "VOICE CONTROL ON AT EACH START OF THE SHELL, KEPT IN data/voice.conf; VOICE ON TURNS IT ON NOW")
+    require(vm.command("cat data/voice.conf"), "on --wav voice.wav")
+    require(vm.command("voice disable"), "VOICE CONTROL OFF AT THE SHELL'S START")
+    require(vm.command("cat data/voice.conf"), "NOT FOUND")
 
 
 def tts_holdings_check(vm, models):
@@ -16721,6 +16884,8 @@ def main():
                     tts_suite(vm, wav, args.asr_model)
                 elif suite == "listen":
                     listen_suite(vm, starts)
+                    vm.close()
+                    voice_at_start_check(args, disk, wav)
                 elif suite == "tablet":
                     tablet_suite(vm, wav)
                 elif suite == "serialload":  # 000-KRN-0188, named only, in no gate group

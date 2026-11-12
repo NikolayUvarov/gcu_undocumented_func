@@ -86,6 +86,8 @@
 
 **Landed** in round 121 (`main` db6a8e6f, 2026-11-11): 110-NET-0068, closed. **Left of stage 1:** a device updated from the maintainer's server, the configuration named (MC-12.1).
 
+**Stage 2, its first part (2026-11-12):** [110-NET-0069](../issues-done/110-NET-0069-the-tls-services-server-role.done), the TLS service's server role with the device key in `keystore`, and [110-NET-0070](../issues-done/110-NET-0070-httpd-as-a-mind-core-service.done), `httpd` as a MIND Core service, landed in round 124 (`main` 60b995bd) and closed. **Left of stage 2:** the two-machine QEMU suite (one MIND machine serves, the other updates from it), which needs the updater's server address set to a MIND machine.
+
 ## Related
 
 [351](351-self-update.md), [docs/update/publishing.md](../docs/update/publishing.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md), [351-STO-0006](../issues-done/351-STO-0006-releases-pinned-in-the-store.done), [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done) (the client side), [950](950-our-own-micro-messenger.md), [100003](100003-improve-the-system-from-the-phone.md).

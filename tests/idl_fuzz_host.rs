@@ -80,6 +80,7 @@ mod idl {
     #[path = "../../libmind/src/idl/battery.rs"] pub mod battery;
     #[path = "../../libmind/src/idl/block.rs"] pub mod block;
     #[path = "../../libmind/src/idl/blockstore.rs"] pub mod blockstore;
+    #[path = "../../libmind/src/idl/clipboard.rs"] pub mod clipboard;
     #[path = "../../libmind/src/idl/display.rs"] pub mod display;
     #[path = "../../libmind/src/idl/effector.rs"] pub mod effector;
     #[path = "../../libmind/src/idl/gpio.rs"] pub mod gpio;
@@ -354,7 +355,7 @@ fn scribble() {
 #[test]
 fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
-        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), borrowed!(effector), owned!(gpio), owned!(init), owned!(keyboard),
+        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(clipboard), owned!(display), borrowed!(effector), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(nn), borrowed!(parse), owned!(rtc),
         borrowed!(serial), owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), borrowed!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
@@ -421,6 +422,7 @@ macro_rules! types {
 types! {
     audio: Range Levels;
     battery: Error Status;
+    clipboard: Error Part;
     blockstore: Error Codec Durability Stats Head Collected Kept Pinned Usage Update Named Published PinTaken Committed Domain Scrubbed CopyStats Standing CopyName Walked Rebuilt;
     display: Error Mode RemoteState;
     effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport Delivered PolicySummary Load Space Sample UpdateState;

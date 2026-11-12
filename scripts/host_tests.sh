@@ -17,6 +17,9 @@ for file in tests/*_host.rs; do
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
+# The clipboard service's state: its parts, who is answered, the generation (000-APP-0032).
+rustc --edition=2021 --test tests/clipboard_host.rs -o "$OUT/clipboard-tests"
+"$OUT/clipboard-tests"
 # The WPA2-PSK library uses RustCrypto crates, so Cargo builds its tests and the station's (550-NET-0016, 0017).
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
@@ -50,6 +53,9 @@ rustc --edition=2021 -O -C debug-assertions=on --test tests/index_host.rs -o "$O
 # scan: optimized, its checks of overflow and assertions kept, 1 s rather than 13 (312-STO-0047).
 rustc --edition=2021 -O -C debug-assertions=on --test tests/vector_host.rs -o "$OUT/vector-tests"
 "$OUT/vector-tests"
+# A model as one object of the store (251-STO-0015), on a line of its own so that it meets no shared line.
+rustc --edition=2021 --test tests/model_object_host.rs -o "$OUT/model_object-tests"
+"$OUT/model_object-tests"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"

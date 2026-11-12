@@ -1,14 +1,14 @@
-# 110-NET-0070 — `httpd` as a MIND Core service: the release layout over HTTPS from a read-only scope
+# 110-NET-0070 — `httpd` as a MIND Core service: the release layout over HTTPS from a read-only scope — done
 
-**Type:** network (a new service `httpd/`, `parse`, `libmind` `http_serve`, the grants in `init` as a `KRN` part) · **Owner:** `NET` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) (stage 2) · **Roadmap:** track C, track D · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
+**Type:** network (a new service `httpd/`, `parse`, `libmind` `http_serve`, the grants in `init` as a `KRN` part) · **Owner:** `NET` · **Priority:** P1 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [110](../issues/110-our-own-web-server.md) (stage 2) · **Roadmap:** track C, track D · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
 
 ## Problem
 
-Stage 1 of [110](110-our-own-web-server.md) serves releases from a Linux machine (`tools/httpd`). Stage 2 has a MIND machine serve them to the others, for instance on a network without the Internet.
+Stage 1 of [110](../issues/110-our-own-web-server.md) serves releases from a Linux machine (`tools/httpd`). Stage 2 has a MIND machine serve them to the others, for instance on a network without the Internet.
 
 Most of what it needs exists:
 - listening sockets and the listening grant ([110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done));
-- the TLS server role, with the device key kept in `keystore` ([110-NET-0069](110-NET-0069-the-tls-services-server-role.md)).
+- the TLS server role, with the device key kept in `keystore` ([110-NET-0069](110-NET-0069-the-tls-services-server-role.done)).
 
 What is missing is the server itself, and a parser of request heads outside it (MC-11.11).
 
@@ -86,6 +86,10 @@ Not in this task: the two-machine suite of stage 2's criterion (one MIND machine
 
 ## Related
 
-- [110](110-our-own-web-server.md): stage 2.
-- [110-NET-0069](110-NET-0069-the-tls-services-server-role.md): the TLS server role.
+- [110](../issues/110-our-own-web-server.md): stage 2.
+- [110-NET-0069](110-NET-0069-the-tls-services-server-role.done): the TLS server role.
 - [110-NET-0066](../issues-done/110-NET-0066-httpd-serves-the-release-layout-over-http.done): stage 1's server and its rules.
+
+## Resolution
+
+`httpd` in `main` (round 124, 60b995bd): the release layout over HTTPS from a read-only scope of `data/releases/`, request heads parsed by `parse` (`parse.wit` 2.1), `libmind/src/http_serve.rs` with `tests/http_serve_host.rs`, `init`'s grants (handoff 33), `httpd_check` in the `tls` suite on x86 and aarch64. The two-machine suite of 110's stage 2 stays with 110.
