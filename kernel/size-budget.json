@@ -1,5 +1,5 @@
 {
-  "budget": 7600,
+  "budget": 7700,
   "unit": "lines of Rust in kernel/src, without blank lines and comments, both architectures (scripts/kernel_budget.py)",
   "measured": {
     "date": "2026-10-21",
@@ -35,6 +35,11 @@
       "date": "2026-11-10",
       "to": 7600,
       "why": "000-KRN-0231 (33 lines in kernel/src/scheduler.rs: move_waiting, relist, a task's home and the return in select): an application whose wait ended borrows an idle CPU while its own runs a system-band task, and goes back as it waits again. Which CPU a task runs on is the scheduler's decision, taken under its lock at the moment the task becomes ready, so it cannot live in user space; without it a 10 ms sleep ended 30-60 ms late behind the compositor's frame copies in QEMU. 000-KRN-0232 (17 lines): each task's state written each second where QEMU's monitor reads it when a wait runs out, since a stuck system has no task to ask; the lines are written by the harness. 7533 lines after both; about 67 of room."
+    },
+    {
+      "date": "2026-11-12",
+      "to": 7700,
+      "why": "100004-PRT-0015 (74 lines in kernel/src/arch/aarch64: sunxi_wdt.rs and watchdog.rs, and the feed, start and stops): the Allwinner SoCs' watchdog, armed with the tick and fed every second from the boot CPU's tick, stopped before a halt the kernel chose, a reboot and a power-off, as x86's chipset watchdog is (000-KRN-0076, 213-KRN-0125). Its point is to restart a board whose kernel froze: fed by a task, it would also be fed by a system whose kernel still schedules that task and nothing else, and it must be stopped by the kernel's own halt; and no task may hold its registers, which could stop it. 7640 lines after it; about 60 of room."
     }
   ]
 }
