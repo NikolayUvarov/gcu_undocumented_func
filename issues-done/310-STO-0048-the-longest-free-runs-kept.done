@@ -1,6 +1,6 @@
-# 310-STO-0048 — The store keeps its longest free runs when it meets more than its list holds
+# 310-STO-0048 — The store keeps its longest free runs when it meets more than its list holds — done
 
-**Type:** bug (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (2026-11-12) · **Blocked by:** — · **Main task:** [310](310-the-index-on-the-medium.md) · **Roadmap:** track B "scale" · **Constitution:** MC-4.4, MC-4.10
+**Type:** bug (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [310](../issues/310-the-index-on-the-medium.md) · **Roadmap:** track B "scale" · **Constitution:** MC-4.4, MC-4.10
 
 ## Problem
 
@@ -22,6 +22,15 @@ So a medium with more small gaps than the list holds before its free tail lost t
 - **The test fails without the change.**
 - The store's other host tests pass.
 
+## Resolution
+
+Done on `claude/relaxed-meitner-5bmhpz` as a3db0579:
+- **`blockstore/src/store.rs`:** `hole` and `release` go through `make_way`. Past the list, its shortest run gives way to a longer one, so the list keeps the longest runs met, in the medium's order; a shorter one dropped is found again by the next scan, as before.
+- **Tests:** `tests/blockstore_host.rs` `a_store_with_more_gaps_than_its_list_of_runs_keeps_the_longest` (8 runs, 20 gaps of a sector, then the rest of the medium): it fails without the change. The store's 97 host tests pass with it.
+- **Also run:** the QEMU `store` suite (aarch64, 34 checks) and x86 `boot` and `store` (57 checks), on 8f9311ef in this session's container.
+- **docs/storage:** the limits ("The blank runs") and the evidence.
+- **No change** to the layout, the interface or what is written.
+
 ## Related
 
-[310](310-the-index-on-the-medium.md), [312-STO-0047](312-STO-0047-a-vector-index-of-a-journals-embeddings.md), [303](../issues-done/303-retention-and-collection.done).
+[310](../issues/310-the-index-on-the-medium.md), [312-STO-0047](312-STO-0047-a-vector-index-of-a-journals-embeddings.done), [303](303-retention-and-collection.done).

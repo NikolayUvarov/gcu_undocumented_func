@@ -1,6 +1,6 @@
-# 312-STO-0046 — A memory domain's own limit, set when it is made
+# 312-STO-0046 — A memory domain's own limit, set when it is made — done
 
-**Type:** service (storage), interface · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (2026-11-12) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.md) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.8, MC-4.11, MC-11.5
+**Type:** service (storage), interface · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.8, MC-4.11, MC-11.5
 
 ## Problem
 
@@ -38,6 +38,24 @@ So a program the owner lends one domain's client, an agent with its memory, can 
 - **QEMU,** where domains are made (aarch64's `store` suite, with RNDR; x86's `boot` suite store disk, with RDRAND): a limited domain refuses a publish past its limit, and after a reboot on x86 its limit and usage are the same.
 - **`docs/storage`** ("Memory domains") and `docs/idl`.
 
+## Resolution
+
+Done on `claude/relaxed-meitner-5bmhpz` as 516b7169:
+- **The limit** (`blockstore/src/store.rs`):
+  - `domain_create_limited(owner, kib)`, kept in the four bytes of the key record that were zero, so layout 4 stays and a record with zeros there has no limit of its own;
+  - `within_quota` bounds the roots a domain's names and pins retain together, each counted once, beside the owner's quota and the updater's reserve;
+  - `domain_usage(id, owner)` says what one retains.
+- **`blockstore.wit` 2.7** (minor: `domain-create-limited`, `domain-usage`), its bindings regenerated:
+  - `blockstore`'s handlers, refused through a domain's client;
+  - the log line `[BLOCKSTORE] DOMAIN <n> MADE FOR BADGE <b> BY PID <p>, RETAINING AT MOST <k> KIB`.
+- **`blocks domain new [KiB]`, `blocks domain usage <id>`.**
+- **Tests:**
+  - `tests/blockstore_host.rs` `a_domains_limit_bounds_what_it_retains`; four faults put in by hand were each caught;
+  - the QEMU `store` suite's domains check on aarch64 (34 checks): a domain of 8 KiB takes 5000 bytes and refuses 4000 more, its usage told, the volume taking the same object;
+  - the `boot` suite's store disk on x86: the limit and usage the same after a reboot, and a publish past it refused. x86 `boot` and `store` (57 checks), on 8f9311ef in this session's container.
+- **docs/storage** ("Memory domains") and docs/idl.
+- **Not done here:** the term. `blockstore` holds no calendar clock, and the termination condition MC-4.11 accepts in its place is `domain-forget` (312's progress).
+
 ## Related
 
-[312](312-the-minds-memory.md), [308-STO-0023](../issues-done/308-STO-0023-memory-domains.done), [351-STO-0043](../issues-done/351-STO-0043-a-reserve-for-the-updaters-releases.done).
+[312](../issues/312-the-minds-memory.md), [308-STO-0023](308-STO-0023-memory-domains.done), [351-STO-0043](351-STO-0043-a-reserve-for-the-updaters-releases.done).

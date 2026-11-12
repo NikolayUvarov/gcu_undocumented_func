@@ -14,6 +14,10 @@ docs/storage/README.md lists the limits: the whole index in memory, at most 2^32
 - **64-bit sector numbers:** a new layout (4 or later: 3 is the sealed records of [308-STO-0021](../issues-done/308-STO-0021-sealed-records.done)), with the one before refused. Before the first release a new layout or interface replaces the old one, which is refused by name; no conversion code (AGENTS.md section 3, the maintainer's decision of 2026-10-25).
 - **Names:** a history's length per name within a quota; commits of more than 8 names; a read session that holds one commit's point across requests.
 
+## Tasks
+
+- [310-STO-0048](../issues-done/310-STO-0048-the-longest-free-runs-kept.done): the store keeps its longest blank runs when it meets more than its list holds, so a long journal's gaps no longer hide the free tail. Done 2026-11-12.
+
 ## Acceptance criteria
 
 - Host: 10^7 blocks; a mount's time bounded by the tail it scans.
