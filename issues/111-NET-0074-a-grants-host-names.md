@@ -1,0 +1,34 @@
+# 111-NET-0074 — A grant keeps the host names its addresses were resolved from: `socket.wit` 2.12
+
+**Type:** network (`netstack`, `netpolicy`, `idl/socket.wit`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [111](111-network-time.md) (stage 2) · **Roadmap:** track D · **Constitution:** MC-11.4, MC-11.6, MC-12.4
+
+## Problem
+
+NTS-KE checks the server's certificate for the server's name (RFC 8915, section 4; 111's plan: "against the image's roots"). The owner names a time server in `netpolicy.txt` by its host name, `timed time.cloudflare.com tcp 4460`. The broker resolves the name when it makes the grant and registers only the address (`policy-set`). `timed` reads its servers back from its grant (`grant-rules`, 2.10) and gets the address alone, so it has no name to check a certificate for.
+
+`timed` must not read the policy file itself: that is the broker's, and `timed` holds nothing but its grant, its clock client and its directory (MC-11.4).
+
+## Plan
+
+1. **`socket.wit` 2.12** (MC-12.4):
+   - `record named { address, name }`;
+   - `policy-names(badge, names)`, for the policy badge: the names behind a grant's addresses, replacing what it had. An empty name, or an address no rule of the grant names, is refused (`invalid`).
+   - `grant-names()`, for a live grant's own badge.
+2. **`netpolicy`** registers, with each grant it makes, the name of each address it resolved from a name, at most 8, the first name of an address. A grant the stack does not take whole is refused as before.
+3. **The grant still reaches only the address** resolved when it was made (351-NET-0003): the name changes nothing of what it may reach.
+
+## Acceptance criteria
+
+- `netstack` and `netpolicy` build for both targets; the IDL test passes.
+- **QEMU, x86 and aarch64:** `timed`, given an NTS server by name through the test's resolver, reads the name back and has `tls` check the server's certificate for it ([111-NET-0075](111-NET-0075-timed-with-nts.md)).
+
+## Progress
+
+**Made (2026-11-12)** on `claude/111-NET-0073-tls-alpn-exporter`: `idl/socket.wit` 2.12 and its bindings; `netstack`'s `set_names` and `names` (`netstack/src/policy.rs`); `netpolicy`'s names in `policy_for` and `policy-names` at the grant. Built for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`; `tests/idl_test.py` passes. Docs: `docs/network/policy.md`, `docs/idl/README.md`.
+
+**Left:** the QEMU criterion, with 111-NET-0075; the gate.
+
+## Related
+
+- [111](111-network-time.md): the main task, stage 2.
+- [111-NET-0073](111-NET-0073-tls-alpn-and-the-exporter.md), [111-NET-0075](111-NET-0075-timed-with-nts.md).

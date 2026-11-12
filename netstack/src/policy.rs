@@ -3,15 +3,16 @@
 //! only, reaches any public address on its port: a browsing grant (socket.wit 2.7, 000-NET-0049), whose every new host
 //! is logged. A rule the user gave in answer to a grant's question is added to it (socket.wit 2.8); one given once ends
 //! with the grant's first connection through it. A grant may listen on the TCP ports its listening rules name, and take
-//! connections from the networks they name (socket.wit 2.9, 110-NET-0052). A grant reads its own rules (socket.wit 2.10).
+//! connections from the networks they name (socket.wit 2.9, 110-NET-0052). A grant reads its own rules (socket.wit 2.10),
+//! and the host names the broker resolved its addresses from (socket.wit 2.12, 111-NET-0074).
 use alloc::vec::Vec;
-use mind::idl::socket::{self, Error, ListenRule, Protocol, Rule};
+use mind::idl::socket::{self, Error, ListenRule, Named, Protocol, Rule};
 use mind::network::{BADGE_GRANT_LAST, BADGE_OPERATOR, BADGE_POLICY};
 
 pub const GRANTS: usize = 64;
 
 pub struct Grant { pub badge: u16, rules: Vec<Rule>, expires: u64, budget: u64, pub sent: u64, pub received: u64, pub ended: bool, hosts: Vec<u32>, once: Vec<Rule>,
-                  listen: Vec<ListenRule> }
+                  listen: Vec<ListenRule>, names: Vec<Named> }
 
 // The public hosts a browsing grant has reached that the audit remembers; past them each new one is logged again.
 const HOSTS: usize = 256;
@@ -31,7 +32,7 @@ impl Policy {
         self.grants.retain(|g| g.badge != badge);
         if self.grants.len() >= GRANTS { return Err(Error::Limit); }
         self.grants.push(Grant { badge, rules: rules.to_vec(), expires: now + seconds as u64 * 1000, budget: bytes, sent: 0, received: 0, ended: false, hosts: Vec::new(), once: Vec::new(),
-                                 listen: Vec::new() });
+                                 listen: Vec::new(), names: Vec::new() });
         Ok(())
     }
     pub fn drop(&mut self, badge: u16) -> bool { let before = self.grants.len(); self.grants.retain(|g| g.badge != badge); before != self.grants.len() }
@@ -106,6 +107,16 @@ impl Policy {
     }
     /// The rules of live grant `badge` (socket.wit 2.10): what it may reach, as registered and as the user's answers added.
     pub fn rules(&self, badge: u16, now: u64) -> Result<&[Rule], Error> { self.live(badge, now).map(|g| g.rules.as_slice()) }
+    /// The host names behind grant `badge`'s addresses, replacing what it had (socket.wit 2.12): each an address one of
+    /// its rules names.
+    pub fn set_names(&mut self, badge: u16, names: &[Named]) -> Result<(), Error> {
+        let grant = self.grants.iter_mut().find(|g| g.badge == badge).ok_or(Error::NotFound)?;
+        if names.iter().any(|n| n.name.as_str().is_empty() || n.address == 0 || !grant.rules.iter().any(|r| r.address == n.address)) { return Err(Error::Invalid); }
+        grant.names = names.to_vec();
+        Ok(())
+    }
+    /// A live grant's host names (socket.wit 2.12).
+    pub fn names(&self, badge: u16, now: u64) -> Result<&[Named], Error> { self.live(badge, now).map(|g| g.names.as_slice()) }
     /// Any request of a live grant (sockets it already holds).
     pub fn alive(&self, badge: u16, now: u64) -> Result<(), Error> { self.live(badge, now).map(drop) }
     pub fn charge(&mut self, badge: u16, sent: usize, received: usize) {

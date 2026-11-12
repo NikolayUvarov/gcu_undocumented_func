@@ -49,6 +49,10 @@
 //! another card takes its flows, and its TCP connections are aborted. The stack sends nothing through it, DHCP
 //! included, while its driver keeps the link; back in use, DHCP runs on it again. Of the cards whose networks hold a
 //! destination, the preferred one is taken first: preferring a card moves its network's flows too.
+//!
+//! 2.12 (111-NET-0074): a grant's host names. The broker registers the name each of a grant's addresses was resolved
+//! from (`policy-names`), and the grant reads them (`grant-names`), so that a service the policy gives its servers by
+//! name checks a server's certificate for that name. The grant still reaches only the address resolved when it was made.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -58,7 +62,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 11, 0);
+pub const VERSION: (u8, u8, u8) = (2, 12, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -244,6 +248,15 @@ impl Wire for Accepted {
     const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u16 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.socket.encode(w)?; self.address.encode(w)?; self.port.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { socket: Wire::decode(r)?, address: Wire::decode(r)?, port: Wire::decode(r)? }) }
+}
+
+/// A host name of the policy and the address it was resolved to when the grant was made (2.12).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Named { pub address: u32, pub name: Text<253> }
+impl Wire for Named {
+    const MAX: usize = <u32 as Wire>::MAX + <Text<253> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.address.encode(w)?; self.name.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { address: Wire::decode(r)?, name: Wire::decode(r)? }) }
 }
 
 pub fn config(endpoint: Endpoint) -> Result<core::result::Result<Config, Error>> {
@@ -638,6 +651,38 @@ pub fn withdrawn(endpoint: Endpoint) -> Result<core::result::Result<u8, Error>> 
     Ok(Ok(wire::field(&reply, 0, 16, 8) as u8))
 }
 
+/// Registers the host names behind grant `badge`'s rules, replacing what it had (policy badge, 2.12). `not-found`:
+/// no grant with that badge; `invalid`: an empty name, or an address no rule of the grant names.
+pub fn policy_names(endpoint: Endpoint, badge: u16, names: &[Named]) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        badge.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<Named, 8>(names, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 30 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// The host names behind the caller's own grant's rules (2.12): a name for each address the broker resolved one
+/// to. `denied`: not a live grant's badge.
+pub fn grant_names(endpoint: Endpoint) -> Result<core::result::Result<List<Named, 8>, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 31 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 2074, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Named, 8> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -673,6 +718,8 @@ pub enum Request<'a> {
     GrantRules,
     Withdraw { cards: u8 },
     Withdrawn,
+    PolicyNames { badge: u16, names: List<Named, 8> },
+    GrantNames,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -883,6 +930,22 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Withdrawn, Call::words(request, cap)))
         }
+        30 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let badge = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let names = <List<Named, 8> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::PolicyNames { badge, names }, call))
+        }
+        31 => {
+            let (call, length) = wire::take_buffer(request, cap, 2074, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::GrantNames, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -1002,4 +1065,12 @@ pub fn reply_withdraw(call: Call, value: core::result::Result<(), Error>) -> Res
 pub fn reply_withdrawn(call: Call, value: core::result::Result<u8, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_policy_names(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_grant_names(call: Call, value: core::result::Result<&[Named], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Named, 8>(value, w))
 }

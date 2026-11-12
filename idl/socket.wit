@@ -48,7 +48,11 @@
 /// another card takes its flows, and its TCP connections are aborted. The stack sends nothing through it, DHCP
 /// included, while its driver keeps the link; back in use, DHCP runs on it again. Of the cards whose networks hold a
 /// destination, the preferred one is taken first: preferring a card moves its network's flows too.
-package mind:socket@2.11.0;
+///
+/// 2.12 (111-NET-0074): a grant's host names. The broker registers the name each of a grant's addresses was resolved
+/// from (`policy-names`), and the grant reads them (`grant-names`), so that a service the policy gives its servers by
+/// name checks a server's certificate for that name. The grant still reaches only the address resolved when it was made.
+package mind:socket@2.12.0;
 
 interface socket {
     /// Why a request failed.
@@ -174,4 +178,12 @@ interface socket {
     withdraw: func(cards: u8) -> result<_, error>;
     /// The cards out of use, a bit each (2.11).
     withdrawn: func() -> result<u8, error>;
+    /// A host name of the policy and the address it was resolved to when the grant was made (2.12).
+    record named { address: u32, name: string<253> }
+    /// Registers the host names behind grant `badge`'s rules, replacing what it had (policy badge, 2.12). `not-found`:
+    /// no grant with that badge; `invalid`: an empty name, or an address no rule of the grant names.
+    policy-names: func(badge: u16, names: list<named, 8>) -> result<_, error>;
+    /// The host names behind the caller's own grant's rules (2.12): a name for each address the broker resolved one
+    /// to. `denied`: not a live grant's badge.
+    grant-names: func() -> result<list<named, 8>, error>;
 }

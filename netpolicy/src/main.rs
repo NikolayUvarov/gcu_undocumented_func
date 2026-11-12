@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use mind::abi::{BootInfo, CAP_GRANT, CAP_WRITE};
 use mind::idl::codec::{List, Text};
 use mind::idl::netpolicy::{self, Error};
-use mind::idl::socket::{self, ListenRule, Protocol, Rule};
+use mind::idl::socket::{self, ListenRule, Named, Protocol, Rule};
 use mind::idl::wire;
 use mind::ipc::{self, Endpoint};
 use mind::network::{may_change_policy, BADGE_GRANT_LAST};
@@ -113,10 +113,11 @@ fn lookup(program: &str, name: &str, (server, port): (u32, u16)) -> Option<u32> 
 // host name, looked up when the grant is made at the `resolver` the file names (else the stack's DNS server); a name
 // that does not resolve gives no rule. The grant gets the shortest term and the smallest volume any of its lines names
 // (the defaults where none does).
-// Its `listen` lines (110-NET-0052) give the ports it may listen on and the networks peers may connect from.
-fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, Vec<ListenRule>, u32, u64) {
-    let (mut rules, mut listen, mut seconds, mut bytes) = (Vec::new(), Vec::new(), None::<u32>, None::<u64>);
-    let Some(text) = policy_text() else { return (rules, listen, 0, 0) };
+// Its `listen` lines (110-NET-0052) give the ports it may listen on and the networks peers may connect from. The host
+// names its rules were resolved from come with them, one an address, at most 8 (socket.wit 2.12, 111-NET-0074).
+fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, Vec<ListenRule>, Vec<Named>, u32, u64) {
+    let (mut rules, mut listen, mut names, mut seconds, mut bytes) = (Vec::new(), Vec::new(), Vec::<Named>::new(), None::<u32>, None::<u64>);
+    let Some(text) = policy_text() else { return (rules, listen, names, 0, 0) };
     let text = text.as_str();
     let resolver = resolver(text);
     for line in text.lines() {
@@ -146,15 +147,23 @@ fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, Vec<ListenRule>, u32, u64)
             (dns != 0).then_some(Rule { address: dns, port: 53, protocol: Protocol::Udp })
         } else {
             let protocol = match words.get(2).map(|w| w.to_ascii_lowercase()) { Some(p) if p == "tcp" => Protocol::Tcp, Some(p) if p == "udp" => Protocol::Udp, Some(p) if p == "icmp" => Protocol::Icmp, _ => continue };
-            let address = parse_ip(words[1]).or_else(|| if is_name(words[1]) { lookup(program, words[1], resolver) } else { None });
-            address.filter(|&a| a != 0).map(|address| Rule { address, port: words.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), protocol })
+            let named = parse_ip(words[1]).is_none() && is_name(words[1]);
+            let address = parse_ip(words[1]).or_else(|| if named { lookup(program, words[1], resolver) } else { None });
+            address.filter(|&a| a != 0).map(|address| {
+                if named && names.len() < 8 && !names.iter().any(|n| n.address == address) {
+                    if let Some(name) = Text::new(words[1]) { names.push(Named { address, name }); }
+                }
+                Rule { address, port: words.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), protocol }
+            })
         };
         let Some(rule) = rule else { continue };
         if rules.len() < 16 { rules.push(rule); }
         if let Some(s) = words.get(4).and_then(|s| s.parse::<u32>().ok()) { seconds = Some(seconds.map_or(s, |t| t.min(s))); }
         if let Some(b) = words.get(5).and_then(|b| b.parse::<u64>().ok()) { bytes = Some(bytes.map_or(b, |v| v.min(b))); }
     }
-    (rules, listen, seconds.unwrap_or(SECONDS), bytes.unwrap_or(BYTES))
+    // A name whose rule did not fit among the 16 is not registered.
+    names.retain(|n| rules.iter().any(|r| r.address == n.address));
+    (rules, listen, names, seconds.unwrap_or(SECONDS), bytes.unwrap_or(BYTES))
 }
 
 // The policy in force (108): the changed one, a change cut short before it replaced it, or the shipped one.
@@ -232,12 +241,13 @@ impl Broker {
         if program.is_empty() { return Err(Error::Invalid); }
         if self.grants.len() >= GRANTS { return Err(Error::Limit); }
         let dns = match socket::config(CONTROL) { Ok(Ok(config)) => config.dns, _ => 0 };
-        let (rules, listen, seconds, bytes) = policy_for(program, dns);
+        let (rules, listen, names, seconds, bytes) = policy_for(program, dns);
         if rules.is_empty() && listen.is_empty() { mind::println!("[NETPOLICY] REFUSED {}: NO POLICY", program); return Err(Error::NoPolicy); }
         let badge = self.badge();
         let cap = ipc::mint_badged(SOURCE, CAP_WRITE | CAP_GRANT, badge).map_err(|_| Error::Limit)?;
         let set = matches!(socket::policy_set(CONTROL, badge, &rules, seconds, bytes), Ok(Ok(())))
-            && (listen.is_empty() || matches!(socket::policy_listen(CONTROL, badge, &listen), Ok(Ok(()))));
+            && (listen.is_empty() || matches!(socket::policy_listen(CONTROL, badge, &listen), Ok(Ok(()))))
+            && (names.is_empty() || matches!(socket::policy_names(CONTROL, badge, &names), Ok(Ok(()))));
         if !set {
             let _ = socket::policy_drop(CONTROL, badge);
             let _ = ipc::drop_cap(cap);

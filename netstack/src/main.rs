@@ -1018,6 +1018,15 @@ fn main(_info: &'static BootInfo) {
                 let result = match policy::access(badge) { Access::Grant(grant) => policy.rules(grant, now), _ => Err(Error::Denied) };
                 let _ = socket::reply_grant_rules(call, result); continue;
             }
+            // A grant's host names (socket.wit 2.12): set by the broker, read by the grant (111-NET-0074).
+            socket::Request::PolicyNames { badge: grant, names } => {
+                let result = if matches!(policy::access(badge), Access::Policy) { policy.set_names(grant, names.as_slice()) } else { Err(Error::Denied) };
+                let _ = socket::reply_policy_names(call, result); continue;
+            }
+            socket::Request::GrantNames => {
+                let result = match policy::access(badge) { Access::Grant(grant) => policy.names(grant, now), _ => Err(Error::Denied) };
+                let _ = socket::reply_grant_names(call, result); continue;
+            }
             socket::Request::Decide { id, address, allowed, once } => {
                 let result = if !matches!(policy::access(badge), Access::Policy) { Err(Error::Denied) } else {
                     match questions.pending(id) {
@@ -1106,6 +1115,8 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::GrantRules => socket::reply_grant_rules(call, Err(error)),
         socket::Request::Withdraw { .. } => socket::reply_withdraw(call, Err(error)),
         socket::Request::Withdrawn => socket::reply_withdrawn(call, Err(error)),
+        socket::Request::PolicyNames { .. } => socket::reply_policy_names(call, Err(error)),
+        socket::Request::GrantNames => socket::reply_grant_names(call, Err(error)),
     }
 }
 
