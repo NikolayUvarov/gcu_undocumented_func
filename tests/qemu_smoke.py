@@ -7812,11 +7812,14 @@ def disks_check(args, boot, temp):
     """251-KRN-0031: a model disk and a store disk next to the boot disk each reach their own service: the blank VirtIO
     disk the block store (init routes it by its first sector), the FAT32 disk labelled MIND MODELS vfs_server as models:,
     and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks.
-    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart."""
+    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart.
+    251-STO-0015: a model's file mapped by the model's name, copied once into a sealed memory object, timed beside `get`."""
     models, store = temp / "models-disk.img", temp / "store-disk.img"
     # Two models as scripts/models.py lists them (251-STO-0014): one whole, one whose file differs from its SHA-256.
     tree = temp / "models-tree"
+    # A third, of one file of 2 MiB, before the one that differs: an import stops at that one.
     files = {"asr-test": {"am/encoder.int8.onnx": bytes(range(256)) * 160 + b"tail", "tokens.txt": "ёлка 1\n".encode() * 50},
+             "map-test": {"weights.bin": b"".join(hashlib.sha256(i.to_bytes(4, "little")).digest() for i in range(65536))},
              "tts-bad": {"voice.bin": b"not the voice the manifest names"}}
     entries = []
     for model_id, model_files in files.items():
@@ -7856,6 +7859,8 @@ def disks_check(args, boot, temp):
         encoder, tokens = files["asr-test"]["am/encoder.int8.onnx"], files["asr-test"]["tokens.txt"]
         require(out, f"IMPORTED asr-test: 2 FILES, {len(encoder) + len(tokens)} BYTES, OBJECT ")
         require(out, "AS models/asr-test VERSION 1")
+        weights = files["map-test"]["weights.bin"]
+        require(out, f"IMPORTED map-test: 1 FILES, {len(weights)} BYTES, OBJECT ")
         require(out, "blocks: models: models:tts-bad/voice.bin is not as the manifest says (32 bytes read of 32): tts-bad not imported")
         require(vm.command("blocks resolve models/tts-bad", raw=True), "blocks: resolve models/tts-bad: NotFound")
 
@@ -7866,6 +7871,27 @@ def disks_check(args, boot, temp):
             require(vm.command("sha256 ram:got.bin"), f"{hashlib.sha256(data).hexdigest()}  ram:got.bin")
         get_back("am/encoder.int8.onnx", encoder)
         get_back("tokens.txt", tokens)
+        # 251-STO-0015: a file copied once into a sealed memory object and mapped, as a recognizer would map it, beside
+        # `get` to the RAM disk; the times are this configuration's (QEMU under TCG), not a machine's.
+        def timed(command):
+            started = time.monotonic()
+            vm.send(f"{command}\n")
+            out = vm.expect("MIND> ", timeout=240, after=f"{command}\n")
+            return out, time.monotonic() - started
+        sha = hashlib.sha256(weights).hexdigest()
+        out, got = timed("blocks models get map-test weights.bin ram:w.bin")
+        require(out, f"GOT weights.bin OF models/map-test: {len(weights)} BYTES, SHA-256 {sha}")
+        vm.command("rm ram:w.bin")
+        out, mapped = timed("blocks models map map-test weights.bin")
+        copied = re.search(rf"^MAPPED weights.bin OF models/map-test: {len(weights)} BYTES, SEALED, SHA-256 {sha}, COPIED IN (\d+) MS\r?$", out, re.M)
+        assert copied, out
+        require(timed("blocks models map asr-test tokens.txt")[0], f"MAPPED tokens.txt OF models/asr-test: {len(tokens)} BYTES, SEALED, SHA-256 {hashlib.sha256(tokens).hexdigest()}, COPIED IN ")
+        require(vm.command("blocks models map asr-test nothing"), "blocks: models: models/asr-test has no file nothing")
+        require(vm.command("blocks models map nothing tokens.txt"), "blocks: models: models/nothing: NotFound")
+        print(f"NOTE: a model's file of {len(weights)} bytes from the store: `get` to the RAM disk {got:.1f} s, `map` {mapped:.1f} s "
+              f"(its copy into memory {int(copied[1]) / 1000:.1f} s), QEMU under TCG", flush=True)
+        print("PASS: a model's file mapped from the store by the model's name (251-STO-0015): copied once into a memory object, "
+              "sealed, mapped by the stand-in for a recognizer, its bytes the manifest's SHA-256; a path or a model not there refused", flush=True)
         # A restarted store finds the model again on its disk.
         pid = vm.services()["blockstore"]
         require(vm.command(f"kill {pid}", raw=True), f"KILLED PID={pid}")

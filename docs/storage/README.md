@@ -1091,7 +1091,7 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 - the history of three versions; a second name of the same object counted once in `usage`; a publication and a pin past the quota refused with `quota`; a pin of an object a name already retains, listed and charged nothing more; a removal and an unpin;
 - the store mounts again with no damage, the removal and the other name as they were, no pin.
 
-## Speech models in the store (251-STO-0013, 0014) — run on the platform; a 3 GiB object on the host
+## Speech models in the store (251-STO-0013, 0014, 0015) — run on the platform; a 3 GiB object on the host
 
 `blocks models import [id]` stores the models of a model disk (`models:`, [251](../../issues/251-model-cache-and-model-disk.md)):
 - **The manifest.** `blocks` reads `models:MANIFEST.json`, at most 60 000 bytes, and has the parser service read it (`parse::model`, `mind::models` over `mind::json`): it never parses the disk's JSON itself. For each model the service gives the id, its files with their sizes and SHA-256, and the bounds of the model's entry in the text.
@@ -1113,15 +1113,21 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 
 `blocks models get <id> <path> <file>` resolves the name, reads the object's header and copies one file out, checked against its SHA-256 again.
 
+**A model's file mapped** (251-STO-0015). Of the two ways the plan weighed, a reader copies the file once into memory, and the recognizer maps that. The store handing out memory objects of its own was not built: it would hold a model of up to 3 GB in the store's quota, and needs a new interface.
+- **`mind::model_object`** finds a file in a model object by its path (`find`, the header read until its `data` line, at most 32 KiB) and reads it whole into memory the caller gives (`read`), every chunk checked against its CID and the bytes against the header's SHA-256, which is the manifest's.
+- **`blocks models map <id> <path>`** stands in for a recognizer. It reads the file into pages of its own, turns them into a memory object (`MEM_DETACH`), and keeps only a read-only capability, so nobody can write it (`SHARE_RO`, MC-2.6). It then maps that as a recognizer would, checks the object sealed and its bytes against the SHA-256 again, and prints `MAPPED <path> OF models/<id>: <n> BYTES, SEALED, SHA-256 <hex>, COPIED IN <ms> MS`.
+- **No interface changes:** `blockstore.wit` is read as for `get`, and the copy takes the reader's memory, not the store's.
+- **The recognizers** (`dictate`, `speak`, `tts`) still read their models from `models:` (`mind::model_file`). Reading them from the store is the tools track's to choose.
+
 Tests:
 - `tests/models_host.rs` (passes): the JSON reader against Python's `json`, and the manifest of `models/manifest.toml` read model by model as `scripts/models.py` writes it.
-- The `disks` check of the `vfs` suite (x86 and aarch64, also with an NVMe boot disk; passed in the local gate of 2026-10-10): a model disk imported into a store disk, its files read back with their SHA-256, also after the store restarted; a model whose file differs is not named.
+- `tests/model_object_host.rs` (251-STO-0015), through the store's own logic on a simulated medium: every file of a model object written in the test from the format is found by its path and read whole (one of 50 000 bytes over several chunks, an empty one, a path with spaces, a header over two chunks), its offset and SHA-256 those of the header; a file not its SHA-256, an object cut before a file ends, a header not of the format (another format, no `data` line, an entry's length wrong or not a number, a line that is no file line, a digest not of 64 digits, past the buffer) and a path it does not name are refused; a store that lies about a chunk is not believed. Four faults put in by hand, never committed, were each caught.
+- The `disks` check of the `vfs` suite (x86 and aarch64, also with an NVMe boot disk; passed in the local gate of 2026-10-10): a model disk imported into a store disk, its files read back with their SHA-256, also after the store restarted; a model whose file differs is not named. Since 251-STO-0015 it also imports a model of one file of 2 MiB and runs `blocks models map` on it and on another, timed beside `get`, and refuses a path or a model not there.
 - `tests/blockstore_host.rs`, `a_three_gibibyte_object_fits` (ignored by default, for a local run): an object of 3 GiB whose chunks are all distinct, through `dag::Builder` into a store on a sparse file of 4.5 GiB (an owner may retain three quarters of the medium, MC-4.11), found after a remount and read back in pieces. Run on 2026-10-10, built with `-O`: 197 380 blocks, 6 504 258 sectors written, an index of 225 654 slots (12 340 KiB) sized for them, and a peak resident set of 16 732 KiB for the whole test process, in 104 s.
 
 Not provided:
-- reading a model into a memory object a recognizer maps (251-STO-0015);
-- a 3 GiB model on the platform: QEMU without KVM reads about 4 MB/s. The service sizes its index from the medium: a 4.5 GiB disk asks for 2^20 slots (56 MiB) and, within the default memory quota of 16 MiB, gets 2^18 (14 MiB, room for 229 376 blocks) or less; a 3 GiB model needs about 197 000. Not run;
-- the store's memory quota for a large index (requests-KRN.md).
+- a 3 GiB model on the platform. QEMU without KVM read about 4 MB/s when it was measured (2026-10-10, before 307-STO-0042's read-ahead). The service sizes its index from the medium: a 4.5 GiB disk asks for 2^20 slots (56 MiB), which the store's memory quota of 64 MiB holds (251-KRN-0071); a 3 GiB model needs about 197 000. Not run;
+- a recognizer reading its model from the store (above).
 
 ## Authority (300-STO-0004)
 
