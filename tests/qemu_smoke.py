@@ -12712,6 +12712,9 @@ def sshd_check(args, disk, cpu):
                 assert out.returncode != 0 and not (work / "taken").exists(), (path, out)
             out = scp(str(upload), "mind@127.0.0.1:ssh/authorized_keys")
             assert out.returncode != 0, out
+            # The files' part made 7 connections from 10.0.2.2, QEMU's address for the host; sshd takes 10 a minute from one
+            # address, so the next 5 wait for the minute to pass.
+            time.sleep(61)
             # Refused: an unlisted key, a password, the console to the files' key.
             out = ssh("stranger", "ps")
             assert out.returncode == 255 and "Permission denied (publickey)" in out.stderr, out
