@@ -5505,14 +5505,14 @@ def run_in_domain_check(vm, first=None, second=None, note=None):
               "store and a service (no domain without a random source)", flush=True)
         return
     require(run(f"-d {first} blocks resolve secret"), f"secret VERSION 1 ROOT {note}")
-    vm.logged(f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}, READ AND WRITE", 0)
+    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}, READ AND WRITE")
     require(run(f"-d {second} blocks resolve secret"), "blocks: resolve secret: NotFound")
     require(run(f"-d {first} blocks domain new"), "blocks: domain new: Rights")
     require(run(f"-d {first} blocks domains"), "blocks: domains: Rights")
     # A read-only start: blocksro asks for the get badge alone, so the domain's client is minted through the shell's
     # read-only client, with its rights: it reads the domain's name and is refused a put and a publish.
     require(run(f"-d {first} blocksro resolve secret"), f"secret VERSION 1 ROOT {note}")
-    vm.logged(f"[SHELL] BLOCKSRO STARTS IN MEMORY DOMAIN {first}, READ ONLY", 0)
+    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKSRO STARTS IN MEMORY DOMAIN {first}, READ ONLY")
     out = run(f"-d {first} blocksro put ram:dom.txt")
     require(out, "blocks: put:"); require(out, "Rights")
     require(run(f"-d {first} blocksro publish ro {note}"), "blocks: publish ro: Rights")
