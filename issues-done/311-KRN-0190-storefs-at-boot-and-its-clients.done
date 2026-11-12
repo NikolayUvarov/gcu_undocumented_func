@@ -1,6 +1,6 @@
 # 311-KRN-0190 — `storefs` at boot, a client of it beside `vfs_server`'s, and `mind::fs` routing by volume — done
 
-**Type:** `init` (start and grants), `common/abi.rs` (a slot, ABI), `libmind` `fs` · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) (STO's), for 311-STO-0032 · **Constitution:** MC-3.1, MC-3.4, MC-6.1, MC-12.4
+**Type:** `init` (start and grants), `common/abi.rs` (a slot, ABI), `libmind` `fs` · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.done) (STO's), for 311-STO-0032 · **Constitution:** MC-3.1, MC-3.4, MC-6.1, MC-12.4
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-30, "`storefs`: started by `init`, reached by a files client, and a `conflict` error in `vfs.wit`", and in its message to KRN of 10:53. The kernel track chose the way in, (b), in its answer of 11:15.
 
@@ -92,4 +92,4 @@ STO offered two ways in: (a) `vfs_server` forwards the volumes it does not hold,
 
 ## Related
 
-[311](../issues/311-storefs-a-file-face.md), 311-STO-0032, [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done), [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done).
+[311](311-storefs-a-file-face.done), 311-STO-0032, [311-KRN-0189](../issues-done/311-KRN-0189-a-conflict-error-in-vfs-wit.done), [308-KRN-0184](../issues-done/308-KRN-0184-blockstore-badges-its-own-clients.done).

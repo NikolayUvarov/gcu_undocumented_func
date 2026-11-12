@@ -1,6 +1,6 @@
 # 311-APP-0116 — The shell builds against `vfs.wit` 2.6's `conflict` — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (311-KRN-0189 lands with it) · **Status:** done (2026-11-08) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-12.4
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (311-KRN-0189 lands with it) · **Status:** done (2026-11-08) · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.done) · **Roadmap:** track B · **Constitution:** MC-12.4
 
 Numbered on 2026-10-30 from the kernel track's request in `requests-APP.md`, "An arm for `vfs.wit` 2.6's error `conflict` in the shell", for 311-KRN-0189 (STO's `storefs`, 311-STO-0032).
 

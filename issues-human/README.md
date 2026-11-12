@@ -209,8 +209,15 @@ Main task [100004](../issues/100004-two-allwinner-boards-before-the-phone.md): t
 - [ ] **A 3.3 V USB-UART adapter for each board,** on the board's 3-pin debug header: the board's TX to the adapter's RX, RX to TX, GND to GND. Never connect the adapter's VCC. Note the adapter's chip:
   - MIND Core drives the FTDI FT232R and the WCH CH340 today;
   - the CP2102 and the PL2303 come with [800-LNK-0041](../issues/800-LNK-0041-usb-serial-cp210x-pl2303-and-several-converters.md).
+  - **The maintainer (2026-11-12):** most likely an FTDI and a CH340; the exact chips once the adapters are at hand.
 - [ ] **Which host each adapter is plugged into** (the DEXP, the Ryzen or the MacBook), and the port's name under Windows (`COMn`) or Linux (`/dev/serial/by-id/…`).
-- [ ] **Power:** a 5 V supply of 2 A or more for each board (the Zero 3 through USB-C). Wanted: a way for agents to power-cycle a hung board, such as a USB hub with per-port power switching or a relay ([section 10](#10-a-test-rig-for-real-machines-keyboard-and-mouse-the-screen-power)). Say whether agents may power-cycle the boards.
+- [ ] **Power:** a 5 V supply of 2 A or more for each board (the Zero 3 through USB-C).
+  - **The maintainer's word (2026-11-12):**
+    - the bench gets a device that powers its devices, which the maintainer is finding;
+    - every module that can be is connected to it;
+    - agents may power-cycle the bench's devices: «стендовые устройства по питанию можно будет перезагружать» ([100004-MOB-0009](../issues/100004-MOB-0009-the-benchs-power-switched-by-agents.md)).
+  - [ ] **When it is found,** name the device, how it is controlled (USB serial, HID, network) and what is on each channel.
+  - **One thing to wire:** with the power cut, a USB-UART adapter's TX (3.3 V when idle) can feed the board through its RX and keep it half on. A resistor of about 1 kΩ in series with the adapter's TX prevents it.
 - [ ] **Two or more microSD cards** for each board.
 - [ ] **Writing the card** with the image of [100004-MOB-0001](../issues/100004-MOB-0001-the-boards-sd-card.md), when it is ready. Writing a card stays the maintainer's act.
 
@@ -228,3 +235,20 @@ Main task [110](../issues/110-our-own-web-server.md), stage 1's last criterion: 
 - [ ] **Note for 110:** the server's OS, `httpd`'s commit, the key's kind, the device and its release before and after, and the lines the updater and `httpd`'s log wrote.
 
 Done when one device was updated from it and those notes are in 110.
+
+## 16. The block store's own partition on the MacBook Pro's and the Ryzen's sticks
+
+Main task [307](../issues/307-the-stores-own-partition.md), its third criterion: on each machine's stick, an object found after a reboot, and a power cut done by the maintainer with its configuration named (MC-12.1). In QEMU this is shown on x86 and aarch64, on the stick's partition and on NVMe and AHCI partitions (307-KRN-0177, 307-STO-0044); no real machine has run it.
+
+- [ ] **The stick:** write the image with `scripts/make_usb_image.py`. Its partition 3 is the store's: type `0x7F`, 128 MiB, the store's superblock.
+- [ ] **First boot**, on each machine. Send back:
+  - `dmesg -s init`, its lines that begin `[INIT] THE BLOCK STORE'S PARTITION`;
+  - `blocks stat` (it should say `DURABILITY=FLUSHED` and `SECTORS=…/262144`).
+- [ ] **An object and a name:** `blocks pattern 5000` prints `PUT <cid> SIZE 5000`; then `blocks publish human-check <cid>`.
+- [ ] **A reboot:** `reboot`, then `blocks resolve human-check` and `blocks check <cid> pattern`.
+- [ ] **A power cut while idle:** a minute after another `blocks publish human-check <cid>`, hold the power button or pull the plug. Then boot, and send back the same two lines and `dmesg -s blockstore`.
+- [ ] **A power cut while it writes (optional):** start `blocks pattern 50000000` and cut the power before it prints `PUT`. Then boot and send back `dmesg -s blockstore` and `blocks resolve human-check`. The name should stand at the version before.
+- [ ] **Note for 307:** each machine, the stick (its make and size), the image's commit, and the lines above.
+
+Done when both machines' notes are in 307. The profile's Article 4 row then says what each machine reaches.
+
