@@ -50,7 +50,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -12350,6 +12350,7 @@ def tls_suite(args, disk):
         require(vm.command("dmesg -s tls"), "THE SERVER ROLE REFUSED TO A CLIENT WITHOUT THE RIGHT TO THE DEVICE CERTIFICATE")
         # 110-NET-0070: no listening grant for httpd in this policy, so init does not start it.
         require(vm.command("dmesg -s init", raw=True), "[INIT] httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT")
+        require(vm.command("dmesg -s init", raw=True), "[INIT] sshd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
@@ -12395,6 +12396,7 @@ def tls_suite(args, disk):
     tpm_check(args, with_entropy)
     recovery_key_check(args, with_entropy)
     httpd_check(args, disk, with_entropy, certificates)
+    sshd_check(args, disk, with_entropy)
 
 
 def httpd_check(args, disk, cpu, certificates):
@@ -12496,6 +12498,103 @@ def httpd_check(args, disk, cpu, certificates):
           "keystore's; a channel and a blob whole on one connection, a range resumed (206), 304 for the tag, 404, 400 for a query, "
           "405 for POST, one log line each without the query; a silent peer cut after 10 s; a program refused the server role; "
           "a tlsserver.pem for another key refused at listen", flush=True)
+
+
+def sshd_check(args, disk, cpu):
+    """112-NET-0072: OpenSSH's client logs into a MIND machine. sshd is started by the policy's listening grant and lists
+    the keys data/ssh/authorized_keys names, each with its rights; the host key is the device key (known_hosts holds the
+    line keystore logs), and keystore signs each key exchange (`ssh-host`). With the files' right, scp copies a file up
+    and down whole and sftp makes, lists, renames and removes; data/ssh/ and paths above the root are refused. An
+    unlisted key, a password and the console (not lent yet: requests-APP.md) are refused. Each login, refusal and write
+    is one log line, with the key's fingerprint as ssh-keygen prints it."""
+    if not (shutil.which("ssh") and shutil.which("scp") and shutil.which("sftp") and shutil.which("ssh-keygen")):
+        print("SKIP: sshd needs OpenSSH's client on the host (ssh, scp, sftp, ssh-keygen)", flush=True)
+        return
+    work = Path(tempfile.mkdtemp(prefix="mind-sshd-"))
+    keys = {}
+    for name in ("files", "console", "stranger"):
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"{name}@host", "-f", str(work / name)], check=True)
+        keys[name] = (work / f"{name}.pub").read_text().split()
+    fingerprint = subprocess.run(["ssh-keygen", "-l", "-E", "sha256", "-f", str(work / "files.pub")], capture_output=True, text=True, check=True).stdout.split()[1]
+    directory = disk / "data" / "ssh"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "authorized_keys").write_text(f"# the owner's keys\nfiles {' '.join(keys['files'])}\nconsole {' '.join(keys['console'])}\n{' '.join(keys['stranger'][:2])} no rights\n")
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    policy.write_text((before or "") + "listen sshd tcp 22 from 10.0.2.0/24\n")
+    port = free_port()
+    network = ["-nic", "none", "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:22", "-device", "virtio-net-pci,netdev=n0"]
+    upload = work / "upload.bin"
+    upload.write_bytes(bytes((i * 13 + i // 509) & 0xFF for i in range(300_000)))
+    try:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
+        try:
+            log = vm.service_logs("sshd", "LISTENING ON TCP 22")
+            require(log, "[SSHD] LISTENING ON TCP 22: ONE SESSION AT A TIME, A LOGIN WITHIN 30 S, THE CONSOLE NOT LENT (THE FILES ALONE)")
+            require(log, "[SSHD] data/ssh/authorized_keys: 2 KEYS LISTED")
+            require(log, "[SSHD] data/ssh/authorized_keys LINE 4 LEFT OUT: no rights before the key")
+            device = re.search(r"ssh-ed25519 [A-Za-z0-9+/=]+", vm.command("dmesg -s keystore", raw=True))[0]
+            host_fingerprint = re.search(r"HOST KEY: THE DEVICE KEY, (SHA256:\S+)", log)[1]
+            known = work / "known_hosts"
+            known.write_text(f"[127.0.0.1]:{port} {device}\n")
+            (work / "device.pub").write_text(device + "\n")
+            printed = subprocess.run(["ssh-keygen", "-l", "-E", "sha256", "-f", str(work / "device.pub")], capture_output=True, text=True, check=True).stdout
+            assert host_fingerprint in printed, (host_fingerprint, printed)
+            common = ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known}", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=60",
+                      "-o", "ServerAliveInterval=0", "-o", "LogLevel=ERROR"]
+
+            def ssh(key, *command, password=False):
+                auth = ["-o", "PreferredAuthentications=password", "-o", "PasswordAuthentication=yes", "-o", "NumberOfPasswordPrompts=1"] if password else ["-i", str(work / key), "-o", "BatchMode=yes"]
+                return subprocess.run(["ssh", *common, *auth, "-p", str(port), "mind@127.0.0.1", *command], capture_output=True, text=True, timeout=240, stdin=subprocess.DEVNULL)
+
+            def scp(*paths):
+                return subprocess.run(["scp", *common, "-s", "-i", str(work / "files"), "-o", "BatchMode=yes", "-P", str(port), *paths], capture_output=True, text=True, timeout=300)
+
+            def sftp(batch):
+                (work / "batch").write_text(batch)
+                return subprocess.run(["sftp", *common, "-i", str(work / "files"), "-o", "BatchMode=yes", "-P", str(port), "-b", str(work / "batch"), "mind@127.0.0.1"],
+                                      capture_output=True, text=True, timeout=300)
+            # The files' right: scp up, then down, whole.
+            out = scp(str(upload), "mind@127.0.0.1:upload.bin")
+            assert out.returncode == 0, out
+            back = work / "back.bin"
+            out = scp("mind@127.0.0.1:upload.bin", str(back))
+            assert out.returncode == 0 and hashlib.sha256(back.read_bytes()).digest() == hashlib.sha256(upload.read_bytes()).digest(), out
+            out = sftp("mkdir d\nput " + str(upload) + " d/copy.bin\nls -l d\nrename d/copy.bin d/moved.bin\nls d\nrm d/moved.bin\nrmdir d\nls\n")
+            assert out.returncode == 0 and "copy.bin" in out.stdout and "moved.bin" in out.stdout and "upload.bin" in out.stdout and "ssh" not in out.stdout.split("sftp> ls\n")[-1], out
+            # The keys' directory and a path above the root: refused, so the files' right never reaches another key.
+            for path in ("ssh/authorized_keys", "/SSH/authorized_keys", "../../x"):
+                out = sftp(f"get {path} {work / 'taken'}\n")
+                assert out.returncode != 0 and not (work / "taken").exists(), (path, out)
+            out = scp(str(upload), "mind@127.0.0.1:ssh/authorized_keys")
+            assert out.returncode != 0, out
+            # Refused: an unlisted key, a password, the console (not lent yet).
+            out = ssh("stranger", "ps")
+            assert out.returncode == 255 and "Permission denied (publickey)" in out.stderr, out
+            out = ssh(None, "ps", password=True)
+            assert out.returncode == 255 and "Permission denied (publickey)" in out.stderr, out
+            for key in ("console", "files"):
+                out = ssh(key, "ps")
+                assert out.returncode != 0 and "PID" not in out.stdout, (key, out)
+            log = vm.service_logs("sshd", "REFUSED")
+            for line in (f"[SSHD] LOGIN AS mind FROM 10.0.2.2:", f"WITH {fingerprint} (files@host): THE FILES", "[SSHD] 10.0.2.2:", " WROTE data/upload.bin",
+                         " REMOVED data/d/moved.bin", "REFUSED: a key not listed", "ITS CONSOLE RIGHT UNUSED", " BYTES WRITTEN"):
+                require(log, line)
+            require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED SshHost FOR PID")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-sshd-{args.cpus}cpu.log").write_text(vm.log)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
+        if before is None:
+            policy.unlink(missing_ok=True)
+        else:
+            policy.write_text(before)
+    print("PASS: sshd (112-NET-0072): OpenSSH's ssh, scp and sftp against the device key as the host key, each exchange signed by "
+          "keystore; scp up and down whole, sftp's directory work; data/ssh/ and paths above the root refused; an unlisted key, "
+          "a password and the console (not lent yet) refused; each login with the key's fingerprint, each refusal and write logged", flush=True)
 
 
 def passphrase_wait_check(args, cpu):
@@ -16161,7 +16260,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -16394,6 +16493,10 @@ def main():
                 continue
             if suite == "download":  # net's downloads, `get` and the API clients' checks alone (000-NET-0047)
                 download_check(args, disk)
+                continue
+            if suite == "sshd":
+                # The SSH server's check alone (112-NET-0072), which the tls suite runs at its end.
+                sshd_check(args, disk, "max" if args.arch == "aarch64" else "qemu64,+rdrand")
                 continue
             if suite == "tls":
                 tls_suite(args, disk)

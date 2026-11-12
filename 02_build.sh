@@ -127,6 +127,7 @@ USER_CRATES=(
     "keystore:keystore:keystore.elf"
     "tls:tls:tls.elf"
     "httpd:httpd:httpd.elf"
+    "sshd:sshd:sshd.elf"
     "ssh_service:ssh:ssh.elf"
     "updater:updater:updater.elf"
     "sysmon:sysmon:sysmon.elf"

@@ -4,7 +4,8 @@
 //! subsystem (version 3) to open, size, read and close files. It does no I/O of its own: the caller's `Io` moves the
 //! bytes. No libmind, so `cargo test` runs it on the host against OpenSSH's server. Without its `client` feature it is
 //! `login` and `wire` alone: what a login signs, for the key service's check (351-NET-0027). Its `server` feature adds the
-//! server's role (112-NET-0071): `server::serve`.
+//! server's role (112-NET-0071): `server::serve`, and the owner's list of login keys
+//! (112-NET-0072): `keys`.
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -15,6 +16,8 @@ pub mod cipher;
 pub mod login;
 #[cfg(feature = "client")]
 pub mod session;
+#[cfg(feature = "server")]
+pub mod keys;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "client")]

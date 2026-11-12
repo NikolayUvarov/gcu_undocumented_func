@@ -1,0 +1,20 @@
+[package]
+name = "sshd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# The SSH server `sshd` (112-NET-0072): the protocol is the `ssh` crate's server role (112-NET-0071); the host key is
+# the device key, which keystore signs each key exchange with.
+[[bin]]
+name = "sshd"
+path = "src/main.rs"
+
+[dependencies]
+libmind = { path = "../libmind", features = ["alloc"] }
+ssh = { path = "../ssh", features = ["server"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

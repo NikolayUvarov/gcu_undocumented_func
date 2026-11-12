@@ -29,7 +29,7 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -o "$OUT/rp2-link-tests" devices/rp2-link/
 # The SSH client against OpenSSH's server, which its tests start on 127.0.0.1 (351-NET-0026): needs openssh-server.
 cargo test --quiet --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target"
 # The server's role against OpenSSH's client (ssh, scp, sftp), and its fuzz target (112-NET-0071).
-cargo test --quiet --features server --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target" --test server_openssh --test server_fuzz
+cargo test --quiet --features server --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target" --test server_openssh --test server_fuzz --test keys
 # The store's tests seal every record and time 100 000 puts: optimized, its checks of overflow and assertions kept (308-STO-0021).
 rustc --edition=2021 -O -C debug-assertions=on --test tests/blockstore_host.rs -o "$OUT/blockstore-tests"
 "$OUT/blockstore-tests"
