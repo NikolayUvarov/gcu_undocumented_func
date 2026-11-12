@@ -1165,14 +1165,17 @@ impl FakeStore {
 
 #[test]
 fn the_store_wrapper_passes_on_what_it_does_not_hold() {
-    // fm's disk is wrapped with store:, and the system clipboard is the disk's (000-APP-0032).
+    // fm's disk is wrapped with store:, and the system clipboard and storefs's volumes are the disk's (000-APP-0032,
+    // 311-APP-0135).
     let mut mem = Mem::sample();
     mem.clip = Some(b"copied".to_vec());
+    mem.stores = vec!["notes:".into()];
     let mut disk = store::WithStore { disk: mem, store: Some(store::Volume::new(FakeStore::default())) };
     assert!(disk.clipboard());
     assert_eq!(disk.paste().unwrap(), b"copied");
     disk.copy(b"again").unwrap();
     assert_eq!(disk.disk.clip.as_deref(), Some(&b"again"[..]));
+    assert_eq!(disk.store_volumes(), ["notes:"]);
 }
 
 #[test]

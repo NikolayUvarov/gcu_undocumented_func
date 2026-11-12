@@ -240,7 +240,8 @@ impl<D: Disk, S: Store + 'static> Disk for WithStore<D, S> {
         match on_store(path) { Some(_) => self.store.as_mut()?.volume(), None => self.disk.volume(path) }
     }
     fn flush(&mut self, path: &str) -> Result<(), Failure> { if on_store(path).is_none() { self.disk.flush(path) } else { Ok(()) } }
-    // The system clipboard is the disk's (000-APP-0032).
+    // The store volumes storefs serves are the disk's (311-APP-0135), as is the system clipboard (000-APP-0032).
+    fn store_volumes(&mut self) -> Vec<String> { self.disk.store_volumes() }
     fn clipboard(&mut self) -> bool { self.disk.clipboard() }
     fn copy(&mut self, text: &[u8]) -> Result<(), String> { self.disk.copy(text) }
     fn paste(&mut self) -> Result<Vec<u8>, String> { self.disk.paste() }
