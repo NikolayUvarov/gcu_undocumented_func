@@ -64,11 +64,11 @@ target/release/httpd /srv/mind --cert chain.pem --key key.pem --listen 0.0.0.0:4
 
 ## На машине MIND (этап 2)
 
-`httpd` есть и как служба MIND Core: она раздаёт ту же раскладку с машины MIND ([110-NET-0070](../../issues/110-NET-0070-httpd-as-a-mind-core-service.md)). Она следует правилам `tools/httpd` (`mind::http_serve`, с теми же случаями в хост-тестах); отличия ниже.
+`httpd` есть и как служба MIND Core: она раздаёт ту же раскладку с машины MIND ([110-NET-0070](../../issues-done/110-NET-0070-httpd-as-a-mind-core-service.done)). Она следует правилам `tools/httpd` (`mind::http_serve`, с теми же случаями в хост-тестах); отличия ниже.
 
 - **Запускается `init`**, только если политика даёт программе `httpd` право слушать: `listen httpd tcp 443 from <сеть>/<префикс>`. Без него `init` пишет `httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT`.
 - **Содержимое:** `data/releases/` владельца (`blobs/`, `releases/`, `channels/`), которое `init` даёт только для чтения и никогда не создаёт. Без него на любой путь ответ 404.
-- **Только TLS 1.3, на TCP 443.** Рукопожатие ведёт служба TLS ([110-NET-0069](../../issues/110-NET-0069-the-tls-services-server-role.md)), а каждую подпись ключом устройства делает `keystore`; ключ его не покидает (MC-11.9).
+- **Только TLS 1.3, на TCP 443.** Рукопожатие ведёт служба TLS ([110-NET-0069](../../issues-done/110-NET-0069-the-tls-services-server-role.done)), а каждую подпись ключом устройства делает `keystore`; ключ его не покидает (MC-11.9).
   - Сертификат — сертификат устройства (Ed25519, самоподписанный) или цепочка из `tlsserver.pem` на загрузочном диске, первый сертификат которой должен нести ключ устройства.
   - Устройство закрепляет SHA-256 его SPKI; сам сертификат печатает `tls cert`.
   - Браузеры не принимают серверный сертификат Ed25519: этот сервер — для машин (curl, OpenSSL, собственный клиент MIND Core).

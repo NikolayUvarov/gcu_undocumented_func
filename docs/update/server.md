@@ -64,11 +64,11 @@ The QEMU checks need a server that cuts a download midway, holds a response and 
 
 ## On a MIND machine (stage 2)
 
-`httpd` is also a MIND Core service, which serves the same layout from a MIND machine ([110-NET-0070](../../issues/110-NET-0070-httpd-as-a-mind-core-service.md)). It follows `tools/httpd`'s rules (`mind::http_serve`, with the same cases in its host tests); the differences are below.
+`httpd` is also a MIND Core service, which serves the same layout from a MIND machine ([110-NET-0070](../../issues-done/110-NET-0070-httpd-as-a-mind-core-service.done)). It follows `tools/httpd`'s rules (`mind::http_serve`, with the same cases in its host tests); the differences are below.
 
 - **Started by `init`** only when the policy gives program `httpd` a listening grant: `listen httpd tcp 443 from <network>/<prefix>`. Without one, `init` says `httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT`.
 - **The content:** the owner's `data/releases/` (`blobs/`, `releases/`, `channels/`), which `init` lends read-only and never makes. Without it every path is answered 404.
-- **TLS 1.3 only, on TCP 443.** The TLS service serves the handshake ([110-NET-0069](../../issues/110-NET-0069-the-tls-services-server-role.md)), and `keystore` makes every signature with the device key, which never leaves it (MC-11.9).
+- **TLS 1.3 only, on TCP 443.** The TLS service serves the handshake ([110-NET-0069](../../issues-done/110-NET-0069-the-tls-services-server-role.done)), and `keystore` makes every signature with the device key, which never leaves it (MC-11.9).
   - The certificate is the device certificate (Ed25519, self-signed), or the chain in `tlsserver.pem` on the boot disk, whose first certificate must hold the device key.
   - A device pins the SHA-256 of its SPKI, as `tls cert` prints the certificate.
   - Browsers do not accept an Ed25519 server certificate: this server is for machines (curl, OpenSSL, MIND Core's own client).

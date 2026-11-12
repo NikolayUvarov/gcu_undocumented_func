@@ -77,7 +77,7 @@ or claim that the handoff itself completes interoperability.
 
 ## The gateway's lists of services hold every unit init lists (KRN, 2026-11-12, for 110-NET-0070)
 
-**Asked by:** the kernel session (`KRN`, `NET`) · **For:** [110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.md) · **Constitution:** MC-10.3, MC-12.4
+**Asked by:** the kernel session (`KRN`, `NET`) · **For:** [110-NET-0070](../issues-done/110-NET-0070-httpd-as-a-mind-core-service.done) · **Constitution:** MC-10.3, MC-12.4
 
 - **What is wrong.** `effector.wit` 1.x bounds `status.services` (`list<service, 48>`) and `sample.services` (`list<load, 48>`). `init`'s `list` answers every unit, `list<service, 64>`: 50 boot images and 5 instances on `main` once `httpd` lands, 54 today. `effector_gw` stops at the 48th (`if !services.push(..) { break; }`), so the status and the telemetry leave out the last units without saying so: today the shell and the five instances (`virtio_net#1`, `ramdisk#1`, `virtio_blk#1`, `virtio_blk#2`, `rtl8168#1`).
 - **How it showed.** With `httpd` placed after `tls`, `effector` became the 49th unit, and the aarch64 effector suite failed on its missing component (`KeyError: 'effector'`, acc-1, 2026-11-12). 110-NET-0070 now places `httpd` last before the shell, so `effector` is the 48th again; the next boot image would push it out again.
