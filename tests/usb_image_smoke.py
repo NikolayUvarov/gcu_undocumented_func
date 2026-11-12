@@ -331,8 +331,16 @@ def unplugged(vm, booted, name):
         answer = vm.hmp(command)
         assert answer.strip() in ("", "OK"), (command, answer)
     require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
-    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
-    require(vm.service_logs("usb_storage", "IS NOT USED"), f"[USB] STORAGE: ANOTHER MEDIUM ({longer_sectors} SECTORS) IS NOT USED")
+    # usb_storage meets the copy at a request that reads; vfs_server, which compares the medium before it asks again
+    # (000-KRN-0085), sends one only after its wait, so the program is asked for until the copy is met.
+    usb = ""
+    for _ in range(15):
+        require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+        usb += vm.service_logs("usb_storage")
+        if "IS NOT USED" in usb:
+            break
+        time.sleep(2)
+    require(usb, f"[USB] STORAGE: ANOTHER MEDIUM ({longer_sectors} SECTORS) IS NOT USED")
     assert "usb_storage" not in vm.service_logs("init"), "no restart for another capacity"
     # 000-KRN-0079: another medium in its place, as a stick rewritten with another build elsewhere and put back: the
     # same partition table and disk signature, another commit in the boot manifests. vfs_server, which saw the drive
@@ -340,8 +348,15 @@ def unplugged(vm, booted, name):
     # stick gets another device ID: QEMU may not have let go of the old one yet.
     vm.hmp("device_del usbstick5")
     require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
-    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
-    require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
+    # A device gone may answer "not found" at once: vfs_server says it does not answer once that lasts 10 s.
+    log = ""
+    for _ in range(20):
+        require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+        log += vm.service_logs("vfs_server")
+        if "DRIVE DOES NOT ANSWER" in log:
+            break
+        time.sleep(1)
+    require(log, "DRIVE DOES NOT ANSWER")
     other = another_manifest(booted, "-other")
     before = hashlib.sha256(other.read_bytes()).hexdigest()
     for command in (f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}", "device_add usb-storage,drive=usbdisk3,id=usbstick3"):
@@ -378,16 +393,20 @@ def another_manifest(image, name):
 
 
 def swapped_unasked(vm, image):
-    # 000-KRN-0085: the stick swapped at once for a copy with another manifest while vfs_server asks nothing of it. The
+    # 000-KRN-0085: the stick swapped for a copy with another manifest while vfs_server asks nothing of it. The
     # next request finds the device enumerated again: usb_storage runs nothing on it and ends, init starts it again,
     # and vfs_server, told of the return rather than given the request again, compares the medium first: another one,
     # so its volumes close and nothing it cached is written to the copy.
     other = another_manifest(image, "-swapped")
     before = hashlib.sha256(other.read_bytes()).hexdigest()
     require(vm.command("sync"), "OK")
-    vm.service_logs("usb_host")  # drained, so that the SUPER SPEED below is the copy's
+    vm.service_logs("usb_host")  # drained, so that the lines below are the swap's
     vm.service_logs("vfs_server")
-    for command in ("device_del usbstick", f"drive_add 0 if=none,id=usbswap,format=raw,file={other}", "device_add usb-storage,drive=usbswap,id=usbswapped"):
+    # The boot stick out (QEMU lets go of a boot device once the guest sees it gone), then the copy in; nothing is asked
+    # of vfs_server meanwhile.
+    vm.hmp("device_del usbstick")
+    require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
+    for command in (f"drive_add 0 if=none,id=usbswap,format=raw,file={other}", "device_add usb-storage,drive=usbswap,id=usbswapped"):
         answer = vm.hmp(command)
         assert answer.strip() in ("", "OK"), (command, answer)
     require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")

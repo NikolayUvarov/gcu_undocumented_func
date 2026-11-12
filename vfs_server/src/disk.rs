@@ -14,13 +14,16 @@ const LINES: usize = 64;
 const READ_AHEAD: usize = 32;
 const SLOW_MS: u64 = 1000; // a failure that took this long: the drive does not answer (unplugged), not a bad sector
 const QUIET_MS: u64 = 10_000; // then requests fail at once for this long, before the drive is asked again (211-KRN-0050)
-const BACK_MS: u64 = 8000; // a driver that answered "not found" is tried this long: a fresh instance, and init's windows (6 s in QEMU)
+const BACK_MS: u64 = 10_000; // a driver that answered "not found" is tried this long before it is said not to answer (a fresh
+// instance and init's windows: 6 s in QEMU)
+const RETRY_MS: u64 = 500; // meanwhile, between tries
 const IDENTITY: usize = 256; // at most this many sectors read while mounting are kept, by hash, as the medium's identity
 
-// `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted (none through
+// `silent_until`: until when the drive is not asked, after it did not answer; `missing_since`: when it answered "not
+// found" first, and `said`: whether the log says it does not answer. `first`: sector 0 as mounted (none through
 // windows); `identity`: the sectors read while mounting (the boot manifest's among them), by hash, until `mounted`;
 // `replaced`: the drive came back with another medium (000-KRN-0079).
-pub struct Disk { device: Io, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64, first: Option<[u8; SECTOR]>, identity: alloc::vec::Vec<(u32, [u8; 32])>, recording: bool, replaced: bool }
+pub struct Disk { device: Io, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64, missing_since: u64, said: bool, first: Option<[u8; SECTOR]>, identity: alloc::vec::Vec<(u32, [u8; 32])>, recording: bool, replaced: bool }
 
 /// A disk as vfs_server reaches it: the whole device, or windows of a partitioned one, each at its first sector on the
 /// disk (307-KRN-0229). A sector is asked of the window that starts last at or before it, so one past that window's end
@@ -55,7 +58,7 @@ impl Disk {
     pub fn new(mut device: Io) -> Option<Self> {
         device.check_returns();
         let first = device.read(0, 1).ok().and_then(|data| data.get(..SECTOR).map(|s| { let mut sector = [0u8; SECTOR]; sector.copy_from_slice(s); sector }));
-        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false })
+        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, missing_since: 0, said: false, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false })
     }
     pub fn kind(&self) -> usize { self.device.kind() }
     /// The volumes are mounted: sectors read from now on are not part of the medium's identity.
@@ -64,53 +67,57 @@ impl Disk {
     // A drive that did not answer is not asked again for QUIET_MS: requests fail at once instead of each waiting for the
     // drive's own timeout (an unplugged USB disk, 211-KRN-0050). Cached sectors are still read.
     fn quiet(&self) -> bool { self.silent_until != 0 && (mind::time::uptime_ms() as u64) < self.silent_until }
-    // Runs one request to the drive and notes whether it answered. A driver that answers as a fresh instance does
-    // (restarted, or its medium went away and came back, 000-KRN-0085) gets the request again only after the check.
+    // Runs one request to the drive and notes whether it answered. A driver that answers "not found" (restarted, its
+    // medium gone and back, 000-KRN-0085, or its device gone) gets the request again only after the medium is compared,
+    // and nothing waits here: while the comparison cannot be made yet, requests fail at once and it is tried again
+    // RETRY_MS later, and after BACK_MS of that the drive is said not to answer.
     fn ask<T>(&mut self, mut request: impl FnMut(&mut Io) -> Option<T>) -> Option<T> {
         if self.quiet() || self.replaced { return None; }
-        if (self.silent_until != 0 || self.device.returned()) && !self.back() { return None; }
+        if self.silent_until != 0 || self.device.returned() {
+            if !self.back() { return None; }
+        }
         let start = mind::time::uptime_ms() as u64;
         let result = request(&mut self.device);
         let now = mind::time::uptime_ms() as u64;
         if result.is_some() { return result; }
-        // Slow: the drive does not answer (unplugged); a return it brings is checked when it is asked again.
-        if now.saturating_sub(start) >= SLOW_MS {
-            mind::println!("[VFS] THE {} DRIVE DOES NOT ANSWER: REQUESTS FAIL AT ONCE, IT IS ASKED AGAIN EVERY {} S", crate::device_name(self.device.kind()), QUIET_MS / 1000);
-            self.silent_until = now + QUIET_MS;
-            return None;
+        // Slow: the drive does not answer (unplugged).
+        let slow = now.saturating_sub(start) >= SLOW_MS;
+        if !slow && !self.device.returned() { return None; }
+        if self.missing_since == 0 { self.missing_since = start; }
+        if self.device.returned() {
+            if !slow { mind::println!("[VFS] THE {} DRIVE ANSWERED NOT FOUND: ITS MEDIUM IS COMPARED BEFORE ANYTHING ELSE IS ASKED OF IT", crate::device_name(self.device.kind())); }
+            // At once: a driver that found its medium gone and back ends at its next request, for init to start it again.
+            if self.back() { return request(&mut self.device); }
         }
-        if !self.device.returned() { return None; }
-        // "Not found": a driver started again, one whose medium went away and came back, or a device gone.
-        mind::println!("[VFS] THE {} DRIVE ANSWERED NOT FOUND: ITS MEDIUM IS COMPARED BEFORE ANYTHING ELSE IS ASKED OF IT", crate::device_name(self.device.kind()));
-        if self.back() { return request(&mut self.device); }
-        if !self.replaced {
-            mind::println!("[VFS] THE {} DRIVE DOES NOT ANSWER: REQUESTS FAIL AT ONCE, IT IS ASKED AGAIN EVERY {} S", crate::device_name(self.device.kind()), QUIET_MS / 1000);
-        }
+        if slow { self.not_answering(now); }
         None
     }
 
-    // Back after it did not answer, or after a return: the buffer lent to the driver's current instance, then the
-    // medium compared before anything else is asked of it. Its reads are tried again for up to BACK_MS while they meet
-    // "not found": a fresh instance serves sectors only once init has set its windows again, and a driver finds a
-    // device that came back only when a read asks for it. False: not back yet, and asked again after QUIET_MS; or
-    // another medium, whose volumes are closed.
-    fn back(&mut self) -> bool {
-        let mut waited = 0;
-        loop {
-            let attached = self.device.reattach().is_ok();
-            match if attached { self.same_medium() } else { None } {
-                Some(true) => {
-                    self.silent_until = 0;
-                    mind::println!("[VFS] THE {} DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM", crate::device_name(self.device.kind()));
-                    return true;
-                }
-                Some(false) => { self.silent_until = 0; self.replace(); return false; }
-                None if waited < BACK_MS && (!attached || self.device.returned()) => { mind::time::sleep(100); waited += 100; }
-                None => break,
-            }
+    fn not_answering(&mut self, now: u64) {
+        if !self.said {
+            mind::println!("[VFS] THE {} DRIVE DOES NOT ANSWER: REQUESTS FAIL AT ONCE, IT IS ASKED AGAIN EVERY {} S", crate::device_name(self.device.kind()), QUIET_MS / 1000);
+            self.said = true;
         }
-        self.silent_until = mind::time::uptime_ms() as u64 + QUIET_MS;
-        false
+        self.silent_until = now + QUIET_MS;
+    }
+
+    // Back after it did not answer, or after a return: the buffer lent to the driver's current instance, then the medium
+    // compared before anything else is asked of it. A fresh instance serves sectors only once init has set its windows
+    // again, and a driver finds a device that came back only when a read asks for it, so a comparison that meets "not
+    // found" is tried again with a later request, within BACK_MS of the first. False: not back yet; or another medium,
+    // whose volumes are closed.
+    fn back(&mut self) -> bool {
+        let now = mind::time::uptime_ms() as u64;
+        match if self.device.reattach().is_ok() { self.same_medium() } else { None } {
+            Some(true) => {
+                (self.silent_until, self.missing_since, self.said) = (0, 0, false);
+                mind::println!("[VFS] THE {} DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM", crate::device_name(self.device.kind()));
+                true
+            }
+            Some(false) => { self.silent_until = 0; self.replace(); false }
+            None if self.said || now.saturating_sub(self.missing_since) >= BACK_MS => { self.not_answering(now); false }
+            None => { self.silent_until = now + RETRY_MS; false }
+        }
     }
 
     fn line(&self, index: usize) -> &[u8] { &self.cache.as_slice()[index * SECTOR..(index + 1) * SECTOR] }
