@@ -80,16 +80,17 @@ impl Disk {
         let result = request(&mut self.device);
         let now = mind::time::uptime_ms() as u64;
         if result.is_some() { return result; }
-        // Slow: the drive does not answer (unplugged); a return it brings is checked when it is asked again.
-        if now.saturating_sub(start) >= SLOW_MS {
-            self.missing_since = start;
-            self.not_answering(now);
-            return None;
+        // Slow: the drive does not answer (unplugged).
+        let slow = now.saturating_sub(start) >= SLOW_MS;
+        if !slow && !self.device.returned() { return None; }
+        if self.missing_since == 0 { self.missing_since = start; }
+        if self.device.returned() {
+            if !slow { mind::println!("[VFS] THE {} DRIVE ANSWERED NOT FOUND: ITS MEDIUM IS COMPARED BEFORE ANYTHING ELSE IS ASKED OF IT", crate::device_name(self.device.kind())); }
+            // At once: a driver that found its medium gone and back ends at its next request, for init to start it again.
+            if self.back() { return request(&mut self.device); }
         }
-        if !self.device.returned() { return None; }
-        mind::println!("[VFS] THE {} DRIVE ANSWERED NOT FOUND: ITS MEDIUM IS COMPARED BEFORE ANYTHING ELSE IS ASKED OF IT", crate::device_name(self.device.kind()));
-        self.missing_since = start;
-        if self.back() { request(&mut self.device) } else { None }
+        if slow { self.not_answering(now); }
+        None
     }
 
     fn not_answering(&mut self, now: u64) {

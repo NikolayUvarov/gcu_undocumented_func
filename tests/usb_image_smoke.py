@@ -393,16 +393,20 @@ def another_manifest(image, name):
 
 
 def swapped_unasked(vm, image):
-    # 000-KRN-0085: the stick swapped at once for a copy with another manifest while vfs_server asks nothing of it. The
+    # 000-KRN-0085: the stick swapped for a copy with another manifest while vfs_server asks nothing of it. The
     # next request finds the device enumerated again: usb_storage runs nothing on it and ends, init starts it again,
     # and vfs_server, told of the return rather than given the request again, compares the medium first: another one,
     # so its volumes close and nothing it cached is written to the copy.
     other = another_manifest(image, "-swapped")
     before = hashlib.sha256(other.read_bytes()).hexdigest()
     require(vm.command("sync"), "OK")
-    vm.service_logs("usb_host")  # drained, so that the SUPER SPEED below is the copy's
+    vm.service_logs("usb_host")  # drained, so that the lines below are the swap's
     vm.service_logs("vfs_server")
-    for command in ("device_del usbstick", f"drive_add 0 if=none,id=usbswap,format=raw,file={other}", "device_add usb-storage,drive=usbswap,id=usbswapped"):
+    # The boot stick out (QEMU lets go of a boot device once the guest sees it gone), then the copy in; nothing is asked
+    # of vfs_server meanwhile.
+    vm.hmp("device_del usbstick")
+    require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
+    for command in (f"drive_add 0 if=none,id=usbswap,format=raw,file={other}", "device_add usb-storage,drive=usbswap,id=usbswapped"):
         answer = vm.hmp(command)
         assert answer.strip() in ("", "OK"), (command, answer)
     require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
