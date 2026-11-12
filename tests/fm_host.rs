@@ -1164,6 +1164,18 @@ impl FakeStore {
 }
 
 #[test]
+fn the_store_wrapper_passes_on_what_it_does_not_hold() {
+    // fm's disk is wrapped with store:, and the system clipboard is the disk's (000-APP-0032).
+    let mut mem = Mem::sample();
+    mem.clip = Some(b"copied".to_vec());
+    let mut disk = store::WithStore { disk: mem, store: Some(store::Volume::new(FakeStore::default())) };
+    assert!(disk.clipboard());
+    assert_eq!(disk.paste().unwrap(), b"copied");
+    disk.copy(b"again").unwrap();
+    assert_eq!(disk.disk.clip.as_deref(), Some(&b"again"[..]));
+}
+
+#[test]
 fn the_block_store_panel() {
     // 300-APP-0038: store: beside the disks; a copy there publishes a name, F3 reads an object back with every block
     // checked, F6 renames in one commit, F8 unpublishes; names fm has not seen show once the store can list them.
