@@ -29,7 +29,7 @@ What stands in the way today, read from the code:
 |---|---|---|
 | [251-STO-0013](251-STO-0013-an-index-that-grows-with-the-medium.done) | An index that grows with the medium: a hash table with open addressing in place of the sorted array (O(1) insert and lookup), entries of 56 bytes, and its size chosen by the service from the medium at mount; a store of more blocks than it holds is still refused whole | done |
 | [251-STO-0014](251-STO-0014-importing-a-model-disk.done) | Importing a model disk: each file of `models:/MANIFEST.json` streamed into the store with its SHA-256 checked as it is read; each model an object of its files and its manifest entry, named `models/<id>` (the name retains it) | done |
-| [251-STO-0015](../issues/251-STO-0015-a-model-read-into-memory.md) | A model read back into memory: a memory object of a file from the store, or a copy made once that a recognizer maps | open, split off |
+| [251-STO-0015](251-STO-0015-a-model-read-into-memory.done) | A model read back into memory: a memory object of a file from the store, or a copy made once that a recognizer maps | split off; done 2026-11-12 |
 | `KRN` request | `init` gives `blockstore` a memory quota that fits the index of its disk (today the default 16 MiB) | with 0013 |
 
 The criterion "a model of 3 GB fits without the store holding it all in memory" is shown on the host. A host test stores a 3 GiB object through the store on a file-backed medium. Run locally, it records the index's size and the process's peak memory. QEMU without KVM reads about 4 MB/s, so 3 GB is not a CI case.
@@ -46,7 +46,7 @@ Both criteria are met:
 - **3 GB without the store holding it** ([251-STO-0013](251-STO-0013-an-index-that-grows-with-the-medium.done)): on the host, an object of 3 GiB with every chunk distinct went through `dag::Builder` into a store on a file and was found after a remount. The index had 225 654 slots (12 340 KiB) and the test process peaked at 16 732 KiB resident.
 
 Left, in tasks of their own:
-- reading a model into memory for a recognizer: [251-STO-0015](../issues/251-STO-0015-a-model-read-into-memory.md);
+- reading a model into memory for a recognizer: [251-STO-0015](251-STO-0015-a-model-read-into-memory.done);
 - `blockstore`'s memory quota for a large disk's index: [requests-KRN.md](../issues/requests-KRN.md);
 - a 3 GB model on the platform: it waits for both, and for faster reads of the model disk.
 
