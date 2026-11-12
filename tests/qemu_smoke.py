@@ -50,7 +50,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -2832,6 +2832,55 @@ def secret_line_check(vm):
           "another command through its badged copy refused; none for a script's program", flush=True)
 
 
+def fm_store_volume_check(vm):
+    """311-APP-0135: fm's volume menu lists the store volumes storefs serves after the disks (the store's names under
+    fs/), opens one as a disk's through the storefs client the shell lends with the user's files, and a file copies from
+    it to ram: and from ram: to it."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+
+    def to(name):
+        line = keys(b"\x1b[H", "CURRENT=")  # Home
+        for _ in range(30):
+            if f"CURRENT={name} " in line:
+                return
+            line = keys(b"\x1b[B", "CURRENT=")
+        raise AssertionError(line)
+    require(vm.command("write ram:fromram.txt to the store volume"), "WROTE 20 BYTES")
+    require(vm.command("write notes:docs/fromstore.txt from the store volume"), "WROTE 22 BYTES")
+    vm.send("fm ram:\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/ram: ")
+    line = keys(b"\x1b[12;3~", "DIALOG=VOLUME")  # Alt+F2: the right panel's volume
+    for _ in range(12):
+        if "DIALOG=VOLUME:/notes: " in line:
+            break
+        line = keys(b"\x1b[B", "DIALOG=VOLUME")
+    require(line, "DIALOG=VOLUME:/notes: ")
+    keys(b"\r", "RIGHT=/notes: ")
+    keys(b"\t", "ACTIVE=R")
+    to("docs")
+    keys(b"\r", "RIGHT=/notes:docs ")
+    to("fromstore.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to the other panel, ram:
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    keys(b"\t", "ACTIVE=L")
+    to("fromram.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to notes:docs
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("cat ram:fromstore.txt"), "from the store volume")
+    require(vm.command("cat notes:docs/fromram.txt"), "to the store volume")
+    for path in ("ram:fromstore.txt", "ram:fromram.txt", "notes:docs/fromstore.txt", "notes:docs/fromram.txt"):
+        require(vm.command(f"rm {path}"), "OK")
+    print("PASS: fm lists the store volume notes: after the disks, opens it through the shell's storefs client, and a file "
+          "copies from it to ram: and from ram: to it (311-APP-0135)", flush=True)
+
+
 def storefs_check(vm):
     """311-KRN-0190: storefs runs at boot with the block store's client, and the shell reaches a store volume through the
     same mind::fs calls as a FAT one; a program without storefs's client finds no store volume, and asks nobody."""
@@ -2905,6 +2954,7 @@ def storefs_check(vm):
     scopes = vm.service_logs("storefs", "ENDED")
     made = list(re.finditer(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes))
     assert len(made) == 2 and f"[STOREFS] SCOPE {made[0][1]} ENDED" in scopes[made[0].end():], scopes[-1500:]  # after it was made
+    fm_store_volume_check(vm)
     require(vm.command("rm notes:docs/b.txt"), "OK")
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
@@ -5360,6 +5410,7 @@ def store_domains_check(vm):
         require(made, "blocks: domain new: NoRandom")
         require(vm.service_logs("blockstore", "NO DOMAIN FOR PID"), "AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED")
         print("PASS: memory domains: none made without a random source, and the store says why", flush=True)
+        run_in_domain_check(vm)
         return
     first = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
     second = int(re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))[1])
@@ -5409,6 +5460,8 @@ def store_domains_check(vm):
     out = blocks("domains")
     for line in (f"DOMAIN {first} LIVE", f"DOMAIN {second} LIVE"):
         require(out, line)
+    # 312-APP-0134: the shell's `run -d` in the two live domains.
+    run_in_domain_check(vm, first, second, note)
     # The same bytes in the other domain are its own block; forgetting the first leaves it.
     require(blocks(f"-d {second} put ram:dom.txt"), f"PUT {note} SIZE 12")
     require(blocks(f"domain forget {first}"), f"DOMAIN {first} FORGOTTEN")
@@ -5426,6 +5479,37 @@ def store_domains_check(vm):
           "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
           "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046); a "
           "client of a domain that may only read reads it and is refused a put and a publish (312-STO-0049)", flush=True)
+
+
+def run_in_domain_check(vm, first=None, second=None, note=None):
+    """312-APP-0134: `run -d <domain> <program>` gives the program, in place of the shell's client of the volume, the
+    client of the shell's memory domain the store mints. Refused before the start: no number, a domain that is not live,
+    a program that asks for no block store, a service. With domains (a random source), `blocks` started in the first
+    holds that domain's client alone: it reads the first's name, which neither the volume nor the second shows, and
+    makes no domain through it; `blocksro`, which asks only to read, is refused until the store mints a domain's client
+    with fewer rights."""
+    def run(args, timeout=240):
+        vm.send(f"run {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"run {args}\n")
+    require(run("-d blocks stat"), "USAGE: RUN [-D <DOMAIN>] <NAME> [ARGUMENTS] [&]")
+    require(run("-d 999 blocks stat"), "RUN -D: NO LIVE MEMORY DOMAIN OF THE SHELL'S HAS THAT NUMBER")
+    require(run("-d 0 clock"), "RUN -D: THE PROGRAM ASKS FOR NO BLOCK STORE")
+    require(run("-d 0 blockstore"), "RUN -D STARTS A PROGRAM, NOT A SERVICE")
+    if first is None:
+        print("PASS: run -d: refused without a number, for a domain that is not live, a program that asks for no block "
+              "store and a service (no domain without a random source)", flush=True)
+        return
+    require(run(f"-d {first} blocks resolve secret"), f"secret VERSION 1 ROOT {note}")
+    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}")
+    require(run(f"-d {second} blocks resolve secret"), "blocks: resolve secret: NotFound")
+    require(run(f"-d {first} blocks domain new"), "blocks: domain new: Rights")
+    require(run(f"-d {first} blocks domains"), "blocks: domains: Rights")
+    # Not yet a read-only start: blocksro asks for the get badge alone, and the store mints a domain's client with the
+    # asking client's rights and owner, while the shell's domains are its writing client's (requests-STO.md).
+    require(run(f"-d {first} blocksro resolve secret"), "RUN -D: NOT YET FOR A PROGRAM THAT ONLY READS")
+    print("PASS: run -d: blocks started in a memory domain reads that domain's name, not the other's, and makes no "
+          "domain; refused without a number, for a domain that is not live, a program that asks for no block store or "
+          "only to read, and a service", flush=True)
 
 
 def fm_store_check(vm):
@@ -9531,6 +9615,52 @@ def listen_suite(vm, starts):
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)
 
 
+def voice_at_start_check(args, disk, wav):
+    """000-APP-0052: with data/voice.conf on the boot volume, as `voice enable` writes it, a machine's start turns voice
+    control on with no command: the shell starts voice with the file's words, a WAV standing in for the microphone.
+    Its first phrase opens a program; the second asks before a reboot, and the third's no leaves the machine running."""
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "voice-start.wav").write_bytes(speech_wav(("открой файлы", "перезагрузи систему", "нет"))[0])
+    (disk / "data/voice.conf").write_text("# voice control at the shell's start (000-APP-0052)\non --wav voice-start.wav\n")
+    try:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), audio=wav, extra=["-nic", "user,model=virtio-net-pci"])
+        try:
+            vm.wait = LOADED_WAIT
+            # From the whole log: the VM's own first commands may have taken it from the output.
+            vm.logged("VOICE CONTROL ON. F12 OR VOICE LISTEN", 0, timeout=120)
+            pid = re.search(r"STARTED PID=(\d+) NAME=voice BACKGROUND", ANSI.sub("", vm.log))[1]
+            require(vm.command("dmesg -s shell", raw=True), "[SHELL] VOICE CONTROL ON AT THE SHELL'S START, AS data/voice.conf SAYS")
+            log = ""
+            for _ in range(240):
+                log += vm.command(f"logs {pid}", raw=True)  # a PID from the raw log
+                if "[VOICE] READY" in log:
+                    break
+                time.sleep(.25)
+            require(log, "3 UTTERANCES FROM voice-start.wav")
+            vm.send("voice listen\n")
+            output = vm.expect("NAME=fm FOREGROUND", timeout=180)
+            require(output, 'VOICE: "открой файлы" (')
+            fm = re.search(r"STARTED PID=(\d+) NAME=fm FOREGROUND", output)[1]
+            vm.background(fm)
+            vm.command(f"kill {fm}")
+            # The reboot is asked about; "нет" cancels it, and the machine keeps running.
+            vm.send("voice listen\n")
+            output = vm.expect("-> Отменено", timeout=180)
+            require(output, 'VOICE: "перезагрузи систему" (')
+            require(output, "-> Перезагрузить систему?")
+            require(output, 'VOICE: "нет" (')
+            assert vm.process.poll() is None, "the machine restarted (QEMU runs with -no-reboot)"
+            require(vm.command("voice off"), "VOICE CONTROL OFF")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+    finally:
+        (disk / "data/voice.conf").unlink(missing_ok=True)
+        (disk / "voice-start.wav").unlink(missing_ok=True)
+    print("PASS: voice control at the shell's start (000-APP-0052): with data/voice.conf the shell turned it on with no "
+          "command; by voice a program opened, and a reboot was asked about and cancelled", flush=True)
+
+
 def voice_control(vm):
     """Voice control (issue 079): the shell starts voice with a WAV file standing in for the microphone; each
     push-to-talk takes the file's next utterance, and the shell's questions take the one after."""
@@ -9625,7 +9755,14 @@ def voice_control(vm):
         raise AssertionError("voice did not quit")
     require(vm.command("voice"), "VOICE CONTROL OFF")
     require(vm.command("voice listen"), "ERROR: VOICE CONTROL IS OFF (VOICE ON)")
-    require(vm.command("voice x"), "USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN")
+    require(vm.command("voice x"), "USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN | VOICE ENABLE [--wav FILE] [SECONDS] | VOICE DISABLE")
+    # 000-APP-0052: `voice enable` keeps voice on's words in data/voice.conf for the shell's next start; words voice on
+    # would not take are refused; `voice disable` removes the file.
+    require(vm.command("voice enable --wav voice.wav 99999"), "USAGE: VOICE ON [--wav FILE]")
+    require(vm.command("voice enable --wav voice.wav"), "VOICE CONTROL ON AT EACH START OF THE SHELL, KEPT IN data/voice.conf; VOICE ON TURNS IT ON NOW")
+    require(vm.command("cat data/voice.conf"), "on --wav voice.wav")
+    require(vm.command("voice disable"), "VOICE CONTROL OFF AT THE SHELL'S START")
+    require(vm.command("cat data/voice.conf"), "NOT FOUND")
 
 
 def tts_holdings_check(vm, models):
@@ -12530,6 +12667,11 @@ def tls_suite(args, disk):
         out = vm.command(f"webcheck https://10.0.2.2:{ports['asking']}/program --name mind.test --client-cert", timeout=60)
         assert "Denied" in out and "CERTIFICATE SENT" not in out, out
         require(vm.command("dmesg -s tls"), "THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT")
+        # 110-NET-0069: nor may it serve as the device (tls.wit 1.3's server role), refused before any port is looked at.
+        require(vm.command("webcheck listen:8443", timeout=60), "WEBCHECK LISTEN 8443: Ok(Err(Denied))")
+        require(vm.command("dmesg -s tls"), "THE SERVER ROLE REFUSED TO A CLIENT WITHOUT THE RIGHT TO THE DEVICE CERTIFICATE")
+        # 110-NET-0070: no listening grant for httpd in this policy, so init does not start it.
+        require(vm.command("dmesg -s init", raw=True), "[INIT] httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
@@ -12566,7 +12708,6 @@ def tls_suite(args, disk):
         require(vm.command("tls cert"), "TLS: NotFound")
     finally:
         vm.close()
-    shutil.rmtree(certificates, ignore_errors=True)
     print("PASS: TLS 1.3 client service: HTTPS with the server certificate verified (by name and by address; AES-256-GCM, "
           "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
@@ -12575,6 +12716,108 @@ def tls_suite(args, disk):
     passphrase_wait_check(args, with_entropy)
     tpm_check(args, with_entropy)
     recovery_key_check(args, with_entropy)
+    httpd_check(args, disk, with_entropy, certificates)
+
+
+def httpd_check(args, disk, cpu, certificates):
+    """110-NET-0069 and 0070: a MIND machine serves the release layout over HTTPS: httpd, through the TLS service's server
+    role, whose every signature keystore makes with the device key. The host's TLS 1.3 client (Python's ssl) gets the
+    device certificate, the one `tls cert` prints; a channel and a blob whole, the blob resumed with Range (206), 304 for
+    its ETag, two requests on one connection; 404 outside the layout, 400 for a query string, 405 for POST; one log line
+    each, without the query. A peer that never finishes its handshake is cut after 10 s. A second boot with a
+    tlsserver.pem whose certificate holds another key: refused at listen, and httpd says so."""
+    import http.client
+    releases = disk / "data" / "releases"
+    blob = bytes((i * 7 + 3) % 251 for i in range(150_000))
+    digest = hashlib.sha256(blob).hexdigest()
+    (releases / "blobs").mkdir(parents=True, exist_ok=True)
+    (releases / "channels").mkdir(parents=True, exist_ok=True)
+    (releases / "blobs" / digest).write_bytes(blob)
+    (releases / "channels" / "stable").write_text('{"version":6}\n')
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    policy.write_text((before or "") + "listen httpd tcp 443 from 10.0.2.0/24\n")
+    port = free_port()
+    network = ["-nic", "none", "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:443", "-device", "virtio-net-pci,netdev=n0"]
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname, context.verify_mode, context.minimum_version = False, ssl.CERT_NONE, ssl.TLSVersion.TLSv1_3
+    served = disk / "tlsserver.pem"
+    try:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
+        try:
+            require(vm.service_logs("httpd", "[HTTPD] SERVING"), "[HTTPD] SERVING data/releases/ OVER HTTPS ON TCP 443, AT MOST 7 CONNECTIONS")
+            require(vm.command("dmesg -s tls"), "LISTENS ON TCP 443, SERVING THE DEVICE CERTIFICATE")
+            pem = re.search(r"-----BEGIN CERTIFICATE-----\r?\n.*?-----END CERTIFICATE-----", vm.command("tls cert"), re.S)[0].replace("\r", "")
+            device = ssl.PEM_cert_to_DER_cert(pem)
+            connection = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=60)
+
+            def get(path, method="GET", headers=None, keep=None):
+                c = keep or http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=60)
+                c.request(method, path, headers=headers or {})
+                # Before the response: one the server closes after (Connection: close) closes the client's socket too.
+                assert c.sock.getpeercert(binary_form=True) == device, "not the device certificate"
+                assert c.sock.version() == "TLSv1.3", c.sock.version()
+                response = c.getresponse()
+                body = response.read()
+                if not keep:
+                    c.close()
+                return response.status, {k.lower(): v for k, v in response.getheaders()}, body
+            # Two requests on one kept connection: the channel, then the blob whole.
+            status, headers, body = get("/channels/stable", keep=connection)
+            assert (status, body, headers["cache-control"]) == (200, b'{"version":6}\n', "no-cache"), (status, headers, body)
+            status, headers, body = get(f"/blobs/{digest}", keep=connection)
+            assert (status, len(body), headers["etag"]) == (200, len(blob), f'"{digest}"') and body == blob, (status, headers, len(body))
+            connection.close()
+            status, headers, body = get(f"/blobs/{digest}", headers={"Range": "bytes=100000-"})
+            assert (status, headers["content-range"], body) == (206, "bytes 100000-149999/150000", blob[100000:]), (status, headers)
+            status, _, body = get(f"/blobs/{digest}", headers={"If-None-Match": f'"{digest}"'})
+            assert (status, body) == (304, b""), status
+            for path, method, expected in (("/index.html", "GET", 404), ("/channels/stable?x=1", "GET", 400), ("/channels/stable", "POST", 405)):
+                status, headers, _ = get(path, method)
+                assert status == expected, (path, method, status)
+                if expected == 405:
+                    assert headers["allow"] == "GET, HEAD", headers
+            log = vm.service_logs("httpd", " 405 ")
+            for line in ("10.0.2.2 GET /channels/stable 200 14 ", f"10.0.2.2 GET /blobs/{digest} 200 150000 ", f"10.0.2.2 GET /blobs/{digest} 206 50000 ",
+                         f"10.0.2.2 GET /blobs/{digest} 304 0 ", "10.0.2.2 GET /index.html 404 ", "10.0.2.2 GET /channels/stable 400 ", "(a query string is not served)",
+                         "10.0.2.2 - - 405 "):
+                require(log, line)
+            assert "?x=1" not in log, log[-2000:]
+            require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED TlsServer FOR PID")
+            require(vm.command("dmesg -s tls"), "SERVED 10.0.2.2:")
+            # A peer that sends nothing: its handshake is cut after 10 s, and the connection with it.
+            with socket.create_connection(("127.0.0.1", port), timeout=30) as idle:
+                started = time.monotonic()
+                try:
+                    left = idle.recv(16)
+                except OSError:
+                    left = b""
+                assert left == b"" and 9 < time.monotonic() - started < 25, (left, time.monotonic() - started)
+            require(vm.service_logs("httpd", "took longer than 10 s"), "(the TLS handshake took longer than 10 s)")
+            require(vm.command("dmesg -s tls"), "TIMED OUT")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-httpd-{args.cpus}cpu.log").write_text(vm.log)
+        # A chain whose first certificate holds another key than the device's: refused at listen, nothing served.
+        served.write_text((certificates / "server.pem").read_text())
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
+        try:
+            require(vm.service_logs("httpd", "NOT LISTENED ON"), "[HTTPD] TCP 443 NOT LISTENED ON: Ok(Err(Certificate))")
+            require(vm.command("dmesg -s tls"), "tlsserver.pem: ITS FIRST CERTIFICATE DOES NOT HOLD THE DEVICE KEY")
+        finally:
+            vm.close()
+    finally:
+        served.unlink(missing_ok=True)
+        shutil.rmtree(releases, ignore_errors=True)
+        if before is None:
+            policy.unlink(missing_ok=True)
+        else:
+            policy.write_text(before)
+        shutil.rmtree(certificates, ignore_errors=True)
+    print("PASS: httpd over the TLS service's server role (110-NET-0069, 0070): the device certificate served and every signature "
+          "keystore's; a channel and a blob whole on one connection, a range resumed (206), 304 for the tag, 404, 400 for a query, "
+          "405 for POST, one log line each without the query; a silent peer cut after 10 s; a program refused the server role; "
+          "a tlsserver.pem for another key refused at listen", flush=True)
 
 
 def passphrase_wait_check(args, cpu):
@@ -16542,6 +16785,8 @@ def main():
                     tts_suite(vm, wav, args.asr_model)
                 elif suite == "listen":
                     listen_suite(vm, starts)
+                    vm.close()
+                    voice_at_start_check(args, disk, wav)
                 elif suite == "tablet":
                     tablet_suite(vm, wav)
                 elif suite == "serialload":  # 000-KRN-0188, named only, in no gate group

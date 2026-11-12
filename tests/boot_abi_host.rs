@@ -50,19 +50,26 @@ fn version_read_needs_only_the_old_record() {
 
 // 351-KRN-0166: the loader's handoff apart from the system calls, one version with no range (000-KRN-0175). Handoff 25
 // adds two images, bt_hci (700-KRN-0176) and nnd (262-KRN-0178), which move every field after extra_programs; handoff 28
-// adds storefs after keystore (311-KRN-0190), handoff 29 timed after netpolicy (111-KRN-0206).
+// adds storefs after keystore (311-KRN-0190), handoff 29 timed after netpolicy (111-KRN-0206), handoff 33 httpd after tls
+// (110-NET-0070).
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
-    assert_eq!(BOOT_HANDOFF_VERSION, 30);
+    assert_eq!(BOOT_HANDOFF_VERSION, 33);
     // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192; ABI 29,
     // 100000-KRN-0222). It stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older,
-    // 351-KRN-0166). Handoff 30 came at ABI 29 (100000-KRN-0221), and ABIs 30 and 31 (308-KRN-0204, 0205) left it: the next change of
-    // the handoff takes a number above ABI_VERSION.
+    // 351-KRN-0166). Handoff 33 came at ABI 32 (110-NET-0070), as handoff 30 at ABI 29 (100000-KRN-0221): the next change of the
+    // handoff takes a number above ABI_VERSION.
     assert!(BOOT_HANDOFF_VERSION > 18, "a handoff is above every ABI an older loader wrote in its place");
-    const ABI_AT_THE_HANDOFF: u32 = 29;
+    const ABI_AT_THE_HANDOFF: u32 = 32;
     assert!(BOOT_HANDOFF_VERSION > ABI_AT_THE_HANDOFF && ABI_VERSION >= ABI_AT_THE_HANDOFF, "a handoff that changed was numbered above every ABI then");
-    assert_eq!(BOOT_IMAGES, 49, "a change of the boot images is a change of the handoff");
-    assert_eq!(size_of::<BootInfo>(), 1144, "a change of BootInfo is a change of the handoff");
+    assert_eq!(BOOT_IMAGES, 50, "a change of the boot images is a change of the handoff");
+    assert_eq!(size_of::<BootInfo>(), 1160, "a change of BootInfo is a change of the handoff");
+    // httpd serves through tls and parse, so it starts after both (110-NET-0070); it comes last before the shell, as the
+    // gateway's lists of services hold the first 48 units alone (requests-EFF.md).
+    let at = BOOT_SERVICES.iter().position(|&name| name == "httpd").unwrap();
+    assert_eq!((BOOT_SERVICES[at - 1], BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("effector", "shell", "httpd.elf"));
+    assert!(BOOT_SERVICES.iter().position(|&name| name == "effector").unwrap() < 48, "the gateway's lists hold the effector session");
+    assert!(at > BOOT_SERVICES.iter().position(|&name| name == "parse").unwrap() && at > BOOT_SERVICES.iter().position(|&name| name == "netpolicy").unwrap());
     // uart_serial serves the link's line on a board's UART, so it starts before link (100000-KRN-0221).
     let at = BOOT_SERVICES.iter().position(|&name| name == "uart_serial").unwrap();
     assert_eq!((BOOT_SERVICES[at - 1], BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("usb_serial", "link", "uart_serial.elf"));

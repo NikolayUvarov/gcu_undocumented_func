@@ -22,6 +22,7 @@ pub mod block_protocol;
 pub mod blockstore;
 pub mod car;
 pub mod checkpoint;
+pub mod clipboard; // the system clipboard's client (000-APP-0032); paste needs alloc
 pub mod cid;
 pub mod control;
 pub mod dag;
@@ -43,6 +44,7 @@ pub mod heap;
 pub mod hostname;
 pub mod hid;
 pub mod http;
+pub mod http_serve;
 pub mod multipart;
 pub mod idl;
 pub mod input;

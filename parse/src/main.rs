@@ -3,7 +3,8 @@
 // Parser service (109-NET-0008, MC-11.11, Appendix B.6's session parser): bounded bytes from outside in, typed messages
 // out (idl/parse.wit), so the program that holds the network and the files does not parse them itself: HTTP response
 // heads, release channels and boot manifests for the updater (351-NET-0011), and a model disk's manifest for the importer
-// into the block store (251-STO-0014), and any JSON text as its values (750-NET-0021). Holds its own endpoint and the system log, nothing else: no files, no network, no
+// into the block store (251-STO-0014), any JSON text as its values (750-NET-0021), and HTTP request heads for a server
+// (2.1, 110-NET-0070). Holds its own endpoint and the system log, nothing else: no files, no network, no
 // spawn, no devices. Each request is parsed on its own and nothing of it is kept; a refusal is logged with the client's
 // PID. Started by the loader as a helper with `--session` (109-NET-0010), it serves one session's endpoint and holds
 // nothing else, not even the log, and writes nothing: it ends on a message that is not a call, or after IDLE_MS without
@@ -25,7 +26,7 @@ static mut SCRATCH: [u8; parse::REQUEST_MAX] = [0; parse::REQUEST_MAX];
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let session = mind::process::args_str().split_whitespace().any(|a| a == "--session");
-    if !session { mind::println!("[PARSE] READY: HTTP RESPONSE HEADS, RELEASE CHANNELS, BOOT MANIFESTS, MODEL MANIFESTS, JSON"); }
+    if !session { mind::println!("[PARSE] READY: HTTP RESPONSE AND REQUEST HEADS, RELEASE CHANNELS, BOOT MANIFESTS, MODEL MANIFESTS, JSON"); }
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
     loop {
         // SLOT_INIT is SLOT_SERVICE: a session's endpoint is served the same way.
@@ -40,6 +41,12 @@ fn main(_info: &'static BootInfo) {
                     Error::Malformed
                 });
                 parse::reply_http_response(call, typed.as_ref().map_err(|e| *e))
+            }
+            Ok((parse::Request::HttpRequest { head }, call)) => {
+                // A refusal is an answer (the server sends its status), not an error: logged as one all the same.
+                let parsed = mind::http_serve::parse_request(head);
+                if let (Err(bad), false) = (parsed, session) { mind::println!("[PARSE] REFUSED A REQUEST HEAD FOR PID {}: {:?} ({} BYTES)", request.sender, bad, head.len()); }
+                parse::reply_http_request(call, Ok(&mind::parse::to_request(&parsed)))
             }
             Ok((parse::Request::Json { text, start }, call)) => {
                 // The whole text is read on every page; the values from `start` are kept (750-NET-0021).

@@ -15,6 +15,8 @@ mod ring;
 mod redirect;
 #[path = "../shell/src/clients.rs"]
 mod clients;
+#[path = "../shell/src/domainrun.rs"]
+mod domainrun;
 #[path = "../shell/src/start.rs"]
 mod start;
 #[path = "../shell/src/safe.rs"]
@@ -45,6 +47,8 @@ mod wifilend;
 mod secret;
 #[path = "../shell/src/passphrase.rs"]
 mod passphrase;
+#[path = "../shell/src/voiceconf.rs"]
+mod voiceconf;
 #[path = "../shell/src/nnrows.rs"]
 mod nnrows;
 #[path = "../shell/src/sound.rs"]
@@ -176,6 +180,52 @@ fn the_links_console_gets_scripts_and_the_policy_but_never_mode() {
         assert_eq!(console(line), taken_by(line, Client::Link), "{:?}", line);
     }
     for line in ["msh /data/link/effector/start.msh", "netpolicy add allow x", "netrevoke fetch"] { assert_eq!(taken_by(line, Client::Link), Taken::Refused, "{}", line); }
+}
+
+#[test]
+fn an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file() {
+    // 112-APP-0136, for 112-NET-0072: a login's console is never asked on the machine's screen.
+    use clients::{taken_by, Client, Taken};
+    let remote = |line: &str| taken_by(line, Client::Remote);
+    for line in ["ps", "ip", "netgrants", "date", "netpolicy", "help kill", "netstat -i", "ping -c 1 10.0.2.2", "logs 7", "stat caps 7", "pmap 7", "caps 3", "kill 7",
+                 "reboot", "poweroff", "shutdown -f", "budget 7 5 10", "date set 2026-11-12 12:00", "logger hello", "hostname dexp", "fetch ya.ru /", "volume"] {
+        assert_eq!(remote(line), Taken::Now, "{}", line);
+        assert_eq!(taken_by(line, Client::Link), Taken::Now, "{}", line);
+    }
+    // Refused as for the link: the policy's changes, modes, scripts, the screen's commands, programs, the firmware's and
+    // the updater's commands.
+    for line in ["netpolicy add allow x", "netrevoke fetch", "mode", "mode maintenance on", "msh /diag/quick.msh", "msh -c \"print(1)\"", "fg 1", "keymap ru",
+                 "screenshot", "voice on", "run fm", "fm", "caps", "let x = 1", "clear", "", "boot", "update apply", "passphrase set", "ls", "cat data/x"] {
+        assert_eq!(remote(line), Taken::Refused, "{:?}", line);
+    }
+    // Refused besides: a file written in the shell's name, the files being the key's `files` right's, and the TPM.
+    for line in ["ps > data/ps.txt", "logs 7 >> ram:logs.txt", "tpm", "tpm seal x"] {
+        assert_eq!(remote(line), Taken::Refused, "{:?}", line);
+        assert_ne!(taken_by(line, Client::Link), Taken::Refused, "{:?}", line);
+    }
+    // Nothing a remote line gets is asked.
+    for line in ["kill 7", "reboot", "hostname dexp", "date set 2026-11-12 12:00", "logs 7"] { assert_ne!(remote(line), Taken::Asked, "{}", line); }
+    assert_eq!(clients::BADGE_REMOTE, 3);
+}
+
+#[test]
+fn run_d_names_a_memory_domain_before_the_program() {
+    // 312-APP-0134: `run -d <domain> <program> [arguments] [&]`.
+    use domainrun::split;
+    assert_eq!(split("blocks names"), Ok(None));
+    assert_eq!(split("-d 3 blocks names m/"), Ok(Some((3, "blocks names m/"))));
+    assert_eq!(split("  -d   0   blocks"), Ok(Some((0, "blocks"))));
+    assert_eq!(split("-d 65535 data/apps/agent/agent.elf -v"), Ok(Some((65535, "data/apps/agent/agent.elf -v"))));
+    // A word that starts with -d is no option; a program's own -d after its name is its argument.
+    assert_eq!(split("-dx blocks"), Ok(None));
+    assert_eq!(split("blocks -d 3 names"), Ok(None));
+    // No number, one too big or not one, or no program.
+    for words in ["-d", "-d blocks", "-d 65536 blocks", "-d -1 blocks", "-d 3", "-d 3   ", "-d x3 blocks"] { assert_eq!(split(words), Err(()), "{:?}", words); }
+    // Each refusal has its text, and no other code has one.
+    for code in [domainrun::NOT_ASKED, domainrun::NOT_LENT, domainrun::NOT_FOUND, domainrun::NOT_OURS, domainrun::FULL, domainrun::NO_CLIENT, domainrun::SERVICE, domainrun::READ_ONLY] {
+        assert!(domainrun::text(code).is_some_and(|t| t.starts_with("RUN -D")), "{}", code);
+    }
+    assert_eq!(domainrun::text(usize::MAX - 9), None);
 }
 
 #[test]
@@ -739,6 +789,22 @@ fn keystores_passphrase_is_typed_in_steps_and_checked_before_it_is_sent() {
     // A passphrase typed on the line by mistake stays out of the history; `passphrase` alone goes in.
     assert!(on_line("passphrase correct horse") && on_line("  PASSPHRASE x"));
     assert!(!on_line("passphrase") && !on_line("passphrase   ") && !on_line("passphrases x") && !on_line("help passphrase"));
+}
+
+#[test]
+fn voice_control_at_the_shells_start_is_kept_in_voice_conf() {
+    // 000-APP-0052: `voice enable` writes voice on's words after `on`; the file read back gives them, and a line voice on
+    // would not take, `off` or none leave voice control off.
+    use voiceconf::{parse, render, words_ok};
+    assert_eq!(render(""), "# voice control at the shell's start (000-APP-0052); `voice disable` removes this file\non\n");
+    assert_eq!(parse(&render("")), Some(""));
+    assert_eq!(parse(&render("--wav voice.wav 30")), Some("--wav voice.wav 30"));
+    assert_eq!(parse("\n# a note\n  on --wav x.wav  \n"), Some("--wav x.wav"));
+    for text in ["", "# on\n", "off\n", "onward\n", "on --wav\n", "on 0\n", "on 3601\n", "on --wav a b c\n", "on --x\n"] {
+        assert_eq!(parse(text), None, "{:?}", text);
+    }
+    for words in ["", "--wav voice.wav", "--wav voice.wav 10", "60"] { assert!(words_ok(words), "{:?}", words); }
+    for words in ["--wav", "--wav -x", "10 20", "abc", &format!("--wav {}", "f".repeat(64))] { assert!(!words_ok(words), "{:?}", words); }
 }
 
 #[test]

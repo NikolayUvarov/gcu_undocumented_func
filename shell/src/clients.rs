@@ -7,7 +7,9 @@
 //! shell's window to agree: it gets at once what reads and, by the maintainer's choice of 2026-10-22, what changes the
 //! machine, but never a change of the network policy (800-NET-0038), the machine's modes or a script. In the owner's
 //! `link-console` mode (`init.wit` 1.8, 800-APP-0108) the link's line is the console's: scripts by their file and the
-//! policy's changes run too, never `mode`. Host-tested in tests/shell_host.rs.
+//! policy's changes run too, never `mode`. An SSH session's line (112-APP-0136) is never asked on the machine's screen:
+//! what the link runs at once, but for a file written by `>` (the key's `files` right's, through SFTP) and the TPM.
+//! Host-tested in tests/shell_host.rs.
 
 /// Taken at once.
 pub const NOW: [&str; 18] = ["ps", "cpus", "free", "faults", "quotas", "heap", "devices", "irqs", "endpoints", "physmap", "time", "ip", "net", "netgrants", "sync", "battery",
@@ -21,21 +23,29 @@ pub const ASKED: [&str; 21] = ["kill", "stop", "reboot", "poweroff", "shutdown",
 /// (800-NET-0038). `mode` is refused to every client, the link's console too.
 pub const NOT_OVER_THE_LINK: [&str; 2] = ["netrevoke", "netpolicy"];
 
+/// Of what the link takes at once, refused to an SSH session as well: the TPM, the machine's own root of trust.
+pub const NOT_REMOTE: [&str; 1] = ["tpm"];
+
+/// The badge of the client `init` mints for `sshd` (112-NET-0072's `mind::process::BADGE_SHELL_REMOTE`, not in `main` yet).
+pub const BADGE_REMOTE: u16 = 3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Taken { Refused, Now, Asked }
 
-/// Who calls: a program the shell lent its commands to, `link` in developer mode (`mind::process::BADGE_SHELL_LINK`), or
-/// `link` while init reports the owner's `link-console` mode (800-APP-0108).
+/// Who calls: a program the shell lent its commands to, `link` in developer mode (`mind::process::BADGE_SHELL_LINK`),
+/// `link` while init reports the owner's `link-console` mode (800-APP-0108), or `sshd` for a login's console (`BADGE_REMOTE`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Client { Program, Link, LinkConsole }
+pub enum Client { Program, Link, LinkConsole, Remote }
 
 /// How the shell takes `line` from `client`: for the link, what a program's client is asked runs at once, but for the
-/// policy's changes and scripts, which are refused; for the link's console those run at once too.
+/// policy's changes and scripts, which are refused; for the link's console those run at once too; for an SSH session as
+/// for the link, but for a file written and the TPM.
 pub fn taken_by(line: &str, client: Client) -> Taken {
     let line = line.trim();
     let asked = if client == Client::Program { Taken::Asked } else { Taken::Now };
     // `>` writes a file in the shell's name (000-APP-0074): asked, for a command taken at all.
     match crate::redirect::split(line) {
+        Ok(Some(_)) if client == Client::Remote => return Taken::Refused,
         Ok(Some(split)) => return if taken_by(split.command, client) == Taken::Refused { Taken::Refused } else { asked },
         Err(_) => return Taken::Refused,
         Ok(None) => {}
@@ -50,9 +60,10 @@ pub fn taken_by(line: &str, client: Client) -> Taken {
         "caps" if args.is_empty() => Taken::Refused, // the caps tool, a program
         // A script by its file, in the shell's window once the user agrees (000-APP-0067), at once for the link's console;
         // not `-c` code or options.
-        "msh" if client != Client::Link && !args.is_empty() && !args.starts_with('-') && args.split_whitespace().count() == 1 => asked,
+        "msh" if !matches!(client, Client::Link | Client::Remote) && !args.is_empty() && !args.starts_with('-') && args.split_whitespace().count() == 1 => asked,
         "msh" => Taken::Refused,
-        _ if client == Client::Link && NOT_OVER_THE_LINK.contains(&word) => Taken::Refused,
+        _ if matches!(client, Client::Link | Client::Remote) && NOT_OVER_THE_LINK.contains(&word) => Taken::Refused,
+        _ if client == Client::Remote && NOT_REMOTE.contains(&word) => Taken::Refused,
         _ if ASKED.contains(&word) => asked,
         _ if NOW.contains(&word) => Taken::Now,
         _ => Taken::Refused,

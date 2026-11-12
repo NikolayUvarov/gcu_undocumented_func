@@ -4,7 +4,8 @@
 //! endpoint and the system log: no files, no network, no spawn, no devices. Each request is parsed on its own; nothing
 //! of one stays for the next. A refusal is logged with the client's PID. The client still checks what a typed message
 //! says against what it asked for (MC-11.5). 2.0 (000-NET-0047): one HTTP response head, `http-response`, which also
-//! gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone.
+//! gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone. 2.1 (110-NET-0070):
+//! `http-request`, a request head as a server reads it.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -14,7 +15,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+pub const VERSION: (u8, u8, u8) = (2, 1, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -167,6 +168,46 @@ impl Wire for JsonPage {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { values: Wire::decode(r)?, page: Wire::decode(r)? }) }
 }
 
+/// 2.1 (110-NET-0070): an HTTP/1.x request head as a server reads it (`mind::http_serve::parse_request`, the rules
+/// of `tools/httpd`): GET or HEAD, HTTP/1.1 or 1.0, `Host` for 1.1, no folded line, at most 64 header lines, a
+/// target of at most 1024 bytes. `refusal`: why it is not served, `none` when it is; the server answers 400, 405,
+/// 505, 400, 431 or 414 for the others. Of a head served: the method, the target as sent, whether it is HTTP/1.1,
+/// whether the connection stays open after the response, the first `Range` and `If-None-Match` values (empty: none,
+/// or longer than 128 bytes), and whether a body follows (a first `Content-Length` other than 0, or a transfer coding).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum HttpRefusal { #[default] None = 0, Malformed = 1, Method = 2, Version = 3, NoHost = 4, TooManyHeaders = 5, TooLong = 6 }
+impl HttpRefusal {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::None), 1 => Some(Self::Malformed), 2 => Some(Self::Method), 3 => Some(Self::Version), 4 => Some(Self::NoHost), 5 => Some(Self::TooManyHeaders), 6 => Some(Self::TooLong), _ => None } }
+}
+impl Wire for HttpRefusal {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum HttpMethod { #[default] Get = 0, Head = 1 }
+impl HttpMethod {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Get), 1 => Some(Self::Head), _ => None } }
+}
+impl Wire for HttpMethod {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HttpRequest { pub refusal: HttpRefusal, pub method: HttpMethod, pub target: Text<1024>, pub http11: bool, pub keep_alive: bool, pub range: Text<128>, pub if_none_match: Text<128>, pub body: bool }
+impl Wire for HttpRequest {
+    const MAX: usize = <HttpRefusal as Wire>::MAX + <HttpMethod as Wire>::MAX + <Text<1024> as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<128> as Wire>::MAX + <Text<128> as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.refusal.encode(w)?; self.method.encode(w)?; self.target.encode(w)?; self.http11.encode(w)?; self.keep_alive.encode(w)?; self.range.encode(w)?; self.if_none_match.encode(w)?; self.body.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { refusal: Wire::decode(r)?, method: Wire::decode(r)?, target: Wire::decode(r)?, http11: Wire::decode(r)?, keep_alive: Wire::decode(r)?, range: Wire::decode(r)?, if_none_match: Wire::decode(r)?, body: Wire::decode(r)? }) }
+}
+
 /// A channel file (1.1).
 pub fn channel(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<Channel, Error>> {
     let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
@@ -245,6 +286,21 @@ pub fn json(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result:
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <JsonPage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The head of an HTTP request: its request line and header lines, with or without the blank line that ends them.
+pub fn http_request(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result<HttpRequest, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(12288).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<8192>(head, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1291, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <HttpRequest as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 60010;
 
@@ -256,6 +312,7 @@ pub enum Request<'a> {
     Model { text: &'a [u8], index: u32, start: u32 },
     HttpResponse { head: &'a [u8] },
     Json { text: &'a [u8], start: u32 },
+    HttpRequest { head: &'a [u8] },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -310,6 +367,14 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Json { text, start }, call))
         }
+        6 => {
+            let (call, length) = wire::take_buffer(request, cap, 1291, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let head = codec::decode_bytes::<8192>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::HttpRequest { head }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -331,6 +396,10 @@ pub fn reply_http_response(call: Call, value: core::result::Result<&HttpResponse
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_json(call: Call, value: core::result::Result<&JsonPage, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_http_request(call: Call, value: core::result::Result<&HttpRequest, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

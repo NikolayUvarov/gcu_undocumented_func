@@ -590,3 +590,35 @@ fn syntax_colours() {
     assert!(e.syntax.is_none() && !screen[0].contains("Rust"));
     assert_eq!(cells[80].style, CLASSIC.panel);
 }
+
+#[test]
+fn copy_and_paste_go_through_the_system_clipboard_when_the_program_holds_it() {
+    // 000-APP-0032: without the system clipboard Ctrl+C, X and V keep the editor's own copy, as before; with it, copy and
+    // cut give the text to the program (and keep it), and paste asks the program, which gives a text or falls back.
+    let mut own = Editor::new(b"alpha beta".to_vec(), "ram:a.txt", false);
+    own.key(ctrl('a'));
+    assert_eq!(own.key(ctrl('c')), Outcome::Redraw);
+    own.key(code(KEY_END));
+    assert_eq!(own.key(ctrl('v')), Outcome::Redraw);
+    assert_eq!(own.buffer.text(), b"alpha betaalpha beta");
+    let mut e = Editor::new(b"alpha beta".to_vec(), "ram:a.txt", false);
+    e.system = true;
+    e.key(ctrl('a'));
+    assert_eq!(e.key(ctrl('c')), Outcome::Copy(b"alpha beta".to_vec()));
+    assert_eq!(e.key(ctrl('x')), Outcome::Copy(b"alpha beta".to_vec()));
+    assert_eq!(e.buffer.text(), b"", "cut");
+    assert_eq!(e.key(ctrl('v')), Outcome::Paste);
+    e.paste_text("Жук".as_bytes());
+    assert_eq!(e.buffer.text(), "Жук".as_bytes());
+    // The clipboard did not answer: the editor's own copy, which the last copy and paste kept.
+    assert_eq!(e.key(ctrl('v')), Outcome::Paste);
+    e.paste();
+    assert_eq!(e.buffer.text(), "ЖукЖук".as_bytes());
+    // Nothing selected: no copy is asked; a read-only file pastes nothing.
+    assert_eq!(e.key(ctrl('c')), Outcome::Redraw);
+    let mut ro = Editor::new(b"x".to_vec(), "a.txt", true);
+    ro.system = true;
+    assert_eq!(ro.key(ctrl('v')), Outcome::Redraw);
+    ro.paste_text(b"y");
+    assert_eq!(ro.buffer.text(), b"x");
+}

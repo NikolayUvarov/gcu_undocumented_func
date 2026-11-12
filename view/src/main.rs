@@ -25,6 +25,9 @@ fn pointer_key(p: &Pointer, pressed: bool, area: Rect, modifiers: u8) -> Option<
     None
 }
 
+// The system clipboard, for Ctrl+C's line (000-APP-0032).
+mind::request!(REQUEST_CLIPBOARD);
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("view — text and hex viewer.\nUsage: view <file>\n↑↓ PgUp PgDn Space Home End scroll, F2 wrap, F4 hex or text, F5 go to, F7 search, Shift+F7 next, F1 keys, Esc F3 F10 quit.");
@@ -60,6 +63,17 @@ fn main(info: &'static BootInfo) {
                 match pointer_key(&p, pressed, area, viewer.modifiers) { Some(key) => key, None => continue }
             }
         };
+        // Ctrl+C: the line found, else the top one, to the system clipboard (000-APP-0032).
+        if key.is_ctrl('c') {
+            let mut line = [0u8; 4096];
+            let len = viewer.copied_line(&mut line);
+            let text = match core::str::from_utf8(&line[..len]) { Ok(text) => text, Err(e) => core::str::from_utf8(&line[..e.valid_up_to()]).unwrap_or("") };
+            match mind::clipboard::copy(text) {
+                Ok(generation) => mind::println!("[VIEW] COPIED {} BYTES TO THE CLIPBOARD, GENERATION {}", text.len(), generation),
+                Err(error) => mind::println!("[VIEW] NOT COPIED: {}", error.text()),
+            }
+            continue;
+        }
         for _ in 0..times {
             if viewer.key(key) == Action::Quit { mind::println!("[VIEW] DONE"); return; }
         }

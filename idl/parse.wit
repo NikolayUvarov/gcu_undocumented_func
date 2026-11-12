@@ -3,8 +3,9 @@
 /// endpoint and the system log: no files, no network, no spawn, no devices. Each request is parsed on its own; nothing
 /// of one stays for the next. A refusal is logged with the client's PID. The client still checks what a typed message
 /// says against what it asked for (MC-11.5). 2.0 (000-NET-0047): one HTTP response head, `http-response`, which also
-/// gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone.
-package mind:parse@2.0.0;
+/// gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone. 2.1 (110-NET-0070):
+/// `http-request`, a request head as a server reads it.
+package mind:parse@2.1.0;
 
 interface parse {
     /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -64,4 +65,16 @@ interface parse {
     record json-value { kind: json-kind, parent: u16, key: string<64>, text: string<512> }
     record json-page { values: u32, page: list<json-value, 16> }
     json: func(text: bytes<16384>, start: u32) -> result<json-page, error>;
+
+    /// 2.1 (110-NET-0070): an HTTP/1.x request head as a server reads it (`mind::http_serve::parse_request`, the rules
+    /// of `tools/httpd`): GET or HEAD, HTTP/1.1 or 1.0, `Host` for 1.1, no folded line, at most 64 header lines, a
+    /// target of at most 1024 bytes. `refusal`: why it is not served, `none` when it is; the server answers 400, 405,
+    /// 505, 400, 431 or 414 for the others. Of a head served: the method, the target as sent, whether it is HTTP/1.1,
+    /// whether the connection stays open after the response, the first `Range` and `If-None-Match` values (empty: none,
+    /// or longer than 128 bytes), and whether a body follows (a first `Content-Length` other than 0, or a transfer coding).
+    enum http-refusal { none, malformed, method, version, no-host, too-many-headers, too-long }
+    enum http-method { get, head }
+    record http-request { refusal: http-refusal, method: http-method, target: string<1024>, http11: bool, keep-alive: bool, range: string<128>, if-none-match: string<128>, body: bool }
+    /// The head of an HTTP request: its request line and header lines, with or without the blank line that ends them.
+    http-request: func(head: bytes<8192>) -> result<http-request, error>;
 }

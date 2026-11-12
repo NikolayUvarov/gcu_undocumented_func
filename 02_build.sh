@@ -126,6 +126,7 @@ USER_CRATES=(
     "bench:kbench:kbench.elf"
     "keystore:keystore:keystore.elf"
     "tls:tls:tls.elf"
+    "httpd:httpd:httpd.elf"
     "ssh_service:ssh:ssh.elf"
     "updater:updater:updater.elf"
     "sysmon:sysmon:sysmon.elf"
