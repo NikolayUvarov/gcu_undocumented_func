@@ -1,6 +1,6 @@
 # 000-APP-0032 — The system clipboard: text copied in one program, pasted in another
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open · **Blocked by:** `SLOT_CLIPBOARD`, `REQUEST_CLIPBOARD` and `init` starting the service ([requests-KRN.md](requests-KRN.md)) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-11.5, MC-12.4
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** in progress (the service and its clients written and host-tested, 2026-11-12; `init` starting it and the QEMU check left) · **Blocked by:** `init` starting the service and giving the shell its client with `CAP_BADGE` ([requests-KRN.md](requests-KRN.md), APP's request of 2026-11-12); `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are in the ABI since [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-11.5, MC-12.4
 
 ## Problem
 
@@ -29,6 +29,21 @@ Each program keeps its copied text to itself: `edit`'s Ctrl+C/X/V, `fm`'s comman
   - text copied in `edit` is pasted into the shell's line and into a second `edit`;
   - a program that did not ask for the clipboard holds nothing in the slot;
   - a program in the background cannot read it (whichever rule is chosen above).
+
+## Progress (2026-11-12)
+
+- **Who may read, decided:** the program in front, as the managers name it. The shell (for the console shown) and the window manager it started (for its window in front; none while its menus or Settings have the keys) hold copies badged `BADGE_MANAGER` and call `front`; a program's copy, badged `BADGE_PROGRAM`, is answered only while its PID is the one named. A badge per client, enabled by the shell, would need the shell to know each window's program in front, which only the window manager knows.
+- **`idl/clipboard.wit` 1.0:** `set-part`, `get-part`, `generation`, `front`. The text is up to 65536 bytes, carried in parts of 4000 bytes split where a character ends: the generated record holds its text inline, so a 64 KiB one would not fit a program's 64 KiB stack. `mind::clipboard` joins them (`copy`, `paste`, read again from the start when the text changes meanwhile).
+- **`clipboard/`** (`clipboard.elf`, in `02_build.sh`): the service, its rules in `clipboard/src/state.rs`. The text in memory only, zeroed when replaced; each text set and read logged with its length and generation, never the text.
+- **The clients:**
+  - **the shell:** mints its manager copy from `init`'s client in `SLOT_CLIPBOARD`, names the program in front of the console shown as it changes, lends a program's copy for `REQUEST_CLIPBOARD` (a script's under `requires: clipboard`) and a window manager one that may badge; its line pastes its first line with Ctrl+V or Shift+Insert and copies itself with Ctrl+Insert;
+  - **`wm`:** asks for it, mints its manager copy, names the program of the window in front, and lends its windows' programs their copies;
+  - **`edit` and `fm`'s editor:** Ctrl+C/X/V through it (`Outcome::Copy`, `Outcome::Paste`), their own copy where it does not answer.
+- **Tests:** host `tests/clipboard_host.rs` (who may, the parts in order and within 64 KiB, generations, characters' ends; 3 tests), `tests/edit_host.rs` (the editor's outcomes), the IDL fuzz test with the new receiver.
+- **Left:**
+  - `init` starting the service (KRN, requested);
+  - the QEMU `tools` suite's check once it runs: `edit`'s text pasted into the shell's line and a second `edit`, a program without the request holding nothing in the slot, a program behind refused;
+  - `view`'s copy, `console` and `fm`'s command line.
 
 ## Related
 
