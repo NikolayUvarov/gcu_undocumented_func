@@ -24,6 +24,8 @@ A Mind needs memory with an explicit history, deliberate and accounted forgettin
 - [312-STO-0034](../issues-done/312-STO-0034-a-journal-checked-from-its-head.done): the journal, append-only, checked from its head; `blocks journal` as the pilot. Done 2026-10-31.
 - [312-STO-0035](../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done): a text index derived from a journal, rebuilt equal to itself, a stale one told, every answer checked; `blocks index` as the pilot. Done 2026-10-31.
 - [312-STO-0038](../issues-done/312-STO-0038-assertions-about-objects.done): assertions about objects, each with its type, source and interpretation, kept in a journal apart from content, mentioning its subject without retaining it; `blocks assert` as the pilot. Done 2026-10-31.
+- [312-STO-0046](312-STO-0046-a-memory-domains-own-limit.md): a memory domain's own limit, set when it is made (MC-4.11, `blockstore.wit` 2.7).
+- [312-STO-0047](312-STO-0047-a-vector-index-of-a-journals-embeddings.md): a vector index of a journal's embeddings by one model, an exact scan; `blocks vector` as the pilot.
 
 ## Acceptance criteria
 

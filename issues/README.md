@@ -207,6 +207,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [307](307-the-stores-own-partition.md) | A durable medium on real machines: the store's own partition (track B, eighth step) | main task, `STO` | P1 | [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md), the copy's partition (requests-KRN.md), the maintainer's sticks (issues-human 16) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
 | [312-STO-0046](312-STO-0046-a-memory-domains-own-limit.md) | A memory domain's own limit, set when it is made (MC-4.11, `blockstore.wit` 2.7) | `STO` | P2 | — | track B |
+| [312-STO-0047](312-STO-0047-a-vector-index-of-a-journals-embeddings.md) | A vector index of a journal's embeddings by one model, an exact scan, each answer checked against the journal (`blocks vector`) | `STO` | P2 | — | track B |
 | [310-STO-0048](310-STO-0048-the-longest-free-runs-kept.md) | The store keeps its longest free runs when it meets more than its list holds: a long journal's gaps no longer hide the free tail (found by 312-STO-0047) | `STO` | P2 | — | track B |
 | [312](312-the-minds-memory.md) | The Mind's memory: a journal, assertions and derived indexes | main task, `STO` | P2 | — (308 done) | track B |
 | [313](313-persistent-actors.md) | Persistent actors: checkpoints of services with queues | main task, `STO` | P2 | — (308 done) | track B |
