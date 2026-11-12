@@ -39,6 +39,28 @@ The A64 (the PinePhone) names the A31's timer as well.
 
 Not covered: a board stopped in U-Boot, a card that does not boot, a wedged chip. For those, the bench's power device (100004-MOB-0009).
 
+## Progress
+
+**Made (2026-11-12)** on `claude/100004-PRT-0015-allwinner-watchdog`, steps 1 to 3:
+- **`common/fdt.rs`:** `Board::watchdog`, the first enabled node compatible with `allwinner,sun6i-a31-wdt` whose first `reg` holds its 0x20 bytes.
+- **`kernel/src/arch/aarch64/sunxi_wdt.rs`:** the registers and `arm`, `restart`, `disable`:
+  - `arm` sets the interval while the timer is stopped, restarts it, sets `CFG` to a reset of the whole system (its other bits kept), then enables it and restarts it again;
+  - a register that does not read back what it was given leaves the timer stopped, and the boot line says why.
+- **`kernel/src/arch/aarch64/watchdog.rs`:**
+  - `start` at the end of `interrupts::init`, once the tick runs;
+  - `feed` from `advance`, each second of the boot CPU's tick;
+  - `stop` in `halt_all`, `acpi::reboot` and `acpi::power_off`;
+  - `freeze`, the stop of every CPU that leaves the watchdog running, for the test kernel.
+- **`kernel_owns`:** the watchdog's registers, so no task is lent its page.
+- **`watchdog-test`:** on aarch64 every CPU stops for good 20 s after each boot. The SoC keeps no status across the watchdog's reset, so a board that runs it restarts every 36 s or so.
+- **The kernel's budget:** raised to 7700 in its own commit (43aa7e3b): 7640 lines after it.
+- **Tested in this container:**
+  - `tests/sunxi_watchdog_host.rs`: armed in order, fed, stopped; CFG or MODE that does not take the setting refused, left stopped. It passes.
+  - `tests/fdt_host.rs`: the H5's and the PinePhone's 0x01C20CA0, the H618's 0x030090A0, none on `virt`. It passes.
+  - The aarch64 kernel builds, with and without `watchdog-test`.
+- **On acc-1** (Effector, QEMU under TCG), at 2a87a348: "aarch64: boot and fault containment" (164 s) and "aarch64: the board from a device tree, under U-Boot" (113 s) passed. Their boots, through AAVMF's ACPI and through U-Boot's tree, each said `WATCHDOG: NONE (THE FIRMWARE NAMES NO WATCHDOG THIS KERNEL DRIVES)`.
+- **Left:** the gate; the boards' runs (MOB).
+
 ## Related
 
 - [100004](100004-two-allwinner-boards-before-the-phone.md): the two boards.

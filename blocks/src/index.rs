@@ -7,14 +7,14 @@ use mind::index::{self, Error, Posting, State, Term, Verdict, Work};
 use crate::journal::{steps, stopped};
 use crate::Remote;
 
-// The work area: terms, their bytes, postings, and three blocks; about 430 KiB, kept here rather than on the stack.
+// The work area: terms, their bytes, postings, and three blocks (also `vector`'s); about 430 KiB, kept here rather than on the stack.
 const TERMS: usize = 4096;
 const TEXT: usize = 64 * 1024;
 const POSTINGS: usize = 32 * 1024;
 static mut TERM_AREA: [Term; TERMS] = [Term::EMPTY; TERMS];
 static mut TEXT_AREA: [u8; TEXT] = [0; TEXT];
 static mut POSTING_AREA: [Posting; POSTINGS] = [Posting::EMPTY; POSTINGS];
-static mut BLOCKS: [[u8; CHUNK]; 3] = [[0; CHUNK]; 3];
+pub(crate) static mut BLOCKS: [[u8; CHUNK]; 3] = [[0; CHUNK]; 3];
 // Sequences on one line of a search's answer at most.
 const LINE: usize = 16;
 
