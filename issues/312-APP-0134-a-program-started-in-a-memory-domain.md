@@ -1,6 +1,6 @@
 # 312-APP-0134 — The shell starts a program in a memory domain
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (`run -d` done, 2026-11-12; its QEMU check on aarch64 to pass) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (`run -d` done, 2026-11-12; a read-only start waits for the store) · **Blocked by:** — (a read-only start: [requests-STO.md](requests-STO.md), a domain's client with fewer rights) · **Main task:** [312](312-the-minds-memory.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
 
 **Asked by:** STO, for 312's QEMU criterion, in [requests-APP.md](requests-APP.md), 2026-11-12. Numbered on 2026-11-12.
 
@@ -21,10 +21,10 @@ A memory domain is a set of names, pins and blocks under a key of its own (308-S
 
 ## Progress (2026-11-12)
 
-- **`run -d <domain> <program> [arguments] [&]`** (`shell/src/domainrun.rs`, `shell/src/main.rs`'s `start_with`): the store's client of the domain is asked for through the client the program would have had (`SLOT_BLOCKSTORE` for `REQUEST_BLOCKSTORE`, `SLOT_BLOCKSTORE_READ` for `REQUEST_BLOCKSTORE_READ`), after the other grants, and lent in `SLOT_BLOCKSTORE` in place of the volume's; the serial line says `[SHELL] BLOCKS STARTS IN MEMORY DOMAIN 2, READ AND WRITE`.
-- **Refused before the start,** each with its text: `-d` with no number or no program (`USAGE: RUN [-D <DOMAIN>] <NAME> [ARGUMENTS] [&]`), a program that asks for no block store, one with no store client to lend (no store, or a script without `requires: blockstore`), a service; after the loader's session begins, the store's `not-found`, `rights` and `full`, the session aborted.
+- **`run -d <domain> <program> [arguments] [&]`** (`shell/src/domainrun.rs`, `shell/src/main.rs`'s `start_with`): the store's client of the domain is asked for through the shell's client (`SLOT_BLOCKSTORE`), after the other grants, and lent in `SLOT_BLOCKSTORE` in place of the volume's; the system log says `[SHELL] BLOCKS STARTS IN MEMORY DOMAIN 2`.
+- **Refused before the start,** each with its text: `-d` with no number or no program (`USAGE: RUN [-D <DOMAIN>] <NAME> [ARGUMENTS] [&]`), a program that asks for no block store, one with no store client to lend (no store, or a script without `requires: blockstore`), a service, and for now one that asks only to read; after the loader's session begins, the store's `not-found`, `rights` and `full`, the session aborted.
 - **Tested:** `tests/shell_host.rs`'s `run_d_names_a_memory_domain_before_the_program` (the words and the texts). **Checked by** the `store` suite's `run_in_domain_check`: the refusals on x86, where no domain is made without a random source; and on aarch64, `blocks` started in the first domain reading that domain's name, not seen from the second, and refused `domain new` and `domains` through the domain's client.
-- **A read-only start:** the `store` suite's `blocksro` (`blocks` asking for `REQUEST_BLOCKSTORE_READ` alone) started with `-d` reads the domain's name and is refused a put and a publish: the domain's client has the get badge's rights (`blocksro` added after STO's answer of 2026-11-12, which leaves this check to APP).
+- **A read-only start, not yet:** the aarch64 `store` suite showed that the store refuses `domain-client` through the shell's read-only client (`rights`): it mints a domain's client with the rights and owner of the client it is asked through, the owner being the whole badge (`OWNER_BITS`), and the shell's domains are its writing client's. A client of the writing one would give a program that only reads the right to write, so the shell refuses such a start with its own text (`RUN -D: NOT YET FOR A PROGRAM THAT ONLY READS`, checked with `blocksro`), and asks STO for a domain's client with fewer rights than the caller's ([requests-STO.md](requests-STO.md)).
 
 ## Related
 
