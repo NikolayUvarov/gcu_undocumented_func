@@ -12670,6 +12670,7 @@ def nts_check(args, disk, cpu, certificates):
             assert "FAULT PID=" not in vm.command("faults")
         finally:
             vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-nts-{args.cpus}cpu.log").write_text(vm.log)
         for s in servers:
             s.close()
         servers = [_Nts(certificates, "nts", "alpn"), _Nts(certificates, "rogue"), _Nts(certificates, "nts")]
@@ -12686,6 +12687,7 @@ def nts_check(args, disk, cpu, certificates):
             assert "[TIMED] SET " not in log, log[-3000:]
         finally:
             vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-nts-refused-{args.cpus}cpu.log").write_text(vm.log)
     finally:
         for s in servers:
             s.close()
