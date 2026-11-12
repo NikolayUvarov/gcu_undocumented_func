@@ -75,6 +75,12 @@ Stage 2 of [110](110-our-own-web-server.md) has a MIND machine serve its updates
 - **The profile** (MC-11.9, the TCB) and `docs/network/services.md` say what the role is trusted with.
 - **Left:** aarch64; the gate.
 
+**Tested on the maintainer's machines (2026-11-12),** branch head 188e8788 (with 110-NET-0070's boot order), each group once:
+- "x86: network, TLS and Effector" on acc-2: passed (1349 s);
+- "aarch64: network, TLS and Effector" on acc-1: passed (1074 s), the effector suite with it. Its earlier run, with `httpd` after `tls`, failed in the effector suite (`KeyError: 'effector'`), for 0070's boot order (see 110-NET-0070).
+
+**Left:** the gate.
+
 ## Related
 
 - [110](110-our-own-web-server.md): stage 2.
