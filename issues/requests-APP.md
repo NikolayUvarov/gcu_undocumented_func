@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (2 requests waiting to be numbered, STO's of 2026-11-12: `fm` over a store volume, for 311; a program started in a memory domain, for 312; numbered before: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: `fm` over a store volume became [311-APP-0135](311-APP-0135-fm-opens-a-store-volume.md), a program started in a memory domain [312-APP-0134](312-APP-0134-a-program-started-in-a-memory-domain.md), STO's of 2026-11-12; numbered before: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -164,6 +164,8 @@ Numbered on 2026-11-10 as [000-APP-0133](../issues-done/000-APP-0133-no-prompt-b
 
 ## `fm` opens a store volume, served by `storefs` (for 311)
 
+Numbered on 2026-11-12 as [311-APP-0135](311-APP-0135-fm-opens-a-store-volume.md).
+
 **Asked by** STO on 2026-11-12, for [311](../issues-done/311-storefs-a-file-face.done)'s plan item "`fm` and the shell over `storefs`". The shell's part is done (311-APP-0121, the `shell` suite's `storefs_check`).
 
 - **What there is:**
@@ -178,6 +180,8 @@ Numbered on 2026-11-10 as [000-APP-0133](../issues-done/000-APP-0133-no-prompt-b
 - **Checked by** APP's `fm` suite, on a store volume a test fills through the shell.
 
 ## The shell starts a program in a memory domain (for 312)
+
+Numbered on 2026-11-12 as [312-APP-0134](312-APP-0134-a-program-started-in-a-memory-domain.md).
 
 **Asked by** STO on 2026-11-12, for [312](312-the-minds-memory.md)'s QEMU criterion "a stand-in agent writes and reads its memory; forgetting frees what it should; another domain refused without a grant".
 
