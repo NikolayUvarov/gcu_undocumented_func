@@ -83,8 +83,8 @@ pub const ABI_VERSION: u32 = 32;
 // (311-KRN-0190) renumbers the images after it. Handoff 29: `timed`, the network time service, after `netpolicy`
 // (111-KRN-0206), renumbers the images after it. Handoff 30: `uart_serial`, the link's line on a board's UART, after
 // `usb_serial` (100000-KRN-0221), renumbers the images after it. Handoff 33: `httpd`, the release server, last
-// before the shell (110-NET-0070, where the gateway's lists of 48 services still hold `effector`), adds an image. Handoff 34: `sshd`, the SSH
-// server, after `httpd` (112-NET-0072), adds another.
+// before the shell (110-NET-0070, where the gateway's lists of 48 services still hold `effector`), adds an image. Handoff 34:
+// `sshd`, the SSH server, after `httpd` (112-NET-0072), adds another.
 // Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
 // refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
 pub const BOOT_HANDOFF_VERSION: u32 = 34;

@@ -78,6 +78,12 @@ Not in this task: the two-machine suite of stage 2's criterion (one MIND machine
   - the IDL table and `docs/api`.
 - **Left:** aarch64; the gate.
 
+**Tested on the maintainer's machines (2026-11-12),** branch head 188e8788 (the boot order above), each group once:
+- "x86: network, TLS and Effector" on acc-2: passed (1349 s);
+- "aarch64: network, TLS and Effector" on acc-1: passed (1074 s), the effector suite with it. Its earlier run, with `httpd` after `tls`, failed in the effector suite (`KeyError: 'effector'`), as said above.
+
+**Left:** the gate.
+
 ## Related
 
 - [110](110-our-own-web-server.md): stage 2.
