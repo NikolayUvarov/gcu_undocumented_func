@@ -94,7 +94,16 @@ A client serves TLS 1.3 as the device (110-NET-0069). The release server `httpd`
 
   Each signature is `keystore`'s (`keystore.wit` 1.7 `tls-server`, at most 120 a minute): the private key never enters `tls`.
 - **Who may serve:** a client with the right to the device certificate. One badged `BADGE_TLS_NO_DEVICE`, the copy the shell lends a program, is denied `listen`, and `tls` logs it.
-- **Not provided:** TLS 1.2, resumption (no tickets), client certificates, ALPN, and a key other than the device's.
+- **Not provided:** TLS 1.2, resumption (no tickets), client certificates, ALPN on the server's side, and a key other than the device's.
+
+## An application protocol and the exporter (`idl/tls.wit` 1.4)
+
+What NTS-KE (RFC 8915) asks of TLS, for `timed` (111-NET-0073):
+
+- **`connect-alpn(session, name, address, port, protocol, timeout)`:** as `connect` without the device certificate, offering the one application protocol `protocol` (RFC 7301, at most 32 bytes). A server that does not agree on it is refused (`handshake`), and `tls` logs `IT DID NOT AGREE ON THE PROTOCOL`.
+- **`export(session, label, context, length)`:** 1 to 64 bytes of keying material from the established session's TLS 1.3 exporter (RFC 8446, section 7.5), for any session the client holds, one it connected or one it serves. The peer derives the same bytes from the same label and context.
+- **How it is made:** rustls's unbuffered connections do not offer the exporter. Each connection gets its own key log, which keeps the exporter secret alone; `tls` derives the bytes from it (`tls/src/exporter.rs`) and wipes the copies it used. The session's other secrets are not logged anywhere, and no secret leaves `tls`.
+- **Checked:** the derivation against OpenSSL 3.0.13's `-keymatexport` for a SHA-256 and a SHA-384 suite (`tests/tls_exporter_host.rs`).
 
 ## JSON read by the parser service (`idl/parse.wit` 1.4)
 
