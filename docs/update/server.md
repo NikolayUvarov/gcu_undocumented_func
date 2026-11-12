@@ -1,6 +1,6 @@
 # The release server, `httpd`
 
-**Version:** 0.2 (2026-11-11) · **Track:** `NET` ([TRACKS.md](../../TRACKS.md)), main task [110](../../issues/110-our-own-web-server.md) · **Russian:** [server_RU.md](server_RU.md)
+**Version:** 0.3 (2026-11-12) · **Track:** `NET` ([TRACKS.md](../../TRACKS.md)), main task [110](../../issues/110-our-own-web-server.md) · **Russian:** [server_RU.md](server_RU.md)
 
 `tools/httpd` is the project's own web server for releases: a host program for Linux that serves `scripts/release.py`'s layout read-only. This is stage 1 of [110](../../issues/110-our-own-web-server.md). The `update` and `update_store` checks in QEMU run against it ([110-NET-0068](../../issues-done/110-NET-0068-the-update-checks-run-against-httpd.done)); no device has been updated from it on a real machine yet.
 
@@ -62,7 +62,27 @@ The QEMU checks need a server that cuts a download midway, holds a response and 
 - **`scripts/serve_httpd.py`** builds it so and runs it for the `update` and `update_store` suites. They set its deadlines to 60 s, since the emulated machines of a loaded host are slow.
 - `scripts/serve_release.py` stays for the `net` suite's download checks, which need a malformed head no real server sends.
 
+## On a MIND machine (stage 2)
+
+`httpd` is also a MIND Core service, which serves the same layout from a MIND machine ([110-NET-0070](../../issues/110-NET-0070-httpd-as-a-mind-core-service.md)). It follows `tools/httpd`'s rules (`mind::http_serve`, with the same cases in its host tests); the differences are below.
+
+- **Started by `init`** only when the policy gives program `httpd` a listening grant: `listen httpd tcp 443 from <network>/<prefix>`. Without one, `init` says `httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT`.
+- **The content:** the owner's `data/releases/` (`blobs/`, `releases/`, `channels/`), which `init` lends read-only and never makes. Without it every path is answered 404.
+- **TLS 1.3 only, on TCP 443.** The TLS service serves the handshake ([110-NET-0069](../../issues/110-NET-0069-the-tls-services-server-role.md)), and `keystore` makes every signature with the device key, which never leaves it (MC-11.9).
+  - The certificate is the device certificate (Ed25519, self-signed), or the chain in `tlsserver.pem` on the boot disk, whose first certificate must hold the device key.
+  - A device pins the SHA-256 of its SPKI, as `tls cert` prints the certificate.
+  - Browsers do not accept an Ed25519 server certificate: this server is for machines (curl, OpenSSL, MIND Core's own client).
+- **Request heads** are parsed by the parser service (`parse.wit` 2.1 `http-request`, MC-11.11), not by `httpd`.
+- **Limits:**
+  - 7 connections at once, 4 of one address;
+  - a head within 8 KiB and 10 s from its first byte;
+  - 10 s without a byte taken, or on an idle kept connection;
+  - 600 requests a minute of one address;
+  - a TLS handshake within 10 s.
+- **The log** is the system log: `[HTTPD] <client> <method> <path> <status> <bytes> <ms> MS (<why>)`, without the query and without any header's value.
+- **No test hooks:** the MIND service has none.
+
 ## Not done yet
 
 - a device updated from the maintainer's server (110, stage 1);
-- the same server as a MIND Core service (stage 2).
+- a MIND machine updated from another one (stage 2's two-machine suite).

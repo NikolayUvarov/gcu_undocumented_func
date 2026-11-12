@@ -65,7 +65,15 @@ Stage 2 of [110](110-our-own-web-server.md) has a MIND machine serve its updates
   - `tlsserver.pem`, or the device certificate (`device::Served`, which offers it to a peer with Ed25519 among its schemes);
   - the server role refused to a client badged `BADGE_TLS_NO_DEVICE`;
   - 16 sessions, 8 of one client.
-- **Built for x86.** Not run yet.
+- **Built for x86 and run** (this container, 4 CPUs, QEMU 8.2.2 under TCG), through 110-NET-0070's `httpd`, in the `tls` suite:
+  - a host TLS 1.3 client (Python's `ssl`) got the device certificate, the one `tls cert` prints, on TCP 443, and exchanged data: a channel and a blob on one kept connection, a range, a 304 and three refusals;
+  - `keystore` logged `SIGNED TlsServer`; `tls` logged `SERVED 10.0.2.2:...`;
+  - a peer that sent nothing was cut after 10 s, and `tls` logged `TIMED OUT`;
+  - `webcheck listen:8443`, whose client the shell badged `BADGE_TLS_NO_DEVICE`, was refused (`Denied`) and logged;
+  - a `tlsserver.pem` holding another key's certificate was refused at `listen` and logged;
+  - the rest of the `tls` suite passed beside it (the client's checks, the device key, the secrets, the passphrase, the TPM, the recovery key).
+- **The profile** (MC-11.9, the TCB) and `docs/network/services.md` say what the role is trusted with.
+- **Left:** aarch64; the gate.
 
 ## Related
 

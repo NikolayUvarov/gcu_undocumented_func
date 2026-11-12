@@ -1,6 +1,6 @@
 # 110-NET-0070 — `httpd` as a MIND Core service: the release layout over HTTPS from a read-only scope
 
-**Type:** network (a new service `httpd/`, `parse`, `libmind` `http`, the grants in `init` as a `KRN` part) · **Owner:** `NET` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) (stage 2) · **Roadmap:** track C, track D · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
+**Type:** network (a new service `httpd/`, `parse`, `libmind` `http_serve`, the grants in `init` as a `KRN` part) · **Owner:** `NET` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) (stage 2) · **Roadmap:** track C, track D · **Constitution:** MC-5.1, MC-5.2, MC-9.4, MC-10.3, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -56,6 +56,27 @@ What is missing is the server itself, and a parser of request heads outside it (
 - **The profile** (Article 9) and `docs/update/server.md` say what the MIND service is trusted with and what it is not.
 
 Not in this task: the two-machine suite of stage 2's criterion (one MIND machine serves, the other updates from it), which needs the updater's server address set to a MIND machine (a later task).
+
+## Progress
+
+**Made (2026-11-12)** on `claude/110-NET-0069-tls-server-role`, with 110-NET-0069:
+- **`libmind/src/http_serve.rs`:** `tools/httpd`'s rules for a server, without allocation: `parse_request`, `asked`, `matches_tag`, `resolve`.
+  - `tests/http_serve_host.rs` holds every case of `tools/httpd`'s head, range and layout tests, and what the parser's record keeps (its bounds, the first of each header, a body). It passes.
+  - **One difference:** a target over 1024 bytes is refused with 414, where `tools/httpd` reads it and answers 404.
+- **`parse.wit` 2.1 `http-request`,** served by `parse` (`mind::parse::to_request`, `from_request`). `tests/idl_fuzz_host.rs` lists its types and `tls.wit` 1.3's `Accepted`.
+- **`httpd/`:** one loop over its connections through `tls`, no call waiting for a peer; each head sent to `parse`; each file read from `init`'s read-only scope of `data/releases/`; the limits and the log as planned.
+- **`init`** (the `KRN` part):
+  - `httpd` after `tls` in the boot images, **handoff 33** (`common/abi.rs`, `tests/boot_abi_host.rs`);
+  - its grants; not started without the policy's flow (`THE POLICY GIVES IT NO LISTENING GRANT`);
+  - `NEEDS` on `netpolicy`, `tls` and `parse`.
+- **`webcheck listen:PORT`,** for the refusal of a program's client.
+- **`tests/qemu_smoke_probe.py` removed:** a probe of 000-KRN-0233, committed to `main` by mistake in the merge 1a18628c.
+- **Tested** (this container, x86, the `tls` suite; see 110-NET-0069): every request of the criteria and their log lines. Without the grant, `init` says `httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT`. The host tests the change touches pass.
+- **Docs:**
+  - `docs/update/server.md` and `server_RU.md` 0.3 (the MIND service);
+  - the profile's TCB and bootstrap's grants;
+  - the IDL table and `docs/api`.
+- **Left:** aarch64; the gate.
 
 ## Related
 
