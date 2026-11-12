@@ -9357,12 +9357,13 @@ def voice_at_start_check(args, disk, wav):
         vm = VM(args, disk.relative_to(ROOT).as_posix(), audio=wav, extra=["-nic", "user,model=virtio-net-pci"])
         try:
             vm.wait = LOADED_WAIT
-            start = vm.expect("VOICE CONTROL ON. F12 OR VOICE LISTEN", timeout=120)
-            pid = re.search(r"STARTED PID=(\d+) NAME=voice BACKGROUND", start)[1]
+            # From the whole log: the VM's own first commands may have taken it from the output.
+            vm.logged("VOICE CONTROL ON. F12 OR VOICE LISTEN", 0, timeout=120)
+            pid = re.search(r"STARTED PID=(\d+) NAME=voice BACKGROUND", ANSI.sub("", vm.log))[1]
             require(vm.command("dmesg -s shell", raw=True), "[SHELL] VOICE CONTROL ON AT THE SHELL'S START, AS data/voice.conf SAYS")
             log = ""
             for _ in range(240):
-                log += vm.command(f"logs {pid}")
+                log += vm.command(f"logs {pid}", raw=True)  # a PID from the raw log
                 if "[VOICE] READY" in log:
                     break
                 time.sleep(.25)
