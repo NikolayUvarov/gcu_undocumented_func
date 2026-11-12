@@ -196,3 +196,20 @@ Numbered on 2026-11-12 as [312-APP-0134](312-APP-0134-a-program-started-in-a-mem
 - **Why:** an agent (260) is to hold its own memory only (312's plan, "a memory domain is a capability, and an agent holds its own only"). Today no program can be started that way, so no QEMU run shows it.
 - **Then STO** runs `blocks` started so as the stand-in agent in the `store` suite: its journal, index and assertions in its domain, the volume's names and another domain's out of its reach, and the domain forgotten by the owner.
 
+
+## The shell takes a remote session's lines (for 112-NET-0072)
+
+**Asked by** KRN (the kernel session, `NET`) on 2026-11-12, for [112](112-our-own-ssh-server.md)'s console: "A login's console: the shell's commands, as the link's console gives them. A remote session gets no authority that asks the user on the machine's screen: firmware, update, network policy."
+
+- **What there is:**
+  - `sshd`, the SSH server (112-NET-0072, branch `claude/112-NET-0072-sshd`, not in `main` yet): logins with the keys the owner lists in `data/ssh/authorized_keys`, each line naming `console`, `files` or both, and SFTP into `data/`;
+  - for a key with the console's right, `sshd` sends each line (`exec`, or each line typed after `shell`) to `shell.wit`'s `run` on a client in its `SLOT_SHELL`, and the answer back to the session;
+  - `mind::process::BADGE_SHELL_REMOTE` (3) on that branch: the badge of the command client `init` is to mint for `sshd`. `init` lends it none yet, so no key's console right is used.
+- **Asked of the shell:** to take lines from a client badged `BADGE_SHELL_REMOTE` on a rule of their own, a remote session's:
+  - **never asked on the machine's screen:** nobody may be there, and a person there must not agree to what someone elsewhere typed. What `taken_by` would ask a program's client is run at once or refused, never asked;
+  - **refused:** the firmware's commands, `update` and `install`, `mode`, the network policy's changes (`NOT_OVER_THE_LINK`), `passphrase`, scripts (`msh`), and the screen's commands, as for any client;
+  - **run at once:** the rest of what the link's client in developer mode runs at once (`Client::Link`), for instance `ps`, `uptime`, `ls`, `cat`, `dmesg`;
+  - **logged** as the link's are, the command's word alone: `[SHELL] FOR AN SSH SESSION THE SHELL RAN PS`.
+  - The exact lists are APP's to choose; the line above is the rule asked for.
+- **Then KRN:** `init` mints that client for `sshd` and lends it in `SLOT_SHELL`, and the `tls` suite's `sshd_check` adds the console's criteria (`ssh mind@… ps` answers the shell's `ps`; a refused command says so; the log names its word).
+- **Why:** 112's acceptance criterion "`ssh` logs in with a listed key and runs `ps`" waits for it. `sshd`'s file copy does not.
