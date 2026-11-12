@@ -73,8 +73,12 @@ Time zones for `date` and `wm` (APP's), and serving time to other machines.
 
 **Stage 1 is done (2026-11-04).** [111-NET-0057](../issues-done/111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done) and [111-KRN-0206](../issues-done/111-KRN-0206-timed-among-the-boot-services.done) landed in `main` e28cfe4d.
 
+**Stage 2 (2026-11-12)** is split into [111-NET-0073](111-NET-0073-tls-alpn-and-the-exporter.md), `tls.wit` 1.4's ALPN and exporter; [111-NET-0074](111-NET-0074-a-grants-host-names.md), `socket.wit` 2.12's host names of a grant, which the certificate check needs; and [111-NET-0075](111-NET-0075-timed-with-nts.md), `timed`'s NTS. Two points of the plan changed, each for a reason:
+- **An NTS server is named by a TCP rule** of program `timed`, its NTP by a UDP rule of the same address, and a plain server by a UDP rule alone: the owner's line says which a server is.
+- **The wider bound:** when every server that agreed is NTS's, a step of more than 24 hours is taken at any set; two servers must still agree, and the floor holds.
+
 **Left:**
-- stage 2, NTS;
+- stage 2, NTS: 111-NET-0073, 0074, 0075;
 - `date sync`, which needs a service endpoint of `timed`;
 - a run on a machine.
 

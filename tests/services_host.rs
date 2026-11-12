@@ -61,8 +61,9 @@ fn the_block_store_starts_right_after_keystore() {
     // 308-KRN-0183: its secrets client is keystore's; every image once, the others in BOOT_SERVICES' order.
     let units = units();
     assert_eq!(at(&units, "blockstore"), at(&units, "keystore") + 1);
-    let rest: Vec<_> = units.iter().copied().filter(|u| !u.contains('#') && *u != "blockstore").collect();
-    assert_eq!(rest, BOOT_SERVICES.iter().copied().filter(|u| *u != "blockstore").collect::<Vec<_>>());
+    let late = |u: &&str| LATE.iter().any(|(name, _)| name == u);
+    let rest: Vec<_> = units.iter().copied().filter(|u| !u.contains('#') && !late(u)).collect();
+    assert_eq!(rest, BOOT_SERVICES.iter().copied().filter(|u| !late(u)).collect::<Vec<_>>());
     // A file cannot put keystore after it, and turning keystore off leaves the store on, without the client.
     let (plan, refused) = parsed("after keystore blockstore
 ");
@@ -73,6 +74,14 @@ fn the_block_store_starts_right_after_keystore() {
     assert!(!plan.off[at(&units, "blockstore")] && plan.needs[at(&units, "blockstore")].is_none());
     let order = order(&plan);
     assert!(order.iter().position(|u| *u == "keystore") < order.iter().position(|u| *u == "blockstore"));
+}
+
+#[test]
+fn timed_starts_right_after_tls() {
+    // 111-NET-0075: its NTS-KE client is tls's, lent only when tls runs.
+    let units = units();
+    assert_eq!(at(&units, "timed"), at(&units, "tls") + 1);
+    assert!(at(&units, "netpolicy") < at(&units, "timed"));
 }
 
 #[test]

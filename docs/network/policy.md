@@ -70,6 +70,7 @@ The network time service `timed` (111-NET-0057) asks the servers its lines name,
 - **Its lines** are ordinary rules of program `timed`, one a server: `timed 192.0.2.10 udp 123 4294967295`. Give each the longest term: the grant is made once at boot and is kept for the service's restarts.
 - **Without such a line** `init` does not start it: `[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER`.
 - **It reads them back** from its own grant (`grant-rules`, `idl/socket.wit` 2.10): its UDP rules with an address, at most 4, each on its port (123 when a line names none).
+- **An NTS server** (RFC 8915, 111-NET-0075) has two lines: `timed time.example tcp 4460 4294967295` for its key establishment, and `timed time.example udp 123 4294967295` for the NTP port the key establishment names. An address with a TCP rule is an NTS server, whose answers count only when authenticated; an address with a UDP rule alone is a plain one, used within stage 1's bounds.
 - **A server named by its host name** keeps the name (`idl/socket.wit` 2.12, 111-NET-0074): the broker registers with the grant the name each address was resolved from (`policy-names`, at most 8), and the grant reads them (`grant-names`). The grant still reaches only the address resolved when it was made; the name serves to check a server's certificate (NTS-KE, 111-NET-0075).
 - **What it takes** (`docs/profile/clocks.md`): at least two servers that agree within a second, never a time before its floor, and a step of more than 24 hours only at the first set after boot.
 
