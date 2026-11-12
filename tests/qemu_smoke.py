@@ -4329,6 +4329,36 @@ def assertion_node(subject, kind, interp, value=None, retracts=None, basis=None)
     return cbor_head(5, len(fields)) + b"".join(cbor_text(k) + v for k, v in fields)
 
 
+def embedding_node(subject, model, vector):
+    """An embedding (312-STO-0047) written here from its schema and the DAG-CBOR specification, not from libmind:
+    `{"v": 1, "model", "vector", "subject"}`, its keys in DAG-CBOR's order; the CIDs' binary forms and the components,
+    signed bytes, each a byte string."""
+    def string(data):
+        return cbor_head(2, len(data)) + data
+    return (cbor_head(5, 4) + cbor_text("v") + cbor_head(0, 1) + cbor_text("model") + string(model) + cbor_text("vector")
+            + string(bytes(c & 0xff for c in vector)) + cbor_text("subject") + string(subject))
+
+
+def vector_index(journal, seq, head, model, dims, vectors):
+    """A vector index of a journal (312-STO-0047) written here from its layout and the DAG-CBOR and directory schemas,
+    not from libmind: `vectors` the (sequence, components) of the model's embeddings up to `seq`, newest first, `head`
+    the binary CID of the entry at `seq`, `model` the model's. The root holds `manifest` and `vectors`, whose files
+    `0000`, `0001`, ... each hold as many vectors as a block of 16384 bytes does, a vector its sequence (u32,
+    little-endian), then its components. Returns the root's CID."""
+    def directory(entries):
+        node = cbor_head(5, 2) + cbor_text("v") + cbor_head(0, 1) + cbor_text("entries") + cbor_head(4, len(entries))
+        for name, kind, size, cid in sorted(entries):
+            node += cbor_head(4, 4) + cbor_head(3, len(name)) + name + cbor_head(0, kind) + cbor_head(0, size) + cbor_link(cid)
+        return cid_binary(0x71, node)
+    per = 16384 // (4 + dims)
+    files = [b"".join(s.to_bytes(4, "little") + bytes(c & 0xff for c in v) for s, v in vectors[k:k + per]) for k in range(0, len(vectors), per)]
+    listed = directory([(f"{k:04x}".encode(), 0, len(f), cid_binary(0x55, f)) for k, f in enumerate(files)])
+    manifest = (cbor_head(5, 9) + cbor_text("v") + cbor_head(0, 1) + cbor_text("seq") + cbor_head(0, seq) + cbor_text("dims") + cbor_head(0, dims)
+                + cbor_text("head") + cbor_link(head) + cbor_text("kind") + cbor_text("vector") + cbor_text("model") + cbor_head(2, len(model)) + model
+                + cbor_text("metric") + cbor_text("dot") + cbor_text("entries") + cbor_head(0, len(vectors)) + cbor_text("journal") + cbor_text(journal))
+    return cid_text(directory([(b"manifest", 0, len(manifest), cid_binary(0x55, manifest)), (b"vectors", 1, len(files), listed)]))
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -4574,6 +4604,7 @@ def store_suite(vm):
     store_journal_check(vm)
     store_index_check(vm)
     store_assertion_check(vm)
+    store_vector_check(vm)
     storefs_writers_check(vm)
     store_recovery_check(vm)
 
@@ -5126,6 +5157,102 @@ def store_assertion_check(vm):
     print("PASS: assertions: one in a memory domain is the domain's alone and goes with it", flush=True)
 
 
+def store_vector_check(vm):
+    """312-STO-0047: a vector index of a journal of embeddings through `blocks vector`. Five embeddings of four
+    components by a stand-in model are appended, and one by another model; each embedding's CID is the one this suite
+    computes from the schema. `build` publishes the index of the first model's, whose root this suite computes from the
+    layout (`vector_index`); `near` prints the k nearest by the dot product, highest first and of equal scores the newest
+    first, as the scores computed here order them, and `scan` the same without the index; `check` says EQUAL. After
+    another append, `near` says the index lacks one entry and still finds it first, and `check` says STALE 1; rebuilt,
+    EQUAL. A query of other dimensions or by another model is refused, and an embedding by the model of other dimensions
+    leaves its journal without an index. Where a memory domain is made (aarch64), an index in it is the domain's alone."""
+    import base64
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def cid_bytes(text):
+        return base64.b32decode(text[1:].upper() + "=" * (-len(text[1:]) % 8))
+    # The models and the objects are mentioned, never put.
+    model, other = cid_raw(b"a stand-in model of 4 dimensions"), cid_raw(b"another model")
+    held, heads, counts = [], [], {}
+
+    def add(vector, by=model, journal="memory"):
+        seq = counts[journal] = counts.get(journal, 0) + 1
+        subject = cid_raw(f"object {seq} of {journal}".encode())
+        cid = cid_text(cid_binary(0x55, embedding_node(cid_bytes(subject), cid_bytes(by), vector)))
+        out = blocks(f"vector add {journal} {subject} {by} {','.join(map(str, vector))}")
+        found = re.search(rf"^EMBEDDED {journal} SEQUENCE {seq} ENTRY (\S+) EMBEDDING {cid} OF {subject} BY {by}, {len(vector)} DIMS \(", out, re.M)
+        assert found, out
+        if journal == "memory":
+            held.append((seq, vector, subject, by))
+            heads.append(found[1])
+
+    def mine(upto):
+        return [(s, v) for s, v, _, by in reversed(held[:upto]) if by == model]
+
+    def build(version):
+        root = vector_index("memory", len(held), cid_bytes(heads[-1]), cid_bytes(model), 4, mine(len(held)))
+        require_all(blocks(f"vector build memory {model} 4"), f"INDEXED memory TO SEQUENCE {len(held)}: {len(mine(len(held)))} VECTORS OF 4 DIMS BY {model}",
+                    f"PUBLISHED vector/memory VERSION {version} ROOT {root} (")
+        return root
+
+    def near(query, k, at, state):
+        scored = sorted(((sum(a * b for a, b in zip(v, query)), s, subject) for s, v, subject, by in held if by == model), key=lambda x: (-x[0], -x[1]))[:k]
+        expected = [(str(s), str(score), subject) for score, s, subject in scored]
+        q = ",".join(map(str, query))
+        out = blocks(f"vector near memory {model} {q} {k}")
+        assert re.findall(r"^NEAR (\d+) SCORE (-?\d+) SUBJECT (\S+)\r?$", out, re.M) == expected, out
+        require_all(out, f"INDEX vector/memory OF memory AT SEQUENCE {at}: {state}", f"NEAREST {len(expected)} OF {len(mine(len(held)))} VECTORS IN memory, EACH CHECKED AGAINST THE JOURNAL")
+        out = blocks(f"vector scan memory {model} {q} {k}")
+        assert re.findall(r"^NEAR (\d+) SCORE (-?\d+) SUBJECT (\S+)\r?$", out, re.M) == expected, out
+        require(out, f"NEAREST {len(expected)} OF {len(mine(len(held)))} VECTORS IN memory, AN EXACT SCAN")
+        return [int(s) for s, _, _ in expected]
+    for vector in [[100, 0, 0, 0], [0, 100, 0, 0], [70, 70, 0, 0], [-100, 0, 0, 0], [0, 0, 100, 0]]:
+        add(vector)
+    add([1, 2, 3], by=other)
+    root = build(1)
+    assert near([90, 10, 0, 0], 3, 6, "CURRENT") == [1, 3, 2]
+    assert near([0, 0, 0, 1], 2, 6, "CURRENT") == [5, 4]
+    assert near([-128, 127, -1, 0], 5, 6, "CURRENT") == [4, 2, 3, 5, 1]
+    require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 6: EQUAL")
+    require(blocks(f"vector build memory {model} 4"), f"UNCHANGED vector/memory VERSION 1 ROOT {root}")
+    print("PASS: a vector index: built from five embeddings of a model, not another model's, to the root computed here; "
+          "each search answers the nearest by the scores computed here, each checked against the journal, as the exact "
+          "scan does; the check rebuilds it equal", flush=True)
+    # One more: the index lacks it, a search scores it and answers it first, the check says by how much.
+    add([95, 5, 0, 0])
+    assert near([90, 10, 0, 0], 2, 6, "STALE, LACKS 1 ENTRIES, SCANNED") == [1, 7]
+    require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 6: STALE 1")
+    build(2)
+    require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 7: EQUAL")
+    assert near([90, 10, 0, 0], 2, 7, "CURRENT") == [1, 7]
+    # Refused: a query of other dimensions, or by another model; k past 16.
+    require(blocks(f"vector near memory {model} 1,2,3 1"), "blocks: vector near memory: Dims(0)")
+    require(blocks(f"vector near memory {other} 1,2,3,4 1"), "blocks: vector near memory: Model")
+    require(blocks(f"vector near memory {model} 1,2,3,4 17"), "blocks: vector near memory: Count")
+    # An embedding by the model of other dimensions: its journal has no index, nothing published.
+    add([1, 2, 3, 4], journal="mixed")
+    add([1, 2, 3], journal="mixed")
+    require(blocks(f"vector build mixed {model} 4"), "blocks: vector build mixed: Dims(2)")
+    require(blocks("vector check mixed"), "blocks: vector check mixed: NotFound")
+    print("PASS: a vector index: after an append it is told one entry short and the search still finds that entry; "
+          "rebuilt, the check says equal; a query of other dimensions or by another model is refused, and a journal "
+          "with an embedding by the model of other dimensions has no index", flush=True)
+    made = blocks("domain new")
+    if "NoRandom" in made:
+        return
+    domain = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
+    require(blocks(f"-d {domain} vector add memory {held[0][2]} {model} 0,0,0,9"), "EMBEDDED memory SEQUENCE 1 ENTRY ")
+    require(blocks(f"-d {domain} vector build memory {model} 4"), "PUBLISHED vector/memory VERSION 1 ROOT")
+    out = blocks(f"-d {domain} vector near memory {model} 0,0,0,1 3")
+    assert re.findall(r"^NEAR (\d+) SCORE (-?\d+) SUBJECT", out, re.M) == [("1", "9")], out
+    require(out, "NEAREST 1 OF 1 VECTORS IN memory, EACH CHECKED AGAINST THE JOURNAL")
+    require(blocks(f"domain forget {domain}"), f"DOMAIN {domain} FORGOTTEN")
+    require(blocks(f"-d {domain} vector check memory"), f"blocks: domain {domain}: NotFound")
+    require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 7: EQUAL")
+    print("PASS: a vector index: one in a memory domain is the domain's alone and goes with it", flush=True)
+
+
 def storefs_writers_check(vm):
     """311-STO-0032, 0037: storefs's writers and scopes on the platform, through `fsstep`, which the shell starts with a
     writable scope of its file's directory on the store volume `w:` (the store's name `fs/w`), as for every program that
@@ -5243,7 +5370,9 @@ def store_domains_check(vm):
     """308-STO-0023: memory domains on the store's RAM disk. Where the processor gives random numbers (RNDR on aarch64's
     `max`), a domain is made; its blocks, names and journal (312-STO-0034) are its own, a domain's client makes no
     domain, and a forgotten domain is gone at once, its journal with it and its records then collected, while another
-    domain stands. Without a random source (x86's qemu64), no domain is made, and the store says why."""
+    domain stands. 312-STO-0046: a domain made with a limit of 8 KiB refuses a publish past it, while the volume takes
+    the same object, and says what it retains. Without a random source (x86's qemu64), no domain is made, and the store
+    says why."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
@@ -5266,6 +5395,19 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 312-STO-0046: a domain with a limit of its own: 5000 bytes fit in 8 KiB, 4000 more do not; the volume is not bound.
+    limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", blocks("domain new 8"))[1])
+    require(vm.service_logs("blockstore", "RETAINING AT MOST"), f"[BLOCKSTORE] DOMAIN {limited} MADE FOR BADGE")
+    fits = re.search(r"PUT (\S+) SIZE 5000", blocks(f"-d {limited} pattern 5000"))[1]
+    require(blocks(f"-d {limited} publish fits {fits}"), "PUBLISHED fits VERSION 1")
+    past = re.search(r"PUT (\S+) SIZE 4000", blocks(f"-d {limited} pattern 4000"))[1]
+    require(blocks(f"-d {limited} publish past {past}"), "blocks: publish past: Quota")
+    require(blocks(f"-d {limited} pin {past}"), "Quota")
+    require(blocks(f"domain usage {limited}"), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
+    require(blocks(f"domain usage {second}"), f"DOMAIN {second} RETAINS 0 BYTES, NO LIMIT OF ITS OWN")
+    require(blocks(f"-d {first} domain usage {limited}"), "Rights")
+    require(re.search(r"PUT (\S+) SIZE 4000", blocks("pattern 4000"))[1], past)
+    require(blocks(f"publish past {past}"), "PUBLISHED past VERSION 1")
     # 312-STO-0034: a journal in a domain is written through the domain's client, and is the domain's alone.
     require(blocks(f"-d {first} journal append log note in a domain"), "APPENDED log SEQUENCE 1 BOOT 1 ENTRY")
     require(blocks(f"-d {first} journal check log"), "CHECKED log: 1 ENTRIES, SEQUENCE 1 TO 1, AT VERSION 1: WHOLE")
@@ -5288,7 +5430,8 @@ def store_domains_check(vm):
     assert f"DOMAIN {first} " not in out and f"DOMAIN {second} LIVE" in out, out
     require(blocks(f"-d {second} get {note} ram:again.txt"), "GOT 12 BYTES")
     print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
-          "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole", flush=True)
+          "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
+          "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046)", flush=True)
 
 
 def fm_store_check(vm):
@@ -15601,6 +15744,10 @@ def store_disk_check(args, disk):
             kept = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {second} pattern 4000", raw=True))[1]
             require(vm.command(f"blocks -d {second} publish kept {kept}", raw=True), "PUBLISHED kept VERSION 1")
             require(vm.command(f"blocks domain forget {first}", raw=True), f"DOMAIN {first} FORGOTTEN")
+            # 312-STO-0046: a domain with a limit of 8 KiB, 5000 bytes named in it; its limit outlives the reboot.
+            limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", vm.command("blocks domain new 8", raw=True))[1])
+            held = re.search(r"PUT (\S+) SIZE 5000", vm.command(f"blocks -d {limited} pattern 5000", raw=True))[1]
+            require(vm.command(f"blocks -d {limited} publish held {held}", raw=True), "PUBLISHED held VERSION 1")
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
@@ -15619,6 +15766,9 @@ def store_disk_check(args, disk):
             require(mounted, f"[BLOCKSTORE] DOMAIN {second} OF BADGE")
             require(vm.command(f"blocks -d {first} resolve gone", raw=True), f"blocks: domain {first}: NotFound")
             require(vm.command(f"blocks -d {second} check {kept} pattern", raw=True), "CHECKED 4000 BYTES = PATTERN")
+            require(vm.command(f"blocks domain usage {limited}", raw=True), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
+            past = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {limited} pattern 4000", raw=True))[1]
+            require(vm.command(f"blocks -d {limited} publish past {past}", raw=True), "blocks: publish past: Quota")
             assert re.search(r"COLLECTED [1-9]\d* BLOCKS", vm.command("blocks collect", raw=True))
             domains = vm.command("blocks domains", raw=True)
             assert f"DOMAIN {first} " not in domains and f"DOMAIN {second} LIVE" in domains, domains
@@ -15626,7 +15776,8 @@ def store_disk_check(args, disk):
             vm.close()
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot; "
           "its writes report FLUSHED, and a name published there is found after the reboot; a memory domain forgotten before the "
-          "reboot stays unreadable after it and is collected, another one whole (308-STO-0023)", flush=True)
+          "reboot stays unreadable after it and is collected, another one whole (308-STO-0023); a domain's limit of 8 KiB, "
+          "its usage the same after the reboot, refuses a publish past it (312-STO-0046)", flush=True)
     # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
     with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
         big = Path(temp) / "store.img"

@@ -30,6 +30,7 @@ pub mod dag;
 pub mod index;
 pub mod journal;
 pub mod tree;
+pub mod vector;
 pub mod worktree;
 pub mod debug;
 pub mod deadline;
