@@ -12616,19 +12616,20 @@ def _nts_certificate(directory):
 
 
 def _timed_lines(vm, until, timeout=180):
-    # timed's log lines until `until` is among them (`logs` drains: each call gives the lines since the last).
-    log, deadline = "", time.monotonic() + timeout
-    while until not in log and time.monotonic() < deadline:
-        log += vm.command(f"logs {vm.services()['timed']}", raw=True)
-        if until not in log:
-            time.sleep(2)
-    return log
+    # timed's lines of the system log, all of them since boot, once `until` is among them (or the time is up).
+    deadline = time.monotonic() + timeout
+    while True:
+        log = vm.command("dmesg -s timed", raw=True)
+        if until in log or time.monotonic() > deadline:
+            return log
+        time.sleep(3)
 
 
 def nts_check(args, disk, cpu, certificates):
     """111-NET-0073, 0074, 0075: timed sets the clock from NTS servers (RFC 8915) on the host. The policy names four by
     the host name mind.test, which the test's resolver gives as 10.0.2.2: NTS-KE through tls agrees on ntske/1, checks
-    the certificate for that name and takes the keys from the exporter; two honest servers agree and set the clock from
+    the certificate for that name and takes the keys from the exporter (a name that waited for the network at boot is
+    added to the grant once it resolves); two honest servers agree and set the clock from
     2024, a third's answers are forged and refused as not authentic, a fourth's are authentic answers to other requests
     and refused as not ours; the cookies come back to eight. A second boot: a server that agrees on no application
     protocol and one whose certificate no root vouches for are refused at NTS-KE, so nothing is set."""
@@ -12656,9 +12657,13 @@ def nts_check(args, disk, cpu, certificates):
             require(log, f"[TIMED] 10.0.2.2:{servers[3].ntp_port}: ITS ANSWER REFUSED, ITS UNIQUE IDENTIFIER IS NOT OUR REQUEST'S")
             require_all(log, "(WAS 2024-01-01 ", "2 OF 4 SERVERS AGREED, 2 BY NTS")
             assert all(s.kes == 1 and s.asked >= 1 for s in servers), [(s.kes, s.asked) for s in servers]
-            tls_log = vm.service_logs("tls")
+            tls_log = vm.command("dmesg -s tls", raw=True)
             assert tls_log.count("mind.test VERIFIED, PROTOCOL ntske/1, SUITE") >= 4, tls_log[-3000:]
-            require(vm.service_logs("netpolicy"), "[NETPOLICY] timed: mind.test IS 10.0.2.2")
+            # Resolved at the grant, or (a boot service's grant made before DHCP) once the network came up (111-NET-0074).
+            policy_log = vm.command("dmesg -s netpolicy", raw=True)
+            require(policy_log, "[NETPOLICY] timed: mind.test IS 10.0.2.2")
+            if "WAITS FOR THE NETWORK" in policy_log:
+                require(policy_log, "RULES ADDED, ITS HOST NAMES RESOLVED ONCE THE NETWORK CAME UP")
             shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
             gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
             assert gap < 3, (shown, gap)
@@ -12675,7 +12680,7 @@ def nts_check(args, disk, cpu, certificates):
             assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[0].ke_port}\) FAILED: TLS REFUSED IT: Handshake; AGAIN IN 10 S", log), log[-4000:]
             assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[1].ke_port}\) FAILED: TLS REFUSED IT: Certificate; AGAIN IN 10 S", log), log[-4000:]
             require_all(log, f"NTS-KE WITH mind.test (10.0.2.2:{servers[2].ke_port}): 8 COOKIES", "[TIMED] NOTHING SET: FEWER THAN 2 ANSWERS (1 OF 1 ANSWERED)")
-            tls_log = vm.service_logs("tls")
+            tls_log = vm.command("dmesg -s tls", raw=True)
             require(tls_log, "mind.test REFUSED: IT DID NOT AGREE ON THE PROTOCOL ntske/1")
             require(tls_log, "mind.test REFUSED: CERTIFICATE")
             assert "[TIMED] SET " not in log, log[-3000:]

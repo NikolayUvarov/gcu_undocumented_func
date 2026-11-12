@@ -115,6 +115,16 @@ impl Policy {
         grant.names = names.to_vec();
         Ok(())
     }
+    /// Rules added to grant `badge`'s after it was made: its host names that resolved once the network was up (socket.wit
+    /// 2.12). Its term and volume stay as they were.
+    pub fn add_rules(&mut self, badge: u16, rules: &[Rule]) -> Result<(), Error> {
+        if rules.iter().any(|r| r.address == 0) { return Err(Error::Invalid); }
+        let grant = self.grants.iter_mut().find(|g| g.badge == badge).ok_or(Error::NotFound)?;
+        let new: Vec<Rule> = rules.iter().copied().filter(|r| !grant.rules.contains(r)).collect();
+        if grant.rules.len() + new.len() > 16 { return Err(Error::Limit); }
+        grant.rules.extend(new);
+        Ok(())
+    }
     /// A live grant's host names (socket.wit 2.12).
     pub fn names(&self, badge: u16, now: u64) -> Result<&[Named], Error> { self.live(badge, now).map(|g| g.names.as_slice()) }
     /// Any request of a live grant (sockets it already holds).

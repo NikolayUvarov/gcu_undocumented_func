@@ -51,7 +51,9 @@
 ///
 /// 2.12 (111-NET-0074): a grant's host names. The broker registers the name each of a grant's addresses was resolved
 /// from (`policy-names`), and the grant reads them (`grant-names`), so that a service the policy gives its servers by
-/// name checks a server's certificate for that name. The grant still reaches only the address resolved when it was made.
+/// name checks a server's certificate for that name. The grant still reaches only the addresses resolved for it. A
+/// name the broker could not resolve for want of a network when it made the grant (a boot service's, before DHCP) it
+/// resolves once the network is up, and adds the rule to the live grant (`policy-add`).
 package mind:socket@2.12.0;
 
 interface socket {
@@ -186,4 +188,8 @@ interface socket {
     /// The host names behind the caller's own grant's rules (2.12): a name for each address the broker resolved one
     /// to. `denied`: not a live grant's badge.
     grant-names: func() -> result<list<named, 8>, error>;
+    /// Adds `rules` to grant `badge`'s, keeping the term and volume it has (policy badge, 2.12): the destinations of
+    /// its policy's host names that resolved only after it was made. A rule it holds already is left as it is.
+    /// `not-found`: no grant with that badge; `invalid`: a rule of address 0; `limit`: past 16 rules.
+    policy-add: func(badge: u16, rules: list<rule, 16>) -> result<_, error>;
 }

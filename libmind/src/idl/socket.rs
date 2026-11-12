@@ -52,7 +52,9 @@
 //!
 //! 2.12 (111-NET-0074): a grant's host names. The broker registers the name each of a grant's addresses was resolved
 //! from (`policy-names`), and the grant reads them (`grant-names`), so that a service the policy gives its servers by
-//! name checks a server's certificate for that name. The grant still reaches only the address resolved when it was made.
+//! name checks a server's certificate for that name. The grant still reaches only the addresses resolved for it. A
+//! name the broker could not resolve for want of a network when it made the grant (a boot service's, before DHCP) it
+//! resolves once the network is up, and adds the rule to the live grant (`policy-add`).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -683,6 +685,24 @@ pub fn grant_names(endpoint: Endpoint) -> Result<core::result::Result<List<Named
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Named, 8> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Adds `rules` to grant `badge`'s, keeping the term and volume it has (policy badge, 2.12): the destinations of
+/// its policy's host names that resolved only after it was made. A rule it holds already is left as it is.
+/// `not-found`: no grant with that badge; `invalid`: a rule of address 0; `limit`: past 16 rules.
+pub fn policy_add(endpoint: Endpoint, badge: u16, rules: &[Rule]) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        badge.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<Rule, 16>(rules, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 32 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -720,6 +740,7 @@ pub enum Request<'a> {
     Withdrawn,
     PolicyNames { badge: u16, names: List<Named, 8> },
     GrantNames,
+    PolicyAdd { badge: u16, rules: List<Rule, 16> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -946,6 +967,15 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::GrantNames, call))
         }
+        32 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let badge = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let rules = <List<Rule, 16> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::PolicyAdd { badge, rules }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -1073,4 +1103,8 @@ pub fn reply_policy_names(call: Call, value: core::result::Result<(), Error>) ->
 pub fn reply_grant_names(call: Call, value: core::result::Result<&[Named], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<Named, 8>(value, w))
+}
+pub fn reply_policy_add(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

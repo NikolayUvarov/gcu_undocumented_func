@@ -41,7 +41,17 @@ const SECONDS: u32 = 3600; // a line without a term
 const BYTES: u64 = 16 * 1024 * 1024; // a line without a volume
 const ANSWER_MS: u64 = 60_000; // a question no one answers in this time is refused (000-NET-0049)
 
-struct Grant { badge: u16, program: Text<16>, cap: usize, rules: u8, taken: bool, pid: u64 }
+const PENDING_MS: u64 = 2000; // how often a host name that waits for the network is looked up again (111-NET-0074)
+
+// A line whose host name did not resolve for want of a network when its grant was made (a boot service's, before
+// DHCP): looked up again once the network is up, and its rule added to the live grant (socket.wit 2.12).
+struct Pending { name: Text<253>, port: u16, protocol: Protocol, resolver: (u32, u16) }
+
+struct Grant { badge: u16, program: Text<16>, cap: usize, rules: u8, taken: bool, pid: u64, names: Vec<Named>, pending: Vec<Pending> }
+
+// What the policy names for a program: its rules, listening rules, the host names its rules were resolved from, the
+// lines that wait for the network, its term and volume.
+struct Policy { rules: Vec<Rule>, listen: Vec<ListenRule>, names: Vec<Named>, pending: Vec<Pending>, seconds: u32, bytes: u64 }
 
 fn parse_ip(text: &str) -> Option<u32> {
     let mut address = [0u8; 4]; let mut parts = text.split('.');
@@ -95,16 +105,20 @@ fn is_name(word: &str) -> bool {
         && word.split('.').all(|label| !label.is_empty() && label.len() <= 63 && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
 }
 
+// What a lookup gave: an address, a wait for the network (none is up yet, 111-NET-0074), or nothing (logged).
+enum Looked { Found(u32), Later, Never }
+
 // The address of `name` now (351-NET-0003): the grant keeps it, later changes of the name do not follow.
-fn lookup(program: &str, name: &str, (server, port): (u32, u16)) -> Option<u32> {
+fn lookup(program: &str, name: &str, (server, port): (u32, u16)) -> Looked {
     match socket::resolve(CONTROL, name, server, port, 3000) {
         Ok(Ok(address)) if address != 0 => {
             let [a, b, c, d] = address.to_be_bytes();
             mind::println!("[NETPOLICY] {}: {} IS {}.{}.{}.{}", program, name, a, b, c, d);
-            Some(address)
+            Looked::Found(address)
         }
-        Ok(Err(error)) => { mind::println!("[NETPOLICY] {}: {} NOT RESOLVED ({:?})", program, name, error); None }
-        _ => { mind::println!("[NETPOLICY] {}: {} NOT RESOLVED (NO ANSWER)", program, name); None }
+        Ok(Err(socket::Error::NoNetwork)) => Looked::Later,
+        Ok(Err(error)) => { mind::println!("[NETPOLICY] {}: {} NOT RESOLVED ({:?})", program, name, error); Looked::Never }
+        _ => { mind::println!("[NETPOLICY] {}: {} NOT RESOLVED (NO ANSWER)", program, name); Looked::Never }
     }
 }
 
@@ -114,10 +128,12 @@ fn lookup(program: &str, name: &str, (server, port): (u32, u16)) -> Option<u32> 
 // that does not resolve gives no rule. The grant gets the shortest term and the smallest volume any of its lines names
 // (the defaults where none does).
 // Its `listen` lines (110-NET-0052) give the ports it may listen on and the networks peers may connect from. The host
-// names its rules were resolved from come with them, one an address, at most 8 (socket.wit 2.12, 111-NET-0074).
-fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, Vec<ListenRule>, Vec<Named>, u32, u64) {
+// names its rules were resolved from come with them, one an address, at most 8 (socket.wit 2.12, 111-NET-0074); a
+// name that waits for the network is kept as a pending line.
+fn policy_for(program: &str, dns: u32) -> Policy {
     let (mut rules, mut listen, mut names, mut seconds, mut bytes) = (Vec::new(), Vec::new(), Vec::<Named>::new(), None::<u32>, None::<u64>);
-    let Some(text) = policy_text() else { return (rules, listen, names, 0, 0) };
+    let mut pending = Vec::new();
+    let Some(text) = policy_text() else { return Policy { rules, listen, names, pending, seconds: 0, bytes: 0 } };
     let text = text.as_str();
     let resolver = resolver(text);
     for line in text.lines() {
@@ -148,12 +164,29 @@ fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, Vec<ListenRule>, Vec<Named
         } else {
             let protocol = match words.get(2).map(|w| w.to_ascii_lowercase()) { Some(p) if p == "tcp" => Protocol::Tcp, Some(p) if p == "udp" => Protocol::Udp, Some(p) if p == "icmp" => Protocol::Icmp, _ => continue };
             let named = parse_ip(words[1]).is_none() && is_name(words[1]);
-            let address = parse_ip(words[1]).or_else(|| if named { lookup(program, words[1], resolver) } else { None });
+            let port = words.get(3).and_then(|p| p.parse().ok()).unwrap_or(0);
+            let address = match (parse_ip(words[1]), named) {
+                (Some(address), _) => Some(address),
+                (None, false) => None,
+                (None, true) => match lookup(program, words[1], resolver) {
+                    Looked::Found(address) => Some(address),
+                    Looked::Never => None,
+                    Looked::Later => {
+                        if rules.len() + pending.len() < 16 {
+                            if let Some(name) = Text::new(words[1]) {
+                                mind::println!("[NETPOLICY] {}: {} WAITS FOR THE NETWORK: ITS RULE IS ADDED TO THE GRANT ONCE IT RESOLVES", program, words[1]);
+                                pending.push(Pending { name, port, protocol, resolver });
+                            }
+                        }
+                        None
+                    }
+                },
+            };
             address.filter(|&a| a != 0).map(|address| {
                 if named && names.len() < 8 && !names.iter().any(|n| n.address == address) {
                     if let Some(name) = Text::new(words[1]) { names.push(Named { address, name }); }
                 }
-                Rule { address, port: words.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), protocol }
+                Rule { address, port, protocol }
             })
         };
         let Some(rule) = rule else { continue };
@@ -163,7 +196,7 @@ fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, Vec<ListenRule>, Vec<Named
     }
     // A name whose rule did not fit among the 16 is not registered.
     names.retain(|n| rules.iter().any(|r| r.address == n.address));
-    (rules, listen, names, seconds.unwrap_or(SECONDS), bytes.unwrap_or(BYTES))
+    Policy { rules, listen, names, pending, seconds: seconds.unwrap_or(SECONDS), bytes: bytes.unwrap_or(BYTES) }
 }
 
 // The policy in force (108): the changed one, a change cut short before it replaced it, or the shipped one.
@@ -241,8 +274,8 @@ impl Broker {
         if program.is_empty() { return Err(Error::Invalid); }
         if self.grants.len() >= GRANTS { return Err(Error::Limit); }
         let dns = match socket::config(CONTROL) { Ok(Ok(config)) => config.dns, _ => 0 };
-        let (rules, listen, names, seconds, bytes) = policy_for(program, dns);
-        if rules.is_empty() && listen.is_empty() { mind::println!("[NETPOLICY] REFUSED {}: NO POLICY", program); return Err(Error::NoPolicy); }
+        let Policy { rules, listen, names, pending, seconds, bytes } = policy_for(program, dns);
+        if rules.is_empty() && listen.is_empty() && pending.is_empty() { mind::println!("[NETPOLICY] REFUSED {}: NO POLICY", program); return Err(Error::NoPolicy); }
         let badge = self.badge();
         let cap = ipc::mint_badged(SOURCE, CAP_WRITE | CAP_GRANT, badge).map_err(|_| Error::Limit)?;
         let set = matches!(socket::policy_set(CONTROL, badge, &rules, seconds, bytes), Ok(Ok(())))
@@ -254,9 +287,11 @@ impl Broker {
             mind::println!("[NETPOLICY] REFUSED {}: THE NETWORK STACK DID NOT TAKE THE GRANT", program);
             return Err(Error::NoNetwork);
         }
-        self.grants.push(Grant { badge, program: Text::new(program).unwrap_or_default(), cap, rules: rules.len() as u8, taken: false, pid: 0 });
+        let waiting = pending.len();
+        self.grants.push(Grant { badge, program: Text::new(program).unwrap_or_default(), cap, rules: rules.len() as u8, taken: false, pid: 0, names, pending });
         let browsing = rules.iter().filter(|r| r.address == 0).count();
-        mind::println!("[NETPOLICY] GRANT {} TO {}: {} RULES{}, {} S, {} BYTES{}", badge, program, rules.len(),
+        let waits = if waiting > 0 { alloc::format!(", {} WAITING FOR THE NETWORK", waiting) } else { String::new() };
+        mind::println!("[NETPOLICY] GRANT {} TO {}: {} RULES{}{}, {} S, {} BYTES{}", badge, program, rules.len(), waits,
             if browsing > 0 { ", BROWSING ANY PUBLIC ADDRESS" } else { "" }, seconds, bytes,
             if may_change_policy(launcher) { "" } else { ", ASKED BY A LAUNCH-ONLY CLIENT" });
         // Each port it may listen on, with the networks peers may connect from (MC-10.3).
@@ -283,6 +318,33 @@ impl Broker {
     }
 
     // Grants whose term or volume ran out, or whose process ended.
+    // The host names that waited for the network, looked up again (111-NET-0074): each that resolves adds its rule to
+    // its live grant, with its name; one the network answers without an address is dropped, as at the grant.
+    fn resolve_pending(&mut self) {
+        for grant in self.grants.iter_mut().filter(|g| !g.pending.is_empty()) {
+            let program = String::from(grant.program.as_str());
+            let mut found = Vec::new();
+            grant.pending.retain(|p| match lookup(&program, p.name.as_str(), p.resolver) {
+                Looked::Found(address) => { found.push((Rule { address, port: p.port, protocol: p.protocol }, p.name)); false }
+                Looked::Later => true,
+                Looked::Never => false,
+            });
+            if found.is_empty() { continue; }
+            let rules: Vec<Rule> = found.iter().map(|(r, _)| *r).collect();
+            for (rule, name) in &found {
+                if grant.names.len() < 8 && !grant.names.iter().any(|n| n.address == rule.address) { grant.names.push(Named { address: rule.address, name: *name }); }
+            }
+            let added = matches!(socket::policy_add(CONTROL, grant.badge, &rules), Ok(Ok(())))
+                && matches!(socket::policy_names(CONTROL, grant.badge, &grant.names), Ok(Ok(())));
+            if added {
+                grant.rules = grant.rules.saturating_add(rules.len() as u8);
+                mind::println!("[NETPOLICY] GRANT {} TO {}: {} RULES ADDED, ITS HOST NAMES RESOLVED ONCE THE NETWORK CAME UP", grant.badge, program, rules.len());
+            } else {
+                mind::println!("[NETPOLICY] GRANT {} TO {}: THE NETWORK STACK DID NOT TAKE {} RULES OF ITS HOST NAMES", grant.badge, program, rules.len());
+            }
+        }
+    }
+
     fn expire(&mut self) {
         let mut index = 0;
         while index < self.grants.len() {
@@ -335,7 +397,13 @@ impl Broker {
             mind::println!("[NETPOLICY] QUESTION {} OF {}: REFUSED BY THE USER", id, program);
             return Ok(());
         }
-        let address = parse_ip(host).or_else(|| if is_name(host) { lookup(program, host, resolver(&policy_text().unwrap_or_default())) } else { None });
+        let address = parse_ip(host).or_else(|| if !is_name(host) { None } else {
+            match lookup(program, host, resolver(&policy_text().unwrap_or_default())) {
+                Looked::Found(address) => Some(address),
+                Looked::Later => { mind::println!("[NETPOLICY] {}: {} NOT RESOLVED (NoNetwork)", program, printable(host)); None }
+                Looked::Never => None,
+            }
+        });
         let Some(address) = address.filter(|&a| a != 0) else {
             let _ = socket::decide(CONTROL, id, 0, false, false);
             mind::println!("[NETPOLICY] QUESTION {} OF {}: {} NOT RESOLVED, REFUSED", id, program, printable(host));
@@ -434,10 +502,11 @@ fn main(_info: &'static BootInfo) {
     let mut broker = Broker { grants: Vec::new(), next: 0, preferred: None, off: None, told: 0, read: false, asked: Vec::new() };
     mind::println!("[NETPOLICY] READY: POLICY FROM {}", POLICY_FILE);
     broker.prefer(true, mind::time::uptime_ms() as u64);
-    let mut checked = 0u64;
+    let (mut checked, mut looked) = (0u64, 0u64);
     loop {
         let now = mind::time::uptime_ms() as u64;
         if now - checked >= 1000 { checked = now; broker.expire(); broker.questions(now); }
+        if now - looked >= PENDING_MS { looked = now; broker.resolve_pending(); }
         if now - broker.told >= PREFER_MS { broker.prefer(false, now); }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) else { continue };
         if !request.is_call { continue; }

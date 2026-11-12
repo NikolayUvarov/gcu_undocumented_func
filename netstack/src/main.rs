@@ -1023,6 +1023,10 @@ fn main(_info: &'static BootInfo) {
                 let result = if matches!(policy::access(badge), Access::Policy) { policy.set_names(grant, names.as_slice()) } else { Err(Error::Denied) };
                 let _ = socket::reply_policy_names(call, result); continue;
             }
+            socket::Request::PolicyAdd { badge: grant, rules } => {
+                let result = if matches!(policy::access(badge), Access::Policy) { policy.add_rules(grant, rules.as_slice()) } else { Err(Error::Denied) };
+                let _ = socket::reply_policy_add(call, result); continue;
+            }
             socket::Request::GrantNames => {
                 let result = match policy::access(badge) { Access::Grant(grant) => policy.names(grant, now), _ => Err(Error::Denied) };
                 let _ = socket::reply_grant_names(call, result); continue;
@@ -1117,6 +1121,7 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::Withdrawn => socket::reply_withdrawn(call, Err(error)),
         socket::Request::PolicyNames { .. } => socket::reply_policy_names(call, Err(error)),
         socket::Request::GrantNames => socket::reply_grant_names(call, Err(error)),
+        socket::Request::PolicyAdd { .. } => socket::reply_policy_add(call, Err(error)),
     }
 }
 

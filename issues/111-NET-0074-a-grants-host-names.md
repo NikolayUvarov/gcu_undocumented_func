@@ -13,9 +13,14 @@ NTS-KE checks the server's certificate for the server's name (RFC 8915, section 
 1. **`socket.wit` 2.12** (MC-12.4):
    - `record named { address, name }`;
    - `policy-names(badge, names)`, for the policy badge: the names behind a grant's addresses, replacing what it had. An empty name, or an address no rule of the grant names, is refused (`invalid`).
-   - `grant-names()`, for a live grant's own badge.
+   - `grant-names()`, for a live grant's own badge;
+   - `policy-add(badge, rules)`, for the policy badge: rules added to a live grant, its term and volume kept; at most 16 rules in all.
 2. **`netpolicy`** registers, with each grant it makes, the name of each address it resolved from a name, at most 8, the first name of an address. A grant the stack does not take whole is refused as before.
-3. **The grant still reaches only the address** resolved when it was made (351-NET-0003): the name changes nothing of what it may reach.
+3. **The grant still reaches only the addresses** resolved for it (351-NET-0003): the name changes nothing of what it may reach.
+4. **A name that waits for the network.** A boot service's grant is made before DHCP has given a DNS server, so its names do not resolve (`NoNetwork`). Found by the first run of 111-NET-0075's QEMU check: the grant of `timed` held only the lines whose names happened to resolve as DHCP finished. So:
+   - `netpolicy` keeps such a line as pending, makes the grant even when it holds nothing else yet, and logs `WAITS FOR THE NETWORK`;
+   - every 2 s it looks the name up again; one that resolves has its rule added to the live grant (`socket.wit` 2.12 `policy-add`, its term and volume kept) with its name; one the network answers without an address is dropped, as at the grant;
+   - a name the user's answer to a question names is refused without a network, as before.
 
 ## Acceptance criteria
 
@@ -24,7 +29,7 @@ NTS-KE checks the server's certificate for the server's name (RFC 8915, section 
 
 ## Progress
 
-**Made (2026-11-12)** on `claude/111-NET-0073-tls-alpn-exporter`: `idl/socket.wit` 2.12 and its bindings; `netstack`'s `set_names` and `names` (`netstack/src/policy.rs`); `netpolicy`'s names in `policy_for` and `policy-names` at the grant. Built for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`; `tests/idl_test.py` passes. Docs: `docs/network/policy.md`, `docs/idl/README.md`.
+**Made (2026-11-12)** on `claude/111-NET-0073-tls-alpn-exporter`: `idl/socket.wit` 2.12 and its bindings; `netstack`'s `set_names`, `names` and `add_rules` (`netstack/src/policy.rs`); `netpolicy`'s names in `policy_for` and `policy-names` at the grant, and its pending names (`Pending`, `resolve_pending`, `policy-add`). Built for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`; `tests/idl_test.py` passes. Docs: `docs/network/policy.md`, `docs/idl/README.md`.
 
 **Left:** the QEMU criterion, with 111-NET-0075; the gate.
 
