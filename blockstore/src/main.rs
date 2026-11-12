@@ -271,6 +271,15 @@ fn domain_made(made: Result<u16, Error>, owner: u16, pid: u64, kib: u32) {
     }
 }
 
+// A client of the owner's live domain `id` with `rights`: not-found for none, rights for another owner's (308-STO-0023).
+fn lend_domain(store: &Result<Store<'static, Medium>, Error>, clients: &mut DomainClients, id: u16, rights: u16, owner: u16) -> Result<usize, Error> {
+    store.as_ref().map_err(|e| *e).and_then(|s| match s.domains().find(|d| d.id == id && !d.forgotten) {
+        None => Err(Error::NotFound),
+        Some(d) if d.owner != owner => Err(Error::Rights),
+        Some(_) => clients.client(id, rights, owner),
+    })
+}
+
 fn medium(side: Side) -> &'static str { match side { Side::Store => "THE STORE'S MEDIUM", Side::Copy => "THE COPY" } }
 
 // What the copy did, logged (309-STO-0040).
@@ -572,6 +581,7 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Names { .. }, call)) if refused(Operation::Names) => blockstore::reply_names(call, Err(Error::Rights)),
             Ok((Request::DomainCreate, call)) if refused(Operation::DomainCreate) || through_domain(Operation::DomainCreate) => blockstore::reply_domain_create(call, Err(Error::Rights)),
             Ok((Request::DomainClient { .. }, call)) if refused(Operation::DomainClient) || through_domain(Operation::DomainClient) => blockstore::reply_domain_client(call, Err(Error::Rights)),
+            Ok((Request::DomainClientWith { .. }, call)) if refused(Operation::DomainClient) || through_domain(Operation::DomainClient) => blockstore::reply_domain_client_with(call, Err(Error::Rights)),
             Ok((Request::DomainForget { .. }, call)) if refused(Operation::DomainForget) || through_domain(Operation::DomainForget) => blockstore::reply_domain_forget(call, Err(Error::Rights)),
             Ok((Request::Domains, call)) if refused(Operation::Domains) || through_domain(Operation::Domains) => blockstore::reply_domains(call, Err(Error::Rights)),
             Ok((Request::DomainCreateLimited { .. }, call)) if refused(Operation::DomainCreate) || through_domain(Operation::DomainCreate) => blockstore::reply_domain_create_limited(call, Err(Error::Rights)),
@@ -761,13 +771,16 @@ fn main(_info: &'static BootInfo) {
                 blockstore::reply_domain_usage(call, usage.as_ref().map_err(|e| *e))
             }
             Ok((Request::DomainClient { id }, call)) => {
-                let cap = store.as_ref().map_err(|e| *e).and_then(|s| match s.domains().find(|d| d.id == id && !d.forgotten) {
-                    None => Err(Error::NotFound),
-                    Some(d) if d.owner != owner => Err(Error::Rights),
-                    Some(_) => clients.client(id, rights, owner),
-                });
+                let cap = lend_domain(&store, &mut clients, id, rights, owner);
                 if cap.is_ok() { mind::println!("[BLOCKSTORE] DOMAIN {}'S CLIENT LENT TO PID {} (BADGE {})", id, pid, badge); }
                 blockstore::reply_domain_client(call, cap)
+            }
+            // A client of the domain with fewer rights than the caller's (312-STO-0049).
+            Ok((Request::DomainClientWith { id, rights: wanted }, call)) => {
+                let narrowed = mind::blockstore::narrowed(rights, wanted);
+                let cap = narrowed.ok_or(Error::Invalid).and_then(|r| lend_domain(&store, &mut clients, id, r, owner));
+                if cap.is_ok() { mind::println!("[BLOCKSTORE] DOMAIN {}'S CLIENT LENT TO PID {} (BADGE {}) WITH RIGHTS {}", id, pid, badge, narrowed.unwrap_or(0)); }
+                blockstore::reply_domain_client_with(call, cap)
             }
             Ok((Request::DomainForget { id }, call)) => {
                 let done = store.as_mut().map_err(|e| *e).and_then(|s| s.domain_forget(id, owner).map_err(error));

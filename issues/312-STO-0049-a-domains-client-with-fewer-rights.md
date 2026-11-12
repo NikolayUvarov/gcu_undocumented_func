@@ -1,6 +1,6 @@
 # 312-STO-0049 — A domain's client with fewer rights than its owner's
 
-**Type:** service (storage), interface · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.md) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.7, MC-4.11, MC-11.5
+**Type:** service (storage), interface · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (2026-11-12) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.md) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.7, MC-4.11, MC-11.5
 
 Asked by APP on 2026-11-12 in `requests-STO.md`, for [312-APP-0134](312-APP-0134-a-program-started-in-a-memory-domain.md)'s read-only start (`run -d` of a program that asks only for `REQUEST_BLOCKSTORE_READ`).
 
@@ -19,6 +19,15 @@ Asked by APP on 2026-11-12 in `requests-STO.md`, for [312-APP-0134](312-APP-0134
    - the recovery right never: a domain's client recovers nothing.
 2. **Its clients are the domain's** as `domain-client`'s are: revoked when the domain is forgotten, refused through a domain's client.
 3. **`blocks -dr <id>`** runs a command through a client of the domain that may only read.
+
+## Departure from the plan (2026-11-12)
+
+The QEMU criterion "rights the caller lacks, and none, refused (`invalid`)" is checked on the host, not in QEMU:
+- **Why:** no program on the platform asks for a right it lacks. `blocks -dr` asks for get, which the shell's writing client holds, and `blocksro`'s read-only client is another owner, so it gets `rights` first.
+- **Instead:**
+  - `tests/blockstore_host.rs` holds `narrowed` to the rule for every caller's badge and every rights asked;
+  - the service answers `invalid` exactly when `narrowed` gives none;
+  - QEMU checks `blocksro -dr` refused (`rights`).
 
 ## Acceptance criteria
 
