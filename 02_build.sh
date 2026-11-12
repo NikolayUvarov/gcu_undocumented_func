@@ -161,7 +161,6 @@ USER_CRATES=(
     "pins:pinmap:pinmap.elf"
     "wifi:wifi:wifi.elf"
     "recovery:recovery:recovery.elf"
-    "clipboard:clipboard:clipboard.elf"
     "camera:camera:camera.elf"
     "efivar:efivar:efivar.elf"
     "dictate:dictate:dictate.elf"
