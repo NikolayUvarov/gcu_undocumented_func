@@ -12700,8 +12700,9 @@ def tls_suite(args, disk):
     passphrase_wait_check(args, with_entropy)
     tpm_check(args, with_entropy)
     recovery_key_check(args, with_entropy)
-    httpd_check(args, disk, with_entropy, certificates)
+    # Before httpd_check, which removes the certificates' directory when it ends.
     nts_check(args, disk, with_entropy, certificates)
+    httpd_check(args, disk, with_entropy, certificates)
 
 
 def _cmac(key, data):
