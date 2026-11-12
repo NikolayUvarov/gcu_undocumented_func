@@ -1,6 +1,6 @@
 # 311-KRN-0203 — A lent files client and a held `storefs` client: store volumes go to `storefs` — done
 
-**Type:** `libmind` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) (APP's request for [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.done)) · **Constitution:** MC-3.1
+**Type:** `libmind` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.done) (APP's request for [311-APP-0121](311-APP-0121-the-shell-lends-a-storefs-client.done)) · **Constitution:** MC-3.1
 
 ## Problem
 

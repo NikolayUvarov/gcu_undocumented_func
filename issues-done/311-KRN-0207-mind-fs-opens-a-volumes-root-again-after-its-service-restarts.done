@@ -1,6 +1,6 @@
 # 311-KRN-0207 — `mind::fs` opens a volume's root again after its service restarts — done
 
-**Type:** `libmind` (`mind::fs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-6.6
+**Type:** `libmind` (`mind::fs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-04) · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.done) · **Constitution:** MC-6.6
 
 **Asked by:** STO, 2026-11-04 (`requests-KRN.md`, taken out of it with this issue), from a run by hand on x86 while building 311-STO-0032's QEMU checks.
 

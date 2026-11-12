@@ -1,12 +1,12 @@
 # 308-STO-0023 — Memory domains: a key per domain, and forgetting by destroying it — done
 
-**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [308](../issues/308-encryption-at-rest.md) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
+**Type:** storage (sealing at rest) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-29) · **Blocked by:** — · **Main task:** [308](308-encryption-at-rest.done) · **Constitution:** MC-4.7, MC-4.8, MC-4.11
 
-Split from [308](../issues/308-encryption-at-rest.md) (2026-10-28).
+Split from [308](308-encryption-at-rest.done) (2026-10-28).
 
 ## Problem
 
-With one volume key, nothing can be forgotten for sure: deleting a name leaves copies of its blocks until they are collected, and a copy of the medium keeps them. [308](../issues/308-encryption-at-rest.md) chose a key per memory domain, so a domain can be forgotten by destroying its key (MC-4.8).
+With one volume key, nothing can be forgotten for sure: deleting a name leaves copies of its blocks until they are collected, and a copy of the medium keeps them. [308](308-encryption-at-rest.done) chose a key per memory domain, so a domain can be forgotten by destroying its key (MC-4.8).
 
 ## Plan
 
@@ -40,7 +40,7 @@ With one volume key, nothing can be forgotten for sure: deleting a name leaves c
 
 ## Related
 
-[308](../issues/308-encryption-at-rest.md), [303](303-retention-and-collection.done), [312](../issues/312-the-minds-memory.md).
+[308](308-encryption-at-rest.done), [303](303-retention-and-collection.done), [312](../issues/312-the-minds-memory.md).
 
 ## Resolution
 

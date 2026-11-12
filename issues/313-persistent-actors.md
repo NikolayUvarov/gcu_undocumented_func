@@ -1,6 +1,6 @@
 # 313 — Persistent actors: checkpoints of services with queues
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** [308](308-encryption-at-rest.md) (for actors that hold personal data) · **Roadmap:** track B "checkpoint/rebind" · **Constitution:** MC-6.10, MC-6.11, MC-6.12, RFC 001 §9
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([308](../issues-done/308-encryption-at-rest.done), sealing for actors that hold personal data, is done) · **Roadmap:** track B "checkpoint/rebind" · **Constitution:** MC-6.10, MC-6.11, MC-6.12, RFC 001 §9
 
 From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-as-a-minds-memory.md` on `internal-dev-messages`), taken by the storage session at the maintainer's word (2026-10-27). Everything here is plan, not a guarantee (MC-12.3).
 

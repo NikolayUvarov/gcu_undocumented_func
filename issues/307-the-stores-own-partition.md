@@ -1,6 +1,6 @@
 # 307 — A durable medium on real machines: the store's own partition (track B, eighth step)
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md) (what a flush reaches), [307-KRN-0229](../issues-done/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done) (`vfs_server` off the store's partition) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-4.8, MC-12.1, preamble ("preservation of state"), Appendix B.3
+**Type:** main task · **Owner:** `STO` track · **Priority:** P1 · **Status:** open · **Blocked by:** [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md) (what a flush reaches), the copy's partition on a real machine (`requests-KRN.md`, 2026-11-12), the maintainer's sticks ([issues-human](../issues-human/README.md) 16) · **Roadmap:** track B "durability classes" · **Constitution:** MC-4.4, MC-4.8, MC-12.1, preamble ("preservation of state"), Appendix B.3
 
 From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-as-a-minds-memory.md` on `internal-dev-messages`), taken by the storage session at the maintainer's word (2026-10-27). Everything here is plan, not a guarantee (MC-12.3).
 
@@ -78,13 +78,14 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 
 **The second criterion is met in QEMU,** on x86 and aarch64: the NVMe and AHCI partitions here, and the USB stick's partition, a blank disk and two candidates never written in 307-KRN-0177's USB image suite.
 
-**Left besides:**
-- [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md): what a flush reaches, per driver;
-- [307-KRN-0229](../issues-done/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done): `vfs_server` still holds the stick whole;
-- [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md), step 5: a medium that comes back keeps its windows;
-- the copy's medium on a real machine;
-- the MacBook Pro's and the Ryzen's sticks, and the profile's Article 4 row.
+**Left besides** (2026-11-12):
+- [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md): what a flush reaches, per driver (DRV's);
+- [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md), step 5: a medium that comes back keeps its windows (KRN's);
+- **the copy's medium on a real machine:** a partition `store.txt` names, asked of KRN in [requests-KRN.md](requests-KRN.md) on 2026-11-12. STO's QEMU check follows once it is in;
+- **the MacBook Pro's and the Ryzen's sticks:** an object after a reboot and a power cut, the maintainer's, [issues-human](../issues-human/README.md) 16. The profile's Article 4 row then says what each machine reaches.
+
+[307-KRN-0229](../issues-done/307-KRN-0229-vfs-servers-clients-bounded-to-its-own-partitions.done) is done: `vfs_server` gets a disk with a partition table as windows of its FAT partitions, never whole (round 114).
 
 ## Related
 
-[300](../issues-done/300-checksummed-block-store.done), 300-KRN-0025, [308](308-encryption-at-rest.md), [309](../issues-done/309-copies-scrub-and-repair.done), `requests-KRN.md`, `requests-DRV.md`.
+[300](../issues-done/300-checksummed-block-store.done), 300-KRN-0025, [308](../issues-done/308-encryption-at-rest.done), [309](../issues-done/309-copies-scrub-and-repair.done), `requests-KRN.md`, `requests-DRV.md`.

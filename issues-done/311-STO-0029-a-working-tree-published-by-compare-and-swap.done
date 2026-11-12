@@ -1,8 +1,8 @@
 # 311-STO-0029 — A working tree published by compare-and-swap: edits in memory, a new root under a name — done
 
-**Type:** storage (`libmind` `worktree`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — ([311-STO-0027](311-STO-0027-directories-as-objects.done), directory nodes, done) · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.9, MC-4.10, MC-4.13, MC-12.4
+**Type:** storage (`libmind` `worktree`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — ([311-STO-0027](311-STO-0027-directories-as-objects.done), directory nodes, done) · **Main task:** [311](311-storefs-a-file-face.done) · **Constitution:** MC-4.9, MC-4.10, MC-4.13, MC-12.4
 
-Split from [311](../issues/311-storefs-a-file-face.md) (2026-10-30), its second step: what `storefs` will do on a write, before there is a `storefs`.
+Split from [311](311-storefs-a-file-face.done) (2026-10-30), its second step: what `storefs` will do on a write, before there is a `storefs`.
 
 ## Problem
 
@@ -84,4 +84,4 @@ Done 2026-10-30, landed in round 54 (`main` 3fbdd30e, from `claude/relaxed-meitn
 
 ## Related
 
-[311](../issues/311-storefs-a-file-face.md), [311-STO-0027](311-STO-0027-directories-as-objects.done), [302](302-names-and-current-roots.done), [304](304-several-names-at-once.done).
+[311](311-storefs-a-file-face.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [302](302-names-and-current-roots.done), [304](304-several-names-at-once.done).
