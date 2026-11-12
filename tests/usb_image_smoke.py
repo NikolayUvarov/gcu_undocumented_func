@@ -385,13 +385,17 @@ def swapped_unasked(vm, image):
     other = another_manifest(image, "-swapped")
     before = hashlib.sha256(other.read_bytes()).hexdigest()
     require(vm.command("sync"), "OK")
+    vm.service_logs("usb_host")  # drained, so that the SUPER SPEED below is the copy's
+    vm.service_logs("vfs_server")
     for command in ("device_del usbstick", f"drive_add 0 if=none,id=usbswap,format=raw,file={other}", "device_add usb-storage,drive=usbswap,id=usbswapped"):
         answer = vm.hmp(command)
         assert answer.strip() in ("", "OK"), (command, answer)
     require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
+    # The first request after the swap waits for usb_storage to find the device again (up to 20 s in QEMU).
+    log = ""
     for _ in range(20):
-        vm.command("ls log:", raw=True)
-        log = vm.service_logs("vfs_server")
+        vm.command("ls log:", raw=True, timeout=90)
+        log += vm.service_logs("vfs_server")
         if "ANOTHER MEDIUM" in log:
             break
         time.sleep(1)
