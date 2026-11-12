@@ -29,13 +29,13 @@ pub fn nodes() {
     }); }
 }
 /// Whether physical `start..end` holds registers the kernel drives itself: the GIC's (a GICv3 redistributor of 128 KiB
-/// for each CPU), its MSI frame or ITS, the ECAM.
+/// for each CPU), its MSI frame or ITS, the ECAM, the watchdog (100004-PRT-0015).
 pub fn kernel_owns(start: u64, end: u64) -> bool {
     let at = |base: usize, bytes: u64| base != 0 && (base as u64) < end && base as u64 + bytes > start;
     let cpus = super::acpi::CPU_COUNT.load(core::sync::atomic::Ordering::Relaxed).max(1) as u64;
     let gic = if board::get(&board::GIC_VERSION) == 2 { at(board::get(&board::GICC), 0x1_0000) || at(board::get(&board::V2M), 0x1_0000) }
               else { at(board::get(&board::GICR), 0x2_0000 * cpus) || at(board::get(&board::GITS), 0x2_0000) };
-    gic || at(board::get(&board::GICD), 0x1_0000) || super::pcicfg::ecam().is_some_and(|(from, to)| from < end && to > start)
+    gic || at(board::get(&board::GICD), 0x1_0000) || at(board::get(&board::WATCHDOG), 0x20) || super::pcicfg::ecam().is_some_and(|(from, to)| from < end && to > start)
 }
 /// Whether a node's line `n` is one the kernel can bind: a device line, SPI 0..15 (line n is interrupt 32 + n).
 pub fn node_line(line: u32) -> bool { (line as usize) < super::context::MSI_FIRST }

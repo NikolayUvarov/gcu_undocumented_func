@@ -310,6 +310,8 @@ pub struct Board {
     /// A generic ECAM PCI host: its base and its first and last bus.
     pub ecam: Option<(u64, u8, u8)>,
     pub framebuffer: Option<Framebuffer>,
+    /// The Allwinner A31's watchdog, which the A64, the H5 and the H616 name too: its registers' base (100004-PRT-0015).
+    pub watchdog: Option<u64>,
 }
 
 const GIC_V2: [&str; 4] = ["arm,gic-400", "arm,cortex-a15-gic", "arm,cortex-a7-gic", "arm,cortex-a9-gic"];
@@ -385,7 +387,8 @@ pub fn board(tree: &Tree) -> Board {
         let bgr = match n.string("format")? { b"a8r8g8b8" | b"x8r8g8b8" => true, b"a8b8g8r8" | b"x8b8g8r8" => false, _ => return None };
         (width > 0 && height > 0 && stride as u64 >= 4 * width as u64 && size >= stride as u64 * height as u64).then_some(Framebuffer { base, size, width, height, stride, bgr })
     });
-    Board { console: console_with(tree, gic.as_ref()), gic, timer, timer_erratum, psci, rtc, ecam, framebuffer }
+    let watchdog = enabled_compatible(tree, &["allwinner,sun6i-a31-wdt"]).and_then(|n| n.first_reg()).filter(|&(_, size)| size >= 0x20).map(|(base, _)| base);
+    Board { console: console_with(tree, gic.as_ref()), gic, timer, timer_erratum, psci, rtc, ecam, framebuffer, watchdog }
 }
 
 /// Calls `each` with the MPIDR (`reg`) of every enabled CPU of `/cpus` that PSCI starts, in the tree's order;
