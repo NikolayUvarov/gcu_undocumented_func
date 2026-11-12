@@ -79,7 +79,9 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
 /// The buffer is a LEASE the client ends with `CAP_REVOKE` on re-attach and on drop; the driver writes into it while
 /// it is attached (a SHARE_RW adapter listed in docs/profile), and the client copies the data out after each reply.
 /// Written data travels as a sealed read-only copy (SHARE_RO), so the driver writes exactly what it was given.
-pub struct Device { endpoint: Endpoint, buffer: Pages, lease: usize, sectors: u64, kind: usize, writable: bool }
+/// A client that must check the medium first (`check_returns`, 000-KRN-0085) gets no repeat: a fresh instance's
+/// answer marks the device returned, and it refuses every request until `reattach`.
+pub struct Device { endpoint: Endpoint, buffer: Pages, lease: usize, sectors: u64, kind: usize, writable: bool, checks: bool, returned: bool }
 
 impl Device {
     /// Waits for the driver to be ready; Err(NotFound) if there is no drive.
@@ -89,7 +91,7 @@ impl Device {
         let writable = block::writable(endpoint).unwrap_or(false);
         let buffer = Pages::new(BUFFER).ok_or(Error::NoMemory)?;
         let lease = buffer.share()?;
-        let device = Self { endpoint, buffer, lease, sectors, kind, writable };
+        let device = Self { endpoint, buffer, lease, sectors, kind, writable, checks: false, returned: false };
         device.attach()?;
         Ok(device)
     }
@@ -98,6 +100,24 @@ impl Device {
         let _ = ipc::revoke(self.lease);
         block::attach(self.endpoint, self.lease)
     }
+    /// "Not found" or "peer" (a driver restarted, or one whose medium went away and came back) is not repeated: the
+    /// device is marked returned instead, for the client to check the medium before anything else reaches it.
+    pub fn check_returns(&mut self) { self.checks = true; }
+    /// The driver answered as a fresh instance does, and nothing was asked of it since.
+    pub fn returned(&self) -> bool { self.returned }
+    /// Lends the buffer to the driver's current instance and asks its size again; requests are taken again.
+    pub fn reattach(&mut self) -> Result<()> {
+        self.attach()?;
+        self.sectors = block::sectors(self.endpoint)?;
+        self.returned = false;
+        Ok(())
+    }
+    // Whether a failed request is repeated after re-attaching; a client that checks returns is told instead.
+    fn repeat(&mut self, error: Error) -> Result<()> {
+        if !matches!(error, Error::NotFound | Error::Peer) { return Err(error); }
+        if self.checks { self.returned = true; return Err(Error::NotFound); }
+        self.attach()
+    }
     pub fn sectors(&self) -> u64 { self.sectors }
     /// Device kind (BLOCK_KIND_*, KIND_RAM), to tell drives apart.
     pub fn kind(&self) -> usize { self.kind }
@@ -105,20 +125,22 @@ impl Device {
     pub fn read_only(&self) -> bool { !self.writable }
     /// Reads up to BLOCK_MAX_SECTORS sectors; the slice is valid until the next read.
     pub fn read(&mut self, lba: u64, count: usize) -> Result<&[u8]> {
+        if self.returned { return Err(Error::NotFound); }
         let count = count.min(BLOCK_MAX_SECTORS) as u16;
         let got = match block::read(self.endpoint, count, lba) {
-            Err(Error::NotFound | Error::Peer) => { self.attach()?; block::read(self.endpoint, count, lba)? }
-            other => other?,
+            Err(error) => { self.repeat(error)?; block::read(self.endpoint, count, lba)? }
+            Ok(got) => got,
         };
         Ok(&self.buffer.as_slice()[..got as usize * BLOCK_SECTOR])
     }
     /// Writes whole sectors (`data` up to BUFFER bytes, a multiple of BLOCK_SECTOR); returns the sectors written.
     pub fn write(&mut self, lba: u64, data: &[u8]) -> Result<usize> {
         if data.is_empty() || data.len() % BLOCK_SECTOR != 0 || data.len() > BUFFER { return Err(Error::Invalid); }
+        if self.returned { return Err(Error::NotFound); }
         let count = (data.len() / BLOCK_SECTOR) as u16;
         let written = match self.write_sealed(data, count, lba) {
-            Err(Error::NotFound | Error::Peer) => { self.attach()?; self.write_sealed(data, count, lba)? }
-            other => other?,
+            Err(error) => { self.repeat(error)?; self.write_sealed(data, count, lba)? }
+            Ok(written) => written,
         };
         Ok(written as usize)
     }
@@ -129,7 +151,12 @@ impl Device {
         result
     }
     /// Asks the drive to write its cache to the medium.
-    pub fn flush(&mut self) -> Result<()> { block::flush(self.endpoint) }
+    pub fn flush(&mut self) -> Result<()> {
+        if self.returned { return Err(Error::NotFound); }
+        let result = block::flush(self.endpoint);
+        if let Err(error @ (Error::NotFound | Error::Peer)) = result { if self.checks { self.returned = true; } return Err(error); }
+        result
+    }
 }
 
 impl Drop for Device { fn drop(&mut self) { let _ = ipc::revoke(self.lease); let _ = ipc::drop_cap(self.lease); } }

@@ -237,6 +237,7 @@ def slots_check(args, work):
         size = len(payloads["kernel.elf"])
         require(output, f"READ MIND/A/kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
         vm.command(f"kill {pid}")
+        swapped_unasked(vm, image)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -341,15 +342,7 @@ def unplugged(vm, booted, name):
     require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
     require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
     require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
-    other = booted.with_name(booted.stem + "-other" + booted.suffix)
-    shutil.copyfile(booted, other)
-    data = bytearray(other.read_bytes())
-    manifests = [m for m in re.finditer(rb"MIND-MANIFEST \d+\nkey [0-9a-f]{16}\ncommit ", data) if m.start() % 512 == 0]
-    assert manifests, "no boot manifest found in the image"
-    for m in manifests:
-        data[m.end()] = ord("0") if data[m.end()] != ord("0") else ord("1")
-    other.write_bytes(data)
-    assert other.read_bytes()[:512] == booted.read_bytes()[:512], "the copy keeps the stick's sector 0"
+    other = another_manifest(booted, "-other")
     before = hashlib.sha256(other.read_bytes()).hexdigest()
     for command in (f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}", "device_add usb-storage,drive=usbdisk3,id=usbstick3"):
         answer = vm.hmp(command)
@@ -369,6 +362,48 @@ def unplugged(vm, booted, name):
     assert hashlib.sha256(longer.read_bytes()).hexdigest() == longer_before, "a medium of another capacity was written"
     other.unlink()
     longer.unlink()
+
+
+def another_manifest(image, name):
+    # A copy of `image` with another commit in its boot manifests: its partition table and sector 0 are the stick's.
+    other = image.with_name(image.stem + name + image.suffix)
+    data = bytearray(image.read_bytes())
+    manifests = [m for m in re.finditer(rb"MIND-MANIFEST \d+\nkey [0-9a-f]{16}\ncommit ", data) if m.start() % 512 == 0]
+    assert manifests, "no boot manifest found in the image"
+    for m in manifests:
+        data[m.end()] = ord("0") if data[m.end()] != ord("0") else ord("1")
+    other.write_bytes(data)
+    assert other.read_bytes()[:512] == image.read_bytes()[:512], "the copy keeps the stick's sector 0"
+    return other
+
+
+def swapped_unasked(vm, image):
+    # 000-KRN-0085: the stick swapped at once for a copy with another manifest while vfs_server asks nothing of it. The
+    # next request finds the device enumerated again: usb_storage runs nothing on it and ends, init starts it again,
+    # and vfs_server, told of the return rather than given the request again, compares the medium first: another one,
+    # so its volumes close and nothing it cached is written to the copy.
+    other = another_manifest(image, "-swapped")
+    before = hashlib.sha256(other.read_bytes()).hexdigest()
+    require(vm.command("sync"), "OK")
+    for command in ("device_del usbstick", f"drive_add 0 if=none,id=usbswap,format=raw,file={other}", "device_add usb-storage,drive=usbswap,id=usbswapped"):
+        answer = vm.hmp(command)
+        assert answer.strip() in ("", "OK"), (command, answer)
+    require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
+    for _ in range(20):
+        vm.command("ls log:", raw=True)
+        log = vm.service_logs("vfs_server")
+        if "ANOTHER MEDIUM" in log:
+            break
+        time.sleep(1)
+    require(log, "ANSWERED AS A DRIVER STARTED AGAIN")
+    require(log, "CAME BACK WITH ANOTHER MEDIUM")
+    assert "DOES NOT ANSWER" not in log, "vfs_server saw the drive not answer: the swap was not made unasked"
+    require(vm.service_logs("usb_storage", "ENUMERATED AGAIN"), "[USB] STORAGE: A DEVICE CAME BACK, ENUMERATED AGAIN")
+    vm.command("write log:swap.txt written after the swap", raw=True)
+    vm.command("sync", raw=True)
+    time.sleep(3)
+    assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "the old volumes wrote to another medium"
+    other.unlink()
 
 
 def came_back(vm, times):

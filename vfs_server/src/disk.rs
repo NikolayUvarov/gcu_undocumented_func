@@ -14,6 +14,7 @@ const LINES: usize = 64;
 const READ_AHEAD: usize = 32;
 const SLOW_MS: u64 = 1000; // a failure that took this long: the drive does not answer (unplugged), not a bad sector
 const QUIET_MS: u64 = 10_000; // then requests fail at once for this long, before the drive is asked again (211-KRN-0050)
+const BACK_MS: u64 = 3000; // a driver that answered as a fresh instance is waited for this long, and init's windows with it
 const IDENTITY: usize = 256; // at most this many sectors read while mounting are kept, by hash, as the medium's identity
 
 // `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted (none through
@@ -34,6 +35,12 @@ impl Io {
         }
     }
     fn devices(&self) -> impl Iterator<Item = &Device> { let (whole, windows) = match self { Io::Whole(device) => (Some(device), &[][..]), Io::Windows(windows) => (None, &windows[..]) }; whole.into_iter().chain(windows.iter().map(|(_, device)| device)) }
+    fn devices_mut(&mut self) -> impl Iterator<Item = &mut Device> { let (whole, windows) = match self { Io::Whole(device) => (Some(device), &mut [][..]), Io::Windows(windows) => (None, &mut windows[..]) }; whole.into_iter().chain(windows.iter_mut().map(|(_, device)| device)) }
+    /// A driver that answered as a fresh instance does is not asked again before the medium is checked (000-KRN-0085).
+    fn check_returns(&mut self) { self.devices_mut().for_each(Device::check_returns); }
+    fn returned(&self) -> bool { self.devices().any(Device::returned) }
+    // Every window's client re-attached: one driver behind them all, restarted for all.
+    fn reattach(&mut self) -> Result<()> { self.devices_mut().try_for_each(Device::reattach) }
     pub fn read(&mut self, lba: u64, count: usize) -> Result<&[u8]> { let (device, lba) = self.at(lba).ok_or(Error::Invalid)?; device.read(lba, count) }
     pub fn write(&mut self, lba: u64, data: &[u8]) -> Result<usize> { let (device, lba) = self.at(lba).ok_or(Error::Invalid)?; device.write(lba, data) }
     // One drive behind every window: one flush empties its cache.
@@ -46,6 +53,7 @@ impl Io {
 
 impl Disk {
     pub fn new(mut device: Io) -> Option<Self> {
+        device.check_returns();
         let first = device.read(0, 1).ok().and_then(|data| data.get(..SECTOR).map(|s| { let mut sector = [0u8; SECTOR]; sector.copy_from_slice(s); sector }));
         Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false })
     }
@@ -56,50 +64,77 @@ impl Disk {
     // A drive that did not answer is not asked again for QUIET_MS: requests fail at once instead of each waiting for the
     // drive's own timeout (an unplugged USB disk, 211-KRN-0050). Cached sectors are still read.
     fn quiet(&self) -> bool { self.silent_until != 0 && (mind::time::uptime_ms() as u64) < self.silent_until }
-    // Runs one request to the drive and notes whether it answered.
-    fn ask<T>(&mut self, request: impl FnOnce(&mut Io) -> Option<T>) -> Option<T> {
+    // Runs one request to the drive and notes whether it answered. A driver that answers as a fresh instance does
+    // (restarted, or its medium went away and came back, 000-KRN-0085) gets the request again only after the check.
+    fn ask<T>(&mut self, mut request: impl FnMut(&mut Io) -> Option<T>) -> Option<T> {
         if self.quiet() || self.replaced { return None; }
-        // Back after it did not answer: the medium compared before anything is asked of it; a read that fails there
-        // means the drive still does not answer.
-        if self.silent_until != 0 {
-            let Some(same) = self.same_medium() else { self.silent_until = mind::time::uptime_ms() as u64 + QUIET_MS; return None };
-            self.silent_until = 0;
-            if !same { return None; }
-            mind::println!("[VFS] THE {} DRIVE ANSWERS AGAIN", crate::device_name(self.device.kind()));
-        }
+        if (self.silent_until != 0 || self.device.returned()) && !self.back() { return None; }
         let start = mind::time::uptime_ms() as u64;
         let result = request(&mut self.device);
         let now = mind::time::uptime_ms() as u64;
-        if result.is_none() && now.saturating_sub(start) >= SLOW_MS {
+        if result.is_some() { return result; }
+        // Slow: the drive does not answer (unplugged); a return it brings is checked when it is asked again.
+        if now.saturating_sub(start) >= SLOW_MS {
             mind::println!("[VFS] THE {} DRIVE DOES NOT ANSWER: REQUESTS FAIL AT ONCE, IT IS ASKED AGAIN EVERY {} S", crate::device_name(self.device.kind()), QUIET_MS / 1000);
             self.silent_until = now + QUIET_MS;
+            return None;
         }
-        result
+        if !self.device.returned() { return None; }
+        mind::println!("[VFS] THE {} DRIVE ANSWERED AS A DRIVER STARTED AGAIN: ITS MEDIUM IS COMPARED BEFORE ANYTHING ELSE IS ASKED OF IT", crate::device_name(self.device.kind()));
+        if !self.back() { return None; }
+        request(&mut self.device)
+    }
+
+    // Back after it did not answer, or after a return: the buffer lent to the driver's current instance (waiting up to
+    // BACK_MS for it and for init's windows), then the medium compared before anything is asked of it. A return met
+    // by the comparison's own reads is checked once more on the fresh instance. False: not back yet, and asked again
+    // after QUIET_MS; or another medium, whose volumes are closed.
+    fn back(&mut self) -> bool {
+        let sectors = self.device.sectors();
+        for _ in 0..2 {
+            let mut waited = 0;
+            while self.device.reattach().is_err() && waited < BACK_MS { mind::time::sleep(100); waited += 100; }
+            if self.device.returned() { break; }
+            let same = if self.device.sectors() != sectors { Some(false) } else { self.same_medium() };
+            match same {
+                Some(true) => {
+                    self.silent_until = 0;
+                    mind::println!("[VFS] THE {} DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM", crate::device_name(self.device.kind()));
+                    return true;
+                }
+                Some(false) => { self.silent_until = 0; self.replace(); return false; }
+                None if self.device.returned() => continue,
+                None => break,
+            }
+        }
+        self.silent_until = mind::time::uptime_ms() as u64 + QUIET_MS;
+        false
     }
 
     fn line(&self, index: usize) -> &[u8] { &self.cache.as_slice()[index * SECTOR..(index + 1) * SECTOR] }
 
-    // A drive back after it did not answer may hold another medium: a stick rewritten elsewhere and put back, or another
-    // one (000-KRN-0079). Sector 0, the identity's sectors and every unchanged cached sector must read as before;
-    // otherwise nothing cached is written to it, its volumes fail from now on, and the log says so. None: a read failed.
+    // A drive back after it did not answer, or after a return, may hold another medium: a stick rewritten elsewhere and
+    // put back, or another one (000-KRN-0079, 000-KRN-0085). Sector 0, the identity's sectors and every unchanged cached
+    // sector must read as before. None: a read failed.
     fn same_medium(&mut self) -> Option<bool> {
         let mut checks: alloc::vec::Vec<(u32, [u8; 32])> = self.first.iter().map(|s| (0u32, mind::sha256::digest(s))).collect();
         checks.extend(self.identity.iter().copied());
         for index in (0..LINES).filter(|&i| self.tags[i] != u32::MAX && !self.dirty[i]) { checks.push((self.tags[index], mind::sha256::digest(self.line(index)))); }
         checks.sort_unstable_by_key(|&(lba, _)| lba);
         checks.dedup_by_key(|&mut (lba, _)| lba);
-        let mut same = true;
         for (lba, before) in &checks {
             let now = self.device.read(*lba as u64, 1).ok()?;
-            if now.get(..SECTOR).map(mind::sha256::digest) != Some(*before) { same = false; break; }
+            if now.get(..SECTOR).map(mind::sha256::digest) != Some(*before) { return Some(false); }
         }
-        if !same {
-            let lost = self.dirty.iter().filter(|&&d| d).count();
-            self.discard();
-            self.replaced = true;
-            mind::println!("[VFS] THE {} DRIVE CAME BACK WITH ANOTHER MEDIUM: ITS VOLUMES ARE CLOSED, {} CHANGED SECTORS OF THE OLD ONE NOT WRITTEN TO IT", crate::device_name(self.device.kind()), lost);
-        }
-        Some(same)
+        Some(true)
+    }
+
+    // Another medium: nothing cached is written to it, and its volumes fail from now on.
+    fn replace(&mut self) {
+        let lost = self.dirty.iter().filter(|&&d| d).count();
+        self.discard();
+        self.replaced = true;
+        mind::println!("[VFS] THE {} DRIVE CAME BACK WITH ANOTHER MEDIUM: ITS VOLUMES ARE CLOSED, {} CHANGED SECTORS OF THE OLD ONE NOT WRITTEN TO IT", crate::device_name(self.device.kind()), lost);
     }
 
     // A sector read while mounting joins the identity; one this system writes leaves it (the medium may not hold it yet).
