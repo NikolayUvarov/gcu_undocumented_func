@@ -5221,7 +5221,9 @@ def store_domains_check(vm):
     """308-STO-0023: memory domains on the store's RAM disk. Where the processor gives random numbers (RNDR on aarch64's
     `max`), a domain is made; its blocks, names and journal (312-STO-0034) are its own, a domain's client makes no
     domain, and a forgotten domain is gone at once, its journal with it and its records then collected, while another
-    domain stands. Without a random source (x86's qemu64), no domain is made, and the store says why."""
+    domain stands. 312-STO-0046: a domain made with a limit of 8 KiB refuses a publish past it, while the volume takes
+    the same object, and says what it retains. Without a random source (x86's qemu64), no domain is made, and the store
+    says why."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
@@ -5244,6 +5246,19 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 312-STO-0046: a domain with a limit of its own: 5000 bytes fit in 8 KiB, 4000 more do not; the volume is not bound.
+    limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", blocks("domain new 8"))[1])
+    require(vm.service_logs("blockstore", "RETAINING AT MOST"), f"[BLOCKSTORE] DOMAIN {limited} MADE FOR BADGE")
+    fits = re.search(r"PUT (\S+) SIZE 5000", blocks(f"-d {limited} pattern 5000"))[1]
+    require(blocks(f"-d {limited} publish fits {fits}"), "PUBLISHED fits VERSION 1")
+    past = re.search(r"PUT (\S+) SIZE 4000", blocks(f"-d {limited} pattern 4000"))[1]
+    require(blocks(f"-d {limited} publish past {past}"), "blocks: publish past: Quota")
+    require(blocks(f"-d {limited} pin {past}"), "Quota")
+    require(blocks(f"domain usage {limited}"), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
+    require(blocks(f"domain usage {second}"), f"DOMAIN {second} RETAINS 0 BYTES, NO LIMIT OF ITS OWN")
+    require(blocks(f"-d {first} domain usage {limited}"), "Rights")
+    require(re.search(r"PUT (\S+) SIZE 4000", blocks("pattern 4000"))[1], past)
+    require(blocks(f"publish past {past}"), "PUBLISHED past VERSION 1")
     # 312-STO-0034: a journal in a domain is written through the domain's client, and is the domain's alone.
     require(blocks(f"-d {first} journal append log note in a domain"), "APPENDED log SEQUENCE 1 BOOT 1 ENTRY")
     require(blocks(f"-d {first} journal check log"), "CHECKED log: 1 ENTRIES, SEQUENCE 1 TO 1, AT VERSION 1: WHOLE")
@@ -5266,7 +5281,8 @@ def store_domains_check(vm):
     assert f"DOMAIN {first} " not in out and f"DOMAIN {second} LIVE" in out, out
     require(blocks(f"-d {second} get {note} ram:again.txt"), "GOT 12 BYTES")
     print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
-          "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole", flush=True)
+          "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
+          "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046)", flush=True)
 
 
 def fm_store_check(vm):
@@ -15526,6 +15542,10 @@ def store_disk_check(args, disk):
             kept = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {second} pattern 4000", raw=True))[1]
             require(vm.command(f"blocks -d {second} publish kept {kept}", raw=True), "PUBLISHED kept VERSION 1")
             require(vm.command(f"blocks domain forget {first}", raw=True), f"DOMAIN {first} FORGOTTEN")
+            # 312-STO-0046: a domain with a limit of 8 KiB, 5000 bytes named in it; its limit outlives the reboot.
+            limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", vm.command("blocks domain new 8", raw=True))[1])
+            held = re.search(r"PUT (\S+) SIZE 5000", vm.command(f"blocks -d {limited} pattern 5000", raw=True))[1]
+            require(vm.command(f"blocks -d {limited} publish held {held}", raw=True), "PUBLISHED held VERSION 1")
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
@@ -15544,6 +15564,9 @@ def store_disk_check(args, disk):
             require(mounted, f"[BLOCKSTORE] DOMAIN {second} OF BADGE")
             require(vm.command(f"blocks -d {first} resolve gone", raw=True), f"blocks: domain {first}: NotFound")
             require(vm.command(f"blocks -d {second} check {kept} pattern", raw=True), "CHECKED 4000 BYTES = PATTERN")
+            require(vm.command(f"blocks domain usage {limited}", raw=True), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
+            past = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {limited} pattern 4000", raw=True))[1]
+            require(vm.command(f"blocks -d {limited} publish past {past}", raw=True), "blocks: publish past: Quota")
             assert re.search(r"COLLECTED [1-9]\d* BLOCKS", vm.command("blocks collect", raw=True))
             domains = vm.command("blocks domains", raw=True)
             assert f"DOMAIN {first} " not in domains and f"DOMAIN {second} LIVE" in domains, domains
@@ -15551,7 +15574,8 @@ def store_disk_check(args, disk):
             vm.close()
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot; "
           "its writes report FLUSHED, and a name published there is found after the reboot; a memory domain forgotten before the "
-          "reboot stays unreadable after it and is collected, another one whole (308-STO-0023)", flush=True)
+          "reboot stays unreadable after it and is collected, another one whole (308-STO-0023); a domain's limit of 8 KiB, "
+          "its usage the same after the reboot, refuses a publish past it (312-STO-0046)", flush=True)
     # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
     with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
         big = Path(temp) / "store.img"

@@ -894,6 +894,12 @@ A memory domain is a set of names, pins and blocks with a key of its own, so tha
 - **A domain's key** is 32 random bytes from the processor (RDRAND, RNDR). Without a random source no domain is made (`no-random`): a key derived from anything kept could not be destroyed. It is kept in a key record sealed under the volume key: `MIND-KEY`, layout, the domain, its state (1 live, 2 forgotten), its owner, zero, the key, a SHA-256. Its frame's domain is 0xFFFF.
 - **Its records** are sealed under keys derived from the domain's key; their frames name the domain. A mount scans the medium once: records of a domain whose key record it has not met yet wait (up to 64) and are opened once the scan is done; past 64, it scans once more, every key known. A tombstone met after a domain's records takes them out of the tables again.
 - **Its own blocks.** The index is keyed by CID and domain: the same bytes in two domains are two blocks, so one domain's forgetting cannot leave its blocks readable through another. Names and pins are a domain's too. An owner's quota counts its roots in every domain.
+- **A limit of its own** (312-STO-0046, MC-4.11, `blockstore.wit` 2.7):
+  - **Set when it is made:** `domain-create-limited(kib)`, kept in the four bytes of its key record that were zero (0: no limit of its own, as every domain before). It does not change while the domain lives.
+  - **What it bounds:** the roots the domain's names and pins retain together, each counted once, whichever client works in it. A `publish`, `commit` or `pin` past it is `quota`. The owner's quota and the updater's reserve hold beside it.
+  - **Why:** a program lent one domain's client, an agent with its memory, cannot then fill its owner's whole quota through it.
+  - **`domain-usage(id)`:** what the domain retains, its limit and its names and pins, for its owner through a client of the volume. `blocks domain new [KiB]` and `blocks domain usage <id>` are the tool's.
+  - **The term:** a domain's term ends with `domain-forget`, the owner's. A term the store would keep by itself needs a calendar clock, which `blockstore` does not hold.
 - **Through a client of its own** (`blockstore.wit` 2.2):
   - `domain-create` makes one for the caller's owner, its badge;
   - `domain-client` gives a client whose every call works in that domain, with the caller's rights: `blockstore` mints it from its own endpoint, with a badge from `0x100` up (`mind::blockstore::FIRST_DOMAIN_CLIENT`);
@@ -915,12 +921,14 @@ Evidence: `tests/blockstore_host.rs`:
 - `a_forgotten_domain_is_refused_then_collected`: its names, pins and blocks gone at once, another owner refused; on the medium the tombstone alone; a remount counts its records neither corrupt nor damaged; a collection frees them and the tombstone; the other domain whole;
 - `a_forget_stopped_before_its_key_record_was_erased_is_finished_by_the_next_mount`;
 - `a_domains_records_before_its_key_record_are_found`: 10 records that wait, and 70, past what waits, found by a second scan;
-- `a_domain_needs_a_random_key_and_an_owner`, `a_damaged_key_record_keeps_its_domains_records`.
+- `a_domain_needs_a_random_key_and_an_owner`, `a_damaged_key_record_keeps_its_domains_records`;
+- `a_domains_limit_bounds_what_it_retains` (312-STO-0046): a publish, a pin and a commit past 8 KiB refused, a root counted once however many names and pins retain it, the volume and another domain not bound by it, the limit found again after a remount.
 
 On the platform:
 - the QEMU `store` suite on aarch64 (RNDR): two domains, a block and a name of one unseen from the volume and the other, a domain's client refused a domain, a forgotten domain gone at once and its records collected, the other whole;
 - the `store` suite on x86's qemu64, without RDRAND: no domain made, `no-random`, and the log says why;
-- the `boot` suite's store disk on x86 with RDRAND: a domain forgotten before a reboot is unreadable after it and its records are collected; another domain's object reads back whole.
+- the `boot` suite's store disk on x86 with RDRAND: a domain forgotten before a reboot is unreadable after it and its records are collected; another domain's object reads back whole;
+- a domain made with a limit of 8 KiB refuses a publish past it while the volume takes the same object (the `store` suite on aarch64), and its limit and usage are the same after a reboot (the `boot` suite on x86).
 
 ## Several names at once — run on the platform (304)
 

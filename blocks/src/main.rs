@@ -154,8 +154,9 @@ fn names(prefix: &str) {
     mind::println!("{} NAMES IN {} PAGES", count, pages);
 }
 
-// Memory domains of the caller's owner (308-STO-0023): `domains` lists them, `domain new` makes one, `domain forget <id>`
-// destroys its key.
+// Memory domains of the caller's owner (308-STO-0023): `domains` lists them, `domain new` makes one, with a limit of its
+// own in KiB when one is given (312-STO-0046), `domain usage <id>` says what one retains, `domain forget <id>` destroys
+// its key.
 fn domains(mut words: core::str::SplitWhitespace) {
     match (words.next(), words.next(), words.next(), words.next()) {
         (Some("domains"), None, ..) => match blockstore::domains(store()) {
@@ -171,6 +172,23 @@ fn domains(mut words: core::str::SplitWhitespace) {
             Ok(Err(e)) => mind::println!("blocks: domain new: {:?}", e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
+        (Some("domain"), Some("new"), Some(kib), None) => match kib.parse::<u32>() {
+            Ok(kib) => match blockstore::domain_create_limited(store(), kib) {
+                Ok(Ok(id)) => mind::println!("DOMAIN {} MADE, RETAINING AT MOST {} KIB", id, kib),
+                Ok(Err(e)) => mind::println!("blocks: domain new: {:?}", e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            },
+            Err(_) => mind::println!("blocks: domain new [KiB]"),
+        },
+        (Some("domain"), Some("usage"), Some(id), None) => match id.parse::<u16>() {
+            Ok(id) => match blockstore::domain_usage(store(), id) {
+                Ok(Ok(u)) if u.quota == 0 => mind::println!("DOMAIN {} RETAINS {} BYTES, NO LIMIT OF ITS OWN, {} NAMES, {} PINS", id, u.retained, u.names, u.pins),
+                Ok(Ok(u)) => mind::println!("DOMAIN {} RETAINS {} OF {} BYTES, {} NAMES, {} PINS", id, u.retained, u.quota, u.names, u.pins),
+                Ok(Err(e)) => mind::println!("blocks: domain usage {}: {:?}", id, e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            },
+            Err(_) => mind::println!("blocks: domain usage <number>"),
+        },
         (Some("domain"), Some("forget"), Some(id), None) => match id.parse::<u16>() {
             Ok(id) => match blockstore::domain_forget(store(), id) {
                 Ok(Ok(())) => mind::println!("DOMAIN {} FORGOTTEN", id),
@@ -179,7 +197,7 @@ fn domains(mut words: core::str::SplitWhitespace) {
             },
             Err(_) => mind::println!("blocks: domain forget <number>"),
         },
-        _ => mind::println!("blocks: domains | domain new | domain forget <id>"),
+        _ => mind::println!("blocks: domains | domain new [KiB] | domain usage <id> | domain forget <id>"),
     }
 }
 
@@ -299,7 +317,7 @@ fn lost_line(name: &str, version: u64, root: &Cid, walked: Walked, at: &[u8]) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern | tree] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern | tree] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new [KiB] | domain usage <id> | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -489,6 +507,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern | tree] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]"),
+        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern | tree] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new [KiB] | domain usage <id> | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]"),
     }
 }

@@ -84,8 +84,8 @@ const KEYS: u16 = 0xFFFF;
 const RECOVERY: u16 = 0xFFFE;
 /// Domains a store keeps at most, live and forgotten together.
 pub const DOMAINS: usize = 32;
-// A domain's key record: magic, layout, the domain (u16), its state (u16), the owner (u16), zero (4), the key (32
-// bytes, zeros once forgotten), and the SHA-256 of these 52 bytes.
+// A domain's key record: magic, layout, the domain (u16), its state (u16), the owner (u16), its limit in KiB (u32, 0
+// none: 312-STO-0046), the key (32 bytes, zeros once forgotten), and the SHA-256 of these 52 bytes.
 const KEY_MAGIC: &[u8; 8] = b"MIND-KEY";
 const KEY_RECORD: usize = 52 + 32;
 const KEY_LIVE: u16 = 1;
@@ -462,29 +462,34 @@ fn parse_pin(sector: &[u8]) -> Option<Pin> {
     Some(Pin { id, owner: u16::from_le_bytes([sector[16], sector[17]]), root: sector[20..56].try_into().unwrap(), lba: 0, size: 0, domain: VOLUME })
 }
 
-fn key_record(domain: u16, state: u16, owner: u16, key: &[u8; 32]) -> [u8; KEY_RECORD] {
+fn key_record(domain: u16, state: u16, owner: u16, limit_kib: u32, key: &[u8; 32]) -> [u8; KEY_RECORD] {
     let mut r = [0u8; KEY_RECORD];
     r[..8].copy_from_slice(KEY_MAGIC);
     r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
     r[10..12].copy_from_slice(&domain.to_le_bytes());
     r[12..14].copy_from_slice(&state.to_le_bytes());
     r[14..16].copy_from_slice(&owner.to_le_bytes());
+    r[16..20].copy_from_slice(&limit_kib.to_le_bytes());
     r[20..52].copy_from_slice(key);
     let check = sha256::digest(&r[..52]);
     r[52..KEY_RECORD].copy_from_slice(&check);
     r
 }
 
-// A domain's number, state, owner and key, if the sector is a whole key record of this layout.
-fn parse_key(sector: &[u8]) -> Option<(u16, u16, u16, [u8; 32])> {
+// A domain's number, state, owner, limit in KiB and key, if the sector is a whole key record of this layout.
+fn parse_key(sector: &[u8]) -> Option<KeyRecord> {
     if &sector[..8] != KEY_MAGIC || sector[52..KEY_RECORD] != sha256::digest(&sector[..52]) || sector[KEY_RECORD..].iter().any(|&b| b != 0) { return None; }
     let field = |at: usize| u16::from_le_bytes([sector[at], sector[at + 1]]);
     let (domain, state, owner) = (field(10), field(12), field(14));
+    let limit_kib = u32::from_le_bytes(sector[16..20].try_into().unwrap());
     let key: [u8; 32] = sector[20..52].try_into().unwrap();
-    let valid = field(8) == LAYOUT && sector[16..20] == [0; 4] && domain != VOLUME && domain < RECOVERY
+    let valid = field(8) == LAYOUT && domain != VOLUME && domain < RECOVERY
         && (state == KEY_LIVE || (state == KEY_GONE && key == [0; 32]));
-    valid.then_some((domain, state, owner, key))
+    valid.then_some(KeyRecord { domain, state, owner, limit_kib, key })
 }
+
+// What a key record holds.
+struct KeyRecord { domain: u16, state: u16, owner: u16, limit_kib: u32, key: [u8; 32] }
 
 fn recovery_record(volume: &[u8; 32]) -> [u8; RECOVERY_RECORD] {
     let mut r = [0u8; RECOVERY_RECORD];
@@ -525,7 +530,7 @@ fn find_recovery<D: Device>(dev: &mut D, buffer: &mut [u8; BUFFER], mut lba: u64
 /// A memory domain (308-STO-0023): its number, its owner (a badge), whether its key is forgotten, and how many of its
 /// records the last pass met; its keys and where its key record and tombstone lie.
 #[derive(Clone, Copy)]
-pub struct Domain { pub id: u16, pub owner: u16, pub forgotten: bool, pub records: u32, keys: Keys, key_at: u64, tomb_at: u64 }
+pub struct Domain { pub id: u16, pub owner: u16, pub forgotten: bool, pub records: u32, pub limit: u64, keys: Keys, key_at: u64, tomb_at: u64 }
 
 pub struct Store<'a, D: Device> {
     dev: D,
@@ -874,12 +879,13 @@ impl<'a, D: Device> Store<'a, D> {
     }
 
     // A key record or tombstone found at `lba`.
-    fn key_found(&mut self, lba: u64, (id, state, owner, key): (u16, u16, u16, [u8; 32])) -> Result<(), Error> {
+    fn key_found(&mut self, lba: u64, record: KeyRecord) -> Result<(), Error> {
+        let KeyRecord { domain: id, state, owner, limit_kib, key } = record;
         let k = match self.slot_of(id) {
             Some(k) => k,
             None => {
                 let k = self.domains.iter().position(Option::is_none).ok_or(Error::Full)?;
-                self.domains[k] = Some(Domain { id, owner, forgotten: false, records: 0, keys: Keys::NONE, key_at: 0, tomb_at: 0 });
+                self.domains[k] = Some(Domain { id, owner, forgotten: false, records: 0, limit: 0, keys: Keys::NONE, key_at: 0, tomb_at: 0 });
                 k
             }
         };
@@ -890,7 +896,7 @@ impl<'a, D: Device> Store<'a, D> {
             // What the scan opened of it before the tombstone leaves the tables again.
             if was_live { self.drop_domain(id); }
         } else if d.key_at == 0 {
-            (d.key_at, d.owner) = (lba, owner);
+            (d.key_at, d.owner, d.limit) = (lba, owner, limit_kib as u64 * 1024);
             if !d.forgotten { d.keys = Keys::new(&key); }
         }
         Ok(())
@@ -1319,10 +1325,47 @@ impl<'a, D: Device> Store<'a, D> {
     // owner the reserve is not for, together, within the same quota.
     fn within_quota(&self, owner: u16, extra: &[(Root, u64)]) -> bool {
         if self.retained_by(owner, extra) > self.quota { return false; }
+        // A domain with a limit of its own: its names and pins together within it too (312-STO-0046).
+        if let Some(limit) = self.domain_limit(self.domain) {
+            if self.retained_in(self.domain, extra) > limit { return false; }
+        }
         match self.reserve {
             Some(kept_for) if !kept_for(owner) => self.retained_where(move |o| !kept_for(o), extra) <= self.quota,
             _ => true,
         }
+    }
+
+    // Domain `id`'s own limit in bytes; none for the volume, a forgotten or unknown domain, or a limit of 0.
+    fn domain_limit(&self, id: u16) -> Option<u64> {
+        if id == VOLUME { return None; }
+        self.domains().find(|d| d.id == id && !d.forgotten).map(|d| d.limit).filter(|&limit| limit > 0)
+    }
+
+    // The bytes domain `id`'s names and pins retain, whoever owns them, each root counted once; with `extra`'s roots
+    // in that domain added unless it holds them already.
+    fn retained_in(&self, id: u16, extra: &[(Root, u64)]) -> u64 {
+        let held = || self.owned_where(|_| true).filter(move |(root, _)| root.1 == id);
+        let mut total = 0;
+        for (k, (root, size)) in held().enumerate() {
+            if !held().take(k).any(|(r, _)| r == root) { total += size; }
+        }
+        for (k, (root, size)) in extra.iter().enumerate() {
+            if root.1 == id && !held().any(|(r, _)| r == *root) && !extra[..k].iter().any(|(r, _)| r == root) { total += size; }
+        }
+        total
+    }
+
+    /// What domain `id` of `owner` retains, its own limit (`quota`, 0 for none), and its names and pins (312-STO-0046).
+    /// `NotFound` for a domain not live, `Rights` for another owner's.
+    pub fn domain_usage(&self, id: u16, owner: u16) -> Result<Usage, Error> {
+        let d = self.domains().find(|d| d.id == id && !d.forgotten).ok_or(Error::NotFound)?;
+        if d.owner != owner { return Err(Error::Rights); }
+        Ok(Usage {
+            retained: self.retained_in(id, &[]),
+            quota: d.limit,
+            names: self.heads[..self.names].iter().filter(|h| h.domain == id && !h.removed()).count() as u32,
+            pins: self.pins[..self.pinned].iter().filter(|p| p.domain == id).count() as u32,
+        })
     }
 
     /// What `owner` retains and may retain.
@@ -1572,7 +1615,12 @@ impl<'a, D: Device> Store<'a, D> {
 
     /// Makes a domain for `owner` (a badge), its key random and kept in a record sealed under the volume key; returns
     /// its number. Without a random source none is made: a key derived from anything kept could not be destroyed.
-    pub fn domain_create(&mut self, owner: u16) -> Result<u16, Error> {
+    pub fn domain_create(&mut self, owner: u16) -> Result<u16, Error> { self.domain_create_limited(owner, 0) }
+
+    /// Makes a domain as `domain_create` does, whose names and pins retain at most `limit_kib` KiB together, each root
+    /// counted once, beside the owner's quota (312-STO-0046, MC-4.11); 0 sets no limit of its own. The limit is kept in
+    /// the domain's key record and does not change while the domain lives.
+    pub fn domain_create_limited(&mut self, owner: u16, limit_kib: u32) -> Result<u16, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         let slot = self.domains.iter().position(Option::is_none).ok_or(Error::Full)?;
         let id = self.domains().map(|d| d.id).max().unwrap_or(VOLUME) + 1;
@@ -1581,11 +1629,11 @@ impl<'a, D: Device> Store<'a, D> {
         if !self.crypto.random(&mut key) { return Err(Error::NoRandom); }
         let lba = self.room(1)?;
         self.claim(lba, 1);
-        let written = self.write_record(lba, &key_record(id, KEY_LIVE, owner, &key), KEYS);
+        let written = self.write_record(lba, &key_record(id, KEY_LIVE, owner, limit_kib, &key), KEYS);
         let keys = Keys::new(&key);
         key.fill(0);
         written?;
-        self.domains[slot] = Some(Domain { id, owner, forgotten: false, records: 0, keys, key_at: lba, tomb_at: 0 });
+        self.domains[slot] = Some(Domain { id, owner, forgotten: false, records: 0, limit: limit_kib as u64 * 1024, keys, key_at: lba, tomb_at: 0 });
         Ok(id)
     }
 
@@ -1598,7 +1646,7 @@ impl<'a, D: Device> Store<'a, D> {
         if self.domains[k].is_some_and(|d| d.owner != owner) { return Err(Error::Rights); }
         let lba = self.room(1)?;
         self.claim(lba, 1);
-        self.write_record(lba, &key_record(id, KEY_GONE, owner, &[0; 32]), KEYS)?;
+        self.write_record(lba, &key_record(id, KEY_GONE, owner, 0, &[0; 32]), KEYS)?;
         // Forgotten from here whatever follows: a mount that finds the tombstone erases the key record too.
         let d = self.domains[k].as_mut().unwrap();
         (d.forgotten, d.tomb_at, d.keys) = (true, lba, Keys::NONE);
