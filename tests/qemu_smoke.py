@@ -12561,7 +12561,7 @@ def sshd_check(args, disk, cpu):
             out = scp("mind@127.0.0.1:upload.bin", str(back))
             assert out.returncode == 0 and hashlib.sha256(back.read_bytes()).digest() == hashlib.sha256(upload.read_bytes()).digest(), out
             out = sftp("mkdir d\nput " + str(upload) + " d/copy.bin\nls -l d\nrename d/copy.bin d/moved.bin\nls d\nrm d/moved.bin\nrmdir d\nls\n")
-            assert out.returncode == 0 and "copy.bin" in out.stdout and "moved.bin" in out.stdout and "upload.bin" in out.stdout and "ssh" not in out.stdout.split("sftp> ls\n")[-1], out
+            assert out.returncode == 0 and "copy.bin" in out.stdout and "moved.bin" in out.stdout and "upload.bin" in out.stdout and "ssh" not in out.stdout.split("sftp> ls\n")[-1].split(), out
             # The keys' directory and a path above the root: refused, so the files' right never reaches another key.
             for path in ("ssh/authorized_keys", "/SSH/authorized_keys", "../../x"):
                 out = sftp(f"get {path} {work / 'taken'}\n")
