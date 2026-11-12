@@ -15,7 +15,8 @@
 /// Chosen names have a copy on a second medium, a store of its own that each of their changes reaches after the store,
 /// and a block one medium finds damaged is repaired from the other (309-STO-0040, 2.5). The copy's names are listed with how
 /// each stands against the store, and a name only the copy holds is brought back into the store from it (309-STO-0041, 2.6).
-package mind:blockstore@2.6.0;
+/// A memory domain may be made with a limit of its own on what it retains, beside its owner's quota (312-STO-0046, 2.7).
+package mind:blockstore@2.7.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
@@ -186,6 +187,14 @@ interface blockstore {
     domain-forget: func(id: u16) -> result<_, error>;
     /// The domains of the caller's owner (2.2).
     domains: func() -> result<list<domain, 32>, error>;
+    /// Makes a memory domain as `domain-create` does, whose names and pins together retain at most `kib` KiB, each root
+    /// counted once, beside the owner's quota (MC-4.11); 0 sets no limit of its own. The limit is kept with the domain's
+    /// key and does not change while it lives. A `publish`, `commit` or `pin` through its client past it is `quota`.
+    /// Errors as `domain-create`'s (2.7, 312-STO-0046).
+    domain-create-limited: func(kib: u32) -> result<u16, error>;
+    /// What domain `id` of the caller's owner retains, its own limit in bytes (`quota`, 0 for none), and its names and
+    /// pins. Errors: not-found (no such live domain), rights (another owner's, or asked through a domain's client) (2.7).
+    domain-usage: func(id: u16) -> result<usage, error>;
 
     /// Reads and checks every record of the medium now, as a mount does, and returns what it found; the caller, and every
     /// other client, waits for the whole medium (MC-5.1). Each record that does not open or is not whole is logged; nothing is written or

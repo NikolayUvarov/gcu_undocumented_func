@@ -39,6 +39,10 @@ rustc --edition=2021 -O -C debug-assertions=on --test tests/journal_host.rs -o "
 # each word scanned too: optimized, its checks of overflow and assertions kept, 4 s rather than 44 (312-STO-0035).
 rustc --edition=2021 -O -C debug-assertions=on --test tests/index_host.rs -o "$OUT/index-tests"
 "$OUT/index-tests"
+# The vector index's tests score every vector of journals of hundreds of embeddings for each query, also by the exact
+# scan: optimized, its checks of overflow and assertions kept, 1 s rather than 13 (312-STO-0047).
+rustc --edition=2021 -O -C debug-assertions=on --test tests/vector_host.rs -o "$OUT/vector-tests"
+"$OUT/vector-tests"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"

@@ -261,6 +261,16 @@ fn index_for(sectors: u64, copy: bool) -> &'static mut [Entry] {
 }
 
 fn text(name: &[u8]) -> &str { core::str::from_utf8(name).unwrap_or("?") }
+// The log line of a domain made, or why none was (308-STO-0023); its limit when it has one (312-STO-0046).
+fn domain_made(made: Result<u16, Error>, owner: u16, pid: u64, kib: u32) {
+    match made {
+        Ok(id) if kib > 0 => mind::println!("[BLOCKSTORE] DOMAIN {} MADE FOR BADGE {} BY PID {}, RETAINING AT MOST {} KIB", id, owner, pid, kib),
+        Ok(id) => mind::println!("[BLOCKSTORE] DOMAIN {} MADE FOR BADGE {} BY PID {}", id, owner, pid),
+        Err(Error::NoRandom) => mind::println!("[BLOCKSTORE] NO DOMAIN FOR PID {}: NO {}, AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED", pid, mind::random::SOURCE),
+        Err(_) => {}
+    }
+}
+
 fn medium(side: Side) -> &'static str { match side { Side::Store => "THE STORE'S MEDIUM", Side::Copy => "THE COPY" } }
 
 // What the copy did, logged (309-STO-0040).
@@ -564,6 +574,8 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::DomainClient { .. }, call)) if refused(Operation::DomainClient) || through_domain(Operation::DomainClient) => blockstore::reply_domain_client(call, Err(Error::Rights)),
             Ok((Request::DomainForget { .. }, call)) if refused(Operation::DomainForget) || through_domain(Operation::DomainForget) => blockstore::reply_domain_forget(call, Err(Error::Rights)),
             Ok((Request::Domains, call)) if refused(Operation::Domains) || through_domain(Operation::Domains) => blockstore::reply_domains(call, Err(Error::Rights)),
+            Ok((Request::DomainCreateLimited { .. }, call)) if refused(Operation::DomainCreate) || through_domain(Operation::DomainCreate) => blockstore::reply_domain_create_limited(call, Err(Error::Rights)),
+            Ok((Request::DomainUsage { .. }, call)) if refused(Operation::Domains) || through_domain(Operation::Domains) => blockstore::reply_domain_usage(call, Err(Error::Rights)),
             Ok((Request::Scrub, call)) if refused(Operation::Scrub) => blockstore::reply_scrub(call, Err(Error::Rights)),
             Ok((Request::Scrubbed, call)) if refused(Operation::Scrubbed) => blockstore::reply_scrubbed(call, Err(Error::Rights)),
             // Recovery keys are the volume's, never a domain's (308-STO-0028).
@@ -735,12 +747,18 @@ fn main(_info: &'static BootInfo) {
             }
             Ok((Request::DomainCreate, call)) => {
                 let made = store.as_mut().map_err(|e| *e).and_then(|s| s.domain_create(owner).map_err(error));
-                match made {
-                    Ok(id) => mind::println!("[BLOCKSTORE] DOMAIN {} MADE FOR BADGE {} BY PID {}", id, owner, pid),
-                    Err(Error::NoRandom) => mind::println!("[BLOCKSTORE] NO DOMAIN FOR PID {}: NO {}, AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED", pid, mind::random::SOURCE),
-                    Err(_) => {}
-                }
+                domain_made(made, owner, pid, 0);
                 blockstore::reply_domain_create(call, made)
+            }
+            Ok((Request::DomainCreateLimited { kib }, call)) => {
+                let made = store.as_mut().map_err(|e| *e).and_then(|s| s.domain_create_limited(owner, kib).map_err(error));
+                domain_made(made, owner, pid, kib);
+                blockstore::reply_domain_create_limited(call, made)
+            }
+            Ok((Request::DomainUsage { id }, call)) => {
+                let usage = store.as_ref().map_err(|e| *e).and_then(|s| s.domain_usage(id, owner).map_err(error))
+                    .map(|u| Usage { retained: u.retained, quota: u.quota, names: u.names, pins: u.pins });
+                blockstore::reply_domain_usage(call, usage.as_ref().map_err(|e| *e))
             }
             Ok((Request::DomainClient { id }, call)) => {
                 let cap = store.as_ref().map_err(|e| *e).and_then(|s| match s.domains().find(|d| d.id == id && !d.forgotten) {
