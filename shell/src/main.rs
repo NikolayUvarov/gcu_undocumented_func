@@ -167,7 +167,7 @@ struct Shell {
     commands: Option<Endpoint>, // the shell's commands for a window manager (idl/shell.wit, 211-APP-0044): init's, else made at the first lend
     gave_up: u32, // the calls whose caller gave up before the shell's answer, which the shell did not write (caller_waits)
     managers: alloc::vec::Vec<u64>, // the window managers the shell started with its commands: they set the clock at once (000-APP-0060)
-    unasked: bool, // while a line from the link's client runs (800-APP-0102): no question in the shell's window
+    unasked: bool, // while a line from the link's client or an SSH session runs (800-APP-0102, 112-APP-0136): no question in the shell's window
     console_link: bool, // while a line of the link's console runs (800-APP-0108): a script's questions answered yes
     owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
     fronts: [Option<(u64, u8)>; 4], // programs a program in front started in its place, and their console (issue 160)
@@ -347,6 +347,12 @@ impl Shell {
                 let _ = mind::idl::wire::reply_code(call, commands::Error::Refused as usize);
                 continue;
             }
+            // The copy badged for an SSH session (112-APP-0136) reaches `run` alone: no window, setting or lent client.
+            if message.badge == clients::BADGE_REMOTE && !matches!(request, commands::Request::Run { .. }) {
+                mind::println!("[SHELL] PID {} CALLED THE SHELL THROUGH AN SSH SESSION'S CLIENT FOR ANOTHER COMMAND THAN RUN: REFUSED", message.sender);
+                let _ = mind::idl::wire::reply_code(call, commands::Error::Refused as usize);
+                continue;
+            }
             match request {
                 commands::Request::Window => {
                     let result = self.open_window(false).map(|(_, id)| id);
@@ -477,14 +483,16 @@ impl Shell {
                 commands::Request::Run { line } => {
                     // The link's client in developer mode (800-APP-0102) is told by its badge, which no lent client can set.
                     let link = message.badge == mind::process::BADGE_SHELL_LINK;
+                    // `sshd`'s, for a login's console (112-APP-0136): as init minted it, never asked on the screen.
+                    let remote = message.badge == clients::BADGE_REMOTE;
                     // The owner's `link-console` mode (init.wit 1.8, 800-APP-0108) makes it the console's: asked at each line.
-                    let kind = if !link { clients::Client::Program } else if link_console() { clients::Client::LinkConsole } else { clients::Client::Link };
+                    let kind = if remote { clients::Client::Remote } else if !link { clients::Client::Program } else if link_console() { clients::Client::LinkConsole } else { clients::Client::Link };
                     let result = self.line_for(line.as_str(), message.sender, kind);
                     let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
-                    if link {
+                    if link || remote {
                         // The command's word alone in the system log: its arguments may be the user's (as `link` logs it).
                         let word = line.as_str().split_whitespace().next().unwrap_or("");
-                        let whose = if kind == clients::Client::LinkConsole { "THE LINK'S CONSOLE" } else { "THE LINK" };
+                        let whose = match kind { clients::Client::LinkConsole => "THE LINK'S CONSOLE", clients::Client::Remote => "AN SSH SESSION", _ => "THE LINK" };
                         mind::println!("[SHELL] FOR {} THE SHELL {} {}", whose, verdict, word.to_ascii_uppercase());
                     } else {
                         self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));

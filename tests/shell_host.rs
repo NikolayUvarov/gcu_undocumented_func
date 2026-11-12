@@ -181,6 +181,32 @@ fn the_links_console_gets_scripts_and_the_policy_but_never_mode() {
 }
 
 #[test]
+fn an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file() {
+    // 112-APP-0136, for 112-NET-0072: a login's console is never asked on the machine's screen.
+    use clients::{taken_by, Client, Taken};
+    let remote = |line: &str| taken_by(line, Client::Remote);
+    for line in ["ps", "ip", "netgrants", "date", "netpolicy", "help kill", "netstat -i", "ping -c 1 10.0.2.2", "logs 7", "stat caps 7", "pmap 7", "caps 3", "kill 7",
+                 "reboot", "poweroff", "shutdown -f", "budget 7 5 10", "date set 2026-11-12 12:00", "logger hello", "hostname dexp", "fetch ya.ru /", "volume"] {
+        assert_eq!(remote(line), Taken::Now, "{}", line);
+        assert_eq!(taken_by(line, Client::Link), Taken::Now, "{}", line);
+    }
+    // Refused as for the link: the policy's changes, modes, scripts, the screen's commands, programs, the firmware's and
+    // the updater's commands.
+    for line in ["netpolicy add allow x", "netrevoke fetch", "mode", "mode maintenance on", "msh /diag/quick.msh", "msh -c \"print(1)\"", "fg 1", "keymap ru",
+                 "screenshot", "voice on", "run fm", "fm", "caps", "let x = 1", "clear", "", "boot", "update apply", "passphrase set", "ls", "cat data/x"] {
+        assert_eq!(remote(line), Taken::Refused, "{:?}", line);
+    }
+    // Refused besides: a file written in the shell's name, the files being the key's `files` right's, and the TPM.
+    for line in ["ps > data/ps.txt", "logs 7 >> ram:logs.txt", "tpm", "tpm seal x"] {
+        assert_eq!(remote(line), Taken::Refused, "{:?}", line);
+        assert_ne!(taken_by(line, Client::Link), Taken::Refused, "{:?}", line);
+    }
+    // Nothing a remote line gets is asked.
+    for line in ["kill 7", "reboot", "hostname dexp", "date set 2026-11-12 12:00", "logs 7"] { assert_ne!(remote(line), Taken::Asked, "{}", line); }
+    assert_eq!(clients::BADGE_REMOTE, 3);
+}
+
+#[test]
 fn a_line_splits_at_its_redirection() {
     // 000-APP-0074: `>` and `>>` after a command, one file at the end; `>` inside double quotes is text.
     use redirect::{split, Split};
