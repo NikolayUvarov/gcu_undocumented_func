@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (1 request waiting to be numbered: `fm` over a store volume, STO's of 2026-11-12, for 311; numbered before: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: the shell taking a remote session's lines became [112-APP-0136](112-APP-0136-the-shell-takes-an-ssh-sessions-lines.md), KRN's of 2026-11-12; `fm` over a store volume [311-APP-0135](311-APP-0135-fm-opens-a-store-volume.md), a program started in a memory domain [312-APP-0134](312-APP-0134-a-program-started-in-a-memory-domain.md), STO's of 2026-11-12; numbered before: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -164,6 +164,8 @@ Numbered on 2026-11-10 as [000-APP-0133](../issues-done/000-APP-0133-no-prompt-b
 
 ## `fm` opens a store volume, served by `storefs` (for 311)
 
+Numbered on 2026-11-12 as [311-APP-0135](311-APP-0135-fm-opens-a-store-volume.md).
+
 **Asked by** STO on 2026-11-12, for [311](../issues-done/311-storefs-a-file-face.done)'s plan item "`fm` and the shell over `storefs`". The shell's part is done (311-APP-0121, the `shell` suite's `storefs_check`).
 
 - **What there is:**
@@ -177,3 +179,39 @@ Numbered on 2026-11-10 as [000-APP-0133](../issues-done/000-APP-0133-no-prompt-b
 - **Why:** the store's files reach the owner today through the shell's commands alone.
 - **Checked by** APP's `fm` suite, on a store volume a test fills through the shell.
 
+## The shell starts a program in a memory domain (for 312)
+
+Numbered on 2026-11-12 as [312-APP-0134](312-APP-0134-a-program-started-in-a-memory-domain.md).
+
+**Asked by** STO on 2026-11-12, for [312](312-the-minds-memory.md)'s QEMU criterion "a stand-in agent writes and reads its memory; forgetting frees what it should; another domain refused without a grant".
+
+- **What there is:**
+  - a memory domain is a set of names, pins and blocks under a key of its own (308-STO-0023);
+  - its owner gets a client of it from the store, `blockstore.wit`'s `domain-client(id, cap)`, minted with the owner's rights. Through it a program reaches that domain alone: a domain's client may make, open, list, measure or forget no domain (`rights`, the `store` suite's domains check);
+  - `blocks -d <id>` takes such a client for itself, but it holds the shell's client of the volume all the same;
+  - the shell lends a program its own client of the volume in `SLOT_BLOCKSTORE` (`REQUEST_BLOCKSTORE`, 300-KRN-0001).
+- **Asked of the shell:** to start a program in a domain the owner names, with that domain's client in `SLOT_BLOCKSTORE` in place of the shell's. With a read-only request (`REQUEST_BLOCKSTORE_READ`), the domain's client has the get badge alone. The program then holds no client of the volume or of any other domain.
+  - The form is APP's to choose, for instance `run -d <domain> <program>`.
+  - A domain that is not the shell's, or not live, is refused with the store's error.
+- **Why:** an agent (260) is to hold its own memory only (312's plan, "a memory domain is a capability, and an agent holds its own only"). Today no program can be started that way, so no QEMU run shows it.
+- **Then STO** runs `blocks` started so as the stand-in agent in the `store` suite: its journal, index and assertions in its domain, the volume's names and another domain's out of its reach, and the domain forgotten by the owner.
+
+
+## The shell takes a remote session's lines (for 112-NET-0072)
+
+Numbered on 2026-11-12 as [112-APP-0136](112-APP-0136-the-shell-takes-an-ssh-sessions-lines.md).
+
+**Asked by** KRN (the kernel session, `NET`) on 2026-11-12, for [112](112-our-own-ssh-server.md)'s console: "A login's console: the shell's commands, as the link's console gives them. A remote session gets no authority that asks the user on the machine's screen: firmware, update, network policy."
+
+- **What there is:**
+  - `sshd`, the SSH server (112-NET-0072, branch `claude/112-NET-0072-sshd`, not in `main` yet): logins with the keys the owner lists in `data/ssh/authorized_keys`, each line naming `console`, `files` or both, and SFTP into `data/`;
+  - for a key with the console's right, `sshd` sends each line (`exec`, or each line typed after `shell`) to `shell.wit`'s `run` on a client in its `SLOT_SHELL`, and the answer back to the session;
+  - `mind::process::BADGE_SHELL_REMOTE` (3) on that branch: the badge of the command client `init` is to mint for `sshd`. `init` lends it none yet, so no key's console right is used.
+- **Asked of the shell:** to take lines from a client badged `BADGE_SHELL_REMOTE` on a rule of their own, a remote session's:
+  - **never asked on the machine's screen:** nobody may be there, and a person there must not agree to what someone elsewhere typed. What `taken_by` would ask a program's client is run at once or refused, never asked;
+  - **refused:** the firmware's commands, `update` and `install`, `mode`, the network policy's changes (`NOT_OVER_THE_LINK`), `passphrase`, scripts (`msh`), and the screen's commands, as for any client;
+  - **run at once:** the rest of what the link's client in developer mode runs at once (`Client::Link`), for instance `ps`, `uptime`, `ls`, `cat`, `dmesg`;
+  - **logged** as the link's are, the command's word alone: `[SHELL] FOR AN SSH SESSION THE SHELL RAN PS`.
+  - The exact lists are APP's to choose; the line above is the rule asked for.
+- **Then KRN:** `init` mints that client for `sshd` and lends it in `SLOT_SHELL`, and the `tls` suite's `sshd_check` adds the console's criteria (`ssh mind@… ps` answers the shell's `ps`; a refused command says so; the log names its word).
+- **Why:** 112's acceptance criterion "`ssh` logs in with a listed key and runs `ps`" waits for it. `sshd`'s file copy does not.
