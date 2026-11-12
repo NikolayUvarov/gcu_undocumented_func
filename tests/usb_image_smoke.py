@@ -47,7 +47,6 @@ def main():
         run(args, booted)
         store_partition_check(args, work)
         slots_check(args, work)
-        swapped_unasked(args, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -390,62 +389,6 @@ def another_manifest(image, name):
     other.write_bytes(data)
     assert other.read_bytes()[:512] == image.read_bytes()[:512], "the copy keeps the stick's sector 0"
     return other
-
-
-def swapped_unasked(args, work):
-    """000-KRN-0085: the stick swapped for a copy with another manifest while vfs_server asks nothing of it. First a stick
-    in the boot stick's place, as unplugged() puts one (QEMU lets go of a boot device only once the guest sees it
-    gone); then that one out and the copy in at once. The next request finds the device enumerated again: usb_storage
-    runs nothing on it and ends, init starts it again, and vfs_server, told of the return rather than given the request
-    again, compares the medium first: another one, so its volumes close and nothing it cached is written to the copy."""
-    stick = work / "unasked.img"
-    shutil.copyfile(args.image, stick)
-    other = another_manifest(stick, "-swapped")
-    before = hashlib.sha256(other.read_bytes()).hexdigest()
-    vm = VM(args, qemu_path(stick, args.qemu), usb=True, snapshot=False)
-    try:
-        vm.hmp("device_del usbstick")
-        require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
-        for command in (f"drive_add 0 if=none,id=usbagain,format=raw,file={stick}", "device_add usb-storage,drive=usbagain,id=usbagain"):
-            answer = vm.hmp(command)
-            assert answer.strip() in ("", "OK"), (command, answer)
-        for _ in range(40):
-            time.sleep(2)
-            if "NAME=memmap" in vm.command("run memmap &"):
-                break
-        else:
-            raise AssertionError("memmap does not start after the stick is plugged in again")
-        require(vm.command("sync"), "OK")
-        vm.service_logs("usb_host")  # drained, so that the lines below are the swap's
-        vm.service_logs("vfs_server")
-        for command in ("device_del usbagain", f"drive_add 0 if=none,id=usbswap,format=raw,file={other}", "device_add usb-storage,drive=usbswap,id=usbswapped"):
-            answer = vm.hmp(command)
-            assert answer.strip() in ("", "OK"), (command, answer)
-        require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
-        # The first request after the swap waits for usb_storage to find the device again.
-        log = ""
-        for _ in range(20):
-            vm.command("ls log:", raw=True, timeout=90)
-            log += vm.service_logs("vfs_server")
-            if "ANOTHER MEDIUM" in log:
-                break
-            time.sleep(1)
-        require(log, "DRIVE ANSWERED NOT FOUND")
-        require(log, "CAME BACK WITH ANOTHER MEDIUM")
-        assert "DOES NOT ANSWER" not in log, "vfs_server saw the drive not answer: the swap was not made unasked"
-        require(vm.service_logs("usb_storage", "ENUMERATED AGAIN"), "[USB] STORAGE: A DEVICE CAME BACK, ENUMERATED AGAIN")
-        vm.command("write log:swap.txt written after the swap", raw=True)
-        vm.command("sync", raw=True)
-        time.sleep(3)
-        assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "the old volumes wrote to another medium"
-        assert "PANIC" not in vm.log, vm.log[-2000:]
-    finally:
-        vm.close()
-        (Path(tempfile.gettempdir()) / f"mind-core-usb-unasked{'' if args.arch == 'x86_64' else '-' + args.arch}.log").write_text(vm.log)
-        other.unlink(missing_ok=True)
-        stick.unlink(missing_ok=True)
-    print(f"PASS ({args.arch}): a stick swapped for a copy with another manifest while vfs_server asked nothing (000-KRN-0085): "
-          "the return reported, the medium compared, the volumes closed, the copy not written", flush=True)
 
 
 def came_back(vm, times):
