@@ -8,7 +8,17 @@
 /// one of two pins, so that a pin can rotate, with its name, validity and purpose still checked; and a client badged
 /// `BADGE_TLS_NO_DEVICE` (`mind::network`, 351-NET-0022) is refused `client-certificate` (`denied`): a launcher lends
 /// such a client to a program, so that it cannot sign in as the device.
-package mind:tls@1.2.0;
+///
+/// 1.3 adds the server role (110-NET-0069). A session listens on a TCP port of its lent flow (`listen`), whose listening
+/// grant (socket.wit 2.9) names the port and the networks a peer may connect from; each connection a peer set up becomes
+/// a new session of the same client (`accept`), and the service runs its TLS 1.3 handshake as the server, with the
+/// device certificate, or the chain in `tlsserver.pem` on the boot disk whose first certificate holds the device key.
+/// The key service makes every signature (keystore.wit 1.7 `tls-server`): the private key never enters this service.
+/// The server role presents the device, so a client badged `BADGE_TLS_NO_DEVICE` may not listen (`denied`). No server
+/// call waits for a peer, so a slow one holds up no other session: a handshake goes on as `served`, `send` and
+/// `receive` are called, and one not done within 10 s of its accept fails. TLS 1.3 alone, no resumption, no client
+/// certificate asked for. The service holds 16 sessions, 8 of one client.
+package mind:tls@1.3.0;
 
 interface tls {
     /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
@@ -47,4 +57,23 @@ interface tls {
     /// and the handshake's signature by its key. Its issuer is not looked for: a server may send its leaf alone. A
     /// server that matches no pin, or fails a check, is refused (`certificate`).
     connect-pins: func(session: u32, name: string<253>, address: u32, port: u16, pins: list<pin, 2>, timeout-ms: u32) -> result<peer, error>;
+
+    /// A connection a listening session took (1.3): the new session, and the peer's IPv4 address and TCP port.
+    record accepted { session: u32, address: u32, port: u16 }
+    /// The session listens on TCP `port` of its lent flow, holding up to `backlog` (1 to 16) connections set up and
+    /// not yet accepted (1.3). `denied`: a client badged `BADGE_TLS_NO_DEVICE`, a port the flow's listening grant does
+    /// not name, or no device key; `refused`: another socket listens on the port; `certificate`: `tlsserver.pem` is
+    /// there and holds no certificate, or its first does not hold the device key; `invalid`: the session is connected
+    /// or listens already.
+    listen: func(session: u32, port: u16, backlog: u8) -> result<_, error>;
+    /// The oldest connection the listening session holds, as a new session of the same client whose handshake as the
+    /// server has started (1.3). It waits for no peer: `again` when no connection waits; `limit` when the client holds
+    /// 8 sessions or the service 16, the connection left waiting.
+    accept: func(listener: u32) -> result<accepted, error>;
+    /// An accepted session's handshake, taken as far as the peer's bytes allow (1.3): `again` while it waits for the
+    /// peer; the suite and group once it is done (`client-certificate` is false: none is asked for); `timeout` when it
+    /// was not done within 10 s of its accept, `handshake` when it failed otherwise (no Ed25519 among the peer's
+    /// signature schemes, a key service that would not sign). A failed session holds no connection; `close` frees it.
+    /// Until the handshake is done, `send` and `receive` answer `again`.
+    served: func(session: u32) -> result<peer, error>;
 }
