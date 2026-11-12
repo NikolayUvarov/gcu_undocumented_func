@@ -31,7 +31,9 @@ NTS-KE checks the server's certificate for the server's name (RFC 8915, section 
 
 **Made (2026-11-12)** on `claude/111-NET-0073-tls-alpn-exporter`: `idl/socket.wit` 2.12 and its bindings; `netstack`'s `set_names`, `names` and `add_rules` (`netstack/src/policy.rs`); `netpolicy`'s names in `policy_for` and `policy-names` at the grant, and its pending names (`Pending`, `resolve_pending`, `policy-add`). Built for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`; `tests/idl_test.py` passes. Docs: `docs/network/policy.md`, `docs/idl/README.md`.
 
-**Left:** the QEMU criterion, with 111-NET-0075; the gate.
+**QEMU, x86** (this container, with 111-NET-0075's `nts_check`): `timed`'s grant made with 5 of its 8 lines waiting for the network, the 5 rules added once DHCP was done, and the name `mind.test` read back by `timed` and checked by `tls` for each NTS-KE.
+
+**Left:** aarch64, on the maintainer's machines; the gate.
 
 ## Related
 

@@ -30,7 +30,8 @@ rustls's unbuffered connections, which `tls` uses, have no public exporter: only
 **Made (2026-11-12)** on `claude/111-NET-0073-tls-alpn-exporter`, on 110-NET-0069's branch (`tls.wit` 1.3):
 - `idl/tls.wit` 1.4 and its bindings; `tls`'s `connect-alpn` and `export`; the per-connection key log (`Keys`) and `exporter.rs`.
 - **Tested** (this container): `tests/tls_exporter_host.rs`, 4 tests, against two vectors made with OpenSSL 3.0.13 (`s_client -keylogfile`, `-keymatexport EXPORTER-network-time-security -keymatexportlen 32`, both ends printing the same bytes). They pass. `scripts/host_tests.sh` runs them. `tls` builds for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`; `tests/idl_test.py` passes.
-- **Left:** the QEMU criteria, with 111-NET-0075; the gate.
+- **QEMU, x86** (this container, 111-NET-0075's `nts_check`): `ntske/1` agreed with Python's `ssl` (OpenSSL) and with `chronyd` 4.5 (GnuTLS); keys from `export` that both servers derived too, under SHA-384 (OpenSSL chose AES-256-GCM) and SHA-256 (GnuTLS chose ChaCha20-Poly1305); a server agreeing on no protocol refused, and `tls` logged why.
+- **Left:** aarch64, on the maintainer's machines; the gate.
 
 ## Related
 

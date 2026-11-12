@@ -39,7 +39,15 @@ Stage 1's `timed` takes SNTP answers that anyone on the path can forge, within b
 - `tests/qemu_smoke.py`: `_Nts` (NTS-KE over Python's `ssl`, the exporter from OpenSSL's key log, AES-SIV over `cryptography`'s AES-CMAC and AES-CTR, checked against RFC 5297 at each start), `nts_check` in the `tls` suite and alone as `--suites nts`.
 - Docs: `docs/profile/clocks.md` (NTS), `docs/network/policy.md`, THIRD_PARTY.md (`aes-siv`, `cmac`, `dbl`).
 - **Tested** (this container): `tests/nts_host.rs`, 6 tests, pass (3000 fuzzed inputs at the default seed); `tests/services_host.rs` passes; `timed` and `init` build for both targets.
-- **Left:** the QEMU checks on both architectures; the interop with chrony; the gate.
+- **QEMU, x86** (this container, QEMU 8.2.2 under TCG, 4 CPUs, `--suites nts`): passed.
+  - The first run failed, and found 111-NET-0074's gap: `timed`'s grant is made before DHCP, so its servers' host names did not resolve. Fixed there; the passing run's grant: `3 RULES, 5 WAITING FOR THE NETWORK`, then `5 RULES ADDED, ITS HOST NAMES RESOLVED ONCE THE NETWORK CAME UP`.
+  - Four NTS-KE through `tls`, each `mind.test VERIFIED, PROTOCOL ntske/1, SUITE 1302` (AES-256-GCM-SHA384, so the exporter's SHA-384 path), 8 cookies, the NTP port the server named.
+  - `SET 2026-11-12 22:14:02 (WAS 2024-01-01 00:00:26, …), 2 OF 4 SERVERS AGREED, 2 BY NTS`, the two honest servers `AUTHENTICATED BY NTS (mind.test, 8 COOKIES), AGREES`; `date` within 1 s of the host's.
+  - The forging server's answers `NOT AUTHENTIC UNDER THE SERVER'S KEY`; the replaying server's `ITS UNIQUE IDENTIFIER IS NOT OUR REQUEST'S`, and once its cookies ran out, NTS-KE again.
+  - Second boot: the server agreeing on no protocol refused (`TLS REFUSED IT: Handshake`, `tls`: `IT DID NOT AGREE ON THE PROTOCOL ntske/1`), the rogue CA's (`Certificate`), each `AGAIN IN 10 S`; `NOTHING SET: FEWER THAN 2 ANSWERS (1 OF 1 ANSWERED)`.
+- **Interop** (this container, a local script, not a gate test): `timed` against two `chronyd` 4.5 NTS servers (GnuTLS) on the host, the same certificate: NTS-KE with both (`SUITE 1303`, ChaCha20-Poly1305-SHA256, so the exporter's SHA-256 path), `SET … 2 OF 2 SERVERS AGREED, 2 BY NTS`. So `timed`'s NTS-KE, keys, packets and cookies agree with an implementation other than the test's, on both hashes of the exporter. Evidence of these runs, not a proof (MC-12.2); not on a machine (MC-12.1).
+- **`scripts/host_tests.sh`:** `nts` and `tls_exporter` are Cargo packages: in `OWN_LINES` (000-KRN-0238, merged with 110-NET-0069's branch).
+- **Left:** the `tls` suite on x86 and aarch64 on the maintainer's machines; the gate.
 
 ## Related
 

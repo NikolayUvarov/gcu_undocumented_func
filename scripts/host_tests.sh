@@ -10,7 +10,7 @@ rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
 # Every tests/*_host.rs, but those built on a line of their own (flags, a crate, an order): a new test needs no line
 # here, so tracks that add tests do not meet in this file (000-KRN-0238).
-OWN_LINES=" blockstore hostname index journal listen network_budget regdb rtw89_service rtw89_station_filter tts vector voice "
+OWN_LINES=" blockstore hostname index journal listen network_budget nts regdb rtw89_service rtw89_station_filter tls_exporter tts vector voice "
 for file in tests/*_host.rs; do
     test=$(basename "$file" _host.rs)
     [[ $OWN_LINES == *" $test "* ]] && continue
