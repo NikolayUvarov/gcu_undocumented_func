@@ -1,6 +1,6 @@
 # 000-KRN-0235 — `init` starts the clipboard service and gives the shell its client to mint copies from
 
-**Type:** kernel track (`init`, the boot images) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** APP's service in `main` (`claude/wizardly-franklin-kec1a9` a6944c81) · **Main task:** — ([000-APP-0032](000-APP-0032-system-clipboard.md)) · **Roadmap:** track G · **Constitution:** MC-2.3, MC-3.4, MC-12.4
+**Type:** kernel track (`init`, the boot images) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** — ([000-APP-0032](000-APP-0032-system-clipboard.md)) · **Roadmap:** track G · **Constitution:** MC-2.3, MC-3.4, MC-12.4
 
 ## Problem and plan
 
@@ -21,6 +21,16 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP
 
 - What the request's "Checked by" names, run by the asking track once this is in; `init`'s or the loader's own lines in the log.
 - The tests the change touches pass on x86 and aarch64 in QEMU.
+
+## Progress
+
+**Made (2026-11-12)** on `claude/000-KRN-0235-clipboard`, on 112-NET-0072's branch (handoff 34), after APP's service reached `main` (round 124, 60b995bd):
+- **Handoff 35:** `clipboard` a boot image after `sshd`, last before the shell (`common/abi.rs`: 52 images; `tests/boot_abi_host.rs`: BootInfo 1192 bytes); `clipboard.elf` in `02_build.sh`'s crates, as APP asked (`KRN/2026-11-12T1931Z`).
+- **`init`:** its endpoint and nothing else, one endpoint of quota, configurable (`services::CONFIGURABLE`); the shell's client in `SLOT_CLIPBOARD` with `CAP_BADGE` when it runs, kept by `init` and revoked with every copy the shell minted before a new shell starts, as `SLOT_NN`.
+- **Docs:** `docs/profile/bootstrap.md` (its row, and the shell's).
+- `tests/qemu_smoke.py`'s service list names it, so every suite's boot checks it runs.
+- **Tested** (this container): `tests/boot_abi_host.rs`, `tests/services_host.rs`; `init` and `clipboard` build for both targets.
+- **Left:** the boot and tools groups on x86 and aarch64; APP's `tools` checks of its own; the gate.
 
 ## Related
 

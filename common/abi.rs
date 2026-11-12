@@ -3,11 +3,11 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 51;
+pub const BOOT_IMAGES: usize = 52;
 // ABI 10's image array stays in the fixed prefix; later images are appended after all ABI 10 fields.
 pub const BOOT_PREFIX_IMAGES: usize = 36;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "uart_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "uart_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bt_hci.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "storefs.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "timed.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "nnd.elf", "updater.elf", "effector_gw.elf", "effector.elf", "httpd.elf", "sshd.elf", "shell.elf"];
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "uart_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "uart_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bt_hci.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "storefs.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "timed.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "nnd.elf", "updater.elf", "effector_gw.elf", "effector.elf", "httpd.elf", "sshd.elf", "clipboard.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 5] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2", "rtl8168#1"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64); rtl8168#1: the DEXP's second wired port (211-KRN-0187)
@@ -84,10 +84,11 @@ pub const ABI_VERSION: u32 = 32;
 // (111-KRN-0206), renumbers the images after it. Handoff 30: `uart_serial`, the link's line on a board's UART, after
 // `usb_serial` (100000-KRN-0221), renumbers the images after it. Handoff 33: `httpd`, the release server, last
 // before the shell (110-NET-0070, where the gateway's lists of 48 services still hold `effector`), adds an image. Handoff 34:
-// `sshd`, the SSH server, after `httpd` (112-NET-0072), adds another.
+// `sshd`, the SSH server, after `httpd` (112-NET-0072), adds another. Handoff 35: `clipboard`, the system clipboard,
+// after `sshd` and last before the shell (000-KRN-0235), adds another.
 // Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
 // refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
-pub const BOOT_HANDOFF_VERSION: u32 = 34;
+pub const BOOT_HANDOFF_VERSION: u32 = 35;
 // BootInfo.boot_flags: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init ignores
 // data/services.txt (173-KRN-0036).
 pub const BOOT_SAFE: u32 = 1;
