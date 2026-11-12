@@ -59,7 +59,8 @@ Not covered: a board stopped in U-Boot, a card that does not boot, a wedged chip
   - `tests/fdt_host.rs`: the H5's and the PinePhone's 0x01C20CA0, the H618's 0x030090A0, none on `virt`. It passes.
   - The aarch64 kernel builds, with and without `watchdog-test`.
 - **On acc-1** (Effector, QEMU under TCG), at 2a87a348: "aarch64: boot and fault containment" (164 s) and "aarch64: the board from a device tree, under U-Boot" (113 s) passed. Their boots, through AAVMF's ACPI and through U-Boot's tree, each said `WATCHDOG: NONE (THE FIRMWARE NAMES NO WATCHDOG THIS KERNEL DRIVES)`.
-- **Left:** the gate; the boards' runs (MOB).
+- **Landed** in `main` d44b673a (round 123, candidate 73298271: its 45 groups passed on the maintainer's machines; GitHub CI on the candidate sat queued, as on earlier rounds).
+- **Left:** the boards' runs (MOB).
 
 ## Related
 
