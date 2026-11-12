@@ -15415,8 +15415,9 @@ def store_partition_disk_check(args, disk):
     another system's partition before the store's and after it, and beside it a disk of the other bus that is wholly
     another system's. init takes the store's partition, window 1 of its driver; an object put and a name published there
     are found after a reboot. On the host afterwards, every sector outside the store's partition on both disks is as it
-    was written, and the store has written inside its own past the superblock. The images are written in place. On
-    aarch64 ahci finds its disk where AAVMF leaves the controller untouched since 307-DRV-0068."""
+    was written, and the store has written inside its own past the superblock. 308-STO-0045: read there without its
+    key, the partition holds neither the object's bytes, nor the name, nor the CID in text or binary. The images are
+    written in place. On aarch64 ahci finds its disk where AAVMF leaves the controller untouched since 307-DRV-0068."""
     if getattr(args, "disk", "default") != "default":
         print("SKIP: the store on an NVMe and an AHCI partition (307-STO-0044): the boot disk is on one of those buses", flush=True)
         return
@@ -15431,6 +15432,7 @@ def store_partition_disk_check(args, disk):
             written = partitioned_image(own, 81920, scheme, [(k, a, n) for k, (a, n) in zip(kinds, spans)], seed=f"{bus} store")
             elsewhere = partitioned_image(other, 32768, other_scheme, [(other_kinds[0], 2048, 28672)], seed=f"{other_bus} other")
             store_first = spans[1][0]
+            name = f"sealed-name-check-{bus}"  # long enough that the sealed bytes do not hold it by chance
             extra = []
             for image, on, name in ((own, bus, "own"), (other, other_bus, "other")):
                 extra += ["-drive", f"format=raw,file={image},if=none,id={name},snapshot=off"]
@@ -15464,13 +15466,13 @@ def store_partition_disk_check(args, disk):
                 mounted()
                 require(vm.service_logs(bus, "WINDOW 1 SET"), f"[BLOCK] WINDOW 1 SET: {count} SECTORS FROM {store_first}")
                 put = re.search(r"PUT (\S+) SIZE 5000", blocks("pattern 5000"))[1]
-                blocks(f"publish part {put}", "PUBLISHED part VERSION 1 (FLUSHED)")
+                blocks(f"publish {name} {put}", f"PUBLISHED {name} VERSION 1 (FLUSHED)")
                 vm.send("reboot\n")
                 vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
                 vm.expect("MIND>", timeout=60)
                 time.sleep(1); vm.collect(); vm.output = ""
                 mounted()
-                blocks("resolve part", f"part VERSION 1 ROOT {put}")
+                blocks(f"resolve {name}", f"{name} VERSION 1 ROOT {put}")
                 blocks(f"check {put} pattern", "CHECKED 5000 BYTES = PATTERN")
             finally:
                 vm.close()
@@ -15479,12 +15481,22 @@ def store_partition_disk_check(args, disk):
             assert now[:start] == written[:start], f"{bus}: the table or the partition before the store's was written"
             assert now[end:] == written[end:], f"{bus}: the partition after the store's, or GPT's backup, was written"
             assert any(now[start + 512:end]), f"{bus}: the store wrote nothing past its superblock, so the comparison shows nothing"
+            # 308-STO-0045: the partition read without its key, as a disk taken elsewhere is: its object's bytes, its name
+            # and its CID, in text and in binary, are nowhere in it.
+            sealed = now[start:end]
+            assert b"MIND-SLD" in sealed, f"{bus}: no sealed record's frame where the store's partition was read"  # frames are in the clear
+            pattern = bytes((i * 31 + 7) % 251 for i in range(1000, 1064))  # 64 bytes of the object, `blocks pattern`'s
+            cid = base64.b32decode(put[1:].upper() + "=" * (-len(put[1:]) % 8))
+            for what, needle in (("the object's bytes", pattern), ("the name", name.encode()), ("the CID's text", put.encode()),
+                                 ("the CID", cid), ("the CID's digest", cid[-32:])):
+                assert needle not in sealed, f"{bus}: {what} in the clear on the store's partition"
             assert other.read_bytes() == elsewhere, f"{other_bus}: another system's disk was written"
             shown.append(f"{bus} ({scheme.upper()}) beside {other_bus} ({other_scheme.upper()})")
     print(f"PASS: the store on its own partition of {' and of '.join(shown)}: init takes partition 2, window 1 of its "
           "driver; an object and a name found after a reboot (FLUSHED); on the host every sector outside the store's "
           "partition is as written, another system's partition before and after it and GPT's backup, and the disk beside "
-          "it untouched, while the store wrote inside its own (307-STO-0044)", flush=True)
+          "it untouched, while the store wrote inside its own (307-STO-0044); read without its key, the partition holds "
+          "neither the object's bytes, nor its name, nor its CID (308-STO-0045)", flush=True)
 
 
 def store_disk_check(args, disk):
