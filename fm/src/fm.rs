@@ -68,6 +68,8 @@ pub trait Disk {
     fn volume(&mut self, path: &str) -> Option<VolumeInfo>;
     /// Writes what is cached for the volume of `path` to its medium; an error means it may not be there (175-APP-0036).
     fn flush(&mut self, path: &str) -> Result<(), Failure>;
+    /// The store volumes `storefs` serves (311-APP-0135), each as `notes:`; none without its client.
+    fn store_volumes(&mut self) -> Vec<String> { Vec::new() }
     /// Whether fm holds the system clipboard (000-APP-0032); without it the editor keeps its own copy.
     fn clipboard(&mut self) -> bool { false }
     /// A text to the system clipboard: why not, when it did not take it.
@@ -134,6 +136,8 @@ const FIND_MAX: usize = 500;
 pub const SLICE: usize = 64 * 1024;
 // The boot disk and ram: always; log: and models: where they are mounted (211-APP-0013).
 const VOLUMES: [(&str, &str); 5] = [("", "A: boot disk"), ("ram:", "ram: RAM disk"), ("log:", "log: boot logs"), ("models:", "models: speech models"), ("store:", "store: block store")];
+// The store volumes the volume menu lists after them, at most (311-APP-0135): one page of the store's names.
+const STORE_VOLUMES: usize = 16;
 
 const MENU_TITLES: [&str; 5] = ["Left", "Files", "Commands", "Options", "Right"];
 const PANEL_ITEMS: [&str; 11] = ["Brief", "Full", "Info", "Quick view", "Name", "Extension", "Time", "Size", "Reverse order", "Reread  Ctrl+R", "Volume  Alt+F1/F2"];
@@ -322,7 +326,7 @@ pub enum Dialog {
     Mask { select: bool, line: InputLine },
     Find { line: InputLine },
     Results { mask: String, found: Vec<String>, list: ListState },
-    Volume { side: usize, list: ListState, lines: Vec<String>, paths: Vec<&'static str> },
+    Volume { side: usize, list: ListState, lines: Vec<String>, paths: Vec<String> },
     /// F5 / F6: where to.
     Target { op: Op, line: InputLine, sources: Vec<(String, Entry)> },
     Mkdir { line: InputLine },
@@ -385,7 +389,7 @@ impl<'b> Fm<'b> {
 
     fn volume_line(path: &str, disk: &mut dyn Disk) -> String {
         let (volume, _) = panel::volume(path);
-        let name = VOLUMES.iter().find(|(v, _)| v.eq_ignore_ascii_case(volume)).map_or("?", |(_, name)| name);
+        let name = VOLUMES.iter().find(|(v, _)| v.eq_ignore_ascii_case(volume)).map_or_else(|| format!("{} store volume", volume), |(_, name)| String::from(*name));
         match disk.volume(path) {
             Some(v) if v.fat_bits == 0 => format!("{} {}: {} KiB, {} KiB free", name, v.label, v.bytes / 1024, v.free / 1024),
             Some(v) => format!("{} {} FAT{}: {} KiB, {} KiB free", name, v.label, v.fat_bits, v.bytes / 1024, v.free / 1024),
@@ -586,7 +590,10 @@ impl<'b> Fm<'b> {
     }
 
     fn volume_dialog(&mut self, side: usize, disk: &mut dyn Disk) {
-        let paths: Vec<&'static str> = VOLUMES.iter().enumerate().filter(|(i, (path, _))| *i < 2 || disk.volume(path).is_some()).map(|(_, (path, _))| *path).collect();
+        let mut paths: Vec<String> = VOLUMES.iter().enumerate().filter(|(i, (path, _))| *i < 2 || disk.volume(path).is_some()).map(|(_, (path, _))| String::from(*path)).collect();
+        // A store volume after the disks (311-APP-0135); one named as a disk's volume is that disk's.
+        let stores = disk.store_volumes().into_iter().filter(|v| !VOLUMES.iter().any(|(fixed, _)| fixed.eq_ignore_ascii_case(v)));
+        paths.extend(stores.take(STORE_VOLUMES));
         let lines = paths.iter().map(|path| Self::volume_line(path, disk)).collect();
         let selected = paths.iter().position(|v| v.eq_ignore_ascii_case(panel::volume(&self.panels[side].path).0)).unwrap_or(0);
         self.dialog = Some(Dialog::Volume { side, list: ListState { selected, top: 0 }, lines, paths });
@@ -894,7 +901,7 @@ impl<'b> Fm<'b> {
             Dialog::Volume { side, list, paths, .. } => {
                 if list.key(key, paths.len(), paths.len()) { true } else {
                     match key.code() {
-                        Code::Enter => { let (side, path) = (*side, paths[list.selected.min(paths.len() - 1)]); self.load(side, path, None, disk); false }
+                        Code::Enter => { let (side, path) = (*side, paths[list.selected.min(paths.len() - 1)].clone()); self.load(side, &path, None, disk); false }
                         Code::Esc | Code::F(10) => false,
                         _ => true,
                     }
@@ -1267,14 +1274,16 @@ impl<'b> Fm<'b> {
     pub fn status(&self) -> String {
         if let Some(editor) = &self.editor { return format!("EDITOR {}", editor.status()); }
         let mode = |p: &Panel| match p.mode { Mode::Brief => "BRIEF", Mode::Full => "FULL", Mode::Info => "INFO", Mode::Quick => "QUICK" };
-        let dialog = match self.dialog { None => "NONE", Some(Dialog::Help) => "HELP", Some(Dialog::Message { .. }) => "MESSAGE", Some(Dialog::Mask { .. }) => "MASK",
+        let dialog = match &self.dialog { None => "NONE", Some(Dialog::Help) => "HELP", Some(Dialog::Message { .. }) => "MESSAGE", Some(Dialog::Mask { .. }) => "MASK",
                                          Some(Dialog::Find { .. }) => "FIND", Some(Dialog::Results { .. }) => "RESULTS", Some(Dialog::Volume { .. }) => "VOLUME",
                                          Some(Dialog::Target { .. }) => "TARGET", Some(Dialog::Mkdir { .. }) => "MKDIR", Some(Dialog::NewFile { .. }) => "NEWFILE",
                                          Some(Dialog::Delete { .. }) => "DELETE", Some(Dialog::Overwrite { .. }) => "OVERWRITE" };
+        // The volume menu's line under the cursor, as a panel's path (311-APP-0135): `VOLUME:/notes:`.
+        let chosen = match &self.dialog { Some(Dialog::Volume { list, paths, .. }) => paths.get(list.selected).map_or(String::new(), |p| format!(":/{}", p)), _ => String::new() };
         let job = match &self.job { None => String::from("NONE"), Some(job) => format!("{}:{}/{}{}", job.op.name(), job.at(), job.steps(), if job.failure.is_some() { ":FAILED" } else if job.asking { ":ASKING" } else { "" }) };
         let panel = &self.panels[self.active];
         format!("LEFT=/{} {} RIGHT=/{} {} ACTIVE={} CURRENT={} MARKED={} DIALOG={} MENU={} VIEW={} JOB={}", self.panels[0].path, mode(&self.panels[0]), self.panels[1].path,
-                mode(&self.panels[1]), if self.active == 0 { "L" } else { "R" }, panel.current().map_or("", |e| e.name.as_str()), panel.marked.len(), dialog,
+                mode(&self.panels[1]), if self.active == 0 { "L" } else { "R" }, panel.current().map_or("", |e| e.name.as_str()), panel.marked.len(), String::from(dialog) + &chosen,
                 self.menu.open as u8, self.viewer.as_ref().map_or(0, |v| v.top() as usize + 1), job)
             + &if self.command.is_empty() { String::new() } else { format!(" CMD={}", self.command.as_str()) }
             + match self.hidden { [false, false] => "", [true, false] => " HIDDEN=L", [false, true] => " HIDDEN=R", [true, true] => " HIDDEN=LR" }

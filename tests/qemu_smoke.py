@@ -2832,6 +2832,54 @@ def secret_line_check(vm):
           "another command through its badged copy refused; none for a script's program", flush=True)
 
 
+def fm_store_volume_check(vm):
+    """311-APP-0135: fm's volume menu lists the store volumes storefs serves after the disks (the store's names under
+    fs/), opens one as a disk's through the storefs client the shell lends with the user's files, and a file copies from
+    it to ram: and from ram: to it."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+
+    def to(name):
+        line = keys(b"\x1b[H", "CURRENT=")  # Home
+        for _ in range(30):
+            if f"CURRENT={name} " in line:
+                return
+            line = keys(b"\x1b[B", "CURRENT=")
+        raise AssertionError(line)
+    require(vm.command("write ram:fromram.txt to the store volume"), "WROTE 20 BYTES")
+    vm.send("fm ram:\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/ram: ")
+    line = keys(b"\x1b[12;3~", "DIALOG=VOLUME")  # Alt+F2: the right panel's volume
+    for _ in range(12):
+        if "DIALOG=VOLUME:/notes: " in line:
+            break
+        line = keys(b"\x1b[B", "DIALOG=VOLUME")
+    require(line, "DIALOG=VOLUME:/notes: ")
+    keys(b"\r", "RIGHT=/notes: ")
+    keys(b"\t", "ACTIVE=R")
+    to("docs")
+    keys(b"\r", "RIGHT=/notes:docs ")
+    to("a.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to the other panel, ram:
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    keys(b"\t", "ACTIVE=L")
+    to("fromram.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to notes:docs
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("cat ram:a.txt"), "from the store")
+    require(vm.command("cat notes:docs/fromram.txt"), "to the store volume")
+    for path in ("ram:a.txt", "ram:fromram.txt", "notes:docs/fromram.txt"):
+        require(vm.command(f"rm {path}"), "OK")
+    print("PASS: fm lists the store volume notes: after the disks, opens it through the shell's storefs client, and a file "
+          "copies from it to ram: and from ram: to it (311-APP-0135)", flush=True)
+
+
 def storefs_check(vm):
     """311-KRN-0190: storefs runs at boot with the block store's client, and the shell reaches a store volume through the
     same mind::fs calls as a FAT one; a program without storefs's client finds no store volume, and asks nobody."""
@@ -2905,6 +2953,7 @@ def storefs_check(vm):
     scopes = vm.service_logs("storefs", "ENDED")
     made = list(re.finditer(r"\[STOREFS\] SCOPE (0x[0-9a-f]+) FOR notes:/docs \(WRITABLE\)", scopes))
     assert len(made) == 2 and f"[STOREFS] SCOPE {made[0][1]} ENDED" in scopes[made[0].end():], scopes[-1500:]  # after it was made
+    fm_store_volume_check(vm)
     require(vm.command("rm notes:docs/b.txt"), "OK")
     require(vm.command("rm notes:docs/a.txt"), "OK")
     require(vm.command("ls ram:"), "ENTRIES")
@@ -5381,6 +5430,7 @@ def store_domains_check(vm):
         require(made, "blocks: domain new: NoRandom")
         require(vm.service_logs("blockstore", "NO DOMAIN FOR PID"), "AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED")
         print("PASS: memory domains: none made without a random source, and the store says why", flush=True)
+        run_in_domain_check(vm)
         return
     first = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
     second = int(re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))[1])
@@ -5408,6 +5458,7 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} domain usage {limited}"), "Rights")
     require(re.search(r"PUT (\S+) SIZE 4000", blocks("pattern 4000"))[1], past)
     require(blocks(f"publish past {past}"), "PUBLISHED past VERSION 1")
+    run_in_domain_check(vm, first, second, note)
     # 312-STO-0034: a journal in a domain is written through the domain's client, and is the domain's alone.
     require(blocks(f"-d {first} journal append log note in a domain"), "APPENDED log SEQUENCE 1 BOOT 1 ENTRY")
     require(blocks(f"-d {first} journal check log"), "CHECKED log: 1 ENTRIES, SEQUENCE 1 TO 1, AT VERSION 1: WHOLE")
@@ -5432,6 +5483,33 @@ def store_domains_check(vm):
     print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
           "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
           "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046)", flush=True)
+
+
+def run_in_domain_check(vm, first=None, second=None, note=None):
+    """312-APP-0134: `run -d <domain> <program>` gives the program, in place of the shell's client of the volume, the
+    client of the shell's memory domain the store mints. Refused before the start: no number, a domain that is not live,
+    a program that asks for no block store, a service. With domains (a random source), `blocks` started in the first
+    holds that domain's client alone: it reads the first's name, which neither the volume nor the second shows, and
+    makes no domain through it."""
+    def run(args, timeout=240):
+        vm.send(f"run {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"run {args}\n")
+    require(run("-d blocks stat"), "USAGE: RUN [-D <DOMAIN>] <NAME> [ARGUMENTS] [&]")
+    require(run("-d 999 blocks stat"), "RUN -D: NO LIVE MEMORY DOMAIN OF THE SHELL'S HAS THAT NUMBER")
+    require(run("-d 0 clock"), "RUN -D: THE PROGRAM ASKS FOR NO BLOCK STORE")
+    require(run("-d 0 blockstore"), "RUN -D STARTS A PROGRAM, NOT A SERVICE")
+    if first is None:
+        print("PASS: run -d: refused without a number, for a domain that is not live, a program that asks for no block "
+              "store and a service (no domain without a random source)", flush=True)
+        return
+    require(run(f"-d {first} blocks resolve secret"), f"secret VERSION 1 ROOT {note}")
+    vm.logged(f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}, READ AND WRITE", 0)
+    require(run(f"-d {second} blocks resolve secret"), "blocks: resolve secret: NotFound")
+    require(run(f"-d {first} blocks domain new"), "blocks: domain new: Rights")
+    require(run(f"-d {first} blocks domains"), "blocks: domains: Rights")
+    print("PASS: run -d: blocks started in a memory domain reads that domain's name, not the other's, and makes no "
+          "domain; refused without a number, for a domain that is not live, a program that asks for no block store and a "
+          "service", flush=True)
 
 
 def fm_store_check(vm):

@@ -232,6 +232,12 @@ pub(super) fn ask(shell: &mut Shell, question: &str) -> bool {
         mind::println!("[SHELL] THE LINK'S CONSOLE ANSWERED YES: {}", question);
         return true;
     }
+    // A line of the link or of an SSH session (800-APP-0102, 112-APP-0136) is never asked: no one there typed it.
+    if shell.unasked {
+        let _ = writeln!(shell.term, "{} (Y/N) N (NOT ASKED: NO ONE AT THE SCREEN TYPED THIS LINE)", question);
+        mind::println!("[SHELL] A LINE TYPED ELSEWHERE WAS NOT ASKED: {}", question);
+        return false;
+    }
     let _ = write!(shell.term, "{} (Y/N) ", question);
     shell.term.render(None);
     let until = mind::time::uptime_ms() + 60_000;
