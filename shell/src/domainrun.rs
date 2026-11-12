@@ -1,7 +1,8 @@
 //! `run -d <domain> <program>` (312-APP-0134): the program gets, in SLOT_BLOCKSTORE in place of the shell's client of
-//! the volume, the client of the shell's memory domain `<domain>` the store mints (`blockstore.wit` 2.2 `domain-client`),
-//! through the shell's client for REQUEST_BLOCKSTORE and through its read-only one for REQUEST_BLOCKSTORE_READ. No system
-//! calls: tests/shell_host.rs.
+//! the volume, the client of the shell's memory domain `<domain>` the store mints (`blockstore.wit` 2.2 `domain-client`)
+//! through the shell's client. A program that asks only to read is refused for now: the store mints a domain's client
+//! with the rights and owner of the client it is asked through, and the shell's read-only client owns none of the
+//! shell's domains (requests-STO.md). No system calls: tests/shell_host.rs.
 
 /// The shell's own errors for a start refused before it begins; they never cross an endpoint.
 pub const NOT_ASKED: usize = usize::MAX - 0x1100;
@@ -11,6 +12,7 @@ pub const NOT_OURS: usize = usize::MAX - 0x1103;
 pub const FULL: usize = usize::MAX - 0x1104;
 pub const NO_CLIENT: usize = usize::MAX - 0x1105;
 pub const SERVICE: usize = usize::MAX - 0x1106;
+pub const READ_ONLY: usize = usize::MAX - 0x1107;
 
 pub const USAGE: &str = "USAGE: RUN [-D <DOMAIN>] <NAME> [ARGUMENTS] [&]";
 
@@ -35,6 +37,7 @@ pub fn text(code: usize) -> Option<&'static str> {
         FULL => "RUN -D: THE STORE LENDS 64 DOMAIN CLIENTS AT MOST, ALL IN USE",
         NO_CLIENT => "RUN -D: THE BLOCK STORE GAVE NO CLIENT OF THAT DOMAIN",
         SERVICE => "RUN -D STARTS A PROGRAM, NOT A SERVICE",
+        READ_ONLY => "RUN -D: NOT YET FOR A PROGRAM THAT ONLY READS: THE STORE MINTS NO READ-ONLY CLIENT OF THE SHELL'S DOMAINS",
         _ => return None,
     })
 }

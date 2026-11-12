@@ -5492,8 +5492,8 @@ def run_in_domain_check(vm, first=None, second=None, note=None):
     client of the shell's memory domain the store mints. Refused before the start: no number, a domain that is not live,
     a program that asks for no block store, a service. With domains (a random source), `blocks` started in the first
     holds that domain's client alone: it reads the first's name, which neither the volume nor the second shows, and
-    makes no domain through it; `blocksro`, which asks only to read, gets the domain's client with the get badge's
-    rights."""
+    makes no domain through it; `blocksro`, which asks only to read, is refused until the store mints a domain's client
+    with fewer rights."""
     def run(args, timeout=240):
         vm.send(f"run {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"run {args}\n")
@@ -5506,20 +5506,16 @@ def run_in_domain_check(vm, first=None, second=None, note=None):
               "store and a service (no domain without a random source)", flush=True)
         return
     require(run(f"-d {first} blocks resolve secret"), f"secret VERSION 1 ROOT {note}")
-    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}, READ AND WRITE")
+    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}")
     require(run(f"-d {second} blocks resolve secret"), "blocks: resolve secret: NotFound")
     require(run(f"-d {first} blocks domain new"), "blocks: domain new: Rights")
     require(run(f"-d {first} blocks domains"), "blocks: domains: Rights")
-    # A read-only start: blocksro asks for the get badge alone, so the domain's client is minted through the shell's
-    # read-only client, with its rights: it reads the domain's name and is refused a put and a publish.
-    require(run(f"-d {first} blocksro resolve secret"), f"secret VERSION 1 ROOT {note}")
-    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKSRO STARTS IN MEMORY DOMAIN {first}, READ ONLY")
-    out = run(f"-d {first} blocksro put ram:dom.txt")
-    require(out, "blocks: put:"); require(out, "Rights")
-    require(run(f"-d {first} blocksro publish ro {note}"), "blocks: publish ro: Rights")
+    # Not yet a read-only start: blocksro asks for the get badge alone, and the store mints a domain's client with the
+    # asking client's rights and owner, while the shell's domains are its writing client's (requests-STO.md).
+    require(run(f"-d {first} blocksro resolve secret"), "RUN -D: NOT YET FOR A PROGRAM THAT ONLY READS")
     print("PASS: run -d: blocks started in a memory domain reads that domain's name, not the other's, and makes no "
-          "domain; started asking only to read, it reads there and is refused a put and a publish; refused without a "
-          "number, for a domain that is not live, a program that asks for no block store and a service", flush=True)
+          "domain; refused without a number, for a domain that is not live, a program that asks for no block store or "
+          "only to read, and a service", flush=True)
 
 
 def fm_store_check(vm):
