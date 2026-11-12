@@ -5458,7 +5458,6 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} domain usage {limited}"), "Rights")
     require(re.search(r"PUT (\S+) SIZE 4000", blocks("pattern 4000"))[1], past)
     require(blocks(f"publish past {past}"), "PUBLISHED past VERSION 1")
-    run_in_domain_check(vm, first, second, note)
     # 312-STO-0034: a journal in a domain is written through the domain's client, and is the domain's alone.
     require(blocks(f"-d {first} journal append log note in a domain"), "APPENDED log SEQUENCE 1 BOOT 1 ENTRY")
     require(blocks(f"-d {first} journal check log"), "CHECKED log: 1 ENTRIES, SEQUENCE 1 TO 1, AT VERSION 1: WHOLE")
@@ -5468,6 +5467,8 @@ def store_domains_check(vm):
     out = blocks("domains")
     for line in (f"DOMAIN {first} LIVE", f"DOMAIN {second} LIVE"):
         require(out, line)
+    # 312-APP-0134: the shell's `run -d` in the two live domains.
+    run_in_domain_check(vm, first, second, note)
     # The same bytes in the other domain are its own block; forgetting the first leaves it.
     require(blocks(f"-d {second} put ram:dom.txt"), f"PUT {note} SIZE 12")
     require(blocks(f"domain forget {first}"), f"DOMAIN {first} FORGOTTEN")
