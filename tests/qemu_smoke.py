@@ -12648,7 +12648,8 @@ def sshd_check(args, disk, cpu):
     the keys data/ssh/authorized_keys names, each with its rights; the host key is the device key (known_hosts holds the
     line keystore logs), and keystore signs each key exchange (`ssh-host`). With the files' right, scp copies a file up
     and down whole and sftp makes, lists, renames and removes; data/ssh/ and paths above the root are refused. An
-    unlisted key, a password and the console (not lent yet: requests-APP.md) are refused. Each login, refusal and write
+    unlisted key and a password are refused; the console key runs `ps` through the shell (112-APP-0136's rule) and is
+    refused `update`, and the files' key gets no console. Each login, refusal and write
     is one log line, with the key's fingerprint as ssh-keygen prints it."""
     if not (shutil.which("ssh") and shutil.which("scp") and shutil.which("sftp") and shutil.which("ssh-keygen")):
         print("SKIP: sshd needs OpenSSH's client on the host (ssh, scp, sftp, ssh-keygen)", flush=True)
@@ -12673,7 +12674,7 @@ def sshd_check(args, disk, cpu):
         vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
         try:
             log = vm.service_logs("sshd", "LISTENING ON TCP 22")
-            require(log, "[SSHD] LISTENING ON TCP 22: ONE SESSION AT A TIME, A LOGIN WITHIN 30 S, THE CONSOLE NOT LENT (THE FILES ALONE)")
+            require(log, "[SSHD] LISTENING ON TCP 22: ONE SESSION AT A TIME, A LOGIN WITHIN 30 S, THE CONSOLE THROUGH THE SHELL")
             require(log, "[SSHD] data/ssh/authorized_keys: 2 KEYS LISTED")
             require(log, "[SSHD] data/ssh/authorized_keys LINE 4 LEFT OUT: no rights before the key")
             device = re.search(r"ssh-ed25519 [A-Za-z0-9+/=]+", vm.command("dmesg -s keystore", raw=True))[0]
@@ -12711,18 +12712,25 @@ def sshd_check(args, disk, cpu):
                 assert out.returncode != 0 and not (work / "taken").exists(), (path, out)
             out = scp(str(upload), "mind@127.0.0.1:ssh/authorized_keys")
             assert out.returncode != 0, out
-            # Refused: an unlisted key, a password, the console (not lent yet).
+            # Refused: an unlisted key, a password, the console to the files' key.
             out = ssh("stranger", "ps")
             assert out.returncode == 255 and "Permission denied (publickey)" in out.stderr, out
             out = ssh(None, "ps", password=True)
             assert out.returncode == 255 and "Permission denied (publickey)" in out.stderr, out
-            for key in ("console", "files"):
-                out = ssh(key, "ps")
-                assert out.returncode != 0 and "PID" not in out.stdout, (key, out)
+            out = ssh("files", "ps")
+            assert out.returncode != 0 and "PID" not in out.stdout, out
+            # The console's key: the shell runs `ps` on a remote session's rule, and refuses `update` (112-APP-0136).
+            out = ssh("console", "ps")
+            assert out.returncode == 0 and "PID" in out.stdout and "sshd" in out.stdout, out
+            out = ssh("console", "update")
+            assert "PID" not in out.stdout and ("Refused" in out.stdout or out.returncode != 0), out
             log = vm.service_logs("sshd", "REFUSED")
             for line in (f"[SSHD] LOGIN AS mind FROM 10.0.2.2:", f"WITH {fingerprint} (files@host): THE FILES", "[SSHD] 10.0.2.2:", " WROTE data/upload.bin",
-                         " REMOVED data/d/moved.bin", "REFUSED: a key not listed", "ITS CONSOLE RIGHT UNUSED", " BYTES WRITTEN"):
+                         " REMOVED data/d/moved.bin", "REFUSED: a key not listed", "(console@host): THE CONSOLE", "CONSOLE FROM 10.0.2.2:", ": PS",
+                         ": UPDATE", " BYTES WRITTEN"):
                 require(log, line)
+            shell_log = vm.command("dmesg -s shell", raw=True)
+            require_all(shell_log, "FOR AN SSH SESSION THE SHELL RAN PS", "FOR AN SSH SESSION THE SHELL REFUSED UPDATE")
             require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED SshHost FOR PID")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
@@ -12737,7 +12745,8 @@ def sshd_check(args, disk, cpu):
             policy.write_text(before)
     print("PASS: sshd (112-NET-0072): OpenSSH's ssh, scp and sftp against the device key as the host key, each exchange signed by "
           "keystore; scp up and down whole, sftp's directory work; data/ssh/ and paths above the root refused; an unlisted key, "
-          "a password and the console (not lent yet) refused; each login with the key's fingerprint, each refusal and write logged", flush=True)
+          "a password and the files' key's console refused; the console key's `ps` run by the shell and `update` refused; "
+          "each login with the key's fingerprint, each command, refusal and write logged", flush=True)
 
 
 def passphrase_wait_check(args, cpu):

@@ -1200,12 +1200,14 @@ impl Init {
             }
             // The SSH server (112-NET-0072): the flow the policy gives program `sshd`, whose listening grant names its port;
             // keystore's client for `ssh-host` alone (the device key signs each key exchange and stays in keystore); a writable
-            // scope of data/ (scopes_of), where its keys file and its files are. No shell client yet: its console waits for
-            // the shell to take a remote session's lines on their own rule (requests-APP.md). Not started without the flow.
+            // scope of data/ (scopes_of), where its keys file and its files are; the shell's client badged
+            // BADGE_SHELL_REMOTE, whose lines the shell runs on a remote session's rule (112-APP-0136): `run` alone, nothing
+            // that asks at the machine, no policy, update or firmware. Not started without the flow.
             "sshd" => {
                 let Some(flow) = self.flow(&mut minted, "sshd") else { return Err(Error::NotFound) };
                 grants.add(SLOT_NETWORK, flow, CLIENT);
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SSH_HOST)?, CLIENT);
+                grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_REMOTE)?, CLIENT);
             }
             // The SSH service (351-KRN-0115) has no network either: clients lend their flows. It alone may ask the key
             // service to sign an SSH login.

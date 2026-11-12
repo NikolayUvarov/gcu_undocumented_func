@@ -28,7 +28,7 @@
   - an unlisted key and a password are refused;
   - each login, refusal and write is logged; `keystore` logs `SIGNED SshHost`.
 - **Without the grant:** `sshd` is not started, and `init` says why.
-- **The console's criteria** (`ssh` runs `ps`) wait for the shell's part.
+- **The console** (with 112-APP-0136): the console key's `ssh … ps` lists the processes through the shell, `update` is refused, the files' key gets no console; the shell logs both lines.
 - **The profile** says what `sshd` is trusted with: the host key's use, the files' scope, the console's authority.
 
 ## Progress
@@ -42,7 +42,8 @@
 - **`tests/qemu_smoke.py`:** `sshd_check`, at the end of the `tls` suite and alone as `--suites sshd`; the `tls` suite's first boot checks `init`'s line without the grant.
 - **Docs:** `docs/network/services.md` (the SSH server), the profile's MC-11.9 row, `tcb.md`, `bootstrap.md`, the IDL table.
 - **Tested** (this container, x86, QEMU 8.2.2 under TCG, OpenSSH 9.6p1's client): `--suites sshd` passed: the host key matched the device key's known_hosts line and fingerprint; scp up and down 300 000 bytes with equal SHA-256; sftp's mkdir, put, ls, rename, rm and rmdir; `data/ssh/`, `/SSH/` and `../../x` refused, and scp into `data/ssh/`; an unlisted key and a password refused with `Permission denied (publickey)`; `ps` refused to both keys (no console lent); the log lines; `SIGNED SshHost`. The host tests the change touches pass (`keys`, `server_openssh`, `server_fuzz`, `boot_abi`, `services`, `idl_fuzz`).
-- **Left:** the `tls` suite on x86 and aarch64 on the maintainer's machines; the gate; the console, after the shell's part.
+- **The console lent** (2026-11-12, after 112-APP-0136, APP's answer `KRN/2026-11-12T2125Z`): `init` gives `sshd` the shell's client badged `BADGE_SHELL_REMOTE` in `SLOT_SHELL`; `sshd_check` runs `ps` and `update` through the console key. Docs: `docs/network/services.md`, `tcb.md`, `bootstrap.md`. Not run yet: APP's part reaches `main` in round 124.
+- **Left:** `--suites sshd` once `main` holds 112-APP-0136; the `tls` suite on x86 and aarch64 on the maintainer's machines; the gate.
 
 ## Related
 
