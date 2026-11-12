@@ -68,11 +68,11 @@
   - a client that does not ask for it re-attaches and repeats, as before (MC-6.4).
 - **`vfs_server`** (`vfs_server/src/disk.rs`) asks for it on every disk. On a return, or when a drive that did not answer is asked again (`back`):
   - it re-attaches every window's client and compares sector 0, the identity and the cached sectors (000-KRN-0079);
-  - the comparison's reads are tried again for up to 8 s while they meet "not found": a fresh instance serves sectors only once `init` has set its windows again (6 s after the old one ended, in QEMU), and `usb_storage` finds a device that came back only when a read asks for it;
+  - nothing waits: a comparison that meets "not found" (a fresh instance serves sectors only once `init` has set its windows again, 6 s after the old one ended in QEMU; `usb_storage` finds a device that came back only when a read asks for it) fails the request at once and is tried again with a later one, 0.5 s on;
   - the same medium: `THE … DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM`, and the request is repeated;
   - another one: its volumes close, nothing cached is written (`CAME BACK WITH ANOTHER MEDIUM`);
-  - neither yet (a device gone answers "not found" too): `DOES NOT ANSWER`, requests fail for 10 s, then it is asked again.
-- **`tests/usb_image_smoke.py`,** in the slots check: the stick swapped at once for a copy with another manifest while `vfs_server` asks nothing. The test requires `DRIVE ANSWERED NOT FOUND`, `CAME BACK WITH ANOTHER MEDIUM`, no `DOES NOT ANSWER`, `usb_storage`'s `ENUMERATED AGAIN`, and the copy unchanged after a write and a `sync`.
+  - neither within 10 s of the first "not found", or a request that took 1 s or more: `DOES NOT ANSWER`, and it is asked again every 10 s.
+- **`tests/usb_image_smoke.py`:** the longer copy's step and 000-KRN-0079's step ask for the program until the copy is met, or the drive is said not to answer, as `vfs_server` asks a drive again only after its wait. In the slots check: the stick swapped at once for a copy with another manifest while `vfs_server` asks nothing. The test requires `DRIVE ANSWERED NOT FOUND`, `CAME BACK WITH ANOTHER MEDIUM`, no `DOES NOT ANSWER`, `usb_storage`'s `ENUMERATED AGAIN`, and the copy unchanged after a write and a `sync`.
 
 ## Related
 
