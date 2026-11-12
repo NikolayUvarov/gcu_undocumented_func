@@ -60,7 +60,7 @@ On the platform, the QEMU `store` suite (x86 and aarch64, 300-STO-0003) stores a
 
 ## Directories as objects — host-tested (311-STO-0027)
 
-A directory is a set of named files and subdirectories under one root CID (`libmind/src/tree.rs`), the first step of [311](../../issues/311-storefs-a-file-face.md).
+A directory is a set of named files and subdirectories under one root CID (`libmind/src/tree.rs`), the first step of [311](../../issues-done/311-storefs-a-file-face.done).
 
 - **A directory node** is one DAG-CBOR block `{"v": 1, "entries": [[name, kind, size, link], ...]}`, its keys in DAG-CBOR's order. Each entry is an array of four:
   - `name`: 1 to 255 bytes of UTF-8, without `/` or NUL, neither `.` nor `..`;
@@ -108,7 +108,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 
 ## A working tree — host-tested, run in QEMU on x86 and aarch64 (311-STO-0029)
 
-A writer changes a published tree through a **working tree** (`libmind/src/worktree.rs`), the second step of [311](../../issues/311-storefs-a-file-face.md). A published root is never changed in place (MC-4.9): the edits are made in memory and published as a new root.
+A writer changes a published tree through a **working tree** (`libmind/src/worktree.rs`), the second step of [311](../../issues-done/311-storefs-a-file-face.done). A published root is never changed in place (MC-4.9): the edits are made in memory and published as a new root.
 
 - **It starts** from the root a name's version gave, and that version; none and 0 are the empty tree of a new name.
 - **Edits:** put a file (an object the store holds, with its size: its root is read and the size checked), replace a file with another in one edit (or put it under a name not taken; 311-STO-0032), make a directory, remove a file or an empty directory, move an entry. A path is names separated by `/`, each one a name a directory node takes; a leading `/` is allowed, and the root is the empty path. Each refusal changes nothing:
@@ -202,7 +202,7 @@ Not run on the platform: a comparison past its steps, its depth or its path buff
 
 ## Files over the store: `storefs` — host-tested, at boot since 311-KRN-0190; two writers, a writer cut and its scopes run in QEMU (311-STO-0032, 0037)
 
-`storefs/src/fs.rs` is the logic of a service that serves `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues/311-storefs-a-file-face.md). `storefs/src/main.rs` answers `vfs.wit` 2.6's calls with it, and builds for x86 and aarch64. `init` starts it as a boot image after `blockstore`, with a client of the store, and gives the shell a client badged `mind::fs::BADGE_USER` (311-KRN-0190); `vfs.wit` 2.6's error `conflict` came with 311-KRN-0189.
+`storefs/src/fs.rs` is the logic of a service that serves `vfs.wit` over the store's names `fs/<volume>`, each a tree of directories (above), the third step of [311](../../issues-done/311-storefs-a-file-face.done). `storefs/src/main.rs` answers `vfs.wit` 2.6's calls with it, and builds for x86 and aarch64. `init` starts it as a boot image after `blockstore`, with a client of the store, and gives the shell a client badged `mind::fs::BADGE_USER` (311-KRN-0190); `vfs.wit` 2.6's error `conflict` came with 311-KRN-0189.
 
 - **How a files client reaches it** (the kernel track's answer, 2026-10-30): `mind::fs` asks `vfs_server` first, and asks `storefs` for a volume `vfs_server` answers `not-found`, if the program holds a client of it. So `storefs` answers `not-found` for the boot disk's empty name, `ram`, `log` and `models`, whatever their case; any other volume `v` is the store's name `fs/<v>`.
 - **A volume** is 1 to 16 bytes of `A-Z a-z 0-9 . _ -`, its case ignored, and none of `vfs_server`'s; another name is `not-found`. Its tree is the name `fs/<volume>`, in lower case.
@@ -1118,7 +1118,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 | [308](../../issues/308-encryption-at-rest.md) | Sealed records, a key per memory domain, the volume key from the TPM or a passphrase | before any personal data |
 | [309](../../issues-done/309-copies-scrub-and-repair.done) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), copies in a file with repair from them ([309-STO-0031](../../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)), and copies of chosen names on a second medium with repair from either, host-tested and run in QEMU on x86 and aarch64 (309-STO-0040, above); on real machines after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
-| [311](../../issues/311-storefs-a-file-face.md) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
+| [311](../../issues-done/311-storefs-a-file-face.done) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
 | [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | the journal built ([312-STO-0034](../../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), above), a text index derived from it ([312-STO-0035](../../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done), above), and assertions about objects kept in a journal ([312-STO-0038](../../issues-done/312-STO-0038-assertions-about-objects.done), above); no personal data before 308 |
 | [313](../../issues/313-persistent-actors.md) | Checkpoints of services with queues, an effect journal | after 308 |
 | [314](../../issues/314-models-mapped-from-the-store.md) | Models mapped read-only from the store | after 307 |

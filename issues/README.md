@@ -207,7 +207,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [307](307-the-stores-own-partition.md) | A durable medium on real machines: the store's own partition (track B, eighth step) | main task, `STO` | P1 | [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md), the copy's partition (requests-KRN.md), the maintainer's sticks (issues-human 16) | track B |
 | [308](308-encryption-at-rest.md) | Encryption at rest, and the key's lifecycle, before any personal data | main task, `STO` | P1 | [307](307-the-stores-own-partition.md) (a medium worth sealing) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
-| [311](311-storefs-a-file-face.md) | A file face: trees as objects, and `storefs`, a VFS view of a named root | main task, `STO` | P2 | [307](307-the-stores-own-partition.md) | track B |
 | [312](312-the-minds-memory.md) | The Mind's memory: a journal, assertions and derived indexes | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (no personal data before it) | track B |
 | [313](313-persistent-actors.md) | Persistent actors: checkpoints of services with queues | main task, `STO` | P2 | [308](308-encryption-at-rest.md) (for actors that hold personal data) | track B |
 | [314](314-models-mapped-from-the-store.md) | Models and large objects mapped from the store | main task, `STO` | P3 | [307](307-the-stores-own-partition.md) | track B |
@@ -344,6 +343,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [311](../issues-done/311-storefs-a-file-face.done) | A file face: trees as objects, and `storefs`, a VFS view of a named root (main task) | directories as objects, working trees by compare-and-swap, `storefs` with scopes, two roots compared; the shell's files on a store volume, two writers and a cut writer in QEMU; `fm` (APP) and a program's own directory in the store (KRN) asked |
 | [109-KRN-0133](../issues-done/109-KRN-0133-helpers-from-the-booted-slot.done) | The loader starts its helpers from the booted slot's copy | The loader starts a helper from `MIND/A/` or `MIND/B/`; both checks in the `update` suite since 2026-10-29, slot B's after 109-NET-0037 and 109-UPD-0022 |
 | [110-NET-0068](../issues-done/110-NET-0068-the-update-checks-run-against-httpd.done) | The QEMU update checks run against `httpd`, stage 1's third part | `httpd`'s test hooks behind a feature; `update` and `update_store` against it on x86 and aarch64; round 121 (db6a8e6f) |
 | [000-KRN-0231](../issues-done/000-KRN-0231-kbenchs-ten-ms-sleep-past-40-ms-on-a-loaded-host.done) | `kbench`'s 10 ms sleep past 40 ms on a loaded host | Cause named: the woken CPU held by a system-band task; an application ready there runs on an idle CPU (round 119); ten runs on acc-2 beside a loaded lane passed (f8a5220a) |
