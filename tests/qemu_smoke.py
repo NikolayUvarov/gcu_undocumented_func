@@ -5381,10 +5381,11 @@ def store_domains_check(vm):
     out = blocks(f"-dr {first} put ram:dom.txt")
     require(out, "blocks: put:"); require(out, "Rights")
     require(blocks(f"-dr {first} publish other {note}"), "blocks: publish other: Rights")
-    lent = vm.service_logs("blockstore", "WITH RIGHTS")
-    assert re.search(rf"\[BLOCKSTORE\] DOMAIN {first}'S CLIENT LENT TO PID \d+ \(BADGE \d+\) WITH RIGHTS 1\r?$", lent, re.M), lent
-    refusals = re.findall(r"\[BLOCKSTORE\] REFUSED (Put|Publish) FOR PID \d+ \(BADGE (\d+)\)", vm.service_logs("blockstore", "REFUSED P"))
-    assert {"Put", "Publish"} <= {op for op, badge in refusals if int(badge) >= 0x100}, refusals
+    # `logs` drains the log: read once, up to its last line, the refused publish.
+    log = vm.service_logs("blockstore", "REFUSED Publish")
+    assert re.search(rf"\[BLOCKSTORE\] DOMAIN {first}'S CLIENT LENT TO PID \d+ \(BADGE \d+\) WITH RIGHTS 1\r?$", log, re.M), log
+    refusals = re.findall(r"\[BLOCKSTORE\] REFUSED (Put|Publish) FOR PID \d+ \(BADGE (\d+)\)", log)
+    assert {"Put", "Publish"} <= {op for op, badge in refusals if int(badge) >= 0x100}, log
     require(vm.command(f"blocksro -dr {first} resolve secret"), f"blocks: domain {first}: Rights")
     # 312-STO-0046: a domain with a limit of its own: 5000 bytes fit in 8 KiB, 4000 more do not; the volume is not bound.
     limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", blocks("domain new 8"))[1])
