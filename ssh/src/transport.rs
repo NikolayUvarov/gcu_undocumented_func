@@ -228,6 +228,95 @@ impl<I: Io> Transport<I> {
     }
 }
 
+#[cfg(feature = "server")]
+impl<I: Io> Transport<I> {
+    /// The server's side (112-NET-0071): the version exchange and the key exchange, curve25519-sha256 with the host key
+    /// `host` signs for (its exchange hash, 32 bytes, alone), strict when the client asks for it. The session
+    /// identifier is the exchange hash; `host_key` holds the SHA-256 of the host key blob.
+    pub fn accept(mut io: I, host: &mut dyn crate::Keys, random: &mut dyn FnMut(&mut [u8]) -> bool) -> Result<Self, Error> {
+        let mut ours = Vec::from(VERSION);
+        ours.extend_from_slice(b"\r\n");
+        io.send(&ours)?;
+        let mut t = Transport { io, input: Vec::new(), seq_out: 0, seq_in: 0, sealing: None, opening: None, session_id: [0; 32], host_key: [0; 32] };
+        let theirs = t.version()?;
+
+        let mut cookie = [0u8; 16];
+        if !random(&mut cookie) { return Err(Error::Random); }
+        let mut kexinit = Writer::new(KEXINIT);
+        kexinit.raw(&cookie);
+        let mut kex = Vec::from(KEX);
+        kex.extend_from_slice(b",");
+        kex.extend_from_slice(KEX_LIBSSH);
+        kex.extend_from_slice(b",");
+        kex.extend_from_slice(STRICT_S);
+        for list in [&kex[..], HOST_KEY, CIPHER, CIPHER, MAC, MAC, NONE, NONE, b"", b""] { kexinit.string(list); }
+        kexinit.bool(false).u32(0);
+        let i_s = kexinit.data;
+        t.send(&i_s, random)?;
+
+        // The client's KEXINIT, its first packet when the exchange is strict.
+        let i_c = t.receive()?;
+        if i_c.first() != Some(&KEXINIT) || i_c.len() < 17 { return Err(Error::Protocol); }
+        let mut r = Reader::new(&i_c[17..]);
+        let lists: [&[u8]; 8] = [r.string()?, r.string()?, r.string()?, r.string()?, r.string()?, r.string()?, r.string()?, r.string()?];
+        let strict = has(lists[0], STRICT_C);
+        // The first of the client's that the server has, for each list (RFC 4253 section 7.1): here the server's one.
+        if !(has(lists[0], KEX) || has(lists[0], KEX_LIBSSH)) || !has(lists[1], HOST_KEY) || !has(lists[2], CIPHER) || !has(lists[3], CIPHER)
+            || !has(lists[4], MAC) || !has(lists[5], MAC) || !has(lists[6], NONE) || !has(lists[7], NONE) { return Err(Error::Algorithms); }
+        let _ = (r.string()?, r.string()?);
+        if r.bool()? { return Err(Error::Algorithms); } // a guessed first packet, which this server does not take
+
+        let init = loop {
+            let p = t.receive()?;
+            match p.first() {
+                Some(&KEX_ECDH_INIT) => break p,
+                Some(&IGNORE) | Some(&DEBUG) if !strict => continue,
+                _ => return Err(Error::Protocol),
+            }
+        };
+        let mut r = Reader::new(&init[1..]);
+        let q_c: [u8; 32] = r.string()?.try_into().map_err(|_| Error::Protocol)?;
+        let mut seed = [0u8; 32];
+        if !random(&mut seed) { return Err(Error::Random); }
+        let secret = x25519_dalek::StaticSecret::from(seed);
+        seed.fill(0);
+        let q_s = x25519_dalek::PublicKey::from(&secret);
+        let shared = secret.diffie_hellman(&x25519_dalek::PublicKey::from(q_c));
+        if !shared.was_contributory() { return Err(Error::Protocol); }
+        let mut k = Writer::default();
+        k.mpint(shared.as_bytes());
+
+        let k_s = crate::login::key_blob(&host.public());
+        t.host_key = Sha256::digest(&k_s).into();
+        let mut h = Writer::default();
+        h.string(&theirs).string(VERSION).string(&i_c).string(&i_s).string(&k_s).string(&q_c).string(q_s.as_bytes()).raw(&k.data);
+        let h: [u8; 32] = Sha256::digest(&h.data).into();
+        let signature = host.sign(&h).ok_or(Error::NoKey)?;
+        let mut blob = Writer::default();
+        blob.string(HOST_KEY).string(&signature);
+        let mut reply = Writer::new(KEX_ECDH_REPLY);
+        reply.string(&k_s).string(q_s.as_bytes()).string(&blob.data);
+        t.send(&reply.data, random)?;
+        t.session_id = h;
+
+        t.send(&[NEWKEYS], random)?;
+        t.sealing = Some(ChaChaPoly::new(&derive(&k.data, &h, b'D')));
+        if strict { t.seq_out = 0; }
+        let newkeys = loop {
+            let p = t.receive()?;
+            match p.first() {
+                Some(&IGNORE) | Some(&DEBUG) if !strict => continue,
+                _ => break p,
+            }
+        };
+        if newkeys.first() != Some(&NEWKEYS) { return Err(Error::Protocol); }
+        t.opening = Some(ChaChaPoly::new(&derive(&k.data, &h, b'C')));
+        if strict { t.seq_in = 0; }
+        k.data.fill(0);
+        Ok(t)
+    }
+}
+
 // The 64 bytes of a direction's key (RFC 4253 section 7.2): HASH(K || H || letter || session_id), then extended.
 fn derive(k: &[u8], h: &[u8; 32], letter: u8) -> [u8; 64] {
     let mut first = Sha256::new();
