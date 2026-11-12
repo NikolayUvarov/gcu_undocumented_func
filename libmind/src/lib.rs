@@ -44,6 +44,7 @@ pub mod heap;
 pub mod hostname;
 pub mod hid;
 pub mod http;
+pub mod http_serve;
 pub mod multipart;
 pub mod idl;
 pub mod input;

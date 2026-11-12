@@ -43,6 +43,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
+    "the flow of program httpd (its listening grant); a TLS client with the right to the device certificate; the parser; RTC; a read-only scope of data/releases/",
     "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
@@ -1185,6 +1186,17 @@ impl Init {
                 self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SIGNER)?, CLIENT);
             }
+            // The release server (110-NET-0070): the flow the policy gives program `httpd`, whose listening grant names its
+            // port; a TLS client with the right to the device certificate, for the server role (tls.wit 1.3: the key stays
+            // in keystore); the parser for its request heads (MC-11.11); the clock; a read-only scope of data/releases/
+            // (scopes_of). Nothing else. Not started when the policy gives it no flow.
+            "httpd" => {
+                let Some(flow) = self.flow(&mut minted, "httpd") else { return Err(Error::NotFound) };
+                grants.add(SLOT_NETWORK, flow, CLIENT);
+                self.lend(&mut grants, SLOT_TLS, "tls")?;
+                self.lend(&mut grants, SLOT_PARSE, "parse")?;
+                self.lend(&mut grants, SLOT_RTC, "rtc")?;
+            }
             // The SSH service (351-KRN-0115) has no network either: clients lend their flows. It alone may ask the key
             // service to sign an SSH login.
             "ssh" => {
@@ -2069,7 +2081,9 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
 }
 
 // Why a service whose plan found nothing to drive is not started: its device, or for timed its time servers.
-fn not_found(name: &str) -> &'static str { if name == "timed" { "THE POLICY GIVES IT NO TIME SERVER" } else { "NO DEVICE" } }
+fn not_found(name: &str) -> &'static str {
+    match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" => "THE POLICY GIVES IT NO LISTENING GRANT", _ => "NO DEVICE" }
+}
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
@@ -2090,6 +2104,8 @@ fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
         // The neural voice (252-KRN-0230): the model disk read-only, in SLOT_FILE, whose root holds MANIFEST.json, which each
         // model file is checked against (MC-4.2). Without the disk none, and tts speaks with the formant voice.
         "tts" => &[(SLOT_FILE, mind::fs::BADGE_USER, "models:", false, false)],
+        // The releases httpd serves (110-NET-0070), read-only and never made: a boot writes nothing for it.
+        "httpd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data/releases", false, false)],
         _ => &[],
     }
 }

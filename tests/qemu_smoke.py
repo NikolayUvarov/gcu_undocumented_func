@@ -50,7 +50,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -12563,6 +12563,11 @@ def tls_suite(args, disk):
         out = vm.command(f"webcheck https://10.0.2.2:{ports['asking']}/program --name mind.test --client-cert", timeout=60)
         assert "Denied" in out and "CERTIFICATE SENT" not in out, out
         require(vm.command("dmesg -s tls"), "THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT")
+        # 110-NET-0069: nor may it serve as the device (tls.wit 1.3's server role), refused before any port is looked at.
+        require(vm.command("webcheck listen:8443", timeout=60), "WEBCHECK LISTEN 8443: Ok(Err(Denied))")
+        require(vm.command("dmesg -s tls"), "THE SERVER ROLE REFUSED TO A CLIENT WITHOUT THE RIGHT TO THE DEVICE CERTIFICATE")
+        # 110-NET-0070: no listening grant for httpd in this policy, so init does not start it.
+        require(vm.command("dmesg -s init", raw=True), "[INIT] httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
@@ -12599,7 +12604,6 @@ def tls_suite(args, disk):
         require(vm.command("tls cert"), "TLS: NotFound")
     finally:
         vm.close()
-    shutil.rmtree(certificates, ignore_errors=True)
     print("PASS: TLS 1.3 client service: HTTPS with the server certificate verified (by name and by address; AES-256-GCM, "
           "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
@@ -12608,6 +12612,108 @@ def tls_suite(args, disk):
     passphrase_wait_check(args, with_entropy)
     tpm_check(args, with_entropy)
     recovery_key_check(args, with_entropy)
+    httpd_check(args, disk, with_entropy, certificates)
+
+
+def httpd_check(args, disk, cpu, certificates):
+    """110-NET-0069 and 0070: a MIND machine serves the release layout over HTTPS: httpd, through the TLS service's server
+    role, whose every signature keystore makes with the device key. The host's TLS 1.3 client (Python's ssl) gets the
+    device certificate, the one `tls cert` prints; a channel and a blob whole, the blob resumed with Range (206), 304 for
+    its ETag, two requests on one connection; 404 outside the layout, 400 for a query string, 405 for POST; one log line
+    each, without the query. A peer that never finishes its handshake is cut after 10 s. A second boot with a
+    tlsserver.pem whose certificate holds another key: refused at listen, and httpd says so."""
+    import http.client
+    releases = disk / "data" / "releases"
+    blob = bytes((i * 7 + 3) % 251 for i in range(150_000))
+    digest = hashlib.sha256(blob).hexdigest()
+    (releases / "blobs").mkdir(parents=True, exist_ok=True)
+    (releases / "channels").mkdir(parents=True, exist_ok=True)
+    (releases / "blobs" / digest).write_bytes(blob)
+    (releases / "channels" / "stable").write_text('{"version":6}\n')
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    policy.write_text((before or "") + "listen httpd tcp 443 from 10.0.2.0/24\n")
+    port = free_port()
+    network = ["-nic", "none", "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:443", "-device", "virtio-net-pci,netdev=n0"]
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname, context.verify_mode, context.minimum_version = False, ssl.CERT_NONE, ssl.TLSVersion.TLSv1_3
+    served = disk / "tlsserver.pem"
+    try:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
+        try:
+            require(vm.service_logs("httpd", "[HTTPD] SERVING"), "[HTTPD] SERVING data/releases/ OVER HTTPS ON TCP 443, AT MOST 7 CONNECTIONS")
+            require(vm.command("dmesg -s tls"), "LISTENS ON TCP 443, SERVING THE DEVICE CERTIFICATE")
+            pem = re.search(r"-----BEGIN CERTIFICATE-----\r?\n.*?-----END CERTIFICATE-----", vm.command("tls cert"), re.S)[0].replace("\r", "")
+            device = ssl.PEM_cert_to_DER_cert(pem)
+            connection = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=60)
+
+            def get(path, method="GET", headers=None, keep=None):
+                c = keep or http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=60)
+                c.request(method, path, headers=headers or {})
+                # Before the response: one the server closes after (Connection: close) closes the client's socket too.
+                assert c.sock.getpeercert(binary_form=True) == device, "not the device certificate"
+                assert c.sock.version() == "TLSv1.3", c.sock.version()
+                response = c.getresponse()
+                body = response.read()
+                if not keep:
+                    c.close()
+                return response.status, {k.lower(): v for k, v in response.getheaders()}, body
+            # Two requests on one kept connection: the channel, then the blob whole.
+            status, headers, body = get("/channels/stable", keep=connection)
+            assert (status, body, headers["cache-control"]) == (200, b'{"version":6}\n', "no-cache"), (status, headers, body)
+            status, headers, body = get(f"/blobs/{digest}", keep=connection)
+            assert (status, len(body), headers["etag"]) == (200, len(blob), f'"{digest}"') and body == blob, (status, headers, len(body))
+            connection.close()
+            status, headers, body = get(f"/blobs/{digest}", headers={"Range": "bytes=100000-"})
+            assert (status, headers["content-range"], body) == (206, "bytes 100000-149999/150000", blob[100000:]), (status, headers)
+            status, _, body = get(f"/blobs/{digest}", headers={"If-None-Match": f'"{digest}"'})
+            assert (status, body) == (304, b""), status
+            for path, method, expected in (("/index.html", "GET", 404), ("/channels/stable?x=1", "GET", 400), ("/channels/stable", "POST", 405)):
+                status, headers, _ = get(path, method)
+                assert status == expected, (path, method, status)
+                if expected == 405:
+                    assert headers["allow"] == "GET, HEAD", headers
+            log = vm.service_logs("httpd", " 405 ")
+            for line in ("10.0.2.2 GET /channels/stable 200 14 ", f"10.0.2.2 GET /blobs/{digest} 200 150000 ", f"10.0.2.2 GET /blobs/{digest} 206 50000 ",
+                         f"10.0.2.2 GET /blobs/{digest} 304 0 ", "10.0.2.2 GET /index.html 404 ", "10.0.2.2 GET /channels/stable 400 ", "(a query string is not served)",
+                         "10.0.2.2 - - 405 "):
+                require(log, line)
+            assert "?x=1" not in log, log[-2000:]
+            require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED TlsServer FOR PID")
+            require(vm.command("dmesg -s tls"), "SERVED 10.0.2.2:")
+            # A peer that sends nothing: its handshake is cut after 10 s, and the connection with it.
+            with socket.create_connection(("127.0.0.1", port), timeout=30) as idle:
+                started = time.monotonic()
+                try:
+                    left = idle.recv(16)
+                except OSError:
+                    left = b""
+                assert left == b"" and 9 < time.monotonic() - started < 25, (left, time.monotonic() - started)
+            require(vm.service_logs("httpd", "took longer than 10 s"), "(the TLS handshake took longer than 10 s)")
+            require(vm.command("dmesg -s tls"), "TIMED OUT")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-httpd-{args.cpus}cpu.log").write_text(vm.log)
+        # A chain whose first certificate holds another key than the device's: refused at listen, nothing served.
+        served.write_text((certificates / "server.pem").read_text())
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
+        try:
+            require(vm.service_logs("httpd", "NOT LISTENED ON"), "[HTTPD] TCP 443 NOT LISTENED ON: Ok(Err(Certificate))")
+            require(vm.command("dmesg -s tls"), "tlsserver.pem: ITS FIRST CERTIFICATE DOES NOT HOLD THE DEVICE KEY")
+        finally:
+            vm.close()
+    finally:
+        served.unlink(missing_ok=True)
+        shutil.rmtree(releases, ignore_errors=True)
+        if before is None:
+            policy.unlink(missing_ok=True)
+        else:
+            policy.write_text(before)
+        shutil.rmtree(certificates, ignore_errors=True)
+    print("PASS: httpd over the TLS service's server role (110-NET-0069, 0070): the device certificate served and every signature "
+          "keystore's; a channel and a blob whole on one connection, a range resumed (206), 304 for the tag, 404, 400 for a query, "
+          "405 for POST, one log line each without the query; a silent peer cut after 10 s; a program refused the server role; "
+          "a tlsserver.pem for another key refused at listen", flush=True)
 
 
 def passphrase_wait_check(args, cpu):

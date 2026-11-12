@@ -1,0 +1,89 @@
+# 110-NET-0069 — The TLS service's server role: TLS 1.3 with the device key, which stays in `keystore`
+
+**Type:** network (`tls`, `keystore`, `idl/tls.wit`, `idl/keystore.wit`) · **Owner:** `NET` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Main task:** [110](110-our-own-web-server.md) (stage 2) · **Roadmap:** track C, track D · **Constitution:** MC-5.1, MC-5.2, MC-11.6, MC-11.9, MC-11.11, MC-12.3, MC-12.4
+
+## Problem
+
+Stage 2 of [110](110-our-own-web-server.md) has a MIND machine serve its updates over HTTPS. Three things are missing:
+
+- **`tls` is a client only** (`tls.wit` 1.2).
+- **The device key signs only what a client signs.** `keystore` signs a TLS 1.3 client CertificateVerify and an SSH login, nothing else (MC-11.9).
+- **A program cannot hand an accepted socket to `tls`.** Listening sockets exist ([110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done)), but `netstack` ties each socket to its owner, the PID and the badge. A socket a program accepted is not usable by `tls`, which runs as another process. So `tls` must listen and accept on the flow the client lends, as it connects on it today.
+
+## Plan
+
+1. **`keystore.wit` 1.7: the purpose `tls-server`.**
+   - It signs only a TLS 1.3 server CertificateVerify (RFC 8446 4.4.3): 64 spaces, "TLS 1.3, server CertificateVerify", a zero byte and a SHA-256 or SHA-384 transcript hash.
+   - It is for the signer's badge alone (the TLS service).
+   - Its budget is its own: at most 120 a minute, apart from `tls-client`'s 4096 per boot. A server signs once per connection, so a budget per boot would stop a machine that serves.
+   - Each signature and refusal is logged, as for the other purposes.
+2. **`tls.wit` 1.3: `listen`, `accept`, `served`.**
+   - **`listen`:** an attached session listens on a TCP port of its lent flow. The flow's listening grant (`socket.wit` 2.9) names the port and the networks a peer may connect from.
+   - **`accept`:** takes the oldest connection a peer set up as a new session of the same client, and starts the TLS 1.3 handshake as the server.
+   - **`served`:** takes the handshake as far as the peer's bytes allow and says how it went.
+   - **Who may serve:** the server role presents the device, so a client badged `BADGE_TLS_NO_DEVICE` (the copy the shell lends a program, 351-NET-0022) is denied `listen`, and the refusal is logged.
+3. **The server's certificate.**
+   - By default, the device certificate: Ed25519, self-signed.
+   - Or the chain in `tlsserver.pem` on the boot disk, whose first certificate must hold the device key. Otherwise `listen` fails with `certificate`, and the log says why.
+   - Every signature is the key service's: the private key never enters `tls`.
+   - Peers know the server by the SHA-256 of its SPKI, as the updater pins its server (`update.txt` `pin`, `connect-pinned`).
+4. **Limits (MC-5.1, MC-5.2).**
+   - **No call waits for a peer.** `tls` runs one request at a time. A served handshake goes on at each `served`, `send` or `receive`, as far as the bytes that have arrived allow. So one slow peer holds up no other session.
+   - **A handshake not done within 10 s** of its accept fails, and its socket is closed.
+   - **Sessions:** 16 in all, 8 of one client.
+   - **TLS 1.3 only.** No resumption (no tickets), so every connection is signed by `keystore`. No client certificate is asked for.
+5. **Docs.**
+   - `docs/api`.
+   - The profile's MC-11.9 row and the TCB.
+   - The IDL table.
+
+**Not in this task:**
+- **The first client that serves.** That is `httpd` as a MIND Core service ([110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.md)): `init` lends it a TLS client with the right to the device certificate and its listening flow. Its QEMU check is this task's QEMU evidence.
+- **An ECDSA key.** Browsers (Chrome, Firefox) do not accept an Ed25519 server certificate. This role serves machines: curl and OpenSSL, and MIND Core's own client by its pin.
+
+## Acceptance criteria
+
+- **Host:** `keystore` signs a CertificateVerify's content of its own side alone, with a 32- or 48-byte hash: each other form is refused (`tests/tls_forms_host.rs`).
+- **QEMU, x86 and aarch64**, through [110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.md)'s service:
+  - a TLS 1.3 client on the host (Python's `ssl`) finishes a handshake on the port the listening grant names;
+  - it receives the device certificate, the one `tls cert` prints, and exchanges data;
+  - `keystore` logs `SIGNED TlsServer`;
+  - a peer that never finishes its handshake is cut after 10 s, and the log says so;
+  - a `tlsserver.pem` whose first certificate holds another key is refused at `listen`, and the log says so.
+- **QEMU:** a program the shell starts (`netcheck`, its client badged `BADGE_TLS_NO_DEVICE`) is denied `listen`, and the refusal is logged.
+- **The profile** says what the server role is trusted with, and what it is not.
+
+## Progress
+
+**Made (2026-11-12)** on `claude/110-NET-0069-tls-server-role`, steps 1 to 3:
+- **`keystore.wit` 1.7 and `keystore/src/form.rs`:** the two CertificateVerify forms; `tls-server`'s budget of 120 a minute.
+- **`tests/tls_forms_host.rs`:** each side's content signed, every other form refused. It passes.
+- **`tls.wit` 1.3 and `tls`:**
+  - one state machine for both sides (`handle`, generic over rustls' unbuffered connection data);
+  - listening sessions; accepted sessions with their handshake deadline;
+  - `served`;
+  - `tlsserver.pem`, or the device certificate (`device::Served`, which offers it to a peer with Ed25519 among its schemes);
+  - the server role refused to a client badged `BADGE_TLS_NO_DEVICE`;
+  - 16 sessions, 8 of one client.
+- **Built for x86 and run** (this container, 4 CPUs, QEMU 8.2.2 under TCG), through 110-NET-0070's `httpd`, in the `tls` suite:
+  - a host TLS 1.3 client (Python's `ssl`) got the device certificate, the one `tls cert` prints, on TCP 443, and exchanged data: a channel and a blob on one kept connection, a range, a 304 and three refusals;
+  - `keystore` logged `SIGNED TlsServer`; `tls` logged `SERVED 10.0.2.2:...`;
+  - a peer that sent nothing was cut after 10 s, and `tls` logged `TIMED OUT`;
+  - `webcheck listen:8443`, whose client the shell badged `BADGE_TLS_NO_DEVICE`, was refused (`Denied`) and logged;
+  - a `tlsserver.pem` holding another key's certificate was refused at `listen` and logged;
+  - the rest of the `tls` suite passed beside it (the client's checks, the device key, the secrets, the passphrase, the TPM, the recovery key).
+- **The profile** (MC-11.9, the TCB) and `docs/network/services.md` say what the role is trusted with.
+- **Left:** aarch64; the gate.
+
+**Tested on the maintainer's machines (2026-11-12),** branch head 188e8788 (with 110-NET-0070's boot order), each group once:
+- "x86: network, TLS and Effector" on acc-2: passed (1349 s);
+- "aarch64: network, TLS and Effector" on acc-1: passed (1074 s), the effector suite with it. Its earlier run, with `httpd` after `tls`, failed in the effector suite (`KeyError: 'effector'`), for 0070's boot order (see 110-NET-0070).
+
+**Left:** the gate.
+
+## Related
+
+- [110](110-our-own-web-server.md): stage 2.
+- [110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done): listening sockets and the listening grant.
+- [110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.md): the first client that serves.
+- [351-NET-0022](../issues-done/351-NET-0022-tls-without-the-device-certificate.done): `BADGE_TLS_NO_DEVICE`.
