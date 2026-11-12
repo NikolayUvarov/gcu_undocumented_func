@@ -1,8 +1,8 @@
 # 311-STO-0039 — Two roots of a tree compared, and a name's older versions read — done
 
-**Type:** storage (`libmind` `tree`, `blocks`) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-11-04) · **Blocked by:** none · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.2, MC-4.9, MC-4.13
+**Type:** storage (`libmind` `tree`, `blocks`) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-11-04) · **Blocked by:** none · **Main task:** [311](311-storefs-a-file-face.done) · **Constitution:** MC-4.2, MC-4.9, MC-4.13
 
-Split from [311](../issues/311-storefs-a-file-face.md) (2026-11-04), its plan's "History: old roots are snapshots; a directory's history and two roots can be compared". The other steps of 311 are done ([311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.done), [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.done)).
+Split from [311](311-storefs-a-file-face.done) (2026-11-04), its plan's "History: old roots are snapshots; a directory's history and two roots can be compared". The other steps of 311 are done ([311-STO-0032](311-STO-0032-storefs-a-vfs-view-of-a-named-root.done), [311-STO-0037](311-STO-0037-a-scope-of-a-store-volume.done)).
 
 ## Problem
 
@@ -66,4 +66,4 @@ These are tests of the configurations named, not a proof (MC-12.2).
 
 ## Related
 
-[311](../issues/311-storefs-a-file-face.md), [311-STO-0027](311-STO-0027-directories-as-objects.done), [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done).
+[311](311-storefs-a-file-face.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done).

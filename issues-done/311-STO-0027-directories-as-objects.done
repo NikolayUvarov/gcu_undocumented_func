@@ -1,8 +1,8 @@
 # 311-STO-0027 — Directories as objects: a directory node, its walk, and the store's reachability — done
 
-**Type:** storage (`libmind` `tree`, `blockstore`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Constitution:** MC-4.2, MC-4.5, MC-4.13
+**Type:** storage (`libmind` `tree`, `blockstore`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [311](311-storefs-a-file-face.done) · **Constitution:** MC-4.2, MC-4.5, MC-4.13
 
-Split from [311](../issues/311-storefs-a-file-face.md) (2026-10-30), its first step at the maintainer's word: "trees as objects" needs no partition of the store's own, so it does not wait for 307.
+Split from [311](311-storefs-a-file-face.done) (2026-10-30), its first step at the maintainer's word: "trees as objects" needs no partition of the store's own, so it does not wait for 307.
 
 ## Problem
 
@@ -67,4 +67,4 @@ Done 2026-10-30, landed in round 51 (`main` 57c2fd3d, from `claude/relaxed-meitn
 
 ## Related
 
-[311](../issues/311-storefs-a-file-face.md), [301](301-objects-as-merkle-dags.done), [303](303-retention-and-collection.done), [docs/storage](../docs/storage/README.md).
+[311](311-storefs-a-file-face.done), [301](301-objects-as-merkle-dags.done), [303](303-retention-and-collection.done), [docs/storage](../docs/storage/README.md).

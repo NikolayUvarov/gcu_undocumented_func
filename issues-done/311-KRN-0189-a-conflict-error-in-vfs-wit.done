@@ -1,6 +1,6 @@
 # 311-KRN-0189 — `vfs.wit` 2.6: an error `conflict`, for a write another writer published before — done
 
-**Type:** service interface (`idl/vfs.wit`, `libmind` `fs`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — (the arms are in `main`: the shell's 311-APP-0116, `effector_gw`'s 311-EFF-0024) · **Main task:** [311](../issues/311-storefs-a-file-face.md) (STO's), for 311-STO-0032 · **Constitution:** MC-11.10, MC-12.4
+**Type:** service interface (`idl/vfs.wit`, `libmind` `fs`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — (the arms are in `main`: the shell's 311-APP-0116, `effector_gw`'s 311-EFF-0024) · **Main task:** [311](311-storefs-a-file-face.done) (STO's), for 311-STO-0032 · **Constitution:** MC-11.10, MC-12.4
 
 **Asked by:** the storage track (`STO`) in `issues/requests-KRN.md`, 2026-10-30, "`storefs`: started by `init`, reached by a files client, and a `conflict` error in `vfs.wit`", and in its message to KRN of 10:53.
 
@@ -51,4 +51,4 @@
 
 ## Related
 
-[311](../issues/311-storefs-a-file-face.md), 311-STO-0032, [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done), [311-KRN-0190](../issues/311-KRN-0190-storefs-at-boot-and-its-clients.md).
+[311](311-storefs-a-file-face.done), 311-STO-0032, [311-STO-0029](311-STO-0029-a-working-tree-published-by-compare-and-swap.done), [311-KRN-0190](../issues/311-KRN-0190-storefs-at-boot-and-its-clients.md).

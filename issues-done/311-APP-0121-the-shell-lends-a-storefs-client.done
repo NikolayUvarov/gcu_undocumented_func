@@ -1,6 +1,6 @@
 # 311-APP-0121 — The shell lends programs a `storefs` client that does not write, and a scope for `REQUEST_FILE` — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** nothing · **Main task:** [311](../issues/311-storefs-a-file-face.md) · **Roadmap:** track B · **Constitution:** MC-3.1, MC-3.4
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-09) · **Blocked by:** nothing · **Main task:** [311](311-storefs-a-file-face.done) · **Roadmap:** track B · **Constitution:** MC-3.1, MC-3.4
 
 **Recorded by:** the tools track, 2026-10-31, from KRN's request in `issues/requests-APP.md` (2026-10-30, for the storage track's 311-STO-0032).
 
