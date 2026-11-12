@@ -66,7 +66,7 @@ Not in this task: the two-machine suite of stage 2's criterion (one MIND machine
 - **`parse.wit` 2.1 `http-request`,** served by `parse` (`mind::parse::to_request`, `from_request`). `tests/idl_fuzz_host.rs` lists its types and `tls.wit` 1.3's `Accepted`.
 - **`httpd/`:** one loop over its connections through `tls`, no call waiting for a peer; each head sent to `parse`; each file read from `init`'s read-only scope of `data/releases/`; the limits and the log as planned.
 - **`init`** (the `KRN` part):
-  - `httpd` after `tls` in the boot images, **handoff 33** (`common/abi.rs`, `tests/boot_abi_host.rs`);
+  - `httpd` in the boot images, **handoff 33** (`common/abi.rs`, `tests/boot_abi_host.rs`): last before the shell, after `tls` and `parse`. The gateway's lists of services (`effector.wit`'s `list<load, 48>`) hold the first 48 of `init`'s 55 units, so in `tls`'s place it pushed `effector` out of the telemetry, and the aarch64 effector suite failed (`KeyError: 'effector'`). The bound is EFF's: a request in `requests-EFF.md`;
   - its grants; not started without the policy's flow (`THE POLICY GIVES IT NO LISTENING GRANT`);
   - `NEEDS` on `netpolicy`, `tls` and `parse`.
 - **`webcheck listen:PORT`,** for the refusal of a program's client.

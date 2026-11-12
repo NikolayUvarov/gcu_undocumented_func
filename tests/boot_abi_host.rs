@@ -64,9 +64,11 @@ fn the_handoff_takes_only_its_own_loader() {
     assert!(BOOT_HANDOFF_VERSION > ABI_AT_THE_HANDOFF && ABI_VERSION >= ABI_AT_THE_HANDOFF, "a handoff that changed was numbered above every ABI then");
     assert_eq!(BOOT_IMAGES, 50, "a change of the boot images is a change of the handoff");
     assert_eq!(size_of::<BootInfo>(), 1160, "a change of BootInfo is a change of the handoff");
-    // httpd serves through tls and parse, so it starts after both (110-NET-0070).
+    // httpd serves through tls and parse, so it starts after both (110-NET-0070); it comes last before the shell, as the
+    // gateway's lists of services hold the first 48 units alone (requests-EFF.md).
     let at = BOOT_SERVICES.iter().position(|&name| name == "httpd").unwrap();
-    assert_eq!((BOOT_SERVICES[at - 1], BOOT_FILES[at]), ("tls", "httpd.elf"));
+    assert_eq!((BOOT_SERVICES[at - 1], BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("effector", "shell", "httpd.elf"));
+    assert!(BOOT_SERVICES.iter().position(|&name| name == "effector").unwrap() < 48, "the gateway's lists hold the effector session");
     assert!(at > BOOT_SERVICES.iter().position(|&name| name == "parse").unwrap() && at > BOOT_SERVICES.iter().position(|&name| name == "netpolicy").unwrap());
     // uart_serial serves the link's line on a board's UART, so it starts before link (100000-KRN-0221).
     let at = BOOT_SERVICES.iter().position(|&name| name == "uart_serial").unwrap();

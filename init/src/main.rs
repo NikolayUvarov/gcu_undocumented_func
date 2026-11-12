@@ -38,11 +38,12 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
     "its endpoint, which badges its clients; the block store's client that may get, put and publish", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
-    "network stack clients: minting source and policy control; a VFS client", "the flow of program timed; the RTC's setting client; a VFS client of system/timed", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the flow of program httpd (its listening grant); a TLS client with the right to the device certificate; the parser; RTC; a read-only scope of data/releases/", "the key service's client for SSH logins; no network of its own", "its own program client",
+    "network stack clients: minting source and policy control; a VFS client", "the flow of program timed; the RTC's setting client; a VFS client of system/timed", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
     "observe privilege", "read-only scopes of data/models/ and models:; its quota and workers by its line of data/memory.conf, read at each start",
     "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
+    "the flow of program httpd (its listening grant); a TLS client with the right to the device certificate; the parser; RTC; a read-only scope of data/releases/",
     "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
