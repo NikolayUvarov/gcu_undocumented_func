@@ -14,7 +14,7 @@ const LINES: usize = 64;
 const READ_AHEAD: usize = 32;
 const SLOW_MS: u64 = 1000; // a failure that took this long: the drive does not answer (unplugged), not a bad sector
 const QUIET_MS: u64 = 10_000; // then requests fail at once for this long, before the drive is asked again (211-KRN-0050)
-const BACK_MS: u64 = 6000; // a driver that answered as a fresh instance is waited for this long, and init's windows with it (3 s in QEMU)
+const BACK_MS: u64 = 8000; // a driver that answered "not found" is tried this long: a fresh instance, and init's windows (6 s in QEMU)
 const IDENTITY: usize = 256; // at most this many sectors read while mounting are kept, by hash, as the medium's identity
 
 // `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted (none through
@@ -89,25 +89,23 @@ impl Disk {
         None
     }
 
-    // Back after it did not answer, or after a return: the buffer lent to the driver's current instance (waiting up to
-    // BACK_MS for it and for init's windows), then the medium compared before anything is asked of it. A return met
-    // by the comparison's own reads is checked once more on the fresh instance. False: not back yet, and asked again
-    // after QUIET_MS; or another medium, whose volumes are closed.
+    // Back after it did not answer, or after a return: the buffer lent to the driver's current instance, then the
+    // medium compared before anything else is asked of it. Its reads are tried again for up to BACK_MS while they meet
+    // "not found": a fresh instance serves sectors only once init has set its windows again, and a driver finds a
+    // device that came back only when a read asks for it. False: not back yet, and asked again after QUIET_MS; or
+    // another medium, whose volumes are closed.
     fn back(&mut self) -> bool {
-        let sectors = self.device.sectors();
-        for _ in 0..2 {
-            let mut waited = 0;
-            while self.device.reattach().is_err() && waited < BACK_MS { mind::time::sleep(100); waited += 100; }
-            if self.device.returned() { break; }
-            let same = if self.device.sectors() != sectors { Some(false) } else { self.same_medium() };
-            match same {
+        let mut waited = 0;
+        loop {
+            let attached = self.device.reattach().is_ok();
+            match if attached { self.same_medium() } else { None } {
                 Some(true) => {
                     self.silent_until = 0;
                     mind::println!("[VFS] THE {} DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM", crate::device_name(self.device.kind()));
                     return true;
                 }
                 Some(false) => { self.silent_until = 0; self.replace(); return false; }
-                None if self.device.returned() => continue,
+                None if waited < BACK_MS && (!attached || self.device.returned()) => { mind::time::sleep(100); waited += 100; }
                 None => break,
             }
         }

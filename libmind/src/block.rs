@@ -105,10 +105,9 @@ impl Device {
     pub fn check_returns(&mut self) { self.checks = true; }
     /// The driver answered as a fresh instance does, and nothing was asked of it since.
     pub fn returned(&self) -> bool { self.returned }
-    /// Lends the buffer to the driver's current instance and asks its size again; requests are taken again.
+    /// Lends the buffer to the driver's current instance; requests are taken again.
     pub fn reattach(&mut self) -> Result<()> {
         self.attach()?;
-        self.sectors = block::sectors(self.endpoint)?;
         self.returned = false;
         Ok(())
     }

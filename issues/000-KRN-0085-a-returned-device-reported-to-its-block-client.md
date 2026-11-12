@@ -64,12 +64,11 @@
 **Made** on `claude/000-KRN-0085-returns-checked`, on DRV's `claude/000-DRV-0058-a-returned-usb-disk` (f7090144), whose `usb_storage` reports a return (plan step 4):
 - **`block::Device`** (`libmind/src/block.rs`):
   - `check_returns()`: after "not found" or "peer" the request is not repeated; the device is marked returned and refuses every request until `reattach()`;
-  - `returned()`, and `reattach()`, which lends the buffer to the driver's current instance and asks its size again;
+  - `returned()`, and `reattach()`, which lends the buffer to the driver's current instance;
   - a client that does not ask for it re-attaches and repeats, as before (MC-6.4).
 - **`vfs_server`** (`vfs_server/src/disk.rs`) asks for it on every disk. On a return, or when a drive that did not answer is asked again (`back`):
-  - it re-attaches every window's client, waiting up to 6 s for the fresh instance and for `init`'s windows (3 s in QEMU);
-  - another size is another medium;
-  - otherwise it compares sector 0, the identity and the cached sectors (000-KRN-0079), once more if the comparison's own reads met a return;
+  - it re-attaches every window's client and compares sector 0, the identity and the cached sectors (000-KRN-0079);
+  - the comparison's reads are tried again for up to 8 s while they meet "not found": a fresh instance serves sectors only once `init` has set its windows again (6 s after the old one ended, in QEMU), and `usb_storage` finds a device that came back only when a read asks for it;
   - the same medium: `THE … DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM`, and the request is repeated;
   - another one: its volumes close, nothing cached is written (`CAME BACK WITH ANOTHER MEDIUM`);
   - neither yet (a device gone answers "not found" too): `DOES NOT ANSWER`, requests fail for 10 s, then it is asked again.
