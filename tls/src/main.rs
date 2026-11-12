@@ -4,9 +4,11 @@
 // (idl/tls.wit). The service has no network access of its own: every connection goes through the client's socket
 // capability, so the network policy of the client holds. Server certificates are verified against tlsroots.pem on the
 // boot disk, or a server is known by the SHA-256 of its public key (connect-pinned, 351-NET-0002); a client certificate
-// is the device certificate, signed for by the key service. Random bytes come from
-// RDRAND only: without it every connection is refused. Holds: an RTC client (slot 2, certificate times), a VFS client
-// (slot 3, the root store), the key service's signer client (slot 4).
+// is the device certificate, signed for by the key service. The server role (1.3, 110-NET-0069): a session listens on
+// its lent flow and each connection it accepts is a session served with the device certificate (or tlsserver.pem's
+// chain for the device key), its handshake taken as far as the peer's bytes allow at each call, so no peer is waited
+// for. Random bytes come from RDRAND only: without it every connection is refused. Holds: an RTC client (slot 2,
+// certificate times), a VFS client (slot 3, the root store and the server's chain), the key service's signer client (slot 4).
 extern crate alloc;
 
 mod device;
@@ -26,15 +28,20 @@ use mind::idl::tls::{self as api, Error, Peer};
 use mind::idl::wire;
 use mind::ipc::{self, Endpoint};
 use mind::network::BADGE_TLS_NO_DEVICE;
+use pki_types::CertificateDer;
 use rustls::client::{UnbufferedClientConnection, WebPkiServerVerifier};
+use rustls::server::UnbufferedServerConnection;
 use rustls::unbuffered::{ConnectionState, EncodeError, UnbufferedStatus};
 use rustls::crypto::CryptoProvider;
-use rustls::{ClientConfig, RootCertStore};
+use rustls::{ClientConfig, CommonState, RootCertStore, ServerConfig};
 
 const RECEIVED: usize = 9;
 const KEYS: Endpoint = Endpoint(4);
 const ROOTS_FILE: &str = "tlsroots.pem";
-const SESSIONS: usize = 8;
+const SESSIONS: usize = 16; // in all (1.3; 8 before)
+const PER_CLIENT: usize = 8; // of one client (1.3)
+const SERVER_FILE: &str = "tlsserver.pem"; // the server's chain, when not the device certificate alone (1.3)
+const HANDSHAKE_MS: u64 = 10_000; // longest a served handshake takes from its accept (1.3)
 const CHUNK: usize = 4096; // largest send or receive (idl/tls.wit)
 const IDLE_MS: u64 = 5000; // longest wait for the peer in send, receive and close
 const PLAIN_MAX: usize = 64 * 1024; // decrypted bytes held for a client before the socket is read again
@@ -106,64 +113,94 @@ enum Step { Progress, NeedData, Ready, Closed }
 #[derive(Clone, Copy)]
 enum Write<'a> { Data(&'a [u8]), CloseNotify }
 
+/// A session's TLS connection: a client's, or one it serves (1.3).
+enum Conn { Client(UnbufferedClientConnection), Server(UnbufferedServerConnection) }
+
+impl Conn {
+    fn state(&self) -> &CommonState { match self { Conn::Client(c) => c, Conn::Server(s) => s } }
+}
+
+/// A listening session (1.3): its socket and the configuration of the sessions it accepts.
+struct Listener { socket: u32, config: Arc<ServerConfig> }
+
+/// An accepted session's handshake (1.3): the peer, when it must be done, and how it went once it is over.
+struct Serving { address: u32, port: u16, until: u64, outcome: Option<Result<Peer, Error>> }
+
 struct Session {
     id: u32, owner: u64, flow: usize,
-    conn: Option<UnbufferedClientConnection>, link: Option<Link>, device: Option<Arc<device::Device>>,
+    conn: Option<Conn>, link: Option<Link>, device: Option<Arc<device::Device>>,
     incoming: Vec<u8>, outgoing: Vec<u8>, plain: VecDeque<u8>, peer_closed: bool,
+    listener: Option<Listener>, serving: Option<Serving>,
+}
+
+// One state of a connection of either side handled: what it gave, whether `write` went out (once the connection can
+// take application data), and how many bytes of the records it was given are used.
+fn handle<D>(status: UnbufferedStatus<'_, '_, D>, link: &mut Link, outgoing: &mut Vec<u8>, plain: &mut VecDeque<u8>, peer_closed: &mut bool,
+             write: Option<Write>, deadline: u64) -> (Result<Step, Failure>, bool, usize) {
+    let UnbufferedStatus { mut discard, state } = status;
+    let mut wrote = false;
+    let result = match state {
+        Err(error) => Err(Failure::Tls(error)),
+        Ok(ConnectionState::ReadTraffic(mut traffic)) => {
+            let mut result = Ok(Step::Progress);
+            while let Some(record) = traffic.next_record() {
+                match record {
+                    Ok(record) => { discard += record.discard; plain.extend(record.payload.iter()); }
+                    Err(error) => { result = Err(Failure::Tls(error)); break; }
+                }
+            }
+            result
+        }
+        Ok(ConnectionState::PeerClosed) => { *peer_closed = true; Ok(Step::Progress) }
+        Ok(ConnectionState::Closed) => Ok(Step::Closed),
+        Ok(ConnectionState::EncodeTlsData(mut data)) => {
+            let used = outgoing.len();
+            outgoing.resize(used + CHUNK, 0);
+            loop {
+                match data.encode(&mut outgoing[used..]) {
+                    Ok(n) => { outgoing.truncate(used + n); break Ok(Step::Progress); }
+                    Err(EncodeError::InsufficientSize(size)) => outgoing.resize(used + size.required_size, 0),
+                    Err(_) => { outgoing.truncate(used); break Err(Failure::Client(Error::Handshake)); }
+                }
+            }
+        }
+        Ok(ConnectionState::TransmitTlsData(data)) => {
+            let sent = link.transmit(outgoing, deadline);
+            outgoing.clear();
+            data.done();
+            sent.map(|()| Step::Progress).map_err(Failure::Client)
+        }
+        Ok(ConnectionState::BlockedHandshake) => Ok(Step::NeedData),
+        Ok(ConnectionState::WriteTraffic(mut traffic)) => {
+            let mut buffer = if write.is_some() { alloc::vec![0u8; CHUNK + 64] } else { Vec::new() };
+            let encrypted = match write {
+                None => Ok(0),
+                Some(Write::Data(data)) => traffic.encrypt(data, &mut buffer),
+                Some(Write::CloseNotify) => traffic.queue_close_notify(&mut buffer),
+            };
+            match encrypted {
+                Ok(n) => { wrote = write.is_some(); link.transmit(&buffer[..n], deadline).map(|()| Step::Ready).map_err(Failure::Client) }
+                Err(_) => Err(Failure::Client(Error::Closed)),
+            }
+        }
+        Ok(_) => Ok(Step::Progress),
+    };
+    (result, wrote, discard)
 }
 
 impl Session {
+    fn new(id: u32, owner: u64, flow: usize) -> Box<Session> {
+        Box::new(Session { id, owner, flow, conn: None, link: None, device: None, incoming: Vec::new(), outgoing: Vec::new(), plain: VecDeque::new(),
+                           peer_closed: false, listener: None, serving: None })
+    }
+
     // One state of the connection handled; `write` is done when the connection can take application data (the bool).
     fn step(&mut self, write: Option<Write>, deadline: u64) -> Result<(Step, bool), Failure> {
         let (Some(conn), Some(link)) = (self.conn.as_mut(), self.link.as_mut()) else { return Err(Error::Invalid.into()) };
-        let (incoming, outgoing, plain) = (&mut self.incoming, &mut self.outgoing, &mut self.plain);
-        let UnbufferedStatus { mut discard, state } = conn.process_tls_records(&mut incoming[..]);
-        let mut wrote = false;
-        let result = match state {
-            Err(error) => Err(Failure::Tls(error)),
-            Ok(ConnectionState::ReadTraffic(mut traffic)) => {
-                let mut result = Ok(Step::Progress);
-                while let Some(record) = traffic.next_record() {
-                    match record {
-                        Ok(record) => { discard += record.discard; plain.extend(record.payload.iter()); }
-                        Err(error) => { result = Err(Failure::Tls(error)); break; }
-                    }
-                }
-                result
-            }
-            Ok(ConnectionState::PeerClosed) => { self.peer_closed = true; Ok(Step::Progress) }
-            Ok(ConnectionState::Closed) => Ok(Step::Closed),
-            Ok(ConnectionState::EncodeTlsData(mut data)) => {
-                let used = outgoing.len();
-                outgoing.resize(used + CHUNK, 0);
-                loop {
-                    match data.encode(&mut outgoing[used..]) {
-                        Ok(n) => { outgoing.truncate(used + n); break Ok(Step::Progress); }
-                        Err(EncodeError::InsufficientSize(size)) => outgoing.resize(used + size.required_size, 0),
-                        Err(_) => { outgoing.truncate(used); break Err(Failure::Client(Error::Handshake)); }
-                    }
-                }
-            }
-            Ok(ConnectionState::TransmitTlsData(data)) => {
-                let sent = link.transmit(outgoing, deadline);
-                outgoing.clear();
-                data.done();
-                sent.map(|()| Step::Progress).map_err(Failure::Client)
-            }
-            Ok(ConnectionState::BlockedHandshake) => Ok(Step::NeedData),
-            Ok(ConnectionState::WriteTraffic(mut traffic)) => {
-                let mut buffer = if write.is_some() { alloc::vec![0u8; CHUNK + 64] } else { Vec::new() };
-                let encrypted = match write {
-                    None => Ok(0),
-                    Some(Write::Data(data)) => traffic.encrypt(data, &mut buffer),
-                    Some(Write::CloseNotify) => traffic.queue_close_notify(&mut buffer),
-                };
-                match encrypted {
-                    Ok(n) => { wrote = write.is_some(); link.transmit(&buffer[..n], deadline).map(|()| Step::Ready).map_err(Failure::Client) }
-                    Err(_) => Err(Failure::Client(Error::Closed)),
-                }
-            }
-            Ok(_) => Ok(Step::Progress),
+        let (incoming, outgoing, plain, closed) = (&mut self.incoming, &mut self.outgoing, &mut self.plain, &mut self.peer_closed);
+        let (result, wrote, discard) = match conn {
+            Conn::Client(c) => handle(c.process_tls_records(&mut incoming[..]), link, outgoing, plain, closed, write, deadline),
+            Conn::Server(s) => handle(s.process_tls_records(&mut incoming[..]), link, outgoing, plain, closed, write, deadline),
         };
         incoming.drain(..discard.min(incoming.len()));
         result.map(|step| (step, wrote))
@@ -192,6 +229,17 @@ impl Session {
         }
     }
 
+    // An accepted session's handshake taken as far as the bytes that have arrived allow (1.3): whether it is done.
+    fn advance(&mut self, until: u64) -> Result<bool, Failure> {
+        loop {
+            let more = match (self.link.as_mut(), &mut self.incoming) { (Some(link), incoming) => link.fill(incoming)?, _ => return Err(Error::Invalid.into()) };
+            let (step, _) = self.pump(None, until)?;
+            match self.conn.as_ref() { Some(conn) if !conn.state().is_handshaking() => return Ok(true), Some(_) => {}, None => return Err(Error::Invalid.into()) }
+            if step == Step::Closed || self.link.as_ref().is_some_and(|l| l.eof) { return Err(Error::Closed.into()); }
+            if !more { return Ok(false); }
+        }
+    }
+
     fn handshake(&mut self, deadline: u64) -> Result<(), Failure> {
         loop {
             match self.pump(None, deadline)?.0 {
@@ -212,6 +260,12 @@ impl Session {
 
 struct Service { provider: Arc<CryptoProvider>, sessions: Vec<Box<Session>>, next: u32 }
 
+// The suite and group a connection agreed on (IANA numbers).
+fn negotiated(conn: &Conn) -> (u16, u16) {
+    let state = conn.state();
+    (state.negotiated_cipher_suite().map_or(0, |s| u16::from(s.suite())), state.negotiated_key_exchange_group().map_or(0, |g| u16::from(g.name())))
+}
+
 // The root store from the boot disk, read for every connection so a changed file takes effect; with the count of
 // certificates in it that did not parse.
 fn roots() -> (RootCertStore, usize) {
@@ -229,13 +283,18 @@ impl Service {
         self.sessions.iter_mut().find(|s| s.id == id && s.owner == pid).map(|s| &mut **s).ok_or(Error::NotFound)
     }
 
+    // Whether client `pid` may have one more session: 16 in all, 8 of one client.
+    fn room(&self, pid: u64) -> bool { self.sessions.len() < SESSIONS && self.sessions.iter().filter(|s| s.owner == pid).count() < PER_CLIENT }
+
+    fn number(&mut self) -> u32 { self.next = self.next.wrapping_add(1).max(1); self.next }
+
     fn attach(&mut self, flow: usize, pid: u64) -> Result<u32, Error> {
-        if self.sessions.len() >= SESSIONS { return Err(Error::Limit); }
+        if !self.room(pid) { return Err(Error::Limit); }
         // A child of the lent capability: the client's revocation removes it too.
         let flow = ipc::mint(flow, u8::MAX, 0, 0).map_err(|_| Error::Limit)?;
-        self.next = self.next.wrapping_add(1).max(1);
-        self.sessions.push(Box::new(Session { id: self.next, owner: pid, flow, conn: None, link: None, device: None, incoming: Vec::new(), outgoing: Vec::new(), plain: VecDeque::new(), peer_closed: false }));
-        Ok(self.next)
+        let id = self.number();
+        self.sessions.push(Session::new(id, pid, flow));
+        Ok(id)
     }
 
     // The server verified against the root store, or by its pins.
@@ -263,7 +322,7 @@ impl Service {
         let pinned = pins.is_some();
         let config = Arc::new(self.config(device.clone(), pins)?);
         let session = self.session(id, pid)?;
-        if session.conn.is_some() { return Err(Error::Invalid); }
+        if session.conn.is_some() || session.listener.is_some() || session.serving.is_some() { return Err(Error::Invalid); }
         let deadline = now() + timeout.clamp(100, 60_000) as u64;
         let endpoint = Endpoint(session.flow);
         let socket = flow(socket::tcp_connect(endpoint, address, port, timeout.clamp(100, 60_000)))?;
@@ -271,14 +330,12 @@ impl Service {
         session.device = device;
         let id = session.id;
         let result = match UnbufferedClientConnection::new(config, server) {
-            Ok(conn) => { session.conn = Some(conn); session.handshake(deadline) }
+            Ok(conn) => { session.conn = Some(Conn::Client(conn)); session.handshake(deadline) }
             Err(error) => Err(Failure::Tls(error)),
         };
         match result {
             Ok(()) => {
-                let conn = session.conn.as_ref().ok_or(Error::Invalid)?;
-                let suite = conn.negotiated_cipher_suite().map_or(0, |s| u16::from(s.suite()));
-                let group = conn.negotiated_key_exchange_group().map_or(0, |g| u16::from(g.name()));
+                let (suite, group) = negotiated(session.conn.as_ref().ok_or(Error::Invalid)?);
                 let sent = session.device.as_ref().is_some_and(|d| d.sent.load(Ordering::Relaxed));
                 mind::println!("[TLS] SESSION {} OF PID {}: {} VERIFIED{}, SUITE {:04X}, GROUP {:04X}, CLIENT CERTIFICATE {}", id, pid, name, how, suite, group, if sent { "SENT" } else { "NOT SENT" });
                 Ok(Peer { suite, group, client_certificate: sent })
@@ -300,6 +357,7 @@ impl Service {
     }
 
     fn send(&mut self, id: u32, pid: u64, data: &[u8]) -> Result<u32, Error> {
+        self.ready(id, pid)?;
         let session = self.session(id, pid)?;
         if session.conn.is_none() { return Err(Error::Invalid); }
         let _ = session.poll();
@@ -312,6 +370,7 @@ impl Service {
     }
 
     fn receive(&mut self, id: u32, pid: u64, length: u32, out: &mut [u8; CHUNK]) -> Result<usize, Error> {
+        self.ready(id, pid)?;
         let session = self.session(id, pid)?;
         if session.conn.is_none() { return Err(Error::Invalid); }
         let step = session.poll();
@@ -328,12 +387,131 @@ impl Service {
         }
     }
 
-    // Frees session `index`: close_notify if it can still be sent, the TCP connection, the lent flow.
+    // Frees session `index`: close_notify if it can still be sent, the TCP connection or the listening socket, the
+    // lent flow.
     fn end(&mut self, index: usize) {
         let mut session = self.sessions.swap_remove(index);
         if session.conn.is_some() { let _ = session.pump(Some(Write::CloseNotify), now() + IDLE_MS); }
         if let Some(link) = session.link.take() { let _ = socket::close(link.flow, link.socket); }
+        if let Some(listener) = session.listener.take() { let _ = socket::close(Endpoint(session.flow), listener.socket); }
         let _ = ipc::drop_cap(session.flow);
+    }
+
+    // The server's chain (1.3): tlsserver.pem's certificates when the file is there, the first holding the device key;
+    // else the device certificate alone. With what the log calls it.
+    fn chain(&self) -> Result<(Vec<CertificateDer<'static>>, alloc::string::String), Error> {
+        let device = device::certificate(KEYS).ok_or(Error::Denied)?;
+        let file = match mind::fs::File::open(SERVER_FILE) {
+            Ok(file) => file,
+            Err(mind::fs::Error::NotFound) => return Ok((alloc::vec![device], "THE DEVICE CERTIFICATE".into())),
+            Err(error) => { mind::println!("[TLS] {} NOT READ: {:?}", SERVER_FILE, error); return Err(Error::Certificate); }
+        };
+        let mut text = alloc::vec![0u8; file.size().min(64 * 1024)];
+        let length = file.read_at(0, &mut text).unwrap_or(0);
+        let chain: Vec<CertificateDer<'static>> = pem::certificates(core::str::from_utf8(&text[..length]).unwrap_or("")).into_iter().map(CertificateDer::from).collect();
+        let key = pinned::spki_sha256(&device);
+        match chain.first() {
+            None => { mind::println!("[TLS] {} HOLDS NO CERTIFICATE", SERVER_FILE); Err(Error::Certificate) }
+            Some(leaf) if key.is_none() || pinned::spki_sha256(leaf) != key => {
+                mind::println!("[TLS] {}: ITS FIRST CERTIFICATE DOES NOT HOLD THE DEVICE KEY", SERVER_FILE); Err(Error::Certificate)
+            }
+            Some(_) => { let name = alloc::format!("{} ({} CERTIFICATES)", SERVER_FILE, chain.len()); Ok((chain, name)) }
+        }
+    }
+
+    // TLS 1.3 as the server with `chain`, every signature the key service's; no tickets, so no resumption.
+    fn server_config(&self, chain: Vec<CertificateDer<'static>>) -> Result<Arc<ServerConfig>, Error> {
+        let mut config = ServerConfig::builder_with_details(self.provider.clone(), Arc::new(provider::Rtc))
+            .with_protocol_versions(&[&rustls::version::TLS13]).map_err(|_| Error::Handshake)?
+            .with_no_client_auth().with_cert_resolver(Arc::new(device::Served::new(KEYS, chain)));
+        config.send_tls13_tickets = 0;
+        Ok(Arc::new(config))
+    }
+
+    // Session `id` listens on TCP `port` of its flow (1.3); the flow's listening grant decides whether it may.
+    fn listen(&mut self, id: u32, pid: u64, port: u16, backlog: u8) -> Result<(), Error> {
+        if !mind::random::available() { return Err(Error::NoEntropy); }
+        let session = self.session(id, pid)?;
+        if session.conn.is_some() || session.listener.is_some() || session.serving.is_some() { return Err(Error::Invalid); }
+        let (chain, served) = self.chain()?;
+        let config = self.server_config(chain)?;
+        let session = self.session(id, pid)?;
+        match flow(socket::tcp_listen(Endpoint(session.flow), port, backlog)) {
+            Ok(socket) => {
+                session.listener = Some(Listener { socket, config });
+                mind::println!("[TLS] SESSION {} OF PID {} LISTENS ON TCP {}, SERVING {}", id, pid, port, served);
+                Ok(())
+            }
+            Err(error) => { mind::println!("[TLS] SESSION {} OF PID {}: TCP {} NOT LISTENED ON: {:?}", id, pid, port, error); Err(error) }
+        }
+    }
+
+    // The oldest connection listener `id` holds, as a new session whose handshake as the server has started (1.3).
+    fn accept(&mut self, id: u32, pid: u64) -> Result<api::Accepted, Error> {
+        let listener = self.session(id, pid)?;
+        let (flow_slot, socket_id, config) = match listener.listener.as_ref() { Some(l) => (listener.flow, l.socket, l.config.clone()), None => return Err(Error::Invalid) };
+        if !self.room(pid) { return Err(Error::Limit); }
+        let taken = flow(socket::tcp_accept(Endpoint(flow_slot), socket_id))?;
+        // A child of the listener's flow, so that either can end without the other; the client's revocation removes both.
+        let child = match ipc::mint(flow_slot, u8::MAX, 0, 0) { Ok(child) => child, Err(_) => { let _ = socket::close(Endpoint(flow_slot), taken.socket); return Err(Error::Limit); } };
+        let conn = match UnbufferedServerConnection::new(config) {
+            Ok(conn) => conn,
+            Err(error) => {
+                mind::println!("[TLS] SESSION {} OF PID {}: NO SERVER CONNECTION: {:?}", id, pid, error);
+                let _ = socket::close(Endpoint(child), taken.socket);
+                let _ = ipc::drop_cap(child);
+                return Err(Error::Handshake);
+            }
+        };
+        let number = self.number();
+        let mut session = Session::new(number, pid, child);
+        session.conn = Some(Conn::Server(conn));
+        session.link = Some(Link { flow: Endpoint(child), socket: taken.socket, eof: false });
+        session.serving = Some(Serving { address: taken.address, port: taken.port, until: now() + HANDSHAKE_MS, outcome: None });
+        self.sessions.push(session);
+        let _ = self.served(number, pid); // as far as the peer's bytes go now
+        Ok(api::Accepted { session: number, address: taken.address, port: taken.port })
+    }
+
+    // Takes accepted session `id`'s handshake as far as the peer's bytes allow (1.3): `again` while it waits for them,
+    // then how it went, logged once; a failed one's connection is closed.
+    fn served(&mut self, id: u32, pid: u64) -> Result<Peer, Error> {
+        let session = self.session(id, pid)?;
+        let Some(serving) = session.serving.as_ref() else { return Err(Error::Invalid) };
+        if let Some(outcome) = serving.outcome { return outcome; }
+        let (until, address, port) = (serving.until, serving.address, serving.port);
+        let result = match session.advance(until) {
+            Ok(true) => Ok(()),
+            Ok(false) if now() > until => Err(Failure::Client(Error::Timeout)),
+            Ok(false) => return Err(Error::Again),
+            Err(failure) => Err(failure),
+        };
+        let [a, b, c, d] = address.to_be_bytes();
+        let outcome = match result {
+            Ok(()) => {
+                let (suite, group) = negotiated(session.conn.as_ref().ok_or(Error::Invalid)?);
+                mind::println!("[TLS] SESSION {} OF PID {}: SERVED {}.{}.{}.{}:{}, SUITE {:04X}, GROUP {:04X}", id, pid, a, b, c, d, port, suite, group);
+                Ok(Peer { suite, group, client_certificate: false })
+            }
+            Err(failure) => {
+                let error = match failure {
+                    Failure::Client(Error::Timeout) => { mind::println!("[TLS] SESSION {} OF PID {}: HANDSHAKE WITH {}.{}.{}.{}:{} TIMED OUT", id, pid, a, b, c, d, port); Error::Timeout }
+                    Failure::Client(error) => { mind::println!("[TLS] SESSION {} OF PID {}: HANDSHAKE WITH {}.{}.{}.{}:{} FAILED: {:?}", id, pid, a, b, c, d, port, error); error }
+                    Failure::Tls(error) => { mind::println!("[TLS] SESSION {} OF PID {}: HANDSHAKE WITH {}.{}.{}.{}:{} FAILED: {:?}", id, pid, a, b, c, d, port, error); Error::Handshake }
+                };
+                if let Some(link) = session.link.take() { let _ = socket::close(link.flow, link.socket); }
+                session.conn = None;
+                Err(error)
+            }
+        };
+        if let Some(serving) = session.serving.as_mut() { serving.outcome = Some(outcome); }
+        outcome
+    }
+
+    // Before `send` and `receive`: an accepted session's handshake done (`again` while it goes on); any other session as it is.
+    fn ready(&mut self, id: u32, pid: u64) -> Result<(), Error> {
+        if self.session(id, pid)?.serving.is_none() { return Ok(()); }
+        self.served(id, pid).map(drop)
     }
 
     fn close(&mut self, id: u32, pid: u64) -> Result<(), Error> {
@@ -342,12 +520,15 @@ impl Service {
         Ok(())
     }
 
-    // Sessions of processes that ended.
+    // Sessions of processes that ended; served handshakes past their time (1.3), whose sockets are freed for other peers.
     fn expire(&mut self) {
         while let Some(index) = self.sessions.iter().position(|s| !mind::process::alive(s.owner)) {
             mind::println!("[TLS] PROCESS {} ENDED: SESSION {} CLOSED", self.sessions[index].owner, self.sessions[index].id);
             self.end(index);
         }
+        let late: Vec<(u32, u64)> = self.sessions.iter()
+            .filter(|s| s.serving.as_ref().is_some_and(|v| v.outcome.is_none() && now() > v.until)).map(|s| (s.id, s.owner)).collect();
+        for (id, pid) in late { let _ = self.served(id, pid); }
     }
 }
 
@@ -403,6 +584,16 @@ fn main(_info: &'static BootInfo) {
                 api::reply_receive(call, result.map(|n| &buffer[..n]))
             }
             Ok((api::Request::Close { session }, call)) => api::reply_close(call, service.close(session, pid)),
+            Ok((api::Request::Listen { session, port, backlog }, call)) => {
+                // The server role presents the device: not for a client badged BADGE_TLS_NO_DEVICE (1.3).
+                let result = if badge & BADGE_TLS_NO_DEVICE != 0 {
+                    mind::println!("[TLS] PID {}: THE SERVER ROLE REFUSED TO A CLIENT WITHOUT THE RIGHT TO THE DEVICE CERTIFICATE", pid);
+                    Err(Error::Denied)
+                } else { service.listen(session, pid, port, backlog) };
+                api::reply_listen(call, result)
+            }
+            Ok((api::Request::Accept { listener }, call)) => api::reply_accept(call, service.accept(listener, pid).as_ref().map_err(|e| *e)),
+            Ok((api::Request::Served { session }, call)) => api::reply_served(call, service.served(session, pid).as_ref().map_err(|e| *e)),
             Ok((api::Request::Certificate, call)) => {
                 let result = match mind::idl::keystore::certificate(KEYS, &mut buffer[..]) { Ok(Ok(n)) => Ok(&buffer[..n]), Ok(Err(_)) | Err(_) => Err(Error::NotFound) };
                 api::reply_certificate(call, result)
