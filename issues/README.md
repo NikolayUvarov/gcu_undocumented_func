@@ -210,7 +210,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-UPD-0017](351-UPD-0017-bootloader-multi-os-boot-selection.md) | Bootloader multi-OS boot selection: can our bootloader programmatically switch between mind-core-os and Ubuntu for update and firmware operations? | `UPD` | P3 | — | track C |
 | [307](307-the-stores-own-partition.md) | A durable medium on real machines: the store's own partition (track B, eighth step) | main task, `STO` | P1 | [307-DRV-0055](307-DRV-0055-what-a-flush-reaches-per-driver.md), [307-KRN-0236](307-KRN-0236-the-copys-partition-on-a-real-machine.md) (the copy's partition), the maintainer's sticks (issues-human 16) | track B |
 | [310](310-the-index-on-the-medium.md) | Scale: the index on the medium, larger media, longer histories | main task, `STO` | P3 | — (when sizes ask for it; before [312](312-the-minds-memory.md)'s indexes grow large) | track B |
-| [312-STO-0049](312-STO-0049-a-domains-client-with-fewer-rights.md) | A domain's client with fewer rights than its owner's: `domain-client-with(id, rights)` (`blockstore.wit` 2.8), for a read-only `run -d` (APP's request, 312-APP-0134) | `STO` | P2 | — | track B |
 | [312](312-the-minds-memory.md) | The Mind's memory: a journal, assertions and derived indexes | main task, `STO` | P2 | — (308 done) | track B |
 | [313](313-persistent-actors.md) | Persistent actors: checkpoints of services with queues | main task, `STO` | P2 | — (308 done) | track B |
 | [314](314-models-mapped-from-the-store.md) | Models and large objects mapped from the store | main task, `STO` | P3 | [307](307-the-stores-own-partition.md) | track B |
@@ -350,6 +349,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [312-STO-0049](../issues-done/312-STO-0049-a-domains-client-with-fewer-rights.done) | A domain's client with fewer rights than its owner's | `domain-client-with(id, rights)` (`blockstore.wit` 2.8), `blocks -dr`; host test, QEMU `store` on aarch64; for APP's read-only `run -d` |
 | [251-STO-0015](../issues-done/251-STO-0015-a-model-read-into-memory.done) | A model read back into memory for a recognizer | a reader copies a model's file once into a sealed memory object (`mind::model_object`, `blocks models map`); host test, QEMU `vfs` on x86 and aarch64, timed beside `get` |
 | [312-STO-0047](../issues-done/312-STO-0047-a-vector-index-of-a-journals-embeddings.done) | A vector index of a journal's embeddings by one model, an exact scan | `mind::vector`, `blocks vector`; every answer checked against the journal; host tests, QEMU on x86 and aarch64 |
 | [312-STO-0046](../issues-done/312-STO-0046-a-memory-domains-own-limit.done) | A memory domain's own limit, set when it is made | `domain-create-limited`, `domain-usage` (`blockstore.wit` 2.7), `blocks domain new [KiB]`; host test, QEMU on x86 across a reboot and aarch64 |
