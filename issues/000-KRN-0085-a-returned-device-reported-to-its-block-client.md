@@ -72,7 +72,7 @@
   - the same medium: `THE … DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM`, and the request is repeated;
   - another one: its volumes close, nothing cached is written (`CAME BACK WITH ANOTHER MEDIUM`);
   - neither within 10 s of the first "not found", or a request that took 1 s or more: `DOES NOT ANSWER`, and it is asked again every 10 s.
-- **`tests/usb_image_smoke.py`:** the longer copy's step and 000-KRN-0079's step ask for the program until the copy is met, or the drive is said not to answer, as `vfs_server` asks a drive again only after its wait. In the slots check: the stick swapped at once for a copy with another manifest while `vfs_server` asks nothing. The test requires `DRIVE ANSWERED NOT FOUND`, `CAME BACK WITH ANOTHER MEDIUM`, no `DOES NOT ANSWER`, `usb_storage`'s `ENUMERATED AGAIN`, and the copy unchanged after a write and a `sync`.
+- **`tests/usb_image_smoke.py`:** the longer copy's step and 000-KRN-0079's step ask for the program until the copy is met, or the drive is said not to answer, as `vfs_server` asks a drive again only after its wait. A boot of its own (`swapped_unasked`): a stick in the boot stick's place, then that one swapped at once for a copy with another manifest while `vfs_server` asks nothing. The test requires `DRIVE ANSWERED NOT FOUND`, `CAME BACK WITH ANOTHER MEDIUM`, no `DOES NOT ANSWER`, `usb_storage`'s `ENUMERATED AGAIN`, and the copy unchanged after a write and a `sync`.
 
 ## Related
 
