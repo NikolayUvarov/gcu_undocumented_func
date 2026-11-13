@@ -525,12 +525,6 @@ def require(text, fragment):
     assert fragment in text, (fragment, text)
 
 
-def require_match(text, pattern):
-    """`pattern` (a regular expression) matches somewhere in `text`, or the test fails with it."""
-    if not re.search(pattern, text):
-        raise AssertionError(f"expected a match for {pattern!r}, got:\n{text[-1500:]}")
-
-
 def require_all(text, *fragments):
     for fragment in fragments:
         require(text, fragment)
@@ -4517,10 +4511,9 @@ def vector_index(journal, seq, head, model, dims, vectors):
     return cid_text(directory([(b"manifest", 0, len(manifest), cid_binary(0x55, manifest)), (b"vectors", 1, len(files), listed)]))
 
 
-# 312-STO-0050: a term the suites set, seconds since 1970 UTC, and the text `blocks domain term` gives it; ahead of
-# the guest's clock, so it has not passed, or the store hears no clock.
+# 312-STO-0050: a term the suites set, seconds since 1970 UTC (2030-03-17), and the text `blocks domain term` gives it;
+# ahead of the guest's clock, also when 312-STO-0051 sets it to 2029.
 TERM_AT = 1_900_000_000
-TERM_STATE = "(?:NOT PASSED|NO CALENDAR CLOCK)"
 
 
 def term_text(until):
@@ -5659,11 +5652,11 @@ def store_domains_check(vm):
     require(blocks(f"domain usage {second}"), f"DOMAIN {second} RETAINS 0 BYTES, NO LIMIT OF ITS OWN")
     require(blocks(f"-d {first} domain usage {limited}"), "Rights")
     # 312-STO-0050: a domain's term and mode, report and none until set; set and read by its owner, through a client of
-    # the volume only. With the store's rtc client (312-KRN-0239) a term in 2030 has not passed; without it the store
-    # hears no calendar clock and says so; either way none acts here.
-    require_match(blocks(f"domain term {second}"), rf"DOMAIN {second} NO TERM, MODE REPORT, {TERM_STATE}")
+    # the volume only. The store hears the calendar time from its rtc client (312-KRN-0239), and a term in 2030 has not
+    # passed (312-STO-0051 sets the clock past one).
+    require(blocks(f"domain term {second}"), f"DOMAIN {second} NO TERM, MODE REPORT, NOT PASSED")
     require(blocks(f"domain term {second} forget {TERM_AT}"), f"DOMAIN {second} TERM SET: {term_text(TERM_AT)}, MODE FORGET")
-    require_match(blocks(f"domain term {second}"), rf"DOMAIN {second} {re.escape(term_text(TERM_AT))}, MODE FORGET, {TERM_STATE}")
+    require(blocks(f"domain term {second}"), f"DOMAIN {second} {term_text(TERM_AT)}, MODE FORGET, NOT PASSED")
     require(blocks(f"-d {first} domain term {second}"), "blocks: domain term")
     require(blocks(f"-d {first} domain term {second} report 0"), "Rights")
     require(blocks(f"domain term 999 report 0"), "blocks: domain term 999: NotFound")
@@ -5700,6 +5693,80 @@ def store_domains_check(vm):
           "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
           "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046); a "
           "client of a domain that may only read reads it and is refused a put and a publish (312-STO-0049)", flush=True)
+    store_terms_check(vm, blocks)
+
+
+def log_until(vm, service, lines, timeout=240):
+    """A service's log until every one of `lines` is in it, or `timeout` seconds: `logs` drains it, so reads are joined."""
+    text, end = "", time.monotonic() + timeout
+    while True:
+        text += vm.service_logs(service)
+        if all(line in text for line in lines) or time.monotonic() > end:
+            break
+        time.sleep(2)
+    for line in lines:
+        require(text, line)
+    return text
+
+
+def store_terms_check(vm, blocks):
+    """312-STO-0051: a domain's term acting on the platform, by the calendar time `blockstore` reads from its rtc client
+    (312-KRN-0239). The guest's clock set by the shell, four domains with a block and a name each, and a term 90 s
+    ahead: one in mode forget, two in release, one in report. Once the clock passes it, the store forgets the first;
+    the two released refuse a put and a publish, and one is set back to report before a collection, which frees the
+    other's records while its key stays and keeps the first's; the report domain is told passed and keeps everything.
+    The clock goes back to the host's time at the end."""
+    import calendar, datetime
+    made = lambda: int(re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))[1])
+    gone, held, kept, told = made(), made(), made(), made()
+    require(vm.command("write ram:term.txt kept until its term"), "WROTE 20 BYTES")
+    note = cid_raw(b"kept until its term\n")
+    for d in (gone, held, kept, told):
+        require(blocks(f"-d {d} put ram:term.txt"), f"PUT {note} SIZE 20")
+        require(blocks(f"-d {d} publish term {note}"), "PUBLISHED term VERSION 1")
+    require(vm.command("date set 2029-06-01 12:00:00"), "CLOCK SET")
+    until = calendar.timegm((2029, 6, 1, 12, 1, 30, 0, 0, 0))
+    for d, mode in ((gone, "forget"), (held, "release"), (kept, "release"), (told, "report")):
+        require(blocks(f"domain term {d} {mode} {until}"), f"DOMAIN {d} TERM SET: {term_text(until)}, MODE {mode.upper()}")
+    # A set makes the store read the clock at once, so the term is not yet passed and the clock is heard.
+    require(blocks(f"domain term {gone}"), f"DOMAIN {gone} {term_text(until)}, MODE FORGET, NOT PASSED")
+    log_until(vm, "blockstore", [f"[BLOCKSTORE] DOMAIN {gone} FORGOTTEN: ITS TERM PASSED (MODE FORGET)",
+                                 f"[BLOCKSTORE] DOMAIN {held}'S TERM {until} PASSED (MODE RELEASE)",
+                                 f"[BLOCKSTORE] DOMAIN {kept}'S TERM {until} PASSED (MODE RELEASE)",
+                                 f"[BLOCKSTORE] DOMAIN {told}'S TERM {until} PASSED (MODE REPORT)"])
+    # Forget: the domain is gone, no client of it is lent, its name with it.
+    require(blocks("domains"), f"DOMAIN {gone} FORGOTTEN")
+    require(blocks(f"-d {gone} resolve term"), f"blocks: domain {gone}: NotFound")
+    # Release: read as before, a put and a publish refused; the second set back to report before the collection.
+    for d in (held, kept):
+        require(blocks(f"domain term {d}"), f"DOMAIN {d} {term_text(until)}, MODE RELEASE, PASSED")
+        require(blocks(f"-d {d} resolve term"), f"term VERSION 1 ROOT {note}")
+        out = blocks(f"-d {d} put ram:term.txt")
+        require(out, "blocks: put:"); require(out, "ReadOnly")
+        require(blocks(f"-d {d} publish other {note}"), "blocks: publish other: ReadOnly")
+    require(blocks(f"domain term {kept} report {until}"), f"DOMAIN {kept} TERM SET: {term_text(until)}, MODE REPORT")
+    # Report: told passed, and writes go on.
+    require(blocks(f"domain term {told}"), f"DOMAIN {told} {term_text(until)}, MODE REPORT, PASSED")
+    require(blocks(f"-d {told} publish again {note}"), "PUBLISHED again VERSION 1")
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    # The released domain's name and block freed by the collection; the domain stays, its key with it.
+    require(blocks(f"-d {held} resolve term"), "blocks: resolve term: NotFound")
+    require(blocks(f"-d {held} get {note} ram:x.txt"), "NotFound")
+    out = blocks("domains")
+    assert f"DOMAIN {gone} " not in out and all(f"DOMAIN {d} LIVE" in out for d in (held, kept, told)), out
+    for d in (kept, told):
+        require(blocks(f"-d {d} resolve term"), f"term VERSION 1 ROOT {note}")
+        require(blocks(f"-d {d} get {note} ram:back.txt"), "GOT 20 BYTES")
+    # Its term lifted, the released domain takes a put again under the same key.
+    require(blocks(f"domain term {held} release 0"), f"DOMAIN {held} TERM SET: NO TERM, MODE RELEASE")
+    require(blocks(f"-d {held} put ram:term.txt"), f"PUT {note} SIZE 20")
+    require(blocks(f"-d {held} publish term {note}"), "PUBLISHED term VERSION 1")
+    require(vm.command(f"date set {datetime.datetime.now(datetime.timezone.utc):%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
+    print("PASS: a domain's term acting by the calendar time from rtc: past its term, the domain in mode forget is "
+          "forgotten; one in release refuses a put and a publish and a collection frees its records while it stays, and "
+          "another set back to report before the collection keeps them; one in report is told passed and keeps "
+          "everything (312-STO-0051)", flush=True)
 
 
 def run_in_domain_check(vm, first=None, second=None, note=None):
@@ -17017,6 +17084,18 @@ def store_disk_check(args, disk):
             require(vm.command(f"blocks -d {limited} publish held {held}", raw=True), "PUBLISHED held VERSION 1")
             # 312-STO-0050: a term and mode set on it, found again after the reboot.
             require(vm.command(f"blocks domain term {limited} release {TERM_AT}", raw=True), f"DOMAIN {limited} TERM SET: {term_text(TERM_AT)}, MODE RELEASE")
+            # 312-STO-0051: a domain in mode forget whose term passes while the machine is off. A set makes the store read
+            # the clock at once, and then not for a minute; the clock moved past the term just before the reboot is
+            # first heard after the mount.
+            import calendar
+            ended = int(re.search(r"DOMAIN (\d+) MADE", vm.command("blocks domain new", raw=True))[1])
+            short = re.search(r"PUT (\S+) SIZE 2000", vm.command(f"blocks -d {ended} pattern 2000", raw=True))[1]
+            require(vm.command(f"blocks -d {ended} publish ended {short}", raw=True), "PUBLISHED ended VERSION 1")
+            require(vm.command("date set 2029-06-01 12:00:00", raw=True), "CLOCK SET")
+            ends = calendar.timegm((2029, 6, 1, 13, 0, 0, 0, 0, 0))
+            require(vm.command(f"blocks domain term {ended} forget {ends}", raw=True), f"DOMAIN {ended} TERM SET: {term_text(ends)}, MODE FORGET")
+            require(vm.command(f"blocks domain term {ended}", raw=True), f"DOMAIN {ended} {term_text(ends)}, MODE FORGET, NOT PASSED")
+            require(vm.command("date set 2029-06-01 13:05:00", raw=True), "CLOCK SET")
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
@@ -17034,24 +17113,34 @@ def store_disk_check(args, disk):
             require(mounted, f"[BLOCKSTORE] DOMAIN {first} FORGOTTEN:")
             require(mounted, f"[BLOCKSTORE] DOMAIN {second} OF BADGE")
             require(vm.command(f"blocks -d {first} resolve gone", raw=True), f"blocks: domain {first}: NotFound")
+            # 312-STO-0051: the term that passed while the machine was off acts in this boot, within a minute of the mount.
+            expired = f"[BLOCKSTORE] DOMAIN {ended} FORGOTTEN: ITS TERM PASSED (MODE FORGET)"
+            for _ in range(60):
+                if expired in mounted:
+                    break
+                time.sleep(2)
+                mounted = vm.command("dmesg -s blockstore", raw=True)
+            require(mounted, expired)
+            require(vm.command(f"blocks -d {ended} resolve ended", raw=True), f"blocks: domain {ended}: NotFound")
+            require(vm.command("blocks domains", raw=True), f"DOMAIN {ended} FORGOTTEN")
             require(vm.command(f"blocks -d {second} check {kept} pattern", raw=True), "CHECKED 4000 BYTES = PATTERN")
             require(vm.command(f"blocks domain usage {limited}", raw=True), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
             past = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {limited} pattern 4000", raw=True))[1]
             require(vm.command(f"blocks -d {limited} publish past {past}", raw=True), "blocks: publish past: Quota")
-            # 312-STO-0050: its term and mode the same after the reboot; a term in 2030 has not passed, or the store hears
-            # no clock (without 312-KRN-0239's rtc client): either way none acts, and the publish past it was Quota, not
-            # read-only.
-            require_match(vm.command(f"blocks domain term {limited}", raw=True), rf"DOMAIN {limited} {re.escape(term_text(TERM_AT))}, MODE RELEASE, {TERM_STATE}")
+            # 312-STO-0050: its term and mode the same after the reboot; a term in 2030 has not passed by the clock the
+            # store heard (2029), and the publish past it was Quota, not read-only.
+            require(vm.command(f"blocks domain term {limited}", raw=True), f"DOMAIN {limited} {term_text(TERM_AT)}, MODE RELEASE, NOT PASSED")
             assert re.search(r"COLLECTED [1-9]\d* BLOCKS", vm.command("blocks collect", raw=True))
             domains = vm.command("blocks domains", raw=True)
-            assert f"DOMAIN {first} " not in domains and f"DOMAIN {second} LIVE" in domains, domains
+            assert all(f"DOMAIN {d} " not in domains for d in (first, ended)) and f"DOMAIN {second} LIVE" in domains, domains
         finally:
             vm.close()
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot; "
           "its writes report FLUSHED, and a name published there is found after the reboot; a memory domain forgotten before the "
           "reboot stays unreadable after it and is collected, another one whole (308-STO-0023); a domain's limit of 8 KiB, "
           "its usage the same after the reboot, refuses a publish past it (312-STO-0046); its term and mode the same after the "
-          "reboot, acting on nothing without a calendar clock (312-STO-0050)", flush=True)
+          "reboot (312-STO-0050); a domain whose term in mode forget passed while the machine was off is forgotten after the "
+          "mount (312-STO-0051)", flush=True)
     # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
     with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
         big = Path(temp) / "store.img"
