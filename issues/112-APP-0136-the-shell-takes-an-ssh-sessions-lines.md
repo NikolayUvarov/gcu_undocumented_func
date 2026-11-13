@@ -1,6 +1,6 @@
 # 112-APP-0136 — The shell takes an SSH session's lines
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the shell's part done, 2026-11-12; its QEMU criterion waits for the client `init` mints) · **Blocked by:** — (the client `init` mints for `sshd`: KRN's, after 112-NET-0072) · **Main task:** [112](112-our-own-ssh-server.md) · **Roadmap:** track D · **Constitution:** MC-3.1, MC-5.1, MC-11.4, MC-11.6
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the shell's part in `main` since round 124, 267ad266, 2026-11-12; its QEMU criterion waits for the client `init` mints) · **Blocked by:** — (the client `init` mints for `sshd`: KRN's, after 112-NET-0072) · **Main task:** [112](112-our-own-ssh-server.md) · **Roadmap:** track D · **Constitution:** MC-3.1, MC-5.1, MC-11.4, MC-11.6
 
 **Asked by:** KRN (the kernel session, `NET`), for 112-NET-0072's console, in [requests-APP.md](requests-APP.md), 2026-11-12. Numbered on 2026-11-12.
 
