@@ -2608,7 +2608,8 @@ def fm_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()  # Enter on "..": back to EFI
-    assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, r"║BOOTX64\.EFI +│ +\d+│"), screen
+    # The architecture's loader at the removable-media path, as main() sets BOOT_EFI (000-APP-0137).
+    assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, rf"║{re.escape(Path(BOOT_EFI).name)} +│ +\d+│"), screen
     assert "CURRENT=BOOT" in poke("[FM] LEFT=/EFI FULL")
     keys(b"\x7f", "LEFT=/ FULL")
     # A program started from the panel takes fm's place in front (issue 160): top gets the keys, and Esc brings fm back
