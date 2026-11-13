@@ -16506,7 +16506,8 @@ def watchdog_suite(args, disk):
         took = time.monotonic() - frozen
         # The shell tells the safe start above its first prompt, with `svc start` for each service left out (000-APP-0086).
         shown = vm.expect("MIND> ", timeout=120)
-        notice = re.search(r"^SAFE START: THE LAST RUN DID NOT END AS ASKED\. LEFT OUT: (.*) \((.*)\)$", shown, re.M)
+        # A kernel line can land inside the notice (round 132, x32: ACPI's line inside `tts`): it is taken out first (000-KRN-0241).
+        notice = re.search(r"^SAFE START: THE LAST RUN DID NOT END AS ASKED\. LEFT OUT: (.*) \((.*)\)$", re.sub(r"MIND CORE KERNEL: [^\n]*\n", "", shown), re.M)
         assert notice and {"audio_gw", "tts", "video_gw"} <= set(notice[1].split(", ")), shown[-3000:]
         assert notice[2] == ", ".join(f"svc start {name}" for name in notice[1].split(", ")), notice[0]
         require(vm.command("dmesg -s shell", raw=True), "[SHELL] SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: ")
