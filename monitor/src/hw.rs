@@ -9,14 +9,21 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// What the program reads itself: CPUID, the clock and its screen.
+/// What the program reads itself: CPUID, the clock and its screen; and the architecture's names for the CPUs' hardware
+/// IDs and the counter the clock runs on, with where its rate comes from (000-APP-0137).
 #[derive(Clone, Debug, Default)]
 pub struct Local {
     pub vendor: String, pub brand: String, pub family: u32, pub model: u32, pub stepping: u32,
     pub features: Vec<(&'static str, bool)>,
     pub tsc_hz: u64, pub resolution_ns: u64,
     pub width: usize, pub height: usize, pub stride: usize,
+    pub ids: &'static str, pub counter: &'static str, pub counter_rate: &'static str,
 }
+
+/// x86's names: the local APICs' IDs, the TSC, whose rate the kernel calibrates.
+pub const X86_NAMES: (&str, &str, &str) = ("APIC IDs", "TSC", "calibrated");
+/// aarch64's: the MPIDR affinities, the generic timer's counter, whose rate CNTFRQ_EL0 states.
+pub const AARCH64_NAMES: (&str, &str, &str) = ("MPIDR affinities", "generic timer", "CNTFRQ_EL0");
 
 #[cfg(target_arch = "x86_64")]
 impl Local {
@@ -46,14 +53,18 @@ impl Local {
             ("SSE2", one.edx & (1 << 26) != 0), ("SSE4.2", one.ecx & (1 << 20) != 0), ("AVX", one.ecx & (1 << 28) != 0), ("AVX2", seven.ebx & (1 << 5) != 0),
             ("RDRAND", one.ecx & (1 << 30) != 0), ("SMEP", seven.ebx & (1 << 7) != 0), ("SMAP", seven.ebx & (1 << 20) != 0), ("1 GiB pages", ext.edx & (1 << 26) != 0),
         ];
-        Self { vendor, brand: String::from(brand.trim()), family, model, stepping: one.eax & 0xF, features, ..Self::default() }
+        let (ids, counter, counter_rate) = X86_NAMES;
+        Self { vendor, brand: String::from(brand.trim()), family, model, stepping: one.eax & 0xF, features, ids, counter, counter_rate, ..Self::default() }
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 impl Local {
     /// EL0 cannot read the ID registers: the architecture only (issue 202).
-    pub fn cpuid() -> Self { Self { vendor: String::from("AArch64"), ..Self::default() } }
+    pub fn cpuid() -> Self {
+        let (ids, counter, counter_rate) = AARCH64_NAMES;
+        Self { vendor: String::from("AArch64"), ids, counter, counter_rate, ..Self::default() }
+    }
 }
 
 /// A line of the report: text and how to show it.
@@ -91,15 +102,16 @@ impl Hw {
         if !l.brand.is_empty() { line(format!("  {}", l.brand), Kind::Text); }
         line(format!("  {}, family {}, model {}, stepping {}", l.vendor, l.family, l.model, l.stepping), Kind::Text);
         let online: Vec<String> = self.cpus.iter().filter(|c| c.online).map(|c| format!("{}", c.apic)).collect();
-        line(format!("  {} CPUs online, APIC IDs {}", online.len(), online.join(", ")), Kind::Text);
+        line(format!("  {} CPUs online, {} {}", online.len(), l.ids, online.join(", ")), Kind::Text);
+        // aarch64's EL0 reads no ID registers, so it lists no features.
         let features: Vec<String> = l.features.iter().map(|&(name, on)| format!("{}{}", if on { '+' } else { '-' }, name)).collect();
-        line(format!("  {}", features.join("  ")), Kind::Text);
+        if !features.is_empty() { line(format!("  {}", features.join("  ")), Kind::Text); }
         line(String::new(), Kind::Text);
         line(String::from("Clocks"), Kind::Heading);
         if l.tsc_hz != 0 {
-            line(format!("  TSC {}.{:03} MHz (calibrated), monotonic clock resolution {} ns", l.tsc_hz / 1_000_000, l.tsc_hz / 1000 % 1000, l.resolution_ns), Kind::Text);
+            line(format!("  {} {}.{:03} MHz ({}), monotonic clock resolution {} ns", l.counter, l.tsc_hz / 1_000_000, l.tsc_hz / 1000 % 1000, l.counter_rate, l.resolution_ns), Kind::Text);
         } else {
-            line(format!("  10 ms timer tick (the TSC rate is not constant), resolution {} ns", l.resolution_ns), Kind::Text);
+            line(format!("  10 ms timer tick (the {} rate is not constant), resolution {} ns", l.counter, l.resolution_ns), Kind::Text);
         }
         line(format!("  up {}", text::uptime(self.uptime_ms)), Kind::Text);
         line(String::new(), Kind::Text);

@@ -2475,11 +2475,18 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     tool_status(vm, "[HW] TOP=0")
-    for text in ("Processor", f"{vm.cpus} CPUs online", "+NX", "MHz (calibrated)", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}",
-                 "00:01.1  010180  IDE controller", "Interrupt lines", "kernel arena 64.0M"):
+    # Each architecture's own (000-APP-0137): x86's CPUID features, its IDE controller and the keyboard's line; on
+    # aarch64's virt the MPIDR affinities, the generic timer's stated rate, a virtio disk and virtio_input's lines.
+    if vm.arch == "aarch64":
+        names = (f"{vm.cpus} CPUs online, MPIDR affinities", "generic timer", "MHz (CNTFRQ_EL0)", "010000  storage")
+        line = r"IRQ \d+ .* virtio_input \(PID \d+\) \(\+1 holding a copy\)"
+    else:
+        names = (f"{vm.cpus} CPUs online, APIC IDs", "+NX", "TSC", "MHz (calibrated)", "00:01.1  010180  IDE controller")
+        line = r"IRQ 1 .* ps2_kbd \(PID \d+\) \(\+1 holding a copy\)"
+    for text in ("Processor", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}", "Interrupt lines", "kernel arena 64.0M") + names:
         assert table_row(screen, re.escape(canon(text))), (text, screen)
     # The holder of a line is the driver; init keeps a copy for restarts (issues 075, 076).
-    assert table_row(screen, r"IRQ 1 .* ps2_kbd \(PID \d+\) \(\+1 holding a copy\)"), screen
+    assert table_row(screen, line), screen
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
