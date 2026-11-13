@@ -197,12 +197,12 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_BATTERY != 0 { if holds(SLOT_BATTERY) && grant(SLOT_BATTERY, SLOT_BATTERY) { lent.push("battery"); } else { missing.push("battery"); } }
     if requests & mind::process::REQUEST_WIFI != 0 { if holds(SLOT_WIFI) && grant(SLOT_WIFI, SLOT_WIFI) { lent.push("wifi"); } else { missing.push("wifi"); } }
     if requests & mind::process::REQUEST_NET_COUNTERS != 0 { if holds(SLOT_NET) && grant(SLOT_NET, SLOT_NET) { lent.push("net-counters"); } else { missing.push("net-counters"); } }
-    // The clipboard (000-APP-0032): a program's copy, minted from the client the shell lent wm, which may badge. With
-    // none, there is no clipboard to lend, and the program keeps its own copy buffer, as the shell's do.
+    // The clipboard (000-APP-0032, clipboard.wit 1.1): a program's copy, which the service mints for wm's manager copy,
+    // since a copy on the wire carries no right to badge. With none, the program keeps its own copy buffer.
     if requests & mind::process::REQUEST_CLIPBOARD != 0 && holds(SLOT_CLIPBOARD) {
-        match ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE | CAP_GRANT, mind::clipboard::BADGE_PROGRAM) {
-            Ok(copy) => { if grant(SLOT_CLIPBOARD, copy) { lent.push("clipboard"); } else { missing.push("clipboard"); } let _ = ipc::drop_cap(copy); }
-            Err(_) => missing.push("clipboard"),
+        match mind::clipboard::program_client(Endpoint(SLOT_CLIPBOARD), RECEIVE) {
+            Ok(()) => { if grant(SLOT_CLIPBOARD, RECEIVE) { lent.push("clipboard"); } else { missing.push("clipboard"); } let _ = ipc::drop_cap(RECEIVE); }
+            Err(error) => { mind::println!("[WM] NO CLIPBOARD CLIENT FOR {}: {}", name, error.text()); missing.push("clipboard"); }
         }
     }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
@@ -690,9 +690,9 @@ fn main(info: &'static BootInfo) {
     let mut last_sync = 0usize;
     let mut shell_window: Option<u32> = None; // the shell's window, to be brought to the front once it shows
     let mut first = true;
-    // The clipboard's manager copy (000-APP-0032): wm names the program of the window in front, 0 while its own menus,
-    // Settings or a move have the keys.
-    let clip = holds(SLOT_CLIPBOARD).then(|| ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE, mind::clipboard::BADGE_MANAGER).ok()).flatten().map(Endpoint);
+    // The clipboard's manager copy the shell lent (000-APP-0032): wm names the program of the window in front, 0 while
+    // its own menus, Settings or a move have the keys.
+    let clip = holds(SLOT_CLIPBOARD).then_some(Endpoint(SLOT_CLIPBOARD));
     let mut clip_front: Option<u64> = None;
     loop {
         let mut relayout = first;

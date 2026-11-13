@@ -86,6 +86,11 @@ impl Clipboard {
         self.front = pid;
         Ok(())
     }
+
+    /// Whether `who` may have a program's client minted (`clipboard.wit` 1.1): a manager alone.
+    pub fn program_client(&self, who: Who) -> Result<(), Refusal> {
+        if who == Who::Manager { Ok(()) } else { Err(Refusal::Refused) }
+    }
 }
 
 // Whether a character starts at `at` (or the text ends there).
