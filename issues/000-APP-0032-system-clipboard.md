@@ -1,6 +1,6 @@
 # 000-APP-0032 — The system clipboard: text copied in one program, pasted in another
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** in progress (the service and its clients written and host-tested, 2026-11-12; `init` starting it and the QEMU check left) · **Blocked by:** `init` starting the service and giving the shell its client with `CAP_BADGE` ([requests-KRN.md](requests-KRN.md), APP's request of 2026-11-12); `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are in the ABI since [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-11.5, MC-12.4
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** in progress (the service and its clients written and host-tested, in `main` since round 124, 267ad266, 2026-11-12; `init` starting it and the QEMU check left) · **Blocked by:** `init` starting the service and giving the shell its client with `CAP_BADGE` ([requests-KRN.md](requests-KRN.md), APP's request of 2026-11-12); `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are in the ABI since [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-11.5, MC-12.4
 
 ## Problem
 

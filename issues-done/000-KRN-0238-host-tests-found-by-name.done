@@ -1,6 +1,6 @@
-# 000-KRN-0238 — Host tests found by name, so a track that adds one changes no shared line
+# 000-KRN-0238 — Host tests found by name, so a track that adds one changes no shared line — done
 
-**Type:** build and test (`scripts/host_tests.sh`) · **Owner:** `KRN` (the integrator) · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** — · **Roadmap:** — (the landing queue, AGENTS.md section 4) · **Constitution:** MC-12.2
+**Type:** build and test (`scripts/host_tests.sh`) · **Owner:** `KRN` (the integrator) · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** — · **Roadmap:** — (the landing queue, AGENTS.md section 4) · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -21,8 +21,14 @@
 
 ## Progress (2026-11-12)
 
-**Made** on `claude/000-KRN-0238-host-tests-by-name`: `OWN_LINES` and the loop over `tests/*_host.rs`. The two lists compared in this container: the same 157 tests. **Left:** the gate.
+**Made** on `claude/000-KRN-0238-host-tests-by-name`: `OWN_LINES` and the loop over `tests/*_host.rs`. The two lists compared in this container: the same 157 tests.
+
+**Merged into 110-NET-0069's branch** (2026-11-12), whose request carries it: there `vector` (STO's line of its own, round 123) joins `OWN_LINES`, and the loop runs the same 160 tests as the list it replaces, `tls_forms` and `http_serve` among them. **Left:** the gate.
 
 ## Related
 
 AGENTS.md section 4 (the landing queue; a conflict in code returns a request).
+
+## Resolution
+
+In `main` (round 124, 60b995bd), with 110-NET-0069's request: `scripts/host_tests.sh` runs every `tests/*_host.rs` but those in `OWN_LINES`; the loop ran the same 160 tests as the list it replaced, and the round's gate (its host tests group) passed. A track that adds a rustc host test now adds no line (ALL/2026-11-12T2151Z).

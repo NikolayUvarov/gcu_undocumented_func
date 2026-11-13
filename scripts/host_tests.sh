@@ -10,16 +10,13 @@ rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
 # Every tests/*_host.rs, but those built on a line of their own (flags, a crate, an order): a new test needs no line
 # here, so tracks that add tests do not meet in this file (000-KRN-0238).
-OWN_LINES=" blockstore clipboard hostname index journal listen network_budget regdb rtw89_service rtw89_station_filter tts vector voice "
+OWN_LINES=" blockstore hostname index journal listen network_budget regdb rtw89_service rtw89_station_filter tts vector voice "
 for file in tests/*_host.rs; do
     test=$(basename "$file" _host.rs)
     [[ $OWN_LINES == *" $test "* ]] && continue
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
-# The clipboard service's state: its parts, who is answered, the generation (000-APP-0032).
-rustc --edition=2021 --test tests/clipboard_host.rs -o "$OUT/clipboard-tests"
-"$OUT/clipboard-tests"
 # The WPA2-PSK library uses RustCrypto crates, so Cargo builds its tests and the station's (550-NET-0016, 0017).
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
