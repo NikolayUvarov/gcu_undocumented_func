@@ -241,8 +241,8 @@ fn a_bundle_of_release_py_is_read_in_place() {
     let data = std::fs::read(dir.join("bundle.zip")).unwrap();
     let read = read_bundle(&data).expect("the bundle reads");
     let names: Vec<&str> = read.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(&names[..3], ["channels/stable", "releases/1/x86_64/MANIFEST", "releases/1/x86_64/MANIFEST.SIG"]);
-    assert!(names.len() > 3 && names[3..].iter().all(|n| n.starts_with("blobs/")), "{names:?}");
+    assert_eq!(&names[..4], ["keys/current", "channels/stable", "releases/1/x86_64/MANIFEST", "releases/1/x86_64/MANIFEST.SIG"]);
+    assert!(names.len() > 4 && names[4..].iter().all(|n| n.starts_with("blobs/")), "{names:?}");
     for (name, bytes) in &read { assert_eq!(bytes, &std::fs::read(dir.join("server").join(name)).unwrap(), "{name}"); }
     // A byte past the end record, a count one more, a compressed entry, one of a name changed in its local header: refused.
     let mut longer = data.clone();
@@ -331,7 +331,7 @@ fn read(store: &mut Blocks, cid: &cid::Cid, size: u64) -> Vec<u8> {
 }
 
 fn release<'a>(version: u64, channel_file: &'a [u8], manifest: &'a [u8]) -> kept::Release<'a> {
-    kept::Release { channel: "stable", channel_file, version, arch: "x86_64", manifest, signature: &[7u8; 64] }
+    kept::Release { keys_file: b"{\"keys\": 1}\n", channel: "stable", channel_file, version, arch: "x86_64", manifest, signature: &[7u8; 64] }
 }
 
 #[test]
@@ -346,7 +346,8 @@ fn a_kept_release_is_the_release_layout_read_back_by_its_paths() {
     assert_eq!(kept::version(&mut store, &root, "x86_64", &mut buffer), Ok(7));
     assert_eq!(kept::version(&mut store, &root, "aarch64", &mut buffer), Err(dag::Error::Shape), "no manifest for another processor");
     assert_eq!(kept::channel(&mut store, &root, &mut buffer).as_deref(), Ok("stable"));
-    for (path, want) in [("channels/stable", &channel[..]), ("releases/7/x86_64/MANIFEST", &manifest[..]), ("releases/7/x86_64/MANIFEST.SIG", &[7u8; 64][..])] {
+    for (path, want) in [("keys/current", &b"{\"keys\": 1}\n"[..]), ("channels/stable", &channel[..]), ("releases/7/x86_64/MANIFEST", &manifest[..]),
+                         ("releases/7/x86_64/MANIFEST.SIG", &[7u8; 64][..])] {
         let (cid, size) = kept::find(&mut store, &root, path, &mut buffer).unwrap().unwrap();
         assert_eq!(read(&mut store, &cid, size), want, "{}", path);
     }
@@ -358,7 +359,7 @@ fn a_kept_release_is_the_release_layout_read_back_by_its_paths() {
         assert_eq!(&read(&mut store, &cid, size), data);
     }
     // What the layout does not hold, or a directory where a file is asked for.
-    for path in [format!("blobs/{}", hex(&[0xab; 32])), String::from("blobs"), String::from("releases/7"), String::from("channels/beta"), String::from("releases/7/x86_64/MANIFEST/x")] {
+    for path in [format!("blobs/{}", hex(&[0xab; 32])), String::from("blobs"), String::from("releases/7"), String::from("channels/beta"), String::from("keys/other"), String::from("releases/7/x86_64/MANIFEST/x")] {
         assert_eq!(kept::find(&mut store, &root, &path, &mut buffer), Ok(None), "{}", path);
     }
     let mut listed = Vec::new();

@@ -183,7 +183,7 @@ Numbered on 2026-11-12 as [311-APP-0135](../issues-done/311-APP-0135-fm-opens-a-
 
 Numbered on 2026-11-12 as [312-APP-0134](312-APP-0134-a-program-started-in-a-memory-domain.md).
 
-**Asked by** STO on 2026-11-12, for [312](312-the-minds-memory.md)'s QEMU criterion "a stand-in agent writes and reads its memory; forgetting frees what it should; another domain refused without a grant".
+**Asked by** STO on 2026-11-12, for [312](../issues-done/312-the-minds-memory.done)'s QEMU criterion "a stand-in agent writes and reads its memory; forgetting frees what it should; another domain refused without a grant".
 
 - **What there is:**
   - a memory domain is a set of names, pins and blocks under a key of its own (308-STO-0023);

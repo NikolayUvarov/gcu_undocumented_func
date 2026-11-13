@@ -192,8 +192,53 @@ pub fn channel_record(channel: &release::Channel, signed: &release::Signed) -> p
     parse::Channel {
         name: Text::new(channel.name.as_str()).unwrap_or_default(), version: channel.version, minimum: channel.minimum,
         expires: Text::new(core::str::from_utf8(&channel.expires).unwrap_or("")).unwrap_or_default(), manifests,
-        signed: signed.body as u32, signature: List::from_slice(&signed.signature).unwrap_or_default(),
+        signed: signed.body as u32, signatures: signature_records(signed),
     }
+}
+
+fn signature_records(signed: &release::Signed) -> List<parse::Signature, { release::SIGNATURES_MAX }> {
+    let mut list = List::default();
+    for s in signed.signatures() {
+        list.push(parse::Signature { key: List::from_slice(&s.key).unwrap_or_default(), value: List::from_slice(&s.value).unwrap_or_default() });
+    }
+    list
+}
+
+// The signatures of a record, if each has its form.
+fn signed_from(body: u32, records: &[parse::Signature]) -> Option<release::Signed> {
+    let mut signed = release::Signed { body: body as usize, signatures: [release::Signature { key: [0; 32], value: [0; 64] }; release::SIGNATURES_MAX], count: 0 };
+    for (slot, s) in signed.signatures.iter_mut().zip(records) {
+        *slot = release::Signature { key: s.key.as_slice().try_into().ok()?, value: s.value.as_slice().try_into().ok()? };
+    }
+    signed.count = records.len().min(release::SIGNATURES_MAX);
+    Some(signed)
+}
+
+/// The record of a key file `mind::release` read (parse.wit 3.0, 351-UPD-0026).
+pub fn keys_record(keys: &release::Keys, signed: &release::Signed) -> parse::KeyFile {
+    let mut roles = List::default();
+    for role in &keys.roles {
+        let mut list = List::default();
+        for key in role.keys() { list.push(parse::PublicKey { key: List::from_slice(key).unwrap_or_default() }); }
+        roles.push(parse::Role { keys: list, threshold: role.threshold });
+    }
+    parse::KeyFile {
+        version: keys.version, expires: Text::new(core::str::from_utf8(&keys.expires).unwrap_or("")).unwrap_or_default(), roles,
+        signed: signed.body as u32, signatures: signature_records(signed),
+    }
+}
+
+/// A key file from the service's record, if every field has its form: still to be compared with the signed bytes.
+pub fn keys_from(record: &parse::KeyFile) -> Option<(release::Keys, release::Signed)> {
+    if record.roles.as_slice().len() != release::ROLES.len() { return None; }
+    let mut roles = [release::Role::EMPTY; 4];
+    for (role, r) in roles.iter_mut().zip(record.roles.as_slice()) {
+        for (slot, k) in role.keys.iter_mut().zip(r.keys.as_slice()) { *slot = k.key.as_slice().try_into().ok()?; }
+        role.count = r.keys.as_slice().len().min(release::ROLE_KEYS);
+        role.threshold = r.threshold;
+    }
+    let keys = release::Keys { version: record.version, expires: record.expires.as_str().as_bytes().try_into().ok()?, roles };
+    Some((keys, signed_from(record.signed, record.signatures.as_slice())?))
 }
 
 /// A channel from the service's record, if every field has its form. Its encoding is still to be compared with the
@@ -207,7 +252,7 @@ pub fn channel_from(record: &parse::Channel) -> Option<(release::Channel, releas
         name: release::Text::new(record.name.as_str().as_bytes())?, version: record.version, minimum: record.minimum,
         expires: record.expires.as_str().as_bytes().try_into().ok()?, manifests, count: record.manifests.as_slice().len(),
     };
-    Some((channel, release::Signed { body: record.signed as usize, signature: record.signature.as_slice().try_into().ok()? }))
+    Some((channel, signed_from(record.signed, record.signatures.as_slice())?))
 }
 
 /// The record of a manifest `mind::release` read: its header lines, its number of files, and up to `PAGE` from `start`.
@@ -248,6 +293,14 @@ pub fn read_channel(endpoint: Endpoint, file: &[u8]) -> Result<(release::Channel
     let record = match parse::channel(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
     let (channel, signed) = channel_from(&record).ok_or(Refused::Lied)?;
     if release::channel_is(file, &channel, &signed) { Ok((channel, signed)) } else { Err(Refused::Lied) }
+}
+
+/// A key file read by the service at `endpoint`, taken only if its fields and signatures encode again to exactly `file`
+/// (351-UPD-0026). Which signatures count is the caller's.
+pub fn read_keys(endpoint: Endpoint, file: &[u8]) -> Result<(release::Keys, release::Signed), Refused> {
+    let record = match parse::keys(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
+    let (keys, signed) = keys_from(&record).ok_or(Refused::Lied)?;
+    if release::keys_is(file, &keys, &signed) { Ok((keys, signed)) } else { Err(Refused::Lied) }
 }
 
 /// A boot manifest read by the service at `endpoint` a page at a time, taken only if its header lines and its files,

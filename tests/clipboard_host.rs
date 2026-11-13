@@ -99,3 +99,13 @@ fn a_text_set_meanwhile_is_told_and_two_callers_keep_their_own_parts() {
     assert_eq!(c.set_part(Who::Program, EDIT, 4, b"more", true), Err(Refusal::Invalid));
     assert_eq!(get_all(&c, Who::Manager, SHELL).unwrap().1, "two");
 }
+
+#[test]
+fn a_manager_alone_has_a_programs_client_minted() {
+    // clipboard.wit 1.1: a window manager's copy comes on the wire without the right to badge (000-KRN-0073), so the
+    // service mints its programs' copies, for a manager alone.
+    let c = Clipboard::new();
+    assert_eq!(c.program_client(Who::Manager), Ok(()));
+    assert_eq!(c.program_client(Who::Program), Err(Refusal::Refused));
+    assert_eq!(c.program_client(Who::Other), Err(Refusal::Refused));
+}

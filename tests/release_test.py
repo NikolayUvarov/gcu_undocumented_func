@@ -4,7 +4,9 @@ directory verifies; a version not above the channel's is refused; an upload cut 
 channel whole; a changed channel, manifest or blob, an expired channel and a channel signed with the boot key are
 refused by the checker; a signed body that is not a channel gets a reason, never an exception (351-UPD-0014); a bundle
 holds what a device needs of the channel, stored, the same for the same release, and only of a layout that verifies
-(751-UPD-0032)."""
+(751-UPD-0032). The key file (351-UPD-0026): made, signed a root key at a time and checked against the root threshold;
+published only above the server's version; a channel signed by a key it does not name refused; real keys refused on a
+server without one."""
 import datetime
 import hashlib
 import json
@@ -100,7 +102,7 @@ class Releases(unittest.TestCase):
         channel = self.dest / "channels/stable"
         original = channel.read_bytes()
         channel.write_bytes(original.replace(b'"minimum":1', b'"minimum":0'))
-        self.assertEqual(self.check(), "channels/stable: bad signature")
+        self.assertEqual(self.check(), "channels/stable: signed by 0 of the release keys keys/current names, not 1")
         channel.write_bytes(original)
         self.assertEqual(release.check(self.dest, now=NOW + datetime.timedelta(days=31)), "channels/stable: expired at 2026-11-07T00:00:00Z")
         manifest = self.dest / "releases/1/x86_64/MANIFEST"
@@ -121,12 +123,13 @@ class Releases(unittest.TestCase):
         def answer(body):
             if isinstance(body, dict):
                 body = (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode()
-            channel.write_bytes(body + b"ed25519 " + sm.sign(release.release_seed(), body).hex().encode() + b"\n")
+            channel.write_bytes(body + release.signature_lines(body, [release.release_seed()]))
             return self.check()
         cases = [
             (b"\xff\xfe not UTF-8\n", "not UTF-8 JSON"),
             (b"{not json\n", "not UTF-8 JSON"),
-            (b"[" * 100000 + b"\n", "not UTF-8 JSON"),
+            (b"[" * 2300 + b"\n", "not UTF-8 JSON"),  # with its signature line, within CHANNEL_MAX
+            (b"[" * 100000 + b"\n", f"larger than {release.CHANNEL_MAX} bytes"),
             ({k: v for k, v in good.items() if k != "expires"}, "not the fields of a channel"),
             ({**good, "minimum": [1]}, "version and minimum not with 1 <= minimum <= version"),
             ({**good, "version": True}, "version and minimum not with 1 <= minimum <= version"),
@@ -145,9 +148,15 @@ class Releases(unittest.TestCase):
             self.assertEqual(answer(body), f"channels/stable: {why}", body[:80] if isinstance(body, bytes) else body)
 
     def test_the_release_key_is_not_the_boot_key(self):
-        # A channel signed with the boot key is refused: the keys have different purposes (MC-9.6).
-        release.publish(self.staged(1), self.dest, now=NOW, seed=sm.TEST_SEED)
-        self.assertEqual(self.check(), "channels/stable: bad signature")
+        # A channel signed with the boot key is refused: the keys have different purposes (MC-9.6). publish signs
+        # with none the key file does not name, and the checker counts none.
+        release.publish(self.staged(1), self.dest, now=NOW)
+        with self.assertRaisesRegex(release.ReleaseError, "names 0 of the 1 release keys given"):
+            release.publish(self.staged(2), self.dest, now=NOW, seed=sm.TEST_SEED)
+        channel = self.dest / "channels/stable"
+        body = channel.read_bytes().split(b"\n")[0] + b"\n"
+        channel.write_bytes(body + release.signature_lines(body, [sm.TEST_SEED]))
+        self.assertEqual(self.check(), "channels/stable: signed by 0 of the release keys keys/current names, not 1")
         self.assertNotEqual(sm.public_key(release.TEST_RELEASE_SEED), sm.public_key(sm.TEST_SEED))
 
     def test_a_volume_that_does_not_verify_is_not_staged(self):
@@ -233,7 +242,7 @@ class Releases(unittest.TestCase):
         paths = release.bundle(self.dest, out, now=NOW)
         manifest = (self.dest / "releases/2/x86_64/MANIFEST").read_bytes()
         blobs = sorted(blob for _, _, blob in release.manifest_files(manifest))
-        self.assertEqual(paths, ["channels/stable", "releases/2/x86_64/MANIFEST", "releases/2/x86_64/MANIFEST.SIG", *(f"blobs/{b}" for b in blobs)])
+        self.assertEqual(paths, ["keys/current", "channels/stable", "releases/2/x86_64/MANIFEST", "releases/2/x86_64/MANIFEST.SIG", *(f"blobs/{b}" for b in blobs)])
         with zipfile.ZipFile(out) as archive:
             self.assertEqual(archive.namelist(), paths)
             for info in archive.infolist():
@@ -252,6 +261,67 @@ class Releases(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "missing or not as listed"):
             release.bundle(self.dest, self.dir / "bad.zip", now=NOW)
         self.assertFalse((self.dir / "bad.zip").exists())
+
+    def keys(self, *argv):
+        # release.py keys …, its exit status and what it printed.
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = release.main(["keys", *map(str, argv)])
+        return status, out.getvalue()
+
+    def test_a_key_file_made_signed_and_checked(self):
+        seeds = [self.dir / f"root{i}" for i in range(3)]
+        for i, seed in enumerate(seeds):
+            seed.write_text(hashlib.sha256(f"a root key of this test {i}".encode()).hexdigest())
+        root = self.dir / "root.pub"
+        status, text = self.keys("root", *seeds, "--threshold", 2)
+        root.write_text(text)
+        self.assertEqual((status, release.root_set(root)[1]), (0, 2))
+        public = sm.public_key(release.TEST_RELEASE_SEED).hex()
+        roles = [x for name in release.ROLES for x in ("--role", f"{name}={public}:1")]
+        made = self.dir / "keys"
+        self.assertEqual(self.keys("make", made, "--version", 3, *roles)[0], 0)
+        self.assertIn("not 1 to 8 signature lines", self.keys("check", made, "--root", root)[1])
+        self.keys("sign", made, seeds[0])
+        # One root key of a 2-of-3 threshold: refused (351-UPD-0026's criterion); the same key again does not count twice.
+        self.assertIn("signed by 1 of the root keys, not 2", self.keys("check", made, "--root", root)[1])
+        self.assertIn("this key signed it already", self.keys("sign", made, seeds[0])[1])
+        whole = made.read_bytes()
+        made.write_bytes(whole + whole[whole.index(b"\n") + 1:])
+        self.assertIn("signed by 1 of the root keys, not 2", self.keys("check", made, "--root", root)[1])
+        made.write_bytes(whole)
+        # A key outside the root set is passed over.
+        (self.dir / "root9").write_text("ab" * 32)
+        self.keys("sign", made, self.dir / "root9")
+        self.assertIn("signed by 1 of the root keys, not 2", self.keys("check", made, "--root", root)[1])
+        self.keys("sign", made, seeds[2])
+        expires = json.loads(whole.split(b"\n")[0])["expires"]
+        self.assertEqual(self.keys("check", made, "--root", root), (0, f"VERIFIED: KEY FILE VERSION 3, EXPIRES {expires}\n"))
+        # Published only above the server's version; the same file again is no change.
+        self.assertEqual(self.keys("publish", made, self.dest, "--root", root)[0], 0)
+        self.assertEqual(self.keys("publish", made, self.dest, "--root", root)[0], 0)
+        older = self.dir / "older"
+        self.keys("make", older, "--version", 2, *roles)
+        for seed in seeds[:2]:
+            self.keys("sign", older, seed)
+        self.assertIn("version 2 is not above the published 3", self.keys("publish", older, self.dest, "--root", root)[1])
+        # A channel under it: the test release key is the release role's; checked against that root set alone.
+        release.publish(self.staged(1), self.dest, now=NOW, root=release.root_set(root))
+        self.assertIsNone(self.check(root=release.root_set(root)))
+        self.assertEqual(self.check(), "keys/current: signed by 0 of the root keys, not 2")
+
+    def test_a_server_without_a_key_file(self):
+        # The test key file goes up with a channel the test release key signs; with real keys none is made.
+        release.publish(self.staged(1), self.dest, now=NOW)
+        k, why = release.check_keys((self.dest / "keys/current").read_bytes(), now=NOW)
+        self.assertIsNone(why)
+        self.assertEqual(k["roles"]["release"], ([sm.public_key(release.TEST_RELEASE_SEED)], 1))
+        other = self.dir / "other"
+        other.mkdir()
+        with self.assertRaisesRegex(release.ReleaseError, "keys/current: missing: publish a key file first"):
+            release.publish(self.staged(2), other, now=NOW, seed=hashlib.sha256(b"a real release key").digest())
+        self.assertFalse((other / "keys/current").exists())
 
 
 if __name__ == "__main__":

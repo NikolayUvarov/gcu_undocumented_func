@@ -435,11 +435,11 @@ types! {
     net: Error Info Counters;
     netpolicy: Error Grant Question Choice;
     nn: Error Model Budget Usage Status;
-    parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage HttpRefusal HttpMethod HttpRequest;
+    parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage HttpRefusal HttpMethod HttpRequest Signature PublicKey Role KeyFile;
     rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters KeyboardLayout LayoutSwitch Keymap;
-    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo QuestionState Question Ruling ListenRule Accepted;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo QuestionState Question Ruling ListenRule Accepted Named;
     ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin Accepted;
