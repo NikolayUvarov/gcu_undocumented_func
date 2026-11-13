@@ -14051,7 +14051,8 @@ def wm_suite(vm):
     fm, clock, top = by_name["fm"], by_name["clock"], by_name["top"]
     # Programs get what wm holds and they ask for: fm the user's files, top system information; not top's
     # lifecycle client, which wm does not hold.
-    require(out, f"STARTED fm PID {started['fm']} WITH window,files,sysinfo,shell")
+    # The clipboard's client between them where the service mints programs' copies (000-KRN-0235, 000-APP-0032).
+    assert re.search(rf"STARTED fm PID {started['fm']} WITH window,files,sysinfo,(clipboard,)?shell\b", out), out[-3000:]
     require(out, f"STARTED top PID {started['top']} WITH window,sysinfo WITHOUT lifecycle")
     assert windows[clock][2:5] == ("PIXELS", "320", "176") and windows[fm][2] == "TEXT", windows
     time.sleep(1.5)  # the text programs drew at the size of their frames
