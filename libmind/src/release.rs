@@ -1,5 +1,6 @@
-//! Release metadata (351-UPD-0013, docs/update/publishing.md): a channel file, a key file (351-UPD-0026) and a boot
-//! manifest. The parser service reads them (`parse_channel`, `parse_keys`, `Manifest`); the updater, which holds the update zone, parses none of it and accepts
+//! Release metadata (351-UPD-0013, docs/update/publishing.md): a channel file, a key file (351-UPD-0026), a timestamp
+//! file (351-UPD-0028) and a boot manifest. The parser service reads them (`parse_channel`, `parse_keys`,
+//! `parse_timestamp`, `Manifest`); the updater, which holds the update zone, parses none of it and accepts
 //! what the parser says only if it encodes again to exactly the signed bytes (`encode_channel`, `encode_line`,
 //! `encode_file`), so a parser that lies is caught (MC-11.5, 11.11). Both formats have one encoding, which `parse_*`
 //! demands: anything else is malformed.
@@ -7,6 +8,7 @@
 /// The largest channel file, key file and boot manifest read.
 pub const CHANNEL_MAX: usize = 2560;
 pub const KEYS_MAX: usize = 4096;
+pub const TIMESTAMP_MAX: usize = 2048;
 pub const MANIFEST_MAX: usize = 32768;
 /// Signature lines a channel or a key file carries, at most; public keys a role names, at most.
 pub const SIGNATURES_MAX: usize = 8;
@@ -389,6 +391,46 @@ pub fn encode_channel(channel: &Channel, out: &mut [u8]) -> Option<usize> {
     o.put(b"}\n")?;
     Some(o.len)
 }
+
+/// What a timestamp file says (351-UPD-0028, after TUF's timestamp metadata): the channel it is for, the SHA-256 of that
+/// channel's file as published, signatures included, a short expiry, and its own version, which each renewal raises.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timestamp { pub channel: Text<NAME_MAX>, pub digest: [u8; 32], pub expires: [u8; 20], pub version: u64 }
+
+/// A timestamp file: `{"channel":…,"digest":"<64 hex digits>","expires":…,"version":…}`, no spaces, the version at least
+/// 1, then its timestamp keys' signature lines, as a channel's.
+pub fn parse_timestamp(file: &[u8]) -> Result<(Timestamp, Signed), Malformed> {
+    if file.len() > TIMESTAMP_MAX { return Err(Malformed); }
+    let (body, signed) = split_signed(file)?;
+    let mut s = Scan { text: &file[..body], at: 0 };
+    let parsed = (|| {
+        s.literal(b"{\"channel\":")?;
+        let channel = s.string::<NAME_MAX>()?;
+        s.literal(b",\"digest\":\"")?;
+        let digest = hex::<32>(s.until(b'"')?)?;
+        s.literal(b"\",\"expires\":\"")?;
+        let expires = timestamp(s.until(b'"')?)?;
+        s.literal(b"\",\"version\":")?;
+        let version = s.digits()?;
+        s.literal(b"}\n")?;
+        (s.at == body && version >= 1).then_some(Timestamp { channel, digest, expires, version })
+    })();
+    parsed.map(|stamp| (stamp, signed)).ok_or(Malformed)
+}
+
+/// The first line of a timestamp file, with its newline, in its one encoding: what the timestamp keys sign.
+pub fn encode_timestamp(stamp: &Timestamp, out: &mut [u8]) -> Option<usize> {
+    let mut o = Out { buf: out, len: 0 };
+    o.put(b"{\"channel\":\"")?; o.put(stamp.channel.as_bytes())?;
+    o.put(b"\",\"digest\":\"")?; o.hex(&stamp.digest)?;
+    o.put(b"\",\"expires\":\"")?; o.put(&stamp.expires)?;
+    o.put(b"\",\"version\":")?; o.decimal(stamp.version)?;
+    o.put(b"}\n")?;
+    Some(o.len)
+}
+
+/// Whether a timestamp's fields and signatures are exactly `file`, as `channel_is` for a channel.
+pub fn timestamp_is(file: &[u8], stamp: &Timestamp, signed: &Signed) -> bool { file_is(file, signed, |out| encode_timestamp(stamp, out)) }
 
 /// A file line of a boot manifest: `file <path> <size> <sha256> <flags in 8 hex digits> <MiB>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

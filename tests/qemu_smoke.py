@@ -8417,6 +8417,31 @@ def update_releases(temp, arch, changed=None, minimum6=None, gateway=None, perio
     return volume, newer, server, kept, good, forged, manifest6, boot_files, channel
 
 
+def serve_channel(server, data, channel="stable"):
+    """`data` as the server's channel file, then a timestamp naming it, one version above the server's last, signed by
+    the test timestamp key as `release.py timestamp` signs it (351-UPD-0028)."""
+    target = release_tool.destination(server)
+    target.put_file(data, f"channels/{channel}")
+    k, why = release_tool.check_chain(target)
+    assert k is not None, why
+    release_tool.stamp(target, channel, k)
+
+
+def stamp_version(server, channel="stable"):
+    """The version of the timestamp the server holds."""
+    whole = (Path(server) / f"timestamps/{channel}").read_bytes()
+    return json.loads(whole.split(b"\n")[0])["version"]
+
+
+def test_timestamp(channel_file, version, hours=24, seeds=None, channel="stable"):
+    """A timestamp naming `channel_file`, `hours` from now (in the past when negative), signed by `seeds` (the test
+    timestamp key by default)."""
+    import datetime
+    expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = release_tool.timestamp_bytes(channel, hashlib.sha256(channel_file).hexdigest(), expires, version)
+    return body + release_tool.signature_lines(body, seeds or [release_tool.TEST_TIMESTAMP_SEED])
+
+
 def trial_confirmed(vm, since, timeout, slot="B"):
     """The console from position `since` of its log, once init's confirmation of the trial boot follows `BOOT: SLOT
     <slot> LOADED ON TRIAL` there. Read from the log, not from what expect() left: a command whose prompt the new boot
@@ -8481,7 +8506,7 @@ def update_suite(args):
     (layout / "update0.msh").write_text("#!msh\nupdate status\n")  # 351-APP-0029: without `requires: lifecycle`
     image = boot_slots.Image.create(temp / "update.img", layout)
     first = boot_slots.records(image.path)
-    (server / "channels/stable").write_bytes(channel(6, 5, "2020-01-01T00:00:00Z"))
+    serve_channel(server, channel(6, 5, "2020-01-01T00:00:00Z"))
     cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
     vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
@@ -8515,10 +8540,25 @@ def update_suite(args):
         assert "PARSER: THE SHARED SERVICE" not in log, log
         # 351-UPD-0023 with 351-KRN-0151: slot A is laid out with release 5's applications, and they run from there.
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
-        (server / "channels/stable").write_bytes(forged)
+        serve_channel(server, forged)
         logged("[UPDATER] CHECK: REFUSED: Signature", 60)
-        (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
+        older = channel(4, 1, "2099-01-01T00:00:00Z")
+        serve_channel(server, older)
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        # 351-UPD-0028: the timestamp that names the channel is checked first. Version `taken` of the server's, naming
+        # the older channel, was taken just above; each of these is refused before the channel is read, and nothing is
+        # written: one below it, one expired, one the release key signed, and one naming another channel file.
+        taken = stamp_version(server)
+        for stamp, line in ((test_timestamp(older, taken - 1), f"[UPDATER] TIMESTAMP VERSION {taken - 1} REFUSED: BELOW VERSION {taken}, TAKEN BEFORE"),
+                            (test_timestamp(older, taken + 1, hours=-1), f"[UPDATER] TIMESTAMP VERSION {taken + 1} REFUSED: EXPIRED AT "),
+                            (test_timestamp(older, taken + 1, seeds=[release_tool.TEST_RELEASE_SEED]),
+                             f"[UPDATER] TIMESTAMP VERSION {taken + 1} REFUSED: FEWER THAN 1 OF THE TIMESTAMP KEYS OF KEY FILE VERSION 1 SIGNED IT"),
+                            (test_timestamp(kept, taken + 1), f"[UPDATER] TIMESTAMP VERSION {taken + 1} NAMES ANOTHER FILE THAN channels/stable")):
+            release_tool.destination(server).put_file(stamp, "timestamps/stable")
+            log = logged(line, 60)
+            assert "[UPDATER] RECORD" not in log, log
+        print("PASS: update: a timestamp older than one taken, expired, signed by the release key, or naming another channel "
+              "file refused, nothing written (351-UPD-0028)", flush=True)
         updater_parser_check(vm, https)
         # 351-UPD-0026: a key file one root key of the test set's two of three signed is refused before any channel is
         # read, and nothing is written. The updater took slot A's, version 1, at its start (351-UPD-0027), so this one is
@@ -8530,8 +8570,12 @@ def update_suite(args):
         assert "[UPDATER] RECORD" not in log, log
         (server / "keys/current").write_bytes(keys_good)
         print("PASS: update: a key file one of the 2-of-3 root keys signed refused, nothing written (351-UPD-0026)", flush=True)
-        # Version 6 as published, but the first of its boot files changed on the server.
+        # Version 6 as published, but the first of its boot files changed on the server. Its timestamp renewed by
+        # `release.py timestamp` with no release key (351-UPD-0028): the device updates on with it.
         (server / "channels/stable").write_bytes(good)
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"MIND_RELEASE_KEY": str(temp / "no-release-key")}):
+            assert release_tool.main(["timestamp", str(server)]) == 0
         blob = server / "blobs" / boot_files[0][1]
         original = blob.read_bytes()
         blob.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
@@ -8753,7 +8797,7 @@ def update_keys_suite(args):
         part = server / (path + ".part")
         part.write_bytes(data)
         part.replace(server / path)
-    put("channels/stable", kept)
+    serve_channel(server, kept)
     first = (server / "keys/current").read_bytes()
     layout = temp / "layout"
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
@@ -8802,7 +8846,7 @@ def update_keys_suite(args):
         # check read a channel, so the count of those lines stands still until then.
         read = "[UPDATER] CHECK stable: VERSION 5, "
         put("keys/current", third)
-        put("channels/stable", resigned)
+        serve_channel(server, resigned)
         log = updater_log(vm, read, 60, count=log.count(read) + 1)
         # Restarted, the updater reads version 3 back; slot A's channel, which only the revoked key signed, is no fallback
         # of a version not known, so the channel's version 5 is read as above the one running.
@@ -9210,10 +9254,14 @@ def linkupdate_suite(args):
         assert "made" not in {line.rstrip("/").rpartition("/")[2] for line in listing.splitlines()}, listing
         # The script's follower stops at a refusal, as it would on a real machine: an expired channel (351-UPD-0025), then
         # one whose signature was changed.
+        # Each with a timestamp naming it, put after it (351-UPD-0028).
+        stamps = iter(range(100, 200))
         for bad, refusal in ((channel(6, 5, "2020-01-01T00:00:00Z"), "Expired"), (forged, "Signature")):
             (temp / "bad").write_bytes(bad)
+            (temp / "bad-stamp").write_bytes(test_timestamp(bad, next(stamps)))
             before = link.log()
             link.put(temp / "bad", "channels/stable")
+            link.put(temp / "bad-stamp", "timestamps/stable")
             try:
                 link_update.follow(link, 120, say=lambda line: None, before=before)
                 raise AssertionError(f"the channel was not refused: {refusal}")
@@ -9224,6 +9272,8 @@ def linkupdate_suite(args):
         assert "[UPDATER] RECORD" not in log and "[UPDATER] FETCH: VERSION 6" not in log, log
         before = link.log()
         link.put(server / "channels/stable", "channels/stable")
+        (temp / "stamp").write_bytes(test_timestamp((server / "channels/stable").read_bytes(), next(stamps)))
+        link.put(temp / "stamp", "timestamps/stable")
         vm.collect(); vm.output = ""
         out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
         vm.send("\n")

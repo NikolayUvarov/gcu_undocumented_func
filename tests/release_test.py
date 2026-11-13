@@ -242,7 +242,7 @@ class Releases(unittest.TestCase):
         paths = release.bundle(self.dest, out, now=NOW)
         manifest = (self.dest / "releases/2/x86_64/MANIFEST").read_bytes()
         blobs = sorted(blob for _, _, blob in release.manifest_files(manifest))
-        self.assertEqual(paths, ["keys/1", "keys/current", "channels/stable", "releases/2/x86_64/MANIFEST", "releases/2/x86_64/MANIFEST.SIG", *(f"blobs/{b}" for b in blobs)])
+        self.assertEqual(paths, ["keys/1", "keys/current", "channels/stable", "timestamps/stable", "releases/2/x86_64/MANIFEST", "releases/2/x86_64/MANIFEST.SIG", *(f"blobs/{b}" for b in blobs)])
         with zipfile.ZipFile(out) as archive:
             self.assertEqual(archive.namelist(), paths)
             for info in archive.infolist():
@@ -280,8 +280,9 @@ class Releases(unittest.TestCase):
         root.write_text(text)
         self.assertEqual((status, release.root_set(root)[1]), (0, 2))
         public = sm.public_key(release.TEST_RELEASE_SEED).hex()
-        roles = [x for name in release.ROLES if name != "root" for x in ("--role", f"{name}={public}:1")]
-        roles += ["--role", f"root={','.join(pub[:3])}:2"]
+        stamper = sm.public_key(release.TEST_TIMESTAMP_SEED).hex()
+        roles = [x for name in release.ROLES if name not in ("root", "timestamp") for x in ("--role", f"{name}={public}:1")]
+        roles += ["--role", f"root={','.join(pub[:3])}:2", "--role", f"timestamp={stamper}:1"]
         made = self.dir / "keys"
         self.assertEqual(self.keys("make", made, "--version", 1, *roles)[0], 0)
         self.assertIn("not 1 to 8 signature lines", self.keys("check", made, "--root", root)[1])
@@ -335,9 +336,39 @@ class Releases(unittest.TestCase):
             self.keys("sign", third, seed)
         self.assertIn("signed by 0 of the root keys, not 1", self.keys("publish", third, self.dest, "--root", root)[1])
         # A revocation that would leave a role short of its threshold is refused; a history with a version missing fails.
-        self.assertIn("boot, recovery, release, timestamp: fewer keys than the threshold", self.keys("revoke", made, public, third)[1])
+        self.assertIn("boot, recovery, release: fewer keys than the threshold", self.keys("revoke", made, public, third)[1])
         (self.dest / "keys/1").unlink()
         self.assertEqual(self.check(root=release.root_set(root)), "keys/1: missing: the key history starts at version 1")
+
+    def test_a_timestamp_renewed_without_the_release_key(self):
+        # 351-UPD-0028: publish writes the timestamp last; `timestamp` renews it, one version more, with the timestamp
+        # key alone; check refuses one expired, one the release key signed and one naming another channel file.
+        import contextlib, io, os
+        from unittest import mock
+        release.publish(self.staged(1), self.dest, now=NOW)
+        path = self.dest / "timestamps/stable"
+        first = path.read_bytes()
+        s, why = release.timestamp_from(first.split(b"\n")[0] + b"\n", "stable")
+        channel = hashlib.sha256((self.dest / "channels/stable").read_bytes()).hexdigest()
+        self.assertEqual((s["version"], s["digest"], s["expires"]), (1, channel, "2026-10-09T00:00:00Z"), why)
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"MIND_RELEASE_KEY": str(self.dir / "no-such-key")}), contextlib.redirect_stdout(out):
+            status = release.main(["timestamp", str(self.dest), "--hours", "6"])
+        self.assertEqual(status, 0, out.getvalue())
+        self.assertIn("TIMESTAMPED", out.getvalue())
+        s, _ = release.timestamp_from(path.read_bytes().split(b"\n")[0] + b"\n", "stable")
+        self.assertEqual((s["version"], s["digest"]), (2, channel))
+        self.assertIsNone(self.check())
+        path.write_bytes(first)
+        self.assertEqual(release.check(self.dest, now=NOW + datetime.timedelta(days=2)), "timestamps/stable: expired at 2026-10-09T00:00:00Z")
+        body = first.split(b"\n")[0] + b"\n"
+        path.write_bytes(body + release.signature_lines(body, [release.TEST_RELEASE_SEED]))
+        self.assertEqual(self.check(), "timestamps/stable: signed by 0 of the timestamp keys keys/current names, not 1")
+        other = release.timestamp_bytes("stable", "00" * 32, "2026-10-09T00:00:00Z", 3)
+        path.write_bytes(other + release.signature_lines(other, [release.TEST_TIMESTAMP_SEED]))
+        self.assertEqual(self.check(), "timestamps/stable: names another channel file")
+        path.unlink()
+        self.assertEqual(self.check(), "timestamps/stable: missing")
 
     def test_a_server_without_a_key_file(self):
         # The test key file goes up with a channel the test release key signs; with real keys none is made.

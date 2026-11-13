@@ -201,7 +201,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol: split into 351-UPD-0024 to 0031 | `UPD` | P2 | its parts | track C |
 | [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) | Root keys with a threshold, and a signed key file (from 351-UPD-0009): made, QEMU runs and the gate left | `UPD` | P2 | — | track C |
 | [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md) | Key rotation and revocation (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | 0026 | track C |
-| [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md) | A short-lived timestamp key for the channel (from 351-UPD-0009) | `UPD` | P2 | 0026 | track C |
+| [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md) | A short-lived timestamp key for the channel (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | 0026 | track C |
 | [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md) | The boot key under the root, in the bootloader (from 351-UPD-0009) | `UPD`, with `KRN`/`PRT` | P2 | 0026 | track C |
 | [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md) | A separate recovery authority (from 351-UPD-0009) | `UPD` | P2 | 0026 | track C |
 | [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) | The key lifecycle and the compromise protocol, written down (from 351-UPD-0009) | `UPD` | P2 | 0026–0030 (for the procedures) | track C |

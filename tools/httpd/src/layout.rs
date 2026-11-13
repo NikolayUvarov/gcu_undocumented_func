@@ -5,7 +5,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-/// What a path names; a blob never changes, a channel and the key file are fetched fresh.
+/// What a path names; a blob never changes, a channel, its timestamp and the key file are fetched fresh.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { Blob, Manifest, Channel }
 
@@ -67,6 +67,7 @@ pub fn resolve(target: &str) -> Result<(String, Kind), Refusal> {
         ["channels", name] if channel_name(name) => Kind::Channel,
         ["keys", "current"] => Kind::Channel, // the key file (351-UPD-0026), fetched fresh as a channel is
         ["keys", version] if digits(version) => Kind::Manifest, // its history (351-UPD-0027): a version never changes
+        ["timestamps", name] if channel_name(name) => Kind::Channel, // a channel's timestamp (351-UPD-0028), fetched fresh
         _ => return Err(Refusal::NotInLayout),
     };
     Ok((names.join("/"), kind))
@@ -106,6 +107,7 @@ mod tests {
         assert_eq!(resolve("/channels/stable").unwrap().1, Kind::Channel);
         assert_eq!(resolve("/keys/current").unwrap(), ("keys/current".to_string(), Kind::Channel));
         assert_eq!(resolve("/keys/12").unwrap(), ("keys/12".to_string(), Kind::Manifest));
+        assert_eq!(resolve("/timestamps/stable").unwrap(), ("timestamps/stable".to_string(), Kind::Channel));
         assert_eq!(resolve("/keys/other"), Err(Refusal::NotInLayout));
         let refused = [
             ("/channels/stable?x=1", Refusal::Query), ("channels/stable", Refusal::NotAbsolute), ("/channels/st%61ble", Refusal::Byte),

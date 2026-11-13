@@ -1,6 +1,6 @@
 # The updater
 
-**Version:** 0.11 (2026-11-13): the key file taken only as the next version, kept in `system/updater`; a channel or slot only a revoked key signed refused (351-UPD-0027); 0.10 (2026-11-10): `apply` writes a damaged staged slot again from the block store, and `kept` lists the releases it keeps (351-UPD-0034, 0035, `update.wit` 1.5); 0.9 (2026-11-08): releases kept in the block store, and a rollback writes a damaged slot again from there (351-UPD-0033, `update.wit` 1.4); 0.8 (2026-10-25): the floor in the boot records, format 2; records of format 1 not read (351-UPD-0024); 0.7: the version floor raised to the channel's minimum; 0.6 (2026-10-24): the release's loader staged into its slot (351-UPD-0010); 0.5 (2026-10-23): metadata past its expiry, the policy and `metadata` (351-UPD-0025); 0.4 (2026-10-22): a fallback runs its slot's own applications (351-UPD-0023, 351-KRN-0151); 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
+**Version:** 0.12 (2026-11-13): the channel's timestamp read first, its expiry the channel's at most (351-UPD-0028); 0.11 (2026-11-13): the key file taken only as the next version, kept in `system/updater`; a channel or slot only a revoked key signed refused (351-UPD-0027); 0.10 (2026-11-10): `apply` writes a damaged staged slot again from the block store, and `kept` lists the releases it keeps (351-UPD-0034, 0035, `update.wit` 1.5); 0.9 (2026-11-08): releases kept in the block store, and a rollback writes a damaged slot again from there (351-UPD-0033, `update.wit` 1.4); 0.8 (2026-10-25): the floor in the boot records, format 2; records of format 1 not read (351-UPD-0024); 0.7: the version floor raised to the channel's minimum; 0.6 (2026-10-24): the release's loader staged into its slot (351-UPD-0010); 0.5 (2026-10-23): metadata past its expiry, the policy and `metadata` (351-UPD-0025); 0.4 (2026-10-22): a fallback runs its slot's own applications (351-UPD-0023, 351-KRN-0151); 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
 
 `updater` is the boot service that turns a published release ([publishing.md](publishing.md)) into a staged, verified slot ([slots.md](slots.md)), and does nothing more. It holds:
 - its own endpoint;
@@ -23,6 +23,13 @@ It cannot write anything else, and the manifest it reads grants nothing (MC-3.11
   - the same version is taken only as the same file.
 
   Each version taken is kept in `system/updater/keys`, written whole beside it (`keys.new`) and then put in its place: `[UPDATER] KEY FILE VERSION 3 TAKEN (keys/current), THE ROOT ROTATED, KEPT IN system/updater/keys`. At start the updater reads it back, the higher version of the two files that its own root signed (`[UPDATER] KEY FILE VERSION 3 FROM system/updater/keys, TAKEN BEFORE`). Without one, it takes a slot's `KEYS` when that is the next version: an image as written holds version 1 there.
+- **The timestamp** (`timestamps/<channel>`, 351-UPD-0028), next. The parser service reads it as the channel below. It is refused, before the channel is read and with nothing written, when:
+  - fewer than the threshold of the timestamp keys the key file names signed it: `[UPDATER] TIMESTAMP VERSION 9 REFUSED: FEWER THAN 1 OF THE TIMESTAMP KEYS OF KEY FILE VERSION 1 SIGNED IT` (`signature`);
+  - it is another channel's (`malformed`);
+  - its version is below the highest the updater took before, kept in `system/updater/timestamp` across restarts (`older`);
+  - it has expired, or the clock cannot be read (`expired`).
+
+  Then the channel file must be the one it names by SHA-256 (`[UPDATER] TIMESTAMP VERSION 9 NAMES ANOTHER FILE THAN channels/stable`, `digest`). The channel's expiry counts as the shorter of its own and the timestamp's: `metadata` and the log show that one, and `apply` waits while it has passed. A rollback, and a release written again from the block store, need no timestamp.
 - **The channel.** The parser service reads its fields, and the updater takes them only if they encode again to exactly the bytes it fetched (MC-11.11). Then it checks:
   - the signature lines over the first line: at least the release role's threshold of the **release keys** the key file names;
   - the channel's name;
@@ -97,7 +104,7 @@ A device may go longer than its channel's expiry without a current one: offline,
 - **It says so.**
   - In the log: `[UPDATER] METADATA: CHANNEL … VERSION …, MINIMUM …, EXPIRES …, KEPT IN SLOT A` at start, and `… FROM THE SOURCE` after each check that reads another channel. Either line ends `; EXPIRED: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL` once the expiry has passed.
   - To a client: `metadata` (`update.wit` 1.1) gives the same.
-- **Freezes.** A source that keeps serving the same unexpired channel holds a device on it until it expires. A shorter bound is the timestamp key ([351-UPD-0028](../../issues/351-UPD-0028-a-short-lived-timestamp-key.md)).
+- **Freezes.** A source that keeps serving the same unexpired channel holds a device on it until its timestamp expires: a day by default, renewed only with the timestamp key (351-UPD-0028), not for the channel's weeks.
 
 ## update.txt
 
