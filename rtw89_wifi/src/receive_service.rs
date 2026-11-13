@@ -78,6 +78,8 @@ pub(crate) struct ReceiveOnly {
     waiters: [Option<Waiter>; WAITERS], last_ms: u64, failure: Option<Stop>, tally: Tally,
     // The hardware filter: narrowed for a network's filter (`narrow`), and a change the serving loop has to apply.
     narrow: bool, narrowing: Option<bool>,
+    // A channel the client set: until then `info` says 0, how wlan tells a restarted radio (550-NET-0061).
+    set: bool,
 }
 
 impl ReceiveOnly {
@@ -86,7 +88,7 @@ impl ReceiveOnly {
         Self { mac, channel, filter: Filter::new(mac, true, [0; 6], [0; 6]), limits: None, settings: 0, admits, ask: None,
             frames: [[0; FRAME_BYTES]; FRAMES], lengths: [0; FRAMES], head: 0, count: 0, dropped: 0,
             waiters: [const { None }; WAITERS], last_ms: time::monotonic_ns() / 1_000_000, failure: None, tally: Tally::default(),
-            narrow: false, narrowing: None }
+            narrow: false, narrowing: None, set: false }
     }
     pub(crate) fn limits(&self) -> Option<&Limits> { self.limits.as_ref() }
     /// The `set-country` requests taken so far, which number the next.
@@ -100,7 +102,7 @@ impl ReceiveOnly {
     pub(crate) fn take_ask(&mut self) -> Option<Ask> { self.ask.take() }
     /// The passive tune `Ask::Tune` asked for is done, in `took_us`: frames heard before it are of another channel.
     pub(crate) fn tuned(&mut self, channel: u8, took_us: u64) {
-        self.channel = channel; self.head = 0; self.count = 0;
+        self.channel = channel; self.set = true; self.head = 0; self.count = 0;
         self.tally.tunes = self.tally.tunes.saturating_add(1); self.tally.longest_us = self.tally.longest_us.max(took_us);
     }
     /// Before the data service takes the endpoint: every waiter answered, no frame kept.
@@ -149,7 +151,7 @@ impl ReceiveOnly {
             _ => for ch in 1..=13 { channels.push(ch); } }
         let mut supported = List::default(); for ch in 1..=13 { supported.push(ch); }
         wlanhw::Info { mac: packed(self.mac), bands: mind::network::BAND_2GHZ | mind::network::BAND_2GHZ_OFDM,
-            channels, supported, frame_max: frames::FRAME_MAX as u16, channel: self.channel }
+            channels, supported, frame_max: frames::FRAME_MAX as u16, channel: if self.set { self.channel } else { 0 } }
     }
 
     /// One receive and one bounded RX step; continuous traffic on either side cannot starve the other.
@@ -175,7 +177,7 @@ impl ReceiveOnly {
         match request {
             wlanhw::Request::Info => { let _ = wlanhw::reply_info(call, Ok(&self.info())); }
             wlanhw::Request::SetChannel { channel } => {
-                if channel == self.channel { let _ = wlanhw::reply_set_channel(call, Ok(())); return }
+                if channel == self.channel { self.set = true; let _ = wlanhw::reply_set_channel(call, Ok(())); return }
                 let left = self.limits.as_ref().filter(|_| self.admits).is_none_or(|l| l.applied(channel).is_some());
                 if !(1..=13).contains(&channel) || !left || self.ask.is_some() {
                     let _ = wlanhw::reply_set_channel(call, Err(wlanhw::Error::Invalid)); return
