@@ -72,7 +72,7 @@ if [[ "${1:-}" == --fixtures ]]; then
     (cd "$ROOT/tests/wlansim" && cargo build --release --target "$TARGET")
     cp "$ROOT/tests/wlansim/target/$TARGET/release/wlansim" "$OUT/fixture-wlansim.elf"
     # The shell suite's console programs: a secret line (000-APP-0126) and a write through a read-only store scope (311-APP-0121).
-    for stub in secret storewrite; do
+    for stub in secret storewrite clip; do
         (cd "$ROOT/tests/${stub}_stub" && cargo build --release --target "$TARGET")
         cp "$ROOT/tests/${stub}_stub/target/$TARGET/release/${stub}_stub" "$OUT/fixture-$stub.elf"
     done

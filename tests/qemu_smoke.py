@@ -2003,10 +2003,20 @@ def clipboard_check(vm):
     edit("ram:clip2.txt", [(b"\x16", f"[EDIT] PASTED {len(text)} BYTES FROM THE CLIPBOARD")])
     require(vm.command("cat ram:clip2.txt"), text)
     assert text not in vm.service_logs("clipboard", "READ BY PID"), "the service logs no text"
+    # A program in front pastes; the same program in the background is refused; one that asked for none holds no client.
+    if vm.args.clip_elf:
+        require(vm.command("clipstub", timeout=30), f"CLIP STUB: PASTED {len(text)} BYTES")
+        started = vm.command("run clipstub &", raw=True, timeout=30)  # real PIDs, as the service's log has them
+        pid = re.search(r"STARTED PID=(\d+) NAME=clipstub", started)[1]
+        require(vm.service_logs("clipboard", "READ REFUSED"), f"[CLIPBOARD] READ REFUSED TO PID {pid}: Behind")
+        require(vm.command("clipnone", timeout=30), "CLIP STUB: NO CLIPBOARD CLIENT")
+    else:
+        print("SKIP: clipboard: a program in front and behind (000-APP-0032): no tests/clip_stub build (scripts/x86_fixtures.sh)", flush=True)
     for path in ("ram:clip1.txt", "ram:clip2.txt"):
         require(vm.command(f"rm {path}"), "OK")
-    print("PASS: clipboard: edit copied a line through the service, the shell's line and a second edit pasted it; the "
-          "service logged each set and read by its length alone (000-APP-0032)", flush=True)
+    print("PASS: clipboard: edit copied a line through the service, the shell's line and a second edit pasted it; a "
+          "program in front pasted it, the same in the background was refused, one that asked for none held no client; "
+          "the service logged each set and read by its length alone (000-APP-0032)", flush=True)
 
 
 def fbank_check(vm):
@@ -17234,6 +17244,7 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
+    parser.add_argument("--clip-elf", help="test-only ELF built from tests/clip_stub (the clipboard from a program in front and behind in the tools suite, 000-APP-0032); found where the fixture scripts put it")
     parser.add_argument("--levels-elf", help="test-only ELF built from tests/levels_stub (the audio levels through a plain client in the audio suite, 000-DRV-0057); found where the fixture scripts put it")
     parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
@@ -17272,7 +17283,7 @@ def main():
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-gateway-target/x86_64-unknown-none/release/gateway_stub"
     args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
     # The shell suite's console programs (000-APP-0126, 311-APP-0121): aarch64 beside the image, x86 in MIND_TEST_OUT.
-    for name in ("secret", "storewrite"):
+    for name in ("secret", "storewrite", "clip"):
         built = ROOT / IMAGE / f"fixture-{name}.elf" if args.arch == "aarch64" else \
             Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / f"mind-{name}-target/x86_64-unknown-none/release/{name}_stub"
         setattr(args, f"{name}_elf", getattr(args, f"{name}_elf") or (str(built) if built.exists() else None))
@@ -17416,6 +17427,14 @@ def main():
                 note = elf.index(b"MINDREQ1") + 8
                 elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~16384 | 32768).to_bytes(4, "little")
                 (disk / "blocksro.elf").write_bytes(elf)
+            if suite == "tools" and args.clip_elf:
+                # The clipboard's stub (000-APP-0032), and a copy whose request note asks for no clipboard
+                # (REQUEST_CLIPBOARD 524288), as blocksro is made below.
+                elf = bytearray(Path(args.clip_elf).read_bytes())
+                shutil.copyfile(args.clip_elf, disk / "clipstub.elf")
+                note = elf.index(b"MINDREQ1") + 8
+                elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~524288).to_bytes(4, "little")
+                (disk / "clipnone.elf").write_bytes(elf)
             if suite == "tools":
                 # The dictation models' features of a test signal (250): dictate compares with kaldi-native-fbank's,
                 # and runs the toy transducer on it; one byte changed in a copy fails its checksum.
