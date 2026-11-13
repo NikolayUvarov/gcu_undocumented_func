@@ -79,6 +79,11 @@ def to_real(text):
     return PID_IN.sub(lambda m: f"{m[1]}{m[2]}{int(m[3]) + BASE if int(m[3]) > 0 else m[3]}", text)
 
 
+def joined(text):
+    # Console text as one line, without ANSI codes: a check of a line the screen's width may cut (000-NET-0077).
+    return to_ordinal(ANSI.sub("", text).replace("\r", "").replace("\n", ""))
+
+
 def to_ordinal(text):
     return PID_OUT.sub(lambda m: f"{m[1]}{int(m[2]) - BASE}" if int(m[2]) > BASE else m[0], text)
 
@@ -12119,11 +12124,19 @@ def browse_check(args):
             # its program was started from (000-APP-0120). One whose program ends leaves the broker's list, and the shell
             # takes it down.
             question = "NETWORK: netcheck (PID "
+            vm.collect()
+            since = len(vm.log)
             out = vm.command("netcheck ask:11.0.2.80:81:3", timeout=30)
             require_all(out, question, ") ASKS TO REACH 11.0.2.80:81", "ITS REASON, IN ITS OWN WORDS: \"netcheck's check of a question at run time\"",
                         "N: NO (THE DEFAULT)  O: ONCE  S: FOR THIS RUN  A: ALWAYS?", "NETCHECK ANSWER PENDING", "NETCHECK ask:11.0.2.80:81:3 Timeout")
-            if "(GONE: ITS PROGRAM ENDED" not in out:  # the take-down may come before the prompt or after it
-                vm.expect("MIND> ", timeout=10, after="(GONE: ITS PROGRAM ENDED")
+            # The take-down may come before the prompt or after it, and the screen's width may cut its line anywhere:
+            # read the log since the command with its lines joined (000-NET-0077).
+            deadline = time.monotonic() + 10
+            while "MIND> " not in joined(vm.log[since:]).partition("(GONE: ITS PROGRAM ENDED")[2]:
+                assert time.monotonic() < deadline, ("no prompt after the take-down", vm.log[since:][-3000:])
+                time.sleep(.02)
+                vm.collect()
+            vm.output = ""
             log = vm.service_logs("netpolicy", "ITS PROGRAM ENDED")
             require_all(log, "netcheck (PID ", ") ASKS FOR 11.0.2.80:81 TCP: \"netcheck's check of a question at run time\"", "OF netcheck: ITS PROGRAM ENDED")
 
