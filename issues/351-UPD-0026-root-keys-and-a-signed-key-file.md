@@ -1,6 +1,6 @@
 # 351-UPD-0026 — Root keys with a threshold, and a signed key file
 
-**Type:** update (keys) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.5, MC-9.6, MC-12.4
+**Type:** update (keys) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress (made on `claude/351-UPD-0026-root-keys`; QEMU runs and the gate left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.5, MC-9.6, MC-12.4
 
 Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
@@ -39,6 +39,50 @@ The updater and the bootloader each carry one key built in: the release key and 
   - a channel signed by a release key the key file names is taken;
   - a key file signed by one root key of a 2-of-3 threshold is refused, with no record written (a key change not signed by the root threshold).
 - docs/update/publishing.md and publishing_RU.md give the format and the command.
+
+## Progress
+
+**Made (2026-11-13)** on `claude/351-UPD-0026-root-keys`.
+
+Decided on the way:
+- **The format:**
+  - The key file is `keys/current` on the server. It holds its version, its expiry and the roles `boot`, `recovery`, `release` and `timestamp`, in that order. Each role names 1 to 4 keys in ascending order and a threshold from 1 to their number.
+  - One encoding: the body is JSON with sorted keys and no spaces (`libmind` `release`: `parse_keys`, `encode_keys`, `keys_is`).
+  - A signature line is `ed25519 <public key> <signature>` in hex, 1 to 8 lines a file. The channel's lines took the same form, so a channel says which release key signed it.
+  - A channel of before this task, its one `ed25519 <signature>` naming no key, is refused (MC-12.4): it is malformed, and `release.py` names it.
+- **Counting** (`release::signed_by`): each key of the set counts once however many lines name it, and a line of another key is passed over.
+- **`parse.wit` 3.0:** the channel's signatures, and `keys`; the parser service answers it. 2.x's channel of one signature is gone, by the rule of 2026-10-25.
+- **The updater:**
+  - **Built in:** the root set's public keys and threshold (`$MIND_ROOT_KEYS`; `updater/keys/root-test.pub`, three test keys from fixed text, two of which sign) and the boot key. The release key is no longer built in (`updater/keys/release-test.pub` removed): the key file's release role names the release keys.
+  - **Reading:** it fetches `keys/current` before the channel and checks the root threshold and the expiry. It checks the channel with the release role's keys and threshold.
+  - **Keeping:** the key file is kept beside the channel as `KEYS` in a slot and as `keys/current` in a release the store keeps. A slot's or a kept release's channel counts only with its key file.
+- **The bootloader** takes no root keys yet. It checks the boot key alone, as before; putting it under the root is [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md).
+- **`release.py`:**
+  - `keys make`, `sign` (one root seed at a time; a key that signed already refused), `check`, `publish` (a version above the server's), `root` and `--test`;
+  - `publish` refuses release keys the server's key file does not name, or fewer than its threshold, and with other than the test release key a server without a key file. With the test release key alone it puts the test key file there;
+  - `check` checks the key file first; `bundle` holds it first.
+- **Readers of the layout:**
+  - both release layouts serve `/keys/current`, fresh as a channel (`tools/httpd`, `libmind` `http_serve`);
+  - `link_update.py` puts it before the channel;
+  - `make_usb_image.py --slots --channel` takes `--keys` and checks both against the root set.
+
+**Tested in this container:**
+- `tests/release_host.rs` (12): the key file read and encoded again; other forms refused; a byte changed; a parser that lies; and the root threshold as the criteria name it:
+  - fewer than t signatures refused;
+  - two signatures by one root key counted once;
+  - an unknown key's ignored;
+  - a channel signed in the old form refused.
+- `tests/release_test.py` (14): the key file made, signed a root key at a time, checked and published; a lower version refused; a channel under another root set refused; real keys refused on a server without a key file.
+- `tests/updater_host.rs`, the IDL fuzzer with `parse.wit` 3.0's records, `tests/link_update_test.py`.
+
+**Added to the QEMU `update` suite:** `keys/current` signed by one root key of the test set's 2 of 3 is refused, the updater logs `KEY FILE VERSION 1 REFUSED: FEWER THAN 2 OF THE ROOT KEYS SIGNED IT`, and no record is written. Every other update check now runs with a key file.
+
+**Docs:** `docs/update/publishing.md` and `publishing_RU.md` (0.4: the format and the commands), `updater.md` and `updater_RU.md`, `docs/idl/README.md`, and `docs/profile/README.md`'s Article 9 row.
+
+**Left:**
+- the QEMU update groups on x86 and aarch64;
+- the gate;
+- the fuzz target for `parse_keys`, asked of ASR (351-ASR-0006's harness).
 
 ## Related
 

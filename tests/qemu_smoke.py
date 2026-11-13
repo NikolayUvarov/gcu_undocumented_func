@@ -8411,8 +8411,8 @@ def update_releases(temp, arch, changed=None, minimum6=None, gateway=None, perio
 
     def channel(version, minimum, expires):
         body = release_tool.channel_bytes("stable", version, minimum, expires, {arch: hashlib.sha256(manifest6).hexdigest()})
-        return body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
-    signature = good.index(b"ed25519 ") + 8
+        return body + release_tool.signature_lines(body, [release_tool.TEST_RELEASE_SEED])
+    signature = good.rindex(b" ") + 1  # the signature's first digit, after the key its line names (351-UPD-0026)
     forged = good[:signature] + (b"1" if good[signature:signature + 1] == b"0" else b"0") + good[signature + 1:]
     return volume, newer, server, kept, good, forged, manifest6, boot_files, channel
 
@@ -8474,6 +8474,7 @@ def update_suite(args):
     # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
                                        "channel stable\nautomatic apply\nevery 20\ntries 3\n")
@@ -8519,6 +8520,14 @@ def update_suite(args):
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         updater_parser_check(vm, https)
+        # 351-UPD-0026: a key file one root key of the test set's two of three signed is refused before any channel is
+        # read, and nothing is written.
+        keys_good = (server / "keys/current").read_bytes()
+        (server / "keys/current").write_bytes(release_tool.test_keys_file(roots=release_tool.TEST_ROOT_SEEDS[2:]))
+        log = logged("[UPDATER] KEY FILE VERSION 1 REFUSED: FEWER THAN 2 OF THE ROOT KEYS SIGNED IT", 60)
+        assert "[UPDATER] RECORD" not in log, log
+        (server / "keys/current").write_bytes(keys_good)
+        print("PASS: update: a key file one of the 2-of-3 root keys signed refused, nothing written (351-UPD-0026)", flush=True)
         # Version 6 as published, but the first of its boot files changed on the server.
         (server / "channels/stable").write_bytes(good)
         blob = server / "blobs" / boot_files[0][1]
@@ -8631,7 +8640,7 @@ def update_suite(args):
     assert boot_slots.newest(records)[1] == {"sequence": 5, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 6}, records
     for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
-    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good and image.read("MIND/B/KEYS") == (server / "keys/current").read_bytes()
     assert image.read(f"MIND/B/{boot_slots.PERIOD}") == period6  # 351-UPD-0036: staged with the slot's files
     # Only the application release 6 changed came from the server; the others were copied from slot A.
     asked = {path for path, _ in https.requests}
@@ -8726,6 +8735,7 @@ def update_store_suite(args):
     layout = temp / "layout"
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0033)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
                                        "channel stable\nautomatic none\n")
@@ -8910,6 +8920,7 @@ def install_suite(args, stub_elf):
     layout = temp / "layout"
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     gateway = layout / "system/effector_gw"
     gateway.mkdir(parents=True)
     for name in size:
@@ -9023,6 +9034,7 @@ def linkupdate_suite(args):
     # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     (layout / "link.conf").write_text("baud=115200\n")
     (layout / "update.txt").write_text("# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\n"
                                        "automatic apply\nevery 20\ntries 3\n")
@@ -9097,7 +9109,7 @@ def linkupdate_suite(args):
     assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 1}, records
     for name, digest in boot_files:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
-    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good and image.read("MIND/B/KEYS") == (server / "keys/current").read_bytes()
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: linkupdate: release 6 put into data/link/rel/ through the link; an expired channel and one with a changed "
@@ -10258,7 +10270,7 @@ def download_check(args, disk):
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
     # A release channel as release.py publishes it, and one with a space where its one encoding has none (351-NET-0011).
     body = release_tool.channel_bytes("stable", 7, 5, "2026-11-08T00:00:00Z", {"x86_64": "ab" * 32, "aarch64": "0c" * 32})
-    channel = body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    channel = body + release_tool.signature_lines(body, [release_tool.TEST_RELEASE_SEED])
     (disk / "data" / "stable").write_bytes(channel)
     (disk / "data" / "spaced").write_bytes(channel.replace(b'"version":7', b'"version": 7'))
     # TLS takes random bytes from RDRAND only.
@@ -12343,6 +12355,7 @@ def effector_update_suite(args):
     layout = temp / "layout"
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server_tree / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     files = {"netpolicy.txt": f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\n".encode(), "data/mode.conf": b"development\n",
              "data/effector/effector.conf": f"effector-config 1\nserver https://10.0.2.2:{server.port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n".encode(),
              "data/effector/token": (token + "\n").encode(), "data/effector/agent_id": (agent + "\n").encode(),

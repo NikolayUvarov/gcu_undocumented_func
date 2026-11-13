@@ -1,5 +1,6 @@
 // The releases the updater keeps in the block store (351-UPD-0033, docs/update/updater.md; MC-9.3). Each one is a tree
-// of the release layout (scripts/release.py): its channel, this processor's manifest and signature, and the blobs that
+// of the release layout (scripts/release.py): its key file (351-UPD-0026), its channel, this processor's manifest and
+// signature, and the blobs that
 // manifest lists for a slot. The blobs lie under the first two digits of their names (`blobs/ab/ab…`), so that no
 // directory is over a block. The updater pins each tree with its own owner (`mind::blockstore::OWNER_UPDATER`), whose
 // pins no other client ends. It names none: a name keeps its versions, which would hold a release past its pin. A kept
@@ -17,9 +18,9 @@ use crate::tree::{self, Entry, Kind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Blob { pub digest: [u8; 32], pub size: u64, pub cid: Cid }
 
-/// The small files of a release: the channel's name and file, the version, this processor's name, its manifest and the
-/// manifest's signature.
-pub struct Release<'a> { pub channel: &'a str, pub channel_file: &'a [u8], pub version: u64, pub arch: &'a str, pub manifest: &'a [u8], pub signature: &'a [u8] }
+/// The small files of a release: the key file, the channel's name and file, the version, this processor's name, its
+/// manifest and the manifest's signature.
+pub struct Release<'a> { pub keys_file: &'a [u8], pub channel: &'a str, pub channel_file: &'a [u8], pub version: u64, pub arch: &'a str, pub manifest: &'a [u8], pub signature: &'a [u8] }
 
 fn hex(digest: &[u8; 32]) -> String { digest.iter().map(|b| format!("{:02x}", b)).collect() }
 
@@ -79,8 +80,11 @@ pub fn put<B: Blocks>(blocks: &mut B, builder: &mut Builder, release: &Release, 
     let releases = directory(blocks, &[Entry { name: version.as_bytes(), kind: Kind::Directory, size: 1, cid: numbered }], buffer)?;
     let (channel, channel_size) = file(blocks, builder, release.channel_file)?;
     let channels = directory(blocks, &[Entry { name: release.channel.as_bytes(), kind: Kind::File, size: channel_size, cid: channel }], buffer)?;
+    let (keys, keys_size) = file(blocks, builder, release.keys_file)?;
+    let keys = directory(blocks, &[Entry { name: b"current", kind: Kind::File, size: keys_size, cid: keys }], buffer)?;
     directory(blocks, &[Entry { name: b"blobs", kind: Kind::Directory, size: prefixes.len() as u64, cid: blobs },
                         Entry { name: b"channels", kind: Kind::Directory, size: 1, cid: channels },
+                        Entry { name: b"keys", kind: Kind::Directory, size: 1, cid: keys },
                         Entry { name: b"releases", kind: Kind::Directory, size: 1, cid: releases }], buffer)
 }
 
