@@ -41,7 +41,13 @@ Today the only way below the floor is writing the disk by hand. And once the rel
 - **The publisher:** `scripts/release.py recover DEST --version V --floor F [--days 7]`, signed by `$MIND_RECOVERY_KEY` (the test recovery key without it), its sequence one above the server's.
 - **Docs:** `docs/update/updater.md` and `updater_RU.md` 0.13, `publishing.md` and `publishing_RU.md` 0.7, the profile's Article 9 row, `docs/idl/README.md`.
 - **Tested** (this container): `tests/updater_host.rs` (`plan::recover`), `tests/release_host.rs` (the order's form), `tests/release_test.py` (`recover`), `tests/idl_fuzz_host.rs`, `tests/http_serve_host.rs`; `updater` builds for x86.
-- **The QEMU check** `update-recovery` (in the `updater` suite), x86 and aarch64: release 6 in slot A under floor 6, release 5 in slot B. An order back to 5 the release key signed is refused with no record written. The recovery key's is applied: slot B boots on trial under floor 5 and is confirmed. The same order, still served, is refused as replayed. Runs on the maintainer's machines: below, once made.
+- **The QEMU check** `update-recovery` (in the `updater` suite), x86 and aarch64: release 6 in slot A under floor 6, release 5 in slot B. An order back to 5 the release key signed is refused with no record written. The recovery key's is applied: slot B boots on trial under floor 5 and is confirmed. The same order, still served, is refused as replayed.
+- **Run** in the updater groups of 351-UPD-0029's branch, which carries this one, with `main` ada2b041 merged in, at 629398b3, on the maintainer's machines (Effector, QEMU under TCG):
+  - x32-128: "x86: the updater and an update through the link" (1089 s), "x86: boot, display, shell, memory, clock" (731 s), "x86: USB image" (106 s), "x86: Secure Boot with our keys" (23 s), "x86: reproducible build" (232 s), "x86: NVMe boot disk" (83 s);
+  - its second lane: "host tests" (977 s), "x86: files and block writes" (933 s), "x86: keys, shell, tools" (633 s), "x86: a developer's release through the Effector agent" (48 s), "x86: network, TLS and Effector" (1415 s);
+  - acc-2: "aarch64: the updater and the modes" (1046 s), "aarch64: boot and fault containment" (174 s), "aarch64: an update through the link" (743 s), "aarch64: the board from a device tree, under U-Boot" (117 s), "aarch64: network, TLS and Effector" (1234 s), "aarch64: the link" (211 s), "aarch64: GICv2 with GICv2m" (851 s);
+  - PCU: "aarch64: programs, shell and four CPUs" (588 s), "aarch64: NVMe boot disk" (234 s), "aarch64: files and the block store" (1110 s).
+  Every one passed.
 
 ## Related
 

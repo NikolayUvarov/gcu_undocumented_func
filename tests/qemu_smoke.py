@@ -17282,31 +17282,9 @@ def loader_error(vm, name, reason):
     vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=60)
 
 
-def boot_suite(args, disk):
-    # The bootloader names a broken or missing boot file instead of hanging silently.
+def signed_volume_check(args, disk):
+    """The boot suite's refusals of a signed volume, alone for aarch64, whose other boot cases are x86's (351-UPD-0029)."""
     kernel = (disk / "kernel.elf").read_bytes()
-    for name, data, reason in [("kernel.elf", b"XELF" + kernel[4:], "bad ELF magic"),
-                               ("kernel.elf", kernel[:40], "file too short for an ELF header"),
-                               ("kernel.elf", kernel[:64] + b"\0" * 64, "program headers outside the file"),
-                               ("rtc.elf", None, "file not found")]:
-        target = disk / name
-        original = target.read_bytes()
-        if data is None:
-            target.unlink()
-        else:
-            target.write_bytes(data)
-        # Signed again, so the bootloader gets past the manifest to the ELF it checks; a missing service is not, so the
-        # manifest still lists it (one it does not list may be absent, 351-KRN-0022).
-        if data is not None:
-            sign_manifest.sign_volume(disk)
-        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
-        try:
-            loader_error(vm, name, reason)
-        finally:
-            vm.close()
-        target.write_bytes(original)
-    sign_manifest.sign_volume(disk)
-    print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file the manifest lists", flush=True)
     # 350-UPD-0003: nothing is loaded that the signed manifest does not describe. A changed image, a changed manifest,
     # a manifest signed by a key the key file does not name or no signature: the bootloader names the file and stops.
     # 351-UPD-0029: so does a volume without its key file, or with one only one root key of the test set's two signed.
@@ -17332,6 +17310,34 @@ def boot_suite(args, disk):
     print("PASS: signed boot volume: a changed kernel or service, a changed manifest, another key's signature, no "
           "signature, no key file and a key file short of the root threshold each stop the bootloader before anything is "
           "loaded", flush=True)
+
+
+def boot_suite(args, disk):
+    # The bootloader names a broken or missing boot file instead of hanging silently.
+    kernel = (disk / "kernel.elf").read_bytes()
+    for name, data, reason in [("kernel.elf", b"XELF" + kernel[4:], "bad ELF magic"),
+                               ("kernel.elf", kernel[:40], "file too short for an ELF header"),
+                               ("kernel.elf", kernel[:64] + b"\0" * 64, "program headers outside the file"),
+                               ("rtc.elf", None, "file not found")]:
+        target = disk / name
+        original = target.read_bytes()
+        if data is None:
+            target.unlink()
+        else:
+            target.write_bytes(data)
+        # Signed again, so the bootloader gets past the manifest to the ELF it checks; a missing service is not, so the
+        # manifest still lists it (one it does not list may be absent, 351-KRN-0022).
+        if data is not None:
+            sign_manifest.sign_volume(disk)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        try:
+            loader_error(vm, name, reason)
+        finally:
+            vm.close()
+        target.write_bytes(original)
+    sign_manifest.sign_volume(disk)
+    print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file the manifest lists", flush=True)
+    signed_volume_check(args, disk)
     # 211-KRN-0012: the firmware lists another disk's EFI partition first (a Mac's internal disk); the loader reads the
     # kernel and the services from its own volume.
     # The decoy is on IDE, served by ata, the first block driver; the boot disk on AHCI. vfs_server mounts the volume
@@ -17759,6 +17765,9 @@ def main():
             sign_manifest.sign_volume(disk)
             if suite == "boot":
                 boot_suite(args, disk)
+                continue
+            if suite == "bootkeys":
+                signed_volume_check(args, disk)
                 continue
             if suite == "display":
                 display_suite(args, disk)

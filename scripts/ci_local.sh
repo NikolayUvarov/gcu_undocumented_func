@@ -110,7 +110,7 @@ A64_GROUPS=(
     "aarch64: files and the block store|$A64 --suites vfs,store,storefaults"
     "aarch64: network, TLS and Effector|$A64 --suites net,tls,effector"
     "aarch64: a developer's release through the Effector agent|$A64 --suites effector-update"
-    "aarch64: the updater and the modes|$A64 --suites updater,modes"
+    "aarch64: the updater and the modes|$A64 --suites updater,modes,bootkeys"
     "aarch64: an update through the link|$A64 --suites linkupdate"
     "aarch64: the link|$A64 --suites link"
     # At EL2 as well (100004-PRT-0014): AAVMF starts the loader there when the guest has it, with the GICv3 system registers.
