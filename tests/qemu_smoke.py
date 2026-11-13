@@ -2395,7 +2395,18 @@ def monitors_check(vm):
     vm.serial()
     tool_status(vm, "[MEMMAP] VIEW=PHYSICAL")
     assert table_row(screen, canon("Physical address space")) and table_row(screen, canon("free RAM")), screen
-    assert table_row(screen, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena"), screen
+    arena, page = table_row(screen, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena"), screen
+    for _ in range(4):
+        if arena:
+            break
+        # The list is longer than the screen (aarch64's, as the boot images grew): further down, a page at a time.
+        vm.send_bytes(b"\x1b[6~")  # PgDn
+        tool_status(vm, "[MEMMAP] VIEW=PHYSICAL")
+        time.sleep(.2)
+        page = screen_text(vm)
+        vm.serial()
+        arena = table_row(page, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena")
+    assert arena, page
     usable = re.search(r"RAM (\d+(?:\.\d)?)M usable", "\n".join(screen))
     assert usable and 128 < float(usable[1]) < 512, screen  # the VM has 512 MiB
     vm.send("2")
