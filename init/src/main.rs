@@ -44,7 +44,8 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
     "the flow of program httpd (its listening grant); a TLS client with the right to the device certificate; the parser; RTC; a read-only scope of data/releases/",
-    "the flow of program sshd (its listening grant); keystore's client for its key exchanges' signatures; a writable scope of data/",
+    "the flow of program sshd (its listening grant); keystore's client for its key exchanges' signatures; a writable scope of data/; the shell's client for a remote session",
+    "nothing but its endpoint",
     "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
@@ -177,7 +178,7 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               replaced: [Option<(usize, usize)>; UNITS],
               placed: [Placed; UNITS], configuration: idl_init::Configuration,
               // The client of nnd init keeps, whose copies the shell holds and lends, revoked before each new shell (262-KRN-0178).
-              shell_nn: Option<usize>,
+              shell_nn: Option<usize>, shell_clipboard: Option<usize>,
               // Whether this boot's slot was signed with the public test key, which anyone can sign with (751-KRN-0185).
               test_key: bool,
               // A safe start, after an unfinished run or asked at the bootloader: link gets no input (800-KRN-0191).
@@ -586,6 +587,15 @@ impl Init {
 
     // The client of nnd init keeps for the shell, with the right to badge: the shell holds a copy, so that revoking this
     // one's descendants ends every client an old shell minted (262-KRN-0178).
+    // The clipboard's client init keeps for the shell, with the right to badge (000-KRN-0235): the shell mints a manager's
+    // copy and programs' copies from it, and every one goes when a new shell starts.
+    fn shell_clipboard(&mut self) -> Result<usize> {
+        if let Some(slot) = self.shell_clipboard { return Ok(slot); }
+        let slot = ipc::mint(self.keeper("clipboard")?, CLIENT | CAP_BADGE, 0, 0)?;
+        self.shell_clipboard = Some(slot);
+        Ok(slot)
+    }
+
     fn shell_nn(&mut self) -> Result<usize> {
         if let Some(slot) = self.shell_nn { return Ok(slot); }
         let slot = ipc::mint(self.keeper("nnd")?, CLIENT | CAP_BADGE, 0, 0)?;
@@ -1082,6 +1092,10 @@ impl Init {
             // (`scopes_of`); its quota and workers by data/memory.conf at each start (`nnd_memory`). No network, device or
             // lifecycle client.
             "nnd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "nnd")?, ALL); }
+            // The system clipboard (000-KRN-0235): its endpoint and nothing else; the shell gets the one client of it.
+            // With the right to badge: it mints the BADGE_PROGRAM client a window manager asks for each program
+            // (clipboard.wit 1.1 `program-client`, 000-APP-0032), as no copy on the wire carries that right (000-KRN-0073).
+            "clipboard" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "clipboard")?, ALL | CAP_BADGE); }
             // The TPM service alone holds the TPM's registers (351-KRN-0043); without a TPM it runs and says so.
             "tpm" => {
                 if let Some(slot) = self.nodes.tpm.and_then(|node| minted.mint(PLATFORM_MMIO, node, 0).ok()) { grants.add(SLOT_DEV0, slot, 0); }
@@ -1293,6 +1307,9 @@ impl Init {
                 // The model service's, with the right to badge, lent for REQUEST_NN with a badge for each start: a copy of the
                 // client init keeps, revoked before a new shell starts (262-KRN-0178).
                 if self.present("nnd") { grants.copy(SLOT_NN, self.shell_nn()?, CLIENT | CAP_BADGE); }
+                // The clipboard's, with the right to badge: the shell mints the manager's copy and a program's for
+                // REQUEST_CLIPBOARD (000-KRN-0235, 000-APP-0032), revoked before a new shell starts.
+                if self.present("clipboard") { grants.copy(SLOT_CLIPBOARD, self.shell_clipboard()?, CLIENT | CAP_BADGE); }
                 // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
                 grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
                 // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148); with the
@@ -1333,6 +1350,7 @@ impl Init {
             "updater" => Quota { endpoints: 1, ..Quota::default() },
             // The endpoint of nnd's probe for workers; its memory and workers come with its line of data/memory.conf.
             "nnd" => Quota { endpoints: 1, ..Quota::default() },
+            "clipboard" => Quota { endpoints: 1, ..Quota::default() },
             // The endpoint where the programs link starts send their output (800-LNK-0009, 800-KRN-0137).
             "link" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
@@ -1361,6 +1379,13 @@ impl Init {
             match ipc::revoke(kept) {
                 Ok(removed) => mind::println!("[INIT] shell: {} CLIENTS OF nnd THE OLD SHELL HELD OR LENT REVOKED", removed),
                 Err(error) => mind::println!("[INIT] shell: THE OLD SHELL'S CLIENTS OF nnd NOT REVOKED ({:?})", error),
+            }
+        }
+        // And none of the clipboard's (000-KRN-0235).
+        if let Some(kept) = self.shell_clipboard.filter(|_| name == "shell" && self.starts[index] > 0) {
+            match ipc::revoke(kept) {
+                Ok(removed) => mind::println!("[INIT] shell: {} CLIENTS OF clipboard THE OLD SHELL HELD OR LENT REVOKED", removed),
+                Err(error) => mind::println!("[INIT] shell: THE OLD SHELL'S CLIENTS OF clipboard NOT REVOKED ({:?})", error),
             }
         }
         let mut grants = plan.grants; let mut receiver = None;
@@ -2277,7 +2302,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
                          power: hardware::power_policy(), nodes: hardware::Nodes::default() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
