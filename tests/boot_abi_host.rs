@@ -54,20 +54,26 @@ fn version_read_needs_only_the_old_record() {
 // (110-NET-0070).
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
-    assert_eq!(BOOT_HANDOFF_VERSION, 33);
+    assert_eq!(BOOT_HANDOFF_VERSION, 35);
     // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192; ABI 29,
     // 100000-KRN-0222). It stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older,
-    // 351-KRN-0166). Handoff 33 came at ABI 32 (110-NET-0070), as handoff 30 at ABI 29 (100000-KRN-0221): the next change of the
+    // 351-KRN-0166). Handoffs 33, 34 and 35 came at ABI 32 (110-NET-0070, 112-NET-0072, 000-KRN-0235), as handoff 30 at ABI 29 (100000-KRN-0221): the next change of the
     // handoff takes a number above ABI_VERSION.
     assert!(BOOT_HANDOFF_VERSION > 18, "a handoff is above every ABI an older loader wrote in its place");
     const ABI_AT_THE_HANDOFF: u32 = 32;
     assert!(BOOT_HANDOFF_VERSION > ABI_AT_THE_HANDOFF && ABI_VERSION >= ABI_AT_THE_HANDOFF, "a handoff that changed was numbered above every ABI then");
-    assert_eq!(BOOT_IMAGES, 50, "a change of the boot images is a change of the handoff");
-    assert_eq!(size_of::<BootInfo>(), 1160, "a change of BootInfo is a change of the handoff");
-    // httpd serves through tls and parse, so it starts after both (110-NET-0070); it comes last before the shell, as the
+    assert_eq!(BOOT_IMAGES, 52, "a change of the boot images is a change of the handoff");
+    assert_eq!(size_of::<BootInfo>(), 1192, "a change of BootInfo is a change of the handoff");
+    // httpd serves through tls and parse, so it starts after both (110-NET-0070); it comes after effector, as the
     // gateway's lists of services hold the first 48 units alone (requests-EFF.md).
     let at = BOOT_SERVICES.iter().position(|&name| name == "httpd").unwrap();
-    assert_eq!((BOOT_SERVICES[at - 1], BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("effector", "shell", "httpd.elf"));
+    assert_eq!((BOOT_SERVICES[at - 1], BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("effector", "sshd", "httpd.elf"));
+    // sshd, the SSH server (112-NET-0072), after it, for the same lists; then clipboard, last before the shell, which
+    // gets its client (000-KRN-0235).
+    let at = BOOT_SERVICES.iter().position(|&name| name == "sshd").unwrap();
+    assert_eq!((BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("clipboard", "sshd.elf"));
+    let at = BOOT_SERVICES.iter().position(|&name| name == "clipboard").unwrap();
+    assert_eq!((BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("shell", "clipboard.elf"));
     assert!(BOOT_SERVICES.iter().position(|&name| name == "effector").unwrap() < 48, "the gateway's lists hold the effector session");
     assert!(at > BOOT_SERVICES.iter().position(|&name| name == "parse").unwrap() && at > BOOT_SERVICES.iter().position(|&name| name == "netpolicy").unwrap());
     // uart_serial serves the link's line on a board's UART, so it starts before link (100000-KRN-0221).

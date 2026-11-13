@@ -1,6 +1,6 @@
 # 312-STO-0046 — A memory domain's own limit, set when it is made — done
 
-**Type:** service (storage), interface · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.8, MC-4.11, MC-11.5
+**Type:** service (storage), interface · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.done) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.8, MC-4.11, MC-11.5
 
 ## Problem
 
@@ -58,4 +58,4 @@ Done on `claude/relaxed-meitner-5bmhpz` as 516b7169:
 
 ## Related
 
-[312](../issues/312-the-minds-memory.md), [308-STO-0023](308-STO-0023-memory-domains.done), [351-STO-0043](351-STO-0043-a-reserve-for-the-updaters-releases.done).
+[312](312-the-minds-memory.done), [308-STO-0023](308-STO-0023-memory-domains.done), [351-STO-0043](351-STO-0043-a-reserve-for-the-updaters-releases.done).

@@ -16,7 +16,8 @@
 /// and a block one medium finds damaged is repaired from the other (309-STO-0040, 2.5). The copy's names are listed with how
 /// each stands against the store, and a name only the copy holds is brought back into the store from it (309-STO-0041, 2.6).
 /// A memory domain may be made with a limit of its own on what it retains, beside its owner's quota (312-STO-0046, 2.7).
-package mind:blockstore@2.7.0;
+/// An owner may lend a client of its domain with fewer rights than its own, one that only reads (312-STO-0049, 2.8).
+package mind:blockstore@2.8.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
@@ -180,6 +181,10 @@ interface blockstore {
     /// the domain is forgotten or the store restarts. Errors: not-found (no such live domain), rights (another owner's
     /// domain, or asked through a domain's client), full (64 domain clients), device (the store could not mint one) (2.2).
     domain-client: func(id: u16) -> result<borrow<endpoint>, error>;
+    /// A client of domain `id` of the caller's owner, as `domain-client` gives, with those of `rights` the caller holds
+    /// too: 1 get, 2 put, 4 publish, as the badges grant them. So an owner lends a client that only reads. Errors as
+    /// `domain-client`'s, and invalid (none of `rights` held, or a bit that is no such right) (2.8, 312-STO-0049).
+    domain-client-with: func(id: u16, rights: u16) -> result<borrow<endpoint>, error>;
     /// Forgets domain `id` of the caller's owner (MC-4.8): a tombstone is written, then its key record erased. Its
     /// names, pins and blocks are gone at once and its clients revoked; its records never open again, and the next
     /// collection frees them. Copies already read, and a flash medium's spare blocks, are outside this. Errors:

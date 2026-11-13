@@ -30,12 +30,23 @@
   - so the network time is trusted for the logs' times, and for the checks that refuse what is too old (a channel's expiry, a certificate's validity) only as far as the floor allows. Stage 2 (NTS) authenticates the answers.
 - **Tested:** host tests and seeded fuzzing of `mind::sntp`, and the `net` suite's `timed_check` in QEMU. The floor's file is written there, but the suite boots on a snapshot, so reading it back at the next boot is not tested. Not on a machine (MC-12.1).
 
+### NTS (111's stage 2)
+
+`timed` (111-NET-0075) authenticates the answers of the servers its policy names over TCP (`timed <server> tcp 4460`, with `timed <server> udp <port>` for the NTP port its key establishment names), by NTS (RFC 8915).
+- **The key establishment** runs through `tls` (111-NET-0073): TLS 1.3 agreeing on `ntske/1`, the certificate checked against `tlsroots.pem` for the name the policy gave (111-NET-0074), the keys taken from the session's exporter. `timed` holds the keys and the cookies, never the TLS session's secrets (MC-11.9).
+- **An answer counts** only when it carries this request's unique identifier and its authenticator holds under the server's key (AEAD_AES_SIV_CMAC_256). Its new cookies are kept, at most 8 a server; a server out of cookies, or one that sends an NTS NAK, has its key establishment run again, a failed one waiting 10 s and twice as long at each failure, up to 6 hours.
+- **Plain servers** are used only as the owner's lines name them: an address with a UDP rule and no TCP rule.
+- **The bound is wider:** when every server that agreed is authenticated by NTS, a step of more than 24 hours is taken at any set, not only the first since boot. The floor holds either way, and two servers must still agree.
+- **What it is trusted for:** NTS authenticates the server, not its time. Two NTS servers that agree can move the clock forward without limit, and back as far as the floor; one on the path can delay or drop their answers but not change them.
+- **The circularity:** the key establishment checks the server's certificate against the clock it is to set. A clock earlier than the certificate's start refuses it, and then only plain servers or the user set the clock. The bound: a clock at the floor (the build's commit time) accepts a certificate that was valid then, so a device whose clock was lost bootstraps by NTS only while its build is younger than the server's certificate.
+- **Tested:** see 111-NET-0075's resolution.
+
 ## Not provided
 
 - Deadlines and jitter bounds (MC-5.3, 5.4): not claimed. CPU budgets per period exist (C7) but are enforced at the end of each 10 ms time slice.
 - Daylight saving and a zone database: a time zone is a fixed offset from UTC (`rtc.wit` 1.3), changed by hand (`date zone`, `wm`'s Settings).
 - A CMOS clock that keeps local time (as Windows keeps it): `now` and `date` are taken as UTC; such a machine leaves the zone at UTC.
-- Authenticated network time (NTS, 111's stage 2), and the user's `date sync`: `timed` has no service endpoint yet.
+- The user's `date sync`: `timed` has no service endpoint yet. NTS servers that name their NTP server by a host name (`timed` resolves none), NTS cookies kept across reboots, and setting the clock to the floor so that NTS can bootstrap (111-NET-0075).
 - Sleeping with resolution better than 1 ms, or scheduling better than the 10 ms time slice: `WAIT` and IPC timeouts end on the tick, and a task made ready waits for its CPU's time slice to end unless that CPU is idle.
 - A tickless idle: the boot CPU takes its tick every millisecond even when nothing runs.
 - Tasks of a CPU that zeroes a large block (more than 64 MiB): they wait until the block is zeroed, about 0.1 s a GiB expected on a machine (not measured) and seconds under QEMU's emulation, since the kernel does not leave a system call for another task. Between the block's 2 MiB pieces the CPU takes its interrupts, bookkeeping only: the boot CPU's tick still ends the sleeps and IPC deadlines of the other CPUs (262-KRN-0165).

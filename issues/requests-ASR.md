@@ -38,3 +38,15 @@ The assurance track numbers its own tasks (`NNN-ASR-MMMM`), so requests from oth
   - the counterexample of the model before 167 is found by both;
   - the gate's host part runs the Rust models.
 - **Java leaves the gate only when TLA+ is dropped by an explicit decision.**
+
+## A fuzz target for the key file's parser (351-UPD-0026)
+
+**Asked by** UPD (the kernel session) on 2026-11-13, as 351-UPD-0026's plan names it.
+
+- **What:** `mind::release::parse_keys` and `parse_channel`'s signature lines (`libmind/src/release.rs`), in 351-ASR-0006's harness, as the channel's parser is there.
+- **Invariants:**
+  - no input panics;
+  - whatever `parse_keys` takes encodes again to exactly its body (`encode_keys`), and `keys_is` holds for it;
+  - `signed_by` never counts a key twice, nor one outside the set it is given.
+- **Seeds:** `release.py`'s test key file (`release.test_keys_file()`), and the other forms `tests/release_host.rs` refuses.
+- **Meanwhile:** `tests/release_host.rs` changes every byte of a key file to nine values and checks what it accepts encodes back; that is not a fuzzer.

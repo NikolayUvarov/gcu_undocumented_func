@@ -1,8 +1,8 @@
 # 312-STO-0035 — A text index derived from a journal: rebuilt equal to itself, a stale one told, every answer checked — done
 
-**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, MC-10.3
+**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.done) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, MC-10.3
 
-Split from [312](../issues/312-the-minds-memory.md) (2026-10-31), its second step: "derived indexes: full text … an exact scan first … an index is never authority or proof that a version is current, and may be dropped and rebuilt (MC-4.12)". Vectors wait for `NRL`'s embeddings; assertions are a later task of 312.
+Split from [312](312-the-minds-memory.done) (2026-10-31), its second step: "derived indexes: full text … an exact scan first … an index is never authority or proof that a version is current, and may be dropped and rebuilt (MC-4.12)". Vectors wait for `NRL`'s embeddings; assertions are a later task of 312.
 
 No personal data is written before [308](308-encryption-at-rest.done) is done: the tests and the pilot index test text only.
 
@@ -118,4 +118,4 @@ Landed in `main` 36d05f12 (round 8ea4b135) as 27388dd7, f7d8bc6f and da6b8137.
 
 ## Related
 
-[312](../issues/312-the-minds-memory.md), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [310](../issues/310-the-index-on-the-medium.md), [303](303-retention-and-collection.done).
+[312](312-the-minds-memory.done), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [311-STO-0027](311-STO-0027-directories-as-objects.done), [310](../issues/310-the-index-on-the-medium.md), [303](303-retention-and-collection.done).

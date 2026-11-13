@@ -50,7 +50,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -4676,6 +4676,7 @@ def store_suite(vm):
     store_index_check(vm)
     store_assertion_check(vm)
     store_vector_check(vm)
+    store_agent_check(vm)
     storefs_writers_check(vm)
     store_recovery_check(vm)
 
@@ -5324,6 +5325,73 @@ def store_vector_check(vm):
     print("PASS: a vector index: one in a memory domain is the domain's alone and goes with it", flush=True)
 
 
+def store_agent_check(vm):
+    """312: a stand-in agent with a memory of its own. `blocks` is started by `run -d` (312-APP-0134) in a memory domain
+    the owner (the shell) made, and holds that domain's client alone. It writes its memory (three notes in a journal, a
+    text index of them, an assertion) and reads it back (the journal listed and checked, a search, `about`). The
+    volume's names, another domain's and any other domain are out of its reach, and the volume does not see its
+    memory. The owner forgets its domain: the memory is gone at once, a collection frees its records, and the other
+    domain stands. Without a random source (x86's qemu64) no domain is made, and no agent is run."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    made = blocks("domain new")
+    if "NoRandom" in made:
+        print("NOTE: a stand-in agent: no memory domain without a random source (x86's qemu64), so none is run", flush=True)
+        return
+    mine = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
+    theirs = int(re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))[1])
+
+    def agent(args, timeout=240):
+        vm.send(f"run -d {mine} blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"run -d {mine} blocks {args}\n")
+    # Another program's memory, in the other domain.
+    require(vm.command("write ram:theirs.txt kept by another"), "WROTE 16 BYTES")
+    kept = cid_raw(b"kept by another\n")
+    require(blocks(f"-d {theirs} put ram:theirs.txt"), f"PUT {kept} SIZE 16")
+    require(blocks(f"-d {theirs} publish private {kept}"), "PUBLISHED private VERSION 1")
+    # The agent writes its memory: three notes, an index of them, a claim about what it met.
+    notes = ["met the user at nine", "the user likes tea", "tea at four with the user"]
+    for k, note in enumerate(notes, 1):
+        require(agent(f"journal append self note {note}"), f"APPENDED self SEQUENCE {k} BOOT 1 ENTRY ")
+    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {mine}")
+    require(agent("index build self"), "PUBLISHED index/self VERSION 1 ROOT")
+    user = cid_raw(b"the user")
+    require(agent(f"assert add claims {user} likes tea"), f"ASSERTED claims SEQUENCE 1 ASSERTION ")
+    # And reads it back.
+    out = agent("journal list self")
+    for k, note in enumerate(notes, 1):
+        assert re.search(rf"^ENTRY {k} ", out, re.M), out
+        require(out, f"TEXT {note}")
+    require(out, "3 ENTRIES OF self AT VERSION 3, NEWEST FIRST")
+    require(agent("journal check self"), "CHECKED self: 3 ENTRIES, SEQUENCE 1 TO 3, AT VERSION 3: WHOLE")
+    out = agent("index search self tea")
+    assert re.search(r"^SEQUENCES 3 2\r?$", out, re.M), out
+    require(out, "INDEX index/self OF self AT SEQUENCE 3: CURRENT")
+    require_all(agent(f"assert about claims {user}"), "  TEXT tea", f"1 ASSERTIONS ABOUT {user} IN claims AT VERSION 1, NEWEST FIRST")
+    print("PASS: a stand-in agent: blocks started by run -d in a memory domain writes its memory (a journal, its index, a "
+          "claim) and reads it back, checked from the journal's head", flush=True)
+    # Out of its reach: the volume's names (store_index_check's journal), the other domain's, any other domain.
+    require(agent("journal check notes"), "blocks: journal notes: NotFound")
+    require(agent("resolve private"), "blocks: resolve private: NotFound")
+    require(agent(f"-d {theirs} resolve private"), f"blocks: domain {theirs}: Rights")
+    require(agent("domain new"), "blocks: domain new: Rights")
+    # Nor does the volume see the agent's memory.
+    require(blocks("journal check self"), "blocks: journal self: NotFound")
+    print("PASS: a stand-in agent: the volume's names, another domain's and any other domain are out of its reach, and the "
+          "volume does not see its memory", flush=True)
+    # The owner forgets the agent's domain: its memory goes at once, a collection frees its records, the other stands.
+    require(blocks(f"domain forget {mine}"), f"DOMAIN {mine} FORGOTTEN")
+    require(vm.command(f"run -d {mine} blocks journal check self"), "RUN -D: NO LIVE MEMORY DOMAIN OF THE SHELL'S HAS THAT NUMBER")
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    out = blocks("domains")
+    assert f"DOMAIN {mine} " not in out and f"DOMAIN {theirs} LIVE" in out, out
+    require(blocks(f"-d {theirs} resolve private"), f"private VERSION 1 ROOT {kept}")
+    print("PASS: a stand-in agent: its domain forgotten by the owner, its memory is gone at once and a collection frees its "
+          "records; the other domain stands", flush=True)
+
+
 def storefs_writers_check(vm):
     """311-STO-0032, 0037: storefs's writers and scopes on the platform, through `fsstep`, which the shell starts with a
     writable scope of its file's directory on the store volume `w:` (the store's name `fs/w`), as for every program that
@@ -5442,7 +5510,8 @@ def store_domains_check(vm):
     `max`), a domain is made; its blocks, names and journal (312-STO-0034) are its own, a domain's client makes no
     domain, and a forgotten domain is gone at once, its journal with it and its records then collected, while another
     domain stands. 312-STO-0046: a domain made with a limit of 8 KiB refuses a publish past it, while the volume takes
-    the same object, and says what it retains. Without a random source (x86's qemu64), no domain is made, and the store
+    the same object, and says what it retains. 312-STO-0049: a client of a domain that may only read (`blocks -dr`)
+    reads its name and block and is refused a put and a publish; through the shell's read-only client, none is lent. Without a random source (x86's qemu64), no domain is made, and the store
     says why."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
@@ -5467,6 +5536,19 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 312-STO-0049: a client of the domain that may only read (`-dr`, domain-client-with): the name resolved and the
+    # block read; a put and a publish refused, each logged with its badge. The shell's read-only client is another owner.
+    require(blocks(f"-dr {first} resolve secret"), f"secret VERSION 1 ROOT {note}")
+    require(blocks(f"-dr {first} get {note} ram:ro.txt"), "GOT 12 BYTES")
+    out = blocks(f"-dr {first} put ram:dom.txt")
+    require(out, "blocks: put:"); require(out, "Rights")
+    require(blocks(f"-dr {first} publish other {note}"), "blocks: publish other: Rights")
+    # `logs` drains the log: read once, up to its last line, the refused publish.
+    log = vm.service_logs("blockstore", "REFUSED Publish")
+    assert re.search(rf"\[BLOCKSTORE\] DOMAIN {first}'S CLIENT LENT TO PID \d+ \(BADGE \d+\) WITH RIGHTS 1\r?$", log, re.M), log
+    refusals = re.findall(r"\[BLOCKSTORE\] REFUSED (Put|Publish) FOR PID \d+ \(BADGE (\d+)\)", log)
+    assert {"Put", "Publish"} <= {op for op, badge in refusals if int(badge) >= 0x100}, log
+    require(vm.command(f"blocksro -dr {first} resolve secret"), f"blocks: domain {first}: Rights")
     # 312-STO-0046: a domain with a limit of its own: 5000 bytes fit in 8 KiB, 4000 more do not; the volume is not bound.
     limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", blocks("domain new 8"))[1])
     require(vm.service_logs("blockstore", "RETAINING AT MOST"), f"[BLOCKSTORE] DOMAIN {limited} MADE FOR BADGE")
@@ -5496,6 +5578,7 @@ def store_domains_check(vm):
     require(blocks(f"domain forget {first}"), f"DOMAIN {first} FORGOTTEN")
     require(vm.service_logs("blockstore", "FORGOTTEN BY PID"), f"[BLOCKSTORE] DOMAIN {first} FORGOTTEN BY PID")
     require(blocks(f"-d {first} resolve secret"), f"blocks: domain {first}: NotFound")
+    require(blocks(f"-dr {first} resolve secret"), f"blocks: domain {first}: NotFound")
     require(blocks(f"-d {first} journal check log"), f"blocks: domain {first}: NotFound")
     require(blocks("domains"), f"DOMAIN {first} FORGOTTEN")
     collected = blocks("collect")
@@ -5505,7 +5588,8 @@ def store_domains_check(vm):
     require(blocks(f"-d {second} get {note} ram:again.txt"), "GOT 12 BYTES")
     print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
           "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
-          "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046)", flush=True)
+          "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046); a "
+          "client of a domain that may only read reads it and is refused a put and a publish (312-STO-0049)", flush=True)
 
 
 def run_in_domain_check(vm, first=None, second=None, note=None):
@@ -6282,7 +6366,10 @@ def dmesg_check(vm):
     assert re.search(r"^\[\s*\d+\.\d{3}\] ", output, re.M), output
     # The text may claim any source; logd records the sender.
     require(vm.command(f"logger vfs_server({pids['vfs_server']}) [VFS] FORGED LINE"), "LOGGED")
-    require(vm.command("dmesg -n 1", raw=True), f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
+    # The last records: clipboard may log the program the shell names in front (dmesg itself) after the forged line.
+    last = vm.command("dmesg -n 3", raw=True)
+    require(last, f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
+    assert len(re.findall(r"^\[\s*\d+\.\d{3}\] ", last, re.M)) <= 3, last
     only = vm.command("dmesg -s vfs_server", raw=True)
     assert "FORGED" not in only and "[VFS] MOUNTED" in only and "[INIT]" not in only, only
     assert "[LOADER]" in vm.command(f"dmesg -s {pids['loader']}", raw=True)
@@ -8454,8 +8541,8 @@ def update_releases(temp, arch, changed=None, minimum6=None, gateway=None, perio
 
     def channel(version, minimum, expires):
         body = release_tool.channel_bytes("stable", version, minimum, expires, {arch: hashlib.sha256(manifest6).hexdigest()})
-        return body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
-    signature = good.index(b"ed25519 ") + 8
+        return body + release_tool.signature_lines(body, [release_tool.TEST_RELEASE_SEED])
+    signature = good.rindex(b" ") + 1  # the signature's first digit, after the key its line names (351-UPD-0026)
     forged = good[:signature] + (b"1" if good[signature:signature + 1] == b"0" else b"0") + good[signature + 1:]
     return volume, newer, server, kept, good, forged, manifest6, boot_files, channel
 
@@ -8517,6 +8604,7 @@ def update_suite(args):
     # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
                                        "channel stable\nautomatic apply\nevery 20\ntries 3\n")
@@ -8562,6 +8650,14 @@ def update_suite(args):
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         updater_parser_check(vm, https)
+        # 351-UPD-0026: a key file one root key of the test set's two of three signed is refused before any channel is
+        # read, and nothing is written.
+        keys_good = (server / "keys/current").read_bytes()
+        (server / "keys/current").write_bytes(release_tool.test_keys_file(roots=release_tool.TEST_ROOT_SEEDS[2:]))
+        log = logged("[UPDATER] KEY FILE VERSION 1 REFUSED: FEWER THAN 2 OF THE ROOT KEYS SIGNED IT", 60)
+        assert "[UPDATER] RECORD" not in log, log
+        (server / "keys/current").write_bytes(keys_good)
+        print("PASS: update: a key file one of the 2-of-3 root keys signed refused, nothing written (351-UPD-0026)", flush=True)
         # Version 6 as published, but the first of its boot files changed on the server.
         (server / "channels/stable").write_bytes(good)
         blob = server / "blobs" / boot_files[0][1]
@@ -8674,7 +8770,7 @@ def update_suite(args):
     assert boot_slots.newest(records)[1] == {"sequence": 5, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 6}, records
     for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
-    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good and image.read("MIND/B/KEYS") == (server / "keys/current").read_bytes()
     assert image.read(f"MIND/B/{boot_slots.PERIOD}") == period6  # 351-UPD-0036: staged with the slot's files
     # Only the application release 6 changed came from the server; the others were copied from slot A.
     asked = {path for path, _ in https.requests}
@@ -8769,6 +8865,7 @@ def update_store_suite(args):
     layout = temp / "layout"
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0033)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
                                        "channel stable\nautomatic none\n")
@@ -8779,8 +8876,10 @@ def update_store_suite(args):
     # What a kept tree holds: the blobs of the files a slot holds, each digest once, the channel, the manifest and its
     # signature.
     def tree_of(directory, manifest, channel):
+        # The blobs, then the channel, the key file (351-UPD-0026), the manifest and its signature.
+        keys = (server / "keys/current").read_bytes()
         blobs = {digest: size for name, size, digest in release_tool.manifest_files(manifest) if (name.endswith(".elf") and "/" not in name) or name == BOOT_EFI}
-        return len(blobs) + 3, sum(blobs.values()) + len(channel) + len(manifest) + len((directory / "MANIFEST.SIG").read_bytes())
+        return len(blobs) + 4, sum(blobs.values()) + len(channel) + len(keys) + len(manifest) + len((directory / "MANIFEST.SIG").read_bytes())
     cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
     disks = ["-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
@@ -8953,6 +9052,7 @@ def install_suite(args, stub_elf):
     layout = temp / "layout"
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     gateway = layout / "system/effector_gw"
     gateway.mkdir(parents=True)
     for name in size:
@@ -9066,6 +9166,7 @@ def linkupdate_suite(args):
     # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     (layout / "link.conf").write_text("baud=115200\n")
     (layout / "update.txt").write_text("# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\n"
                                        "automatic apply\nevery 20\ntries 3\n")
@@ -9140,7 +9241,7 @@ def linkupdate_suite(args):
     assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 1}, records
     for name, digest in boot_files:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
-    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good and image.read("MIND/B/KEYS") == (server / "keys/current").read_bytes()
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: linkupdate: release 6 put into data/link/rel/ through the link; an expired channel and one with a changed "
@@ -10301,7 +10402,7 @@ def download_check(args, disk):
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
     # A release channel as release.py publishes it, and one with a space where its one encoding has none (351-NET-0011).
     body = release_tool.channel_bytes("stable", 7, 5, "2026-11-08T00:00:00Z", {"x86_64": "ab" * 32, "aarch64": "0c" * 32})
-    channel = body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    channel = body + release_tool.signature_lines(body, [release_tool.TEST_RELEASE_SEED])
     (disk / "data" / "stable").write_bytes(channel)
     (disk / "data" / "spaced").write_bytes(channel.replace(b'"version":7', b'"version": 7'))
     # TLS takes random bytes from RDRAND only.
@@ -12386,6 +12487,7 @@ def effector_update_suite(args):
     layout = temp / "layout"
     boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server_tree / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
     files = {"netpolicy.txt": f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\n".encode(), "data/mode.conf": b"development\n",
              "data/effector/effector.conf": f"effector-config 1\nserver https://10.0.2.2:{server.port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n".encode(),
              "data/effector/token": (token + "\n").encode(), "data/effector/agent_id": (agent + "\n").encode(),
@@ -12699,6 +12801,7 @@ def tls_suite(args, disk):
         require(vm.command("dmesg -s tls"), "THE SERVER ROLE REFUSED TO A CLIENT WITHOUT THE RIGHT TO THE DEVICE CERTIFICATE")
         # 110-NET-0070: no listening grant for httpd in this policy, so init does not start it.
         require(vm.command("dmesg -s init", raw=True), "[INIT] httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT")
+        require(vm.command("dmesg -s init", raw=True), "[INIT] sshd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
@@ -12743,7 +12846,314 @@ def tls_suite(args, disk):
     passphrase_wait_check(args, with_entropy)
     tpm_check(args, with_entropy)
     recovery_key_check(args, with_entropy)
+    # Before httpd_check, which removes the certificates' directory when it ends.
+    nts_check(args, disk, with_entropy, certificates)
     httpd_check(args, disk, with_entropy, certificates)
+    sshd_check(args, disk, with_entropy)
+
+
+def _cmac(key, data):
+    from cryptography.hazmat.primitives import cmac
+    from cryptography.hazmat.primitives.ciphers import algorithms
+    mac = cmac.CMAC(algorithms.AES(key))
+    mac.update(data)
+    return mac.finalize()
+
+
+def _dbl(block):
+    n = int.from_bytes(block, "big") << 1
+    return ((n ^ 0x87 if n >> 128 else n) & (1 << 128) - 1).to_bytes(16, "big")
+
+
+def _xor(a, b):
+    return bytes(x ^ y for x, y in zip(a, b))
+
+
+def _s2v(key, headers, plain):
+    d = _cmac(key, bytes(16))
+    for header in headers:
+        d = _xor(_dbl(d), _cmac(key, header))
+    if len(plain) >= 16:
+        return _cmac(key, plain[:-16] + _xor(plain[-16:], d))
+    return _cmac(key, _xor(_dbl(d), (plain + b"\x80").ljust(16, b"\0")))
+
+
+def _siv_ctr(key, v, data):
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    q = bytearray(v)
+    q[8] &= 0x7F
+    q[12] &= 0x7F
+    crypt = Cipher(algorithms.AES(key), modes.CTR(bytes(q))).encryptor()
+    return crypt.update(data) + crypt.finalize()
+
+
+def _siv_seal(key, headers, plain):
+    # AEAD_AES_SIV_CMAC_256 (RFC 5297) over `cryptography`'s AES-CMAC and AES-CTR: written apart from timed's own
+    # (RustCrypto's aes-siv), each checked against RFC 5297's example.
+    v = _s2v(key[:16], headers, plain)
+    return v + _siv_ctr(key[16:], v, plain)
+
+
+def _siv_open(key, headers, sealed):
+    import hmac as hmac_module
+    v = sealed[:16]
+    plain = _siv_ctr(key[16:], v, sealed[16:])
+    return plain if len(sealed) >= 16 and hmac_module.compare_digest(_s2v(key[:16], headers, plain), v) else None
+
+
+def _siv_selftest():
+    # RFC 5297, A.2: two associated data and the nonce last.
+    h = lambda text: bytes.fromhex(text.replace(" ", ""))
+    sealed = _siv_seal(h("7f7e7d7c 7b7a7978 77767574 73727170 40414243 44454647 48494a4b 4c4d4e4f"),
+                       [h("00112233 44556677 8899aabb ccddeeff deaddada deaddada ffeeddcc bbaa9988 77665544 33221100"), h("10203040 50607080 90a0"),
+                        h("09f91102 9d74e35b d84156c5 635688c0")],
+                       h("74686973 20697320 736f6d65 20706c61 696e7465 78742074 6f20656e 63727970 74207573 696e6720 5349562d 414553"))
+    assert sealed == h("7bdb6e3b 432667eb 06f4d14b ff2fbd0f cb900f2f ddbe4043 26601965 c889bf17 dba77ceb 094fa663 b7a3f748 ba8af829 ea64ad54 4a272e9c 485b62a3 fd5c0d"), sealed.hex()
+
+
+def _tls_exporter(hash_name, secret, label, context, length):
+    # RFC 8446, section 7.5, from the exporter secret OpenSSL's key log holds (Python's ssl offers no exporter); checked
+    # against OpenSSL's own -keymatexport in 111-NET-0073.
+    import hmac as hmac_module
+
+    def expand_label(key, name, ctx, n):
+        full = b"tls13 " + name
+        info = n.to_bytes(2, "big") + bytes([len(full)]) + full + bytes([len(ctx)]) + ctx
+        out, block, i = b"", b"", 1
+        while len(out) < n:
+            block = hmac_module.new(key, block + info + bytes([i]), hash_name).digest()
+            out, i = out + block, i + 1
+        return out[:n]
+    derived = expand_label(secret, label, hashlib.new(hash_name, b"").digest(), hashlib.new(hash_name).digest_size)
+    return expand_label(derived, b"exporter", hashlib.new(hash_name, context).digest(), length)
+
+
+def _records(*records):
+    return b"".join(struct.pack(">HH", kind, len(body)) + body for kind, body in records)
+
+
+def _field(kind, value):
+    padded = max((len(value) + 3) & ~3, 12)
+    return struct.pack(">HH", kind, 4 + padded) + value.ljust(padded, b"\0")
+
+
+def _fields(data, at=48):
+    out = []
+    while at + 4 <= len(data):
+        kind, length = struct.unpack(">HH", data[at:at + 4])
+        if length < 4 or length % 4 or at + length > len(data):
+            return None
+        out.append((kind, data[at + 4:at + length], at))
+        at += length
+    return out if at == len(data) else None
+
+
+class _Nts:
+    """An NTS server on the host for timed's check (111-NET-0075, RFC 8915): NTS-KE over TLS 1.3 (ALPN ntske/1, the keys
+    from the exporter), then NTPv4 with its extension fields, sealed with AEAD_AES_SIV_CMAC_256. Its cookies hold the
+    client's keys sealed under a key of its own. `mode`: `honest`; `forge` changes a byte of each answer's sealed part;
+    `replay` answers each request with an authentic answer to another request (another identifier and origin time),
+    as a replay of an earlier answer carries; `alpn` agrees on no application protocol. NTS-KE names its NTP port."""
+
+    def __init__(self, certificates, leaf, mode="honest", shift=0.0):
+        _siv_selftest()
+        self.mode, self.shift, self.master, self.asked, self.kes = mode, shift, os.urandom(32), 0, 0
+        self.keylog = Path(tempfile.mkdtemp(prefix="mind-nts-")) / "keys.log"
+        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.context.minimum_version = ssl.TLSVersion.TLSv1_3
+        self.context.load_cert_chain(certificates / f"{leaf}.pem", certificates / f"{leaf}.key")
+        self.context.set_alpn_protocols(["http/1.1"] if mode == "alpn" else ["ntske/1"])
+        self.context.keylog_filename = str(self.keylog)
+        self.ke = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.ke.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.ke.bind(("127.0.0.1", 0))
+        self.ke.listen(4)
+        self.ntp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.ntp.bind(("127.0.0.1", 0))
+        self.ke_port, self.ntp_port = self.ke.getsockname()[1], self.ntp.getsockname()[1]
+        threading.Thread(target=self.serve_ke, daemon=True).start()
+        threading.Thread(target=self.serve_ntp, daemon=True).start()
+
+    def cookie(self, c2s, s2c):
+        nonce = os.urandom(16)
+        return nonce + _siv_seal(self.master, [nonce], c2s + s2c)
+
+    def serve_ke(self):
+        while True:
+            try:
+                raw, _ = self.ke.accept()
+            except OSError:
+                return
+            try:
+                raw.settimeout(20)
+                with self.context.wrap_socket(raw, server_side=True) as conn:
+                    request = b""
+                    while not request.endswith(b"\x80\x00\x00\x00"):
+                        chunk = conn.recv(1024)
+                        if not chunk:
+                            break
+                        request += chunk
+                    hash_name = "sha384" if conn.cipher()[0].endswith("SHA384") else "sha256"
+                    secret = bytes.fromhex([line.split()[2] for line in self.keylog.read_text().splitlines() if line.startswith("EXPORTER_SECRET")][-1])
+                    label = b"EXPORTER-network-time-security"
+                    c2s, s2c = (_tls_exporter(hash_name, secret, label, bytes([0, 0, 0, 15, d]), 32) for d in (0, 1))
+                    self.kes += 1
+                    conn.sendall(_records((0x8001, b"\0\0"), (0x8004, b"\0\x0f"), (7, struct.pack(">H", self.ntp_port)),
+                                          *((5, self.cookie(c2s, s2c)) for _ in range(8)), (0x8000, b"")))
+                    try:
+                        conn.unwrap()
+                    except (OSError, ssl.SSLError):
+                        pass
+            except (OSError, ssl.SSLError, IndexError, TypeError):
+                pass
+
+    def answer(self, request):
+        fields = _fields(request)
+        if not fields or fields[-1][0] != 0x0404:
+            return None
+        uid = next((v for k, v, _ in fields if k == 0x0104), None)
+        cookie = next((v for k, v, _ in fields if k == 0x0204), None)
+        placeholders = sum(1 for k, _, _ in fields if k == 0x0304)
+        value, start = fields[-1][1], fields[-1][2]
+        nonce_length, sealed_length = struct.unpack(">HH", value[:4])
+        nonce, sealed = value[4:4 + nonce_length], value[4 + ((nonce_length + 3) & ~3):][:sealed_length]
+        keys = cookie and _siv_open(self.master, [cookie[:16]], cookie[16:])
+        if uid is None or not keys or _siv_open(keys[:32], [request[:start], nonce], sealed) is None:
+            return None
+        s2c = keys[32:]
+        if self.mode == "replay":
+            uid, origin = os.urandom(32), os.urandom(8)
+        else:
+            origin = request[40:48]
+        t = time.time() + self.shift
+        stamp = struct.pack(">II", int(t) + 2_208_988_800, int((t % 1) * 2**32))
+        head = bytes([0x24, 2, 6, 0xEC]) + bytes(8) + b"MIND" + stamp + origin + stamp + stamp + _field(0x0104, uid)
+        plain = b"".join(_field(0x0204, self.cookie(keys[:32], s2c)) for _ in range(1 + placeholders))
+        server_nonce = os.urandom(16)
+        sealed = bytearray(_siv_seal(s2c, [head, server_nonce], plain))
+        if self.mode == "forge":
+            sealed[-1] ^= 1
+        value = struct.pack(">HH", 16, len(sealed)) + server_nonce + bytes(sealed)
+        return head + struct.pack(">HH", 0x0404, 4 + ((len(value) + 3) & ~3)) + value.ljust((len(value) + 3) & ~3, b"\0")
+
+    def serve_ntp(self):
+        while True:
+            try:
+                data, peer = self.ntp.recvfrom(2048)
+            except OSError:
+                return
+            self.asked += 1
+            reply = self.answer(data) if len(data) > 48 else None
+            if reply:
+                self.ntp.sendto(reply, peer)
+
+    def close(self):
+        self.ke.close()
+        self.ntp.close()
+
+
+def _nts_certificate(directory):
+    # The NTS-KE server's certificate from the test CA, for mind.test and 10.0.2.2, valid from 2020 to two days from now,
+    # so that a clock set back to 2024 still finds it valid: the circularity the profile states (111).
+    import datetime
+
+    def run(*command):
+        subprocess.run(["openssl", *command], cwd=directory, check=True, capture_output=True)
+    (directory / "nts-index.txt").write_text("")
+    (directory / "nts-serial.txt").write_text("2000\n")
+    (directory / "nts-ca.cnf").write_text("[ca]\ndefault_ca = test\n[test]\ndatabase = nts-index.txt\nnew_certs_dir = .\nserial = nts-serial.txt\n"
+                                          "default_md = sha256\npolicy = any\nunique_subject = no\n[any]\ncommonName = supplied\n")
+    end = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)).strftime("%Y%m%d%H%M%SZ")
+    run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "nts.key", "-out", "nts.csr", "-subj", "/CN=mind.test")
+    run("ca", "-batch", "-config", "nts-ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "nts.csr", "-out", "nts.pem", "-notext",
+        "-startdate", "20200101000000Z", "-enddate", end, "-extfile", "names.cnf")
+
+
+def _timed_lines(vm, until, timeout=180):
+    # timed's lines of the system log, all of them since boot, once `until` is among them (or the time is up).
+    deadline = time.monotonic() + timeout
+    while True:
+        log = vm.command("dmesg -s timed", raw=True)
+        if until in log or time.monotonic() > deadline:
+            return log
+        time.sleep(3)
+
+
+def nts_check(args, disk, cpu, certificates):
+    """111-NET-0073, 0074, 0075: timed sets the clock from NTS servers (RFC 8915) on the host. The policy names four by
+    the host name mind.test, which the test's resolver gives as 10.0.2.2: NTS-KE through tls agrees on ntske/1, checks
+    the certificate for that name and takes the keys from the exporter (a name that waited for the network at boot is
+    added to the grant once it resolves); two honest servers agree and set the clock from
+    2024, a third's answers are forged and refused as not authentic, a fourth's are authentic answers to other requests
+    and refused as not ours; the cookies come back to eight. A second boot: a server that agrees on no application
+    protocol and one whose certificate no root vouches for are refused at NTS-KE, so nothing is set."""
+    import datetime
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    _nts_certificate(certificates)
+    dns = _dns_server()
+    servers = [_Nts(certificates, "nts"), _Nts(certificates, "nts", shift=0.2), _Nts(certificates, "nts", "forge"), _Nts(certificates, "nts", "replay")]
+    card = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", cpu]
+
+    def lines(list_):
+        return (f"resolver 10.0.2.2:{dns.getsockname()[1]}\n"
+                + "".join(f"timed mind.test tcp {s.ke_port} {2**32 - 1}\ntimed mind.test udp {s.ntp_port} {2**32 - 1}\n" for s in list_))
+    try:
+        policy.write_text(lines(servers))
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
+        try:
+            log = _timed_lines(vm, "[TIMED] SET ")
+            for s in servers:
+                assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{s.ke_port}\): 8 COOKIES, NTP AT 10\.0\.2\.2:{s.ntp_port}", log), log[-4000:]
+            for s in servers[:2]:
+                assert re.search(rf"\[TIMED\] 10\.0\.2\.2:{s.ntp_port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, AUTHENTICATED BY NTS \(mind\.test, 8 COOKIES\), AGREES", log), log[-4000:]
+            require(log, f"[TIMED] 10.0.2.2:{servers[2].ntp_port}: ITS ANSWER REFUSED, NOT AUTHENTIC UNDER THE SERVER'S KEY")
+            require(log, f"[TIMED] 10.0.2.2:{servers[3].ntp_port}: ITS ANSWER REFUSED, ITS UNIQUE IDENTIFIER IS NOT OUR REQUEST'S")
+            require_all(log, "(WAS 2024-01-01 ", "2 OF 4 SERVERS AGREED, 2 BY NTS")
+            assert all(s.kes == 1 and s.asked >= 1 for s in servers), [(s.kes, s.asked) for s in servers]
+            tls_log = vm.command("dmesg -s tls", raw=True)
+            assert tls_log.count("mind.test VERIFIED, PROTOCOL ntske/1, SUITE") >= 4, tls_log[-3000:]
+            # Resolved at the grant, or (a boot service's grant made before DHCP) once the network came up (111-NET-0074).
+            policy_log = vm.command("dmesg -s netpolicy", raw=True)
+            require(policy_log, "[NETPOLICY] timed: mind.test IS 10.0.2.2")
+            if "WAITS FOR THE NETWORK" in policy_log:
+                require(policy_log, "RULES ADDED, ITS HOST NAMES RESOLVED ONCE THE NETWORK CAME UP")
+            shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
+            gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
+            assert gap < 3, (shown, gap)
+            assert "FAULT PID=" not in vm.command("faults")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-nts-{args.cpus}cpu.log").write_text(vm.log)
+        for s in servers:
+            s.close()
+        servers = [_Nts(certificates, "nts", "alpn"), _Nts(certificates, "rogue"), _Nts(certificates, "nts")]
+        policy.write_text(lines(servers))
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=card)
+        try:
+            log = _timed_lines(vm, "[TIMED] NOTHING SET")
+            assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[0].ke_port}\) FAILED: TLS REFUSED IT: Handshake; AGAIN IN 10 S", log), log[-4000:]
+            assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[1].ke_port}\) FAILED: TLS REFUSED IT: Certificate; AGAIN IN 10 S", log), log[-4000:]
+            require_all(log, f"NTS-KE WITH mind.test (10.0.2.2:{servers[2].ke_port}): 8 COOKIES", "[TIMED] NOTHING SET: FEWER THAN 2 ANSWERS (1 OF 1 ANSWERED)")
+            tls_log = vm.command("dmesg -s tls", raw=True)
+            require(tls_log, "mind.test REFUSED: IT DID NOT AGREE ON THE PROTOCOL ntske/1")
+            require(tls_log, "mind.test REFUSED: CERTIFICATE")
+            assert "[TIMED] SET " not in log, log[-3000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-nts-refused-{args.cpus}cpu.log").write_text(vm.log)
+    finally:
+        for s in servers:
+            s.close()
+        dns.close()
+        if before is None:
+            policy.unlink()
+        else:
+            policy.write_text(before)
+    print(f"PASS: NTS (111-NET-0073, 0074, 0075): timed set the clock from 2024 ({gap:.1f} s from the host's) by two NTS servers "
+          "named mind.test, NTS-KE through tls (ntske/1, the certificate checked for the policy's name, the keys from the exporter), "
+          "a forged answer refused as not authentic and another request's answer as not ours, the cookies back to 8; a server "
+          "agreeing on no protocol and one no root vouches for refused at NTS-KE", flush=True)
 
 
 def httpd_check(args, disk, cpu, certificates):
@@ -12845,6 +13255,115 @@ def httpd_check(args, disk, cpu, certificates):
           "keystore's; a channel and a blob whole on one connection, a range resumed (206), 304 for the tag, 404, 400 for a query, "
           "405 for POST, one log line each without the query; a silent peer cut after 10 s; a program refused the server role; "
           "a tlsserver.pem for another key refused at listen", flush=True)
+
+
+def sshd_check(args, disk, cpu):
+    """112-NET-0072: OpenSSH's client logs into a MIND machine. sshd is started by the policy's listening grant and lists
+    the keys data/ssh/authorized_keys names, each with its rights; the host key is the device key (known_hosts holds the
+    line keystore logs), and keystore signs each key exchange (`ssh-host`). With the files' right, scp copies a file up
+    and down whole and sftp makes, lists, renames and removes; data/ssh/ and paths above the root are refused. An
+    unlisted key and a password are refused; the console key runs `ps` through the shell (112-APP-0136's rule) and is
+    refused `update`, and the files' key gets no console. Each login, refusal and write
+    is one log line, with the key's fingerprint as ssh-keygen prints it."""
+    if not (shutil.which("ssh") and shutil.which("scp") and shutil.which("sftp") and shutil.which("ssh-keygen")):
+        print("SKIP: sshd needs OpenSSH's client on the host (ssh, scp, sftp, ssh-keygen)", flush=True)
+        return
+    work = Path(tempfile.mkdtemp(prefix="mind-sshd-"))
+    keys = {}
+    for name in ("files", "console", "stranger"):
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"{name}@host", "-f", str(work / name)], check=True)
+        keys[name] = (work / f"{name}.pub").read_text().split()
+    fingerprint = subprocess.run(["ssh-keygen", "-l", "-E", "sha256", "-f", str(work / "files.pub")], capture_output=True, text=True, check=True).stdout.split()[1]
+    directory = disk / "data" / "ssh"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "authorized_keys").write_text(f"# the owner's keys\nfiles {' '.join(keys['files'])}\nconsole {' '.join(keys['console'])}\n{' '.join(keys['stranger'][:2])} no rights\n")
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    policy.write_text((before or "") + "listen sshd tcp 22 from 10.0.2.0/24\n")
+    port = free_port()
+    network = ["-nic", "none", "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:22", "-device", "virtio-net-pci,netdev=n0"]
+    upload = work / "upload.bin"
+    upload.write_bytes(bytes((i * 13 + i // 509) & 0xFF for i in range(300_000)))
+    try:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
+        try:
+            log = vm.service_logs("sshd", "LISTENING ON TCP 22")
+            require(log, "[SSHD] LISTENING ON TCP 22: ONE SESSION AT A TIME, A LOGIN WITHIN 30 S, THE CONSOLE THROUGH THE SHELL")
+            require(log, "[SSHD] data/ssh/authorized_keys: 2 KEYS LISTED")
+            require(log, "[SSHD] data/ssh/authorized_keys LINE 4 LEFT OUT: no rights before the key")
+            device = re.search(r"ssh-ed25519 [A-Za-z0-9+/=]+", vm.command("dmesg -s keystore", raw=True))[0]
+            host_fingerprint = re.search(r"HOST KEY: THE DEVICE KEY, (SHA256:\S+)", log)[1]
+            known = work / "known_hosts"
+            known.write_text(f"[127.0.0.1]:{port} {device}\n")
+            (work / "device.pub").write_text(device + "\n")
+            printed = subprocess.run(["ssh-keygen", "-l", "-E", "sha256", "-f", str(work / "device.pub")], capture_output=True, text=True, check=True).stdout
+            assert host_fingerprint in printed, (host_fingerprint, printed)
+            common = ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known}", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=60",
+                      "-o", "ServerAliveInterval=0", "-o", "LogLevel=ERROR"]
+
+            def ssh(key, *command, password=False):
+                auth = ["-o", "PreferredAuthentications=password", "-o", "PasswordAuthentication=yes", "-o", "NumberOfPasswordPrompts=1"] if password else ["-i", str(work / key), "-o", "BatchMode=yes"]
+                return subprocess.run(["ssh", *common, *auth, "-p", str(port), "mind@127.0.0.1", *command], capture_output=True, text=True, timeout=240, stdin=subprocess.DEVNULL)
+
+            def scp(*paths):
+                return subprocess.run(["scp", *common, "-s", "-i", str(work / "files"), "-o", "BatchMode=yes", "-P", str(port), *paths], capture_output=True, text=True, timeout=300)
+
+            def sftp(batch):
+                (work / "batch").write_text(batch)
+                return subprocess.run(["sftp", *common, "-i", str(work / "files"), "-o", "BatchMode=yes", "-P", str(port), "-b", str(work / "batch"), "mind@127.0.0.1"],
+                                      capture_output=True, text=True, timeout=300)
+            # The files' right: scp up, then down, whole.
+            out = scp(str(upload), "mind@127.0.0.1:upload.bin")
+            assert out.returncode == 0, out
+            back = work / "back.bin"
+            out = scp("mind@127.0.0.1:upload.bin", str(back))
+            assert out.returncode == 0 and hashlib.sha256(back.read_bytes()).digest() == hashlib.sha256(upload.read_bytes()).digest(), out
+            out = sftp("mkdir d\nput " + str(upload) + " d/copy.bin\nls -l d\nrename d/copy.bin d/moved.bin\nls d\nrm d/moved.bin\nrmdir d\nls\n")
+            assert out.returncode == 0 and "copy.bin" in out.stdout and "moved.bin" in out.stdout and "upload.bin" in out.stdout and "ssh" not in out.stdout.split("sftp> ls\n")[-1].split(), out
+            # The keys' directory and a path above the root: refused, so the files' right never reaches another key.
+            for path in ("ssh/authorized_keys", "/SSH/authorized_keys", "../../x"):
+                out = sftp(f"get {path} {work / 'taken'}\n")
+                assert out.returncode != 0 and not (work / "taken").exists(), (path, out)
+            out = scp(str(upload), "mind@127.0.0.1:ssh/authorized_keys")
+            assert out.returncode != 0, out
+            # The files' part made 7 connections from 10.0.2.2, QEMU's address for the host; sshd takes 10 a minute from one
+            # address, so the next 5 wait for the minute to pass.
+            time.sleep(61)
+            # Refused: an unlisted key, a password, the console to the files' key.
+            out = ssh("stranger", "ps")
+            assert out.returncode == 255 and "Permission denied (publickey)" in out.stderr, out
+            out = ssh(None, "ps", password=True)
+            assert out.returncode == 255 and "Permission denied (publickey)" in out.stderr, out
+            out = ssh("files", "ps")
+            assert out.returncode != 0 and "PID" not in out.stdout, out
+            # The console's key: the shell runs `ps` on a remote session's rule, and refuses `update` (112-APP-0136).
+            out = ssh("console", "ps")
+            assert out.returncode == 0 and "PID" in out.stdout and "sshd" in out.stdout, out
+            out = ssh("console", "update")
+            assert "PID" not in out.stdout and ("Refused" in out.stdout or out.returncode != 0), out
+            log = vm.service_logs("sshd", "REFUSED")
+            for line in (f"[SSHD] LOGIN AS mind FROM 10.0.2.2:", f"WITH {fingerprint} (files@host): THE FILES", "[SSHD] 10.0.2.2:", " WROTE data/upload.bin",
+                         " REMOVED data/d/moved.bin", "REFUSED: a key not listed", "(console@host): THE CONSOLE", "CONSOLE FROM 10.0.2.2:", ": PS",
+                         ": UPDATE", " BYTES WRITTEN"):
+                require(log, line)
+            shell_log = vm.command("dmesg -s shell", raw=True)
+            require_all(shell_log, "FOR AN SSH SESSION THE SHELL RAN PS", "FOR AN SSH SESSION THE SHELL REFUSED UPDATE")
+            require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED SshHost FOR PID")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-sshd-{args.cpus}cpu.log").write_text(vm.log)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
+        if before is None:
+            policy.unlink(missing_ok=True)
+        else:
+            policy.write_text(before)
+    print("PASS: sshd (112-NET-0072): OpenSSH's ssh, scp and sftp against the device key as the host key, each exchange signed by "
+          "keystore; scp up and down whole, sftp's directory work; data/ssh/ and paths above the root refused; an unlisted key, "
+          "a password and the files' key's console refused; the console key's `ps` run by the shell and `update` refused; "
+          "each login with the key's fingerprint, each command, refusal and write logged", flush=True)
 
 
 def passphrase_wait_check(args, cpu):
@@ -13980,7 +14499,8 @@ def wm_suite(vm):
     fm, clock, top = by_name["fm"], by_name["clock"], by_name["top"]
     # Programs get what wm holds and they ask for: fm the user's files, top system information; not top's
     # lifecycle client, which wm does not hold.
-    require(out, f"STARTED fm PID {started['fm']} WITH window,files,sysinfo,shell")
+    # The clipboard's client between them where the service mints programs' copies (000-KRN-0235, 000-APP-0032).
+    assert re.search(rf"STARTED fm PID {started['fm']} WITH window,files,sysinfo,(clipboard,)?shell\b", out), out[-3000:]
     require(out, f"STARTED top PID {started['top']} WITH window,sysinfo WITHOUT lifecycle")
     assert windows[clock][2:5] == ("PIXELS", "320", "176") and windows[fm][2] == "TEXT", windows
     time.sleep(1.5)  # the text programs drew at the size of their frames
@@ -14790,7 +15310,7 @@ def wm_suite(vm):
         # no leaves it.
         run_line("fm ram:fmrun.msh", "STARTED fm")
         started_fm = re.findall(r"\[WM\] STARTED fm PID (\d+) WITH ([^\n]*)", "".join(seen))[-1]
-        assert "shell" in started_fm[1].split(","), started_fm
+        assert "shell" in started_fm[1].split(" WITHOUT ")[0].split(","), started_fm  # what it lacks follows WITHOUT
         while not any(m[1] == started_fm[0] for m in windows_re.findall("".join(seen))):
             wait("[WM] WINDOW", lines=0)
         files = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == started_fm[0])
@@ -16530,7 +17050,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -16764,8 +17284,18 @@ def main():
             if suite == "download":  # net's downloads, `get` and the API clients' checks alone (000-NET-0047)
                 download_check(args, disk)
                 continue
+            if suite == "sshd":
+                # The SSH server's check alone (112-NET-0072), which the tls suite runs at its end.
+                sshd_check(args, disk, "max" if args.arch == "aarch64" else "qemu64,+rdrand")
+                continue
             if suite == "tls":
                 tls_suite(args, disk)
+                continue
+            if suite == "nts":  # the tls suite's NTS check alone (111-NET-0075)
+                certificates = Path(tempfile.mkdtemp(prefix="mind-tls-"))
+                _certificates(certificates)
+                _roots_with_test_ca(certificates, disk)
+                nts_check(args, disk, "max" if args.arch == "aarch64" else "qemu64,+rdrand", certificates)
                 continue
             if suite == "effector":
                 effector_suite(args, disk)
