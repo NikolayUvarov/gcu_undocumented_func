@@ -37,4 +37,4 @@ From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-
 
 ## Related
 
-[306](../issues-done/306-checkpoints-and-rebinding.done), [309](../issues-done/309-copies-scrub-and-repair.done), [312](312-the-minds-memory.md), 260, 950.
+[306](../issues-done/306-checkpoints-and-rebinding.done), [309](../issues-done/309-copies-scrub-and-repair.done), [312](../issues-done/312-the-minds-memory.done), 260, 950.

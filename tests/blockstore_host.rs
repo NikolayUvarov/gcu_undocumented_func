@@ -558,6 +558,33 @@ fn rights_come_from_the_badge() {
 }
 
 #[test]
+fn a_domains_client_with_fewer_rights_gets_only_those_its_caller_holds() {
+    // 312-STO-0049: domain-client-with's rights, for every caller's badge and every rights asked, against the rule
+    // written here: those asked of get, put and publish that the caller holds; none, or a bit of no such right, none.
+    use rights::{allowed, narrowed, Operation::*, BADGE_GET, BADGE_PUBLISH, BADGE_PUT, BADGE_RECOVER};
+    let domain = BADGE_GET | BADGE_PUT | BADGE_PUBLISH;
+    for held in 0..0x200u16 {
+        for wanted in 0..0x20u16 {
+            let expected = if wanted & !domain != 0 || held & wanted == 0 { None } else { Some(held & wanted) };
+            let got = narrowed(held, wanted);
+            assert_eq!(got, expected, "held {held:#x} wanted {wanted:#x}");
+            // Never a right the caller lacks, never the recovery right, never an owner's bits.
+            if let Some(r) = got {
+                assert_eq!(r & !held, 0);
+                assert_eq!(r & (BADGE_RECOVER | rights::OWNER_BITS), 0);
+                for operation in [Put, Get, Publish, Pin] { assert!(!allowed(r, operation) || allowed(held, operation), "{held:#x} {wanted:#x} {operation:?}"); }
+            }
+        }
+    }
+    // The shell's writing client (the owner's bits 0, get, put and publish) lends one that only reads.
+    let shell = BADGE_GET | BADGE_PUT | BADGE_PUBLISH;
+    let reading = narrowed(shell, BADGE_GET).unwrap();
+    assert!(allowed(reading, Get) && allowed(reading, Resolve) && !allowed(reading, Put) && !allowed(reading, Publish) && !allowed(reading, Pin));
+    // The read-only client asks for put: none in common.
+    assert_eq!(narrowed(BADGE_GET, BADGE_PUT), None);
+}
+
+#[test]
 fn nodes_are_stored_only_if_they_decode() {
     let mut medium = Memory::new(128);
     let node_cid;

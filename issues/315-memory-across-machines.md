@@ -14,7 +14,8 @@ This is an intention, not a plan to build now:
 
 - one Mind's stores on several machines, synchronized over MIND Link or the network with TLS;
 - under a partition, a lost connection does not prove a root is gone (MC-4.5);
-- conflicts reported, never resolved silently.
+- conflicts reported, never resolved silently;
+- **assertions signed where they cross a trust zone** (Appendix B.3), from [312](../issues-done/312-the-minds-memory.done): a store on another machine is the first place a claim's provenance leaves the store it was made in (`mind::assertion`'s claims carry their source as a label, unsigned).
 
 ## Acceptance criteria
 
