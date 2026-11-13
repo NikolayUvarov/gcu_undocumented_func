@@ -78,3 +78,17 @@ fn scaled_samples() {
     let (a, b) = (i16::from_le_bytes([pcm[0], pcm[1]]), i16::from_le_bytes([pcm[2], pcm[3]]));
     assert!((5000..=5020).contains(&a) && (-5020..=-5000).contains(&b), "{a} {b}");
 }
+
+#[test]
+fn a_second_amplifier_follows_in_db() {
+    // The CS4206's DACs: 128 settings of 0.5 dB, 0 dB at 0x73; QEMU's: 75 of 1 dB, 0 dB at 0x4A.
+    let (cirrus, qemu) = (Amp { steps: 128, step_qdb: 2, zero: 0x73 }, Amp { steps: 75, step_qdb: 4, zero: 0x4A });
+    for s in 0..128 { assert_eq!(matching(s, cirrus, cirrus), s, "the same amplifier, the same setting"); }
+    assert_eq!(matching(0x73, cirrus, qemu), 0x4A, "0 dB on both");
+    assert_eq!(matching(0x73 + 12, cirrus, qemu), 0x4A, "+6 dB above the other's top, 0 dB: its top");
+    assert_eq!(matching(0x73 - 20, cirrus, qemu), 0x4A - 10, "-10 dB");
+    assert_eq!(matching(0x4A, qemu, cirrus), 0x73, "0 dB back");
+    assert_eq!(matching(0x4A - 3, qemu, cirrus), 0x73 - 6, "-3 dB");
+    assert_eq!(matching(0, cirrus, qemu), 0x4A - 58, "-57.5 dB rounds to -58");
+    assert_eq!(matching(0, qemu, cirrus), 0, "below the other's bottom: its bottom");
+}

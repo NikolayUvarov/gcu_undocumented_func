@@ -272,6 +272,9 @@ impl Device {
     fn record_read(&mut self, out: &mut [u8]) -> (usize, bool) { match self { Device::Ac97(d) => d.record_read(out), Device::Hda(d) => d.record_read(out) } }
     fn clear_status(&mut self) { match self { Device::Ac97(d) => d.clear_status(), Device::Hda(d) => d.clear_status() } }
     fn interrupt(&mut self) -> usize { match self { Device::Ac97(d) => { d.interrupt(); d.interrupts } Device::Hda(d) => { d.interrupt(); d.interrupts } } }
+    // A headphone jack to look at (551-DRV-0056), and the look.
+    fn watches(&self) -> bool { matches!(self, Device::Hda(d) if d.watches()) }
+    fn watch_jack(&mut self) { if let Device::Hda(d) = self { d.watch_jack(); } }
     // The levels the device starts with: 0 dB on each side, as `init` and `configure` leave the amplifiers.
     fn levels(&self) -> Levels {
         match self {
@@ -289,7 +292,12 @@ impl Device {
         match self {
             Device::Ac97(d) => d.set_volume(s.setting, s.switch),
             Device::Hda(d) => match d.out_amp {
-                Some(c) => { d.set_amp(c, s.setting, s.switch); d.out_factor = if s.switch && !c.mute { 0 } else { 1 << 15 }; }
+                Some(c) => {
+                    d.set_amp(c, s.setting, s.switch);
+                    // The other speakers' and the headphones' amplifiers follow in dB, muted with it (551-DRV-0056).
+                    for f in d.followers.into_iter().flatten() { d.set_amp(f, levels::matching(s.setting, c.amp, f.amp), s.switch); }
+                    d.out_factor = if s.switch && (!c.mute || d.followers.iter().flatten().any(|f| !f.mute)) { 0 } else { 1 << 15 };
+                }
                 None => d.out_factor = levels::factor_q15(levels::qdb(s.setting, s.amp), s.switch),
             },
         }
@@ -310,6 +318,8 @@ const WAITERS: usize = 8;
 // While a client waits, the ring is also looked at this often: an interrupt lost to a burst of completions (a host
 // backend such as dsound plays 100 ms at a time) would otherwise leave it waiting forever, and its program with it.
 const POLL_MS: u32 = 20;
+// A headphone jack is looked at this often (551-DRV-0056).
+const JACK_MS: u64 = 1000;
 
 // Answers deferred `wait` calls whose space is now free (or all of them on stop).
 fn release(device: &mut Option<Device>, waiters: &mut [Option<(Call, u8)>; WAITERS], all: bool) {
@@ -356,10 +366,15 @@ fn main(_info: &'static BootInfo) {
         }
         None => mind::println!("[AUDIO] NO AUDIO DEVICE (HDA OR AC97); GATEWAY ANSWERS WITHOUT OUTPUT"),
     }
+    let watching = device.as_ref().is_some_and(Device::watches);
+    let mut jack_due = mind::time::uptime_ms() as u64 + JACK_MS;
     loop {
+        let now = mind::time::uptime_ms() as u64;
+        if watching && now >= jack_due { if let Some(d) = device.as_mut() { d.watch_jack(); } jack_due = now + JACK_MS; }
         // A running HDA stream is looked at while it runs, so the buffers it played are cleared before it loops.
         let waiting = waiters.iter().any(Option::is_some) || device.as_ref().is_some_and(Device::active);
-        let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if waiting { POLL_MS } else { 0 }) {
+        let timeout = if waiting { POLL_MS } else if watching { jack_due.saturating_sub(now).clamp(1, JACK_MS) as u32 } else { 0 };
+        let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, timeout) {
             Ok(request) => request,
             Err(Error::Other(ERR_TIMEOUT)) => {
                 // No interrupt for a while: do what it would have done, and unmask the line again.

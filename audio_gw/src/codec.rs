@@ -23,7 +23,14 @@ impl Widget {
     /// A jack (alone or beside an internal device) that says whether something is plugged in.
     pub fn senses(&self) -> bool { self.config >> 30 & 1 == 0 && self.config & (1 << 8) == 0 && self.pin_caps & PRESENCE != 0 }
     pub fn links(&self) -> &[u8] { &self.connections[..self.count as usize] }
+    /// The pins of one device share an association (configuration bits 7:4); 15 groups nothing.
+    pub fn association(&self) -> u32 { (self.config >> 4) & 0xF }
 }
+
+/// A pin and its chain through connections: the nodes with the connection each takes, and how many.
+pub type Path = (Widget, [(u8, u8); 6], usize);
+/// The speaker pins of one device the gateway drives at most.
+pub const SPEAKERS: usize = 4;
 
 /// A chain from `from` through connections to a widget of `kind`, at most 5 deep: the node IDs and, for each node, the
 /// index of the connection taken.
@@ -50,6 +57,48 @@ pub fn find_pin(list: &[Widget], from: u8, target: u8, depth: usize, path: &mut 
         if let Some(n) = find_pin(list, next, target, depth + 1, path) { return Some(n); }
     }
     None
+}
+
+/// The output: an internal speaker, else headphones, else line out; the first such pin a DAC reaches, through mixers or
+/// selectors. Its chain ends at the DAC.
+pub fn output(list: &[Widget]) -> Option<Path> {
+    const OUTPUTS: [(u32, bool); 5] = [(SPEAKER, true), (SPEAKER, false), (HEADPHONE, false), (LINE_OUT, true), (LINE_OUT, false)];
+    for (device, inside) in OUTPUTS {
+        for pin in list.iter().filter(|w| w.kind == PIN && w.connected() && w.device() == device && w.internal() == inside && w.pin_caps & OUT != 0) {
+            let mut path = [(0u8, 0u8); 6];
+            if let Some(depth) = find(list, pin.nid, OUTPUT, 0, &mut path) { return Some((*pin, path, depth)); }
+        }
+    }
+    None
+}
+
+/// The input: an internal microphone, else a microphone jack, else line in; the first such pin an ADC reaches. Its
+/// chain starts at the ADC.
+pub fn input(list: &[Widget]) -> Option<Path> {
+    const INPUTS: [(u32, bool); 3] = [(MICROPHONE, true), (MICROPHONE, false), (LINE_IN, false)];
+    for (device, inside) in INPUTS {
+        for pin in list.iter().filter(|w| w.kind == PIN && w.connected() && w.device() == device && w.internal() == inside && w.pin_caps & IN != 0) {
+            for adc in list.iter().filter(|w| w.kind == INPUT) {
+                let mut path = [(0u8, 0u8); 6];
+                if let Some(depth) = find_pin(list, adc.nid, pin.nid, 0, &mut path) { return Some((*pin, path, depth)); }
+            }
+        }
+    }
+    None
+}
+
+/// The other speaker pins of the output `speaker`'s device, of its association (1 to 14), each with its chain to a DAC:
+/// they play the same stream (the MacBook Pro's 0xB beside 0xA).
+pub fn companions(list: &[Widget], speaker: &Widget) -> ([Path; SPEAKERS - 1], usize) {
+    let mut out = [(Widget::default(), [(0u8, 0u8); 6], 0); SPEAKERS - 1];
+    let mut n = 0;
+    let association = speaker.association();
+    if speaker.device() != SPEAKER || !(1..=14).contains(&association) { return (out, 0); }
+    for pin in list.iter().filter(|w| w.kind == PIN && w.nid != speaker.nid && w.connected() && w.device() == SPEAKER && w.association() == association && w.pin_caps & OUT != 0) {
+        let mut path = [(0u8, 0u8); 6];
+        if n < out.len() { if let Some(depth) = find(list, pin.nid, OUTPUT, 0, &mut path) { out[n] = (*pin, path, depth); n += 1; } }
+    }
+    (out, n)
 }
 
 /// The headphone jack beside the output `speaker`: a pin that drives headphones from a DAC and senses them plugged in.
@@ -206,4 +255,91 @@ pub fn dump_widget(address: u32, w: &Widget, s: &State, sink: &mut dyn FnMut(&st
 pub fn dump_coefficients(address: u32, nid: u8, coefficients: &[u16], sink: &mut dyn FnMut(&str)) {
     let mut l = Lines::new(sink, format_args!("[AUDIO] CODEC {} NID {:#X} COEFFICIENTS:", address, nid));
     for (i, c) in coefficients.iter().enumerate() { l.field(format_args!("{:02X}={:04X}", i, c)); }
+}
+
+/// The codec's verbs: the controller's, or a model's on the host.
+pub trait Verbs {
+    fn verb(&mut self, nid: u8, verb: u32, payload: u32) -> Option<u32>;
+    /// Waits `ms` milliseconds for a measurement the codec makes.
+    fn pause(&mut self, _ms: usize) {}
+}
+
+/// A pin's sense (verb F09), measured first where the pin needs a trigger.
+pub fn sense(v: &mut dyn Verbs, pin: &Widget) -> u32 {
+    if pin.pin_caps & TRIGGER != 0 { let _ = v.verb(pin.nid, 0x709, 0); v.pause(1); }
+    v.verb(pin.nid, 0xF09, 0).unwrap_or(0)
+}
+
+/// Apple's speaker and headphone amplifiers on a Cirrus codec's GPIOs: the bit of each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Amplifiers { pub speakers: u32, pub headphones: u32 }
+
+// By subsystem, the last row for every other Apple machine (facts of Linux 6.1's patch_cirrus: GPIO3 the speakers; GPIO2
+// the headphones on the iMacs 12,1, 12,2 and 14,1, GPIO1 on the others, the MacBook Pro 10,1 among them).
+const GPIO_13: Amplifiers = Amplifiers { speakers: 0x08, headphones: 0x02 };
+const GPIO_23: Amplifiers = Amplifiers { speakers: 0x08, headphones: 0x04 };
+const APPLE_AMPLIFIERS: [(u32, Amplifiers); 4] = [(0x106B_0600, GPIO_23), (0x106B_0900, GPIO_23), (0x106B_2000, GPIO_23), (0, GPIO_13)];
+
+/// The amplifier GPIOs of a Cirrus codec in an Apple machine; None elsewhere.
+pub fn apple_amplifiers(vendor: u32, subsystem: u32) -> Option<Amplifiers> {
+    if vendor >> 16 != 0x1013 || subsystem >> 16 != 0x106B { return None; }
+    APPLE_AMPLIFIERS.iter().find(|(s, _)| *s == subsystem || *s == 0).map(|&(_, a)| a)
+}
+
+/// Cirrus's vendor widget on the CS4206/4207, whose coefficient 4 switches the digital microphones on.
+pub const CIRRUS_VENDOR: u8 = 0x11;
+
+/// The bit of coefficient 4 that switches on a CS4206/4207's digital microphone on `pin`: DMIC1 on 0xE, DMIC2 on 0x12
+/// (facts of Linux's patch_cirrus); None for another pin or codec.
+pub fn cirrus_digital_microphone(vendor: u32, pin: u8) -> Option<u16> {
+    if !matches!(vendor, 0x1013_4206 | 0x1013_4207) { return None; }
+    match pin { 0x0E => Some(1 << 3), 0x12 => Some(1 << 4), _ => None }
+}
+
+/// The headphone jack beside the output `speaker` and its chain to a DAC; None where the output is no speaker, or no
+/// pin can be watched or fed.
+pub fn jack_path(list: &[Widget], speaker: u8) -> Option<Path> {
+    if list.iter().find(|w| w.nid == speaker)?.device() != SPEAKER { return None; }
+    let jack = headphone_jack(list, speaker)?;
+    let mut path = [(0u8, 0u8); 6];
+    find(list, jack.nid, OUTPUT, 0, &mut path).map(|depth| (jack, path, depth))
+}
+
+/// The pins and amplifiers with headphones in or out: the speaker's pin control and EAPD, the jack's pin control, the
+/// GPIO data of Apple's amplifiers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Route { pub speaker: u8, pub speaker_eapd: u8, pub jack: u8, pub gpio: Option<u32> }
+
+/// Headphones in: the speakers' pins, their EAPD and amplifier off, the jack's pin on (with its headphone amplifier
+/// where it has one) and the headphones' amplifier on; out, the other way round.
+pub fn route(headphones: bool, jack: &Widget, amplifiers: Option<Amplifiers>) -> Route {
+    let on = 0x40 | if jack.pin_caps & HP_AMP != 0 { 0x80 } else { 0 };
+    Route { speaker: if headphones { 0 } else { 0x40 }, speaker_eapd: if headphones { 0 } else { 2 }, jack: if headphones { on } else { 0 },
+            gpio: amplifiers.map(|a| if headphones { a.headphones } else { a.speakers }) }
+}
+
+/// The headphone jack the gateway watches: its pin and DAC, the speaker pins it silences (`count` of them), the
+/// function group with Apple's amplifiers, and whether headphones were in when last looked at.
+#[derive(Clone, Copy, Debug)]
+pub struct Jack { pub pin: Widget, pub dac: u8, pub speakers: [Widget; SPEAKERS], pub count: usize, pub afg: u8, pub amplifiers: Option<Amplifiers>, pub headphones: Option<bool> }
+
+impl Jack {
+    pub fn speakers(&self) -> &[Widget] { &self.speakers[..self.count.min(SPEAKERS)] }
+
+    /// Looks at the jack; the first time and on each change sets the route, and answers it with the sense.
+    pub fn watch(&mut self, v: &mut dyn Verbs) -> Option<(Route, u32)> {
+        let sense = sense(v, &self.pin);
+        let now = present(sense);
+        if self.headphones == Some(now) { return None; }
+        self.headphones = Some(now);
+        let r = route(now, &self.pin, self.amplifiers);
+        for speaker in self.speakers() {
+            let _ = v.verb(speaker.nid, 0x707, r.speaker as u32);
+            if speaker.pin_caps & EAPD != 0 { let _ = v.verb(speaker.nid, 0x70C, r.speaker_eapd as u32); }
+        }
+        let _ = v.verb(self.pin.nid, 0x707, r.jack as u32);
+        if self.pin.pin_caps & EAPD != 0 { let _ = v.verb(self.pin.nid, 0x70C, 2); }
+        if let Some(g) = r.gpio { let _ = v.verb(self.afg, 0x715, g); }
+        Some((r, sense))
+    }
 }

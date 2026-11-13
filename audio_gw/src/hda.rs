@@ -5,7 +5,7 @@
 use mind::dev::Mmio;
 use mind::mem::Mapping;
 use crate::levels::{self, Amp};
-use crate::codec::{self, Widget, OUTPUT, INPUT, MIXER, PIN, VENDOR, LINE_OUT, SPEAKER, HEADPHONE, LINE_IN, MICROPHONE};
+use crate::codec::{self, Widget, MIXER, PIN, VENDOR, HEADPHONE, MICROPHONE};
 
 pub const BUFFERS: usize = 32;
 pub const BUFFER_BYTES: usize = 4096;
@@ -31,6 +31,9 @@ const WIDGETS: usize = 96;
 const SUMMARY: usize = 160; // the codec's line in the log
 // The dump's lines a second: logd takes 64 a second from a sender (logd/src/ring.rs), and the gateway logs others.
 const DUMP_RATE: usize = 40;
+// The other speaker pins of the speaker's association play only in a build with MIND_AUDIO_COMPANIONS set (551-DRV-0056):
+// the MacBook Pro's 0xA alone plays its stereo pair, and what 0xB adds is to be heard first.
+const COMPANIONS: bool = option_env!("MIND_AUDIO_COMPANIONS").is_some();
 
 pub struct Hda {
     regs: Mmio, ring: Mapping, physical: u64, codec: u32, afg: u8, rirb_read: usize, corb_entries: usize, rirb_entries: usize,
@@ -43,11 +46,17 @@ pub struct Hda {
     // The levels (000-DRV-0057): the amplifier each side's level sets, if the paths have one, and the samples' factors
     // where they do not (Q15).
     pub out_amp: Option<Control>, pub in_amp: Option<Control>, pub boost_amp: Option<Control>, pub out_factor: u32, pub in_factor: u32,
+    // The headphone jack watched beside the speakers; the amplifiers that follow the volume on the other speakers' and
+    // the headphones' paths (551-DRV-0056).
+    jack: Option<codec::Jack>, pub followers: [Option<Control>; codec::SPEAKERS],
 }
 
 /// An amplifier a level sets: its widget, output or input (and the connection), its range, whether it mutes.
 #[derive(Clone, Copy)]
 pub struct Control { pub nid: u8, pub output: bool, pub index: u8, pub amp: Amp, pub mute: bool }
+
+// A node of the list by its ID; the paths hold only nodes from it.
+fn node(list: &[Widget], nid: u8) -> Widget { list.iter().find(|w| w.nid == nid).copied().unwrap_or_default() }
 
 fn put(summary: &mut [u8; SUMMARY], len: &mut usize, args: core::fmt::Arguments) {
     let mut text = mind::util::FixedBuf::<SUMMARY>::new();
@@ -77,7 +86,7 @@ impl Hda {
         let mut hda = Self { regs, ring, physical, codec: codecs.trailing_zeros(), afg: 1, rirb_read: 0, corb_entries: 256, rirb_entries: 256,
             out_sd: 0x80 + inputs * 0x20, in_sd: 0x80, head: 0, queued: 0, played: 0, started: false,
             capture: false, tail: 0, ready: 0, captured: 0, lost: false, interrupts: 0, has_input: inputs > 0, summary: [0; SUMMARY], summary_len: 0,
-            out_amp: None, in_amp: None, boost_amp: None, out_factor: 1 << 15, in_factor: 1 << 15 };
+            out_amp: None, in_amp: None, boost_amp: None, out_factor: 1 << 15, in_factor: 1 << 15, jack: None, followers: [None; codec::SPEAKERS] };
         hda.ring.as_mut_slice()[CAPTURE_AT..DMA_BYTES].fill(0);
         hda.ring.as_mut_slice()[..CAPTURE_AT].fill(0);
         hda.start_corb();
@@ -230,86 +239,98 @@ impl Hda {
         if w.count > 1 && w.kind != MIXER { let _ = self.verb(w.nid, 0x701, index as u32); }
     }
 
-    // Apple's Cirrus codecs (CS4206, CS4207) power the speaker and headphone amplifiers by GPIOs of the function group:
-    // GPIO3 the speakers, GPIO1 (MacBook Pro 10,1) or GPIO2 the headphones (facts of Linux's patch_cirrus).
-    fn apple_amplifiers(&mut self, headphone: bool) {
+    // Apple's Cirrus codecs (CS4206, CS4207) power the speaker and headphone amplifiers by GPIOs of the function group,
+    // as codec::apple_amplifiers keeps them by machine; the ones found, None elsewhere.
+    fn apple_amplifiers(&mut self, headphone: bool) -> Option<codec::Amplifiers> {
         let vendor = self.parameter(0, 0).unwrap_or(0);
         let ssid = self.verb(self.afg, 0xF20, 0).unwrap_or(0); // the subsystem ID: the machine
-        if vendor >> 16 != 0x1013 || ssid >> 16 != 0x106B { return; }
+        let a = codec::apple_amplifiers(vendor, ssid)?;
         let gpios = self.parameter(self.afg, 0x11).unwrap_or(0) & 0xFF;
-        let (speakers, headphones) = (0x08, if ssid == 0x106B_2800 { 0x02 } else { 0x04 });
-        let data = if headphone { headphones } else { speakers };
-        let _ = self.verb(self.afg, 0x716, speakers | headphones); // mask
-        let _ = self.verb(self.afg, 0x717, speakers | headphones); // direction: outputs
+        let data = if headphone { a.headphones } else { a.speakers };
+        let _ = self.verb(self.afg, 0x716, a.speakers | a.headphones); // mask
+        let _ = self.verb(self.afg, 0x717, a.speakers | a.headphones); // direction: outputs
         let _ = self.verb(self.afg, 0x715, data);
         let read = self.verb(self.afg, 0xF15, 0).unwrap_or(0xFF);
         mind::println!("[AUDIO] HDA: APPLE {:08X}, CIRRUS AMPLIFIERS: GPIO {:#04X} OF {} SET, READ {:#04X}", ssid, data, gpios, read);
+        Some(a)
     }
 
-    // Cirrus's CS4206/4207 take a digital microphone on pins 0xE (DMIC1) and 0x12 (DMIC2), switched on by bits 3 and 4
-    // of coefficient 4 of the vendor widget 0x11 (facts of Linux's patch_cirrus): the MacBook Pro's internal microphone.
+    // Cirrus's CS4206/4207 take a digital microphone on pins 0xE (DMIC1) and 0x12 (DMIC2), switched on by a bit of
+    // coefficient 4 of the vendor widget (codec::cirrus_digital_microphone): the MacBook Pro's internal microphone.
     fn cirrus_digital_microphone(&mut self, pin: u8) {
         let vendor = self.parameter(0, 0).unwrap_or(0);
-        if !matches!(vendor, 0x1013_4206 | 0x1013_4207) || !matches!(pin, 0x0E | 0x12) { return; }
-        let _ = self.verb(0x11, 0x703, 1); // the vendor widget's processing on
-        let _ = self.verb(0x11, 0x5, 4); // coefficient index 4
-        let before = self.verb(0x11, 0xC00, 0).unwrap_or(0) & 0xFFFF;
-        let coefficient = before | if pin == 0x0E { 1 << 3 } else { 1 << 4 };
-        let _ = self.verb(0x11, 0x5, 4);
-        let _ = self.verb(0x11, 0x4, coefficient);
-        let _ = self.verb(0x11, 0x5, 4);
-        let after = self.verb(0x11, 0xC00, 0).unwrap_or(0) & 0xFFFF;
+        let Some(bit) = codec::cirrus_digital_microphone(vendor, pin) else { return };
+        let v = codec::CIRRUS_VENDOR;
+        let _ = self.verb(v, 0x703, 1); // the vendor widget's processing on
+        let _ = self.verb(v, 0x5, 4); // coefficient index 4
+        let before = self.verb(v, 0xC00, 0).unwrap_or(0) & 0xFFFF;
+        let _ = self.verb(v, 0x5, 4);
+        let _ = self.verb(v, 0x4, before | bit as u32);
+        let _ = self.verb(v, 0x5, 4);
+        let after = self.verb(v, 0xC00, 0).unwrap_or(0) & 0xFFFF;
         mind::println!("[AUDIO] HDA: CIRRUS DIGITAL MICROPHONE ON PIN {:#X}: COEFFICIENT 4 {:#06X} -> {:#06X}", pin, before, after);
     }
 
-    // Chooses and sets up the output and input paths; false without an output.
+    // A chain from an output pin to its DAC unmuted at 0 dB, the DAC on the output stream; the DAC and the volume's
+    // amplifier, the output one nearest the DAC that has settings.
+    fn feed(&mut self, list: &[Widget], path: &[(u8, u8)]) -> (u8, Option<Control>) {
+        for &(nid, index) in path { let w = node(list, nid); self.unmute(&w, index); }
+        let dac = path[path.len() - 1].0;
+        let _ = self.verb(dac, 0x706, OUT_TAG << 4);
+        let _ = self.verb(dac, 0x2, FORMAT as u32);
+        (dac, path.iter().rev().find_map(|&(nid, _)| self.control(&node(list, nid), true, 0)))
+    }
+
+    // An amplifier that follows the volume beside the output's own, unless it is that one or follows already.
+    fn follow(&mut self, amp: Option<Control>) {
+        let Some(c) = amp else { return };
+        if self.out_amp.is_some_and(|o| o.nid == c.nid) || self.followers.iter().flatten().any(|f| f.nid == c.nid) { return; }
+        if let Some(slot) = self.followers.iter_mut().find(|f| f.is_none()) { *slot = Some(c); }
+    }
+
+    // Chooses and sets up the output and input paths (codec::output, codec::input); false without an output.
     fn configure(&mut self, summary: &mut [u8; SUMMARY], len: &mut usize) -> bool {
         let mut list = [Widget::default(); WIDGETS];
         let n = self.widgets(&mut list);
         let list = &list[..n];
-        // Output: an internal speaker, else headphones, else line out; each fed by a DAC through mixers or selectors.
-        let outputs = [(SPEAKER, true), (SPEAKER, false), (HEADPHONE, false), (LINE_OUT, true), (LINE_OUT, false)];
-        let mut output = None;
-        'out: for (kind, inside) in outputs {
-            for pin in list.iter().filter(|w| w.kind == PIN && w.connected() && w.device() == kind && w.internal() == inside && w.pin_caps & codec::OUT != 0) {
-                let mut path = [(0u8, 0u8); 6];
-                if let Some(depth) = codec::find(list, pin.nid, OUTPUT, 0, &mut path) { output = Some((*pin, path, depth)); break 'out; }
-            }
-        }
-        let Some((pin, path, depth)) = output else { return false };
-        for &(nid, index) in &path[..depth] { let w = *list.iter().find(|w| w.nid == nid).unwrap(); self.unmute(&w, index); }
-        // The volume: the output amplifier nearest the DAC that has settings.
-        for &(nid, _) in path[..depth].iter().rev() {
-            let w = *list.iter().find(|w| w.nid == nid).unwrap();
-            if let Some(c) = self.control(&w, true, 0) { self.out_amp = Some(c); break; }
-        }
-        let dac = path[depth - 1].0;
-        let _ = self.verb(dac, 0x706, OUT_TAG << 4);
-        let _ = self.verb(dac, 0x2, FORMAT as u32);
+        let Some((pin, path, depth)) = codec::output(list) else { return false };
+        let (dac, amp) = self.feed(list, &path[..depth]);
+        self.out_amp = amp;
         let headphone = pin.device() == HEADPHONE;
         let _ = self.verb(pin.nid, 0x707, 0x40 | if headphone { 0x80 } else { 0 });
-        if pin.pin_caps & (1 << 16) != 0 { let _ = self.verb(pin.nid, 0x70C, 2); } // EAPD: the external amplifier on
+        if pin.pin_caps & codec::EAPD != 0 { let _ = self.verb(pin.nid, 0x70C, 2); } // EAPD: the external amplifier on
         put(summary, len, format_args!("; OUT PIN {:#X} ({}) <- DAC {:#X}", pin.nid, ["LINE", "SPEAKER", "HEADPHONE"].get(pin.device() as usize).unwrap_or(&"?"), dac));
-        self.apple_amplifiers(headphone);
-        // Input: an internal microphone, else a microphone jack, else line in; an ADC reaching it.
-        let inputs = [(MICROPHONE, true), (MICROPHONE, false), (LINE_IN, false)];
-        let mut input = None;
-        'inp: for (kind, inside) in inputs {
-            for pin in list.iter().filter(|w| w.kind == PIN && w.connected() && w.device() == kind && w.internal() == inside && w.pin_caps & codec::IN != 0) {
-                for adc in list.iter().filter(|w| w.kind == INPUT) {
-                    let mut path = [(0u8, 0u8); 6];
-                    if let Some(depth) = codec::find_pin(list, adc.nid, pin.nid, 0, &mut path) { input = Some((*pin, path, depth)); break 'inp; }
-                }
+        let amplifiers = self.apple_amplifiers(headphone);
+        // The other speaker pins of its association, where the build drives them, play the same stream from their DACs,
+        // their volume following (the MacBook Pro's 0xB beside 0xA).
+        let (mut speakers, mut count) = ([pin; codec::SPEAKERS], 1);
+        let (others, n) = codec::companions(list, &pin);
+        for &(other, path, depth) in &others[..n] {
+            if !COMPANIONS {
+                mind::println!("[AUDIO] HDA: SPEAKER PIN {:#X} OF PIN {:#X}'S ASSOCIATION {} LEFT OFF (A BUILD WITH MIND_AUDIO_COMPANIONS DRIVES IT)", other.nid, pin.nid, pin.association());
+                continue;
             }
+            let (other_dac, amp) = self.feed(list, &path[..depth]);
+            self.follow(amp);
+            let _ = self.verb(other.nid, 0x707, 0x40);
+            if other.pin_caps & codec::EAPD != 0 { let _ = self.verb(other.nid, 0x70C, 2); }
+            mind::println!("[AUDIO] HDA: SPEAKER PIN {:#X} <- DAC {:#X} TOO, OF PIN {:#X}'S ASSOCIATION {}", other.nid, other_dac, pin.nid, pin.association());
+            speakers[count] = other; count += 1;
         }
-        match input {
+        // A headphone jack beside the speakers (551-DRV-0056): its path fed the same stream, its volume following;
+        // watched from here on.
+        if let Some((jack, path, depth)) = codec::jack_path(list, pin.nid) {
+            let (jack_dac, amp) = self.feed(list, &path[..depth]);
+            self.follow(amp);
+            self.jack = Some(codec::Jack { pin: jack, dac: jack_dac, speakers, count, afg: self.afg, amplifiers, headphones: None });
+        }
+        match codec::input(list) {
             Some((pin, path, depth)) if self.has_input => {
-                for &(nid, index) in &path[..depth] { let w = *list.iter().find(|w| w.nid == nid).unwrap(); self.unmute(&w, index); }
+                for &(nid, index) in &path[..depth] { let w = node(list, nid); self.unmute(&w, index); }
                 // The gain: the input amplifier nearest the ADC that has settings, the pin's apart; the pin's own one
                 // is the boost where it raises the level, else the gain.
                 for &(nid, index) in &path[..depth - 1] {
-                    let w = *list.iter().find(|w| w.nid == nid).unwrap();
-                    if let Some(c) = self.control(&w, false, index) { self.in_amp = Some(c); break; }
+                    if let Some(c) = self.control(&node(list, nid), false, index) { self.in_amp = Some(c); break; }
                 }
                 if let Some(c) = self.control(&pin, false, 0) {
                     if self.in_amp.is_some() && c.amp.zero + 1 < c.amp.steps { self.boost_amp = Some(c); } else if self.in_amp.is_none() { self.in_amp = Some(c); }
@@ -325,21 +346,32 @@ impl Hda {
             }
             _ => { self.has_input = false; put(summary, len, format_args!("; NO INPUT PATH")); }
         }
+        self.watch_jack();
         let mut sent = 0;
         self.dump(list, &mut sent);
-        if let Some(jack) = codec::headphone_jack(list, pin.nid) {
-            let sense = self.sense(&jack);
-            mind::println!("[AUDIO] HEADPHONE JACK: PIN {:#X}, SENSE {:08X}: {}", jack.nid, sense, if codec::present(sense) { "HEADPHONES IN" } else { "EMPTY" });
-        }
         let codecs = self.regs.read16(STATESTS);
         self.dump_others(codecs, &mut sent);
         true
     }
 
-    // A pin's sense (verb F09), measured first where the pin needs a trigger.
-    fn sense(&mut self, pin: &Widget) -> u32 {
-        if pin.pin_caps & codec::TRIGGER != 0 { let _ = self.verb(pin.nid, 0x709, 0); mind::time::sleep(1); }
-        self.verb(pin.nid, 0xF09, 0).unwrap_or(0)
+    /// Whether a headphone jack is watched.
+    pub fn watches(&self) -> bool { self.jack.is_some() }
+
+    /// Looks at the headphone jack (551-DRV-0056): at the first look and on each change, the speaker's pin and
+    /// amplifier off while headphones are in and on again when they are out; logged once per change.
+    pub fn watch_jack(&mut self) {
+        let Some(mut jack) = self.jack else { return };
+        if let Some((r, sense)) = jack.watch(self) {
+            let (mut pins, mut gpio) = (mind::util::FixedBuf::<24>::new(), mind::util::FixedBuf::<16>::new());
+            for (i, s) in jack.speakers().iter().enumerate() { let _ = core::fmt::Write::write_fmt(&mut pins, format_args!("{}{:#X}", if i > 0 { " " } else { "" }, s.nid)); }
+            if let Some(g) = r.gpio { let _ = core::fmt::Write::write_fmt(&mut gpio, format_args!(", GPIO {:#04X}", g)); }
+            if r.jack != 0 {
+                mind::println!("[AUDIO] HEADPHONES IN (PIN {:#X}, SENSE {:08X}): THEY PLAY FROM DAC {:#X} (CONTROL {:#04X}); THE SPEAKER PINS {} OFF{}", jack.pin.nid, sense, jack.dac, r.jack, pins.as_str(), gpio.as_str());
+            } else {
+                mind::println!("[AUDIO] HEADPHONES OUT (PIN {:#X}, SENSE {:08X}): THE SPEAKER PINS {} PLAY (CONTROL {:#04X}); THE JACK'S PIN OFF{}", jack.pin.nid, sense, pins.as_str(), r.speaker, gpio.as_str());
+            }
+        }
+        self.jack = Some(jack);
     }
 
     // The codec's every widget to the log once (551-DRV-0056), as now set: what it is, a pin's configuration and
@@ -376,7 +408,7 @@ impl Hda {
             if w.kind == PIN {
                 s.control = self.verb(w.nid, 0xF07, 0).unwrap_or(0) as u8;
                 if w.pin_caps & codec::EAPD != 0 { s.eapd = self.verb(w.nid, 0xF0C, 0).unwrap_or(0) as u8; }
-                if w.pin_caps & codec::PRESENCE != 0 { s.sense = self.sense(w); }
+                if w.pin_caps & codec::PRESENCE != 0 { s.sense = codec::sense(self, w); }
             }
             codec::dump_widget(self.codec, w, &s, &mut sink);
             if w.kind == VENDOR && g.vendor >> 16 == 0x1013 {
@@ -521,4 +553,9 @@ impl Hda {
         self.update();
     }
     pub fn interrupt(&mut self) { self.clear_status(); self.interrupts += 1; }
+}
+
+impl codec::Verbs for Hda {
+    fn verb(&mut self, nid: u8, verb: u32, payload: u32) -> Option<u32> { Hda::verb(self, nid, verb, payload) }
+    fn pause(&mut self, ms: usize) { mind::time::sleep(ms); }
 }
