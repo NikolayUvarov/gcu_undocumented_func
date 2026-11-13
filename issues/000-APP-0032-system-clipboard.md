@@ -1,6 +1,6 @@
 # 000-APP-0032 — The system clipboard: text copied in one program, pasted in another
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** in progress (the service and its clients written and host-tested, 2026-11-12; `init` starting it and the QEMU check left) · **Blocked by:** `init` starting the service and giving the shell its client with `CAP_BADGE` ([requests-KRN.md](requests-KRN.md), APP's request of 2026-11-12); `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are in the ABI since [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-11.5, MC-12.4
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** in progress (the service and its clients written and host-tested, in `main` since round 124, 267ad266, 2026-11-12; `init` starting it and the QEMU check left) · **Blocked by:** `init` starting the service and giving the shell its client with `CAP_BADGE` ([requests-KRN.md](requests-KRN.md), APP's request of 2026-11-12); `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are in the ABI since [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-11.5, MC-12.4
 
 ## Problem
 
@@ -37,12 +37,12 @@ Each program keeps its copied text to itself: `edit`'s Ctrl+C/X/V, `fm`'s comman
 - **`clipboard/`** (`clipboard.elf`): the service, its rules in `clipboard/src/state.rs`. The text in memory only, zeroed when replaced; each text set and read logged with its length and generation, never the text.
 - **The clients:**
   - **the shell:** mints its manager copy from `init`'s client in `SLOT_CLIPBOARD`, names the program in front of the console shown as it changes, lends a program's copy for `REQUEST_CLIPBOARD` (a script's under `requires: clipboard`) and a window manager one that may badge; its line pastes its first line with Ctrl+V or Shift+Insert and copies itself with Ctrl+Insert;
-  - **`wm`:** asks for it, mints its manager copy, names the program of the window in front, and lends its windows' programs their copies;
+  - **`wm`:** asks for it, gets a manager's copy from the shell, names the program of the window in front, and lends its windows' programs the copies the service mints for it (`clipboard.wit` 1.1 `program-client`): round 125's gate of 000-KRN-0235 showed `wm` lending none, as a copy on the wire carries no right to badge (000-KRN-0073; KRN's report of 2026-11-13, the way it recommended);
   - **`edit` and `fm`'s editor:** Ctrl+C/X/V through it (`Outcome::Copy`, `Outcome::Paste`), their own copy where it does not answer; `fm`'s store wrapper (`WithStore`) passes the clipboard on to its disk;
   - **`view`:** Ctrl+C copies the line found, else the top one; **`console`** and **`fm`'s command line:** Ctrl+V or Shift+Insert paste the first line.
 - **Tests:** host `tests/clipboard_host.rs` (who may, the parts in order and within 64 KiB, generations, characters' ends; 3 tests), `tests/edit_host.rs` (the editor's outcomes), `tests/viewer_host.rs`, `tests/console_host.rs`, `tests/fm_host.rs` (through the store wrapper too), the IDL fuzz test with the new receiver.
 - **Left:**
-  - `init` starting the service (KRN's 000-KRN-0235), with `clipboard` in `BOOT_SERVICES`; then `clipboard.elf` back in `02_build.sh`'s list, left out until then since `wm`'s menu lists a program on the disk that opens no window;
+  - `init` starting the service (KRN's 000-KRN-0235), with `clipboard` in `BOOT_SERVICES`, and giving it its server endpoint with `CAP_BADGE` for `program-client`; then `clipboard.elf` back in `02_build.sh`'s list, left out until then since `wm`'s menu lists a program on the disk that opens no window;
   - the QEMU `tools` suite's check once it runs: `edit`'s text pasted into the shell's line and a second `edit`, a program without the request holding nothing in the slot, a program behind refused;
 
 ## Related

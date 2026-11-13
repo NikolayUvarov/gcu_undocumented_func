@@ -1,12 +1,12 @@
 # 351-UPD-0027 — Key rotation and revocation
 
-**Type:** update (keys) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) (in landing round 127) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.5, MC-9.6
+**Type:** update (keys) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — ([351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), landed in round 127) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.5, MC-9.6
 
 Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
 ## Problem
 
-With a key file ([351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md)), a key is replaced by publishing a new file. Two gaps remain:
+With a key file ([351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done)), a key is replaced by publishing a new file. Two gaps remain:
 
 - nothing stops an old key file from being served again, which brings a revoked key back;
 - nothing says what happens to releases signed by a key the file no longer lists.
@@ -59,4 +59,4 @@ With a key file ([351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md)
 
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md).
+[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md).

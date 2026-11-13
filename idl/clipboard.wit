@@ -4,14 +4,15 @@
 /// `REQUEST_CLIPBOARD`, a copy badged `mind::clipboard::BADGE_PROGRAM`, and its calls but `generation` are answered
 /// only while it is the program in front. The managers, the shell for its consoles and the window manager it started
 /// for its windows, hold copies badged `BADGE_MANAGER`: they name the program in front, and copy and paste themselves.
-/// The service logs each text set and read, never the text.
-package mind:clipboard@1.0.0;
+/// A window manager's copy comes on the wire, which carries no right to badge (000-KRN-0073), so the service mints its
+/// programs' copies (1.1). The service logs each text set and read, never the text.
+package mind:clipboard@1.1.0;
 
 interface clipboard {
     /// `behind`: the caller is not the program in front; `refused`: a manager's call from another client, or a client
     /// with neither badge; `invalid`: a part out of order, or one past 65536 bytes in all; `changed`: the text was set
-    /// again since the generation asked for.
-    enum error { behind, refused, invalid, changed }
+    /// again since the generation asked for; `unavailable`: the service holds no right to badge its endpoint (1.1).
+    enum error { behind, refused, invalid, changed, unavailable }
 
     /// A part of the text: its generation (0 before any text), its whole length in bytes, and the bytes from `at`.
     record part { generation: u32, length: u32, text: string<4000> }
@@ -26,4 +27,7 @@ interface clipboard {
     generation: func() -> result<u32, error>;
     /// Names the program in front, whose calls are answered (a manager's alone): its PID, 0 for none.
     front: func(pid: u64) -> result<_, error>;
+    /// A program's client, badged `BADGE_PROGRAM`, for a manager to lend (a manager's alone, 1.1): moved to the caller,
+    /// the service keeps no copy.
+    program-client: func() -> result<own<endpoint>, error>;
 }

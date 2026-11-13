@@ -10,16 +10,13 @@ rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
 # Every tests/*_host.rs, but those built on a line of their own (flags, a crate, an order): a new test needs no line
 # here, so tracks that add tests do not meet in this file (000-KRN-0238).
-OWN_LINES=" blockstore hostname index journal listen network_budget regdb rtw89_service rtw89_station_filter tts vector voice "
+OWN_LINES=" blockstore hostname index journal listen network_budget nts regdb rtw89_service rtw89_station_filter tls_exporter tts vector voice "
 for file in tests/*_host.rs; do
     test=$(basename "$file" _host.rs)
     [[ $OWN_LINES == *" $test "* ]] && continue
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
-# The clipboard service's state: its parts, who is answered, the generation (000-APP-0032).
-rustc --edition=2021 --test tests/clipboard_host.rs -o "$OUT/clipboard-tests"
-"$OUT/clipboard-tests"
 # The WPA2-PSK library uses RustCrypto crates, so Cargo builds its tests and the station's (550-NET-0016, 0017).
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
@@ -27,6 +24,8 @@ cargo test --quiet --manifest-path apppkg/Cargo.toml --target-dir "$OUT/wpa-targ
 cargo test --quiet --manifest-path passlock/Cargo.toml --target-dir "$OUT/wpa-target" # the device key under a passphrase, Argon2id against RFC 9106 (308-NET-0055)
 cargo test --quiet --manifest-path nnpkg/Cargo.toml --target-dir "$OUT/nnpkg-target" # nnd's package checks and clients on NRL's pinned model (262-APP-0112)
 cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target" # the deadlines (550-NET-0031) and a listening port's backlog (110-NET-0052, tests/listen_host.rs)
+cargo test --quiet --manifest-path tests/tls_exporter/Cargo.toml --target-dir "$OUT/tls-exporter-target" # the TLS service's exporter against OpenSSL's (111-NET-0073)
+cargo test --quiet --manifest-path tests/nts/Cargo.toml --target-dir "$OUT/nts-target" # timed's NTS: AES-SIV against RFC 5297, NTS-KE, the fields, the parsers fuzzed (111-NET-0075)
 cargo test --quiet --manifest-path linkproto/Cargo.toml --target-dir "$OUT/linkproto-target" # the link protocol (800-LNK-0001)
 cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/linkproto-target" # its Linux end and effector485, over a pty and TCP (800-LNK-0004, 0011)
 cargo test --quiet --manifest-path tools/httpd/Cargo.toml --target-dir "$OUT/httpd-target" # the release server: the layout, ranges, limits, the log (110-NET-0066)
@@ -36,6 +35,8 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -o "$OUT/rp2-link-tests" devices/rp2-link/
 "$OUT/rp2-link-tests"
 # The SSH client against OpenSSH's server, which its tests start on 127.0.0.1 (351-NET-0026): needs openssh-server.
 cargo test --quiet --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target"
+# The server's role against OpenSSH's client (ssh, scp, sftp), and its fuzz target (112-NET-0071).
+cargo test --quiet --features server --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target" --test server_openssh --test server_fuzz --test keys
 # The store's tests seal every record and time 100 000 puts: optimized, its checks of overflow and assertions kept (308-STO-0021).
 rustc --edition=2021 -O -C debug-assertions=on --test tests/blockstore_host.rs -o "$OUT/blockstore-tests"
 "$OUT/blockstore-tests"
@@ -51,9 +52,6 @@ rustc --edition=2021 -O -C debug-assertions=on --test tests/index_host.rs -o "$O
 # scan: optimized, its checks of overflow and assertions kept, 1 s rather than 13 (312-STO-0047).
 rustc --edition=2021 -O -C debug-assertions=on --test tests/vector_host.rs -o "$OUT/vector-tests"
 "$OUT/vector-tests"
-# A model as one object of the store (251-STO-0015), on a line of its own so that it meets no shared line.
-rustc --edition=2021 --test tests/model_object_host.rs -o "$OUT/model_object-tests"
-"$OUT/model_object-tests"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"

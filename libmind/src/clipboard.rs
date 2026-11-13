@@ -1,6 +1,6 @@
-//! The system clipboard's client (000-APP-0032, `idl/clipboard.wit` 1.0): a text copied or pasted in parts, which these
-//! calls join, through the client in SLOT_CLIPBOARD that the shell lends for REQUEST_CLIPBOARD. Without one a program
-//! keeps its own copy buffer, as before.
+//! The system clipboard's client (000-APP-0032, `idl/clipboard.wit` 1.1): a text copied or pasted in parts, which these
+//! calls join, through the client in SLOT_CLIPBOARD that the shell or the window manager lends for REQUEST_CLIPBOARD.
+//! Without one a program keeps its own copy buffer, as before.
 use crate::abi::{CAP_KIND_ENDPOINT, SLOT_CLIPBOARD};
 use crate::idl::clipboard as api;
 use crate::idl::wire;
@@ -20,10 +20,10 @@ const CALL_MS: u32 = 1000;
 
 /// Why a copy or a paste did not happen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { NoClient, Behind, Refused, Invalid, Changed, TooLong, NoAnswer }
+pub enum Error { NoClient, Behind, Refused, Invalid, Changed, Unavailable, TooLong, NoAnswer }
 
 impl From<api::Error> for Error {
-    fn from(e: api::Error) -> Self { match e { api::Error::Behind => Error::Behind, api::Error::Refused => Error::Refused, api::Error::Invalid => Error::Invalid, api::Error::Changed => Error::Changed } }
+    fn from(e: api::Error) -> Self { match e { api::Error::Behind => Error::Behind, api::Error::Refused => Error::Refused, api::Error::Invalid => Error::Invalid, api::Error::Changed => Error::Changed, api::Error::Unavailable => Error::Unavailable } }
 }
 
 impl Error {
@@ -35,6 +35,7 @@ impl Error {
             Error::Refused => "THE CLIPBOARD REFUSED",
             Error::Invalid => "THE CLIPBOARD TOOK IT AS INVALID",
             Error::Changed => "THE CLIPBOARD CHANGED WHILE IT WAS READ",
+            Error::Unavailable => "THE CLIPBOARD MAY NOT MINT A PROGRAM'S CLIENT",
             Error::TooLong => "LONGER THAN THE CLIPBOARD HOLDS (64 KIB)",
             Error::NoAnswer => "THE CLIPBOARD DID NOT ANSWER",
         }
@@ -92,3 +93,6 @@ pub fn paste() -> Result<String, Error> { paste_through(client().ok_or(Error::No
 
 /// A manager's word: `pid` is the program in front (0: none).
 pub fn front(manager: Endpoint, pid: u64) -> Result<(), Error> { call(|| api::front(manager, pid)) }
+
+/// A program's client, minted by the service for `manager` to lend, in `receive` (`clipboard.wit` 1.1).
+pub fn program_client(manager: Endpoint, receive: usize) -> Result<(), Error> { call(|| api::program_client(manager, receive)) }
