@@ -80,6 +80,8 @@
 
 **Landed** in round 131 (`main` b631de76, 2026-11-13): steps 2 and 3, with DRV's 000-DRV-0058 (`usb_storage`'s `returned`) whole; every group of the gate passed with it, "x86: USB image" and both arches' file and block-store groups among them. **Left:** the criterion's swap in `run()` (DRV), a driver killed and restarted (`run usb_storage` after `stop`), and the block store's window after a swap (plan step 5's criterion).
 
+**Seen once** in round 132's gate (candidate 712739af, STO's change to the `store` and `boot` suites only), "x86: USB image" on x32-128 (85 s): at 000-DRV-0058's second swap (`device_del usbstick4`, then the copy one MiB longer added at once), `usb_host` logged no `SUPER SPEED` within the 10 s `service_logs` waits. The first swap, the same stick out and in, had passed. The rerun on x32 passed (153 s). Not reproduced; a second time would make it a task, as with the slots boot's `DISCONNECTED` that did not come (above).
+
 ## Related
 
 [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [211-DRV-0019](../issues-done/211-DRV-0019-usb-storage-refusals-and-resets.done).
