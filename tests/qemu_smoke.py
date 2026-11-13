@@ -2338,8 +2338,10 @@ def monitors_check(vm):
     vm.serial()  # Enter: the details window of the selected task
     assert canon(f"Tasks {tasks}:") in screen[1], screen[1]
     assert canon("load average") in screen[0], screen[0]
-    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
-    assert table_row(screen, r"PPID NAME .* BUDGET") and re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
+    # clock, idle, sorts last by CPU and may be below the screen's last row (aarch64's holds 28 tasks, the services are
+    # 28 with clipboard): its row and budget are read below, with the applications alone.
+    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" top +"), screen
+    assert table_row(screen, r"PPID NAME .* BUDGET"), screen
     assert table_row(screen, r"/64\.0M used"), screen
     assert len([row for row in screen if re.match(r"^CPU\d|^ CPU\d", row)]) >= 1, screen
     assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=CPU"))
@@ -2350,6 +2352,9 @@ def monitors_check(vm):
     tool_status(vm, "DETAILS=0")
     vm.send("N")
     vm.expect("[TOP] SORT=PID")
+    # Home: the first row, as top keeps the selected row in view and the table may be longer than the screen.
+    vm.send_bytes(b"\x1b[H")
+    vm.expect("SELECTED=1 ")
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
@@ -2367,6 +2372,14 @@ def monitors_check(vm):
     vm.expect("DETAILS=0")
     vm.send("S")
     assert "ROWS=2" in status_line(vm, "HIDE=1"), "only clock and top are applications"
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: clock's or top's details
+    assert table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
+    assert re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
+    tool_status(vm, "DETAILS=")
+    vm.send_bytes(b"\x1b")
+    vm.expect("DETAILS=0")
     vm.send("t")
     vm.expect("TREE=1")
     vm.send("q")
@@ -2382,7 +2395,18 @@ def monitors_check(vm):
     vm.serial()
     tool_status(vm, "[MEMMAP] VIEW=PHYSICAL")
     assert table_row(screen, canon("Physical address space")) and table_row(screen, canon("free RAM")), screen
-    assert table_row(screen, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena"), screen
+    arena, page = table_row(screen, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena"), screen
+    for _ in range(4):
+        if arena:
+            break
+        # The list is longer than the screen (aarch64's, as the boot images grew): further down, a page at a time.
+        vm.send_bytes(b"\x1b[6~")  # PgDn
+        tool_status(vm, "[MEMMAP] VIEW=PHYSICAL")
+        time.sleep(.2)
+        page = screen_text(vm)
+        vm.serial()
+        arena = table_row(page, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena")
+    assert arena, page
     usable = re.search(r"RAM (\d+(?:\.\d)?)M usable", "\n".join(screen))
     assert usable and 128 < float(usable[1]) < 512, screen  # the VM has 512 MiB
     vm.send("2")
@@ -2405,8 +2429,11 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
-    for line in (r"0x0000008000000000 +\S+ +r-x +image", r"0x0000008001000000 +4\.0K +--- +guard", r"0x0000008001001000 +64\.0K +rw- +stack",
-                 r"0x0000008002000000 +\S+ +rw- +screen", r"0x0000008004000000 +4\.0K +r-- +info", r"0x0000008004001000 +4\.0K +rw- +mailbox", r"0x0000008005000000 +4\.0K +r-x +exit"):
+    # The window starts where the architecture's does: L0 entry 255 on aarch64, clear of the kernel's identity map.
+    base = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
+    for offset, rest in ((0, r"\S+ +r-x +image"), (0x0100_0000, r"4\.0K +--- +guard"), (0x0100_1000, r"64\.0K +rw- +stack"), (0x0200_0000, r"\S+ +rw- +screen"),
+                         (0x0400_0000, r"4\.0K +r-- +info"), (0x0400_1000, r"4\.0K +rw- +mailbox"), (0x0500_0000, r"4\.0K +r-x +exit")):
+        line = rf"0x{base + offset:016x} +{rest}"
         assert table_row(screen, line), (line, screen)
     vm.send("4")
     vm.expect("VIEW=QUOTAS")
