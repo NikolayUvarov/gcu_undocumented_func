@@ -29,6 +29,15 @@ pub fn percent(setting: u8, amp: Amp) -> u8 {
 /// A setting's level in quarter dB: negative below the 0 dB setting.
 pub fn qdb(setting: u8, amp: Amp) -> i32 { (setting as i32 - amp.zero as i32) * amp.step_qdb as i32 }
 
+/// The setting of amplifier `to` nearest the level of `setting` on `from`, within its range: the headphone path follows
+/// the speaker's volume in dB (551-DRV-0056).
+pub fn matching(setting: u8, from: Amp, to: Amp) -> u8 {
+    if from == to { return setting; }
+    let (level, step) = (qdb(setting, from), to.step_qdb.max(1) as i32);
+    let steps = if level >= 0 { (level + step / 2) / step } else { -((-level + step / 2) / step) };
+    (to.zero as i32 + steps).clamp(0, to.steps.saturating_sub(1) as i32) as u8
+}
+
 /// An HD Audio amplifier from its capabilities (parameter 0x12 or 0xD): offset in bits 6:0, steps - 1 in 14:8, the
 /// step's size - 1 in quarter dB in 22:16, mute in 31. None for a fixed amplifier (no step to choose).
 pub fn hda_amp(caps: u32) -> Option<(Amp, bool)> {
