@@ -2,13 +2,13 @@
 #![no_main]
 // Parser service (109-NET-0008, MC-11.11, Appendix B.6's session parser): bounded bytes from outside in, typed messages
 // out (idl/parse.wit), so the program that holds the network and the files does not parse them itself: HTTP response
-// heads, release channels and boot manifests for the updater (351-NET-0011), and a model disk's manifest for the importer
-// into the block store (251-STO-0014), any JSON text as its values (750-NET-0021), and HTTP request heads for a server
-// (2.1, 110-NET-0070). Holds its own endpoint and the system log, nothing else: no files, no network, no
-// spawn, no devices. Each request is parsed on its own and nothing of it is kept; a refusal is logged with the client's
-// PID. Started by the loader as a helper with `--session` (109-NET-0010), it serves one session's endpoint and holds
-// nothing else, not even the log, and writes nothing: it ends on a message that is not a call, or after IDLE_MS without
-// a request. A refusal reaches its client as the answer.
+// heads, release channels, key files (351-UPD-0026) and boot manifests for the updater (351-NET-0011), and a model
+// disk's manifest for the importer into the block store (251-STO-0014), any JSON text as its values (750-NET-0021), and
+// HTTP request heads for a server (2.1, 110-NET-0070). Holds its own endpoint and the system log, nothing else: no
+// files, no network, no spawn, no devices. Each request is parsed on its own and nothing of it is kept; a refusal is
+// logged with the client's PID. Started by the loader as a helper with `--session` (109-NET-0010), it serves one
+// session's endpoint and holds nothing else, not even the log, and writes nothing: it ends on a message that is not a
+// call, or after IDLE_MS without a request. A refusal reaches its client as the answer.
 use mind::abi::BootInfo;
 use mind::http;
 use mind::idl::codec::Text;
@@ -78,6 +78,13 @@ fn main(_info: &'static BootInfo) {
                     Error::Malformed
                 });
                 parse::reply_channel(call, typed.as_ref().map_err(|e| *e))
+            }
+            Ok((parse::Request::Keys { file }, call)) => {
+                let typed = release::parse_keys(file).map(|(keys, signed)| mind::parse::keys_record(&keys, &signed)).map_err(|_| {
+                    if !session { mind::println!("[PARSE] REFUSED A KEY FILE FOR PID {}: MALFORMED ({} BYTES)", request.sender, file.len()); }
+                    Error::Malformed
+                });
+                parse::reply_keys(call, typed.as_ref().map_err(|e| *e))
             }
             Ok((parse::Request::Manifest { text, start }, call)) => {
                 let typed = release::Manifest::parse(text).map(|manifest| mind::parse::manifest_record(&manifest, start)).map_err(|_| {
