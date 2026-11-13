@@ -1,8 +1,8 @@
-# 351-UPD-0030 — A separate recovery authority
+# 351-UPD-0030 — A separate recovery authority — done
 
-**Type:** update (keys, policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (made on 351-UPD-0028's branch, which carries 351-UPD-0027) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.6
+**Type:** update (keys, policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — (made on 351-UPD-0028's branch, which carries 351-UPD-0027) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.4, MC-9.6
 
-Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
+Split from [351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
 ## Problem
 
@@ -49,6 +49,17 @@ Today the only way below the floor is writing the disk by hand. And once the rel
   - PCU: "aarch64: programs, shell and four CPUs" (588 s), "aarch64: NVMe boot disk" (234 s), "aarch64: files and the block store" (1110 s).
   Every one passed.
 
+## Resolution
+
+Landed in round 130 (`main` c3a2c7d8, gate `land-r130` green):
+- **The recovery role** of the key file signs recovery orders (`recovery/<channel>`, `parse.wit` 4.2 `order`, `release.py recover`), apart from the release and timestamp keys.
+- **The updater** applies an order the recovery threshold signed, once per sequence: it keeps it in `system/updater/recovery` first, then writes the other slot's trial record with the floor lowered (`plan::recover`).
+- **The criteria, QEMU `update-recovery`, x86 and aarch64,** in the updater groups ("x86: the updater and an update through the link", acc-1, 1113 s; "aarch64: the updater and the modes", PCU, 1707 s):
+  - an order below the floor the release key signed is refused with no record written;
+  - the one the recovery key signed is applied and logged;
+  - the same order served again is refused as replayed.
+- **Docs:** docs/update/updater.md and updater_RU.md give the procedure.
+
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md), [305](../issues-done/305-recovery-without-the-store.done).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.done), [305](305-recovery-without-the-store.done).

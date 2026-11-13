@@ -74,6 +74,7 @@ const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's in
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
+const SLOT_STORE_RTC: usize = 5; // blockstore: an rtc client that reads the calendar time and sets nothing (312-KRN-0239)
 const STORE_WINDOW: u8 = 1; // the block store's own partition, as a window of its driver (307-KRN-0177)
 const VFS_WINDOW_FIRST: u8 = 2; // vfs_server's windows of a partitioned disk, from 2 up to the driver's last (307-KRN-0229)
 const STORE_TXT: &str = "store.txt"; // the owner's word on the store's partition: `partition <PARTUUID>` (307-KRN-0177)
@@ -951,6 +952,9 @@ impl Init {
                 if disk.is_some() {
                     if let Some(copy) = self.store_copy() { grants.add(SLOT_STORE_COPY, self.badged(&mut minted, copy, mind::block::BADGE_WRITE)?, CLIENT); }
                 }
+                // The calendar time for a memory domain's term (312-STO-0050): rtc's client without the setting badge;
+                // without rtc the store starts with slot 5 empty and acts on no term.
+                if self.present("rtc") { self.lend(&mut grants, SLOT_STORE_RTC, "rtc")?; }
             }
             // The store's file face (311-STO-0032): `vfs.wit` over the store's trees, with the block store's client that
             // may get, put and publish where `tally` and `blocks` find theirs. It badges its own clients, as the store

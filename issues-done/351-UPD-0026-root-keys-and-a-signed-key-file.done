@@ -56,7 +56,7 @@ Decided on the way:
   - **Built in:** the root set's public keys and threshold (`$MIND_ROOT_KEYS`; `updater/keys/root-test.pub`, three test keys from fixed text, two of which sign) and the boot key. The release key is no longer built in (`updater/keys/release-test.pub` removed): the key file's release role names the release keys.
   - **Reading:** it fetches `keys/current` before the channel and checks the root threshold and the expiry. It checks the channel with the release role's keys and threshold.
   - **Keeping:** the key file is kept beside the channel as `KEYS` in a slot and as `keys/current` in a release the store keeps. A slot's or a kept release's channel counts only with its key file.
-- **The bootloader** takes no root keys yet. It checks the boot key alone, as before; putting it under the root is [351-UPD-0029](../issues/351-UPD-0029-the-boot-key-under-the-root.md).
+- **The bootloader** takes no root keys yet. It checks the boot key alone, as before; putting it under the root is [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.done).
 - **`release.py`:**
   - `keys make`, `sign` (one root seed at a time; a key that signed already refused), `check`, `publish` (a version above the server's), `root` and `--test`;
   - `publish` refuses release keys the server's key file does not name, or fewer than its threshold, and with other than the test release key a server without a key file. With the test release key alone it puts the test key file there;
@@ -99,4 +99,4 @@ In this container, "--suites update" on x86 passed, with the key file's refusal.
 
 ## Related
 
-[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.done), [351-UPD-0029](../issues/351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0030](../issues/351-UPD-0030-a-separate-recovery-authority.md), [351-UPD-0013](351-UPD-0013-release-metadata-in-libmind.done), [750-UPD-0019](../issues/750-UPD-0019-signed-application-packages.md).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.done), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.done), [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.done), [351-UPD-0013](351-UPD-0013-release-metadata-in-libmind.done), [750-UPD-0019](../issues/750-UPD-0019-signed-application-packages.md).

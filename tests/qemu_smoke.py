@@ -79,6 +79,11 @@ def to_real(text):
     return PID_IN.sub(lambda m: f"{m[1]}{m[2]}{int(m[3]) + BASE if int(m[3]) > 0 else m[3]}", text)
 
 
+def joined(text):
+    # Console text as one line, without ANSI codes: a check of a line the screen's width may cut (000-NET-0077).
+    return to_ordinal(ANSI.sub("", text).replace("\r", "").replace("\n", ""))
+
+
 def to_ordinal(text):
     return PID_OUT.sub(lambda m: f"{m[1]}{int(m[2]) - BASE}" if int(m[2]) > BASE else m[0], text)
 
@@ -12277,11 +12282,13 @@ def timed_check(args, disk):
         try:
             require(vm.service_logs("timed", "NO ANSWER IN"), "[TIMED] STARTED: THE FLOOR IS ")
             require(vm.command("date"), "DATE: 2024-01-01 ")
+            # The host counts from the command sent, before the guest can start its sleep, so the count does not
+            # lean on the host's own sleep of a second, which a coarse host timer lengthens (111-NET-0076).
+            started = time.monotonic()
             vm.send("msh data/sleep.msh\n")
             time.sleep(1)
             for server in servers:
                 server.answering.set()
-            started = time.monotonic()
             out = vm.expect("MIND> ", timeout=60, after="SLEPT ")
             slept = time.monotonic() - started
             guest = int(re.search(r"SLEPT (\d+) MS", out)[1])
@@ -12292,7 +12299,7 @@ def timed_check(args, disk):
             assert re.search(rf"10\.0\.2\.2:{servers[2].port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, LEFT OUT: IT DISAGREES WITH THE OTHERS", log), log[-3000:]
             require_all(log, "(WAS 2024-01-01 ", "2 OF 3 SERVERS AGREED")
             # The sleep that spanned the step lasted what it asked, by the guest's monotonic clock and by the host's.
-            assert 25_000 <= guest < 26_500 and 24 <= slept < 32, (guest, slept)
+            assert 25_000 <= guest < 26_500 and 25 <= slept < 33, (guest, slept)
             shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
             gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
             assert gap < 3, (shown, gap)
@@ -12445,11 +12452,19 @@ def browse_check(args):
             # its program was started from (000-APP-0120). One whose program ends leaves the broker's list, and the shell
             # takes it down.
             question = "NETWORK: netcheck (PID "
+            vm.collect()
+            since = len(vm.log)
             out = vm.command("netcheck ask:11.0.2.80:81:3", timeout=30)
             require_all(out, question, ") ASKS TO REACH 11.0.2.80:81", "ITS REASON, IN ITS OWN WORDS: \"netcheck's check of a question at run time\"",
                         "N: NO (THE DEFAULT)  O: ONCE  S: FOR THIS RUN  A: ALWAYS?", "NETCHECK ANSWER PENDING", "NETCHECK ask:11.0.2.80:81:3 Timeout")
-            if "(GONE: ITS PROGRAM ENDED" not in out:  # the take-down may come before the prompt or after it
-                vm.expect("MIND> ", timeout=10, after="(GONE: ITS PROGRAM ENDED")
+            # The take-down may come before the prompt or after it, and the screen's width may cut its line anywhere:
+            # read the log since the command with its lines joined (000-NET-0077).
+            deadline = time.monotonic() + 10
+            while "MIND> " not in joined(vm.log[since:]).partition("(GONE: ITS PROGRAM ENDED")[2]:
+                assert time.monotonic() < deadline, ("no prompt after the take-down", vm.log[since:][-3000:])
+                time.sleep(.02)
+                vm.collect()
+            vm.output = ""
             log = vm.service_logs("netpolicy", "ITS PROGRAM ENDED")
             require_all(log, "netcheck (PID ", ") ASKS FOR 11.0.2.80:81 TCP: \"netcheck's check of a question at run time\"", "OF netcheck: ITS PROGRAM ENDED")
 
@@ -13641,7 +13656,14 @@ def nts_check(args, disk, cpu, certificates):
         policy.write_text(lines(servers))
         vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=card)
         try:
-            log = _timed_lines(vm, "[TIMED] NOTHING SET")
+            # A server whose name waited for the network at boot joins the grant later (111-NET-0074), and its key
+            # establishment comes in a later round: wait for each of the three, not the first round (111-NET-0076).
+            deadline = time.monotonic() + 180
+            while True:
+                log = _timed_lines(vm, "[TIMED] NOTHING SET")
+                if all(f"NTS-KE WITH mind.test (10.0.2.2:{s.ke_port})" in log for s in servers) or time.monotonic() > deadline:
+                    break
+                time.sleep(3)
             assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[0].ke_port}\) FAILED: TLS REFUSED IT: Handshake; AGAIN IN 10 S", log), log[-4000:]
             assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[1].ke_port}\) FAILED: TLS REFUSED IT: Certificate; AGAIN IN 10 S", log), log[-4000:]
             require_all(log, f"NTS-KE WITH mind.test (10.0.2.2:{servers[2].ke_port}): 8 COOKIES", "[TIMED] NOTHING SET: FEWER THAN 2 ANSWERS (1 OF 1 ANSWERED)")

@@ -16,7 +16,7 @@ The updater refuses a rollback below the highest minimum it has seen (`rollback`
 - **The bootloader refuses a slot below the floor.** It boots the other slot if that one verifies and is not below. Otherwise it stops with `BOOT ERROR: MANIFEST: below the version floor`.
 - **The updater only raises the floor,** to a higher minimum a checked channel names, once the running slot is confirmed at or above it. Confirming a trial raises nothing.
   - A slot left below the new floor is no fallback any more. The updater logs it, and the next update writes over that slot.
-  - Lowering the floor is the recovery authority's ([351-UPD-0030](../issues/351-UPD-0030-a-separate-recovery-authority.md)).
+  - Lowering the floor is the recovery authority's ([351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.done)).
 - **A release with a bug can still be left:**
   - a trial that is not confirmed falls back as today;
   - the updater's `rollback` boots the other slot while it is at or above the floor;
@@ -41,7 +41,7 @@ The updater refuses a rollback below the highest minimum it has seen (`rollback`
 
 ## Related
 
-[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0011](../issues/351-UPD-0011-version-floor-in-the-tpm.md), [351-UPD-0006](351-UPD-0006-slots-and-boot-records.done), [351-UPD-0015](351-UPD-0015-a-sequence-that-cannot-count-down.done), [351-UPD-0030](../issues/351-UPD-0030-a-separate-recovery-authority.md).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0011](../issues/351-UPD-0011-version-floor-in-the-tpm.md), [351-UPD-0006](351-UPD-0006-slots-and-boot-records.done), [351-UPD-0015](351-UPD-0015-a-sequence-that-cannot-count-down.done), [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.done).
 
 ## Progress (2026-10-25)
 
@@ -75,4 +75,4 @@ The first form landed in round 34 (`main` 1c90f553, the floor in `MIND/FLOOR`); 
 - **The criteria as met.** Two differ in how, not in what, from the plan's wording:
   - *A format 1 record* is refused and named, not read with floor 0 (the maintainer's decision above; the criterion was changed to say so).
   - *The releases* are 5 and 6, not 6 and 7: under floor 6 release 5 is refused and release 6 boots; at floor 5 a rollback to release 5 stays possible; in the `update` suite release 6 raises the minimum to 6, and a fallback to release 5 is not booted.
-- **Not done here:** a floor someone with the disk in hand cannot lower ([351-UPD-0011](../issues/351-UPD-0011-version-floor-in-the-tpm.md), with [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md)); lowering it by the recovery authority ([351-UPD-0030](../issues/351-UPD-0030-a-separate-recovery-authority.md)); a run on hardware. The MacBook Pro's stick, whose records are format 1, is written again by hand.
+- **Not done here:** a floor someone with the disk in hand cannot lower ([351-UPD-0011](../issues/351-UPD-0011-version-floor-in-the-tpm.md), with [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md)); lowering it by the recovery authority ([351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.done)); a run on hardware. The MacBook Pro's stick, whose records are format 1, is written again by hand.

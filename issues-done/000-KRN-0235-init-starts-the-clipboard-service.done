@@ -1,12 +1,12 @@
-# 000-KRN-0235 — `init` starts the clipboard service and gives the shell its client to mint copies from
+# 000-KRN-0235 — `init` starts the clipboard service and gives the shell its client to mint copies from — done
 
-**Type:** kernel track (`init`, the boot images) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** — ([000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done)) · **Roadmap:** track G · **Constitution:** MC-2.3, MC-3.4, MC-12.4
+**Type:** kernel track (`init`, the boot images) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** — ([000-APP-0032](000-APP-0032-system-clipboard.done)) · **Roadmap:** track G · **Constitution:** MC-2.3, MC-3.4, MC-12.4
 
 ## Problem and plan
 
-APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done). The request as it was written, kept whole:
+APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP-0032-system-clipboard.done). The request as it was written, kept whole:
 
-**Asked by** APP on 2026-11-12, for [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done). [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) gave `SLOT_CLIPBOARD` (31) and `REQUEST_CLIPBOARD` (bit 19), and left `init` starting the service until the tools track wrote it.
+**Asked by** APP on 2026-11-12, for [000-APP-0032](000-APP-0032-system-clipboard.done). [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) gave `SLOT_CLIPBOARD` (31) and `REQUEST_CLIPBOARD` (bit 19), and left `init` starting the service until the tools track wrote it.
 
 - **The service:** `clipboard` (`clipboard/`, `idl/clipboard.wit` 1.0), written by APP on its branch; this request's own notice will name the commit.
   - It holds one text, in memory only, up to 60 KiB, and answers `set` and `get` only for the program a manager names as in front. It needs no device, no disk and no network.
@@ -36,7 +36,7 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](../issu
 **Returned by round 125's gate (2026-11-13)** in two groups, both where `clipboard` now runs:
 - **"x86: the window manager":** `wm` logs `STARTED fm PID … WITH window,files,sysinfo,shell WITHOUT clipboard`, and the suite's check split that whole line. It now reads the lent list before `WITHOUT` (a4217c78).
 - **"x86: one CPU":** `clipboard` logs each program the shell names in front, `dmesg` itself among them, and that record may follow the forged line `dmesg -n 1` looked for. The check now looks in the last three records (a4217c78).
-- **A gap this shows, not closed here:** `wm` lends its programs no clipboard copy. The shell lends it one that may badge, through the loader's `grant`. But the IDL runtime passes no capability with the right to badge (`idl::wire::PASSED`, [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done)), so `wm`'s own mints are refused. Read from the code and `wm`'s log; no trace was taken. Its programs keep their own copy buffers, the fallback 000-APP-0032 names. The shell's console and the programs the shell starts are not affected. Recorded for APP in [requests-APP.md](requests-APP.md), with two ways out.
+- **A gap this shows, not closed here:** `wm` lends its programs no clipboard copy. The shell lends it one that may badge, through the loader's `grant`. But the IDL runtime passes no capability with the right to badge (`idl::wire::PASSED`, [000-KRN-0073](000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done)), so `wm`'s own mints are refused. Read from the code and `wm`'s log; no trace was taken. Its programs keep their own copy buffers, the fallback 000-APP-0032 names. The shell's console and the programs the shell starts are not affected. Recorded for APP in [requests-APP.md](../issues/requests-APP.md), with two ways out.
 
 **The first way taken (2026-11-13):**
 - **APP's part** (`KRN/2026-11-13T0216Z-APP-the-first-way-clipboard-wit-1-1-is-ready.md`, LANDING 0246Z): `clipboard.wit` 1.1 `program-client`, answered on a `BADGE_MANAGER` copy alone, moves to the caller a `BADGE_PROGRAM` client the service mints from `SLOT_SERVICE`. The shell lends a window manager a `BADGE_MANAGER` copy, and `wm` asks the service for each program's.
@@ -58,6 +58,14 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](../issu
 
 **Left:** the `dmesg -n 3` check's fix above, in the landing queue; then this task closes.
 
+## Resolution
+
+Landed over rounds 127 to 130 (`main` c3a2c7d8):
+- **`init`** starts `clipboard` as a boot image after `sshd` (handoff 35). It gives the shell its client in `SLOT_CLIPBOARD` with `CAP_BADGE`, kept and revoked with every copy before a new shell starts, and the service its server endpoint with `CAP_BADGE` for `clipboard.wit` 1.1's `program-client`.
+- **APP's checks** (`clipboard_check`, round 128) passed in the `tools` suite.
+- **The last of the checks this showed:** the `dmesg -n 3` check's fix, in round 130's gate ("x86: services, storage, audio", i9, 950 s; "x86: one CPU", x32-128, 138 s).
+- **The criteria:** the tests the change touches passed on x86 and aarch64 in QEMU in each of those gates.
+
 ## Related
 
-- [requests-KRN.md](requests-KRN.md), where it was asked.
+- [requests-KRN.md](../issues/requests-KRN.md), where it was asked.
