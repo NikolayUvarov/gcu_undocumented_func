@@ -2352,6 +2352,9 @@ def monitors_check(vm):
     tool_status(vm, "DETAILS=0")
     vm.send("N")
     vm.expect("[TOP] SORT=PID")
+    # Home: the first row, as top keeps the selected row in view and the table may be longer than the screen.
+    vm.send_bytes(b"\x1b[H")
+    vm.expect("SELECTED=1 ")
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
