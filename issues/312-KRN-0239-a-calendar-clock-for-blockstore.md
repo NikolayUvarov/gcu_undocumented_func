@@ -28,7 +28,8 @@ STO's request of 2026-11-13 (from `requests-KRN.md`), for [312-STO-0050](312-STO
 - **`init`:** `blockstore`'s slot 5 (`SLOT_STORE_RTC`) holds a copy of `init`'s own `rtc` client, which carries no setting badge, when `rtc` runs or is prepared. It is lent as the updater's and `keystore`'s are, so `rtc` refuses it `set`.
 - **Docs:** `docs/profile/bootstrap.md`, `blockstore`'s row.
 - **Tested** (this container): `init` builds for x86 and aarch64 with no warning.
-- **Left:** the QEMU groups that boot the store, then the gate; STO's reading of it.
+- **Run on the maintainer's machines** at a6adff27 (Effector, QEMU under TCG): "x86: files and block writes" on i9 (1452 s) and "aarch64: files and the block store" on PCU (1122 s) passed, the store's suites among them.
+- **Left:** the gate; STO's reading of it.
 
 ## Related
 
