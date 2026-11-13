@@ -10042,9 +10042,11 @@ def ehci_suite(args):
             got = re.findall(r"\[KEYS\] code=Char mods=- char=([abc])", vm.log[start:])
             assert got == ["a", "b", "c"], (name, vm.log[start:])
             vm.send_bytes(b"\x1b"); vm.expect("EXITED. SHELL RESUMED.")
+            # Its lights' output report through the controller's control transfer (000-DRV-0070).
+            require(vm.service_logs("usb_hid", "LOCK LIGHTS"), "[USB_HID] 0627:0001 LOCK LIGHTS: NUM OFF, CAPS OFF, SCROLL OFF (REPORT 00)")
         finally:
             vm.close()
-    print("PASS: EHCI: a keyboard on EHCI with a tablet on xHCI types, and the other way round", flush=True)
+    print("PASS: EHCI: a keyboard on EHCI with a tablet on xHCI types and takes its lights, and the other way round", flush=True)
 
 
 def hda_suite(args):
@@ -16078,6 +16080,12 @@ def usb_suite(vm):
     # A held key repeats: the host does it for a USB keyboard (after 500 ms, every 33 ms).
     got = typed(["w"], hold=1200)
     assert len([g for g in got if "char=w " in g]) >= 10, got
+    # The lock lights (000-DRV-0070): all off when the keyboard was set up; Caps Lock and Num Lock reach them in its
+    # output report, and the letters and the keypad follow the same locks.
+    require(hid if "LOCK LIGHTS" in hid else vm.service_logs("usb_hid", "LOCK LIGHTS"), "[USB_HID] 0627:0001 LOCK LIGHTS: NUM OFF, CAPS OFF, SCROLL OFF (REPORT 00)")
+    in_order(typed(["caps_lock", "a", "num_lock", "kp_1"]), ["char=A U+0041", "char=1 U+0031"])
+    in_order(vm.service_logs("usb_hid", "(REPORT 03)").splitlines(), ["[USB_HID] 0627:0001 LOCK LIGHTS: NUM OFF, CAPS ON, SCROLL OFF (REPORT 02)",
+                                                                     "[USB_HID] 0627:0001 LOCK LIGHTS: NUM ON, CAPS ON, SCROLL OFF (REPORT 03)"])
     # The tablet: a click on fm's first entry puts the cursor there.
     vm.send("fm /\n")
     vm.expect("[FM] READY")
@@ -16113,9 +16121,13 @@ def usb_suite(vm):
     # Unplugged and plugged in again, on another hub port: usb_hid lets it go and takes the new one.
     vm.qmp("device_del", id="kbd")
     require(vm.service_logs("usb_hid", "DEVICE GONE"), "[USB_HID] DEVICE GONE")
+    # Plugged in with Caps Lock and Num Lock on, it is sent them at once; both turned off again from it.
     vm.qmp("device_add", driver="usb-kbd", bus="xhci.0", port="1.2", id="kbd2")
-    require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
-    in_order(typed(["m", "n"]), ["char=m U+006D", "char=n U+006E"])
+    logs = vm.service_logs("usb_hid", "(REPORT 03)")
+    in_order(logs.splitlines(), ["[USB_HID] 0627:0001 KEYBOARD", "[USB_HID] 0627:0001 LOCK LIGHTS: NUM ON, CAPS ON, SCROLL OFF (REPORT 03)"])
+    in_order(typed(["m", "caps_lock", "num_lock", "n"]), ["char=M U+004D", "char=n U+006E"])
+    in_order(vm.service_logs("usb_hid", "(REPORT 00)").splitlines(), ["[USB_HID] 0627:0001 LOCK LIGHTS: NUM ON, CAPS OFF, SCROLL OFF (REPORT 01)",
+                                                                     "[USB_HID] 0627:0001 LOCK LIGHTS: NUM OFF, CAPS OFF, SCROLL OFF (REPORT 00)"])
     # A keyboard on the second xHCI (213-DRV-0048), the first's unplugged so the keys can come from it alone. Its
     # controller comes from init's grant (213-KRN-0099): without it usb_host names no second one.
     host = vm.command("dmesg -s usb_host", raw=True)
@@ -16133,8 +16145,8 @@ def usb_suite(vm):
         require(vm.service_logs("init", f"{driver} RESTARTED"), f"{driver} RESTARTED")
         require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
         in_order(typed(["z"]), ["char=z U+007A"])
-    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, a click, movement, hot plug, driver restarts, "
-          "a keyboard on a second xHCI", flush=True)
+    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, lock lights, a click, movement, hot plug, "
+          "driver restarts, a keyboard on a second xHCI", flush=True)
 
 
 def tablet_suite(vm, wav):

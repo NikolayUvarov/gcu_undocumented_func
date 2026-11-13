@@ -3,14 +3,15 @@
 // Ring 3 USB HID class driver (issue 164): keyboards, mice and tablets through usb_host (idl/usb.wit; its client
 // with the HID badge in SLOT_DEV0 can claim only HID interfaces). A keyboard is put in the boot protocol and its
 // reports become PS/2 set 1 scan codes for the shared decoder (mind::keys), with key repeat done here, as a USB
-// keyboard leaves it to the host; the driver serves the keyboard service (idl/keyboard.wit) as ps2_kbd does. A pointing
-// device's reports, laid out by its report descriptor, become pointer events for the focused task. Devices are
-// claimed as they come; one that goes away is let go.
+// keyboard leaves it to the host; the driver serves the keyboard service (idl/keyboard.wit) as ps2_kbd does. Every
+// keyboard's lights show the decoder's Num, Caps and Scroll Lock (000-DRV-0070). A pointing device's reports, laid out
+// by its report descriptor, become pointer events for the focused task. Devices are claimed as they come; one that
+// goes away is let go.
 use mind::abi::{BootInfo, SLOT_DEV0};
-use mind::hid::{report_descriptor_length, wellspring, Keyboard, Pointer, Trackpad, WELLSPRING_LONGEST, WELLSPRING_MODE};
+use mind::hid::{report_descriptor_length, wellspring, Keyboard, Pointer, Trackpad, LIGHTS_REQUEST, WELLSPRING_LONGEST, WELLSPRING_MODE};
 use mind::idl::{keyboard, wire};
 use mind::ipc::Endpoint;
-use mind::keys::Ps2;
+use mind::keys::{Locks, Ps2};
 use mind::sys::Error;
 use mind::usb::{Host, Interface};
 
@@ -29,8 +30,9 @@ const PADS: usize = 2;
 const LENGTHS: usize = 6; // a trackpad's first packet of each length is logged
 
 enum Kind { Keyboard(Keyboard), Pointer(Pointer), Trackpad(Trackpad) }
-// `switch`: a trackpad's mode switch still to make, through interface 0's handle, at a time; `seen`: its packet lengths.
-struct Device { handle: u32, info: Interface, endpoint: u8, kind: Kind, complained: bool, shown: u8, ids: [u64; 4], misses: u8, switch: Option<(u32, u64)>, seen: [u16; LENGTHS] }
+// `switch`: a trackpad's mode switch still to make, through interface 0's handle, at a time; `seen`: its packet lengths;
+// `dark`: a keyboard that refused its lights, not sent them again.
+struct Device { handle: u32, info: Interface, endpoint: u8, kind: Kind, complained: bool, shown: u8, ids: [u64; 4], misses: u8, switch: Option<(u32, u64)>, seen: [u16; LENGTHS], dark: bool }
 // An interface kept claimed after its setup failed, so that the others are claimed meanwhile.
 struct Failed { handle: u32, info: Interface, at: u64, tries: u8 }
 
@@ -56,7 +58,7 @@ fn setup(host: &mut Host, handle: u32, info: &Interface, first: bool, keyboard: 
     let (number, name) = (info.number as u16, (info.vendor, info.product));
     // Each interface claimed, for a machine whose keys do not arrive (211-DRV-0003).
     if first { mind::println!("[USB_HID] {:04X}:{:04X} INTERFACE {}: SUBCLASS {} PROTOCOL {}, ENDPOINT {:02X}", name.0, name.1, number, info.subclass, info.protocol, endpoint); }
-    let device = |kind, ids| Device { handle, info: *info, endpoint, kind, complained: false, shown: 0, ids, misses: 0, switch: None, seen: [0; LENGTHS] };
+    let device = |kind, ids| Device { handle, info: *info, endpoint, kind, complained: false, shown: 0, ids, misses: 0, switch: None, seen: [0; LENGTHS], dark: false };
     // An Apple trackpad (211-DRV-0018): its vendor interface gives every finger once the device is in its multitouch
     // mode, switched a little later. Its mouse interface serves all the same, and is ignored while fingers arrive.
     if wellspring(name.0, name.1) && info.subclass == 0 && info.protocol == 0 {
@@ -108,6 +110,24 @@ fn report_length(host: &mut Host, handle: u32, number: u8) -> Option<u16> {
 fn held(devices: &[Option<Device>], info: &Interface) -> Option<u32> {
     let same = |d: &&Device| d.info.vendor == info.vendor && d.info.product == info.product && d.info.speed == info.speed;
     devices.iter().flatten().filter(same).find(|d| d.info.number == 0 && matches!(d.kind, Kind::Keyboard(_))).map(|d| d.handle)
+}
+
+// Each keyboard's lights to `locks` where it was sent others or none (000-DRV-0070). One that refuses the report is
+// logged and not sent it again, its keys still read; a gone one is let go by the next poll.
+fn show_locks(host: &mut Host, devices: &mut [Option<Device>], locks: Locks) {
+    let (request_type, request, value) = LIGHTS_REQUEST;
+    let on = |lit: bool| if lit { "ON" } else { "OFF" };
+    for device in devices.iter_mut().flatten().filter(|d| !d.dark) {
+        let Kind::Keyboard(keyboard) = &mut device.kind else { continue };
+        let Some(report) = keyboard.show(locks) else { continue };
+        let name = (device.info.vendor, device.info.product);
+        host.buffer_mut()[0] = report;
+        match host.control(device.handle, request_type, request, value, device.info.number as u16, 1) {
+            Ok(_) => mind::println!("[USB_HID] {:04X}:{:04X} LOCK LIGHTS: NUM {}, CAPS {}, SCROLL {} (REPORT {:02X})", name.0, name.1, on(locks.num), on(locks.caps), on(locks.scroll), report),
+            Err(Error::NotFound | Error::Peer) => {}
+            Err(error) => { device.dark = true; mind::println!("[USB_HID] {:04X}:{:04X} LOCK LIGHTS REFUSED (REPORT {:02X}): {:?}, NOT SENT AGAIN", name.0, name.1, report, error); }
+        }
+    }
 }
 
 // Bytes for the log, 32 a line.
@@ -244,6 +264,8 @@ fn main(_info: &'static BootInfo) {
                 if matches!(result, Err(Error::Peer)) { declined_count = 0; } // a new usb_host knows none of the old handles
             }
         }
+        // The lights after the keys that may have changed a lock, and on a keyboard just set up.
+        show_locks(&mut host, &mut devices, decoder.locks());
         // Keyboard requests (the shell's keymap) between the polls; without a device, until the next look for one.
         let wait = if devices.iter().any(Option::is_some) { POLL_MS } else { CLAIM_MS as u32 };
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait) else { continue };

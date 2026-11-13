@@ -6,6 +6,8 @@
 mod abi;
 #[path = "../libmind/src/hid.rs"]
 mod hid;
+#[path = "../libmind/src/keys.rs"]
+mod keys; // the decoder's locks, for the keyboard's lights (tests/lock_lights_host.rs)
 
 use abi::{pointer_absolute_fields, pointer_across, pointer_fields, POINTER_LEFT, POINTER_RIGHT, POINTER_SCALE};
 use hid::*;
