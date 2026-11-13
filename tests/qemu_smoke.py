@@ -13313,7 +13313,14 @@ def nts_check(args, disk, cpu, certificates):
         policy.write_text(lines(servers))
         vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=card)
         try:
-            log = _timed_lines(vm, "[TIMED] NOTHING SET")
+            # A server whose name waited for the network at boot joins the grant later (111-NET-0074), and its key
+            # establishment comes in a later round: wait for each of the three, not the first round (111-NET-0076).
+            deadline = time.monotonic() + 180
+            while True:
+                log = _timed_lines(vm, "[TIMED] NOTHING SET")
+                if all(f"NTS-KE WITH mind.test (10.0.2.2:{s.ke_port})" in log for s in servers) or time.monotonic() > deadline:
+                    break
+                time.sleep(3)
             assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[0].ke_port}\) FAILED: TLS REFUSED IT: Handshake; AGAIN IN 10 S", log), log[-4000:]
             assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[1].ke_port}\) FAILED: TLS REFUSED IT: Certificate; AGAIN IN 10 S", log), log[-4000:]
             require_all(log, f"NTS-KE WITH mind.test (10.0.2.2:{servers[2].ke_port}): 8 COOKIES", "[TIMED] NOTHING SET: FEWER THAN 2 ANSWERS (1 OF 1 ANSWERED)")
