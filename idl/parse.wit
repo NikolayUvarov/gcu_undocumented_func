@@ -7,7 +7,8 @@
 /// `http-request`, a request head as a server reads it. 3.0 (351-UPD-0026): a channel's signatures name their keys, one
 /// to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
 /// that sign the next one; 3.x's key file of four roles is gone. 4.1 (351-UPD-0028): `timestamp`, a channel's timestamp file.
-package mind:parse@4.1.0;
+/// 4.2 (351-UPD-0030): `order`, a recovery order.
+package mind:parse@4.2.0;
 
 interface parse {
     /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -31,6 +32,9 @@ interface parse {
     /// A channel's timestamp file (351-UPD-0028): the channel, its file's SHA-256, a short expiry and the timestamp's own
     /// version; the timestamp keys' signatures cover its first `signed` bytes. Taken as a channel is (4.1).
     record timestamp { channel: string<32>, digest: list<u8, 32>, expires: string<20>, version: u64, signed: u32, signatures: list<signature, 8> }
+    /// A recovery order (351-UPD-0030): the channel, its expiry, the floor it lowers to, its sequence and the version to
+    /// go back to; the recovery keys' signatures cover its first `signed` bytes. Taken as a channel is (4.2).
+    record recovery-order { channel: string<32>, expires: string<20>, floor: u64, sequence: u64, version: u64, signed: u32, signatures: list<signature, 8> }
     /// A file line of a boot manifest.
     record file { path: string<96>, size: u64, digest: list<u8, 32>, flags: u32, mib: u32 }
     /// A boot manifest's header lines (its format line first, as text), its number of file lines, and up to 8 of them
@@ -43,6 +47,8 @@ interface parse {
     keys: func(file: bytes<4096>) -> result<key-file, error>;
     /// A timestamp file (4.1).
     timestamp: func(file: bytes<2048>) -> result<timestamp, error>;
+    /// A recovery order (4.2).
+    order: func(file: bytes<2048>) -> result<recovery-order, error>;
     /// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
     manifest: func(text: bytes<32768>, start: u32) -> result<manifest, error>;
 

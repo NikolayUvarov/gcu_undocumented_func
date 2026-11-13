@@ -202,7 +202,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md) | Key rotation and revocation (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | — | track C |
 | [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md) | A short-lived timestamp key for the channel (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | 0027 | track C |
 | [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md) | The boot key under the root, in the bootloader (from 351-UPD-0009) | `UPD`, with `KRN`/`PRT` | P2 | 0026 | track C |
-| [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md) | A separate recovery authority (from 351-UPD-0009) | `UPD` | P2 | 0026 | track C |
+| [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md) | A separate recovery authority (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | 0028 | track C |
 | [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) | The key lifecycle and the compromise protocol, written down (from 351-UPD-0009) | `UPD` | P2 | 0026–0030 (for the procedures) | track C |
 | [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | A version floor in a TPM 2.0 counter, kept by the bootloader (rollback with the disk in hand) | `UPD`, with `PRT` | P2 | 0012 | track C |
 | [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | Secure Boot with our own keys; old bootloaders revoked through dbx: done and tested in QEMU (OVMF), the run on a real PC remains | `UPD`, with `PRT` | P2 | the maintainer's PC (issues-human 5) | track C |

@@ -329,6 +329,28 @@ pub fn read_timestamp(endpoint: Endpoint, file: &[u8]) -> Result<(release::Times
     if release::timestamp_is(file, &stamp, &signed) { Ok((stamp, signed)) } else { Err(Refused::Lied) }
 }
 
+/// The record of a recovery order `mind::release` read (parse.wit 4.2, 351-UPD-0030).
+pub fn order_record(order: &release::Order, signed: &release::Signed) -> parse::RecoveryOrder {
+    parse::RecoveryOrder {
+        channel: Text::new(order.channel.as_str()).unwrap_or_default(),
+        expires: Text::new(core::str::from_utf8(&order.expires).unwrap_or("")).unwrap_or_default(),
+        floor: order.floor, sequence: order.sequence, version: order.version, signed: signed.body as u32, signatures: signature_records(signed),
+    }
+}
+
+/// A recovery order read by the service at `endpoint`, taken only if its fields and signatures encode again to exactly
+/// `file` (351-UPD-0030). Which signatures count is the caller's.
+pub fn read_order(endpoint: Endpoint, file: &[u8]) -> Result<(release::Order, release::Signed), Refused> {
+    let record = match parse::order(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
+    let order = release::Order {
+        channel: release::Text::new(record.channel.as_str().as_bytes()).ok_or(Refused::Lied)?,
+        expires: record.expires.as_str().as_bytes().try_into().map_err(|_| Refused::Lied)?,
+        floor: record.floor, sequence: record.sequence, version: record.version,
+    };
+    let signed = signed_from(record.signed, record.signatures.as_slice()).ok_or(Refused::Lied)?;
+    if release::order_is(file, &order, &signed) { Ok((order, signed)) } else { Err(Refused::Lied) }
+}
+
 /// A boot manifest read by the service at `endpoint` a page at a time, taken only if its header lines and its files,
 /// encoded again, make exactly `text`; `each` sees every file in order (and may act only once this returns Ok). Gives
 /// the number of header lines and of files.

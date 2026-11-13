@@ -93,6 +93,13 @@ fn main(_info: &'static BootInfo) {
                 });
                 parse::reply_timestamp(call, typed.as_ref().map_err(|e| *e))
             }
+            Ok((parse::Request::Order { file }, call)) => {
+                let typed = release::parse_order(file).map(|(order, signed)| mind::parse::order_record(&order, &signed)).map_err(|_| {
+                    if !session { mind::println!("[PARSE] REFUSED A RECOVERY ORDER FOR PID {}: MALFORMED ({} BYTES)", request.sender, file.len()); }
+                    Error::Malformed
+                });
+                parse::reply_order(call, typed.as_ref().map_err(|e| *e))
+            }
             Ok((parse::Request::Manifest { text, start }, call)) => {
                 let typed = release::Manifest::parse(text).map(|manifest| mind::parse::manifest_record(&manifest, start)).map_err(|_| {
                     if !session { mind::println!("[PARSE] REFUSED A MANIFEST FOR PID {}: MALFORMED ({} BYTES)", request.sender, text.len()); }

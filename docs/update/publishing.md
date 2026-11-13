@@ -1,6 +1,6 @@
 # Publishing releases
 
-**Version:** 0.6 (2026-11-13): a channel's timestamp, short-lived and renewed without the release key (351-UPD-0028); 0.5 (2026-11-13): the key file's `root` role, its history and the device's chain of versions; rotation and revocation (351-UPD-0027); 0.4 (2026-11-13): the key file and the root keys, and signature lines that name their keys (351-UPD-0026); 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
+**Version:** 0.7 (2026-11-13): recovery orders (351-UPD-0030); 0.6 (2026-11-13): a channel's timestamp, short-lived and renewed without the release key (351-UPD-0028); 0.5 (2026-11-13): the key file's `root` role, its history and the device's chain of versions; rotation and revocation (351-UPD-0027); 0.4 (2026-11-13): the key file and the root keys, and signature lines that name their keys (351-UPD-0026); 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
 
 How a build becomes a release a device can fetch and check, how to publish it to a server, and who holds which key. The device side is the updater ([updater.md](updater.md)): it checks a channel and stages its release in a slot with the same checks as `check` below.
 
@@ -40,6 +40,7 @@ channels/<channel>                          the signed channel file (the release
 keys/current                                the key file (the root keys)
 keys/<version>                              every version of it, from 1: each signed by the root of the one before and its own
 timestamps/<channel>                        the channel's timestamp (the timestamp keys)
+recovery/<channel>                          a recovery order, when one is given (the recovery keys)
 ```
 
 ## Making and publishing a release
@@ -51,7 +52,10 @@ python3 scripts/release.py publish /tmp/release-7 updates@example.org:/srv/mind 
 python3 scripts/release.py check /srv/mind --channel stable   # on the server, or on a copy
 python3 scripts/release.py bundle /srv/mind /tmp/mind-7.zip --arch x86_64   # one file for the Effector gateway
 python3 scripts/release.py timestamp updates@example.org:/srv/mind --channel stable   # on the server, at least daily
+python3 scripts/release.py recover updates@example.org:/srv/mind --version 5 --floor 5 --days 7   # a recovery order
 ```
+
+A **recovery order** (351-UPD-0030) sends devices of the channel back to `--version`, held by their other slot, with the floor lowered to `--floor`; only the recovery keys sign it (`$MIND_RECOVERY_KEY`), and its sequence is one above the server's last. Each device applies it once and keeps it in its account ([updater.md](updater.md#recovery-orders-351-upd-0030)). Change the channel next, or devices back on the old version keep seeing the newer one offered.
 
 The timestamp is renewed with the timestamp key alone (`$MIND_TIMESTAMP_KEY`), which is kept on the publishing server; the release key is not needed there. Renew it well within its life, from a timer on that server: a device that cannot read a current one holds what it has, as past a channel's expiry ([updater.md](updater.md#metadata-past-its-expiry)).
 
