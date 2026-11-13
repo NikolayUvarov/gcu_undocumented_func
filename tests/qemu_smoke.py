@@ -2695,12 +2695,26 @@ def fm_check(vm):
             time.sleep(.05)
         vm.serial(enter=False)
         return text and logged(vm, start, text)
-    clicked = mouse(*mouse_moves((10 - 80) * 8, (3 - 25) * 16), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
+    # aarch64's virt has a VirtIO tablet, which takes only places on the screen, so QEMU's relative moves go nowhere:
+    # the tablet is put at the cell's pixel instead (000-APP-0137). Buttons and the wheel reach either.
+    tablet = vm.arch == "aarch64"
+    if tablet:
+        _, size, _, _ = vm.screenshot().split(b"\n", 3)
+        vm.serial(enter=False)
+        frame = tuple(map(int, size.split()[:2]))
+
+    def to(x, y, fro):
+        # The mouse to cell (x, y): the tablet at that cell's pixel, the PS/2 mouse by the cells from `fro`.
+        if tablet:
+            vm.tablet_at(x * 8 + 4, y * 16 + 8, *frame)
+            return []
+        return mouse_moves((x - fro[0]) * 8, (y - fro[1]) * 16)
+    clicked = mouse(*to(10, 3, (80, 25)), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
     require(clicked, "[FM] POINTER 10,3 BUTTONS=1 WHEEL=0")
     assert "LEFT=/ FULL" in clicked, clicked
     mouse("mouse_button 1", "mouse_button 0", "mouse_button 1", "mouse_button 0", text="LEFT=/EFI FULL")
     require(mouse("mouse_move 0 0 -1", text="CURRENT=BOOT "), "[FM] POINTER 10,3 BUTTONS=0 WHEEL=1")
-    mouse(*mouse_moves(0, 30 * 16))  # moves are not logged
+    mouse(*to(10, 33, (10, 3)))  # moves are not logged
     time.sleep(.3)
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     vm.serial(enter=False)
