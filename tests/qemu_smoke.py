@@ -2483,8 +2483,11 @@ def monitors_check(vm):
     else:
         names = (f"{vm.cpus} CPUs online, APIC IDs", "+NX", "TSC", "MHz (calibrated)", "00:01.1  010180  IDE controller")
         line = r"IRQ 1 .* ps2_kbd \(PID \d+\) \(\+1 holding a copy\)"
-    for text in ("Processor", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}", "Interrupt lines", "kernel arena 64.0M") + names:
+    for text in ("Processor", "Interrupt lines", "kernel arena 64.0M") + names:
         assert table_row(screen, re.escape(canon(text))), (text, screen)
+    # The framebuffer holds the screen's cells, 8 by 16 pixels each; its height need not be a whole row (aarch64's 600).
+    frame = re.search(r"GOP framebuffer (\d+)x(\d+)", "\n".join(screen))
+    assert frame and int(frame[1]) // 8 == len(screen[0]) and int(frame[2]) // 16 == len(screen), (frame and frame[0], screen)
     # The holder of a line is the driver; init keeps a copy for restarts (issues 075, 076).
     assert table_row(screen, line), screen
     vm.send("q")
@@ -2605,7 +2608,8 @@ def fm_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()  # Enter on "..": back to EFI
-    assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, r"║BOOTX64\.EFI +│ +\d+│"), screen
+    # The architecture's loader at the removable-media path, as main() sets BOOT_EFI (000-APP-0137).
+    assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, rf"║{re.escape(Path(BOOT_EFI).name)} +│ +\d+│"), screen
     assert "CURRENT=BOOT" in poke("[FM] LEFT=/EFI FULL")
     keys(b"\x7f", "LEFT=/ FULL")
     # A program started from the panel takes fm's place in front (issue 160): top gets the keys, and Esc brings fm back
@@ -2691,17 +2695,33 @@ def fm_check(vm):
             time.sleep(.05)
         vm.serial(enter=False)
         return text and logged(vm, start, text)
-    clicked = mouse(*mouse_moves((10 - 80) * 8, (3 - 25) * 16), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
+    # aarch64's virt has a VirtIO tablet, which takes only places on the screen, so QEMU's relative moves go nowhere:
+    # the tablet is put at the cell's pixel instead (000-APP-0137). Buttons and the wheel reach either.
+    tablet = vm.arch == "aarch64"
+    if tablet:
+        _, size, _, _ = vm.screenshot().split(b"\n", 3)
+        vm.serial(enter=False)
+        frame = tuple(map(int, size.split()[:2]))
+
+    def to(x, y, fro):
+        # The mouse to cell (x, y): the tablet at that cell's pixel (the grid centred on a screen of no whole rows,
+        # as aarch64's 600 pixels hold 37), the PS/2 mouse by the cells from `fro`.
+        if tablet:
+            vm.tablet_at(frame[0] % 8 // 2 + x * 8 + 4, frame[1] % 16 // 2 + y * 16 + 8, *frame)
+            return []
+        return mouse_moves((x - fro[0]) * 8, (y - fro[1]) * 16)
+    clicked = mouse(*to(10, 3, (80, 25)), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
     require(clicked, "[FM] POINTER 10,3 BUTTONS=1 WHEEL=0")
     assert "LEFT=/ FULL" in clicked, clicked
     mouse("mouse_button 1", "mouse_button 0", "mouse_button 1", "mouse_button 0", text="LEFT=/EFI FULL")
     require(mouse("mouse_move 0 0 -1", text="CURRENT=BOOT "), "[FM] POINTER 10,3 BUTTONS=0 WHEEL=1")
-    mouse(*mouse_moves(0, 30 * 16))  # moves are not logged
+    mouse(*to(10, 33, (10, 3)))  # moves are not logged
     time.sleep(.3)
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     vm.serial(enter=False)
-    width = int(size.split()[0])
-    corner = lambda x, y: pixels[(y * 16 * width + x * 8) * 3:(y * 16 * width + x * 8) * 3 + 3]
+    width, height = map(int, size.split()[:2])
+    x0, y0 = width % 8 // 2, height % 16 // 2  # the grid centred, as mind::tui::Terminal puts it
+    corner = lambda x, y: pixels[((y0 + y * 16) * width + x0 + x * 8) * 3:((y0 + y * 16) * width + x0 + x * 8) * 3 + 3]
     assert corner(10, 33) != corner(12, 33) and corner(9, 33) == corner(12, 33), (corner(10, 33), corner(12, 33))
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
@@ -2757,13 +2777,19 @@ def console_check(vm):
     assert any(row.startswith(canon("nosuch: no such program")) for row in screen), screen
     assert screen[-1].startswith(canon("> ")), screen[-1]
     # console's own commands (issue u006): ps, ls; a shell command is named as such, ping without a network says why.
+    # ps alone on a cleared screen first: its rows and the next commands' outgrow a screen of 37 rows (aarch64's).
     vm.send_bytes(b"clear\r")
-    for line in (b"ps", b"ls docs", b"kill 1", b"ping ya.ru"):
+    vm.send_bytes(b"ps\r")
+    time.sleep(.6)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(re.match(r" +1 init +RECV", row) for row in screen), screen
+    vm.send_bytes(b"clear\r")
+    for line in (b"ls docs", b"kill 1", b"ping ya.ru"):
         vm.send_bytes(line + b"\r")
         time.sleep(.6)
     screen = screen_text(vm)
     vm.serial(enter=False)
-    assert any(re.match(r" +1 init +RECV", row) for row in screen), screen
     assert any(row.startswith(canon("notes.txt ")) for row in screen), screen
     assert any(row.startswith(canon("kill: a command of the shell")) for row in screen), screen
     assert any(row.startswith(canon("ping: ")) for row in screen), screen
@@ -2811,7 +2837,10 @@ def vfs_check(vm):
     # Boot files and the rest of the boot disk stay read-only; paths cannot climb out; data/ is writable.
     require(vm.command("write kernel.elf x"), "ERROR: WRITE: DENIED")
     require(vm.command("write EFI/BOOT/x.txt x"), "ERROR: WRITE: DENIED")
-    require(vm.command("mkdir system"), "ERROR: MKDIR: DENIED")
+    # A new directory outside data/ (system/ may exist already: keystore keeps the device key there where no TPM seals
+    # it, as on aarch64's virt, and mkdir of one that exists is fine), and one in system/, whose others are hidden.
+    require(vm.command("mkdir outside"), "ERROR: MKDIR: DENIED")
+    require(vm.command("mkdir system/shell"), "ERROR: MKDIR: DENIED")
     require(vm.command("cat ram:../kernel.elf"), "ERROR: CAT: INVALID PATH")
     require(vm.command("rm kernel.elf"), "ERROR: RM: DENIED")
     require(vm.command("mkdir data"), "OK")
@@ -3067,7 +3096,10 @@ def search_check(vm):
     assert lines(vm.command("find ram:")) == ["ram:a.txt", "ram:docs/", "ram:docs/b.md", "ram:docs/заметки.txt"], vm.output
     assert lines(vm.command("find ram: -name *.txt -type f")) == ["ram:a.txt", "ram:docs/заметки.txt"]
     assert lines(vm.command("find ram: -size +12")) == ["ram:docs/заметки.txt"], "20 bytes of Cyrillic text"
-    assert lines(vm.command("find A: -name kernel.elf")) == ["kernel.elf"]
+    # system/'s private directories are refused on the way (keystore's holds the device key where no TPM seals it, as
+    # on aarch64's virt): find says so for them alone.
+    found = lines(vm.command("find A: -name kernel.elf"))
+    assert [l for l in found if not re.fullmatch(r"FIND: system/[\w.-]+: DENIED", l)] == ["kernel.elf"], found
     assert lines(utf8("grep -rn привет ram:")) == [], "case matters without -i"
     assert lines(utf8("grep -rin привет ram:")) == ["ram:docs/заметки.txt:1:Привет, мир"]
     assert lines(utf8("grep -l o ram:a.txt ram:docs/заметки.txt ram:docs/b.md")) == ["ram:a.txt"]

@@ -48,7 +48,7 @@ Each program keeps its copied text to itself: `edit`'s Ctrl+C/X/V, `fm`'s comman
 - **On `main`'s service** (000-KRN-0235 in `main` since round 127, `init` starting `clipboard` with the right to badge), x86, 4 CPUs, this branch on 1da784a9 and f98e7a17:
   - the `tools` suite (11 checks): `clipboard_check` as above, and `tests/clip_stub` in front pasting the text, the same in the background refused (`READ REFUSED … Behind` in the service's log), and a copy whose request note asks for no clipboard holding no client;
   - the service logs no line for each program named in front (ff15ed25; KRN's remark of 2026-11-13).
-- **Not checked on aarch64:** the gate runs the `tools` suite on x86 alone, and its monitors' checks drifted there; [000-APP-0137](../issues/000-APP-0137-the-tools-suite-on-aarch64.md) makes the suite pass on aarch64, `clipboard_check` with it (MC-12.1).
+- **On aarch64** (000-APP-0137, which brought the `tools` suite's checks to aarch64's screen): `clipboard_check` with `tests/clip_stub` passes there too, 4 CPUs, in this container, on a67d94b8.
 
 ## Related
 
