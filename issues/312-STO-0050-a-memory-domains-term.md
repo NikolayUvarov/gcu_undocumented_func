@@ -1,6 +1,6 @@
 # 312-STO-0050 — A memory domain's term
 
-**Type:** service (storage), design · **Owner:** `STO` track · **Priority:** P3 · **Status:** open · **Blocked by:** a design choice (below), then a calendar clock for `blockstore` (to be asked of `KRN` once it is made) · **Main task:** [312](../issues-done/312-the-minds-memory.done) · **Roadmap:** track B · **Constitution:** MC-4.11, Appendix B.3
+**Type:** service (storage), design · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (2026-11-13) · **Blocked by:** a calendar clock for `blockstore`, an `rtc` client that only reads ([requests-KRN.md](requests-KRN.md), 2026-11-13), for its effect on the platform; the store's logic and its host tests need none · **Main task:** [312](../issues-done/312-the-minds-memory.done) · **Roadmap:** track B · **Constitution:** MC-4.11, Appendix B.3
 
 Split from [312](../issues-done/312-the-minds-memory.done), whose criteria were met without it.
 
@@ -24,11 +24,28 @@ When a term ends, the store could:
 
 Which one is the maintainer's or the owner's to say. The second and third need no key destroyed by a clock.
 
-## Plan, once chosen
+## Decision (2026-11-13, the maintainer)
 
-- The term in the key record, beside the limit (`domain-create-limited`'s form, `blockstore.wit` minor).
-- `blockstore` given a calendar clock by `init` (a `KRN` request).
-- Host tests across a term's end, and a QEMU check across a reboot.
+All three ways, as a flag of each domain:
+
+> «давай это сделаем флагом с тремя состояниями ... тогда в случае плохих часов можно будет подстраховаться и перейти в режим 3. А если требуется повышенная безопасность - то в режим 2 или 1 - когда это прямо критически важно»
+
+- **A term and a mode per domain,** set by its owner at any time, either way. The term is a calendar time; none is no term. The modes:
+  - **forget:** past its term, the store forgets the domain as `domain-forget` does, its key destroyed;
+  - **release:** past its term, its names and pins retain nothing, so a collection frees its records. Writes through its client are refused (`read-only`), and its key stays until the owner forgets it;
+  - **report:** past its term, the store says so (`domain-term`, and the log once), and nothing else changes.
+- **Report is the default,** and the safeguard: with a clock not to be trusted, the owner sets its domains to report. Release or forget is for when it is critical.
+- **Without a calendar clock** the store acts on no term. Every domain then acts as in report, and the log says why.
+
+## Plan
+
+- **A term record of its own:** the domain, its term, its mode and a counter, sealed under the volume key. No key material is in it, so forgetting still erases the domain's one key record. A change writes a new one and erases the one before; a mount takes the latest.
+- **`blockstore.wit` minor:**
+  - `domain-set-term(id, until, mode)`, the owner's, through a client of the volume;
+  - `domain-term(id)`: the term, the mode, and whether it has passed.
+- **`blockstore` reads the calendar time** from `rtc`, at most once a minute, and acts on the terms past it.
+- **`blocks domain term <id> [<until> <mode>]`.**
+- **Host tests** with a simulated clock across a term's end, each mode, a mount between, a change of term and mode; a **QEMU check** across a reboot once `blockstore` has the clock.
 
 ## Acceptance criteria
 
