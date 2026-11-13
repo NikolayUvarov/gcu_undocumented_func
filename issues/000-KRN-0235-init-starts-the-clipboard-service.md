@@ -30,7 +30,8 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP
 - **Docs:** `docs/profile/bootstrap.md` (its row, and the shell's).
 - `tests/qemu_smoke.py`'s service list names it, so every suite's boot checks it runs.
 - **Tested** (this container): `tests/boot_abi_host.rs`, `tests/services_host.rs`; `init` and `clipboard` build for both targets.
-- **Left:** the boot and tools groups on x86 and aarch64; APP's `tools` checks of its own; the gate.
+- **On the maintainer's machines** (Effector, QEMU under TCG) at f3405836: "x86: boot, display, shell, memory, clock" (713 s) and "x86: keys, shell, tools" (455 s) on x32, "aarch64: boot and fault containment" (164 s) on acc-1 passed; each boot's service list holds `clipboard`.
+- **Left:** APP's `tools` checks of its own (text copied in `edit`, pasted into the shell and another `edit`); the gate.
 
 ## Related
 
