@@ -13,6 +13,8 @@ Server layout:
     channels/<channel>                      the channel: one line of JSON, then its release keys' signature lines
     keys/current                            the key file: each role's keys and threshold, signed by the root keys
                                                  (351-UPD-0026); a signature line is `ed25519 <key> <signature>` in hex
+    keys/<version>                          every version of it, from 1: each signed by the root of the one before and
+                                                 by its own (351-UPD-0027)
 
 Usage:
     release.py stage VERSION OUT [--arch x86_64=usb_root] [--arch aarch64=aarch64_root]
@@ -26,7 +28,10 @@ Usage:
                          [--days 365]       a key file's body, unsigned: every role, its public keys and threshold
     release.py keys sign FILE SEED          adds one root key's signature line (SEED: a file of 64 hex digits)
     release.py keys check FILE [--root ROOT] [--now ISO-8601]   the root threshold, the form and the expiry
-    release.py keys publish FILE DEST [--root ROOT]             checked, then keys/current, a version above the server's
+    release.py keys publish FILE DEST [--root ROOT]             checked against the root before it, then keys/<version>
+                                                 and keys/current: the next version of the server's history (351-UPD-0027)
+    release.py keys rotate FILE ROLE OUT --key KEY[,KEY…] --threshold T   the next version's body, ROLE given those keys
+    release.py keys revoke FILE KEY OUT     the next version's body, KEY in no role
     release.py keys root SEED… --threshold T                    the root set's public file, $MIND_ROOT_KEYS's form
     release.py keys --test                  the test root set's public file
 
@@ -61,7 +66,7 @@ TEST_TIMESTAMP_SEED = hashlib.sha256(b"MIND Core test timestamp key: public, nev
 ARCHES = {"x86_64": "usb_root", "aarch64": "aarch64_root"}
 # A key file's roles in its order, the keys a role names and the signature lines a file carries, at most; the largest
 # channel and key file (libmind/src/release.rs).
-ROLES = ("boot", "recovery", "release", "timestamp")
+ROLES = ("boot", "recovery", "release", "root", "timestamp")  # root: the keys that sign the next key file (351-UPD-0027)
 ROLE_KEYS, SIGNATURES_MAX = 4, 8
 CHANNEL_MAX, KEYS_MAX = 2560, 4096
 
@@ -198,8 +203,8 @@ def root_file(keys, threshold):
 
 
 def check_keys(whole, root=None, now=None):
-    """(the key file, None) if `whole` is a key file the root set's threshold signed and not expired, else (None, the
-    reason)."""
+    """(the key file, None) if `whole` is a key file the threshold of the root set `root` trusts signed, and the threshold
+    of its own root role (the next root, when it rotates it: 351-UPD-0027), and not expired; else (None, the reason)."""
     if len(whole) > KEYS_MAX:
         return None, f"larger than {KEYS_MAX} bytes"
     signed, why = split_signed(whole)
@@ -213,20 +218,57 @@ def check_keys(whole, root=None, now=None):
     good, enough = counted(keys, threshold, body, signatures)
     if not enough:
         return None, f"signed by {good} of the root keys, not {threshold}"
+    own, own_threshold = k["roles"]["root"]
+    good, enough = counted(own, own_threshold, body, signatures)
+    if not enough:
+        return None, f"signed by {good} of its own root keys, not {own_threshold}"
     now = now or datetime.datetime.now(datetime.timezone.utc)
     if datetime.datetime.strptime(k["expires"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc) <= now:
         return None, f"expired at {k['expires']}"
     return k, None
 
 
-def test_keys_file(now=None, days=3650, version=1, roots=TEST_ROOT_SEEDS[:TEST_ROOT_THRESHOLD]):
-    """The test key file: the test boot, recovery, release and timestamp keys, one of each signing, signed by `roots`."""
+def test_keys_file(now=None, days=3650, version=1, roots=TEST_ROOT_SEEDS[:TEST_ROOT_THRESHOLD], release=(TEST_RELEASE_SEED,),
+                   root=(TEST_ROOT_SEEDS, TEST_ROOT_THRESHOLD)):
+    """The test key file: the test boot, recovery and timestamp keys, the `release` seeds' keys, the `root` set (the
+    test one), one of each other signing, signed by `roots`."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     expires = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     roles = {"boot": ([sm.public_key(sm.TEST_SEED)], 1), "recovery": ([sm.public_key(TEST_RECOVERY_SEED)], 1),
-             "release": ([sm.public_key(TEST_RELEASE_SEED)], 1), "timestamp": ([sm.public_key(TEST_TIMESTAMP_SEED)], 1)}
+             "release": ([sm.public_key(seed) for seed in release], 1), "root": ([sm.public_key(seed) for seed in root[0]], root[1]),
+             "timestamp": ([sm.public_key(TEST_TIMESTAMP_SEED)], 1)}
     body = keys_bytes(version, expires, roles)
     return body + signature_lines(body, roots)
+
+
+def key_versions(target):
+    """The versions the server's key history holds (`keys/<version>`), in order, from 1 up while they follow."""
+    out, v = [], 1
+    while target.read(f"keys/{v}") is not None:
+        out.append(v)
+        v += 1
+    return out
+
+
+def check_chain(target, root=None, now=None):
+    """(the server's current key file, None) once every version from 1 up has been checked against the root before it,
+    the first against the root set (351-UPD-0027), and `keys/current` is the last of them; else (None, the reason)."""
+    current = target.read("keys/current")
+    if current is None:
+        return None, "keys/current: missing"
+    trusted, k = root or root_set(), None
+    for v in key_versions(target):
+        k, why = check_keys(target.read(f"keys/{v}"), trusted, now)
+        if k is None:
+            return None, f"keys/{v}: {why}"
+        if k["version"] != v:
+            return None, f"keys/{v}: holds version {k['version']}"
+        trusted = k["roles"]["root"]
+    if k is None:
+        return None, "keys/1: missing: the key history starts at version 1"
+    if current != target.read(f"keys/{k['version']}"):
+        return None, f"keys/current: not keys/{k['version']}, the last of the history"
+    return k, None
 
 
 def manifest_files(text):
@@ -372,10 +414,11 @@ def server_keys(target, root=None, now=None, seeds=None):
         if (seeds or release_seeds()) != [TEST_RELEASE_SEED] or root is not None or os.environ.get("MIND_ROOT_KEYS"):
             raise ReleaseError("keys/current: missing: publish a key file first (release.py keys publish)")
         whole = test_keys_file(now)
+        target.put_file(whole, "keys/1")
         target.put_file(whole, "keys/current")
-    k, why = check_keys(whole, root, now)
+    k, why = check_chain(target, root, now)
     if k is None:
-        raise ReleaseError(f"keys/current on the server: {why}")
+        raise ReleaseError(f"the server's key files: {why}")
     return k
 
 
@@ -421,12 +464,9 @@ def check(dest, channel="stable", boot_public=None, now=None, root=None):
     they list verify; else the reason."""
     target = destination(dest)
     boot_public = boot_public or sm.public_key(sm.signing_seed())
-    whole = target.read("keys/current")
-    if whole is None:
-        return "keys/current: missing"
-    k, why = check_keys(whole, root, now)
+    k, why = check_chain(target, root, now)
     if k is None:
-        return f"keys/current: {why}"
+        return why
     whole = target.read(f"channels/{channel}")
     if whole is None:
         return f"channels/{channel}: missing"
@@ -474,7 +514,8 @@ def bundle(dest, out, channel="stable", arches=None, now=None):
     missing = [a for a in chosen if a not in c["manifests"]]
     if missing:
         raise ReleaseError(f"channels/{channel} names no manifest for {', '.join(missing)}")
-    paths, blobs = ["keys/current", f"channels/{channel}"], set()
+    # The whole key history, for a device that holds an older version (351-UPD-0027), then the current one.
+    paths, blobs = [*(f"keys/{v}" for v in key_versions(target)), "keys/current", f"channels/{channel}"], set()
     for arch in chosen:
         release = f"releases/{c['version']}/{arch}"
         paths += [f"{release}/MANIFEST", f"{release}/MANIFEST.SIG"]
@@ -540,19 +581,54 @@ def keys_command(argv, option):
         print(why or f"VERIFIED: KEY FILE VERSION {k['version']}, EXPIRES {k['expires']}")
         return 1 if why else 0
     elif argv[:1] == ["publish"] and len(argv) >= 3:
-        whole = Path(argv[1]).read_bytes()
-        k, why = check_keys(whole, root)
+        # The next version of the server's history, checked against the root before it (351-UPD-0027): the root set for
+        # version 1, else the last version's root role. The same file again is no change.
+        whole, target = Path(argv[1]).read_bytes(), destination(argv[2])
+        published = key_versions(target)
+        if published and target.read(f"keys/{published[-1]}") == whole:
+            print(f"KEY FILE VERSION {published[-1]} PUBLISHED ALREADY")
+            return 0
+        trusted = root or root_set()
+        if published:
+            last, why = check_chain(target, root)
+            if last is None:
+                raise ReleaseError(f"the server's key files: {why}")
+            trusted = last["roles"]["root"]
+        k, why = check_keys(whole, trusted)
         if k is None:
             raise ReleaseError(f"{argv[1]}: {why}")
-        target = destination(argv[2])
-        current = target.read("keys/current")
-        if current is not None and current != whole:
-            signed, _ = split_signed(current)
-            old, _ = keys_from(signed[0]) if signed else (None, None)
-            if old is not None and old["version"] >= k["version"]:
-                raise ReleaseError(f"version {k['version']} is not above the published {old['version']}")
+        if k["version"] != len(published) + 1:
+            raise ReleaseError(f"version {k['version']} does not follow the published {len(published) or 'none'}: the next is {len(published) + 1}")
+        target.put_file(whole, f"keys/{k['version']}")
         target.put_file(whole, "keys/current")
         print(f"PUBLISHED KEY FILE VERSION {k['version']}, EXPIRES {k['expires']}")
+    elif argv[:1] in (["rotate"], ["revoke"]) and len(argv) >= 4:
+        # The next version's body from a key file (351-UPD-0027): `rotate FILE ROLE OUT --key K[,K…] --threshold T` gives
+        # ROLE those keys; `revoke FILE KEY OUT` takes KEY out of every role. Then `keys sign` it, the root before and the
+        # root after (when `root` rotates) each to its threshold.
+        whole = Path(argv[1]).read_bytes()
+        signed, why = split_signed(whole)
+        k, why = keys_from(signed[0]) if signed else (None, why)
+        if k is None:
+            raise ReleaseError(f"{argv[1]}: {why}")
+        roles = {name: (list(keys), t) for name, (keys, t) in k["roles"].items()}
+        if argv[0] == "rotate":
+            role, out = argv[2], argv[3]
+            if role not in ROLES or not option("--key") or not (option("--threshold") or "").isdigit():
+                raise ReleaseError(f"rotate FILE ROLE OUT --key K[,K…] --threshold T, ROLE one of {', '.join(ROLES)}")
+            roles[role] = ([bytes.fromhex(x) for x in option("--key").split(",")], int(option("--threshold")))
+        else:
+            key, out = bytes.fromhex(argv[2]), argv[3]
+            if not any(key in keys for keys, _ in roles.values()):
+                raise ReleaseError(f"{argv[2]}: no role of {argv[1]} names it")
+            roles = {name: ([x for x in keys if x != key], t) for name, (keys, t) in roles.items()}
+            short = [name for name, (keys, t) in roles.items() if len(keys) < t]
+            if short:
+                raise ReleaseError(f"without it, {', '.join(short)}: fewer keys than the threshold; rotate instead")
+        days = int(option("--days", "365"))
+        expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        Path(out).write_bytes(keys_bytes(k["version"] + 1, expires, roles))
+        print(f"MADE KEY FILE VERSION {k['version'] + 1} IN {out}, EXPIRES {expires}: UNSIGNED")
     else:
         print(__doc__)
         return 2

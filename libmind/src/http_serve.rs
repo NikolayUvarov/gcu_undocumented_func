@@ -210,6 +210,7 @@ pub fn resolve(target: &str) -> Result<(&str, Kind), Refusal> {
         ["releases", version, arch, file] if digits(version) && ARCHES.contains(arch) && MANIFESTS.contains(file) => Kind::Manifest,
         ["channels", name] if channel_name(name) => Kind::Channel,
         ["keys", "current"] => Kind::Channel, // the key file (351-UPD-0026), fetched fresh as a channel is
+        ["keys", version] if digits(version) => Kind::Manifest, // its history (351-UPD-0027): a version never changes
         _ => return Err(Refusal::NotInLayout),
     };
     Ok((relative, kind))

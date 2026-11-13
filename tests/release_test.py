@@ -242,7 +242,7 @@ class Releases(unittest.TestCase):
         paths = release.bundle(self.dest, out, now=NOW)
         manifest = (self.dest / "releases/2/x86_64/MANIFEST").read_bytes()
         blobs = sorted(blob for _, _, blob in release.manifest_files(manifest))
-        self.assertEqual(paths, ["keys/current", "channels/stable", "releases/2/x86_64/MANIFEST", "releases/2/x86_64/MANIFEST.SIG", *(f"blobs/{b}" for b in blobs)])
+        self.assertEqual(paths, ["keys/1", "keys/current", "channels/stable", "releases/2/x86_64/MANIFEST", "releases/2/x86_64/MANIFEST.SIG", *(f"blobs/{b}" for b in blobs)])
         with zipfile.ZipFile(out) as archive:
             self.assertEqual(archive.namelist(), paths)
             for info in archive.infolist():
@@ -271,17 +271,19 @@ class Releases(unittest.TestCase):
         return status, out.getvalue()
 
     def test_a_key_file_made_signed_and_checked(self):
-        seeds = [self.dir / f"root{i}" for i in range(3)]
+        seeds = [self.dir / f"root{i}" for i in range(5)]
         for i, seed in enumerate(seeds):
             seed.write_text(hashlib.sha256(f"a root key of this test {i}".encode()).hexdigest())
+        pub = [sm.public_key(release.read_seed(seed)).hex() for seed in seeds]
         root = self.dir / "root.pub"
-        status, text = self.keys("root", *seeds, "--threshold", 2)
+        status, text = self.keys("root", *seeds[:3], "--threshold", 2)
         root.write_text(text)
         self.assertEqual((status, release.root_set(root)[1]), (0, 2))
         public = sm.public_key(release.TEST_RELEASE_SEED).hex()
-        roles = [x for name in release.ROLES for x in ("--role", f"{name}={public}:1")]
+        roles = [x for name in release.ROLES if name != "root" for x in ("--role", f"{name}={public}:1")]
+        roles += ["--role", f"root={','.join(pub[:3])}:2"]
         made = self.dir / "keys"
-        self.assertEqual(self.keys("make", made, "--version", 3, *roles)[0], 0)
+        self.assertEqual(self.keys("make", made, "--version", 1, *roles)[0], 0)
         self.assertIn("not 1 to 8 signature lines", self.keys("check", made, "--root", root)[1])
         self.keys("sign", made, seeds[0])
         # One root key of a 2-of-3 threshold: refused (351-UPD-0026's criterion); the same key again does not count twice.
@@ -297,19 +299,45 @@ class Releases(unittest.TestCase):
         self.assertIn("signed by 1 of the root keys, not 2", self.keys("check", made, "--root", root)[1])
         self.keys("sign", made, seeds[2])
         expires = json.loads(whole.split(b"\n")[0])["expires"]
-        self.assertEqual(self.keys("check", made, "--root", root), (0, f"VERIFIED: KEY FILE VERSION 3, EXPIRES {expires}\n"))
-        # Published only above the server's version; the same file again is no change.
+        self.assertEqual(self.keys("check", made, "--root", root), (0, f"VERIFIED: KEY FILE VERSION 1, EXPIRES {expires}\n"))
+        # Published as the history's first version; the same file again is no change; another version 1 is refused.
         self.assertEqual(self.keys("publish", made, self.dest, "--root", root)[0], 0)
-        self.assertEqual(self.keys("publish", made, self.dest, "--root", root)[0], 0)
-        older = self.dir / "older"
-        self.keys("make", older, "--version", 2, *roles)
+        self.assertIn("PUBLISHED ALREADY", self.keys("publish", made, self.dest, "--root", root)[1])
+        again = self.dir / "again"
+        self.keys("make", again, "--version", 1, "--days", 30, *roles)
         for seed in seeds[:2]:
-            self.keys("sign", older, seed)
-        self.assertIn("version 2 is not above the published 3", self.keys("publish", older, self.dest, "--root", root)[1])
+            self.keys("sign", again, seed)
+        self.assertIn("version 1 does not follow the published 1: the next is 2", self.keys("publish", again, self.dest, "--root", root)[1])
         # A channel under it: the test release key is the release role's; checked against that root set alone.
         release.publish(self.staged(1), self.dest, now=NOW, root=release.root_set(root))
         self.assertIsNone(self.check(root=release.root_set(root)))
-        self.assertEqual(self.check(), "keys/current: signed by 0 of the root keys, not 2")
+        self.assertEqual(self.check(), "keys/1: signed by 0 of the root keys, not 2")
+        # The root rotated to keys 3 and 4, one of which signs (351-UPD-0027): the old root's threshold and the new one's
+        # must both sign, and the next version is then checked against the new root alone.
+        rotated = self.dir / "rotated"
+        self.assertEqual(self.keys("rotate", made, "root", rotated, "--key", ",".join(pub[3:]), "--threshold", 1)[0], 0)
+        self.keys("sign", rotated, seeds[0])
+        self.keys("sign", rotated, seeds[3])
+        self.assertIn("signed by 1 of the root keys, not 2", self.keys("publish", rotated, self.dest, "--root", root)[1])
+        unsigned = rotated.read_bytes()
+        self.keys("sign", rotated, seeds[1])
+        self.assertEqual(self.keys("publish", rotated, self.dest, "--root", root)[0], 0)
+        rotated.write_bytes(unsigned.split(b"\n")[0] + b"\n")
+        for seed in seeds[:2]:
+            self.keys("sign", rotated, seed)
+        self.assertIn("signed by 0 of its own root keys, not 1", self.keys("check", rotated, "--root", root)[1])
+        self.assertIsNone(self.check(root=release.root_set(root)))
+        self.assertEqual(release.key_versions(release.destination(self.dest)), [1, 2])
+        # Version 3 signed by the old root alone: refused, as that root is no longer trusted.
+        third = self.dir / "third"
+        self.keys("rotate", self.dest / "keys/2", "release", third, "--key", public, "--threshold", 1)
+        for seed in seeds[:3]:
+            self.keys("sign", third, seed)
+        self.assertIn("signed by 0 of the root keys, not 1", self.keys("publish", third, self.dest, "--root", root)[1])
+        # A revocation that would leave a role short of its threshold is refused; a history with a version missing fails.
+        self.assertIn("boot, recovery, release, timestamp: fewer keys than the threshold", self.keys("revoke", made, public, third)[1])
+        (self.dest / "keys/1").unlink()
+        self.assertEqual(self.check(root=release.root_set(root)), "keys/1: missing: the key history starts at version 1")
 
     def test_a_server_without_a_key_file(self):
         # The test key file goes up with a channel the test release key signs; with real keys none is made.

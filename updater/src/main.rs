@@ -1,15 +1,18 @@
 #![no_std]
 #![no_main]
 // The updater (351-UPD-0007, idl/update.wit, docs/update/updater.md; MC-9.2–9.4, MC-3.11): turns a published release
-// into a staged, verified slot and nothing more. It checks the key file against the root keys built into it and a
-// channel's signatures with the release keys that file names (351-UPD-0026), a manifest's with the boot key, and every file it stages by size and SHA-256; the parser service reads the
-// metadata (MC-11.11). It writes only the slot that did not boot and the boot records (vfs_server's update zone), and
-// confirms a trial boot on the disk once the kernel's deadline has passed without a restart. The Effector gateway may hand
+// into a staged, verified slot and nothing more. It takes each key file as the next version of the one it trusts, signed
+// by that one's root and its own, the first by the root keys built into it, keeps the highest in system/updater and
+// refuses a lower one (351-UPD-0026, 351-UPD-0027); it checks a channel's signatures, a slot's kept one included, with the
+// release keys of the key file it trusts, a manifest's with the boot key, and every file it stages by size and SHA-256;
+// the parser service reads the metadata (MC-11.11). It writes only the slot that did not boot and the boot records
+// (vfs_server's update zone) and its key file, and confirms a trial boot on the disk once the kernel's deadline has passed
+// without a restart. The Effector gateway may hand
 // it a release as a bundle (751-UPD-0032), which it checks as any source. It keeps the running, the last known good and
 // a staged release in the block store, pinned by its own owner, and a rollback writes the last known good back into a
 // damaged slot from there (351-UPD-0033, kept.rs). Holds: its endpoint, the clock, the boot disk's client badged for the
-// update zone, the parser, init's client badged for a restart, the log, the flow grant the policy gives it, the TLS
-// client and the block store's client badged OWNER_UPDATER.
+// update zone and its private directory, the parser, init's client badged for a restart, the log, the flow grant the
+// policy gives it, the TLS client and the block store's client badged OWNER_UPDATER.
 extern crate alloc;
 
 #[allow(dead_code)]
@@ -34,7 +37,7 @@ use mind::idl::codec::{List, Text};
 use mind::idl::{init, wire};
 use mind::ipc::Endpoint;
 use mind::parse::{read_channel, read_keys, read_manifest, Refused, Session};
-use mind::release::{self, Channel, Keys, CHANNEL_MAX, KEYS_MAX, MANIFEST_MAX};
+use mind::release::{self, Channel, Keys, Step, CHANNEL_MAX, KEYS_MAX, MANIFEST_MAX};
 use mind::zip; // the names a bundle may hold (bundle.rs)
 use mind::{cid, dag, tree}; // kept.rs names them as crate::cid, crate::dag and crate::tree, as the host tests build it
 use cid::Cid;
@@ -67,6 +70,11 @@ const INSTALL: &str = "INSTALL";
 const BUNDLE_MAX: u64 = 256 << 20;
 // The blobs of kept releases read at most, to find those a release shares with them (351-UPD-0033).
 const BLOBS_MAX: u64 = 4096;
+// The key file it trusts (351-UPD-0027), in its private directory: written whole beside it, then put in its place, and
+// read back from either.
+const TRUSTED_DIR: &str = "system/updater";
+const TRUSTED: &str = "system/updater/keys";
+const TRUSTED_NEW: &str = "system/updater/keys.new";
 
 // About 110 KiB: kept here rather than on the stack; only `builder` takes it, and no call of it is reentrant.
 static mut BUILDER: Builder = Builder::new();
@@ -139,29 +147,38 @@ fn parser() -> Session {
 
 fn verify(key: &[u8; 32], body: &[u8], signature: &[u8; 64]) -> bool { verified(key, body, signature) }
 
-/// A key file whose fields `parser` read and which at least the threshold of the root keys built in signed
-/// (351-UPD-0026): each root key counted once, a line of any other key passed over.
-fn keys_of(file: &[u8], parser: Endpoint) -> Result<Keys, Error> {
-    let (keys, signed) = read_keys(parser, file).map_err(refused)?;
-    if !release::signed_by(&keys::ROOT_KEYS, keys::ROOT_THRESHOLD, &file[..signed.body], &signed, verify) {
-        mind::println!("[UPDATER] KEY FILE VERSION {} REFUSED: FEWER THAN {} OF THE ROOT KEYS SIGNED IT", keys.version, keys::ROOT_THRESHOLD);
-        return Err(Error::Signature);
-    }
-    Ok(keys)
-}
-
-/// A channel file whose fields `parser` read and which at least the threshold of the release keys `keys` names signed.
+/// A channel file whose fields `parser` read and which at least the threshold of the release keys `keys` names signed:
+/// each key counted once, a line of any other key passed over (351-UPD-0026), so a key `keys` no longer names counts for
+/// nothing (351-UPD-0027).
 fn channel_of(file: &[u8], keys: &Keys, parser: Endpoint) -> Result<Channel, Error> {
     let (channel, signed) = read_channel(parser, file).map_err(refused)?;
     let role = keys.role("release").ok_or(Error::Signature)?;
-    if !release::signed_by(role.keys(), role.threshold, &file[..signed.body], &signed, verify) { return Err(Error::Signature); }
+    if !release::signed_by(role.keys(), role.threshold, &file[..signed.body], &signed, &verify) { return Err(Error::Signature); }
     Ok(channel)
 }
 
-/// A release's key file and channel, each checked: the key file by the root keys, then the channel by its release keys.
-fn signed_release(keys_file: &[u8], channel_file: &[u8], parser: Endpoint) -> Result<(Keys, Channel), Error> {
-    let keys = keys_of(keys_file, parser)?;
-    Ok((keys, channel_of(channel_file, &keys, parser)?))
+/// The key file kept in system/updater (351-UPD-0027): of `keys` and `keys.new`, the highest version that its own root's
+/// threshold signed, with its bytes and path; None without one.
+fn kept_keys(parser: Endpoint) -> Option<(Keys, Vec<u8>, &'static str)> {
+    [TRUSTED, TRUSTED_NEW].into_iter().filter_map(|path| {
+        let file = File::open(path).ok().filter(|f| f.size() <= KEYS_MAX)?;
+        let mut data = alloc::vec![0u8; file.size()];
+        if file.read_at(0, &mut data) != Ok(data.len()) { return None; }
+        let (keys, signed) = read_keys(parser, &data).ok()?;
+        let root = keys.root();
+        release::signed_by(root.keys(), root.threshold, &data[..signed.body], &signed, &verify).then_some((keys, data, path))
+    }).max_by_key(|(keys, _, _)| keys.version)
+}
+
+/// Key file `file` kept as the one trusted: written whole beside it, then put in its place.
+fn keep_keys(file: &[u8]) -> Result<(), mind::fs::Error> {
+    match mind::fs::mkdir(TRUSTED_DIR) { Ok(()) | Err(mind::fs::Error::Exists) => {} Err(e) => return Err(e) }
+    let mut new = File::create(TRUSTED_NEW)?;
+    if new.write_at(0, file)? != file.len() { return Err(mind::fs::Error::Io); }
+    new.flush()?;
+    drop(new);
+    match mind::fs::remove(TRUSTED) { Ok(()) | Err(mind::fs::Error::NotFound) => {} Err(e) => return Err(e) }
+    mind::fs::rename(TRUSTED_NEW, TRUSTED)
 }
 
 /// The files of a manifest a slot holds, by name, size and SHA-256: the kernel, the services the bootloader loads, its
@@ -192,6 +209,8 @@ struct Updater {
     install: Option<Install>, handles: u32,
     /// The block store, where it keeps releases (351-UPD-0033): None without one that outlives a reset.
     store: Option<Store>,
+    /// The key file it trusts and its bytes (351-UPD-0027): the highest version it took; None before the first.
+    trusted: Option<(Keys, Vec<u8>)>,
 }
 
 /// Where the channel the updater holds came from.
@@ -248,12 +267,89 @@ impl Updater {
 
     fn other(&self) -> &'static str { slot_name(plan::other(self.slot)) }
 
-    /// The channel kept in a slot, if the key file kept beside it is the root keys' and names the release keys that
-    /// signed it, and it names, for this architecture, the manifest `digest` (None: read the slot's MANIFEST); its
-    /// version is the slot's. The caller's parser reads them, so that one session serves several reads (109-KRN-0133).
+    /// The version of the key file it trusts (0: none) and the root that signs the next: that file's root role, else
+    /// the root keys built in.
+    fn root(&self) -> (u64, &[[u8; 32]], u8) {
+        match &self.trusted { Some((k, _)) => (k.version, k.root().keys(), k.root().threshold), None => (0, &keys::ROOT_KEYS, keys::ROOT_THRESHOLD) }
+    }
+
+    /// Key file `file`, from `from`, taken as the one it trusts when it is the next version of the one trusted, signed by
+    /// that one's root and its own (`release::step`, 351-UPD-0027), and kept in system/updater; the same one again is
+    /// taken as it is. Otherwise refused, and said in the log unless `quiet`: a lower version brings revoked keys back.
+    fn take(&mut self, file: &[u8], from: &str, quiet: bool, parser: Endpoint) -> Result<Keys, Error> {
+        let (next, signed) = read_keys(parser, file).map_err(refused)?;
+        let (held, keys, threshold) = self.root();
+        let (refusal, error) = match release::step(held, keys, threshold, &next, &file[..signed.body], &signed, verify) {
+            Step::Next => (None, Error::Signature),
+            Step::Same if self.trusted.as_ref().is_some_and(|(k, _)| *k == next) => return Ok(next),
+            Step::Same => (Some(String::from("ANOTHER FILE OF THE VERSION TAKEN BEFORE")), Error::Signature),
+            Step::Lower => (Some(format!("BELOW VERSION {}, TAKEN BEFORE: IT WOULD BRING REVOKED KEYS BACK", held)), Error::Older),
+            Step::Skips => (Some(format!("NOT THE NEXT OF VERSION {}", held)), Error::Missing),
+            Step::Unsigned if !release::signed_by(keys, threshold, &file[..signed.body], &signed, &verify) =>
+                (Some(if held == 0 { format!("FEWER THAN {} OF THE ROOT KEYS SIGNED IT", threshold) } else { format!("FEWER THAN {} OF VERSION {}'S ROOT KEYS SIGNED IT", threshold, held) }), Error::Signature),
+            Step::Unsigned => (Some(format!("FEWER THAN {} OF ITS OWN ROOT KEYS SIGNED IT", next.root().threshold)), Error::Signature),
+        };
+        if let Some(why) = refusal {
+            if !quiet { mind::println!("[UPDATER] KEY FILE VERSION {} REFUSED ({}): {}", next.version, from, why); }
+            return Err(error);
+        }
+        let rotated = self.trusted.as_ref().is_some_and(|(k, _)| k.root() != next.root());
+        self.trusted = Some((next, Vec::from(file)));
+        let kept = match keep_keys(file) { Ok(()) => format!("KEPT IN {}", TRUSTED), Err(e) => format!("NOT KEPT ({:?}): HELD UNTIL THE UPDATER ENDS", e) };
+        mind::println!("[UPDATER] KEY FILE VERSION {} TAKEN ({}){}, {}", next.version, from, if rotated { ", THE ROOT ROTATED" } else { "" }, kept);
+        Ok(next)
+    }
+
+    /// The key file it trusts at start (351-UPD-0027): the one kept in system/updater, put in its place if a restart cut
+    /// its write; then a slot's key file, the running one's first, when it is the next version (an image as written
+    /// holds version 1 there).
+    fn trust_kept(&mut self, parser: Endpoint) {
+        match kept_keys(parser) {
+            Some((keys, file, path)) => {
+                mind::println!("[UPDATER] KEY FILE VERSION {} FROM {}, TAKEN BEFORE", keys.version, path);
+                if path == TRUSTED_NEW { let _ = keep_keys(&file); }
+                self.trusted = Some((keys, file));
+            }
+            None => mind::println!("[UPDATER] NO KEY FILE KEPT IN {}: THE ROOT KEYS BUILT IN SIGN THE FIRST", TRUSTED_DIR),
+        }
+        if self.slot == 0 { return; }
+        for slot in [slot_name(self.slot), self.other()] {
+            if let Some(file) = slot_file(slot, "KEYS", KEYS_MAX) { let _ = self.take(&file, &format!("SLOT {}", slot), true, parser); }
+        }
+    }
+
+    /// The key file `source` holds as `keys/current`, taken as the one it trusts (351-UPD-0027): first each version
+    /// between the one trusted and it, from `keys/<version>`, each the next of the one before; then its expiry. With
+    /// the file as read.
+    fn trust_source(&mut self, source: &Source, parser: &mut Session) -> Result<(Keys, Vec<u8>), Error> {
+        let current = source.small("keys/current", KEYS_MAX, parser)?;
+        let (keys, _) = read_keys(parser.endpoint(), &current).map_err(refused)?;
+        for version in self.root().0.saturating_add(1)..keys.version {
+            let path = format!("keys/{}", version);
+            let file = source.small(&path, KEYS_MAX, parser)?;
+            if self.take(&file, &path, false, parser.endpoint())?.version != version { return Err(Error::Malformed); }
+        }
+        let keys = self.take(&current, "keys/current", false, parser.endpoint())?;
+        if keys_expired(&keys) { mind::println!("[UPDATER] KEY FILE VERSION {} EXPIRED", keys.version); return Err(Error::Expired); }
+        Ok((keys, current))
+    }
+
+    /// The channel kept in a slot, if the release keys of the key file it trusts signed it (351-UPD-0027: a slot whose
+    /// channel only a key that file no longer names signed is no fallback, and its version is not known), and it names,
+    /// for this architecture, the manifest `digest` (None: read the slot's MANIFEST); its version is the slot's. The
+    /// caller's parser reads them, so that one session serves several reads (109-KRN-0133).
     fn kept(&self, slot: &str, digest: Option<[u8; 32]>, parser: Endpoint) -> Option<Channel> {
-        let (keys_file, bytes) = (slot_file(slot, "KEYS", KEYS_MAX)?, slot_file(slot, "CHANNEL", CHANNEL_MAX)?);
-        let (_, channel) = signed_release(&keys_file, &bytes, parser).ok()?;
+        let bytes = slot_file(slot, "CHANNEL", CHANNEL_MAX)?;
+        let Some((keys, _)) = &self.trusted else { mind::println!("[UPDATER] SLOT {}: NO KEY FILE TRUSTED: ITS CHANNEL IS NOT READ", slot); return None };
+        let channel = match channel_of(&bytes, keys, parser) {
+            Ok(channel) => channel,
+            Err(Error::Signature) => {
+                let role = keys.role("release").map_or(0, |r| r.threshold);
+                mind::println!("[UPDATER] SLOT {}: ITS CHANNEL IS SIGNED BY FEWER THAN {} OF THE RELEASE KEYS OF KEY FILE VERSION {}: NOT A FALLBACK", slot, role, keys.version);
+                return None;
+            }
+            Err(_) => return None,
+        };
         let digest = digest.or_else(|| {
             let manifest = File::open(&format!("MIND/{}/MANIFEST", slot)).ok()?;
             (manifest.size() <= MANIFEST_MAX).then(|| sha256(&manifest)).flatten()
@@ -336,13 +432,11 @@ impl Updater {
         result
     }
 
-    /// The channel update.txt names as `source` holds it: the key file first, its root signatures, form and expiry
-    /// (351-UPD-0026); then the channel's release signatures, form and expiry, and its version against the running one;
-    /// with the channel's file and the key file as read.
+    /// The channel update.txt names as `source` holds it: the key file first, taken as the next of the one trusted, and
+    /// its expiry (351-UPD-0026, 351-UPD-0027); then the channel's release signatures, form and expiry, and its version
+    /// against the running one; with the channel's file and the key file as read.
     fn read_channel(&mut self, source: &Source, from: Held, parser: &mut Session) -> Result<(Channel, Vec<u8>, Vec<u8>), Error> {
-        let keys_file = source.small("keys/current", KEYS_MAX, parser)?;
-        let keys = keys_of(&keys_file, parser.endpoint())?;
-        if keys_expired(&keys) { mind::println!("[UPDATER] KEY FILE VERSION {} EXPIRED", keys.version); return Err(Error::Expired); }
+        let (keys, keys_file) = self.trust_source(source, parser)?;
         let bytes = source.small(&format!("channels/{}", self.config.channel), CHANNEL_MAX, parser)?;
         let channel = channel_of(&bytes, &keys, parser.endpoint())?;
         if channel.name.as_str() != self.config.channel { return Err(Error::Malformed); }
@@ -660,8 +754,8 @@ impl Updater {
     }
 
     /// The running release kept in the store if it is not yet: its slot's manifest the one booted and signed by the
-    /// boot key, and its channel signed by the release keys of the key file beside it, naming it (351-UPD-0033,
-    /// 351-UPD-0026). Not on trial: the confirmation comes first.
+    /// boot key, and its channel signed by the release keys of the key file it trusts, naming it (351-UPD-0033,
+    /// 351-UPD-0027). Not on trial: the confirmation comes first.
     fn keep_running(&mut self) {
         if self.store.is_none() || self.may_stage().is_err() || self.running == 0 || self.stored().iter().any(|r| r.2 == self.running) { return; }
         let slot = slot_name(self.slot);
@@ -674,7 +768,7 @@ impl Updater {
             return mind::println!("[UPDATER] STORE: SLOT {}'S MANIFEST IS NOT THE ONE BOOTED: VERSION {} NOT KEPT", slot, self.running);
         }
         let parser = parser();
-        let checked = signed_release(&keys_file, &channel_file, parser.endpoint()).ok().map(|(_, c)| c)
+        let checked = self.trusted.as_ref().and_then(|(keys, _)| channel_of(&channel_file, keys, parser.endpoint()).ok())
             .filter(|c| c.version == self.running && c.manifest(ARCH) == Some(self.manifest))
             .map(|c| (c, slot_files(&manifest, parser.endpoint())));
         drop(parser);
@@ -733,14 +827,15 @@ impl Updater {
     }
 
     /// Release `version`, kept in the store at `root`, written into the other slot as a fetch writes a source's: its
-    /// key file and channel the ones kept with it, every file checked by size and SHA-256; `step` names it in the log.
+    /// channel the one kept with it, signed by the release keys of the key file it trusts (351-UPD-0027), and that key
+    /// file beside it; every file checked by size and SHA-256; `step` names it in the log.
     fn from_store(&mut self, root: &Cid, version: u64, step: &str) -> Result<(), Error> {
         let name = kept::channel(&mut Store, root, &mut chunk()).map_err(|_| Error::Digest)?;
         let source = Source::Store(*root);
         let mut parser = parser();
-        let keys_file = source.small("keys/current", KEYS_MAX, &mut parser)?;
+        let (keys, keys_file) = self.trusted.clone().ok_or(Error::Signature)?;
         let channel_file = source.small(&format!("channels/{}", name), CHANNEL_MAX, &mut parser)?;
-        let (_, channel) = signed_release(&keys_file, &channel_file, parser.endpoint())?;
+        let channel = channel_of(&channel_file, &keys, parser.endpoint())?;
         if channel.version != version || channel.name.as_str() != name { return Err(Error::Digest); }
         let (read, _, _, files) = self.write_slot(&source, step, &channel, &channel_file, &keys_file, &mut parser)?;
         drop(parser);
@@ -878,7 +973,7 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let slot = match info.boot_slot.slot { BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
     let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None,
-                                failure: String::new(), install: None, handles: 0, store: None };
+                                failure: String::new(), install: None, handles: 0, store: None, trusted: None };
     if keys::ROOT_TEST_KEYS || keys::BOOT_TEST_KEY {
         mind::println!("[UPDATER] KEYS: {}{}", if keys::ROOT_TEST_KEYS { "THE TEST ROOT KEYS " } else { "" }, if keys::BOOT_TEST_KEY { "THE TEST BOOT KEY" } else { "" });
     }
@@ -887,10 +982,13 @@ fn main(info: &'static BootInfo) {
     let (mut confirm_at, mut ask_at) = (None, None);
     if slot == 0 {
         mind::println!("[UPDATER] BOOTED FROM THE VOLUME'S ROOT: NO SLOT TO FILL");
+        // The key file kept, read only when there is one: a boot from the root starts no parser for nothing.
+        if [TRUSTED, TRUSTED_NEW].iter().any(|path| File::open(path).is_ok()) { updater.trust_kept(parser().endpoint()); }
     } else {
         // Both slots' channels through one parser: a session's helper may hold the updater's one endpoint for a moment
         // after it ends (109-KRN-0133).
         let parser = parser();
+        updater.trust_kept(parser.endpoint());
         let kept = updater.kept(slot_name(slot), Some(updater.manifest), parser.endpoint());
         updater.slot_period(parser.endpoint());
         let (running, minimum) = kept.map_or((0, 0), |c| (c.version, c.minimum));

@@ -11,8 +11,8 @@ pub const MANIFEST_MAX: usize = 32768;
 /// Signature lines a channel or a key file carries, at most; public keys a role names, at most.
 pub const SIGNATURES_MAX: usize = 8;
 pub const ROLE_KEYS: usize = 4;
-/// The roles of a key file, in its order (351-UPD-0026).
-pub const ROLES: [&str; 4] = ["boot", "recovery", "release", "timestamp"];
+/// The roles of a key file, in its order (351-UPD-0026; `root` since 351-UPD-0027, the keys that sign the next file).
+pub const ROLES: [&str; 5] = ["boot", "recovery", "release", "root", "timestamp"];
 /// A channel's name, an architecture's name, a manifest's path: their longest.
 pub const NAME_MAX: usize = 32;
 pub const ARCH_MAX: usize = 16;
@@ -90,16 +90,47 @@ impl Role {
 /// What a key file says (351-UPD-0026, after TUF's root metadata): its version, when it expires, and each role's keys
 /// and threshold, in `ROLES`' order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Keys { pub version: u64, pub expires: [u8; 20], pub roles: [Role; 4] }
+pub struct Keys { pub version: u64, pub expires: [u8; 20], pub roles: [Role; ROLES.len()] }
 
 impl Keys {
     /// The role named `name`, one of `ROLES`.
     pub fn role(&self, name: &str) -> Option<&Role> { ROLES.iter().position(|&r| r == name).map(|i| &self.roles[i]) }
+    /// The root role: the keys and threshold that sign the next key file (351-UPD-0027).
+    pub fn root(&self) -> &Role { &self.roles[3] }
+}
+
+/// What a key file is to a device that holds version `held` and trusts the root `keys` and `threshold` (351-UPD-0027,
+/// after TUF's root rotation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Version `held` + 1, signed by that root's threshold and by its own root's, which differs when it rotates the root.
+    Next,
+    /// Version `held` again: the caller compares it with the file it holds.
+    Same,
+    /// Below `held`: served again, it would bring back the keys a later version revoked.
+    Lower,
+    /// Above `held` + 1: the versions between are taken first.
+    Skips,
+    /// Version `held` + 1 without both thresholds' signatures.
+    Unsigned,
+}
+
+/// The step key file `next` (`body` signed as `signed`) is from version `held` under the root `keys` and `threshold`.
+pub fn step(held: u64, keys: &[[u8; 32]], threshold: u8, next: &Keys, body: &[u8], signed: &Signed, verify: impl Fn(&[u8; 32], &[u8], &[u8; 64]) -> bool) -> Step {
+    match next.version {
+        v if v < held => Step::Lower,
+        v if v == held => Step::Same,
+        v if v > held.saturating_add(1) => Step::Skips,
+        _ => {
+            let root = next.root();
+            if signed_by(keys, threshold, body, signed, &verify) && signed_by(root.keys(), root.threshold, body, signed, &verify) { Step::Next } else { Step::Unsigned }
+        }
+    }
 }
 
 /// Whether at least `threshold` of `keys` signed `body`: each key counts once however many lines name it, a line whose
 /// key is not among `keys` is passed over, and `verify(key, body, signature)` is the Ed25519 check (MC-9.6).
-pub fn signed_by(keys: &[[u8; 32]], threshold: u8, body: &[u8], signed: &Signed, verify: impl Fn(&[u8; 32], &[u8], &[u8; 64]) -> bool) -> bool {
+pub fn signed_by(keys: &[[u8; 32]], threshold: u8, body: &[u8], signed: &Signed, verify: &impl Fn(&[u8; 32], &[u8], &[u8; 64]) -> bool) -> bool {
     if threshold == 0 { return false; }
     let mut counted = 0usize;
     for (i, key) in keys.iter().enumerate() {
@@ -251,7 +282,7 @@ pub fn parse_channel(file: &[u8]) -> Result<(Channel, Signed), Malformed> {
 }
 
 /// A key file (351-UPD-0026): `{"expires":…,"roles":{"boot":{"keys":[…],"threshold":…},"recovery":…,"release":…,
-/// "timestamp":…},"version":…}`, every role present, in that order, each with 1 to ROLE_KEYS public keys in 64 hex digits
+/// "root":…,"timestamp":…},"version":…}`, every role present, in that order (`root` since 351-UPD-0027), each with 1 to ROLE_KEYS public keys in 64 hex digits
 /// in ascending order and a threshold from 1 to their number; the version at least 1; no spaces; then the root keys'
 /// signature lines, as a channel's.
 pub fn parse_keys(file: &[u8]) -> Result<(Keys, Signed), Malformed> {
@@ -262,7 +293,7 @@ pub fn parse_keys(file: &[u8]) -> Result<(Keys, Signed), Malformed> {
         s.literal(b"{\"expires\":\"")?;
         let expires = timestamp(s.until(b'"')?)?;
         s.literal(b"\",\"roles\":{")?;
-        let mut roles = [Role::EMPTY; 4];
+        let mut roles = [Role::EMPTY; ROLES.len()];
         for (i, name) in ROLES.iter().enumerate() {
             if i > 0 { s.literal(b",")?; }
             s.literal(b"\"")?; s.literal(name.as_bytes())?; s.literal(b"\":{\"keys\":[")?;

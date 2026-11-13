@@ -1,13 +1,14 @@
 //! Host tests of the release metadata (libmind/src/release.rs, 351-UPD-0013): channel files, key files (351-UPD-0026)
 //! and boot manifests made by scripts/release.py and scripts/sign_manifest.py are read field by field and encode again
 //! to exactly their bytes; every other form is refused, and any byte changed in a valid file is refused or reads as what
-//! it then encodes. A key file's root signatures are counted as the updater counts them (`signed_by`).
+//! it then encodes. A key file's root signatures are counted as the updater counts them (`signed_by`), and a device takes
+//! the next version only when the root before it and its own both signed it (`step`, 351-UPD-0027).
 #![allow(dead_code)]
 #[path = "../libmind/src/release.rs"]
 mod release;
 
-use release::{channel_is, encode_channel, encode_file, encode_keys, expires_unix, keys_is, parse_channel, parse_keys, signed_by, Malformed, Manifest, Rebuild,
-               CHANNEL_MAX, FILE_LINE_MAX, KEYS_MAX, ROLES};
+use release::{channel_is, encode_channel, encode_file, encode_keys, expires_unix, keys_is, parse_channel, parse_keys, signed_by, step, Malformed, Manifest, Rebuild,
+               Step, CHANNEL_MAX, FILE_LINE_MAX, KEYS_MAX, ROLES};
 use std::process::Command;
 
 // Output of a Python snippet run with scripts/ on its path.
@@ -276,7 +277,11 @@ fn a_key_file_reads_and_encodes_to_its_signed_line() {
     let (keys, signed) = parse_keys(&file).unwrap();
     assert_eq!((keys.version, &keys.expires), (1, b"2036-11-10T00:00:00Z"));
     assert_eq!(signed.count, 2);
-    for name in ROLES { let role = keys.role(name).unwrap(); assert_eq!((role.count, role.threshold), (1, 1), "{}", name); }
+    for name in ROLES {
+        let role = keys.role(name).unwrap();
+        assert_eq!((role.count, role.threshold), if name == "root" { (3, 2) } else { (1, 1) }, "{}", name);
+    }
+    assert_eq!(keys.root(), keys.role("root").unwrap());
     let mut body = [0u8; KEYS_MAX];
     let n = encode_keys(&keys, &mut body).unwrap();
     assert_eq!(&body[..n], &file[..signed.body]);
@@ -293,7 +298,7 @@ fn the_root_threshold_counts_each_known_key_once() {
     let counts = |given: &str| {
         let file = keys_file(given);
         let (_, signed) = parse_keys(&file).unwrap();
-        signed_by(&roots, threshold, &file[..signed.body], &signed, verify)
+        signed_by(&roots, threshold, &file[..signed.body], &signed, &verify)
     };
     assert!(counts(TWO), "two of three");
     assert!(counts("*release.TEST_ROOT_SEEDS"), "all three");
@@ -306,8 +311,8 @@ fn the_root_threshold_counts_each_known_key_once() {
     let file = keys_file(TWO);
     let (_, mut signed) = parse_keys(&file).unwrap();
     signed.signatures[1].value[0] ^= 1;
-    assert!(!signed_by(&roots, threshold, &file[..signed.body], &signed, verify), "a bad signature");
-    assert!(!signed_by(&roots, 0, &file[..signed.body], &signed, verify), "threshold 0");
+    assert!(!signed_by(&roots, threshold, &file[..signed.body], &signed, &verify), "a bad signature");
+    assert!(!signed_by(&roots, 0, &file[..signed.body], &signed, &verify), "threshold 0");
 }
 
 #[test]
@@ -377,4 +382,44 @@ fn a_parser_that_lies_about_a_key_file_is_caught() {
     let mut other = signed;
     other.count = 1;
     assert!(!keys_is(&file, &keys, &other), "a signature left out");
+}
+
+// Key file `version` as `release.py keys` makes one: its root role the seeds `root` with threshold `threshold`, signed by
+// the seeds `signers` (Python expressions; NEW is a second root set of two keys).
+fn version_file(version: u64, root: &str, threshold: u8, signers: &str) -> Vec<u8> {
+    python(&format!("import release, datetime, hashlib\nnow = datetime.datetime(2026, 11, 13, tzinfo=datetime.timezone.utc)\n\
+                     NEW = [hashlib.sha256(f'another root {{i}}'.encode()).digest() for i in (1, 2)]\n\
+                     whole = release.test_keys_file(now, version={version}, roots=[{signers}], root=([{root}], {threshold}))\n\
+                     sys.stdout.buffer.write(whole)"))
+}
+
+#[test]
+fn a_device_takes_the_next_key_file_signed_by_both_roots() {
+    let (roots, threshold) = root_set();
+    let old = "*release.TEST_ROOT_SEEDS";
+    let first = version_file(1, old, 2, TWO);
+    let (v1, s1) = parse_keys(&first).unwrap();
+    let take = |held: u64, keys: &[[u8; 32]], threshold: u8, file: &[u8]| {
+        let (next, signed) = parse_keys(file).unwrap();
+        step(held, keys, threshold, &next, &file[..signed.body], &signed, verify)
+    };
+    // Version 1 from none: the built-in root signed it, and its own root is that root.
+    assert_eq!(step(0, &roots, threshold, &v1, &first[..s1.body], &s1, verify), Step::Next);
+    assert_eq!(take(0, &roots, threshold, &version_file(1, old, 2, "release.TEST_ROOT_SEEDS[0]")), Step::Unsigned, "one root key of two");
+    // The root rotated to a set of two, one of which signs: the old root's threshold and the new one's must both sign.
+    let root = v1.root();
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(2, "*NEW", 1, &format!("{}, NEW[0]", TWO))), Step::Next);
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(2, "*NEW", 1, TWO)), Step::Unsigned, "the new root did not sign");
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(2, "*NEW", 1, "NEW[0], NEW[1]")), Step::Unsigned, "the old root did not sign");
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(2, "*NEW", 1, "release.TEST_ROOT_SEEDS[0], NEW[0]")), Step::Unsigned,
+               "one of the old root's two");
+    // Once version 2 is held, its root alone signs version 3; the old one is not trusted.
+    let (v2, _) = parse_keys(&version_file(2, "*NEW", 1, &format!("{}, NEW[0]", TWO))).unwrap();
+    let root2 = v2.root();
+    assert_eq!(take(2, root2.keys(), root2.threshold, &version_file(3, "*NEW", 1, "NEW[1]")), Step::Next);
+    assert_eq!(take(2, root2.keys(), root2.threshold, &version_file(3, "*NEW", 1, TWO)), Step::Unsigned, "the root before");
+    // A lower version is refused, the same one is compared by the caller, and one past the next waits for those between.
+    assert_eq!(take(2, root2.keys(), root2.threshold, &first), Step::Lower);
+    assert_eq!(take(2, root2.keys(), root2.threshold, &version_file(2, "*NEW", 1, "NEW[0]")), Step::Same);
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(3, old, 2, TWO)), Step::Skips);
 }
