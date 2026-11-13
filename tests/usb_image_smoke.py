@@ -288,6 +288,9 @@ def unplugged(vm, booted, name):
     else:
         raise AssertionError("memmap does not start after the disk is plugged in again")
     require(vm.service_logs("vfs_server", "DRIVE ANSWERS AGAIN"), "DRIVE ANSWERS AGAIN")
+    # 000-DRV-0058: the stick came back enumerated again, so usb_storage ran nothing on it and ended; init started it again
+    # and set the windows again over the same partitions, and vfs_server found the same medium.
+    came_back(vm, 1)
     require(vm.command("sync"), "OK")
     # The records of the time without the disk reach this boot's log once it is back (the journal kept them). Read
     # whole through a pipe: `cat` shows a file's first 16 KiB on the screen, and by now this boot's log is longer.
@@ -300,23 +303,62 @@ def unplugged(vm, booted, name):
     # The journal leaves the log volume marked dirty between its saves (211-KRN-0223): a flush marks it clean, as
     # before a stick is taken out; the image is read on the host as this leaves it.
     require(vm.command("sync"), "OK")
+    # 000-DRV-0058: the same stick out and in again at once, so that vfs_server asks nothing of it meanwhile (QEMU lets
+    # go of a USB drive at device_del). The next request finds it enumerated again, not gone: usb_storage runs nothing
+    # on it and ends, init starts it again, and a file written before reads back as it was.
+    before = vm.command("dmesg -s usb_storage", raw=True).splitlines()
+    for command in ("device_del usbstick", f"drive_add 0 if=none,id=usbdisk4,format=raw,file={booted}", "device_add usb-storage,drive=usbdisk4,id=usbstick4"):
+        answer = vm.hmp(command)
+        assert answer.strip() in ("", "OK"), (command, answer)
+    require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
+    for _ in range(40):
+        if "NAME=memmap" in vm.command("run memmap &"):
+            break
+        time.sleep(2)
+    else:
+        raise AssertionError("memmap does not start after the same stick was put back")
+    came_back(vm, 2)
+    swap = [line for line in vm.command("dmesg -s usb_storage", raw=True).splitlines() if line not in before]
+    assert any("NO ANSWER TO" in line for line in swap) and not any(line.endswith("[USB] STORAGE: THE DEVICE IS GONE") for line in swap), swap
+    require(vm.command("cat log:note.txt"), "written on MIND CORE")
+    # 000-DRV-0058: a copy of the stick one MiB longer swapped in at once: another capacity is not used at all, as
+    # before, while vfs_server checks a medium only after it saw the drive not answer. No restart; nothing written.
+    longer = booted.with_name(booted.stem + "-longer" + booted.suffix)
+    shutil.copyfile(booted, longer)
+    with longer.open("ab") as f:
+        f.write(bytes(1 << 20))
+    longer_sectors, longer_before = longer.stat().st_size // 512, hashlib.sha256(longer.read_bytes()).hexdigest()
+    for command in ("device_del usbstick4", f"drive_add 0 if=none,id=usbdisk5,format=raw,file={longer}", "device_add usb-storage,drive=usbdisk5,id=usbstick5"):
+        answer = vm.hmp(command)
+        assert answer.strip() in ("", "OK"), (command, answer)
+    require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
+    # usb_storage meets the copy at a request that reads; vfs_server, which compares the medium before it asks again
+    # (000-KRN-0085), sends one only after its wait, so the program is asked for until the copy is met.
+    usb = ""
+    for _ in range(15):
+        require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+        usb += vm.service_logs("usb_storage")
+        if "IS NOT USED" in usb:
+            break
+        time.sleep(2)
+    require(usb, f"[USB] STORAGE: ANOTHER MEDIUM ({longer_sectors} SECTORS) IS NOT USED")
+    assert "usb_storage" not in vm.service_logs("init"), "no restart for another capacity"
     # 000-KRN-0079: another medium in its place, as a stick rewritten with another build elsewhere and put back: the
     # same partition table and disk signature, another commit in the boot manifests. vfs_server, which saw the drive
     # not answer, finds it is not the stick it mounted: nothing it cached is written to it, its volumes fail. The new
     # stick gets another device ID: QEMU may not have let go of the old one yet.
-    vm.hmp("device_del usbstick")
+    vm.hmp("device_del usbstick5")
     require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
-    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
-    require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
-    other = booted.with_name(booted.stem + "-other" + booted.suffix)
-    shutil.copyfile(booted, other)
-    data = bytearray(other.read_bytes())
-    manifests = [m for m in re.finditer(rb"MIND-MANIFEST \d+\nkey [0-9a-f]{16}\ncommit ", data) if m.start() % 512 == 0]
-    assert manifests, "no boot manifest found in the image"
-    for m in manifests:
-        data[m.end()] = ord("0") if data[m.end()] != ord("0") else ord("1")
-    other.write_bytes(data)
-    assert other.read_bytes()[:512] == booted.read_bytes()[:512], "the copy keeps the stick's sector 0"
+    # A device gone may answer "not found" at once: vfs_server says it does not answer once that lasts 10 s.
+    log = ""
+    for _ in range(20):
+        require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+        log += vm.service_logs("vfs_server")
+        if "DRIVE DOES NOT ANSWER" in log:
+            break
+        time.sleep(1)
+    require(log, "DRIVE DOES NOT ANSWER")
+    other = another_manifest(booted, "-other")
     before = hashlib.sha256(other.read_bytes()).hexdigest()
     for command in (f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}", "device_add usb-storage,drive=usbdisk3,id=usbstick3"):
         answer = vm.hmp(command)
@@ -333,7 +375,36 @@ def unplugged(vm, booted, name):
     vm.command("sync")
     time.sleep(3)
     assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "the old volumes wrote to another medium"
+    assert hashlib.sha256(longer.read_bytes()).hexdigest() == longer_before, "a medium of another capacity was written"
     other.unlink()
+    longer.unlink()
+
+
+def another_manifest(image, name):
+    # A copy of `image` with another commit in its boot manifests: its partition table and sector 0 are the stick's.
+    other = image.with_name(image.stem + name + image.suffix)
+    data = bytearray(image.read_bytes())
+    manifests = [m for m in re.finditer(rb"MIND-MANIFEST \d+\nkey [0-9a-f]{16}\ncommit ", data) if m.start() % 512 == 0]
+    assert manifests, "no boot manifest found in the image"
+    for m in manifests:
+        data[m.end()] = ord("0") if data[m.end()] != ord("0") else ord("1")
+    other.write_bytes(data)
+    assert other.read_bytes()[:512] == image.read_bytes()[:512], "the copy keeps the stick's sector 0"
+    return other
+
+
+def came_back(vm, times):
+    # usb_storage saw the stick come back `times` times in all, ran nothing on it, and ended for init to start it again
+    # (000-DRV-0058); init set the store's and vfs_server's windows again only over the partitions they had.
+    init = vm.service_logs("init", "usb_storage RESTARTED")
+    require(init, "[INIT] usb_storage RESTARTED PID=")
+    require(init, "[INIT] usb_storage: WINDOW 1 SET AGAIN FOR THE BLOCK STORE (PARTITION 3)")
+    for window, number in ((2, 1), (3, 2)):
+        require(init, f"[INIT] usb_storage: WINDOW {window} SET AGAIN FOR VFS_SERVER (PARTITION {number})")
+    usb = vm.command("dmesg -s usb_storage", raw=True)
+    assert usb.count("[USB] STORAGE: A DEVICE CAME BACK, ENUMERATED AGAIN") == times, usb[-3000:]
+    assert usb.count("[BLOCK] THE MEDIUM WENT AWAY AND CAME BACK") == times, usb[-3000:]
+    assert "QUARANTINED" not in init and "THE DEVICE IS BACK" not in usb, (init, usb[-3000:])
 
 
 def run(args, booted):
@@ -467,7 +538,7 @@ def run(args, booted):
     fsck_volume(booted, entries[0][2], entries[0][3])
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
           "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
-          "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host; "
+          "and plugged in again, the same stick out and in while unused, each return ending usb_storage for a fresh instance, one of another capacity not used, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host; "
           "log: in help, df, fsck and fm; the block store on the stick's partition 3, window 1 of the same drive, its key in its superblock, the boot volume clean; "
           "vfs_server's boot and log partitions as windows 2 and 3, no client of the whole stick")
 
