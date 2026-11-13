@@ -3,7 +3,7 @@
 //! `ssh`, `scp` and `sftp` talk to it with keys ssh-keygen makes. Checked: the host key as known_hosts names it; a
 //! command run; a console with a terminal; an unlisted key, a password and a key without the console's right refused;
 //! a file copied up and down whole with scp (SFTP), sftp's directory work, a path outside the root refused; each login,
-//! refusal and write in the owner's log. Needs OpenSSH's client (`MIND_SSH`, default ssh) and ssh-keygen.
+//! refusal and write in the owner's log. Needs OpenSSH's client from 8.7 (`MIND_SSH`, default ssh; `scp -s`) and ssh-keygen.
 #![cfg(feature = "server")]
 use ssh::server::{self, Attrs, Event, Files, Owner, Rights, NO_SUCH_FILE, PERMISSION_DENIED, FAILURE};
 use ssh::{Error, Io, Keys};
@@ -200,8 +200,9 @@ impl Fixture {
         child.stdin.take().unwrap().write_all(stdin).unwrap();
         child.wait_with_output().unwrap()
     }
+    // `-s`: SFTP, which scp uses by default only from OpenSSH 9.0; the old SCP protocol is 112's stage 2.
     fn scp(&self, key: &str, from: &str, to: &str) -> Output {
-        Command::new("scp").args(self.options(key)).args(["-P", &self.port.to_string(), from, to]).output().expect("scp")
+        Command::new("scp").args(self.options(key)).args(["-s", "-P", &self.port.to_string(), from, to]).output().expect("scp")
     }
     fn log(&self) -> String { self.log.lock().unwrap().join("\n") }
 }
