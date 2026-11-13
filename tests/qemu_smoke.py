@@ -2704,9 +2704,10 @@ def fm_check(vm):
         frame = tuple(map(int, size.split()[:2]))
 
     def to(x, y, fro):
-        # The mouse to cell (x, y): the tablet at that cell's pixel, the PS/2 mouse by the cells from `fro`.
+        # The mouse to cell (x, y): the tablet at that cell's pixel (the grid centred on a screen of no whole rows,
+        # as aarch64's 600 pixels hold 37), the PS/2 mouse by the cells from `fro`.
         if tablet:
-            vm.tablet_at(x * 8 + 4, y * 16 + 8, *frame)
+            vm.tablet_at(frame[0] % 8 // 2 + x * 8 + 4, frame[1] % 16 // 2 + y * 16 + 8, *frame)
             return []
         return mouse_moves((x - fro[0]) * 8, (y - fro[1]) * 16)
     clicked = mouse(*to(10, 3, (80, 25)), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
@@ -2718,8 +2719,9 @@ def fm_check(vm):
     time.sleep(.3)
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     vm.serial(enter=False)
-    width = int(size.split()[0])
-    corner = lambda x, y: pixels[(y * 16 * width + x * 8) * 3:(y * 16 * width + x * 8) * 3 + 3]
+    width, height = map(int, size.split()[:2])
+    x0, y0 = width % 8 // 2, height % 16 // 2  # the grid centred, as mind::tui::Terminal puts it
+    corner = lambda x, y: pixels[((y0 + y * 16) * width + x0 + x * 8) * 3:((y0 + y * 16) * width + x0 + x * 8) * 3 + 3]
     assert corner(10, 33) != corner(12, 33) and corner(9, 33) == corner(12, 33), (corner(10, 33), corner(12, 33))
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
