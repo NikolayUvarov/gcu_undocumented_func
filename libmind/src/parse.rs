@@ -214,7 +214,7 @@ fn signed_from(body: u32, records: &[parse::Signature]) -> Option<release::Signe
     Some(signed)
 }
 
-/// The record of a key file `mind::release` read (parse.wit 3.0, 351-UPD-0026).
+/// The record of a key file `mind::release` read (parse.wit 4.0, 351-UPD-0026, 0027).
 pub fn keys_record(keys: &release::Keys, signed: &release::Signed) -> parse::KeyFile {
     let mut roles = List::default();
     for role in &keys.roles {
@@ -231,7 +231,7 @@ pub fn keys_record(keys: &release::Keys, signed: &release::Signed) -> parse::Key
 /// A key file from the service's record, if every field has its form: still to be compared with the signed bytes.
 pub fn keys_from(record: &parse::KeyFile) -> Option<(release::Keys, release::Signed)> {
     if record.roles.as_slice().len() != release::ROLES.len() { return None; }
-    let mut roles = [release::Role::EMPTY; 4];
+    let mut roles = [release::Role::EMPTY; release::ROLES.len()];
     for (role, r) in roles.iter_mut().zip(record.roles.as_slice()) {
         for (slot, k) in role.keys.iter_mut().zip(r.keys.as_slice()) { *slot = k.key.as_slice().try_into().ok()?; }
         role.count = r.keys.as_slice().len().min(release::ROLE_KEYS);

@@ -8521,10 +8521,12 @@ def update_suite(args):
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         updater_parser_check(vm, https)
         # 351-UPD-0026: a key file one root key of the test set's two of three signed is refused before any channel is
-        # read, and nothing is written.
+        # read, and nothing is written. The updater took slot A's, version 1, at its start (351-UPD-0027), so this one is
+        # version 2, the next.
         keys_good = (server / "keys/current").read_bytes()
-        (server / "keys/current").write_bytes(release_tool.test_keys_file(roots=release_tool.TEST_ROOT_SEEDS[2:]))
-        log = logged("[UPDATER] KEY FILE VERSION 1 REFUSED: FEWER THAN 2 OF THE ROOT KEYS SIGNED IT", 60)
+        require(log, "[UPDATER] KEY FILE VERSION 1 TAKEN (SLOT A), KEPT IN system/updater/keys")
+        (server / "keys/current").write_bytes(release_tool.test_keys_file(version=2, roots=release_tool.TEST_ROOT_SEEDS[2:]))
+        log = logged("[UPDATER] KEY FILE VERSION 2 REFUSED (keys/current): FEWER THAN 2 OF VERSION 1'S ROOT KEYS SIGNED IT", 60)
         assert "[UPDATER] RECORD" not in log, log
         (server / "keys/current").write_bytes(keys_good)
         print("PASS: update: a key file one of the 2-of-3 root keys signed refused, nothing written (351-UPD-0026)", flush=True)
@@ -8705,6 +8707,136 @@ def update_suite(args):
           "check's refusal, asks before a rollback and an apply, which declined write nothing, and is refused to a script "
           "without requires: lifecycle (351-APP-0029); "
           "the file system is consistent", flush=True)
+
+
+def updater_log(vm, line, timeout, count=1):
+    """The updater's lines, read with dmesg, once `line` is there `count` times: the shell holds the serial line, and a
+    kernel line on it can land inside the command's echo; that read is then made again."""
+    deadline, log = time.monotonic() + timeout, ""
+    while time.monotonic() < deadline:
+        try:
+            log = vm.command("dmesg -s updater", raw=True)
+        except AssertionError as error:
+            if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                raise
+            continue
+        if log.count(line) >= count:
+            return log
+        time.sleep(2)
+    raise AssertionError((line, count, log[-3000:]))
+
+
+def update_keys_suite(args):
+    """351-UPD-0027 (MC-9.5, 9.6): key rotation and revocation on the device. A raw image with release 5 in slot A,
+    confirmed, its channel and key file (version 1) kept there, and update.txt naming the test release server with
+    `automatic check` every 5 s; the server offers release 5. At its start the updater takes slot A's key file and keeps
+    it in system/updater. Then the server publishes version 2, which rotates the release key, and version 3, which
+    rotates the root: the updater walks keys/2 and keys/3, and refuses the channel the old release key signed. Version 1
+    served again is refused, and so is a version 4 signed by the root rotated away; the channel signed by the new release
+    key is taken. Restarted, the updater reads version 3 back and holds slot A, whose channel only the revoked key
+    signed, as no fallback of a version not known; after a reboot it still holds version 3 and refuses version 1."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: update-keys suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    import datetime
+    temp = Path(tempfile.mkdtemp(prefix="mind-update-keys-"))
+    arch = args.arch
+    volume, _, server, kept, _, _, _, _, _ = update_releases(temp, arch)
+    certificates = temp / "tls"
+    certificates.mkdir()
+    _certificates(certificates)
+    https = serve_httpd.serve(server, certificates / "server.pem", certificates / "server.key")
+    port = https.server_address[1]
+
+    def put(path, data):
+        # Whole or not at all: a check that reads it meanwhile finds the old file or the new.
+        part = server / (path + ".part")
+        part.write_bytes(data)
+        part.replace(server / path)
+    put("channels/stable", kept)
+    first = (server / "keys/current").read_bytes()
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes(first)
+    (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    (layout / "update.txt").write_text(f"# the test release server (351-UPD-0027)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
+                                       "channel stable\nautomatic check\nevery 5\n")
+    image = boot_slots.Image.create(temp / "keys.img", layout)
+    # The second release key and a second root set of two, one of which signs; the versions the server publishes.
+    release2 = hashlib.sha256(b"351-UPD-0027: the second release key of the test").digest()
+    root2 = tuple(hashlib.sha256(f"351-UPD-0027: a second test root key {i}".encode()).digest() for i in (1, 2))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    old_root = release_tool.TEST_ROOT_SEEDS[:release_tool.TEST_ROOT_THRESHOLD]
+    second = release_tool.test_keys_file(now, version=2, release=(release2,))
+    third = release_tool.test_keys_file(now, version=3, release=(release2,), roots=(*old_root, root2[0]), root=(root2, 1))
+    back = release_tool.test_keys_file(now, version=4, release=(release2,), roots=old_root)  # the old root, signing itself back in
+    body = kept.split(b"\n")[0] + b"\n"
+    resigned = body + release_tool.signature_lines(body, [release2])
+    cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
+            extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    taken = "[UPDATER] KEY FILE VERSION 3 FROM system/updater/keys, TAKEN BEFORE"
+    lower = "[UPDATER] KEY FILE VERSION 1 REFUSED (keys/current): BELOW VERSION 3, TAKEN BEFORE: IT WOULD BRING REVOKED KEYS BACK"
+    try:
+        log = updater_log(vm, "[UPDATER] CHECK: REFUSED: Older", 180)
+        for line in ("[UPDATER] NO KEY FILE KEPT IN system/updater: THE ROOT KEYS BUILT IN SIGN THE FIRST",
+                     "[UPDATER] KEY FILE VERSION 1 TAKEN (SLOT A), KEPT IN system/updater/keys", "[UPDATER] SLOT A, VERSION 5; "):
+            require(log, line)
+        # The release key rotated, then the root: each version taken as the next of the one before.
+        put("keys/2", second)
+        put("keys/3", third)
+        put("keys/current", third)
+        log = updater_log(vm, "[UPDATER] CHECK: REFUSED: Signature", 90)
+        for line in ("[UPDATER] KEY FILE VERSION 2 TAKEN (keys/2), KEPT IN system/updater/keys",
+                     "[UPDATER] KEY FILE VERSION 3 TAKEN (keys/current), THE ROOT ROTATED, KEPT IN system/updater/keys"):
+            require(log, line)
+        print("PASS: update-keys: versions 2 and 3 taken in turn, the root rotated; the channel the revoked release key signed refused", flush=True)
+        # An older key file served again, and a newer one the root rotated away signed: both refused.
+        put("keys/current", first)
+        updater_log(vm, lower, 60)
+        put("keys/current", back)
+        log = updater_log(vm, "[UPDATER] KEY FILE VERSION 4 REFUSED (keys/current): FEWER THAN 1 OF VERSION 3'S ROOT KEYS SIGNED IT", 60)
+        print("PASS: update-keys: key file version 1 served again refused, and a version 4 signed by the root rotated away", flush=True)
+        # The channel the new release key signed: read, and only older than the running version. Since version 3 no
+        # check read a channel, so the count of those lines stands still until then.
+        read = "[UPDATER] CHECK stable: VERSION 5, "
+        put("keys/current", third)
+        put("channels/stable", resigned)
+        log = updater_log(vm, read, 60, count=log.count(read) + 1)
+        # Restarted, the updater reads version 3 back; slot A's channel, which only the revoked key signed, is no fallback
+        # of a version not known, so the channel's version 5 is read as above the one running.
+        require(vm.command("svc restart updater", timeout=60), "updater restarted: PID")
+        log = updater_log(vm, "; RUNNING 0", 90)
+        require(log, taken)
+        restarted = log[log.index(taken):]
+        for line in ("[UPDATER] SLOT A: ITS CHANNEL IS SIGNED BY FEWER THAN 1 OF THE RELEASE KEYS OF KEY FILE VERSION 3: NOT A FALLBACK",
+                     "[UPDATER] SLOT A, VERSION NOT KNOWN; "):
+            require(restarted, line)
+        assert "TAKEN (SLOT A)" not in restarted, restarted
+        put("keys/current", first)
+        updater_log(vm, lower, 60, count=log.count(lower) + 1)
+        print("PASS: update-keys: restarted, the updater holds version 3 and refuses version 1; slot A, signed by the revoked key, is no fallback", flush=True)
+        # And after a reboot.
+        vm.send("reboot\n")
+        vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=240)
+        vm.expect("MIND>", timeout=180)
+        time.sleep(1); vm.collect(); vm.output = ""
+        log = updater_log(vm, lower, 120)
+        require(log, taken)
+        assert "TAKEN (SLOT A)" not in log and "NO KEY FILE KEPT" not in log, log[-3000:]
+        print("PASS: update-keys: after a reboot the updater holds version 3 and refuses version 1", flush=True)
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-update-keys-{args.cpus}cpu.log").write_text(vm.log)
+    assert image.read("system/updater/keys") == third
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: update-keys: a key file taken only as the next version, signed by the root before it and its own; the "
+          "highest kept in system/updater across a restart and a reboot, a lower one refused; a channel or slot only a "
+          "revoked release key signed refused (351-UPD-0027); the file system is consistent", flush=True)
 
 
 def update_store_suite(args):
@@ -9042,7 +9174,7 @@ def linkupdate_suite(args):
                                        "automatic apply\nevery 20\ntries 3\n")
     image = boot_slots.Image.create(temp / "linkupdate.img", layout, megabytes=128)
     # What the updater reads from its source, and nothing more, as scripts/link_update.py puts it on a real machine.
-    files = link_update.release_files(manifest6, arch, 6)
+    files = link_update.release_files(manifest6, arch, 6, release_tool.key_versions(release_tool.destination(server)))
     cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
     vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
             extra=[*cpu, "-nic", "none", "-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link",
@@ -16572,6 +16704,7 @@ def main():
         if suite == "updater":
             updater_suite(args, args.updater_elf)
             update_suite(args)
+            update_keys_suite(args)
             install_suite(args, args.updater_elf)
             update_store_suite(args)
             continue
@@ -16586,6 +16719,9 @@ def main():
             continue
         if suite == "update":
             update_suite(args)
+            continue
+        if suite == "updatekeys":
+            update_keys_suite(args)
             continue
         if suite == "ehci":
             ehci_suite(args)

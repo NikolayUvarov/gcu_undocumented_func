@@ -6,7 +6,8 @@
 //! says against what it asked for (MC-11.5). 2.0 (000-NET-0047): one HTTP response head, `http-response`, which also
 //! gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone. 2.1 (110-NET-0070):
 //! `http-request`, a request head as a server reads it. 3.0 (351-UPD-0026): a channel's signatures name their keys, one
-//! to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone.
+//! to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
+//! that sign the next one; 3.x's key file of four roles is gone.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -16,8 +17,8 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (3, 0, 0);
-const MAJOR: usize = 3;
+pub const VERSION: (u8, u8, u8) = (4, 0, 0);
+const MAJOR: usize = 4;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,12 +81,12 @@ impl Wire for Role {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { keys: Wire::decode(r)?, threshold: Wire::decode(r)? }) }
 }
 
-/// A key file (351-UPD-0026): its version, its expiry and the roles boot, recovery, release and timestamp in that
-/// order; the root keys' signatures cover its first `signed` bytes. Taken as a channel is (3.0).
+/// A key file (351-UPD-0026): its version, its expiry and the roles boot, recovery, release, root and timestamp in
+/// that order; the root keys' signatures cover its first `signed` bytes. Taken as a channel is (3.0; 4.0: `root`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct KeyFile { pub version: u64, pub expires: Text<20>, pub roles: List<Role, 4>, pub signed: u32, pub signatures: List<Signature, 8> }
+pub struct KeyFile { pub version: u64, pub expires: Text<20>, pub roles: List<Role, 5>, pub signed: u32, pub signatures: List<Signature, 8> }
 impl Wire for KeyFile {
-    const MAX: usize = <u64 as Wire>::MAX + <Text<20> as Wire>::MAX + <List<Role, 4> as Wire>::MAX + <u32 as Wire>::MAX + <List<Signature, 8> as Wire>::MAX;
+    const MAX: usize = <u64 as Wire>::MAX + <Text<20> as Wire>::MAX + <List<Role, 5> as Wire>::MAX + <u32 as Wire>::MAX + <List<Signature, 8> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.expires.encode(w)?; self.roles.encode(w)?; self.signed.encode(w)?; self.signatures.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, expires: Wire::decode(r)?, roles: Wire::decode(r)?, signed: Wire::decode(r)?, signatures: Wire::decode(r)? }) }
 }
@@ -261,7 +262,7 @@ pub fn channel(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<C
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Channel as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-/// A key file (3.0).
+/// A key file (3.0; 4.0: five roles).
 pub fn keys(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<KeyFile, Error>> {
     let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
     let length = {
@@ -271,7 +272,7 @@ pub fn keys(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<KeyF
     };
     let reply = wire::call_buffer(endpoint, 2 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 1394, false, false)?;
+    let length = wire::buffer_reply(&reply, 1533, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <KeyFile as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -386,7 +387,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Channel { file }, call))
         }
         2 => {
-            let (call, length) = wire::take_buffer(request, cap, 1394, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 1533, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let file = codec::decode_bytes::<4096>(&mut r).ok_or(Reject::Invalid)?;

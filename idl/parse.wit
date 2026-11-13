@@ -5,8 +5,9 @@
 /// says against what it asked for (MC-11.5). 2.0 (000-NET-0047): one HTTP response head, `http-response`, which also
 /// gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone. 2.1 (110-NET-0070):
 /// `http-request`, a request head as a server reads it. 3.0 (351-UPD-0026): a channel's signatures name their keys, one
-/// to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone.
-package mind:parse@3.0.0;
+/// to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
+/// that sign the next one; 3.x's key file of four roles is gone.
+package mind:parse@4.0.0;
 
 interface parse {
     /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -24,9 +25,9 @@ interface parse {
     record public-key { key: list<u8, 32> }
     /// A role of a key file: its public keys in ascending order and how many must sign (3.0).
     record role { keys: list<public-key, 4>, threshold: u8 }
-    /// A key file (351-UPD-0026): its version, its expiry and the roles boot, recovery, release and timestamp in that
-    /// order; the root keys' signatures cover its first `signed` bytes. Taken as a channel is (3.0).
-    record key-file { version: u64, expires: string<20>, roles: list<role, 4>, signed: u32, signatures: list<signature, 8> }
+    /// A key file (351-UPD-0026): its version, its expiry and the roles boot, recovery, release, root and timestamp in
+    /// that order; the root keys' signatures cover its first `signed` bytes. Taken as a channel is (3.0; 4.0: `root`).
+    record key-file { version: u64, expires: string<20>, roles: list<role, 5>, signed: u32, signatures: list<signature, 8> }
     /// A file line of a boot manifest.
     record file { path: string<96>, size: u64, digest: list<u8, 32>, flags: u32, mib: u32 }
     /// A boot manifest's header lines (its format line first, as text), its number of file lines, and up to 8 of them
@@ -35,7 +36,7 @@ interface parse {
 
     /// A channel file (1.1; 3.0: its signatures with their keys, up to 2560 bytes).
     channel: func(file: bytes<2560>) -> result<channel, error>;
-    /// A key file (3.0).
+    /// A key file (3.0; 4.0: five roles).
     keys: func(file: bytes<4096>) -> result<key-file, error>;
     /// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
     manifest: func(text: bytes<32768>, start: u32) -> result<manifest, error>;

@@ -66,6 +66,7 @@ pub fn resolve(target: &str) -> Result<(String, Kind), Refusal> {
         ["releases", version, arch, file] if digits(version) && ARCHES.contains(arch) && MANIFESTS.contains(file) => Kind::Manifest,
         ["channels", name] if channel_name(name) => Kind::Channel,
         ["keys", "current"] => Kind::Channel, // the key file (351-UPD-0026), fetched fresh as a channel is
+        ["keys", version] if digits(version) => Kind::Manifest, // its history (351-UPD-0027): a version never changes
         _ => return Err(Refusal::NotInLayout),
     };
     Ok((names.join("/"), kind))
@@ -104,6 +105,7 @@ mod tests {
         assert_eq!(resolve("/releases/12/aarch64/MANIFEST.SIG").unwrap().1, Kind::Manifest);
         assert_eq!(resolve("/channels/stable").unwrap().1, Kind::Channel);
         assert_eq!(resolve("/keys/current").unwrap(), ("keys/current".to_string(), Kind::Channel));
+        assert_eq!(resolve("/keys/12").unwrap(), ("keys/12".to_string(), Kind::Manifest));
         assert_eq!(resolve("/keys/other"), Err(Refusal::NotInLayout));
         let refused = [
             ("/channels/stable?x=1", Refusal::Query), ("channels/stable", Refusal::NotAbsolute), ("/channels/st%61ble", Refusal::Byte),
