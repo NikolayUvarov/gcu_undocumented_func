@@ -9880,6 +9880,11 @@ def audio_suite(vm, wav):
     require(played, "[BEEP] PLAYED 3 NOTES, 600 MS")
     require(played, "[BEEP] DONE")
     assert task_rows_reaped(vm) == {}, "beep ended with its sound"
+    # 551-APP-0138: a tone on one channel, a second apart, so that the WAV below holds each alone.
+    for word, line in (("left 660 300", "[BEEP] PLAYED 1 NOTES, 300 MS ON THE LEFT"), ("RIGHT", "[BEEP] PLAYED 1 NOTES, 500 MS ON THE RIGHT")):
+        time.sleep(1.5)
+        require(vm.command(f"beep {word}"), line)
+    require(vm.command("beep 440 left"), "BEEP: left: NOT A NUMBER")
     # After beep, which the suite expects as the session's first program.
     if vm.args.levels_elf:
         out = vm.command("levelstub")
@@ -9950,14 +9955,22 @@ def audio_suite(vm, wav):
     with wave.open(str(wav)) as audio:
         frames = audio.readframes(audio.getnframes())
         rate = audio.getframerate()
-    left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
-    loud = [i for i, sample in enumerate(left) if sample]
+    samples = struct.unpack(f"<{len(frames) // 2}h", frames)
+    left, right = samples[0::2], samples[1::2]
+    loud = [i for i in range(len(left)) if left[i] or right[i]]
     assert loud, "AC97 produced no audio"
-    # The demo, then after a second of silence the notes, then wm's test tone (000-APP-0076).
+    # The demo, then after a second of silence the notes, the left's tone, the right's, then wm's test tone (000-APP-0076).
     gaps = [k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate] + [len(loud)]
-    assert len(gaps) >= 3, [round(loud[k] / rate, 2) for k in gaps[:-1]]
+    assert len(gaps) >= 5, [round(loud[k] / rate, 2) for k in gaps[:-1]]
     gap = gaps[0]
-    demo, notes, tone = loud[:gap], loud[gap:gaps[1]], loud[gaps[1]:gaps[2]]
+    demo, notes, on_left, on_right, tone = loud[:gap], loud[gap:gaps[1]], loud[gaps[1]:gaps[2]], loud[gaps[2]:gaps[3]], loud[gaps[3]:gaps[4]]
+    # 551-APP-0138: each channel's tone (660 Hz for 300 ms; 440 Hz for 500 ms, the word alone) and the other silent.
+    for part, sounds, silent, hz, ms in ((on_left, left, right, 660, 300), (on_right, right, left, 440, 500)):
+        seconds = (part[-1] - part[0]) / rate
+        assert ms / 1000 - 0.03 < seconds < ms / 1000 + 0.03, (hz, seconds)
+        assert not any(silent[part[0]:part[-1] + 1]), (hz, "the other channel is silent")
+        middle = part[0] + int(rate * 0.1)
+        assert tone_power(sounds, rate, middle, hz) > 5 * tone_power(sounds, rate, middle, 880), hz
     seconds = (demo[-1] - demo[0]) / rate
     assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
@@ -9978,7 +9991,7 @@ def audio_suite(vm, wav):
     peak = lambda part: max(abs(left[i]) for i in part)
     below = 20 * math.log10(peak(notes[int(len(notes) * 0.7):]) / max(peak(tone), 1))
     print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
-          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
+          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen, and on the left or the right alone; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
           f"wm's test tone at {lower} %, its peak {below:.1f} dB below beep's 880 Hz at 100 %", flush=True)
 
 
