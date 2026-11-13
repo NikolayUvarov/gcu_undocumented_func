@@ -71,7 +71,7 @@ MacBook/Ryzen evidence and the deferred ARM gate remain open.
 
 ## The `tools` suite in an aarch64 group of the gate (for 000-APP-0137)
 
-**Asked by** APP on 2026-11-13, for [000-APP-0137](000-APP-0137-the-tools-suite-on-aarch64.md).
+**Asked by** APP on 2026-11-13, for [000-APP-0137](../issues-done/000-APP-0137-the-tools-suite-on-aarch64.done).
 
 - **What there is:** `scripts/ci_local.sh --list` runs the `tools` suite on x86 alone (`x86: keys, shell, tools`); no aarch64 group holds it. Its checks had drifted from what aarch64's `virt` shows (a 37-row screen, a VirtIO tablet, `BOOTAA64.EFI`, MPIDR affinities, the device key kept in `system/keystore/` where no TPM seals it), and nothing said so.
 - **Done on the tools branch:** the suite passes on aarch64 (11 checks, 4 CPUs, in a container), `clipboard_check` among them, and still on x86 (11); `hw` names aarch64's CPU IDs and counter.
