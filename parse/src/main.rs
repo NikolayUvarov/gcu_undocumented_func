@@ -86,6 +86,13 @@ fn main(_info: &'static BootInfo) {
                 });
                 parse::reply_keys(call, typed.as_ref().map_err(|e| *e))
             }
+            Ok((parse::Request::Timestamp { file }, call)) => {
+                let typed = release::parse_timestamp(file).map(|(stamp, signed)| mind::parse::timestamp_record(&stamp, &signed)).map_err(|_| {
+                    if !session { mind::println!("[PARSE] REFUSED A TIMESTAMP FOR PID {}: MALFORMED ({} BYTES)", request.sender, file.len()); }
+                    Error::Malformed
+                });
+                parse::reply_timestamp(call, typed.as_ref().map_err(|e| *e))
+            }
             Ok((parse::Request::Manifest { text, start }, call)) => {
                 let typed = release::Manifest::parse(text).map(|manifest| mind::parse::manifest_record(&manifest, start)).map_err(|_| {
                     if !session { mind::println!("[PARSE] REFUSED A MANIFEST FOR PID {}: MALFORMED ({} BYTES)", request.sender, text.len()); }

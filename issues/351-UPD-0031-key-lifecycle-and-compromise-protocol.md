@@ -1,6 +1,6 @@
 # 351-UPD-0031 — The key lifecycle and the compromise protocol, written down
 
-**Type:** update (documentation, policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md), [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md) (for the procedures they show; the document may start before) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.6, MC-11.9
+**Type:** update (documentation, policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0028](../issues-done/351-UPD-0028-a-short-lived-timestamp-key.done), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md) (for the procedures they show; the document may start before) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.6, MC-11.9
 
 Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
@@ -40,4 +40,4 @@ MC-11.9 keeps access to key material apart from the right to ask for a signature
 
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md), [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md), [SECURITY.md](../SECURITY.md).
+[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0028](../issues-done/351-UPD-0028-a-short-lived-timestamp-key.done), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md), [SECURITY.md](../SECURITY.md).

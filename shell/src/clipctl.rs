@@ -14,10 +14,11 @@ pub struct Clip { manager: Option<Endpoint>, front: Option<u64> }
 impl Default for Clip { fn default() -> Self { Self::new() } }
 
 impl Clip {
-    /// The manager's copy, where `init` gave the shell the service's client; without one, no clipboard.
+    /// The manager's copy, where `init` gave the shell the service's client; without one, no clipboard. It may pass a
+    /// capability, as a text's parts go in a lent buffer.
     pub fn new() -> Self {
         let held = mind::dev::cap_info(SLOT_CLIPBOARD).0 == CAP_KIND_ENDPOINT;
-        let manager = held.then(|| mind::ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE, BADGE_MANAGER).ok()).flatten().map(Endpoint);
+        let manager = held.then(|| mind::ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE | CAP_GRANT, BADGE_MANAGER).ok()).flatten().map(Endpoint);
         Self { manager, front: None }
     }
 
