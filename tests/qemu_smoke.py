@@ -8889,7 +8889,7 @@ def update_suite(args):
         (Path(tempfile.gettempdir()) / f"mind-core-update-httpd-{args.cpus}cpu.log").write_text(https.log())
     records = boot_slots.records(image.path)
     assert first[0]["sequence"] == 1 and first[1] is None, first
-    assert boot_slots.newest(records)[1] == {"sequence": 5, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 6}, records
+    assert boot_slots.newest(records)[1] == {"sequence": 5, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 6, "keys": 1}, records
     for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good and image.read("MIND/B/KEYS") == (server / "keys/current").read_bytes()
@@ -9039,7 +9039,7 @@ def update_keys_suite(args):
         put("keys/current", third)
         log = updater_log(vm, "[UPDATER] CHECK: REFUSED: Signature", 90)
         for line in ("[UPDATER] KEY FILE VERSION 2 TAKEN (keys/2), KEPT IN system/updater/keys",
-                     "[UPDATER] KEY FILE VERSION 3 TAKEN (keys/current), THE ROOT ROTATED, KEPT IN system/updater/keys"):
+                     "[UPDATER] KEY FILE VERSION 3 TAKEN (keys/current), THE ROOT ROTATED, KEPT IN system/updater/keys AND system/updater/roots"):
             require(log, line)
         print("PASS: update-keys: versions 2 and 3 taken in turn, the root rotated; the channel the revoked release key signed refused", flush=True)
         # An older key file served again, and a newer one the root rotated away signed: both refused.
@@ -9082,11 +9082,103 @@ def update_keys_suite(args):
         https.shutdown()
         (Path(tempfile.gettempdir()) / f"mind-core-update-keys-{args.cpus}cpu.log").write_text(vm.log)
     assert image.read("system/updater/keys") == third
+    assert image.read("system/updater/roots/3") == third, "the root change kept for the slots (351-UPD-0029)"
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update-keys: a key file taken only as the next version, signed by the root before it and its own; the "
           "highest kept in system/updater across a restart and a reboot, a lower one refused; a channel or slot only a "
           "revoked release key signed refused (351-UPD-0027); the file system is consistent", flush=True)
+
+
+def update_bootkey_suite(args):
+    """351-UPD-0029 (MC-9.5, 9.6): the boot key under the root, at boot. A raw image with release 5 in slot A, confirmed,
+    its key file version 1 naming the test boot key, and update.txt naming the test release server, nothing automatic.
+    The server publishes key file version 2, which names a second boot key in place of the test one, and release 7,
+    signed by it. `update fetch` stages release 7 with key file 2 in slot B; `update apply` boots it on trial: the
+    bootloader checks slot B's key file under the root keys built in, and the manifest against the boot key it names;
+    init confirms it, and the confirmation writes key file version 2 into the records, the updater saying slot A, signed
+    by the old boot key, is no fallback. With the machine off, a record that boots slot A: its key file, version 1, is
+    below the records', and slot B boots. Then slot A given key file 2: its manifest, signed by the old boot key, is
+    refused, and slot B boots."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: update-bootkey suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-update-bootkey-"))
+    arch = args.arch
+    volume, newer, server, kept, _, _, _, _, _ = update_releases(temp, arch)
+    # Key file 2: the boot role a second key alone; release 7 signed by it.
+    boot2 = hashlib.sha256(b"351-UPD-0029: the second boot key of the test").digest()
+    second = release_tool.test_keys_file(version=2, boot=(boot2,))
+    target = release_tool.destination(server)
+    for path in ("keys/2", "keys/current"):
+        target.put_file(second, path)
+    commit, toolchain, locks = sign_manifest.build_inputs()
+    sign_manifest.sign_volume(newer, boot2, inputs=("release-7-of-the-boot-key-suite", toolchain, locks), version=7)
+    release_tool.publish(release_tool.stage(7, temp / "staged7", {arch: newer}, boot_public=sign_manifest.public_key(boot2)), server)
+    assert release_tool.check(server) is None, release_tool.check(server)
+    certificates = temp / "tls"
+    certificates.mkdir()
+    _certificates(certificates)
+    https = serve_httpd.serve(server, certificates / "server.pem", certificates / "server.key")
+    port = https.server_address[1]
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    first = (server / "keys/1").read_bytes()
+    assert (layout / "MIND/A/KEYS").read_bytes() == first, "the build's key file is the server's version 1"
+    (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    (layout / "update.txt").write_text(f"# the test release server (351-UPD-0029)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
+                                       "channel stable\nautomatic none\n")
+    image = boot_slots.Image.create(temp / "bootkey.img", layout)
+    cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+    network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        require(ANSI.sub("", vm.log), "BOOT: MIND\\A\\KEYS: VERSION 1, CHECKED UNDER THE ROOT KEYS BUILT IN (THE TEST ROOT KEYS)")
+        out = vm.command("update fetch", raw=True, timeout=1500)
+        require(out, "UPDATE: VERSION 7 STAGED IN THE OTHER SLOT")
+        log = updater_log(vm, "[UPDATER] KEY FILE VERSION 2 TAKEN", 60)
+        assert "SIGNED BY NO BOOT KEY" not in log, log[-3000:]
+        vm.collect(); vm.output = ""
+        since = len(vm.log)
+        vm.send("update apply 2\n")
+        require(vm.expect("(Y/N)", timeout=60), "APPLY VERSION 7 (RUNNING 5)?")
+        vm.send_bytes(b"y")
+        out = trial_confirmed(vm, since, 1500)
+        require(out, "BOOT: MIND\\B\\KEYS: VERSION 2, CHECKED UNDER THE ROOT KEYS BUILT IN (THE TEST ROOT KEYS)")
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        log = updater_log(vm, "[UPDATER] KEY FILE VERSION 2 IN THE RECORDS: A SLOT WITH A LOWER ONE IS NOT BOOTED (MC-9.6)", 120)
+        for line in ("[UPDATER] SLOT A: SIGNED BY NO BOOT KEY OF KEY FILE VERSION 2: NOT A FALLBACK FROM NOW ON", "[UPDATER] SLOT B CONFIRMED ON THE DISK"):
+            require(log, line)
+        print("PASS: update-bootkey: release 7, signed by the boot key key file 2 names, staged with that key file, booted on "
+              "trial and confirmed; the records hold key file version 2, and slot A, signed by the old boot key, is no fallback", flush=True)
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-update-bootkey-{args.cpus}cpu.log").write_text(vm.log)
+    newest = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert (newest["slot"], newest["confirmed"], newest["keys"]) == ("B", True, 2), newest
+    assert image.read("MIND/B/KEYS") == second and image.read("MIND/A/KEYS") == first
+    # Slot A first again, by hand: its key file below the records' version, then key file 2 over its own manifest.
+    for change, lines in ((None, ("BOOT: KEY FILE VERSION 2 OR ABOVE", "BOOT: MIND\\A\\KEYS: VERSION 1 BELOW VERSION 2, WHICH THE BOOT RECORDS NAME",
+                                  "BOOT: SLOT A: KEYS: below the key file version the boot records name: it may name revoked keys (MC-9.6)")),
+                          (second, ("BOOT: MIND\\A\\KEYS: VERSION 2, CHECKED UNDER THE ROOT KEYS BUILT IN", "BOOT: SLOT A: MANIFEST: bad signature (MC-9.1)"))):
+        if change is not None:
+            image.write("MIND/A/KEYS", change)
+        boot_slots.write_next(image, slot="A", fallback="B", confirmed=True)
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+        try:
+            out = ANSI.sub("", vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)).replace("\r", "")
+            for line in (*lines, "BOOT: SLOT B LOADED"):
+                require(out, line)
+        finally:
+            vm.close()
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: update-bootkey: a slot whose key file is below the records' version is not booted, nor one signed by a "
+          "boot key its key file does not name; slot B boots instead (351-UPD-0029); the file system is consistent", flush=True)
 
 
 def update_recovery_suite(args):
@@ -9575,7 +9667,7 @@ def linkupdate_suite(args):
         vm.close()
         (Path(tempfile.gettempdir()) / f"mind-core-linkupdate-{args.cpus}cpu.log").write_text(vm.log)
     records = boot_slots.records(image.path)
-    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 1}, records
+    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 1, "keys": 1}, records
     for name, digest in boot_files:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good and image.read("MIND/B/KEYS") == (server / "keys/current").read_bytes()
@@ -17177,13 +17269,17 @@ def boot_suite(args, disk):
     sign_manifest.sign_volume(disk)
     print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file the manifest lists", flush=True)
     # 350-UPD-0003: nothing is loaded that the signed manifest does not describe. A changed image, a changed manifest,
-    # a manifest signed by another key or no signature: the bootloader names the file and stops.
+    # a manifest signed by a key the key file does not name or no signature: the bootloader names the file and stops.
+    # 351-UPD-0029: so does a volume without its key file, or with one only one root key of the test set's two signed.
     manifest, rtc = (disk / "MANIFEST").read_bytes(), (disk / "rtc.elf").read_bytes()
     cases = [("kernel.elf", lambda: (disk / "kernel.elf").write_bytes(kernel[:-1] + bytes([kernel[-1] ^ 1])), "not as the manifest says"),
              ("rtc.elf", lambda: (disk / "rtc.elf").write_bytes(rtc + b"\0"), "not as the manifest says"),
              ("MANIFEST", lambda: (disk / "MANIFEST").write_bytes(manifest.replace(b"toolchain ", b"toolchain-")), "bad signature"),
              ("MANIFEST", lambda: sign_manifest.sign_volume(disk, sign_manifest.hashlib.sha256(b"not the key").digest()), "bad signature"),
-             ("MANIFEST.SIG", lambda: (disk / "MANIFEST.SIG").unlink(), "file not found")]
+             ("MANIFEST.SIG", lambda: (disk / "MANIFEST.SIG").unlink(), "file not found"),
+             ("KEYS", lambda: (disk / "KEYS").unlink(), "file not found"),
+             ("KEYS", lambda: (disk / "KEYS").write_bytes(release_tool.test_keys_file(roots=release_tool.TEST_ROOT_SEEDS[:1])),
+              "fewer than the threshold of the root keys signed it (MC-9.6)")]
     for name, change, reason in cases:
         change()
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
@@ -17194,8 +17290,9 @@ def boot_suite(args, disk):
         (disk / "kernel.elf").write_bytes(kernel)
         (disk / "rtc.elf").write_bytes(rtc)
         sign_manifest.sign_volume(disk)
-    print("PASS: signed boot volume: a changed kernel or service, a changed manifest, another key's signature and no "
-          "signature each stop the bootloader before anything is loaded", flush=True)
+    print("PASS: signed boot volume: a changed kernel or service, a changed manifest, another key's signature, no "
+          "signature, no key file and a key file short of the root threshold each stop the bootloader before anything is "
+          "loaded", flush=True)
     # 211-KRN-0012: the firmware lists another disk's EFI partition first (a Mac's internal disk); the loader reads the
     # kernel and the services from its own volume.
     # The decoy is on IDE, served by ata, the first block driver; the boot disk on AHCI. vfs_server mounts the volume
@@ -17459,6 +17556,7 @@ def main():
             updater_suite(args, args.updater_elf)
             update_suite(args)
             update_keys_suite(args)
+            update_bootkey_suite(args)
             update_recovery_suite(args)
             install_suite(args, args.updater_elf)
             update_store_suite(args)
@@ -17480,6 +17578,9 @@ def main():
             continue
         if suite == "updaterecovery":
             update_recovery_suite(args)
+            continue
+        if suite == "updatebootkey":
+            update_bootkey_suite(args)
             continue
         if suite == "ehci":
             ehci_suite(args)

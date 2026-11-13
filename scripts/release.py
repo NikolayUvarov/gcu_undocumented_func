@@ -250,17 +250,50 @@ def check_keys(whole, root=None, now=None):
     return k, None
 
 
+# The test key file's start when none is given: fixed, so that every image and test server holds the same bytes.
+TEST_KEYS_SINCE = datetime.datetime(2026, 11, 1, tzinfo=datetime.timezone.utc)
+
+
 def test_keys_file(now=None, days=3650, version=1, roots=TEST_ROOT_SEEDS[:TEST_ROOT_THRESHOLD], release=(TEST_RELEASE_SEED,),
-                   root=(TEST_ROOT_SEEDS, TEST_ROOT_THRESHOLD)):
-    """The test key file: the test boot, recovery and timestamp keys, the `release` seeds' keys, the `root` set (the
-    test one), one of each other signing, signed by `roots`."""
-    now = now or datetime.datetime.now(datetime.timezone.utc)
+                   root=(TEST_ROOT_SEEDS, TEST_ROOT_THRESHOLD), boot=(sm.TEST_SEED,)):
+    """The test key file: the test recovery and timestamp keys, the `boot` and `release` seeds' keys (the test ones),
+    the `root` set (the test one), one of each other signing, signed by `roots`; expiring `days` after `now`
+    (TEST_KEYS_SINCE)."""
+    now = now or TEST_KEYS_SINCE
     expires = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    roles = {"boot": ([sm.public_key(sm.TEST_SEED)], 1), "recovery": ([sm.public_key(TEST_RECOVERY_SEED)], 1),
+    roles = {"boot": ([sm.public_key(seed) for seed in boot], 1), "recovery": ([sm.public_key(TEST_RECOVERY_SEED)], 1),
              "release": ([sm.public_key(seed) for seed in release], 1), "root": ([sm.public_key(seed) for seed in root[0]], root[1]),
              "timestamp": ([sm.public_key(TEST_TIMESTAMP_SEED)], 1)}
     body = keys_bytes(version, expires, roles)
     return body + signature_lines(body, roots)
+
+
+def volume_keys(history=None, now=None):
+    """The key files a boot volume holds (351-UPD-0029) as [(name, bytes)]: `KEYS`, the last version of the key history
+    in the directory `history` or $MIND_KEYS (`1`, `2`, … as a server's keys/ holds them), and `KEYS.1`, `KEYS.2`, …
+    the versions before it at which the root changed. Each is checked against the root before it, the root set first;
+    the last must not have expired. Without a history, the test key file alone."""
+    history = history or os.environ.get("MIND_KEYS")
+    if not history:
+        return [("KEYS", test_keys_file())]
+    files, v = [], 1
+    while (Path(history) / str(v)).is_file():
+        files.append((Path(history) / str(v)).read_bytes())
+        v += 1
+    if not files:
+        raise ReleaseError(f"{history}: no key file 1 there")
+    trusted, out, long_ago = root_set(), [], datetime.datetime(1970, 1, 2, tzinfo=datetime.timezone.utc)
+    for v, whole in enumerate(files, 1):
+        k, why = check_keys(whole, trusted, now if v == len(files) else long_ago)
+        if k is None:
+            raise ReleaseError(f"{history}/{v}: {why}")
+        own = (sorted(k["roles"]["root"][0]), k["roles"]["root"][1])
+        if v < len(files) and own != (sorted(trusted[0]), trusted[1]):
+            out.append((f"KEYS.{len(out) + 1}", whole))
+        trusted = own
+    if len(out) > 8:
+        raise ReleaseError(f"{history}: more than 8 root changes, more than a boot volume holds")
+    return out + [("KEYS", files[-1])]
 
 
 def key_versions(target):
@@ -435,7 +468,7 @@ def server_keys(target, root=None, now=None, seeds=None):
     if whole is None:
         if (seeds or release_seeds()) != [TEST_RELEASE_SEED] or root is not None or os.environ.get("MIND_ROOT_KEYS"):
             raise ReleaseError("keys/current: missing: publish a key file first (release.py keys publish)")
-        whole = test_keys_file(now)
+        whole = test_keys_file()
         target.put_file(whole, "keys/1")
         target.put_file(whole, "keys/current")
     k, why = check_chain(target, root, now)
@@ -483,14 +516,16 @@ def publish(staged, dest, channel="stable", minimum=None, days=30, seed=None, no
     return body
 
 
-def check(dest, channel="stable", boot_public=None, now=None, root=None):
-    """None if the key file's root signatures, the channel's release signatures, every manifest it names and every blob
-    they list verify; else the reason."""
+def check(dest, channel="stable", now=None, root=None):
+    """None if the key file's root signatures, the channel's release signatures, every manifest it names (signed by a
+    boot key of the key file, 351-UPD-0029) and every blob they list verify; else the reason."""
     target = destination(dest)
-    boot_public = boot_public or sm.public_key(sm.signing_seed())
     k, why = check_chain(target, root, now)
     if k is None:
         return why
+    boot_keys, boot_threshold = k["roles"]["boot"]
+    if boot_threshold != 1:
+        return f"keys/current: its boot role asks for {boot_threshold} signatures; a manifest carries one"
     whole = target.read(f"channels/{channel}")
     if whole is None:
         return f"channels/{channel}: missing"
@@ -518,8 +553,8 @@ def check(dest, channel="stable", boot_public=None, now=None, root=None):
         sig = target.read(f"releases/{c['version']}/{arch}/MANIFEST.SIG")
         if text is None or hashlib.sha256(text).hexdigest() != digest:
             return f"releases/{c['version']}/{arch}/MANIFEST: not the one the channel names"
-        if sig is None or not sm.verify(boot_public, text, sig):
-            return f"releases/{c['version']}/{arch}/MANIFEST: bad signature"
+        if sig is None or not any(sm.verify(key, text, sig) for key in boot_keys):
+            return f"releases/{c['version']}/{arch}/MANIFEST: signed by no boot key keys/current names"
         for name, size, blob in manifest_files(text):
             data = target.read(f"blobs/{blob}")
             if data is None or len(data) != size or hashlib.sha256(data).hexdigest() != blob:

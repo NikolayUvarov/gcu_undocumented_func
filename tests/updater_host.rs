@@ -32,11 +32,11 @@ mod tree;
 #[path = "../updater/src/kept.rs"]
 mod kept;
 
-use plan::{confirm, expired, floor, in_slot, keeps, last_good, manifest_version, kind, may_stage, newest, other, period, raise, recover, trial_of_other, Kind};
+use plan::{confirm, expired, floor, in_slot, keeps, keys, last_good, manifest_version, kind, may_stage, newest, other, period, raise, recover, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
-    Record { sequence, slot, fallback, tries, confirmed, floor: 0 }
+    Record { sequence, slot, fallback, tries, confirmed, floor: 0, keys: 0 }
 }
 
 // The records after `write` lands in its file.
@@ -71,13 +71,13 @@ fn an_update_boots_the_other_slot_on_trial_then_the_bootloader_counts_it() {
     assert_eq!((file, counted), (0, rec(3, b'B', b'A', 2, false)));
     let records = after(records, (file, counted));
     assert!(!may_stage(records, b'B', true), "the fallback is kept while the trial runs");
-    let write = confirm(records, b'B').unwrap();
+    let write = confirm(records, b'B', 0).unwrap();
     assert_eq!(write, (1, rec(4, b'B', b'A', 0, true)));
     let records = after(records, write);
     assert_eq!(slots::plan(records).order, [b'B', b'A']);
     assert!(!slots::plan(records).trial);
     assert!(may_stage(records, b'B', true));
-    assert_eq!(confirm(records, b'B'), None, "a confirmed slot is not confirmed again");
+    assert_eq!(confirm(records, b'B', 0), None, "a confirmed slot is not confirmed again");
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn a_failed_trial_leaves_the_fallback_running_and_its_slot_to_fill() {
     // B's trial used its tries: A boots, not on trial, and B may be filled again.
     let records = [Some(rec(6, b'B', b'A', 0, false)), Some(rec(5, b'B', b'A', 1, false))];
     assert_eq!(slots::plan(records).order, [b'A', 0]);
-    assert_eq!(confirm(records, b'A'), None, "the record names the failed slot, not the running one");
+    assert_eq!(confirm(records, b'A', 0), None, "the record names the failed slot, not the running one");
     assert!(may_stage(records, b'A', false));
     assert_eq!(trial_of_other(records, b'A', 2), Some((1, rec(7, b'B', b'A', 2, false))));
 }
@@ -102,7 +102,7 @@ fn a_rollback_is_a_trial_of_the_other_slot() {
 #[test]
 fn without_a_valid_record_the_first_file_gets_sequence_one() {
     assert_eq!(trial_of_other([None, None], b'A', 3), Some((0, rec(1, b'B', b'A', 3, false))));
-    assert_eq!(confirm([None, None], b'A'), None);
+    assert_eq!(confirm([None, None], b'A', 0), None);
     assert!(may_stage([None, None], b'A', false));
     assert!(!may_stage([None, None], b'A', true));
 }
@@ -112,7 +112,7 @@ fn a_sequence_that_could_not_count_on_is_not_written() {
     let last = SEQUENCE_LAST - 2;
     assert_eq!(trial_of_other([Some(rec(last - 1, b'A', 0, 0, true)), None], b'A', 3), Some((1, rec(last, b'B', b'A', 3, false))));
     assert_eq!(trial_of_other([Some(rec(last, b'A', 0, 0, true)), None], b'A', 3), None);
-    assert_eq!(confirm([Some(rec(last, b'A', b'B', 1, false)), None], b'A'), None);
+    assert_eq!(confirm([Some(rec(last, b'A', b'B', 1, false)), None], b'A', 0), None);
 }
 
 #[test]
@@ -181,6 +181,20 @@ fn the_floor_rises_to_a_minimum_the_confirmed_slot_meets_and_never_falls() {
 }
 
 #[test]
+fn the_key_file_version_rises_with_a_confirmation_and_never_falls() {
+    // 351-UPD-0029: the confirmation carries the running slot's key file version; every later write keeps it, a
+    // recovery order's too, and none lowers it.
+    let trial = [Some(Record { keys: 1, ..rec(4, b'B', b'A', 1, false) }), Some(Record { keys: 1, ..rec(3, b'B', b'A', 2, false) })];
+    assert_eq!(confirm(trial, b'B', 2), Some((1, Record { keys: 2, ..rec(5, b'B', b'A', 0, true) })));
+    assert_eq!(confirm(trial, b'B', 0).map(|(_, r)| r.keys), Some(1), "never lowered");
+    let at = [Some(Record { keys: 3, ..rec(4, b'B', b'A', 0, true) }), None];
+    assert_eq!(keys(at), 3);
+    assert_eq!(trial_of_other(at, b'B', 3).map(|(_, r)| r.keys), Some(3));
+    assert_eq!(recover(at, b'B', 1).map(|(_, r)| r.keys), Some(3), "a recovery order lowers the floor, not the key file version");
+    assert_eq!(raise(at, b'B', 5, 7).map(|(_, r)| r.keys), Some(3));
+}
+
+#[test]
 fn a_recovery_order_lowers_the_floor_and_boots_the_other_slot_on_trial() {
     // 351-UPD-0030: the one write that lowers the floor, for an order the recovery threshold signed.
     let at = [Some(Record { floor: 6, ..rec(4, b'B', b'A', 0, true) }), Some(Record { floor: 6, ..rec(3, b'B', b'A', 1, false) })];
@@ -204,7 +218,7 @@ fn no_write_lowers_the_floor() {
     assert_eq!(floor(records), 6);
     assert_eq!(trial_of_other(records, b'A', 3).map(|(_, r)| r.floor), Some(6));
     let trial = [Some(Record { floor: 6, ..rec(5, b'B', b'A', 2, false) }), Some(Record { floor: 6, ..rec(4, b'A', 0, 0, true) })];
-    assert_eq!(confirm(trial, b'B').map(|(_, r)| r.floor), Some(6), "confirming a trial leaves the floor where it was");
+    assert_eq!(confirm(trial, b'B', 0).map(|(_, r)| r.floor), Some(6), "confirming a trial leaves the floor where it was");
     assert_eq!(floor([None, None]), 0);
 }
 

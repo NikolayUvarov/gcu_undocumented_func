@@ -199,7 +199,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [350-UPD-0004](350-UPD-0004-launch-record.md) | The launch record: printed on the serial line at every verified boot; readable in the system once the kernel keeps it | `UPD` | P2 | [requests-KRN.md](requests-KRN.md) | track C |
 | [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` | P1 | 350 | track C |
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol: split into 351-UPD-0024 to 0031 | `UPD` | P2 | its parts | track C |
-| [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md) | The boot key under the root, in the bootloader (from 351-UPD-0009) | `UPD`, with `KRN`/`PRT` | P2 | 0026 | track C |
+| [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md) | The boot key under the root, in the bootloader (from 351-UPD-0009): made, the QEMU runs next | `UPD`, with `KRN`/`PRT` | P2 | 0030 | track C |
 | [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md) | A separate recovery authority (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | 0028 | track C |
 | [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) | The key lifecycle and the compromise protocol, written down (from 351-UPD-0009) | `UPD` | P2 | 0026–0030 (for the procedures) | track C |
 | [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | A version floor in a TPM 2.0 counter, kept by the bootloader (rollback with the disk in hand) | `UPD`, with `PRT` | P2 | 0012 | track C |
