@@ -11768,8 +11768,9 @@ def wifi_join_check(vm):
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     radio = vm.services()["wlansim"]
     require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
-    restarted, joined = "[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY RU AGAIN", "[WLAN] AUTO-JOIN MIND-TEST: JOINED"
-    after = wlan_until(restarted, 150).rpartition(restarted)[2]  # `logs` drains: each read holds what came since the last
+    restarted, joined = "ITS COUNTRY RU AGAIN", "[WLAN] AUTO-JOIN MIND-TEST: JOINED"
+    before, _, after = wlan_until(restarted, 150).rpartition(restarted)  # `logs` drains: each read holds what came since the last
+    assert "[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET" in before.rpartition("\n")[2], before[-2000:]
     if joined not in after:
         after += wlan_until(joined, 120)
     assert vm.services()["wlansim"] != radio, vm.services()
@@ -11777,6 +11778,31 @@ def wifi_join_check(vm):
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     print("PASS: a restarted radio (wlansim started again by init, no channel and no country): the station noticed, gave it "
           "RU again and joined MIND-TEST by itself (550-NET-0061)", flush=True)
+    # 550-NET-0061, DRV's Ryzen run of 2026-11-13: a restart that the next tune would hide. Not joined, the radio is killed,
+    # and a client's scan tunes the fresh one as soon as it is ready. The station asks the radio before that tune, so it
+    # notices, gives it RU and scans again; before, the scan set a channel and nothing ever noticed (unless the 10-s
+    # check came first, which the PASS line names).
+    run("wifi leave", 30, "[WIFI] LEFT")
+    vm.command(f"logs {vm.services()['wlan']}", raw=True)  # drained: what wlan logs next is this check's
+    radio = vm.services()["wlansim"]
+    require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
+    sim, deadline = "", time.monotonic() + 60
+    while "[WLANSIM] READY" not in sim:
+        assert time.monotonic() < deadline, (vm.services(), sim[-2000:])
+        fresh = vm.services().get("wlansim", radio)
+        if fresh != radio:
+            sim += vm.command(f"logs {fresh}", raw=True)
+        time.sleep(.2)
+    scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
+    assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 ', scanned), scanned[-2000:]
+    before = wlan_until(restarted, 30).rpartition(restarted)[0].rpartition("\n")[2]
+    assert "[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET" in before, before
+    sim += vm.command(f"logs {fresh}", raw=True)
+    assert "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY" in sim, sim[-2000:]
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    how = "before the scan's first tune" if "ASKED BEFORE A TUNE" in before else "by the 10-s check, which came before the scan"
+    print(f"PASS: a radio restarted while the station was not joined, a client's scan at once: the station noticed {how}, "
+          "gave it RU, listed MIND-TEST and joined it again (550-NET-0061)", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
