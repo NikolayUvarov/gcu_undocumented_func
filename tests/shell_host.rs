@@ -205,7 +205,6 @@ fn an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file() {
     }
     // Nothing a remote line gets is asked.
     for line in ["kill 7", "reboot", "hostname dexp", "date set 2026-11-12 12:00", "logs 7"] { assert_ne!(remote(line), Taken::Asked, "{}", line); }
-    assert_eq!(clients::BADGE_REMOTE, 3);
 }
 
 #[test]

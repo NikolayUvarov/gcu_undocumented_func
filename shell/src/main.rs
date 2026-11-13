@@ -353,7 +353,7 @@ impl Shell {
                 continue;
             }
             // The copy badged for an SSH session (112-APP-0136) reaches `run` alone: no window, setting or lent client.
-            if message.badge == clients::BADGE_REMOTE && !matches!(request, commands::Request::Run { .. }) {
+            if message.badge == mind::process::BADGE_SHELL_REMOTE && !matches!(request, commands::Request::Run { .. }) {
                 mind::println!("[SHELL] PID {} CALLED THE SHELL THROUGH AN SSH SESSION'S CLIENT FOR ANOTHER COMMAND THAN RUN: REFUSED", message.sender);
                 let _ = mind::idl::wire::reply_code(call, commands::Error::Refused as usize);
                 continue;
@@ -489,7 +489,7 @@ impl Shell {
                     // The link's client in developer mode (800-APP-0102) is told by its badge, which no lent client can set.
                     let link = message.badge == mind::process::BADGE_SHELL_LINK;
                     // `sshd`'s, for a login's console (112-APP-0136): as init minted it, never asked on the screen.
-                    let remote = message.badge == clients::BADGE_REMOTE;
+                    let remote = message.badge == mind::process::BADGE_SHELL_REMOTE;
                     // The owner's `link-console` mode (init.wit 1.8, 800-APP-0108) makes it the console's: asked at each line.
                     let kind = if remote { clients::Client::Remote } else if !link { clients::Client::Program } else if link_console() { clients::Client::LinkConsole } else { clients::Client::Link };
                     let result = self.line_for(line.as_str(), message.sender, kind);
