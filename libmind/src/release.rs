@@ -1,12 +1,18 @@
-//! Release metadata (351-UPD-0013, docs/update/publishing.md): a channel file and a boot manifest. The parser service
-//! reads them (`parse_channel`, `Manifest`); the updater, which holds the update zone, parses none of it and accepts
+//! Release metadata (351-UPD-0013, docs/update/publishing.md): a channel file, a key file (351-UPD-0026) and a boot
+//! manifest. The parser service reads them (`parse_channel`, `parse_keys`, `Manifest`); the updater, which holds the update zone, parses none of it and accepts
 //! what the parser says only if it encodes again to exactly the signed bytes (`encode_channel`, `encode_line`,
 //! `encode_file`), so a parser that lies is caught (MC-11.5, 11.11). Both formats have one encoding, which `parse_*`
 //! demands: anything else is malformed.
 
-/// The largest channel file and boot manifest read.
-pub const CHANNEL_MAX: usize = 1024;
+/// The largest channel file, key file and boot manifest read.
+pub const CHANNEL_MAX: usize = 2560;
+pub const KEYS_MAX: usize = 4096;
 pub const MANIFEST_MAX: usize = 32768;
+/// Signature lines a channel or a key file carries, at most; public keys a role names, at most.
+pub const SIGNATURES_MAX: usize = 8;
+pub const ROLE_KEYS: usize = 4;
+/// The roles of a key file, in its order (351-UPD-0026).
+pub const ROLES: [&str; 4] = ["boot", "recovery", "release", "timestamp"];
 /// A channel's name, an architecture's name, a manifest's path: their longest.
 pub const NAME_MAX: usize = 32;
 pub const ARCH_MAX: usize = 16;
@@ -59,9 +65,49 @@ impl Channel {
     }
 }
 
-/// Where the signature is: it covers the file's first `body` bytes (its first line with the newline).
+/// One signature line: the public key it names and the Ed25519 signature (351-UPD-0026).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Signed { pub body: usize, pub signature: [u8; 64] }
+pub struct Signature { pub key: [u8; 32], pub value: [u8; 64] }
+
+/// Where the signatures are: they cover the file's first `body` bytes (its first line with the newline), and follow it
+/// one a line, in the file's order, keys repeated or unknown included: which of them count is the checker's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Signed { pub body: usize, pub signatures: [Signature; SIGNATURES_MAX], pub count: usize }
+
+impl Signed {
+    pub fn signatures(&self) -> &[Signature] { &self.signatures[..self.count.min(SIGNATURES_MAX)] }
+}
+
+/// A role of a key file: its public keys, in ascending order, and how many of them must sign.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Role { pub keys: [[u8; 32]; ROLE_KEYS], pub count: usize, pub threshold: u8 }
+
+impl Role {
+    pub const EMPTY: Self = Self { keys: [[0; 32]; ROLE_KEYS], count: 0, threshold: 0 };
+    pub fn keys(&self) -> &[[u8; 32]] { &self.keys[..self.count.min(ROLE_KEYS)] }
+}
+
+/// What a key file says (351-UPD-0026, after TUF's root metadata): its version, when it expires, and each role's keys
+/// and threshold, in `ROLES`' order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Keys { pub version: u64, pub expires: [u8; 20], pub roles: [Role; 4] }
+
+impl Keys {
+    /// The role named `name`, one of `ROLES`.
+    pub fn role(&self, name: &str) -> Option<&Role> { ROLES.iter().position(|&r| r == name).map(|i| &self.roles[i]) }
+}
+
+/// Whether at least `threshold` of `keys` signed `body`: each key counts once however many lines name it, a line whose
+/// key is not among `keys` is passed over, and `verify(key, body, signature)` is the Ed25519 check (MC-9.6).
+pub fn signed_by(keys: &[[u8; 32]], threshold: u8, body: &[u8], signed: &Signed, verify: impl Fn(&[u8; 32], &[u8], &[u8; 64]) -> bool) -> bool {
+    if threshold == 0 { return false; }
+    let mut counted = 0usize;
+    for (i, key) in keys.iter().enumerate() {
+        if keys[..i].contains(key) { continue; }
+        if signed.signatures().iter().any(|s| s.key == *key && verify(key, body, &s.value)) { counted += 1; }
+    }
+    counted >= threshold as usize
+}
 
 // Name characters: those json.dumps writes as they are and a file name holds anywhere.
 fn word_byte(b: u8) -> bool { b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-' }
@@ -135,12 +181,44 @@ impl<'a> Scan<'a> {
     }
 }
 
-/// A channel file: `{"channel":…,"expires":…,"manifests":{…},"minimum":…,"version":…}`, keys and architectures in order,
-/// no spaces, then `ed25519 <128 hex digits>`, each line ending in a newline and nothing after. Its version and minimum
-/// are checked as `scripts/release.py` makes them (1 ≤ minimum ≤ version).
-pub fn parse_channel(file: &[u8]) -> Result<(Channel, Signed), Malformed> {
+// The signature lines after a body: 1 to SIGNATURES_MAX of `ed25519 <key in 64 hex digits> <signature in 128>`, each
+// ending in a newline, and nothing after.
+fn parse_signatures(body: usize, tail: &[u8]) -> Option<Signed> {
+    let mut signed = Signed { body, signatures: [Signature { key: [0; 32], value: [0; 64] }; SIGNATURES_MAX], count: 0 };
+    let mut rest = tail;
+    while !rest.is_empty() {
+        if signed.count == SIGNATURES_MAX { return None; }
+        let end = rest.iter().position(|&b| b == b'\n')?;
+        let line = rest[..end].strip_prefix(b"ed25519 ")?;
+        if line.len() != 64 + 1 + 128 || line[64] != b' ' { return None; }
+        signed.signatures[signed.count] = Signature { key: hex::<32>(&line[..64])?, value: hex::<64>(&line[65..])? };
+        signed.count += 1;
+        rest = &rest[end + 1..];
+    }
+    (signed.count > 0).then_some(signed)
+}
+
+/// The signature lines in their one encoding, as `parse_*` read them.
+pub fn encode_signatures(signed: &Signed, out: &mut [u8]) -> Option<usize> {
+    let mut o = Out { buf: out, len: 0 };
+    for s in signed.signatures() {
+        o.put(b"ed25519 ")?; o.hex(&s.key)?; o.put(b" ")?; o.hex(&s.value)?; o.put(b"\n")?;
+    }
+    Some(o.len)
+}
+
+// The body and its signature lines, or Malformed.
+fn split_signed(file: &[u8]) -> Result<(usize, Signed), Malformed> {
     let body = file.iter().position(|&b| b == b'\n').ok_or(Malformed)? + 1;
-    let signature = file[body..].strip_prefix(b"ed25519 ").and_then(|s| s.strip_suffix(b"\n")).and_then(hex::<64>).ok_or(Malformed)?;
+    Ok((body, parse_signatures(body, &file[body..]).ok_or(Malformed)?))
+}
+
+/// A channel file: `{"channel":…,"expires":…,"manifests":{…},"minimum":…,"version":…}`, keys and architectures in order,
+/// no spaces, then 1 to SIGNATURES_MAX lines `ed25519 <key> <signature>` in hex (351-UPD-0026), each line ending in a
+/// newline and nothing after. Its version and minimum are checked as `scripts/release.py` makes them (1 ≤ minimum ≤
+/// version). A channel of before 351-UPD-0026, its one line `ed25519 <signature>` naming no key, is malformed.
+pub fn parse_channel(file: &[u8]) -> Result<(Channel, Signed), Malformed> {
+    let (body, signed) = split_signed(file)?;
     let mut s = Scan { text: &file[..body], at: 0 };
     let parsed = (|| {
         s.literal(b"{\"channel\":")?;
@@ -169,8 +247,80 @@ pub fn parse_channel(file: &[u8]) -> Result<(Channel, Signed), Malformed> {
         s.literal(b"}\n")?;
         (s.at == body && 1 <= minimum && minimum <= version).then_some(Channel { name, version, minimum, expires, manifests, count })
     })();
-    parsed.map(|channel| (channel, Signed { body, signature })).ok_or(Malformed)
+    parsed.map(|channel| (channel, signed)).ok_or(Malformed)
 }
+
+/// A key file (351-UPD-0026): `{"expires":…,"roles":{"boot":{"keys":[…],"threshold":…},"recovery":…,"release":…,
+/// "timestamp":…},"version":…}`, every role present, in that order, each with 1 to ROLE_KEYS public keys in 64 hex digits
+/// in ascending order and a threshold from 1 to their number; the version at least 1; no spaces; then the root keys'
+/// signature lines, as a channel's.
+pub fn parse_keys(file: &[u8]) -> Result<(Keys, Signed), Malformed> {
+    if file.len() > KEYS_MAX { return Err(Malformed); }
+    let (body, signed) = split_signed(file)?;
+    let mut s = Scan { text: &file[..body], at: 0 };
+    let parsed = (|| {
+        s.literal(b"{\"expires\":\"")?;
+        let expires = timestamp(s.until(b'"')?)?;
+        s.literal(b"\",\"roles\":{")?;
+        let mut roles = [Role::EMPTY; 4];
+        for (i, name) in ROLES.iter().enumerate() {
+            if i > 0 { s.literal(b",")?; }
+            s.literal(b"\"")?; s.literal(name.as_bytes())?; s.literal(b"\":{\"keys\":[")?;
+            let role = &mut roles[i];
+            loop {
+                if role.count == ROLE_KEYS { return None; }
+                s.literal(b"\"")?;
+                let key = hex::<32>(s.until(b'"')?)?;
+                s.literal(b"\"")?;
+                if role.count > 0 && key <= role.keys[role.count - 1] { return None; }
+                role.keys[role.count] = key;
+                role.count += 1;
+                if s.literal(b"]").is_some() { break; }
+                s.literal(b",")?;
+            }
+            s.literal(b",\"threshold\":")?;
+            let threshold = s.digits()?;
+            if threshold < 1 || threshold > role.count as u64 { return None; }
+            role.threshold = threshold as u8;
+            s.literal(b"}")?;
+        }
+        s.literal(b"},\"version\":")?;
+        let version = s.digits()?;
+        s.literal(b"}\n")?;
+        (s.at == body && version >= 1).then_some(Keys { version, expires, roles })
+    })();
+    parsed.map(|keys| (keys, signed)).ok_or(Malformed)
+}
+
+/// The first line of a key file, with its newline, in its one encoding: what the root keys sign.
+pub fn encode_keys(keys: &Keys, out: &mut [u8]) -> Option<usize> {
+    let mut o = Out { buf: out, len: 0 };
+    o.put(b"{\"expires\":\"")?; o.put(&keys.expires)?; o.put(b"\",\"roles\":{")?;
+    for (i, (name, role)) in ROLES.iter().zip(&keys.roles).enumerate() {
+        if i > 0 { o.put(b",")?; }
+        o.put(b"\"")?; o.put(name.as_bytes())?; o.put(b"\":{\"keys\":[")?;
+        for (j, key) in role.keys().iter().enumerate() {
+            if j > 0 { o.put(b",")?; }
+            o.put(b"\"")?; o.hex(key)?; o.put(b"\"")?;
+        }
+        o.put(b"],\"threshold\":")?; o.decimal(role.threshold as u64)?; o.put(b"}")?;
+    }
+    o.put(b"},\"version\":")?; o.decimal(keys.version)?; o.put(b"}\n")?;
+    Some(o.len)
+}
+
+// Whether `file` is exactly the body `encode` makes, then `signed`'s lines.
+fn file_is(file: &[u8], signed: &Signed, encode: impl FnOnce(&mut [u8]) -> Option<usize>) -> bool {
+    let mut line = [0u8; KEYS_MAX];
+    let Some(n) = encode(&mut line) else { return false };
+    let mut tail = [0u8; SIGNATURES_MAX * (8 + 64 + 1 + 128 + 1)];
+    let Some(t) = encode_signatures(signed, &mut tail) else { return false };
+    signed.count > 0 && n == signed.body && file.len() == n + t && file[..n] == line[..n] && file[n..] == tail[..t]
+}
+
+/// Whether a key file's fields and signatures are exactly `file`: what the updater checks of the parser's answer
+/// before it trusts any field.
+pub fn keys_is(file: &[u8], keys: &Keys, signed: &Signed) -> bool { file_is(file, signed, |out| encode_keys(keys, out)) }
 
 // Bytes into a buffer, failing when it is full.
 struct Out<'a> { buf: &'a mut [u8], len: usize }
@@ -282,16 +432,9 @@ impl<'a> Manifest<'a> {
     pub fn file(&self, i: usize) -> Option<File> { (i < self.files).then(|| self.lines().nth(self.headers + i).and_then(parse_file)).flatten() }
 }
 
-/// Whether a channel's fields and signature are exactly `file`: its line in the one encoding, then `ed25519 ` and the
-/// signature in hex. What the updater checks of the parser's answer before it trusts any field.
-pub fn channel_is(file: &[u8], channel: &Channel, signed: &Signed) -> bool {
-    let mut line = [0u8; CHANNEL_MAX];
-    let Some(n) = encode_channel(channel, &mut line) else { return false };
-    let mut tail = [0u8; 8 + 128 + 1];
-    let mut o = Out { buf: &mut tail, len: 0 };
-    let encoded = o.put(b"ed25519 ").and_then(|_| o.hex(&signed.signature)).and_then(|_| o.put(b"\n")).is_some();
-    encoded && n == signed.body && file.len() == n + tail.len() && file[..n] == line[..n] && file[n..] == tail
-}
+/// Whether a channel's fields and signatures are exactly `file`: its line in the one encoding, then its signature
+/// lines. What the updater checks of the parser's answer before it trusts any field.
+pub fn channel_is(file: &[u8], channel: &Channel, signed: &Signed) -> bool { file_is(file, signed, |out| encode_channel(channel, out)) }
 
 /// Checks that lines given in order make exactly `text`, each with its newline: a manifest's header lines as the parser
 /// gave them, then its files encoded again.

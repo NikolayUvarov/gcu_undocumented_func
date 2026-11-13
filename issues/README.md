@@ -204,7 +204,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [350-UPD-0004](350-UPD-0004-launch-record.md) | The launch record: printed on the serial line at every verified boot; readable in the system once the kernel keeps it | `UPD` | P2 | [requests-KRN.md](requests-KRN.md) | track C |
 | [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` | P1 | 350 | track C |
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol: split into 351-UPD-0024 to 0031 | `UPD` | P2 | its parts | track C |
-| [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) | Root keys with a threshold, and a signed key file (from 351-UPD-0009) | `UPD` | P2 | — | track C |
+| [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) | Root keys with a threshold, and a signed key file (from 351-UPD-0009): made, QEMU runs and the gate left | `UPD` | P2 | — | track C |
 | [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md) | Key rotation and revocation (from 351-UPD-0009) | `UPD` | P2 | 0026 | track C |
 | [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md) | A short-lived timestamp key for the channel (from 351-UPD-0009) | `UPD` | P2 | 0026 | track C |
 | [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md) | The boot key under the root, in the bootloader (from 351-UPD-0009) | `UPD`, with `KRN`/`PRT` | P2 | 0026 | track C |
