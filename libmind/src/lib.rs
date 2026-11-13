@@ -22,12 +22,14 @@ pub mod block_protocol;
 pub mod blockstore;
 pub mod car;
 pub mod checkpoint;
+pub mod clipboard; // the system clipboard's client (000-APP-0032); paste needs alloc
 pub mod cid;
 pub mod control;
 pub mod dag;
 pub mod index;
 pub mod journal;
 pub mod tree;
+pub mod vector;
 pub mod worktree;
 pub mod debug;
 pub mod deadline;
@@ -42,6 +44,7 @@ pub mod heap;
 pub mod hostname;
 pub mod hid;
 pub mod http;
+pub mod http_serve;
 pub mod multipart;
 pub mod idl;
 pub mod input;
@@ -60,6 +63,7 @@ pub mod partition; // MBR and GPT, and the block store's own partition (307-KRN-
 pub mod release;
 pub mod json;
 pub mod models;
+pub mod model_object; // a model as one object of the block store (251-STO-0014, 0015)
 pub mod tpm;
 pub mod netring;
 pub mod output;
@@ -92,6 +96,8 @@ pub mod inflate;
 #[cfg(feature = "alloc")]
 pub mod http_coding;
 pub mod sntp;
+#[cfg(feature = "alloc")]
+pub mod nts;
 #[cfg(feature = "alloc")]
 pub mod sse;
 #[cfg(feature = "alloc")]

@@ -197,15 +197,16 @@ def _blank(image, lba):
 
 
 def slots_check(args, work):
-    """351-UPD-0016: the same build packed as `make_usb_image.py --slots --channel` packs it, with a channel of release 1
-    naming its manifest, signed with the public test release key the updater is built with: it boots from slot A,
+    """351-UPD-0016: the same build packed as `make_usb_image.py --slots --channel --keys` packs it, with a channel of
+    release 1 naming its manifest, signed with the public test release key under the test key file (351-UPD-0026): it
+    boots from slot A,
     vfs_server's update zone is slot B, and the updater knows the running version."""
     payloads = read_payloads(ROOT / ARCHES[args.arch]["root"], args.arch)
     expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = release_tool.channel_bytes("stable", 1, 1, expires, {args.arch: hashlib.sha256(payloads["MANIFEST"]).hexdigest()})
-    channel = body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    channel = body + release_tool.signature_lines(body, [release_tool.TEST_RELEASE_SEED])
     image = work / "slots.img"
-    pack(slots(payloads, args.arch, channel), image, find_qemu_img(os.environ.get("QEMU_IMG")), args.arch)
+    pack(slots(payloads, args.arch, channel, release_tool.test_keys_file()), image, find_qemu_img(os.environ.get("QEMU_IMG")), args.arch)
     vm = VM(args, qemu_path(image, args.qemu), usb=True, snapshot=False)
     try:
         require(vm.log.replace("\r", ""), "BOOT: SLOT A LOADED\n")
@@ -291,9 +292,10 @@ def unplugged(vm, booted, name):
     # and set the windows again over the same partitions, and vfs_server found the same medium.
     came_back(vm, 1)
     require(vm.command("sync"), "OK")
-    # The records of the time without the disk reach this boot's log once it is back (the journal kept them).
+    # The records of the time without the disk reach this boot's log once it is back (the journal kept them). Read
+    # whole through a pipe: `cat` shows a file's first 16 KiB on the screen, and by now this boot's log is longer.
     for _ in range(40):
-        saved = vm.command(f"cat log:{name}", raw=True)
+        saved = vm.command(f"cat log:{name} | grep DRIVE", raw=True)
         if "DRIVE ANSWERS AGAIN" in saved:
             break
         time.sleep(1)

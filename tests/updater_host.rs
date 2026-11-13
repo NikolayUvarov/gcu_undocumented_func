@@ -32,11 +32,11 @@ mod tree;
 #[path = "../updater/src/kept.rs"]
 mod kept;
 
-use plan::{confirm, expired, floor, in_slot, keeps, last_good, manifest_version, kind, may_stage, newest, other, period, raise, trial_of_other, Kind};
+use plan::{confirm, expired, floor, in_slot, keeps, keys, last_good, manifest_version, kind, may_stage, newest, other, period, raise, recover, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
-    Record { sequence, slot, fallback, tries, confirmed, floor: 0 }
+    Record { sequence, slot, fallback, tries, confirmed, floor: 0, keys: 0 }
 }
 
 // The records after `write` lands in its file.
@@ -71,13 +71,13 @@ fn an_update_boots_the_other_slot_on_trial_then_the_bootloader_counts_it() {
     assert_eq!((file, counted), (0, rec(3, b'B', b'A', 2, false)));
     let records = after(records, (file, counted));
     assert!(!may_stage(records, b'B', true), "the fallback is kept while the trial runs");
-    let write = confirm(records, b'B').unwrap();
+    let write = confirm(records, b'B', 0).unwrap();
     assert_eq!(write, (1, rec(4, b'B', b'A', 0, true)));
     let records = after(records, write);
     assert_eq!(slots::plan(records).order, [b'B', b'A']);
     assert!(!slots::plan(records).trial);
     assert!(may_stage(records, b'B', true));
-    assert_eq!(confirm(records, b'B'), None, "a confirmed slot is not confirmed again");
+    assert_eq!(confirm(records, b'B', 0), None, "a confirmed slot is not confirmed again");
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn a_failed_trial_leaves_the_fallback_running_and_its_slot_to_fill() {
     // B's trial used its tries: A boots, not on trial, and B may be filled again.
     let records = [Some(rec(6, b'B', b'A', 0, false)), Some(rec(5, b'B', b'A', 1, false))];
     assert_eq!(slots::plan(records).order, [b'A', 0]);
-    assert_eq!(confirm(records, b'A'), None, "the record names the failed slot, not the running one");
+    assert_eq!(confirm(records, b'A', 0), None, "the record names the failed slot, not the running one");
     assert!(may_stage(records, b'A', false));
     assert_eq!(trial_of_other(records, b'A', 2), Some((1, rec(7, b'B', b'A', 2, false))));
 }
@@ -102,7 +102,7 @@ fn a_rollback_is_a_trial_of_the_other_slot() {
 #[test]
 fn without_a_valid_record_the_first_file_gets_sequence_one() {
     assert_eq!(trial_of_other([None, None], b'A', 3), Some((0, rec(1, b'B', b'A', 3, false))));
-    assert_eq!(confirm([None, None], b'A'), None);
+    assert_eq!(confirm([None, None], b'A', 0), None);
     assert!(may_stage([None, None], b'A', false));
     assert!(!may_stage([None, None], b'A', true));
 }
@@ -112,7 +112,7 @@ fn a_sequence_that_could_not_count_on_is_not_written() {
     let last = SEQUENCE_LAST - 2;
     assert_eq!(trial_of_other([Some(rec(last - 1, b'A', 0, 0, true)), None], b'A', 3), Some((1, rec(last, b'B', b'A', 3, false))));
     assert_eq!(trial_of_other([Some(rec(last, b'A', 0, 0, true)), None], b'A', 3), None);
-    assert_eq!(confirm([Some(rec(last, b'A', b'B', 1, false)), None], b'A'), None);
+    assert_eq!(confirm([Some(rec(last, b'A', b'B', 1, false)), None], b'A', 0), None);
 }
 
 #[test]
@@ -181,13 +181,44 @@ fn the_floor_rises_to_a_minimum_the_confirmed_slot_meets_and_never_falls() {
 }
 
 #[test]
+fn the_key_file_version_rises_with_a_confirmation_and_never_falls() {
+    // 351-UPD-0029: the confirmation carries the running slot's key file version; every later write keeps it, a
+    // recovery order's too, and none lowers it.
+    let trial = [Some(Record { keys: 1, ..rec(4, b'B', b'A', 1, false) }), Some(Record { keys: 1, ..rec(3, b'B', b'A', 2, false) })];
+    assert_eq!(confirm(trial, b'B', 2), Some((1, Record { keys: 2, ..rec(5, b'B', b'A', 0, true) })));
+    assert_eq!(confirm(trial, b'B', 0).map(|(_, r)| r.keys), Some(1), "never lowered");
+    let at = [Some(Record { keys: 3, ..rec(4, b'B', b'A', 0, true) }), None];
+    assert_eq!(keys(at), 3);
+    assert_eq!(trial_of_other(at, b'B', 3).map(|(_, r)| r.keys), Some(3));
+    assert_eq!(recover(at, b'B', 1).map(|(_, r)| r.keys), Some(3), "a recovery order lowers the floor, not the key file version");
+    assert_eq!(raise(at, b'B', 5, 7).map(|(_, r)| r.keys), Some(3));
+}
+
+#[test]
+fn a_recovery_order_lowers_the_floor_and_boots_the_other_slot_on_trial() {
+    // 351-UPD-0030: the one write that lowers the floor, for an order the recovery threshold signed.
+    let at = [Some(Record { floor: 6, ..rec(4, b'B', b'A', 0, true) }), Some(Record { floor: 6, ..rec(3, b'B', b'A', 1, false) })];
+    assert_eq!(recover(at, b'B', 5), Some((1, Record { floor: 5, ..rec(5, b'A', b'B', 1, false) })), "slot A on trial, one try, floor 5");
+    assert_eq!(floor(at), 6);
+    let (file, record) = recover(at, b'B', 5).unwrap();
+    let mut after = at;
+    after[file] = Some(record);
+    assert_eq!(floor(after), 5, "the bootloader reads the newer record's floor");
+    // The updater's own writes carry the lower floor on from there, and never lower it again.
+    assert_eq!(trial_of_other(after, b'A', 3).map(|(_, r)| r.floor), Some(5));
+    assert_eq!(recover([None, None], b'A', 2), Some((0, Record { floor: 2, ..rec(1, b'B', b'A', 1, false) })), "from no record");
+    let last = [Some(Record { floor: 6, ..rec(slots::SEQUENCE_LAST - 1, b'B', b'A', 0, true) }), None];
+    assert_eq!(recover(last, b'B', 5), None, "no sequence left for the trial's count");
+}
+
+#[test]
 fn no_write_lowers_the_floor() {
     // Every record the updater writes carries the higher of the records' floors.
     let records = [Some(Record { floor: 6, ..rec(4, b'A', 0, 0, true) }), Some(Record { floor: 2, ..rec(3, b'A', 0, 0, true) })];
     assert_eq!(floor(records), 6);
     assert_eq!(trial_of_other(records, b'A', 3).map(|(_, r)| r.floor), Some(6));
     let trial = [Some(Record { floor: 6, ..rec(5, b'B', b'A', 2, false) }), Some(Record { floor: 6, ..rec(4, b'A', 0, 0, true) })];
-    assert_eq!(confirm(trial, b'B').map(|(_, r)| r.floor), Some(6), "confirming a trial leaves the floor where it was");
+    assert_eq!(confirm(trial, b'B', 0).map(|(_, r)| r.floor), Some(6), "confirming a trial leaves the floor where it was");
     assert_eq!(floor([None, None]), 0);
 }
 
@@ -241,8 +272,9 @@ fn a_bundle_of_release_py_is_read_in_place() {
     let data = std::fs::read(dir.join("bundle.zip")).unwrap();
     let read = read_bundle(&data).expect("the bundle reads");
     let names: Vec<&str> = read.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(&names[..3], ["channels/stable", "releases/1/x86_64/MANIFEST", "releases/1/x86_64/MANIFEST.SIG"]);
-    assert!(names.len() > 3 && names[3..].iter().all(|n| n.starts_with("blobs/")), "{names:?}");
+    // The key file's history first (351-UPD-0027), then the key file, the channel, its timestamp (351-UPD-0028) and the manifest.
+    assert_eq!(&names[..6], ["keys/1", "keys/current", "channels/stable", "timestamps/stable", "releases/1/x86_64/MANIFEST", "releases/1/x86_64/MANIFEST.SIG"]);
+    assert!(names.len() > 6 && names[6..].iter().all(|n| n.starts_with("blobs/")), "{names:?}");
     for (name, bytes) in &read { assert_eq!(bytes, &std::fs::read(dir.join("server").join(name)).unwrap(), "{name}"); }
     // A byte past the end record, a count one more, a compressed entry, one of a name changed in its local header: refused.
     let mut longer = data.clone();
@@ -331,7 +363,7 @@ fn read(store: &mut Blocks, cid: &cid::Cid, size: u64) -> Vec<u8> {
 }
 
 fn release<'a>(version: u64, channel_file: &'a [u8], manifest: &'a [u8]) -> kept::Release<'a> {
-    kept::Release { channel: "stable", channel_file, version, arch: "x86_64", manifest, signature: &[7u8; 64] }
+    kept::Release { keys_file: b"{\"keys\": 1}\n", channel: "stable", channel_file, version, arch: "x86_64", manifest, signature: &[7u8; 64] }
 }
 
 #[test]
@@ -346,7 +378,8 @@ fn a_kept_release_is_the_release_layout_read_back_by_its_paths() {
     assert_eq!(kept::version(&mut store, &root, "x86_64", &mut buffer), Ok(7));
     assert_eq!(kept::version(&mut store, &root, "aarch64", &mut buffer), Err(dag::Error::Shape), "no manifest for another processor");
     assert_eq!(kept::channel(&mut store, &root, &mut buffer).as_deref(), Ok("stable"));
-    for (path, want) in [("channels/stable", &channel[..]), ("releases/7/x86_64/MANIFEST", &manifest[..]), ("releases/7/x86_64/MANIFEST.SIG", &[7u8; 64][..])] {
+    for (path, want) in [("keys/current", &b"{\"keys\": 1}\n"[..]), ("channels/stable", &channel[..]), ("releases/7/x86_64/MANIFEST", &manifest[..]),
+                         ("releases/7/x86_64/MANIFEST.SIG", &[7u8; 64][..])] {
         let (cid, size) = kept::find(&mut store, &root, path, &mut buffer).unwrap().unwrap();
         assert_eq!(read(&mut store, &cid, size), want, "{}", path);
     }
@@ -358,7 +391,7 @@ fn a_kept_release_is_the_release_layout_read_back_by_its_paths() {
         assert_eq!(&read(&mut store, &cid, size), data);
     }
     // What the layout does not hold, or a directory where a file is asked for.
-    for path in [format!("blobs/{}", hex(&[0xab; 32])), String::from("blobs"), String::from("releases/7"), String::from("channels/beta"), String::from("releases/7/x86_64/MANIFEST/x")] {
+    for path in [format!("blobs/{}", hex(&[0xab; 32])), String::from("blobs"), String::from("releases/7"), String::from("channels/beta"), String::from("keys/other"), String::from("releases/7/x86_64/MANIFEST/x")] {
         assert_eq!(kept::find(&mut store, &root, &path, &mut buffer), Ok(None), "{}", path);
     }
     let mut listed = Vec::new();

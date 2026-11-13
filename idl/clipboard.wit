@@ -1,0 +1,33 @@
+/// The system clipboard (`clipboard`, 000-APP-0032): one text the user copied, up to 65536 bytes, kept in the service's
+/// memory only, never on a disk. It goes in parts of a message each, split where a character ends, so that neither side
+/// holds it on its stack; `mind::clipboard` joins them. A program holds a client only when the shell lent it one for
+/// `REQUEST_CLIPBOARD`, a copy badged `mind::clipboard::BADGE_PROGRAM`, and its calls but `generation` are answered
+/// only while it is the program in front. The managers, the shell for its consoles and the window manager it started
+/// for its windows, hold copies badged `BADGE_MANAGER`: they name the program in front, and copy and paste themselves.
+/// A window manager's copy comes on the wire, which carries no right to badge (000-KRN-0073), so the service mints its
+/// programs' copies (1.1). The service logs each text set and read, never the text.
+package mind:clipboard@1.1.0;
+
+interface clipboard {
+    /// `behind`: the caller is not the program in front; `refused`: a manager's call from another client, or a client
+    /// with neither badge; `invalid`: a part out of order, or one past 65536 bytes in all; `changed`: the text was set
+    /// again since the generation asked for; `unavailable`: the service holds no right to badge its endpoint (1.1).
+    enum error { behind, refused, invalid, changed, unavailable }
+
+    /// A part of the text: its generation (0 before any text), its whole length in bytes, and the bytes from `at`.
+    record part { generation: u32, length: u32, text: string<4000> }
+
+    /// A part of the text the caller copies, from byte `at`: the first at 0, each next one where the last ended. The
+    /// text replaces the clipboard's with `last`, which answers its new generation; the others answer 0. A part at 0
+    /// starts again, and another caller's starts its own.
+    set-part: func(at: u32, text: string<4000>, last: bool) -> result<u32, error>;
+    /// The part of the clipboard's text from byte `at`, of `generation` (0: the one now): `changed` when it is no longer.
+    get-part: func(generation: u32, at: u32) -> result<part, error>;
+    /// The generation alone, to any client the shell lent: whether there is something new to paste.
+    generation: func() -> result<u32, error>;
+    /// Names the program in front, whose calls are answered (a manager's alone): its PID, 0 for none.
+    front: func(pid: u64) -> result<_, error>;
+    /// A program's client, badged `BADGE_PROGRAM`, for a manager to lend (a manager's alone, 1.1): moved to the caller,
+    /// the service keeps no copy.
+    program-client: func() -> result<own<endpoint>, error>;
+}

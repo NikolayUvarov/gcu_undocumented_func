@@ -1,0 +1,39 @@
+# 112-APP-0136 — The shell takes an SSH session's lines — done
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [112](../issues/112-our-own-ssh-server.md) · **Roadmap:** track D · **Constitution:** MC-3.1, MC-5.1, MC-11.4, MC-11.6
+
+**Asked by:** KRN (the kernel session, `NET`), for 112-NET-0072's console, in [requests-APP.md](../issues/requests-APP.md), 2026-11-12. Numbered on 2026-11-12.
+
+## Problem
+
+`sshd` (112-NET-0072) sends each line of a login's console to `shell.wit`'s `run`, on a client `init` is to mint badged `mind::process::BADGE_SHELL_REMOTE` (3). The shell knows two rules for `run`: a program's, which asks the user in the shell's window for what changes the machine, and the link's in developer mode, which runs that at once. A line typed somewhere else must never be asked on the machine's screen: nobody may be there, and a person there must not agree to what someone elsewhere typed.
+
+## Plan
+
+- **A rule of its own** for a client badged `BADGE_SHELL_REMOTE`, in `shell/src/clients.rs` (`Client::Remote`):
+  - **run at once:** what the link's client in developer mode runs at once (`ps`, `kill`, `logs`, `reboot`, `date set`, `hostname <name>`, …);
+  - **refused** as for the link: a change of the network policy (`netpolicy` with a change, `netrevoke`), the machine's modes, scripts (`msh`), the screen's commands, programs and statements, and every command no client gets (`update`, `passphrase`, `boot`, …);
+  - **refused besides:** a line whose output goes into a file (`>`, `>>`), as files are the key's `files` right's, through SFTP; and `tpm`, the machine's own root of trust.
+- **Never asked:** a remote line's question on the screen is answered no and logged, whatever command asks it.
+- **`run` alone:** the copy badged for a remote session reaches no other call of `shell.wit` (a window, a setting, a lent client), and is refused with a line in the log.
+- **Logged** by the command's word alone, as the link's: `[SHELL] FOR AN SSH SESSION THE SHELL RAN PS`.
+- The badge's value is named in the shell until 112-NET-0072 brings `mind::process::BADGE_SHELL_REMOTE` to `main`; then the shell takes that one.
+
+## Acceptance criteria
+
+- **Host tests:** the remote rule's lists, beside the link's.
+- **QEMU (`tls` suite's `sshd_check`, KRN's after `init` lends the client):** `ssh mind@… ps` answers the shell's `ps`; a refused command says so; the log names its word.
+
+## Resolution
+
+- **The rule** (`shell/src/clients.rs`, `Client::Remote`, the badge `BADGE_REMOTE` = 3): at once what the link's client in developer mode runs at once; refused as for the link the policy's changes, `mode`, scripts, the screen's commands, programs and the commands no client gets; refused besides a line with `>` or `>>` and `tpm`.
+- **Never asked:** `msh::ask` answers no to a line of the link or of an SSH session and logs `[SHELL] A LINE TYPED ELSEWHERE WAS NOT ASKED: …`; no command either client gets asks today, so this changes nothing the link ran.
+- **`run` alone:** another call through the remote copy is refused and logged (`shell/src/main.rs`, `serve_commands`).
+- **Logged:** `[SHELL] FOR AN SSH SESSION THE SHELL RAN PS` (or `REFUSED`, `DID NOT RUN`).
+- **Host tests:** `tests/shell_host.rs`'s `an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file`, beside the link's tests. On x86 (4 CPUs) the `shell` and `wm` suites (33 checks), `link` (the shell's lines over the link, the policy refused, the link's console) and `modes` (7) pass with it: the link's rule is unchanged. No client is badged 3 yet, so the remote path itself has not run in QEMU.
+- **The badge** is `mind::process::BADGE_SHELL_REMOTE` (3), in `main` with 112-NET-0072 since round 127; the shell's own name for it went (a571053e).
+- **QEMU:** the `tls` suite's `sshd_check` (KRN's, round 127), on x86 with 4 CPUs on this branch's head after a571053e (13 checks): the console key's `ssh … ps` answers the shell's `ps`, `update` is refused, and the shell's log names each word (`[SHELL] FOR AN SSH SESSION THE SHELL RAN PS`, `… REFUSED UPDATE`); the files' key gets no console.
+
+## Related
+
+[112](../issues/112-our-own-ssh-server.md), [requests-APP.md](../issues/requests-APP.md), 800-APP-0102 (the link's client), 800-APP-0108 (the link's console).

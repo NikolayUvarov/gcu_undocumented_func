@@ -23,9 +23,10 @@ and link.conf:
     every 60
 
 The release is signed as scripts/release.py signs one: the manifest with the build's boot key, the channel with
-$MIND_RELEASE_KEY, or the public test release key without it. Only what the updater reads goes over the cable: the
-boot files' and the applications' blobs (mindlink skips a file the other end holds already, so an unchanged
-application costs a check), the manifest and its signature, then the channel, last. Exit status: 0 when the updater confirmed the new slot on the disk, 1 when a step was refused or the
+$MIND_RELEASE_KEY, or the public test release key without it, under the key file the server tree holds (the test one
+without it, 351-UPD-0026). Only what the updater reads goes over the cable: the boot files' and the applications'
+blobs (mindlink skips a file the other end holds already, so an unchanged application costs a check), the manifest and
+its signature, the key file, then the channel, last. Exit status: 0 when the updater confirmed the new slot on the disk, 1 when a step was refused or the
 time ran out, 2 for a usage error.
 """
 import argparse
@@ -68,14 +69,16 @@ def application(name):
     return "/" not in name and name.endswith(".elf") and not boot_file(name)
 
 
-def release_files(manifest, arch, version):
+def release_files(manifest, arch, version, key_versions=()):
     """What the updater reads of a release, in the order it is put: the boot files' blobs, the loader's (351-UPD-0010),
-    the applications' (351-KRN-0151), then the manifest and its signature. A blob two files share goes once. The channel,
-    `channels/stable`, goes last and is not in the list."""
+    the applications' (351-KRN-0151), then the manifest and its signature, then the key file's versions `key_versions`
+    (351-UPD-0027) and the key file (351-UPD-0026). A blob two files share goes once. The channel, `channels/stable`, goes last and is
+    not in the list, nor its timestamp, which goes after it (351-UPD-0028)."""
     files = release.manifest_files(manifest)
     blobs = ([digest for name, _, digest in files if boot_file(name)] + [digest for name, _, digest in files if loader(name, arch)]
              + [digest for name, _, digest in files if application(name)])
-    return [f"blobs/{digest}" for digest in dict.fromkeys(blobs)] + [f"releases/{version}/{arch}/MANIFEST", f"releases/{version}/{arch}/MANIFEST.SIG"]
+    return ([f"blobs/{digest}" for digest in dict.fromkeys(blobs)] + [f"releases/{version}/{arch}/MANIFEST", f"releases/{version}/{arch}/MANIFEST.SIG"]
+            + [f"keys/{v}" for v in key_versions] + ["keys/current"])
 
 
 def build(root, arch, version, temp):
@@ -179,7 +182,7 @@ def follow(link, timeout, say=print, pause=5, before="", version=None):
 
 def update(link, server, manifest, arch, version, timeout, say=print):
     """Puts release `version` from `server` and follows the log to its end."""
-    files = release_files(manifest, arch, version)
+    files = release_files(manifest, arch, version, release.key_versions(release.destination(server)))
     started = time.monotonic()
     for index, name in enumerate(files, 1):
         link.put(Path(server) / name, name)
@@ -190,6 +193,8 @@ def update(link, server, manifest, arch, version, timeout, say=print):
     if before is None:
         raise RuntimeError("the other end's log could not be read")
     link.put(Path(server) / "channels/stable", "channels/stable")
+    # Then the timestamp naming it (351-UPD-0028): until it is there the updater holds the channel it had.
+    link.put(Path(server) / "timestamps/stable", "timestamps/stable")
     return follow(link, timeout, say, before=before, version=version)
 
 

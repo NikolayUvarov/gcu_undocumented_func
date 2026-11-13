@@ -58,6 +58,15 @@ pub fn allowed(badge: u16, operation: Operation) -> bool {
     }
 }
 
+/// The rights a domain's client gets through `domain-client-with` (blockstore.wit 2.8, 312-STO-0049): those of `wanted`
+/// the caller holds too, of get, put and publish; none in common, or a bit of `wanted` that is no such right, gives none.
+pub fn narrowed(held: u16, wanted: u16) -> Option<u16> {
+    const DOMAIN_RIGHTS: u16 = BADGE_GET | BADGE_PUT | BADGE_PUBLISH;
+    if wanted & !DOMAIN_RIGHTS != 0 { return None; }
+    let rights = held & wanted;
+    (rights != 0).then_some(rights)
+}
+
 /// A durability class (its number in idl/blockstore.wit's `durability`) as the log and the tools write it (307-STO-0019).
 pub fn class(durability: u8) -> &'static str { ["VOLATILE", "FLUSHED", "COPIED"].get(durability as usize).copied().unwrap_or("?") }
 

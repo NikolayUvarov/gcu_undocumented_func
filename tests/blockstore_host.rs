@@ -558,6 +558,275 @@ fn rights_come_from_the_badge() {
 }
 
 #[test]
+fn a_domains_client_with_fewer_rights_gets_only_those_its_caller_holds() {
+    // 312-STO-0049: domain-client-with's rights, for every caller's badge and every rights asked, against the rule
+    // written here: those asked of get, put and publish that the caller holds; none, or a bit of no such right, none.
+    use rights::{allowed, narrowed, Operation::*, BADGE_GET, BADGE_PUBLISH, BADGE_PUT, BADGE_RECOVER};
+    let domain = BADGE_GET | BADGE_PUT | BADGE_PUBLISH;
+    for held in 0..0x200u16 {
+        for wanted in 0..0x20u16 {
+            let expected = if wanted & !domain != 0 || held & wanted == 0 { None } else { Some(held & wanted) };
+            let got = narrowed(held, wanted);
+            assert_eq!(got, expected, "held {held:#x} wanted {wanted:#x}");
+            // Never a right the caller lacks, never the recovery right, never an owner's bits.
+            if let Some(r) = got {
+                assert_eq!(r & !held, 0);
+                assert_eq!(r & (BADGE_RECOVER | rights::OWNER_BITS), 0);
+                for operation in [Put, Get, Publish, Pin] { assert!(!allowed(r, operation) || allowed(held, operation), "{held:#x} {wanted:#x} {operation:?}"); }
+            }
+        }
+    }
+    // The shell's writing client (the owner's bits 0, get, put and publish) lends one that only reads.
+    let shell = BADGE_GET | BADGE_PUT | BADGE_PUBLISH;
+    let reading = narrowed(shell, BADGE_GET).unwrap();
+    assert!(allowed(reading, Get) && allowed(reading, Resolve) && !allowed(reading, Put) && !allowed(reading, Publish) && !allowed(reading, Pin));
+    // The read-only client asks for put: none in common.
+    assert_eq!(narrowed(BADGE_GET, BADGE_PUT), None);
+}
+
+// 312-STO-0050: calendar times of the tests, seconds since 1970 UTC.
+const TERM: u64 = 1_800_000_000;
+const BEFORE: u64 = TERM - 60;
+const AFTER: u64 = TERM + 60;
+
+/// The term records on the medium, read here from their layout (312-STO-0050): domain, mode, counter, term.
+fn terms_on(medium: &Memory) -> Vec<(u16, u16, u32, u64)> {
+    records(medium).into_iter().filter_map(|(_, r)| r.filter(|r| r.starts_with(b"MIND-TRM"))).map(|r| {
+        (u16::from_le_bytes([r[10], r[11]]), u16::from_le_bytes([r[12], r[13]]), u32::from_le_bytes(r[16..20].try_into().unwrap()), u64::from_le_bytes(r[20..28].try_into().unwrap()))
+    }).collect()
+}
+
+/// A domain of OWNER holding a block named `a` and pinned, put at the store's time; the block's CID.
+fn domain_with_a_block(store: &mut Store<&mut Memory>, id: u16, seed: usize) -> Cid {
+    store.set_domain(id).unwrap();
+    let cid = store.put(Codec::Raw, &block(seed, 3000)).unwrap();
+    assert_eq!(store.publish(b"a", 0, &cid, OWNER), Ok(1));
+    assert!(store.pin(&cid, OWNER).is_ok());
+    store.set_domain(VOLUME).unwrap();
+    cid
+}
+
+#[test]
+fn a_domains_term_and_mode_are_its_owners_and_found_again_after_a_remount() {
+    use store::{Term, TermMode::*};
+    let mut medium = Memory::new(512);
+    let (one, two);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        (one, two) = (store.domain_create(OWNER).unwrap(), store.domain_create(OWNER).unwrap());
+        // No term, report, until one is set; no clock until one is heard.
+        assert_eq!(store.domain_term(one, OWNER), Ok(Term { until: 0, mode: Report, clock: false, passed: false }));
+        assert_eq!(store.domain_set_term(one, OWNER, TERM, Forget), Ok(()));
+        assert_eq!(store.domain_set_term(one, OWNER, TERM + 1, Release), Ok(()));
+        assert_eq!(store.domain_set_term(two, OWNER, TERM, Forget), Ok(()));
+        assert_eq!(store.domain_term(one, OWNER), Ok(Term { until: TERM + 1, mode: Release, clock: false, passed: false }));
+        // Another owner's, the volume, a domain not there: refused.
+        assert_eq!(store.domain_set_term(one, OWNER + 1, TERM, Report), Err(Error::Rights));
+        assert_eq!(store.domain_term(one, OWNER + 1), Err(Error::Rights));
+        assert_eq!(store.domain_set_term(VOLUME, OWNER, TERM, Report), Err(Error::NotFound));
+        assert_eq!(store.domain_term(99, OWNER), Err(Error::NotFound));
+        // The calendar time heard: the terms are told passed or not.
+        store.set_calendar(Some(BEFORE));
+        assert_eq!(store.domain_term(one, OWNER).map(|t| (t.clock, t.passed)), Ok((true, false)));
+        store.set_calendar(Some(TERM + 1));
+        assert_eq!(store.domain_term(one, OWNER).map(|t| (t.clock, t.passed)), Ok((true, true)));
+    }
+    // On the medium, one term record a domain, the latest: forget is 1, release 2, report 3.
+    let mut on = terms_on(&medium);
+    on.sort();
+    assert_eq!(on, [(one, 2, 2, TERM + 1), (two, 1, 1, TERM)]);
+    // A mount finds the latest of each, and no clock until one is heard again.
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.domain_term(one, OWNER), Ok(Term { until: TERM + 1, mode: Release, clock: false, passed: false }));
+    assert_eq!(store.domain_term(two, OWNER).map(|t| (t.until, t.mode)), Ok((TERM, Forget)));
+    assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0));
+    // Set back to none: no term acts on it.
+    assert_eq!(store.domain_set_term(two, OWNER, 0, Forget), Ok(()));
+    store.set_calendar(Some(AFTER));
+    assert_eq!(store.domain_term(two, OWNER).map(|t| t.passed), Ok(false));
+    assert_eq!(store.expire(), Ok(None));
+}
+
+#[test]
+fn without_a_calendar_time_no_term_acts_and_report_only_says_so() {
+    use store::TermMode::*;
+    let mut medium = Memory::new(512);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let (forget, report) = (store.domain_create(OWNER).unwrap(), store.domain_create(OWNER).unwrap());
+    let kept = [domain_with_a_block(&mut store, forget, 1), domain_with_a_block(&mut store, report, 2)];
+    store.domain_set_term(forget, OWNER, TERM, Forget).unwrap();
+    store.domain_set_term(report, OWNER, TERM, Report).unwrap();
+    // No clock: nothing acts, nothing is told passed, even a term long past.
+    assert_eq!(store.expire(), Ok(None));
+    assert_eq!(store.past_terms().count(), 0);
+    // Report past its term: told, and nothing else changes, also after a collection once the leases ended.
+    store.set_calendar(Some(AFTER));
+    assert_eq!(store.past_terms().map(|d| d.id).collect::<Vec<_>>(), [report]);
+    store.set_domain(report).unwrap();
+    assert!(store.put(Codec::Raw, &block(3, 100)).is_ok());
+    assert_eq!(store.publish(b"b", 0, &kept[1], OWNER), Ok(1));
+    store.set_time(LEASE_NS + 1);
+    store.collect().unwrap();
+    store.set_domain(report).unwrap();
+    assert_eq!(get(&mut store, &kept[1]), Ok(block(2, 3000)));
+    assert_eq!(store.resolve(b"a").map(|(v, _)| v), Ok(1));
+    // Forget past its term, once heard: forgotten, its number given once.
+    store.set_domain(VOLUME).unwrap();
+    assert_eq!(store.expire(), Ok(Some(forget)));
+    assert_eq!(store.expire(), Ok(None));
+    assert!(store.domains().any(|d| d.id == forget && d.forgotten));
+}
+
+#[test]
+fn release_past_its_term_refuses_writes_and_a_collection_frees_its_records_while_its_key_stays() {
+    use store::TermMode::*;
+    let mut medium = Memory::new(512);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let (released, other) = (store.domain_create(OWNER).unwrap(), store.domain_create(OWNER).unwrap());
+    let ours = domain_with_a_block(&mut store, released, 4);
+    let theirs = domain_with_a_block(&mut store, other, 5);
+    let volume = store.put(Codec::Raw, &block(6, 2000)).unwrap();
+    assert_eq!(store.publish(b"v", 0, &volume, OWNER), Ok(1));
+    store.domain_set_term(released, OWNER, TERM, Release).unwrap();
+    // Before its term: as any domain.
+    store.set_calendar(Some(BEFORE));
+    store.set_domain(released).unwrap();
+    assert!(store.put(Codec::Raw, &block(7, 100)).is_ok());
+    // Past it: writes refused, reading goes on, and nothing is freed while the leases hold.
+    store.set_calendar(Some(AFTER));
+    assert_eq!(store.put(Codec::Raw, &block(8, 100)), Err(Error::ReadOnly));
+    assert_eq!(store.publish(b"b", 0, &ours, OWNER), Err(Error::ReadOnly));
+    assert_eq!(store.pin(&ours, OWNER), Err(Error::ReadOnly));
+    assert_eq!(store.commit(&[Update { name: b"b", expected: 0, root: Some(ours) }], OWNER), Err(Error::ReadOnly));
+    assert_eq!(get(&mut store, &ours), Ok(block(4, 3000)));
+    assert_eq!(store.expire(), Ok(None));
+    assert_eq!(store.past_terms().map(|d| d.id).collect::<Vec<_>>(), [released]);
+    // Released, then set back to report before a collection: retained again, nothing lost.
+    store.domain_set_term(released, OWNER, TERM, Report).unwrap();
+    store.set_time(LEASE_NS + 1);
+    store.collect().unwrap();
+    store.set_domain(released).unwrap();
+    assert_eq!(get(&mut store, &ours), Ok(block(4, 3000)));
+    // Released again: a collection frees its names, pins and blocks; the key stays, the domain is live and empty.
+    store.domain_set_term(released, OWNER, TERM, Release).unwrap();
+    store.set_time(2 * LEASE_NS + 2);
+    let collected = store.collect().unwrap();
+    assert!(collected.blocks >= 1 && collected.names >= 1, "{collected:?}");
+    store.set_domain(released).unwrap();
+    assert_eq!(store.resolve(b"a"), Err(Error::NotFound));
+    assert_eq!(get(&mut store, &ours), Err(Error::NotFound));
+    assert!(store.domains().any(|d| d.id == released && !d.forgotten));
+    assert_eq!(store.domain_usage(released, OWNER).map(|u| (u.retained, u.names, u.pins)), Ok((0, 0, 0)));
+    // The other domain and the volume keep theirs.
+    store.set_domain(other).unwrap();
+    assert_eq!(get(&mut store, &theirs), Ok(block(5, 3000)));
+    store.set_domain(VOLUME).unwrap();
+    assert_eq!(store.resolve(b"v").map(|(v, _)| v), Ok(1));
+    // Its term lifted, it takes writes again; a mount finds it so.
+    store.domain_set_term(released, OWNER, 0, Release).unwrap();
+    store.set_domain(released).unwrap();
+    assert!(store.put(Codec::Raw, &block(9, 100)).is_ok());
+    drop(store);
+    let mut room = Room::new(64).at(2 * LEASE_NS + 2);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    store.set_calendar(Some(AFTER));
+    store.set_domain(released).unwrap();
+    assert!(store.put(Codec::Raw, &block(10, 100)).is_ok());
+    assert_eq!(store.resolve(b"a"), Err(Error::NotFound));
+}
+
+#[test]
+fn forget_past_its_term_forgets_the_domain_and_its_term_reaches_no_new_one() {
+    use store::TermMode::*;
+    let mut medium = Memory::new(512);
+    let (gone, cid);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        gone = store.domain_create(OWNER).unwrap();
+        cid = domain_with_a_block(&mut store, gone, 11);
+        store.domain_set_term(gone, OWNER, TERM, Forget).unwrap();
+        store.set_calendar(Some(AFTER));
+        assert_eq!(store.expire(), Ok(Some(gone)));
+        assert_eq!(store.set_domain(gone), Err(Error::NotFound));
+        assert_eq!(store.domain_term(gone, OWNER), Err(Error::NotFound));
+        store.set_time(LEASE_NS + 1);
+        store.collect().unwrap();
+        assert!(!store.domains().any(|d| d.id == gone));
+    }
+    // Its term record went with it.
+    assert_eq!(terms_on(&medium), []);
+    // A mount finds neither the domain nor its term; a new domain has no term, and no clock forgets it.
+    let mut room = Room::new(64).at(LEASE_NS + 1);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert!(!store.domains().any(|d| d.id == gone));
+    let fresh = store.domain_create(OWNER).unwrap();
+    assert_eq!(store.domain_term(fresh, OWNER).map(|t| (t.until, t.mode)), Ok((0, Report)));
+    store.set_calendar(Some(AFTER));
+    assert_eq!(store.expire(), Ok(None));
+    store.set_domain(fresh).unwrap();
+    assert_eq!(get(&mut store, &cid), Err(Error::NotFound));
+    assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0));
+}
+
+#[test]
+fn a_change_of_term_cut_after_any_write_leaves_the_old_term_or_the_new_one() {
+    use store::TermMode::*;
+    let mut base = Memory::new(512);
+    let id;
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut base, &mut room).unwrap();
+        // A hole before the key record: the term records land there, and a mount meets them before the key.
+        let early = store.domain_create(OWNER).unwrap();
+        id = store.domain_create(OWNER).unwrap();
+        store.domain_forget(early, OWNER).unwrap();
+        store.set_time(LEASE_NS + 1);
+        store.collect().unwrap();
+        store.domain_set_term(id, OWNER, TERM, Report).unwrap();
+    }
+    let (mut olds, mut news, mut both) = (0, 0, 0);
+    for n in 0..12 {
+        let mut cut = base.clone();
+        {
+            let mut room = Room::new(64).at(LEASE_NS + 1);
+            let mut store = mount(&mut cut, &mut room).unwrap();
+            let device = store.device();
+            (device.ops, device.stop_after) = (0, Some(n));
+            let _ = store.domain_set_term(id, OWNER, TERM + 100, Forget);
+        }
+        cut.stop_after = None;
+        // The cut left the old record, the new one, or both: a mount takes the higher counter, and erases the other.
+        let on = terms_on(&cut);
+        assert!((1..=2).contains(&on.len()), "{n}: {on:?}");
+        let latest = on.iter().max_by_key(|t| t.2).unwrap();
+        let mut room = Room::new(64).at(LEASE_NS + 1);
+        let mut store = mount(&mut cut, &mut room).unwrap();
+        let term = store.domain_term(id, OWNER).map(|t| (t.until, t.mode as u16));
+        assert_eq!(term, Ok((latest.3, latest.1)), "{n}: {on:?}");
+        assert!(term == Ok((TERM, Report as u16)) || term == Ok((TERM + 100, Forget as u16)), "{n}: {term:?}");
+        if on.len() == 2 { both += 1; }
+        if term == Ok((TERM, Report as u16)) { olds += 1 } else { news += 1 }
+        assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0), "{n}");
+        drop(store);
+        assert_eq!(terms_on(&cut).len(), 1, "{n}");
+        let mut room = Room::new(64).at(LEASE_NS + 1);
+        let mut store = mount(&mut cut, &mut room).unwrap();
+        // The mount erased the older record of a cut between the two writes: one change more and a mount agree.
+        store.domain_set_term(id, OWNER, TERM + 200, Release).unwrap();
+        drop(store);
+        let mut room = Room::new(64).at(LEASE_NS + 1);
+        let store = mount(&mut cut, &mut room).unwrap();
+        assert_eq!(store.domain_term(id, OWNER).map(|t| (t.until, t.mode)), Ok((TERM + 200, Release)), "{n}");
+    }
+    assert!(olds >= 1 && news >= 1 && both >= 1, "{olds} {news} {both}");
+}
+
+#[test]
 fn nodes_are_stored_only_if_they_decode() {
     let mut medium = Memory::new(128);
     let node_cid;
@@ -1017,6 +1286,38 @@ fn a_tree_that_needs_more_steps_than_the_store_gives_is_refused() {
     assert_eq!(store.pin(&past, OWNER), Err(Error::Invalid));
     assert_eq!(store.commit(&[Update { name: b"past", expected: 0, root: Some(past) }], OWNER), Err(Error::Invalid));
     assert_eq!(store.resolve(b"past"), Err(Error::NotFound));
+}
+
+#[test]
+fn a_store_with_more_gaps_than_its_list_of_runs_keeps_the_longest() {
+    // 310-STO-0048: a list of 8 runs, and 20 gaps of a sector between blocks, then the rest of the medium.
+    let mut medium = Memory::new(1024);
+    let mut room = Room::new(256);
+    room.holes = vec![Extent::EMPTY; 8];
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let small: Vec<Cid> = (0..40).map(|i| store.put(Codec::Raw, &block(100 + i, 64)).unwrap()).collect();
+    assert_eq!(record_sectors(64), 1);
+    // The odd ones put again later, so their leases run on when the even ones' have ended.
+    store.set_time(LEASE_NS);
+    for (i, cid) in small.iter().enumerate().skip(1).step_by(2) { assert_eq!(store.put(Codec::Raw, &block(100 + i, 64)), Ok(*cid)); }
+    assert_eq!(store.collect().unwrap().blocks, 20);
+    let tail = 1024 - store.stats().used;
+    assert!(tail > 900, "{tail}");
+    // The list keeps the rest of the medium, not only the first gaps: a block of many sectors finds room.
+    assert_eq!(store.stats().free, tail + 7);
+    let big = store.put(Codec::Raw, &block(1, 4000)).unwrap();
+    assert!(record_sectors(4000) > 1);
+    // A block of one sector goes into the first gap.
+    let one = store.put(Codec::Raw, &block(2, 64)).unwrap();
+    drop(store);
+    // A mount scans the same and keeps the same.
+    let mut room = Room::new(256).at(LEASE_NS);
+    room.holes = vec![Extent::EMPTY; 8];
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((get(&mut store, &big), get(&mut store, &one)), (Ok(block(1, 4000)), Ok(block(2, 64))));
+    assert!(store.stats().free >= 1024 - store.stats().used, "{:?}", store.stats());
+    assert!(store.put(Codec::Raw, &block(3, 8000)).is_ok());
+    for cid in small.iter().skip(1).step_by(2) { assert_eq!(get(&mut store, cid).map(|_| ()), Ok(()), "{cid:?}"); }
 }
 
 #[test]
@@ -1995,6 +2296,59 @@ fn two_domains_open_only_under_their_own_keys() {
         assert_eq!(get(&mut store, &cid).unwrap(), data);
     }
     assert_eq!(store.resolve(b"only-b"), Ok((1, cid)));
+}
+
+#[test]
+fn a_domains_limit_bounds_what_it_retains() {
+    // 312-STO-0046: a domain made with a limit of 8 KiB retains at most that through its names and pins, each root
+    // counted once; the volume and another domain of the same owner are not bound by it; 0 sets none; the limit is
+    // found again after a remount.
+    let mut medium = Memory::new(512);
+    let (small, free, first, second, third);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        small = store.domain_create_limited(OWNER, 8).unwrap();
+        free = store.domain_create_limited(OWNER, 0).unwrap();
+        assert_eq!(store.domain_usage(small, OWNER).map(|u| (u.retained, u.quota, u.names, u.pins)), Ok((0, 8 * 1024, 0, 0)));
+        assert_eq!(store.domain_usage(free, OWNER).map(|u| u.quota), Ok(0));
+        assert_eq!(store.domain_usage(small, OWNER + 1).map(|u| u.quota), Err(Error::Rights));
+        assert_eq!(store.domain_usage(VOLUME, OWNER).map(|u| u.quota), Err(Error::NotFound));
+        store.set_domain(small).unwrap();
+        (first, second, third) = (store.put(Codec::Raw, &block(5, 5000)).unwrap(), store.put(Codec::Raw, &block(6, 4000)).unwrap(),
+                                  store.put(Codec::Raw, &block(7, 3000)).unwrap());
+        assert_eq!(store.publish(b"a", 0, &first, OWNER), Ok(1));
+        // The same root under a second name, and pinned, counts once.
+        assert_eq!(store.publish(b"b", 0, &first, OWNER), Ok(1));
+        assert!(store.pin(&first, OWNER).is_ok());
+        // 5000 and 4000 pass 8192 bytes: a publish, a pin and a commit of the second are each refused, nothing changed.
+        assert_eq!(store.publish(b"c", 0, &second, OWNER), Err(Error::Quota));
+        assert_eq!(store.pin(&second, OWNER), Err(Error::Quota));
+        assert_eq!(store.commit(&[Update { name: b"c", expected: 0, root: Some(second) }], OWNER), Err(Error::Quota));
+        assert_eq!(store.resolve(b"c"), Err(Error::NotFound));
+        // 5000 and 3000 fit.
+        assert_eq!(store.publish(b"d", 0, &third, OWNER), Ok(1));
+        assert_eq!(store.domain_usage(small, OWNER).map(|u| (u.retained, u.names, u.pins)), Ok((8000, 3, 1)));
+        // The volume and the other domain are not bound by it, and their roots are not counted in it.
+        for domain in [VOLUME, free] {
+            store.set_domain(domain).unwrap();
+            assert_eq!(store.put(Codec::Raw, &block(6, 4000)), Ok(second));
+            assert_eq!(store.publish(b"c", 0, &second, OWNER), Ok(1));
+        }
+        assert_eq!(store.domain_usage(small, OWNER).map(|u| u.retained), Ok(8000));
+    }
+    // Found again after a remount, and still refusing.
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.domains().map(|d| (d.id, d.limit)).collect::<Vec<_>>(), vec![(small, 8 * 1024), (free, 0)]);
+    assert_eq!(store.domain_usage(small, OWNER).map(|u| (u.retained, u.names, u.pins)), Ok((8000, 3, 1)));
+    store.set_domain(small).unwrap();
+    assert_eq!(store.put(Codec::Raw, &block(6, 4000)), Ok(second));
+    assert_eq!(store.publish(b"c", 0, &second, OWNER), Err(Error::Quota));
+    // Its key record holds the limit, and a forget leaves a tombstone with none.
+    store.set_domain(VOLUME).unwrap();
+    assert_eq!(store.domain_forget(small, OWNER), Ok(()));
+    assert_eq!(store.domain_usage(small, OWNER).map(|u| u.quota), Err(Error::NotFound));
 }
 
 #[test]

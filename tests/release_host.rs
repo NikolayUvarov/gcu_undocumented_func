@@ -1,11 +1,15 @@
-//! Host tests of the release metadata (libmind/src/release.rs, 351-UPD-0013): channel files and boot manifests made by
-//! scripts/release.py and scripts/sign_manifest.py are read field by field and encode again to exactly their bytes;
-//! every other form is refused, and any byte changed in a valid file is refused or reads as what it then encodes.
+//! Host tests of the release metadata (libmind/src/release.rs, 351-UPD-0013): channel files, key files (351-UPD-0026)
+//! and boot manifests made by scripts/release.py and scripts/sign_manifest.py are read field by field and encode again
+//! to exactly their bytes; every other form is refused, and any byte changed in a valid file is refused or reads as what
+//! it then encodes. A key file's root signatures are counted as the updater counts them (`signed_by`), and a device takes
+//! the next version only when the root before it and its own both signed it (`step`, 351-UPD-0027). A channel's timestamp
+//! file (351-UPD-0028) is read and refused as a channel is.
 #![allow(dead_code)]
 #[path = "../libmind/src/release.rs"]
 mod release;
 
-use release::{channel_is, encode_channel, encode_file, expires_unix, parse_channel, Malformed, Manifest, Rebuild, CHANNEL_MAX, FILE_LINE_MAX};
+use release::{channel_is, encode_channel, encode_file, encode_keys, encode_order, encode_timestamp, expires_unix, keys_is, parse_channel, parse_keys, parse_order, parse_timestamp, signed_by, step,
+               order_is, timestamp_is, Malformed, Manifest, Rebuild, Step, CHANNEL_MAX, FILE_LINE_MAX, KEYS_MAX, ORDER_MAX, ROLES, TIMESTAMP_MAX};
 use std::process::Command;
 
 // Output of a Python snippet run with scripts/ on its path.
@@ -18,9 +22,11 @@ fn python(code: &str) -> Vec<u8> {
 // A channel file as `release.py publish` writes it, signed with the test release key.
 fn channel_file(name: &str, version: u64, minimum: u64, expires: &str, manifests: &str) -> Vec<u8> {
     python(&format!(
-        "import release, sign_manifest as sm\nbody = release.channel_bytes({name:?}, {version}, {minimum}, {expires:?}, {manifests})\n\
-         sys.stdout.buffer.write(body + b'ed25519 ' + sm.sign(release.TEST_RELEASE_SEED, body).hex().encode() + b'\\n')"))
+        "import release\nbody = release.channel_bytes({name:?}, {version}, {minimum}, {expires:?}, {manifests})\n\
+         sys.stdout.buffer.write(body + release.signature_lines(body, [release.TEST_RELEASE_SEED]))"))
 }
+
+fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{:02x}", b)).collect() }
 
 fn stable() -> Vec<u8> { channel_file("stable", 7, 5, "2026-11-08T00:00:00Z", "{'x86_64': 'ab' * 32, 'aarch64': '0c' * 32}") }
 
@@ -37,7 +43,9 @@ fn a_published_channel_reads_and_encodes_to_its_signed_line() {
     let n = encode_channel(&channel, &mut body).unwrap();
     assert_eq!(&body[..n], &file[..signed.body]);
     let line = std::str::from_utf8(&file[signed.body..]).unwrap();
-    assert_eq!(line.trim_end().strip_prefix("ed25519 ").unwrap(), signed.signature.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+    assert_eq!(signed.count, 1);
+    assert_eq!(line, format!("ed25519 {} {}\n", hex(&signed.signatures[0].key), hex(&signed.signatures[0].value)));
+    assert_eq!(hex(&signed.signatures[0].key), python("import release, sign_manifest as sm\nprint(sm.public_key(release.TEST_RELEASE_SEED).hex(), end='')").iter().map(|&b| b as char).collect::<String>());
     // One architecture, and a large version.
     let one = channel_file("test-2", 18446744073709551615, 1, "2028-02-29T23:59:59Z", "{'x86_64': '00' * 32}");
     let (channel, signed) = parse_channel(&one).unwrap();
@@ -50,6 +58,7 @@ fn a_published_channel_reads_and_encodes_to_its_signed_line() {
 fn other_forms_of_a_channel_are_refused() {
     let good = String::from_utf8(stable()).unwrap();
     let (body, signature) = good.split_once('\n').unwrap();
+    let signature = signature.trim_end();
     let changed = |from: &str, to: &str| -> Vec<u8> { assert!(good.contains(from), "{}", from); good.replacen(from, to, 1).into_bytes() };
     let cases: Vec<(&str, Vec<u8>)> = vec![
         ("a space", changed("\"version\":7", "\"version\": 7")),
@@ -72,9 +81,12 @@ fn other_forms_of_a_channel_are_refused() {
         ("bytes after the signature", format!("{}x", good).into_bytes()),
         ("no final newline", good.trim_end().as_bytes().to_vec()),
         ("CRLF", good.replace('\n', "\r\n").into_bytes()),
-        ("a short signature", changed(&signature[..20], &signature[..18])),
+        ("a short signature", changed(&signature[..90], &signature[..88])),
         ("upper-case signature", format!("{}\ned25519 {}\n", body, signature[8..].to_uppercase()).into_bytes()),
         ("no signature line", format!("{}\n", body).into_bytes()),
+        ("a signature of before 351-UPD-0026, naming no key", format!("{}\ned25519 {}\n", body, &signature[8 + 65..]).into_bytes()),
+        ("two spaces in a signature line", changed(&signature[..72], &format!("{} ", &signature[..72]))),
+        ("nine signature lines", format!("{}\n{}", body, format!("{}\n", signature).repeat(9)).into_bytes()),
     ];
     for (what, file) in cases {
         assert_eq!(parse_channel(&file).err(), Some(Malformed), "{}: {}", what, String::from_utf8_lossy(&file));
@@ -206,8 +218,14 @@ fn a_parser_that_lies_is_caught() {
     lies[3].count = 1;
     for lie in &lies { assert!(!channel_is(&file, lie, &signed), "{:?}", lie); }
     let mut other = signed;
-    other.signature[63] ^= 1;
+    other.signatures[0].value[63] ^= 1;
     assert!(!channel_is(&file, &channel, &other));
+    other = signed;
+    other.signatures[0].key[0] ^= 1;
+    assert!(!channel_is(&file, &channel, &other), "another key named");
+    other = signed;
+    other.count = 2;
+    assert!(!channel_is(&file, &channel, &other), "a signature added");
     other = signed;
     other.body -= 1;
     assert!(!channel_is(&file, &channel, &other));
@@ -230,4 +248,271 @@ fn a_parser_that_lies_is_caught() {
     let mut swapped = files.clone();
     swapped.swap(0, 1);
     assert!(!rebuild(5, &swapped), "files reordered");
+}
+
+// A key file as `release.py keys` makes it: the test roles, signed by the test root keys `roots` (indices of
+// release.TEST_ROOT_SEEDS, repeats and other seeds as Python expressions allowed).
+fn keys_file(roots: &str) -> Vec<u8> {
+    python(&format!("import release, datetime\nnow = datetime.datetime(2026, 11, 13, tzinfo=datetime.timezone.utc)\n\
+                     whole = release.test_keys_file(now, roots=[{roots}])\nsys.stdout.buffer.write(whole)"))
+}
+
+// The test root set's public keys and threshold, as the updater's build reads them.
+fn root_set() -> (Vec<[u8; 32]>, u8) {
+    let text = String::from_utf8(python("import release\nk, t = release.root_set()\nprint(t, *[x.hex() for x in k])")).unwrap();
+    let mut words = text.split_whitespace();
+    let threshold = words.next().unwrap().parse().unwrap();
+    (words.map(|w| (0..32).map(|i| u8::from_str_radix(&w[2 * i..2 * i + 2], 16).unwrap()).collect::<Vec<_>>().try_into().unwrap()).collect(), threshold)
+}
+
+fn verify(key: &[u8; 32], body: &[u8], signature: &[u8; 64]) -> bool {
+    let code = format!("import sign_manifest as sm\nprint(sm.verify(bytes.fromhex({:?}), bytes.fromhex({:?}), bytes.fromhex({:?})))", hex(key), hex(body), hex(signature));
+    python(&code) == b"True\n"
+}
+
+const TWO: &str = "release.TEST_ROOT_SEEDS[0], release.TEST_ROOT_SEEDS[1]";
+
+#[test]
+fn a_key_file_reads_and_encodes_to_its_signed_line() {
+    let file = keys_file(TWO);
+    let (keys, signed) = parse_keys(&file).unwrap();
+    assert_eq!((keys.version, &keys.expires), (1, b"2036-11-10T00:00:00Z"));
+    assert_eq!(signed.count, 2);
+    for name in ROLES {
+        let role = keys.role(name).unwrap();
+        assert_eq!((role.count, role.threshold), if name == "root" { (3, 2) } else { (1, 1) }, "{}", name);
+    }
+    assert_eq!(keys.root(), keys.role("root").unwrap());
+    let mut body = [0u8; KEYS_MAX];
+    let n = encode_keys(&keys, &mut body).unwrap();
+    assert_eq!(&body[..n], &file[..signed.body]);
+    assert!(keys_is(&file, &keys, &signed));
+    let release = keys.role("release").unwrap().keys()[0];
+    let test_release = python("import release, sign_manifest as sm\nsys.stdout.buffer.write(sm.public_key(release.TEST_RELEASE_SEED))");
+    assert_eq!(&release[..], &test_release[..]);
+}
+
+#[test]
+fn the_root_threshold_counts_each_known_key_once() {
+    let (roots, threshold) = root_set();
+    assert_eq!((roots.len(), threshold), (3, 2));
+    let counts = |given: &str| {
+        let file = keys_file(given);
+        let (_, signed) = parse_keys(&file).unwrap();
+        signed_by(&roots, threshold, &file[..signed.body], &signed, &verify)
+    };
+    assert!(counts(TWO), "two of three");
+    assert!(counts("*release.TEST_ROOT_SEEDS"), "all three");
+    assert!(!counts("release.TEST_ROOT_SEEDS[2]"), "one of three");
+    assert!(!counts("release.TEST_ROOT_SEEDS[1], release.TEST_ROOT_SEEDS[1]"), "two signatures by one root key count once");
+    assert!(counts("release.TEST_ROOT_SEEDS[0], release.TEST_ROOT_SEEDS[0], release.TEST_ROOT_SEEDS[2]"), "a repeat passed over");
+    assert!(!counts("release.TEST_ROOT_SEEDS[0], release.TEST_RELEASE_SEED"), "a signature by an unknown key is ignored");
+    assert!(counts("release.TEST_RELEASE_SEED, release.TEST_ROOT_SEEDS[0], release.TEST_ROOT_SEEDS[2]"), "an unknown key among them");
+    // A root key's line whose signature is not over this body does not count.
+    let file = keys_file(TWO);
+    let (_, mut signed) = parse_keys(&file).unwrap();
+    signed.signatures[1].value[0] ^= 1;
+    assert!(!signed_by(&roots, threshold, &file[..signed.body], &signed, &verify), "a bad signature");
+    assert!(!signed_by(&roots, 0, &file[..signed.body], &signed, &verify), "threshold 0");
+}
+
+#[test]
+fn other_forms_of_a_key_file_are_refused() {
+    let good = String::from_utf8(keys_file(TWO)).unwrap();
+    let (body, signatures) = good.split_once('\n').unwrap();
+    let changed = |from: &str, to: &str| -> Vec<u8> { assert!(good.contains(from), "{}", from); good.replacen(from, to, 1).into_bytes() };
+    let release_key = &body[body.find("\"release\":{\"keys\":[\"").unwrap() + 20..][..64];
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("a space", changed("\"version\":1", "\"version\": 1")),
+        ("version 0", changed("\"version\":1}", "\"version\":0}")),
+        ("threshold 0", changed("\"threshold\":1}", "\"threshold\":0}")),
+        ("a threshold above the keys", changed("\"threshold\":1}", "\"threshold\":2}")),
+        ("a role left out", changed("\"recovery\":", "\"recovered\":")),
+        ("roles out of order", changed("\"boot\":", "\"zzzz\":")),
+        ("no keys", changed(&format!("[\"{}\"]", release_key), "[]")),
+        ("a key twice", changed(&format!("[\"{}\"]", release_key), &format!("[\"{0}\",\"{0}\"]", release_key))),
+        ("five keys", changed(&format!("[\"{}\"]", release_key), &format!("[{}]", (1..=5).map(|i| format!("\"{:064x}\"", i)).collect::<Vec<_>>().join(",")))),
+        ("keys out of order", changed(&format!("[\"{}\"]", release_key), &format!("[\"{:064x}\",\"{:064x}\"]", 2, 1))),
+        ("an upper-case key", changed(release_key, &release_key.to_uppercase())),
+        ("a short key", changed(release_key, &release_key[..62])),
+        ("29 February of 2026", changed("2036-11-10", "2026-02-29")),
+        ("no signature line", format!("{}\n", body).into_bytes()),
+        ("a signature of before 351-UPD-0026, naming no key", format!("{}\ned25519 {}\n", body, &signatures.lines().next().unwrap()[8 + 65..]).into_bytes()),
+        ("bytes after the signatures", format!("{}x", good).into_bytes()),
+        ("CRLF", good.replace('\n', "\r\n").into_bytes()),
+    ];
+    for (what, file) in cases {
+        assert_eq!(parse_keys(&file).err(), Some(Malformed), "{}: {}", what, String::from_utf8_lossy(&file));
+    }
+    let mut big = good.clone().into_bytes();
+    big.resize(KEYS_MAX + 1, b'\n');
+    assert_eq!(parse_keys(&big).err(), Some(Malformed), "larger than KEYS_MAX");
+}
+
+#[test]
+fn a_changed_byte_of_a_key_file_is_refused_or_reads_as_what_it_encodes() {
+    let file = keys_file(TWO);
+    let mut body = [0u8; KEYS_MAX];
+    let mut accepted = 0;
+    for at in 0..file.len() {
+        for value in [b'0', b'9', b'a', b'f', b'"', b',', b'\n', b' ', 0x80] {
+            let mut changed = file.clone();
+            if changed[at] == value { continue; }
+            changed[at] = value;
+            if let Ok((keys, signed)) = parse_keys(&changed) {
+                accepted += 1;
+                let n = encode_keys(&keys, &mut body).unwrap();
+                assert_eq!(&body[..n], &changed[..signed.body], "at {}", at);
+                assert!(keys_is(&changed, &keys, &signed), "at {}", at);
+            }
+        }
+    }
+    assert!(accepted > 0);
+}
+
+#[test]
+fn a_parser_that_lies_about_a_key_file_is_caught() {
+    let file = keys_file(TWO);
+    let (keys, signed) = parse_keys(&file).unwrap();
+    let mut lies = vec![keys; 4];
+    lies[0].version += 1;
+    lies[1].roles[2].keys[0][0] ^= 1;
+    lies[2].roles[2].threshold = 0;
+    lies[3].expires[3] = b'7';
+    for lie in &lies { assert!(!keys_is(&file, lie, &signed), "{:?}", lie); }
+    let mut other = signed;
+    other.count = 1;
+    assert!(!keys_is(&file, &keys, &other), "a signature left out");
+}
+
+// Key file `version` as `release.py keys` makes one: its root role the seeds `root` with threshold `threshold`, signed by
+// the seeds `signers` (Python expressions; NEW is a second root set of two keys).
+fn version_file(version: u64, root: &str, threshold: u8, signers: &str) -> Vec<u8> {
+    python(&format!("import release, datetime, hashlib\nnow = datetime.datetime(2026, 11, 13, tzinfo=datetime.timezone.utc)\n\
+                     NEW = [hashlib.sha256(f'another root {{i}}'.encode()).digest() for i in (1, 2)]\n\
+                     whole = release.test_keys_file(now, version={version}, roots=[{signers}], root=([{root}], {threshold}))\n\
+                     sys.stdout.buffer.write(whole)"))
+}
+
+#[test]
+fn a_device_takes_the_next_key_file_signed_by_both_roots() {
+    let (roots, threshold) = root_set();
+    let old = "*release.TEST_ROOT_SEEDS";
+    let first = version_file(1, old, 2, TWO);
+    let (v1, s1) = parse_keys(&first).unwrap();
+    let take = |held: u64, keys: &[[u8; 32]], threshold: u8, file: &[u8]| {
+        let (next, signed) = parse_keys(file).unwrap();
+        step(held, keys, threshold, &next, &file[..signed.body], &signed, verify)
+    };
+    // Version 1 from none: the built-in root signed it, and its own root is that root.
+    assert_eq!(step(0, &roots, threshold, &v1, &first[..s1.body], &s1, verify), Step::Next);
+    assert_eq!(take(0, &roots, threshold, &version_file(1, old, 2, "release.TEST_ROOT_SEEDS[0]")), Step::Unsigned, "one root key of two");
+    // The root rotated to a set of two, one of which signs: the old root's threshold and the new one's must both sign.
+    let root = v1.root();
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(2, "*NEW", 1, &format!("{}, NEW[0]", TWO))), Step::Next);
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(2, "*NEW", 1, TWO)), Step::Unsigned, "the new root did not sign");
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(2, "*NEW", 1, "NEW[0], NEW[1]")), Step::Unsigned, "the old root did not sign");
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(2, "*NEW", 1, "release.TEST_ROOT_SEEDS[0], NEW[0]")), Step::Unsigned,
+               "one of the old root's two");
+    // Once version 2 is held, its root alone signs version 3; the old one is not trusted.
+    let (v2, _) = parse_keys(&version_file(2, "*NEW", 1, &format!("{}, NEW[0]", TWO))).unwrap();
+    let root2 = v2.root();
+    assert_eq!(take(2, root2.keys(), root2.threshold, &version_file(3, "*NEW", 1, "NEW[1]")), Step::Next);
+    assert_eq!(take(2, root2.keys(), root2.threshold, &version_file(3, "*NEW", 1, TWO)), Step::Unsigned, "the root before");
+    // A lower version is refused, the same one is compared by the caller, and one past the next waits for those between.
+    assert_eq!(take(2, root2.keys(), root2.threshold, &first), Step::Lower);
+    assert_eq!(take(2, root2.keys(), root2.threshold, &version_file(2, "*NEW", 1, "NEW[0]")), Step::Same);
+    assert_eq!(take(1, root.keys(), root.threshold, &version_file(3, old, 2, TWO)), Step::Skips);
+}
+
+// A timestamp as `release.py` writes it: channel stable, the digest of `b"a channel"`, signed by the test timestamp key.
+fn timestamp_file() -> Vec<u8> {
+    python("import release, hashlib\nbody = release.timestamp_bytes('stable', hashlib.sha256(b'a channel').hexdigest(), '2026-11-14T06:00:00Z', 7)\n\
+            sys.stdout.buffer.write(body + release.signature_lines(body, [release.TEST_TIMESTAMP_SEED]))")
+}
+
+#[test]
+fn a_timestamp_reads_and_encodes_to_its_signed_line() {
+    let file = timestamp_file();
+    let (stamp, signed) = parse_timestamp(&file).unwrap();
+    assert_eq!((stamp.channel.as_str(), stamp.version, &stamp.expires), ("stable", 7, b"2026-11-14T06:00:00Z"));
+    let mut body = [0u8; TIMESTAMP_MAX];
+    let n = encode_timestamp(&stamp, &mut body).unwrap();
+    assert_eq!(&body[..n], &file[..signed.body]);
+    assert!(timestamp_is(&file, &stamp, &signed));
+    let digest = python("import hashlib\nsys.stdout.buffer.write(hashlib.sha256(b'a channel').digest())");
+    assert_eq!(&stamp.digest[..], &digest[..]);
+    // A parser that lies about any field is caught.
+    let mut lies = vec![stamp; 3];
+    lies[0].version += 1;
+    lies[1].digest[0] ^= 1;
+    lies[2].expires[3] = b'7';
+    for lie in &lies { assert!(!timestamp_is(&file, lie, &signed), "{:?}", lie); }
+}
+
+#[test]
+fn other_forms_of_a_timestamp_are_refused() {
+    let good = String::from_utf8(timestamp_file()).unwrap();
+    let changed = |from: &str, to: &str| -> Vec<u8> { assert!(good.contains(from), "{}", from); good.replacen(from, to, 1).into_bytes() };
+    let digest = &good[good.find("\"digest\":\"").unwrap() + 10..][..64];
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("a space", changed("\"version\":7", "\"version\": 7")),
+        ("version 0", changed("\"version\":7}", "\"version\":0}")),
+        ("an upper-case digest", changed(digest, &digest.to_uppercase())),
+        ("a short digest", changed(digest, &digest[..62])),
+        ("no expiry", changed("\"expires\":\"2026-11-14T06:00:00Z\",", "")),
+        ("an expiry not a time", changed("2026-11-14T06", "2026-11-31T06")),
+        ("fields out of order", changed("{\"channel\":\"stable\",", "{\"zchannel\":\"stable\",")),
+        ("no signature", good.split_inclusive('\n').next().unwrap().as_bytes().to_vec()),
+    ];
+    for (what, bytes) in &cases { assert_eq!(parse_timestamp(bytes).err(), Some(Malformed), "{}", what); }
+    let mut big = good.clone().into_bytes();
+    big.resize(TIMESTAMP_MAX + 1, b'\n');
+    assert_eq!(parse_timestamp(&big).err(), Some(Malformed), "larger than TIMESTAMP_MAX");
+    // Any byte changed: refused, or read as what it then encodes.
+    let file = good.into_bytes();
+    for at in 0..file.len() {
+        for value in [b'0', b'9', b'a', b'f', b'"', b'\n', b' '] {
+            let mut bytes = file.clone();
+            if bytes[at] == value { continue; }
+            bytes[at] = value;
+            if let Ok((stamp, signed)) = parse_timestamp(&bytes) { assert!(timestamp_is(&bytes, &stamp, &signed), "at {}", at); }
+        }
+    }
+}
+
+// A recovery order as `release.py recover` writes one: back to version 5, the floor lowered to 5, sequence 3.
+fn order_file() -> Vec<u8> {
+    python("import release\nbody = release.order_bytes('stable', '2026-11-20T06:00:00Z', 5, 3, 5)\n\
+            sys.stdout.buffer.write(body + release.signature_lines(body, [release.TEST_RECOVERY_SEED]))")
+}
+
+#[test]
+fn a_recovery_order_reads_and_other_forms_are_refused() {
+    // 351-UPD-0030.
+    let file = order_file();
+    let (order, signed) = parse_order(&file).unwrap();
+    assert_eq!((order.channel.as_str(), order.floor, order.sequence, order.version), ("stable", 5, 3, 5));
+    let mut body = [0u8; ORDER_MAX];
+    let n = encode_order(&order, &mut body).unwrap();
+    assert_eq!(&body[..n], &file[..signed.body]);
+    assert!(order_is(&file, &order, &signed));
+    let mut lie = order;
+    lie.floor = 4;
+    assert!(!order_is(&file, &lie, &signed), "a parser that lies about the floor");
+    let good = String::from_utf8(file.clone()).unwrap();
+    let changed = |from: &str, to: &str| -> Vec<u8> { assert!(good.contains(from), "{}", from); good.replacen(from, to, 1).into_bytes() };
+    for (what, bytes) in [("a floor above the version", changed("\"floor\":5", "\"floor\":6")), ("floor 0", changed("\"floor\":5", "\"floor\":0")),
+                          ("sequence 0", changed("\"sequence\":3", "\"sequence\":0")), ("a space", changed("\"version\":5", "\"version\": 5")),
+                          ("no signature", good.split_inclusive('\n').next().unwrap().as_bytes().to_vec())] {
+        assert_eq!(parse_order(&bytes).err(), Some(Malformed), "{}", what);
+    }
+    for at in 0..file.len() {
+        for value in [b'0', b'9', b'a', b'"', b'\n'] {
+            let mut bytes = file.clone();
+            if bytes[at] == value { continue; }
+            bytes[at] = value;
+            if let Ok((order, signed)) = parse_order(&bytes) { assert!(order_is(&bytes, &order, &signed), "at {}", at); }
+        }
+    }
 }

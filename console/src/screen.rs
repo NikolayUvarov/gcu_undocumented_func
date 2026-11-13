@@ -172,6 +172,11 @@ impl Screen {
 
     /// A key; Enter gives the line typed (it goes into the history and is shown after the prompt). `page`: the rows
     /// PgUp and PgDn scroll.
+    /// The first line of a pasted text into the line, without its control characters (000-APP-0032).
+    pub fn paste(&mut self, text: &str) {
+        for ch in text.split(['\n', '\r']).next().unwrap_or("").chars().filter(|c| !c.is_control()) { if !self.line.insert(ch) { break; } }
+    }
+
     pub fn key(&mut self, key: Key, page: usize) -> Option<String> {
         match key.code() {
             Code::Up | Code::Down => {

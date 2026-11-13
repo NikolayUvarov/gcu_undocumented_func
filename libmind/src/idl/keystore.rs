@@ -34,6 +34,15 @@
 //! in `system/keystore/device.locked` (Argon2id of the passphrase, then ChaCha20-Poly1305), and every boot waits for it:
 //! `key-state` says `waiting` until `unlock` opens it. Only the passphrase's badge (`BADGE_KEY_PASSPHRASE`,
 //! `mind::network`) may call `unlock` and `passphrase-set`; the log names each refusal, never a passphrase.
+//!
+//! 1.7 (110-NET-0069): the TLS service's server role. The purpose `tls-server` signs only a TLS 1.3 server
+//! CertificateVerify, for the signer's badge alone, at most 120 a minute (its own budget, apart from `tls-client`'s per
+//! boot), each signature logged: the device key serves as the machine's TLS server key without leaving this service.
+//!
+//! 1.8 (112-NET-0072): the SSH server's host key. The purpose `ssh-host` signs only an SSH key exchange's hash, 32
+//! bytes and nothing else, for the SSH server's badge (`BADGE_KEY_SSH_HOST`, `mind::network`) alone, at most 60 a
+//! minute: the device key serves as the machine's SSH host key without leaving this service. No other form the device
+//! key signs is 32 bytes long, so such a signature counts for no TLS handshake and no SSH login.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -43,7 +52,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:keystore";
-pub const VERSION: (u8, u8, u8) = (1, 6, 0);
+pub const VERSION: (u8, u8, u8) = (1, 8, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `missing` (1.4): no secret of that name is kept.
@@ -65,12 +74,16 @@ impl Wire for Error {
 /// signer's badge. `ssh-login` (1.2): what an SSH public-key login signs (RFC 4252 section 7): a 32-byte session
 /// identifier, SSH_MSG_USERAUTH_REQUEST, a user of 1 to 64 printable characters without space, "ssh-connection",
 /// "publickey", TRUE, "ssh-ed25519" and the device key's own blob, nothing after; for the SSH service's badge.
+/// `tls-server` (1.7): a TLS 1.3 server CertificateVerify, as `tls-client`'s with the context string "TLS 1.3,
+/// server CertificateVerify"; for the signer's badge, at most 120 a minute (`budget` once they are used).
+/// `ssh-host` (1.8): an SSH key exchange's hash (RFC 4253 section 8, curve25519-sha256's SHA-256), exactly 32 bytes;
+/// for the SSH server's badge, at most 60 a minute.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Purpose { #[default] TlsClient = 0, SshLogin = 1 }
+pub enum Purpose { #[default] TlsClient = 0, SshLogin = 1, TlsServer = 2, SshHost = 3 }
 impl Purpose {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::TlsClient), 1 => Some(Self::SshLogin), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::TlsClient), 1 => Some(Self::SshLogin), 2 => Some(Self::TlsServer), 3 => Some(Self::SshHost), _ => None } }
 }
 impl Wire for Purpose {
     const MAX: usize = 1;
@@ -78,7 +91,8 @@ impl Wire for Purpose {
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
-/// The TLS signer's signatures made, its budget for this boot, requests refused (`ssh-login` has its own budget).
+/// The TLS client signatures made, their budget for this boot, requests refused of every purpose (`ssh-login`,
+/// `tls-server` and `ssh-host` have budgets of their own).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Usage { pub signatures: u32, pub budget: u32, pub refused: u32 }
 impl Wire for Usage {
@@ -126,8 +140,8 @@ pub fn certificate(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::R
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<512>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
 }
 
-/// An Ed25519 signature of `data` for `purpose` (`tls-client`: the signer's badge only; `ssh-login`: the SSH
-/// service's badge only).
+/// An Ed25519 signature of `data` for `purpose` (`tls-client` and `tls-server`: the signer's badge only;
+/// `ssh-login`: the SSH service's badge only; `ssh-host`: the SSH server's badge only).
 pub fn sign(endpoint: Endpoint, purpose: Purpose, data: &[u8], out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
     let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {

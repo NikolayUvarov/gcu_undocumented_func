@@ -1,0 +1,52 @@
+//! The system clipboard through the shell (000-APP-0032, `idl/clipboard.wit` 1.1). From `init`'s client in
+//! SLOT_CLIPBOARD, which may badge, the shell mints its own copy badged `BADGE_MANAGER`, with which it names the program
+//! in front of the console shown as that changes; a program that asks for REQUEST_CLIPBOARD gets a copy badged
+//! `BADGE_PROGRAM`, and a window manager a copy badged `BADGE_MANAGER`, through which the service mints its windows'
+//! copies: a copy on the wire carries no right to badge (000-KRN-0073).
+//! The shell's line pastes with Ctrl+V or Shift+Insert and copies itself with Ctrl+Insert.
+use mind::abi::{CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_CLIPBOARD};
+use mind::clipboard::{self, Error, BADGE_MANAGER, BADGE_PROGRAM};
+use mind::ipc::Endpoint;
+
+/// The shell's manager copy, and the program it last named in front.
+pub struct Clip { manager: Option<Endpoint>, front: Option<u64> }
+
+impl Default for Clip { fn default() -> Self { Self::new() } }
+
+impl Clip {
+    /// The manager's copy, where `init` gave the shell the service's client; without one, no clipboard. It may pass a
+    /// capability, as a text's parts go in a lent buffer.
+    pub fn new() -> Self {
+        let held = mind::dev::cap_info(SLOT_CLIPBOARD).0 == CAP_KIND_ENDPOINT;
+        let manager = held.then(|| mind::ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE | CAP_GRANT, BADGE_MANAGER).ok()).flatten().map(Endpoint);
+        Self { manager, front: None }
+    }
+
+    /// `pid` is now the program in front (0: the shell itself); the service is told only of a change.
+    pub fn front(&mut self, pid: u64) {
+        let Some(manager) = self.manager else { return };
+        if self.front == Some(pid) { return; }
+        match clipboard::front(manager, pid) {
+            Ok(()) => self.front = Some(pid),
+            Err(error) => mind::println!("[SHELL] THE CLIPBOARD WAS NOT TOLD PID {} IS IN FRONT: {}", pid, error.text()),
+        }
+    }
+
+    /// The text the shell copies from its line.
+    pub fn copy(&self, text: &str) -> Result<u32, Error> { clipboard::copy_through(self.manager.ok_or(Error::NoClient)?, text) }
+
+    /// The clipboard's text, for the shell's line.
+    pub fn paste(&self) -> Result<alloc::string::String, Error> { clipboard::paste_through(self.manager.ok_or(Error::NoClient)?) }
+
+    /// A copy to lend for REQUEST_CLIPBOARD: a program's, or a manager's for a window manager. The caller drops it once
+    /// lent.
+    pub fn lend(&self, window_manager: bool) -> Option<usize> {
+        if self.manager.is_none() { return None; }
+        mind::ipc::mint_badged(SLOT_CLIPBOARD, CAP_WRITE | CAP_GRANT, if window_manager { BADGE_MANAGER } else { BADGE_PROGRAM }).ok()
+    }
+}
+
+/// The first line of a pasted text, for the shell's line: up to its first line end, with no control characters.
+pub fn line_of(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.split(['\n', '\r']).next().unwrap_or("").chars().filter(|c| !c.is_control())
+}

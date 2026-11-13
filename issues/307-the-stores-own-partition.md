@@ -88,4 +88,4 @@ The storage track's answer to 307-KRN-0177 (the kernel session asked for the typ
 
 ## Related
 
-[300](../issues-done/300-checksummed-block-store.done), 300-KRN-0025, [308](308-encryption-at-rest.md), [309](../issues-done/309-copies-scrub-and-repair.done), [307-KRN-0236](307-KRN-0236-the-copys-partition-on-a-real-machine.md), `requests-DRV.md`.
+[300](../issues-done/300-checksummed-block-store.done), 300-KRN-0025, [308](../issues-done/308-encryption-at-rest.done), [309](../issues-done/309-copies-scrub-and-repair.done), [307-KRN-0236](307-KRN-0236-the-copys-partition-on-a-real-machine.md), `requests-DRV.md`.

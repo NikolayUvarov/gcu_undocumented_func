@@ -29,8 +29,18 @@ ARCHES = {
 # Licences travel with the image: tts.elf, hear.elf and voice.elf embed third-party dictionaries, the text programs the MIND Mono
 # font (THIRD_PARTY.md).
 LICENSES = ("LICENSES/LICENSE-MIT", "LICENSES/LICENSE-APACHE", "LICENSES/THIRD_PARTY.md", *sorted(f"LICENSES/{p.name}" for p in (ROOT / "LICENSES").glob("*.txt")))
-# The boot manifest and its signature: the bootloader refuses a volume without them (350-UPD-0002).
-SIGNED = ("MANIFEST", "MANIFEST.SIG")
+# The boot manifest, its signature and the key file whose boot keys signed it: the bootloader refuses a volume without
+# them (350-UPD-0002, 351-UPD-0029). The files of the key file's root changes, KEYS.1 on, go with it when there are some.
+SIGNED = ("MANIFEST", "MANIFEST.SIG", "KEYS")
+
+
+def root_changes(source):
+    """The files of the key file's root changes a volume holds, in order: KEYS.1, KEYS.2, … while they follow."""
+    names, n = [], 1
+    while (Path(source) / f"KEYS.{n}").is_file():
+        names.append(f"KEYS.{n}")
+        n += 1
+    return tuple(names)
 # The voice recognizer's model and grammar (hear and voice, issues 078-079).
 VOICE = ("voice/model.bin", "voice/commands.txt")
 # The runs on real hardware (176-KRN-0087).
@@ -77,7 +87,7 @@ def files(arch, source=None):
     source = Path(source or ROOT / spec["root"])
     names = listed(source)
     boot = tuple(name for name in BOOT_FILES if name not in spec["missing"] and (names is None or name in names))
-    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *DIAG, *ROOTS, *SIGNED)
+    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *DIAG, *ROOTS, *SIGNED, *root_changes(source))
 
 
 def find_qemu_img(requested):
@@ -116,7 +126,7 @@ def read_payloads(source, arch="x86_64"):
         if not 0 < file.stat().st_size <= 4 * 1024 * 1024:
             raise ValueError(f"Invalid size of {file}: expected 1..4194304 bytes.")
         data = file.read_bytes()
-        if name in LICENSES or name in VOICE or name in DIAG or name in ROOTS or name in SIGNED:
+        if name in LICENSES or name in VOICE or name in DIAG or name in ROOTS or name in SIGNED or name.startswith("KEYS."):
             pass
         elif name.endswith(".elf"):
             if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != machine:
@@ -127,17 +137,18 @@ def read_payloads(source, arch="x86_64"):
     return payloads
 
 
-def slots(payloads, arch, channel=None):
+def slots(payloads, arch, channel=None, keys=None):
     """The payloads laid out in slots (351-UPD-0016, docs/update/slots.md), as `boot_slots.py layout` lays out a volume:
     the kernel, the boot services, the applications (351-UPD-0023), a copy of the loader (351-UPD-0010) and the signed
     manifest in MIND/A, confirmed by
-    MIND/BOOT0, with MIND/BOOT1 empty; the licences and voice stay at the root, shared. With `channel`, a release's signed channel file
-    kept in MIND/A/CHANNEL, so the updater knows the version: it must verify with the release key and name this
-    manifest for `arch`."""
+    MIND/BOOT0, with MIND/BOOT1 empty; the licences and voice stay at the root, shared. With `channel` and `keys`, a
+    release's signed channel file kept in MIND/A/CHANNEL and the key file in MIND/A/KEYS, so the updater knows the
+    version: the key file must verify with the root set the updater is built with, the channel with the release keys it
+    names (351-UPD-0026), and the channel must name this manifest for `arch`."""
     # Only with slots: the packager alone needs no other script.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import boot_slots, release as release_tool, sign_manifest  # noqa: E401
-    boot = {"kernel.elf", *BOOT_FILES, *SIGNED}
+    boot = {"kernel.elf", *BOOT_FILES, *SIGNED, *(name for name in payloads if name.startswith("KEYS."))}
     # The applications too: every other *.elf at the root goes with the services it was built with (351-UPD-0023).
     # The release's period for the updater as well (351-UPD-0036), when the build wrote one.
     out = {(f"MIND/A/{name}" if name in boot or name == boot_slots.PERIOD or ("/" not in name and name.endswith(".elf")) else name): data
@@ -146,19 +157,21 @@ def slots(payloads, arch, channel=None):
     out.update({f"MIND/A/{name}": payloads[path] for path, name in boot_slots.LOADERS.items() if path in payloads})
     out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True)
     out["MIND/BOOT1"] = bytes(boot_slots.RECORD)
+    if (channel is None) != (keys is None):
+        raise ValueError("a channel file goes with the key file it was signed under")
     if channel is not None:
-        lines = channel.split(b"\n")
-        if len(lines) != 3 or lines[2] or not lines[1].startswith(b"ed25519 "):
-            raise ValueError("the channel file is not a signed channel")
-        body = lines[0] + b"\n"
-        try:
-            signature = bytes.fromhex(lines[1][8:].decode())
-        except ValueError:
-            raise ValueError("the channel file is not a signed channel") from None
-        # The key the updater is built with (updater/build.rs).
-        key = Path(os.environ.get("MIND_RELEASE_PUBLIC_KEY") or ROOT / "updater/keys/release-test.pub")
-        if not sign_manifest.verify(bytes.fromhex(key.read_text().strip()), body, signature):
-            raise ValueError(f"the channel file is not signed with the release key the updater is built with ({key})")
+        # The root set the updater is built with (updater/build.rs: $MIND_ROOT_KEYS or the test set).
+        k, why = release_tool.check_keys(keys)
+        if k is None:
+            raise ValueError(f"the key file: {why}")
+        signed, why = release_tool.split_signed(channel)
+        if signed is None:
+            raise ValueError(f"the channel file: {why}")
+        body, signatures = signed
+        release_keys, threshold = k["roles"]["release"]
+        good, enough = release_tool.counted(release_keys, threshold, body, signatures)
+        if not enough:
+            raise ValueError(f"the channel file is signed by {good} of the release keys the key file names, not {threshold}")
         try:
             name = json.loads(body)["channel"]
         except (ValueError, TypeError, KeyError):
@@ -169,6 +182,10 @@ def slots(payloads, arch, channel=None):
         if fields["manifests"].get(arch) != hashlib.sha256(payloads["MANIFEST"]).hexdigest():
             raise ValueError(f"the channel does not name this build's {arch} manifest")
         out["MIND/A/CHANNEL"] = channel
+        # Checked against the root set itself above: it needs none of the build's root changes (351-UPD-0029).
+        out["MIND/A/KEYS"] = keys
+        for name in [n for n in out if n.startswith("MIND/A/KEYS.")]:
+            del out[name]
         # The floor the updater would set at once (351-UPD-0024): the channel's minimum, if slot A's manifest meets it.
         if sign_manifest.manifest_version(payloads["MANIFEST"]) >= fields["minimum"]:
             out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True, floor=fields["minimum"])
@@ -451,10 +468,13 @@ def main():
     parser.add_argument("--hwdocs", action="store_true", help="also put the hardware tables of hwdocs/ in /hwdocs (gpio and pins read them)")
     parser.add_argument("--slots", action="store_true", help="the build in slot A, confirmed, so the updater can fill slot B (docs/update/slots.md)")
     parser.add_argument("--channel", type=Path, help="with --slots: the release's signed channel file, kept in slot A (its manifest must be this build's)")
+    parser.add_argument("--keys", type=Path, help="with --channel: the key file it was signed under, kept in slot A (351-UPD-0026)")
     parser.add_argument("--update", type=Path, help="with --slots: an update.txt for the updater, at the root (docs/update/updater.md)")
     args = parser.parse_args()
-    if (args.channel or args.update) and not args.slots:
-        raise ValueError("--channel and --update go with --slots.")
+    if (args.channel or args.keys or args.update) and not args.slots:
+        raise ValueError("--channel, --keys and --update go with --slots.")
+    if bool(args.channel) != bool(args.keys):
+        raise ValueError("--channel goes with --keys, the key file it was signed under.")
     spec = ARCHES[args.arch]
     output = (args.output or ROOT / spec["image"]).absolute()
     if output.suffix.lower() != ".img":
@@ -474,7 +494,7 @@ def main():
             if file.is_file() and file.name != "README.md":
                 payloads[file.relative_to(ROOT).as_posix()] = file.read_bytes()
     if args.slots:
-        payloads = slots(payloads, args.arch, args.channel.read_bytes() if args.channel else None)
+        payloads = slots(payloads, args.arch, args.channel.read_bytes() if args.channel else None, args.keys.read_bytes() if args.keys else None)
         if args.update:
             payloads["update.txt"] = args.update.read_bytes()
     digest = pack(payloads, output, qemu_img, args.arch, args.force)

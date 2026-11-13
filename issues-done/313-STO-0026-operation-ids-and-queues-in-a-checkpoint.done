@@ -2,7 +2,7 @@
 
 **Type:** storage (`libmind` `checkpoint`, `tally`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [313](../issues/313-persistent-actors.md) · **Constitution:** MC-6.10, MC-6.12, MC-12.4, Appendix B.4
 
-Split from [313](../issues/313-persistent-actors.md) (2026-10-30), its first step at the maintainer's word. It holds no personal data, so it does not wait for [308](../issues/308-encryption-at-rest.md).
+Split from [313](../issues/313-persistent-actors.md) (2026-10-30), its first step at the maintainer's word. It holds no personal data, so it does not wait for [308](308-encryption-at-rest.done).
 
 ## Problem
 

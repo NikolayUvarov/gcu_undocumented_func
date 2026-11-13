@@ -2,10 +2,12 @@
 //! a `mind::http::Parser` that asks the service, so a program that holds the network and its files parses no response
 //! head itself (MC-11.11). `mind::http::get` checks whatever comes back against what it asked for (MC-11.5). Release
 //! channels and boot manifests to and from `mind::release` (351-NET-0011): the updater encodes what comes back again
-//! and compares it with the signed bytes. A `Session` is a parser process of one session's own (109-NET-0010).
+//! and compares it with the signed bytes. A `Session` is a parser process of one session's own (109-NET-0010). Request
+//! heads to and from `mind::http_serve::Request` (2.1, 110-NET-0070), for a server that parses none itself.
 use crate::http::{self, Encoding, Field, Head, Range, RetryAfter};
+use crate::http_serve::{self, Bad};
 use crate::idl::codec::{List, Text};
-use crate::idl::parse::{self, ContentCoding, HttpResponse, RetryKind};
+use crate::idl::parse::{self, ContentCoding, HttpMethod, HttpRefusal, HttpRequest, HttpResponse, RetryKind};
 use crate::ipc::{Endpoint, Message};
 use crate::release;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -22,6 +24,40 @@ pub fn to_response(head: &Head) -> HttpResponse {
     HttpResponse { status: head.status, has_length: head.length.is_some(), length: head.length.unwrap_or(0), has_range, range_unsatisfied, range_start, range_end, range_total,
                    chunked: head.chunked, close: head.close, encoding, media: Text::new(head.media.as_str()).unwrap_or_default(),
                    location: Text::new(head.location.as_str()).unwrap_or_default(), retry, retry_after }
+}
+
+/// A request head as parse.wit 2.1's `http-request` carries it, or its refusal (110-NET-0070).
+pub fn to_request(parsed: &Result<http_serve::Request, Bad>) -> HttpRequest {
+    let refused = |refusal| HttpRequest { refusal, ..HttpRequest::default() };
+    match parsed {
+        Err(Bad::Malformed) => refused(HttpRefusal::Malformed),
+        Err(Bad::Method) => refused(HttpRefusal::Method),
+        Err(Bad::Version) => refused(HttpRefusal::Version),
+        Err(Bad::NoHost) => refused(HttpRefusal::NoHost),
+        Err(Bad::TooManyHeaders) => refused(HttpRefusal::TooManyHeaders),
+        Err(Bad::TooLong) => refused(HttpRefusal::TooLong),
+        Ok(r) => HttpRequest {
+            refusal: HttpRefusal::None, method: if r.method == http_serve::Method::Get { HttpMethod::Get } else { HttpMethod::Head },
+            target: Text::new(r.target.as_str()).unwrap_or_default(), http11: r.http11, keep_alive: r.keep_alive,
+            range: Text::new(r.range.as_str()).unwrap_or_default(), if_none_match: Text::new(r.if_none_match.as_str()).unwrap_or_default(), body: r.body,
+        },
+    }
+}
+
+/// The head a parser's `http-request` says, or its refusal; Malformed if its fields are not what a head may carry.
+pub fn from_request(r: &HttpRequest) -> Result<http_serve::Request, Bad> {
+    Err(match r.refusal {
+        HttpRefusal::Malformed => Bad::Malformed, HttpRefusal::Method => Bad::Method, HttpRefusal::Version => Bad::Version,
+        HttpRefusal::NoHost => Bad::NoHost, HttpRefusal::TooManyHeaders => Bad::TooManyHeaders, HttpRefusal::TooLong => Bad::TooLong,
+        HttpRefusal::None => {
+            fn text<const N: usize>(s: &str) -> Result<http_serve::Text<N>, Bad> { http_serve::Text::new(s).ok_or(Bad::Malformed) }
+            let target = text(r.target.as_str())?;
+            if target.is_empty() { return Err(Bad::Malformed); }
+            let method = if r.method == HttpMethod::Get { http_serve::Method::Get } else { http_serve::Method::Head };
+            return Ok(http_serve::Request { method, target, http11: r.http11, keep_alive: r.keep_alive, range: text(r.range.as_str())?,
+                                            if_none_match: text(r.if_none_match.as_str())?, body: r.body });
+        }
+    })
 }
 
 /// The head a parser's `http-response` says; None if its media type or location is not what a head may carry.
@@ -156,8 +192,53 @@ pub fn channel_record(channel: &release::Channel, signed: &release::Signed) -> p
     parse::Channel {
         name: Text::new(channel.name.as_str()).unwrap_or_default(), version: channel.version, minimum: channel.minimum,
         expires: Text::new(core::str::from_utf8(&channel.expires).unwrap_or("")).unwrap_or_default(), manifests,
-        signed: signed.body as u32, signature: List::from_slice(&signed.signature).unwrap_or_default(),
+        signed: signed.body as u32, signatures: signature_records(signed),
     }
+}
+
+fn signature_records(signed: &release::Signed) -> List<parse::Signature, { release::SIGNATURES_MAX }> {
+    let mut list = List::default();
+    for s in signed.signatures() {
+        list.push(parse::Signature { key: List::from_slice(&s.key).unwrap_or_default(), value: List::from_slice(&s.value).unwrap_or_default() });
+    }
+    list
+}
+
+// The signatures of a record, if each has its form.
+fn signed_from(body: u32, records: &[parse::Signature]) -> Option<release::Signed> {
+    let mut signed = release::Signed { body: body as usize, signatures: [release::Signature { key: [0; 32], value: [0; 64] }; release::SIGNATURES_MAX], count: 0 };
+    for (slot, s) in signed.signatures.iter_mut().zip(records) {
+        *slot = release::Signature { key: s.key.as_slice().try_into().ok()?, value: s.value.as_slice().try_into().ok()? };
+    }
+    signed.count = records.len().min(release::SIGNATURES_MAX);
+    Some(signed)
+}
+
+/// The record of a key file `mind::release` read (parse.wit 4.0, 351-UPD-0026, 0027).
+pub fn keys_record(keys: &release::Keys, signed: &release::Signed) -> parse::KeyFile {
+    let mut roles = List::default();
+    for role in &keys.roles {
+        let mut list = List::default();
+        for key in role.keys() { list.push(parse::PublicKey { key: List::from_slice(key).unwrap_or_default() }); }
+        roles.push(parse::Role { keys: list, threshold: role.threshold });
+    }
+    parse::KeyFile {
+        version: keys.version, expires: Text::new(core::str::from_utf8(&keys.expires).unwrap_or("")).unwrap_or_default(), roles,
+        signed: signed.body as u32, signatures: signature_records(signed),
+    }
+}
+
+/// A key file from the service's record, if every field has its form: still to be compared with the signed bytes.
+pub fn keys_from(record: &parse::KeyFile) -> Option<(release::Keys, release::Signed)> {
+    if record.roles.as_slice().len() != release::ROLES.len() { return None; }
+    let mut roles = [release::Role::EMPTY; release::ROLES.len()];
+    for (role, r) in roles.iter_mut().zip(record.roles.as_slice()) {
+        for (slot, k) in role.keys.iter_mut().zip(r.keys.as_slice()) { *slot = k.key.as_slice().try_into().ok()?; }
+        role.count = r.keys.as_slice().len().min(release::ROLE_KEYS);
+        role.threshold = r.threshold;
+    }
+    let keys = release::Keys { version: record.version, expires: record.expires.as_str().as_bytes().try_into().ok()?, roles };
+    Some((keys, signed_from(record.signed, record.signatures.as_slice())?))
 }
 
 /// A channel from the service's record, if every field has its form. Its encoding is still to be compared with the
@@ -171,7 +252,7 @@ pub fn channel_from(record: &parse::Channel) -> Option<(release::Channel, releas
         name: release::Text::new(record.name.as_str().as_bytes())?, version: record.version, minimum: record.minimum,
         expires: record.expires.as_str().as_bytes().try_into().ok()?, manifests, count: record.manifests.as_slice().len(),
     };
-    Some((channel, release::Signed { body: record.signed as usize, signature: record.signature.as_slice().try_into().ok()? }))
+    Some((channel, signed_from(record.signed, record.signatures.as_slice())?))
 }
 
 /// The record of a manifest `mind::release` read: its header lines, its number of files, and up to `PAGE` from `start`.
@@ -212,6 +293,62 @@ pub fn read_channel(endpoint: Endpoint, file: &[u8]) -> Result<(release::Channel
     let record = match parse::channel(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
     let (channel, signed) = channel_from(&record).ok_or(Refused::Lied)?;
     if release::channel_is(file, &channel, &signed) { Ok((channel, signed)) } else { Err(Refused::Lied) }
+}
+
+/// A key file read by the service at `endpoint`, taken only if its fields and signatures encode again to exactly `file`
+/// (351-UPD-0026). Which signatures count is the caller's.
+pub fn read_keys(endpoint: Endpoint, file: &[u8]) -> Result<(release::Keys, release::Signed), Refused> {
+    let record = match parse::keys(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
+    let (keys, signed) = keys_from(&record).ok_or(Refused::Lied)?;
+    if release::keys_is(file, &keys, &signed) { Ok((keys, signed)) } else { Err(Refused::Lied) }
+}
+
+/// The record of a timestamp file `mind::release` read (parse.wit 4.1, 351-UPD-0028).
+pub fn timestamp_record(stamp: &release::Timestamp, signed: &release::Signed) -> parse::Timestamp {
+    parse::Timestamp {
+        channel: Text::new(stamp.channel.as_str()).unwrap_or_default(), digest: List::from_slice(&stamp.digest).unwrap_or_default(),
+        expires: Text::new(core::str::from_utf8(&stamp.expires).unwrap_or("")).unwrap_or_default(), version: stamp.version,
+        signed: signed.body as u32, signatures: signature_records(signed),
+    }
+}
+
+/// A timestamp from the service's record, if every field has its form: still to be compared with the signed bytes.
+pub fn timestamp_from(record: &parse::Timestamp) -> Option<(release::Timestamp, release::Signed)> {
+    let stamp = release::Timestamp {
+        channel: release::Text::new(record.channel.as_str().as_bytes())?, digest: record.digest.as_slice().try_into().ok()?,
+        expires: record.expires.as_str().as_bytes().try_into().ok()?, version: record.version,
+    };
+    Some((stamp, signed_from(record.signed, record.signatures.as_slice())?))
+}
+
+/// A timestamp file read by the service at `endpoint`, taken only if its fields and signatures encode again to exactly
+/// `file` (351-UPD-0028). Which signatures count is the caller's.
+pub fn read_timestamp(endpoint: Endpoint, file: &[u8]) -> Result<(release::Timestamp, release::Signed), Refused> {
+    let record = match parse::timestamp(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
+    let (stamp, signed) = timestamp_from(&record).ok_or(Refused::Lied)?;
+    if release::timestamp_is(file, &stamp, &signed) { Ok((stamp, signed)) } else { Err(Refused::Lied) }
+}
+
+/// The record of a recovery order `mind::release` read (parse.wit 4.2, 351-UPD-0030).
+pub fn order_record(order: &release::Order, signed: &release::Signed) -> parse::RecoveryOrder {
+    parse::RecoveryOrder {
+        channel: Text::new(order.channel.as_str()).unwrap_or_default(),
+        expires: Text::new(core::str::from_utf8(&order.expires).unwrap_or("")).unwrap_or_default(),
+        floor: order.floor, sequence: order.sequence, version: order.version, signed: signed.body as u32, signatures: signature_records(signed),
+    }
+}
+
+/// A recovery order read by the service at `endpoint`, taken only if its fields and signatures encode again to exactly
+/// `file` (351-UPD-0030). Which signatures count is the caller's.
+pub fn read_order(endpoint: Endpoint, file: &[u8]) -> Result<(release::Order, release::Signed), Refused> {
+    let record = match parse::order(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
+    let order = release::Order {
+        channel: release::Text::new(record.channel.as_str().as_bytes()).ok_or(Refused::Lied)?,
+        expires: record.expires.as_str().as_bytes().try_into().map_err(|_| Refused::Lied)?,
+        floor: record.floor, sequence: record.sequence, version: record.version,
+    };
+    let signed = signed_from(record.signed, record.signatures.as_slice()).ok_or(Refused::Lied)?;
+    if release::order_is(file, &order, &signed) { Ok((order, signed)) } else { Err(Refused::Lied) }
 }
 
 /// A boot manifest read by the service at `endpoint` a page at a time, taken only if its header lines and its files,

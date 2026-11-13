@@ -72,6 +72,14 @@ pub fn volume(path: &str) -> (&str, &str) {
 /// The path is the root of its volume.
 pub fn is_root(path: &str) -> bool { volume(path).1.is_empty() }
 
+/// The volume a store's name holds, as fm names it (`fs/notes` is `notes:`): 1 to 16 of `A-Z a-z 0-9 . _ -` after `fs/`
+/// (311-APP-0135).
+pub fn store_volume(name: &str) -> Option<String> {
+    let volume = name.strip_prefix("fs/")?;
+    let named = (1..=16).contains(&volume.len()) && volume.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c));
+    named.then(|| format!("{}:", volume))
+}
+
 /// Two paths are on the same volume.
 pub fn same_volume(a: &str, b: &str) -> bool { volume(a).0.eq_ignore_ascii_case(volume(b).0) }
 

@@ -43,6 +43,9 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
     "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
+    "the flow of program httpd (its listening grant); a TLS client with the right to the device certificate; the parser; RTC; a read-only scope of data/releases/",
+    "the flow of program sshd (its listening grant); keystore's client for its key exchanges' signatures; a writable scope of data/; the shell's client for a remote session",
+    "nothing but its endpoint",
     "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
@@ -71,6 +74,7 @@ const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's in
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
+const SLOT_STORE_RTC: usize = 5; // blockstore: an rtc client that reads the calendar time and sets nothing (312-KRN-0239)
 const STORE_WINDOW: u8 = 1; // the block store's own partition, as a window of its driver (307-KRN-0177)
 const VFS_WINDOW_FIRST: u8 = 2; // vfs_server's windows of a partitioned disk, from 2 up to the driver's last (307-KRN-0229)
 const STORE_TXT: &str = "store.txt"; // the owner's word on the store's partition: `partition <PARTUUID>` (307-KRN-0177)
@@ -175,7 +179,7 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               replaced: [Option<(usize, usize)>; UNITS],
               placed: [Placed; UNITS], configuration: idl_init::Configuration,
               // The client of nnd init keeps, whose copies the shell holds and lends, revoked before each new shell (262-KRN-0178).
-              shell_nn: Option<usize>,
+              shell_nn: Option<usize>, shell_clipboard: Option<usize>,
               // Whether this boot's slot was signed with the public test key, which anyone can sign with (751-KRN-0185).
               test_key: bool,
               // A safe start, after an unfinished run or asked at the bootloader: link gets no input (800-KRN-0191).
@@ -584,6 +588,15 @@ impl Init {
 
     // The client of nnd init keeps for the shell, with the right to badge: the shell holds a copy, so that revoking this
     // one's descendants ends every client an old shell minted (262-KRN-0178).
+    // The clipboard's client init keeps for the shell, with the right to badge (000-KRN-0235): the shell mints a manager's
+    // copy and programs' copies from it, and every one goes when a new shell starts.
+    fn shell_clipboard(&mut self) -> Result<usize> {
+        if let Some(slot) = self.shell_clipboard { return Ok(slot); }
+        let slot = ipc::mint(self.keeper("clipboard")?, CLIENT | CAP_BADGE, 0, 0)?;
+        self.shell_clipboard = Some(slot);
+        Ok(slot)
+    }
+
     fn shell_nn(&mut self) -> Result<usize> {
         if let Some(slot) = self.shell_nn { return Ok(slot); }
         let slot = ipc::mint(self.keeper("nnd")?, CLIENT | CAP_BADGE, 0, 0)?;
@@ -939,6 +952,9 @@ impl Init {
                 if disk.is_some() {
                     if let Some(copy) = self.store_copy() { grants.add(SLOT_STORE_COPY, self.badged(&mut minted, copy, mind::block::BADGE_WRITE)?, CLIENT); }
                 }
+                // The calendar time for a memory domain's term (312-STO-0050): rtc's client without the setting badge;
+                // without rtc the store starts with slot 5 empty and acts on no term.
+                if self.present("rtc") { self.lend(&mut grants, SLOT_STORE_RTC, "rtc")?; }
             }
             // The store's file face (311-STO-0032): `vfs.wit` over the store's trees, with the block store's client that
             // may get, put and publish where `tally` and `blocks` find theirs. It badges its own clients, as the store
@@ -1080,6 +1096,10 @@ impl Init {
             // (`scopes_of`); its quota and workers by data/memory.conf at each start (`nnd_memory`). No network, device or
             // lifecycle client.
             "nnd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "nnd")?, ALL); }
+            // The system clipboard (000-KRN-0235): its endpoint and nothing else; the shell gets the one client of it.
+            // With the right to badge: it mints the BADGE_PROGRAM client a window manager asks for each program
+            // (clipboard.wit 1.1 `program-client`, 000-APP-0032), as no copy on the wire carries that right (000-KRN-0073).
+            "clipboard" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "clipboard")?, ALL | CAP_BADGE); }
             // The TPM service alone holds the TPM's registers (351-KRN-0043); without a TPM it runs and says so.
             "tpm" => {
                 if let Some(slot) = self.nodes.tpm.and_then(|node| minted.mint(PLATFORM_MMIO, node, 0).ok()) { grants.add(SLOT_DEV0, slot, 0); }
@@ -1106,7 +1126,7 @@ impl Init {
                 grants.add(4, self.badged(&mut minted, "tpm", mind::tpm::BADGE_SEAL)?, CLIENT); // seals the device key (351-NET-0006)
             }
             // The updater (351-KRN-0022): the clock and the boot disk, read-only but for the update zone (351-UPD-0008:
-            // the slot that did not boot, the boot records in place); TLS over the flow the policy gives "updater" (made
+            // the slot that did not boot, the boot records in place) and system/updater (351-UPD-0027); TLS over the flow the policy gives "updater" (made
             // here and kept for restarts: the policy's term bounds it); a lifecycle client of init that may ask for a
             // restart of the machine; the firmware's boot variables.
             "updater" => {
@@ -1171,11 +1191,13 @@ impl Init {
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
             // Network time (111-KRN-0206): the flow the policy gives program `timed`, whose UDP rules are its time servers;
-            // the clock with the setting badge; and its private directory, system/timed, for the floor. Nothing else. Not
-            // started when the policy gives it no flow.
+            // the clock with the setting badge; and its private directory, system/timed, for the floor. For NTS-KE
+            // (111-NET-0075), its TCP rules' servers, a TLS client without the right to the device certificate, when tls
+            // runs (it starts right after tls). Nothing else. Not started when the policy gives it no flow.
             "timed" => {
                 let Some(flow) = self.flow(&mut minted, "timed") else { return Err(Error::NotFound) };
                 grants.add(SLOT_NETWORK, flow, CLIENT);
+                if self.present("tls") { grants.add(SLOT_TLS, self.badged(&mut minted, "tls", mind::network::BADGE_TLS_NO_DEVICE)?, CLIENT); }
                 grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_TIMED)?, CLIENT);
             }
@@ -1184,6 +1206,28 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
                 self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SIGNER)?, CLIENT);
+            }
+            // The release server (110-NET-0070): the flow the policy gives program `httpd`, whose listening grant names its
+            // port; a TLS client with the right to the device certificate, for the server role (tls.wit 1.3: the key stays
+            // in keystore); the parser for its request heads (MC-11.11); the clock; a read-only scope of data/releases/
+            // (scopes_of). Nothing else. Not started when the policy gives it no flow.
+            "httpd" => {
+                let Some(flow) = self.flow(&mut minted, "httpd") else { return Err(Error::NotFound) };
+                grants.add(SLOT_NETWORK, flow, CLIENT);
+                self.lend(&mut grants, SLOT_TLS, "tls")?;
+                self.lend(&mut grants, SLOT_PARSE, "parse")?;
+                self.lend(&mut grants, SLOT_RTC, "rtc")?;
+            }
+            // The SSH server (112-NET-0072): the flow the policy gives program `sshd`, whose listening grant names its port;
+            // keystore's client for `ssh-host` alone (the device key signs each key exchange and stays in keystore); a writable
+            // scope of data/ (scopes_of), where its keys file and its files are; the shell's client badged
+            // BADGE_SHELL_REMOTE, whose lines the shell runs on a remote session's rule (112-APP-0136): `run` alone, nothing
+            // that asks at the machine, no policy, update or firmware. Not started without the flow.
+            "sshd" => {
+                let Some(flow) = self.flow(&mut minted, "sshd") else { return Err(Error::NotFound) };
+                grants.add(SLOT_NETWORK, flow, CLIENT);
+                grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SSH_HOST)?, CLIENT);
+                grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_REMOTE)?, CLIENT);
             }
             // The SSH service (351-KRN-0115) has no network either: clients lend their flows. It alone may ask the key
             // service to sign an SSH login.
@@ -1267,6 +1311,9 @@ impl Init {
                 // The model service's, with the right to badge, lent for REQUEST_NN with a badge for each start: a copy of the
                 // client init keeps, revoked before a new shell starts (262-KRN-0178).
                 if self.present("nnd") { grants.copy(SLOT_NN, self.shell_nn()?, CLIENT | CAP_BADGE); }
+                // The clipboard's, with the right to badge: the shell mints the manager's copy and a program's for
+                // REQUEST_CLIPBOARD (000-KRN-0235, 000-APP-0032), revoked before a new shell starts.
+                if self.present("clipboard") { grants.copy(SLOT_CLIPBOARD, self.shell_clipboard()?, CLIENT | CAP_BADGE); }
                 // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
                 grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
                 // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148); with the
@@ -1307,6 +1354,7 @@ impl Init {
             "updater" => Quota { endpoints: 1, ..Quota::default() },
             // The endpoint of nnd's probe for workers; its memory and workers come with its line of data/memory.conf.
             "nnd" => Quota { endpoints: 1, ..Quota::default() },
+            "clipboard" => Quota { endpoints: 1, ..Quota::default() },
             // The endpoint where the programs link starts send their output (800-LNK-0009, 800-KRN-0137).
             "link" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
@@ -1335,6 +1383,13 @@ impl Init {
             match ipc::revoke(kept) {
                 Ok(removed) => mind::println!("[INIT] shell: {} CLIENTS OF nnd THE OLD SHELL HELD OR LENT REVOKED", removed),
                 Err(error) => mind::println!("[INIT] shell: THE OLD SHELL'S CLIENTS OF nnd NOT REVOKED ({:?})", error),
+            }
+        }
+        // And none of the clipboard's (000-KRN-0235).
+        if let Some(kept) = self.shell_clipboard.filter(|_| name == "shell" && self.starts[index] > 0) {
+            match ipc::revoke(kept) {
+                Ok(removed) => mind::println!("[INIT] shell: {} CLIENTS OF clipboard THE OLD SHELL HELD OR LENT REVOKED", removed),
+                Err(error) => mind::println!("[INIT] shell: THE OLD SHELL'S CLIENTS OF clipboard NOT REVOKED ({:?})", error),
             }
         }
         let mut grants = plan.grants; let mut receiver = None;
@@ -2069,7 +2124,9 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
 }
 
 // Why a service whose plan found nothing to drive is not started: its device, or for timed its time servers.
-fn not_found(name: &str) -> &'static str { if name == "timed" { "THE POLICY GIVES IT NO TIME SERVER" } else { "NO DEVICE" } }
+fn not_found(name: &str) -> &'static str {
+    match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" | "sshd" => "THE POLICY GIVES IT NO LISTENING GRANT", _ => "NO DEVICE" }
+}
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
@@ -2090,6 +2147,10 @@ fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
         // The neural voice (252-KRN-0230): the model disk read-only, in SLOT_FILE, whose root holds MANIFEST.json, which each
         // model file is checked against (MC-4.2). Without the disk none, and tts speaks with the formant voice.
         "tts" => &[(SLOT_FILE, mind::fs::BADGE_USER, "models:", false, false)],
+        // The releases httpd serves (110-NET-0070), read-only and never made: a boot writes nothing for it.
+        "httpd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data/releases", false, false)],
+        // The SSH server's files and its keys (112-NET-0072): data/, writable; sshd itself keeps SFTP off data/ssh/.
+        "sshd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data", true, false)],
         _ => &[],
     }
 }
@@ -2245,7 +2306,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
                          power: hardware::power_policy(), nodes: hardware::Nodes::default() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));

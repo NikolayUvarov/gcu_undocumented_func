@@ -3,8 +3,12 @@
 /// endpoint and the system log: no files, no network, no spawn, no devices. Each request is parsed on its own; nothing
 /// of one stays for the next. A refusal is logged with the client's PID. The client still checks what a typed message
 /// says against what it asked for (MC-11.5). 2.0 (000-NET-0047): one HTTP response head, `http-response`, which also
-/// gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone.
-package mind:parse@2.0.0;
+/// gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone. 2.1 (110-NET-0070):
+/// `http-request`, a request head as a server reads it. 3.0 (351-UPD-0026): a channel's signatures name their keys, one
+/// to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
+/// that sign the next one; 3.x's key file of four roles is gone. 4.1 (351-UPD-0028): `timestamp`, a channel's timestamp file.
+/// 4.2 (351-UPD-0030): `order`, a recovery order.
+package mind:parse@4.2.0;
 
 interface parse {
     /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -12,18 +16,39 @@ interface parse {
 
     /// An architecture's boot manifest in a channel: its name and the manifest's SHA-256 (1.1, 351-NET-0011).
     record manifest-ref { arch: string<16>, digest: list<u8, 32> }
+    /// A signature line of a channel or a key file: the public key it names and the Ed25519 signature (3.0).
+    record signature { key: list<u8, 32>, value: list<u8, 64> }
     /// A release channel file (docs/update/publishing.md), read in its one encoding (`mind::release`): its fields; the
-    /// signature covers the file's first `signed` bytes. The updater accepts the fields only if they encode again to
-    /// exactly those bytes.
-    record channel { name: string<32>, version: u64, minimum: u64, expires: string<20>, manifests: list<manifest-ref, 4>, signed: u32, signature: list<u8, 64> }
+    /// signatures cover the file's first `signed` bytes, in the file's order. The updater accepts the fields only if
+    /// they encode again to exactly those bytes, and counts the signatures itself.
+    record channel { name: string<32>, version: u64, minimum: u64, expires: string<20>, manifests: list<manifest-ref, 4>, signed: u32, signatures: list<signature, 8> }
+    /// A public key of a key file's role (3.0).
+    record public-key { key: list<u8, 32> }
+    /// A role of a key file: its public keys in ascending order and how many must sign (3.0).
+    record role { keys: list<public-key, 4>, threshold: u8 }
+    /// A key file (351-UPD-0026): its version, its expiry and the roles boot, recovery, release, root and timestamp in
+    /// that order; the root keys' signatures cover its first `signed` bytes. Taken as a channel is (3.0; 4.0: `root`).
+    record key-file { version: u64, expires: string<20>, roles: list<role, 5>, signed: u32, signatures: list<signature, 8> }
+    /// A channel's timestamp file (351-UPD-0028): the channel, its file's SHA-256, a short expiry and the timestamp's own
+    /// version; the timestamp keys' signatures cover its first `signed` bytes. Taken as a channel is (4.1).
+    record timestamp { channel: string<32>, digest: list<u8, 32>, expires: string<20>, version: u64, signed: u32, signatures: list<signature, 8> }
+    /// A recovery order (351-UPD-0030): the channel, its expiry, the floor it lowers to, its sequence and the version to
+    /// go back to; the recovery keys' signatures cover its first `signed` bytes. Taken as a channel is (4.2).
+    record recovery-order { channel: string<32>, expires: string<20>, floor: u64, sequence: u64, version: u64, signed: u32, signatures: list<signature, 8> }
     /// A file line of a boot manifest.
     record file { path: string<96>, size: u64, digest: list<u8, 32>, flags: u32, mib: u32 }
     /// A boot manifest's header lines (its format line first, as text), its number of file lines, and up to 8 of them
     /// from the one asked for (a reply small enough for a program's 64 KiB stack).
     record manifest { headers: list<string<128>, 8>, files: u32, page: list<file, 8> }
 
-    /// A channel file (1.1).
-    channel: func(file: bytes<1024>) -> result<channel, error>;
+    /// A channel file (1.1; 3.0: its signatures with their keys, up to 2560 bytes).
+    channel: func(file: bytes<2560>) -> result<channel, error>;
+    /// A key file (3.0; 4.0: five roles).
+    keys: func(file: bytes<4096>) -> result<key-file, error>;
+    /// A timestamp file (4.1).
+    timestamp: func(file: bytes<2048>) -> result<timestamp, error>;
+    /// A recovery order (4.2).
+    order: func(file: bytes<2048>) -> result<recovery-order, error>;
     /// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
     manifest: func(text: bytes<32768>, start: u32) -> result<manifest, error>;
 
@@ -64,4 +89,16 @@ interface parse {
     record json-value { kind: json-kind, parent: u16, key: string<64>, text: string<512> }
     record json-page { values: u32, page: list<json-value, 16> }
     json: func(text: bytes<16384>, start: u32) -> result<json-page, error>;
+
+    /// 2.1 (110-NET-0070): an HTTP/1.x request head as a server reads it (`mind::http_serve::parse_request`, the rules
+    /// of `tools/httpd`): GET or HEAD, HTTP/1.1 or 1.0, `Host` for 1.1, no folded line, at most 64 header lines, a
+    /// target of at most 1024 bytes. `refusal`: why it is not served, `none` when it is; the server answers 400, 405,
+    /// 505, 400, 431 or 414 for the others. Of a head served: the method, the target as sent, whether it is HTTP/1.1,
+    /// whether the connection stays open after the response, the first `Range` and `If-None-Match` values (empty: none,
+    /// or longer than 128 bytes), and whether a body follows (a first `Content-Length` other than 0, or a transfer coding).
+    enum http-refusal { none, malformed, method, version, no-host, too-many-headers, too-long }
+    enum http-method { get, head }
+    record http-request { refusal: http-refusal, method: http-method, target: string<1024>, http11: bool, keep-alive: bool, range: string<128>, if-none-match: string<128>, body: bool }
+    /// The head of an HTTP request: its request line and header lines, with or without the blank line that ends them.
+    http-request: func(head: bytes<8192>) -> result<http-request, error>;
 }

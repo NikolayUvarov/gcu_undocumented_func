@@ -1,0 +1,76 @@
+# 312-STO-0050 — A memory domain's term — done
+
+**Type:** service (storage), design · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** a calendar clock for `blockstore`, an `rtc` client that only reads ([requests-KRN.md](../issues/requests-KRN.md), 2026-11-13), for its effect on the platform; the store's logic and its host tests need none · **Main task:** [312](312-the-minds-memory.done) · **Roadmap:** track B · **Constitution:** MC-4.11, Appendix B.3
+
+Split from [312](312-the-minds-memory.done), whose criteria were met without it.
+
+## Problem
+
+Appendix B.3: "Retention is formalized as a registered obligation with a quota, term and owner."
+
+**What a memory domain has:**
+- an owner (308-STO-0023);
+- a quota of its own (312-STO-0046);
+- a termination condition, the owner's `domain-forget`, which MC-4.11 accepts in a term's place ("a term or termination condition").
+
+**What it lacks** is a term the store keeps by itself. `blockstore` holds no calendar clock (`rtc`), only the monotonic time of its boot.
+
+## The choice to make first
+
+When a term ends, the store could:
+1. **forget the domain itself.** Its key is destroyed, so nothing is readable again. A clock set wrong would destroy memory, so this needs a clock whose time the store trusts, and a margin;
+2. **stop retaining it.** Names and pins stop counting, and a collection frees the records, while the key and anything still leased stay. Reading continues until then;
+3. **only report it** to the owner (`domain-usage`), and leave the forgetting to the owner, as today.
+
+Which one is the maintainer's or the owner's to say. The second and third need no key destroyed by a clock.
+
+## Decision (2026-11-13, the maintainer)
+
+All three ways, as a flag of each domain:
+
+> «давай это сделаем флагом с тремя состояниями ... тогда в случае плохих часов можно будет подстраховаться и перейти в режим 3. А если требуется повышенная безопасность - то в режим 2 или 1 - когда это прямо критически важно»
+
+- **A term and a mode per domain,** set by its owner at any time, either way. The term is a calendar time; none is no term. The modes:
+  - **forget:** past its term, the store forgets the domain as `domain-forget` does, its key destroyed;
+  - **release:** past its term, its names and pins retain nothing, so a collection frees its records. Writes through its client are refused (`read-only`), and its key stays until the owner forgets it;
+  - **report:** past its term, the store says so (`domain-term`, and the log once), and nothing else changes.
+- **Report is the default,** and the safeguard: with a clock not to be trusted, the owner sets its domains to report. Release or forget is for when it is critical.
+- **Without a calendar clock** the store acts on no term. Every domain then acts as in report, and the log says why.
+
+## Plan
+
+- **A term record of its own:** the domain, its term, its mode and a counter, sealed under the volume key. No key material is in it, so forgetting still erases the domain's one key record. A change writes a new one and erases the one before; a mount takes the latest.
+- **`blockstore.wit` minor:**
+  - `domain-set-term(id, until, mode)`, the owner's, through a client of the volume;
+  - `domain-term(id)`: the term, the mode, and whether it has passed.
+- **`blockstore` reads the calendar time** from `rtc`, at most once a minute, and acts on the terms past it.
+- **`blocks domain term <id> [<until> <mode>]`.**
+- **Host tests** with a simulated clock across a term's end, each mode, a mount between, a change of term and mode; a **QEMU check** across a reboot once `blockstore` has the clock.
+
+## Acceptance criteria
+
+- What the choice says, done at a term's end and across a reboot.
+- `docs/storage` ("Memory domains").
+
+## Resolution
+
+Done on `claude/relaxed-meitner-5bmhpz` as 2a63ae54 and 72ce0f6d (the IDL fuzzer lists the two new types), as the maintainer chose (above).
+- **`blockstore/src/store.rs`:**
+  - a term record of its own (`MIND-TRM`, in the key records' frame, no key material);
+  - a change writes the next record, then erases the one before; a mount takes the higher counter and erases the other;
+  - a forget erases the term record with the key record, and a new domain's number stays above any a term record names;
+  - past its term, by the calendar time heard: `forget` as `domain-forget` does (`expire`); `release`, its names and pins out before the mark so a collection frees its records, writes `read-only`, its key kept, nothing lost if set back before; `report`, told (`past_terms`);
+  - without a calendar time none acts.
+- **`blockstore.wit` 2.9:** `domain-set-term(id, mode, until)`, `domain-term(id)`, the enum `term-mode` and the record `term`, its bindings regenerated.
+- **`blockstore`** reads the calendar time from `rtc` where `init` gives a client in slot 5 (312-KRN-0239, `KRN`'s choice of slot), at most once a minute and at once after a set. It read `SLOT_RTC` (2) at 2a63ae54; once 312-KRN-0239 named slot 5, a commit of 2026-11-13 moved it there, and the QEMU checks were made to pass with the clock and without it. Without one, the log says no term acts, and says it again when a term is set.
+- **`blocks domain term <id> [forget|release|report <until>]`.**
+- **Tests:**
+  - `tests/blockstore_host.rs`, five tests: a term and mode found again after a remount, one record a domain on the medium; no clock, no act; report; release, also set back before a collection; forget, and its term reaching no new domain; a change of term cut after every write and flush, read against the records on the medium. Eight faults put in by hand were each caught;
+  - on 2a63ae54, in this session's container: the `store` suite on aarch64 (38 checks; a term set and read, refused through a domain's client, the log saying no clock); the `boot` suite on x86 (25; the store disk's term and mode the same after a reboot, and nothing acting without a clock); `blockstore_host.rs` (103), `idl_host.rs` (8), `mind_idl.py --check`; both images built, x86 with no warning;
+  - `idl_fuzz_host.rs` failed there on the two types the fuzzer did not list; with 72ce0f6d, all three pass.
+- **docs/storage 0.34** ("Memory domains"), docs/idl.
+- **Split off:** a term acting on the platform, which needs the calendar clock `init` does not give `blockstore` yet: [312-STO-0051](../issues/312-STO-0051-a-domains-term-acting-on-the-platform.md).
+
+## Related
+
+[312](312-the-minds-memory.done), [312-STO-0046](312-STO-0046-a-memory-domains-own-limit.done), [308-STO-0023](308-STO-0023-memory-domains.done).

@@ -32,9 +32,11 @@ def test_release_files():
                 b"file EFI/BOOT/BOOTX64.EFI 7 ab 0 0\nfile app.elf 8 cd 0 0\nfile app2.elf 8 cd 0 0\n")
     files = lu.release_files(manifest, "x86_64", 7)
     # The boot files first, the loader (351-UPD-0010), then the applications (351-KRN-0151), a shared blob once; no
-    # licence or model.
+    # licence or model; the key file after the manifest (351-UPD-0026).
     assert files == ["blobs/aa", "blobs/bb", "blobs/dd", "blobs/ab", "blobs/cc", "blobs/cd", "releases/7/x86_64/MANIFEST",
-                     "releases/7/x86_64/MANIFEST.SIG"], files
+                     "releases/7/x86_64/MANIFEST.SIG", "keys/current"], files
+    # The key file's history before it, for a device that holds an older version (351-UPD-0027).
+    assert lu.release_files(manifest, "x86_64", 7, [1, 2])[-3:] == ["keys/1", "keys/2", "keys/current"]
     # Another processor's loader is not this one's.
     assert "blobs/ab" not in lu.release_files(manifest, "aarch64", 7)
 

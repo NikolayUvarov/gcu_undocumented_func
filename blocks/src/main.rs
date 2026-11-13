@@ -30,6 +30,7 @@ mod index;
 mod journal;
 mod models;
 mod tree;
+mod vector;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE | REQUEST_PARSE);
 
@@ -154,8 +155,9 @@ fn names(prefix: &str) {
     mind::println!("{} NAMES IN {} PAGES", count, pages);
 }
 
-// Memory domains of the caller's owner (308-STO-0023): `domains` lists them, `domain new` makes one, `domain forget <id>`
-// destroys its key.
+// Memory domains of the caller's owner (308-STO-0023): `domains` lists them, `domain new` makes one, with a limit of its
+// own in KiB when one is given (312-STO-0046), `domain usage <id>` says what one retains, `domain forget <id>` destroys
+// its key; `domain term <id> [<mode> <until>]` reads or sets its term and mode (312-STO-0050).
 fn domains(mut words: core::str::SplitWhitespace) {
     match (words.next(), words.next(), words.next(), words.next()) {
         (Some("domains"), None, ..) => match blockstore::domains(store()) {
@@ -171,6 +173,23 @@ fn domains(mut words: core::str::SplitWhitespace) {
             Ok(Err(e)) => mind::println!("blocks: domain new: {:?}", e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
+        (Some("domain"), Some("new"), Some(kib), None) => match kib.parse::<u32>() {
+            Ok(kib) => match blockstore::domain_create_limited(store(), kib) {
+                Ok(Ok(id)) => mind::println!("DOMAIN {} MADE, RETAINING AT MOST {} KIB", id, kib),
+                Ok(Err(e)) => mind::println!("blocks: domain new: {:?}", e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            },
+            Err(_) => mind::println!("blocks: domain new [KiB]"),
+        },
+        (Some("domain"), Some("usage"), Some(id), None) => match id.parse::<u16>() {
+            Ok(id) => match blockstore::domain_usage(store(), id) {
+                Ok(Ok(u)) if u.quota == 0 => mind::println!("DOMAIN {} RETAINS {} BYTES, NO LIMIT OF ITS OWN, {} NAMES, {} PINS", id, u.retained, u.names, u.pins),
+                Ok(Ok(u)) => mind::println!("DOMAIN {} RETAINS {} OF {} BYTES, {} NAMES, {} PINS", id, u.retained, u.quota, u.names, u.pins),
+                Ok(Err(e)) => mind::println!("blocks: domain usage {}: {:?}", id, e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            },
+            Err(_) => mind::println!("blocks: domain usage <number>"),
+        },
         (Some("domain"), Some("forget"), Some(id), None) => match id.parse::<u16>() {
             Ok(id) => match blockstore::domain_forget(store(), id) {
                 Ok(Ok(())) => mind::println!("DOMAIN {} FORGOTTEN", id),
@@ -179,7 +198,59 @@ fn domains(mut words: core::str::SplitWhitespace) {
             },
             Err(_) => mind::println!("blocks: domain forget <number>"),
         },
-        _ => mind::println!("blocks: domains | domain new | domain forget <id>"),
+        (Some("domain"), Some("term"), Some(id), None) => match id.parse::<u16>() {
+            Ok(id) => match blockstore::domain_term(store(), id) {
+                Ok(Ok(t)) => {
+                    let clock = if !t.clock { "NO CALENDAR CLOCK" } else if t.passed { "PASSED" } else { "NOT PASSED" };
+                    mind::println!("DOMAIN {} {}, MODE {}, {}", id, Until(t.until), term_mode_name(t.mode), clock);
+                }
+                Ok(Err(e)) => mind::println!("blocks: domain term {}: {:?}", id, e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            },
+            Err(_) => mind::println!("blocks: domain term <number>"),
+        },
+        (Some("domain"), Some("term"), Some(id), Some(mode)) => {
+            let (Ok(id), Some(mode), Some(until), None) = (id.parse::<u16>(), term_mode(mode), words.next().and_then(term_until), words.next()) else {
+                return mind::println!("blocks: domain term <id> forget|release|report <seconds since 1970 UTC | +seconds from now | 0>");
+            };
+            match blockstore::domain_set_term(store(), id, mode, until) {
+                Ok(Ok(())) => mind::println!("DOMAIN {} TERM SET: {}, MODE {}", id, Until(until), term_mode_name(mode)),
+                Ok(Err(e)) => mind::println!("blocks: domain term {}: {:?}", id, e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            }
+        }
+        _ => mind::println!("blocks: domains | domain new [KiB] | domain usage <id> | domain term <id> [forget|release|report <until>] | domain forget <id>"),
+    }
+}
+
+// A term's mode by its name, or by the maintainer's number: 1 forget, 2 release, 3 report (312-STO-0050).
+fn term_mode(word: &str) -> Option<blockstore::TermMode> {
+    match word { "forget" | "1" => Some(blockstore::TermMode::Forget), "release" | "2" => Some(blockstore::TermMode::Release), "report" | "3" => Some(blockstore::TermMode::Report), _ => None }
+}
+fn term_mode_name(mode: blockstore::TermMode) -> &'static str {
+    match mode { blockstore::TermMode::Forget => "FORGET", blockstore::TermMode::Release => "RELEASE", blockstore::TermMode::Report => "REPORT" }
+}
+
+// A term: seconds since 1970 UTC, 0 for none, or `+<seconds>` from the calendar time this program reads now.
+fn term_until(word: &str) -> Option<u64> {
+    match word.strip_prefix('+') {
+        Some(ahead) => {
+            let ahead = ahead.parse::<u64>().ok()?;
+            let (days, seconds) = mind::rtc::local_now_in(mind::rtc::Zone::UTC)?;
+            Some((days as u64 + 10957) * 86_400 + seconds as u64 + ahead)
+        }
+        None => word.parse::<u64>().ok(),
+    }
+}
+
+// A term as `UNTIL <seconds> (<date> UTC)`, or `NO TERM`.
+struct Until(u64);
+impl core::fmt::Display for Until {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        if self.0 == 0 { return f.write_str("NO TERM"); }
+        let (y, m, d) = mind::rtc::civil_from_days((self.0 / 86_400).saturating_sub(10957).min(u32::MAX as u64) as u32);
+        let rest = self.0 % 86_400;
+        write!(f, "UNTIL {} ({:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC)", self.0, y, m, d, rest / 3600, rest / 60 % 60, rest % 60)
     }
 }
 
@@ -299,17 +370,20 @@ fn lost_line(name: &str, version: u64, root: &Cid, walked: Walked, at: &[u8]) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern | tree] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics, memory domains.\nUsage: blocks [-d <domain> | -dr <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern | tree] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | models map <id> <path> | domains | domain new [KiB] | domain usage <id> | domain term <id> [forget|release|report <until>] | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | vector add <journal> <cid> <model> <vector> | vector build <journal> <model> <dims> [name] | vector near <journal> <model> <vector> <k> [name] | vector scan <journal> <model> <vector> <k> | vector check <journal> [name] | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
     let mut remote = Remote { last: None, durability: 0 };
     let mut args = mind::process::args_str();
-    // `-d <id>`: every command after it works in that memory domain, through a client the store lends for it.
-    if let Some(after) = args.strip_prefix("-d ") {
+    // `-d <id>`: every command after it works in that memory domain, through a client the store lends for it; `-dr <id>`
+    // through one that may only read (312-STO-0049).
+    let only_read = args.starts_with("-dr ");
+    if let Some(after) = args.strip_prefix("-d ").or_else(|| args.strip_prefix("-dr ")) {
         let (id, rest) = after.trim_start().split_once(' ').unwrap_or((after.trim_start(), ""));
-        let Ok(id) = id.parse::<u16>() else { mind::println!("blocks: -d <domain number>"); return };
-        match blockstore::domain_client(Endpoint(SLOT_BLOCKSTORE), id, DOMAIN_CLIENT) {
+        let Ok(id) = id.parse::<u16>() else { mind::println!("blocks: -d <domain number> | -dr <domain number>"); return };
+        let lent = if only_read { blockstore::domain_client_with(Endpoint(SLOT_BLOCKSTORE), id, mind::blockstore::BADGE_GET, DOMAIN_CLIENT) } else { blockstore::domain_client(Endpoint(SLOT_BLOCKSTORE), id, DOMAIN_CLIENT) };
+        match lent {
             Ok(Ok(())) => CLIENT.store(DOMAIN_CLIENT, Ordering::Relaxed),
             Ok(Err(e)) => { mind::println!("blocks: domain {}: {:?}", id, e); return }
             Err(e) => { mind::println!("blocks: the store does not answer: {:?}", e); return }
@@ -331,6 +405,7 @@ fn main(_info: &'static BootInfo) {
         Some("journal") => return journal::command(rest, builder, buffer, data, &mut remote),
         Some("index") => return index::command(rest, &mut remote),
         Some("assert") => return assertion::command(rest, buffer, data, &mut remote),
+        Some("vector") => return vector::command(rest, buffer, &mut remote),
         Some("domain") | Some("domains") => return domains(words),
         Some("recovery") => return recovery(rest),
         Some("copies") | Some("copy") => return copies(words),
@@ -489,6 +564,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks [-d <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern | tree] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | domains | domain new | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]"),
+        _ => mind::println!("Usage: blocks [-d <domain> | -dr <domain>] stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern | tree] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | scrub | scrubbed | fill [blocks] | models import [id] | models get <id> <path> <file> | models map <id> <path> | domains | domain new [KiB] | domain usage <id> | domain term <id> [forget|release|report <until>] | domain forget <id> | tree ls <name> [path] | tree cat <name> <path> <file> | tree put <name> <file> <path> [expected] | tree mkdir <name> <path> [expected] | tree rm <name> <path> [expected] | tree mv <name> <from> <to> [expected] | export <file> <name>... | import [--check] <file> | journal append <name> <kind> <text> | journal append <name> <kind> -f <file> | journal check <name> | journal list <name> [n] | index build <journal> [name] | index search <journal> <word> [name] | index check <journal> [name] | assert add <journal> <cid> <type> <text> | assert add <journal> <cid> <type> -c <cid> | assert about <journal> <cid> | assert retract <journal> <assertion> | vector add <journal> <cid> <model> <vector> | vector build <journal> <model> <dims> [name] | vector near <journal> <model> <vector> <k> [name] | vector scan <journal> <model> <vector> <k> | vector check <journal> [name] | recovery | recovery try | copies <name> on|off | copy stat | rebuild [--check]"),
     }
 }

@@ -4,7 +4,11 @@
 //! endpoint and the system log: no files, no network, no spawn, no devices. Each request is parsed on its own; nothing
 //! of one stays for the next. A refusal is logged with the client's PID. The client still checks what a typed message
 //! says against what it asked for (MC-11.5). 2.0 (000-NET-0047): one HTTP response head, `http-response`, which also
-//! gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone.
+//! gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone. 2.1 (110-NET-0070):
+//! `http-request`, a request head as a server reads it. 3.0 (351-UPD-0026): a channel's signatures name their keys, one
+//! to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
+//! that sign the next one; 3.x's key file of four roles is gone. 4.1 (351-UPD-0028): `timestamp`, a channel's timestamp file.
+//! 4.2 (351-UPD-0030): `order`, a recovery order.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -14,8 +18,8 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (2, 0, 0);
-const MAJOR: usize = 2;
+pub const VERSION: (u8, u8, u8) = (4, 2, 0);
+const MAJOR: usize = 4;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -40,15 +44,72 @@ impl Wire for ManifestRef {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { arch: Wire::decode(r)?, digest: Wire::decode(r)? }) }
 }
 
-/// A release channel file (docs/update/publishing.md), read in its one encoding (`mind::release`): its fields; the
-/// signature covers the file's first `signed` bytes. The updater accepts the fields only if they encode again to
-/// exactly those bytes.
+/// A signature line of a channel or a key file: the public key it names and the Ed25519 signature (3.0).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Channel { pub name: Text<32>, pub version: u64, pub minimum: u64, pub expires: Text<20>, pub manifests: List<ManifestRef, 4>, pub signed: u32, pub signature: List<u8, 64> }
+pub struct Signature { pub key: List<u8, 32>, pub value: List<u8, 64> }
+impl Wire for Signature {
+    const MAX: usize = <List<u8, 32> as Wire>::MAX + <List<u8, 64> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.key.encode(w)?; self.value.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { key: Wire::decode(r)?, value: Wire::decode(r)? }) }
+}
+
+/// A release channel file (docs/update/publishing.md), read in its one encoding (`mind::release`): its fields; the
+/// signatures cover the file's first `signed` bytes, in the file's order. The updater accepts the fields only if
+/// they encode again to exactly those bytes, and counts the signatures itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Channel { pub name: Text<32>, pub version: u64, pub minimum: u64, pub expires: Text<20>, pub manifests: List<ManifestRef, 4>, pub signed: u32, pub signatures: List<Signature, 8> }
 impl Wire for Channel {
-    const MAX: usize = <Text<32> as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <Text<20> as Wire>::MAX + <List<ManifestRef, 4> as Wire>::MAX + <u32 as Wire>::MAX + <List<u8, 64> as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.version.encode(w)?; self.minimum.encode(w)?; self.expires.encode(w)?; self.manifests.encode(w)?; self.signed.encode(w)?; self.signature.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, version: Wire::decode(r)?, minimum: Wire::decode(r)?, expires: Wire::decode(r)?, manifests: Wire::decode(r)?, signed: Wire::decode(r)?, signature: Wire::decode(r)? }) }
+    const MAX: usize = <Text<32> as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <Text<20> as Wire>::MAX + <List<ManifestRef, 4> as Wire>::MAX + <u32 as Wire>::MAX + <List<Signature, 8> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.version.encode(w)?; self.minimum.encode(w)?; self.expires.encode(w)?; self.manifests.encode(w)?; self.signed.encode(w)?; self.signatures.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, version: Wire::decode(r)?, minimum: Wire::decode(r)?, expires: Wire::decode(r)?, manifests: Wire::decode(r)?, signed: Wire::decode(r)?, signatures: Wire::decode(r)? }) }
+}
+
+/// A public key of a key file's role (3.0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PublicKey { pub key: List<u8, 32> }
+impl Wire for PublicKey {
+    const MAX: usize = <List<u8, 32> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.key.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { key: Wire::decode(r)? }) }
+}
+
+/// A role of a key file: its public keys in ascending order and how many must sign (3.0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Role { pub keys: List<PublicKey, 4>, pub threshold: u8 }
+impl Wire for Role {
+    const MAX: usize = <List<PublicKey, 4> as Wire>::MAX + <u8 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.keys.encode(w)?; self.threshold.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { keys: Wire::decode(r)?, threshold: Wire::decode(r)? }) }
+}
+
+/// A key file (351-UPD-0026): its version, its expiry and the roles boot, recovery, release, root and timestamp in
+/// that order; the root keys' signatures cover its first `signed` bytes. Taken as a channel is (3.0; 4.0: `root`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyFile { pub version: u64, pub expires: Text<20>, pub roles: List<Role, 5>, pub signed: u32, pub signatures: List<Signature, 8> }
+impl Wire for KeyFile {
+    const MAX: usize = <u64 as Wire>::MAX + <Text<20> as Wire>::MAX + <List<Role, 5> as Wire>::MAX + <u32 as Wire>::MAX + <List<Signature, 8> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.expires.encode(w)?; self.roles.encode(w)?; self.signed.encode(w)?; self.signatures.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, expires: Wire::decode(r)?, roles: Wire::decode(r)?, signed: Wire::decode(r)?, signatures: Wire::decode(r)? }) }
+}
+
+/// A channel's timestamp file (351-UPD-0028): the channel, its file's SHA-256, a short expiry and the timestamp's own
+/// version; the timestamp keys' signatures cover its first `signed` bytes. Taken as a channel is (4.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Timestamp { pub channel: Text<32>, pub digest: List<u8, 32>, pub expires: Text<20>, pub version: u64, pub signed: u32, pub signatures: List<Signature, 8> }
+impl Wire for Timestamp {
+    const MAX: usize = <Text<32> as Wire>::MAX + <List<u8, 32> as Wire>::MAX + <Text<20> as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <List<Signature, 8> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.channel.encode(w)?; self.digest.encode(w)?; self.expires.encode(w)?; self.version.encode(w)?; self.signed.encode(w)?; self.signatures.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { channel: Wire::decode(r)?, digest: Wire::decode(r)?, expires: Wire::decode(r)?, version: Wire::decode(r)?, signed: Wire::decode(r)?, signatures: Wire::decode(r)? }) }
+}
+
+/// A recovery order (351-UPD-0030): the channel, its expiry, the floor it lowers to, its sequence and the version to
+/// go back to; the recovery keys' signatures cover its first `signed` bytes. Taken as a channel is (4.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecoveryOrder { pub channel: Text<32>, pub expires: Text<20>, pub floor: u64, pub sequence: u64, pub version: u64, pub signed: u32, pub signatures: List<Signature, 8> }
+impl Wire for RecoveryOrder {
+    const MAX: usize = <Text<32> as Wire>::MAX + <Text<20> as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <List<Signature, 8> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.channel.encode(w)?; self.expires.encode(w)?; self.floor.encode(w)?; self.sequence.encode(w)?; self.version.encode(w)?; self.signed.encode(w)?; self.signatures.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { channel: Wire::decode(r)?, expires: Wire::decode(r)?, floor: Wire::decode(r)?, sequence: Wire::decode(r)?, version: Wire::decode(r)?, signed: Wire::decode(r)?, signatures: Wire::decode(r)? }) }
 }
 
 /// A file line of a boot manifest.
@@ -167,19 +228,104 @@ impl Wire for JsonPage {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { values: Wire::decode(r)?, page: Wire::decode(r)? }) }
 }
 
-/// A channel file (1.1).
+/// 2.1 (110-NET-0070): an HTTP/1.x request head as a server reads it (`mind::http_serve::parse_request`, the rules
+/// of `tools/httpd`): GET or HEAD, HTTP/1.1 or 1.0, `Host` for 1.1, no folded line, at most 64 header lines, a
+/// target of at most 1024 bytes. `refusal`: why it is not served, `none` when it is; the server answers 400, 405,
+/// 505, 400, 431 or 414 for the others. Of a head served: the method, the target as sent, whether it is HTTP/1.1,
+/// whether the connection stays open after the response, the first `Range` and `If-None-Match` values (empty: none,
+/// or longer than 128 bytes), and whether a body follows (a first `Content-Length` other than 0, or a transfer coding).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum HttpRefusal { #[default] None = 0, Malformed = 1, Method = 2, Version = 3, NoHost = 4, TooManyHeaders = 5, TooLong = 6 }
+impl HttpRefusal {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::None), 1 => Some(Self::Malformed), 2 => Some(Self::Method), 3 => Some(Self::Version), 4 => Some(Self::NoHost), 5 => Some(Self::TooManyHeaders), 6 => Some(Self::TooLong), _ => None } }
+}
+impl Wire for HttpRefusal {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum HttpMethod { #[default] Get = 0, Head = 1 }
+impl HttpMethod {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Get), 1 => Some(Self::Head), _ => None } }
+}
+impl Wire for HttpMethod {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HttpRequest { pub refusal: HttpRefusal, pub method: HttpMethod, pub target: Text<1024>, pub http11: bool, pub keep_alive: bool, pub range: Text<128>, pub if_none_match: Text<128>, pub body: bool }
+impl Wire for HttpRequest {
+    const MAX: usize = <HttpRefusal as Wire>::MAX + <HttpMethod as Wire>::MAX + <Text<1024> as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<128> as Wire>::MAX + <Text<128> as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.refusal.encode(w)?; self.method.encode(w)?; self.target.encode(w)?; self.http11.encode(w)?; self.keep_alive.encode(w)?; self.range.encode(w)?; self.if_none_match.encode(w)?; self.body.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { refusal: Wire::decode(r)?, method: Wire::decode(r)?, target: Wire::decode(r)?, http11: Wire::decode(r)?, keep_alive: Wire::decode(r)?, range: Wire::decode(r)?, if_none_match: Wire::decode(r)?, body: Wire::decode(r)? }) }
+}
+
+/// A channel file (1.1; 3.0: its signatures with their keys, up to 2560 bytes).
 pub fn channel(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<Channel, Error>> {
     let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
-        codec::encode_bytes::<1024>(file, &mut w).ok_or(SysError::Invalid)?;
+        codec::encode_bytes::<2560>(file, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 1 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 352, false, false)?;
+    let length = wire::buffer_reply(&reply, 1088, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Channel as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// A key file (3.0; 4.0: five roles).
+pub fn keys(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<KeyFile, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(8192).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<4096>(file, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 2 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1533, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <KeyFile as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// A timestamp file (4.1).
+pub fn timestamp(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<Timestamp, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<2048>(file, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 3 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 904, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Timestamp as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// A recovery order (4.2).
+pub fn order(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<RecoveryOrder, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<2048>(file, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 886, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <RecoveryOrder as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
@@ -191,7 +337,7 @@ pub fn manifest(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::res
         start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 2 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 2232, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -208,7 +354,7 @@ pub fn model(endpoint: Endpoint, text: &[u8], index: u32, start: u32) -> Result<
         start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 3 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1204, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -223,7 +369,7 @@ pub fn http_response(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Re
         codec::encode_bytes::<8192>(head, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1141, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -238,11 +384,26 @@ pub fn json(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result:
         start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 9334, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <JsonPage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The head of an HTTP request: its request line and header lines, with or without the blank line that ends them.
+pub fn http_request(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result<HttpRequest, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(12288).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<8192>(head, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1291, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <HttpRequest as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
@@ -252,10 +413,14 @@ pub const REQUEST_MAX: usize = 60010;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request<'a> {
     Channel { file: &'a [u8] },
+    Keys { file: &'a [u8] },
+    Timestamp { file: &'a [u8] },
+    Order { file: &'a [u8] },
     Manifest { text: &'a [u8], start: u32 },
     Model { text: &'a [u8], index: u32, start: u32 },
     HttpResponse { head: &'a [u8] },
     Json { text: &'a [u8], start: u32 },
+    HttpRequest { head: &'a [u8] },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -267,14 +432,38 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
     wire::header(request, cap, MAJOR)?;
     match words[0] & 0xFF {
         1 => {
-            let (call, length) = wire::take_buffer(request, cap, 352, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 1088, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
-            let file = codec::decode_bytes::<1024>(&mut r).ok_or(Reject::Invalid)?;
+            let file = codec::decode_bytes::<2560>(&mut r).ok_or(Reject::Invalid)?;
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Channel { file }, call))
         }
         2 => {
+            let (call, length) = wire::take_buffer(request, cap, 1533, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let file = codec::decode_bytes::<4096>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Keys { file }, call))
+        }
+        3 => {
+            let (call, length) = wire::take_buffer(request, cap, 904, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let file = codec::decode_bytes::<2048>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Timestamp { file }, call))
+        }
+        4 => {
+            let (call, length) = wire::take_buffer(request, cap, 886, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let file = codec::decode_bytes::<2048>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Order { file }, call))
+        }
+        5 => {
             let (call, length) = wire::take_buffer(request, cap, 2232, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -283,7 +472,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Manifest { text, start }, call))
         }
-        3 => {
+        6 => {
             let (call, length) = wire::take_buffer(request, cap, 1204, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -293,7 +482,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Model { text, index, start }, call))
         }
-        4 => {
+        7 => {
             let (call, length) = wire::take_buffer(request, cap, 1141, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -301,7 +490,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::HttpResponse { head }, call))
         }
-        5 => {
+        8 => {
             let (call, length) = wire::take_buffer(request, cap, 9334, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -310,11 +499,31 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Json { text, start }, call))
         }
+        9 => {
+            let (call, length) = wire::take_buffer(request, cap, 1291, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let head = codec::decode_bytes::<8192>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::HttpRequest { head }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
 
 pub fn reply_channel(call: Call, value: core::result::Result<&Channel, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_keys(call: Call, value: core::result::Result<&KeyFile, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_timestamp(call: Call, value: core::result::Result<&Timestamp, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_order(call: Call, value: core::result::Result<&RecoveryOrder, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
@@ -331,6 +540,10 @@ pub fn reply_http_response(call: Call, value: core::result::Result<&HttpResponse
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_json(call: Call, value: core::result::Result<&JsonPage, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_http_request(call: Call, value: core::result::Result<&HttpRequest, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

@@ -1,6 +1,6 @@
 # 000-APP-0052 — Voice control as a service one can turn on
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** `svc enable` (173) for the boot part; the microphone on the MacBook Pro (551-DRV-0010) for the hardware check · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done in QEMU on x86, the boot part through the shell, in `main` since round 124, 267ad266; the MacBook Pro's microphone left, 2026-11-12) · **Blocked by:** the microphone on the MacBook Pro (551-DRV-0010) for the hardware check · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -29,6 +29,20 @@ Today voice control lives in one shell:
 - `svc enable voice` and a reboot leave voice control on, without a shell command.
 - In QEMU, a WAV file standing in for the microphone opens a program and asks before a reboot.
 - On the MacBook Pro, the same by the microphone once capture works there (551-DRV-0010).
+
+## Progress (2026-11-12)
+
+- **The boot part, through the shell, not `init`.** Voice control needs the shell's own endpoint (`voice.wit`'s line from `voice` to the shell), which only the shell makes (211-KRN-0058), so `init` cannot start it as a boot service. So the plan's `svc enable voice` became the shell's own setting, as `data/sound.conf` is:
+  - `voice enable [--wav FILE] [SECONDS]` keeps `voice on`'s words in `data/voice.conf`; `voice disable` removes it; words `voice on` would not take are refused (`shell/src/voiceconf.rs`, `voicectl.rs`);
+  - at its start the shell reads the file once the boot volume answers, after the boot's passphrase where one is asked, and turns voice control on with those words, logging `[SHELL] VOICE CONTROL ON AT THE SHELL'S START, AS data/voice.conf SAYS`;
+  - `voice` holds what it held: the line to the shell, audio, `tts` and read-only files.
+  So the first criterion reads: `voice enable` and a reboot leave voice control on, without a shell command.
+- **Tests:**
+  - host: `tests/shell_host.rs` `voice_control_at_the_shells_start_is_kept_in_voice_conf` (36 tests pass);
+  - QEMU x86, 4 CPUs, TCG, this track's container, 2026-11-12: the `listen` suite's voice control checks `voice enable`'s refusal and file and `voice disable`; `voice_at_start_check` boots with `data/voice.conf` naming a WAV of three phrases: the shell turned voice control on with no command, «открой файлы» opened `fm`, «перезагрузи систему» was asked about and «нет» cancelled it, the machine running on.
+  - The `listen` suite passed with the first; the second passed alone after its first run read the voice line where the VM's own `ps` had taken it.
+- **Docs:** `docs/voice/README.md` and `README_RU.md`; `help`.
+- **Left:** the MacBook Pro's microphone (551-DRV-0010).
 
 ## Related
 

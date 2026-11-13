@@ -10,7 +10,9 @@
 // (parse.wit 1.4, 750-NET-0021). With --client-cert, https asks the TLS service to present the device certificate, which a
 // client it lends without that right is refused (351-NET-0022). With --api, the checks of HTTP for API clients against
 // tests/http_api_stub.py at URL (000-NET-0047): a JSON POST, a multipart upload, redirect chains, gzip and deflate
-// bodies and a bomb, 1000 Server-Sent Events, a chunked upload, Retry-After. One line per step.
+// bodies and a bomb, 1000 Server-Sent Events, a chunked upload, Retry-After. One line per step. `webcheck listen:PORT`
+// asks the TLS service to listen on PORT as the device's server (tls.wit 1.3, 110-NET-0069), which a client it lends
+// without the right to the device certificate is refused.
 extern crate alloc;
 
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
@@ -331,9 +333,18 @@ fn api_retry(base: &Url, path: &'static str, parser: &mut mind::parse::Service) 
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("webcheck — the network track's check of HTTP for services: a POST, requests on one connection, a long stream, pinned servers.\nUsage: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS] [--pin leaf|spki:HEX]... [--name NAME] [--json] [--client-cert] [--api]");
+    mind::about!("webcheck — the network track's check of HTTP for services: a POST, requests on one connection, a long stream, pinned servers.\nUsage: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS] [--pin leaf|spki:HEX]... [--name NAME] [--json] [--client-cert] [--api]\n       webcheck listen:PORT");
     let mut words = mind::process::args_str().split_whitespace();
     let Some(url) = words.next() else { fail(format_args!("USAGE: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS]")) };
+    if let Some(port) = url.strip_prefix("listen:") {
+        let Ok(port) = port.parse::<u16>() else { fail(format_args!("listen:PORT")) };
+        let result = match tls::attach(TLS, SLOT_NETWORK) {
+            Ok(Ok(session)) => { let listened = tls::listen(TLS, session, port, 1); let _ = tls::close(TLS, session); listened }
+            other => other.map(|r| r.map(drop)),
+        };
+        mind::println!("WEBCHECK LISTEN {}: {:?}", port, result.map_err(|_| ()));
+        return;
+    }
     let (mut post, mut repeat, mut stream, mut idle, mut as_json, mut client_certificate) = (None, 0u32, false, 15usize, false, false);
     let (mut pins, mut name, mut api_checks) = (mind::idl::codec::List::<tls::Pin, 2>::default(), None, false);
     while let Some(word) = words.next() {

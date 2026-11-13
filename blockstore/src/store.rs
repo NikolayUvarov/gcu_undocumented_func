@@ -84,12 +84,19 @@ const KEYS: u16 = 0xFFFF;
 const RECOVERY: u16 = 0xFFFE;
 /// Domains a store keeps at most, live and forgotten together.
 pub const DOMAINS: usize = 32;
-// A domain's key record: magic, layout, the domain (u16), its state (u16), the owner (u16), zero (4), the key (32
-// bytes, zeros once forgotten), and the SHA-256 of these 52 bytes.
+// A domain's key record: magic, layout, the domain (u16), its state (u16), the owner (u16), its limit in KiB (u32, 0
+// none: 312-STO-0046), the key (32 bytes, zeros once forgotten), and the SHA-256 of these 52 bytes.
 const KEY_MAGIC: &[u8; 8] = b"MIND-KEY";
 const KEY_RECORD: usize = 52 + 32;
 const KEY_LIVE: u16 = 1;
 const KEY_GONE: u16 = 2;
+// A domain's term record (312-STO-0050), in the key records' frame and sealed as they are, without key material: magic,
+// layout, the domain (u16), its mode (u16), zero (u16), a counter (u32: the latest of a domain's wins), its term (u64,
+// seconds since 1970 UTC, 0 none), and the SHA-256 of these 28 bytes.
+const TERM_MAGIC: &[u8; 8] = b"MIND-TRM";
+const TERM_RECORD: usize = 28 + 32;
+// Term records of a domain met twice by a mount (a change stopped between its two writes): erased after the scan.
+const STALE_TERMS: usize = 8;
 // A recovery record: magic, layout, zero (6), the volume key (32 bytes), and the SHA-256 of these 48 bytes.
 const RECOVERY_MAGIC: &[u8; 8] = b"MIND-RCV";
 const RECOVERY_RECORD: usize = 48 + 32;
@@ -462,28 +469,68 @@ fn parse_pin(sector: &[u8]) -> Option<Pin> {
     Some(Pin { id, owner: u16::from_le_bytes([sector[16], sector[17]]), root: sector[20..56].try_into().unwrap(), lba: 0, size: 0, domain: VOLUME })
 }
 
-fn key_record(domain: u16, state: u16, owner: u16, key: &[u8; 32]) -> [u8; KEY_RECORD] {
+fn key_record(domain: u16, state: u16, owner: u16, limit_kib: u32, key: &[u8; 32]) -> [u8; KEY_RECORD] {
     let mut r = [0u8; KEY_RECORD];
     r[..8].copy_from_slice(KEY_MAGIC);
     r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
     r[10..12].copy_from_slice(&domain.to_le_bytes());
     r[12..14].copy_from_slice(&state.to_le_bytes());
     r[14..16].copy_from_slice(&owner.to_le_bytes());
+    r[16..20].copy_from_slice(&limit_kib.to_le_bytes());
     r[20..52].copy_from_slice(key);
     let check = sha256::digest(&r[..52]);
     r[52..KEY_RECORD].copy_from_slice(&check);
     r
 }
 
-// A domain's number, state, owner and key, if the sector is a whole key record of this layout.
-fn parse_key(sector: &[u8]) -> Option<(u16, u16, u16, [u8; 32])> {
+// A domain's number, state, owner, limit in KiB and key, if the sector is a whole key record of this layout.
+fn parse_key(sector: &[u8]) -> Option<KeyRecord> {
     if &sector[..8] != KEY_MAGIC || sector[52..KEY_RECORD] != sha256::digest(&sector[..52]) || sector[KEY_RECORD..].iter().any(|&b| b != 0) { return None; }
     let field = |at: usize| u16::from_le_bytes([sector[at], sector[at + 1]]);
     let (domain, state, owner) = (field(10), field(12), field(14));
+    let limit_kib = u32::from_le_bytes(sector[16..20].try_into().unwrap());
     let key: [u8; 32] = sector[20..52].try_into().unwrap();
-    let valid = field(8) == LAYOUT && sector[16..20] == [0; 4] && domain != VOLUME && domain < RECOVERY
+    let valid = field(8) == LAYOUT && domain != VOLUME && domain < RECOVERY
         && (state == KEY_LIVE || (state == KEY_GONE && key == [0; 32]));
-    valid.then_some((domain, state, owner, key))
+    valid.then_some(KeyRecord { domain, state, owner, limit_kib, key })
+}
+
+// What a key record holds.
+struct KeyRecord { domain: u16, state: u16, owner: u16, limit_kib: u32, key: [u8; 32] }
+
+/// What the store does with a domain past its term (312-STO-0050), by the maintainer's numbers: forget it (its key
+/// destroyed), release it (its names and pins retain nothing, writes refused, its key kept), or only report it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TermMode { Forget = 1, Release = 2, Report = 3 }
+impl TermMode {
+    pub fn from_number(n: u16) -> Option<TermMode> { match n { 1 => Some(TermMode::Forget), 2 => Some(TermMode::Release), 3 => Some(TermMode::Report), _ => None } }
+}
+
+/// A domain's term as its owner reads it: the term (seconds since 1970 UTC, 0 none), the mode, whether the store knows
+/// the calendar time, and whether the term has passed by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Term { pub until: u64, pub mode: TermMode, pub clock: bool, pub passed: bool }
+
+fn term_record(domain: u16, mode: TermMode, n: u32, until: u64) -> [u8; TERM_RECORD] {
+    let mut r = [0u8; TERM_RECORD];
+    r[..8].copy_from_slice(TERM_MAGIC);
+    r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    r[10..12].copy_from_slice(&domain.to_le_bytes());
+    r[12..14].copy_from_slice(&(mode as u16).to_le_bytes());
+    r[16..20].copy_from_slice(&n.to_le_bytes());
+    r[20..28].copy_from_slice(&until.to_le_bytes());
+    let check = sha256::digest(&r[..28]);
+    r[28..TERM_RECORD].copy_from_slice(&check);
+    r
+}
+
+// A term record's domain, mode, counter and term, if the sector is a whole term record of this layout.
+fn parse_term(sector: &[u8]) -> Option<(u16, TermMode, u32, u64)> {
+    if &sector[..8] != TERM_MAGIC || sector[28..TERM_RECORD] != sha256::digest(&sector[..28]) || sector[TERM_RECORD..].iter().any(|&b| b != 0) { return None; }
+    let field = |at: usize| u16::from_le_bytes([sector[at], sector[at + 1]]);
+    let (domain, mode) = (field(10), TermMode::from_number(field(12))?);
+    let valid = field(8) == LAYOUT && domain != VOLUME && domain < RECOVERY && field(14) == 0;
+    valid.then(|| (domain, mode, u32::from_le_bytes(sector[16..20].try_into().unwrap()), u64::from_le_bytes(sector[20..28].try_into().unwrap())))
 }
 
 fn recovery_record(volume: &[u8; 32]) -> [u8; RECOVERY_RECORD] {
@@ -523,9 +570,16 @@ fn find_recovery<D: Device>(dev: &mut D, buffer: &mut [u8; BUFFER], mut lba: u64
 }
 
 /// A memory domain (308-STO-0023): its number, its owner (a badge), whether its key is forgotten, and how many of its
-/// records the last pass met; its keys and where its key record and tombstone lie.
+/// records the last pass met; its keys and where its key record and tombstone lie; its term and mode, the counter of
+/// its term record and where it lies (312-STO-0050).
 #[derive(Clone, Copy)]
-pub struct Domain { pub id: u16, pub owner: u16, pub forgotten: bool, pub records: u32, keys: Keys, key_at: u64, tomb_at: u64 }
+pub struct Domain { pub id: u16, pub owner: u16, pub forgotten: bool, pub records: u32, pub limit: u64, keys: Keys, key_at: u64, tomb_at: u64,
+    pub until: u64, pub mode: TermMode, term_n: u32, term_at: u64 }
+impl Domain {
+    fn new(id: u16, owner: u16, limit: u64, keys: Keys, key_at: u64) -> Self {
+        Domain { id, owner, forgotten: false, records: 0, limit, keys, key_at, tomb_at: 0, until: 0, mode: TermMode::Report, term_n: 0, term_at: 0 }
+    }
+}
 
 pub struct Store<'a, D: Device> {
     dev: D,
@@ -569,6 +623,12 @@ pub struct Store<'a, D: Device> {
     // the mount scan once more, every key known.
     deferred: [(u64, u64, u16); DEFERRED],
     waiting: usize,
+    // The calendar time the store last heard (seconds since 1970 UTC; none: no clock), terms act on (312-STO-0050); term
+    // records a mount met superseded, and the highest domain a term record named, which a new domain stays above.
+    calendar: Option<u64>,
+    stale_terms: [u64; STALE_TERMS],
+    stale: usize,
+    term_floor: u16,
     // Where the scrub goes on from (0: no pass under way), and what this pass found so far.
     scrub_at: u64,
     scrubbing: Scrubbed,
@@ -768,7 +828,8 @@ impl<'a, D: Device> Store<'a, D> {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, reserve: None, holes, runs: 0, buffer,
             scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0, crypto, keys: Keys::new(&key), made, kept,
             recoveries: [0; RECOVERIES], remembered: 0, recovered: 0, domain: VOLUME, domains: [None; DOMAINS],
-            deferred: [(0, 0, 0); DEFERRED], waiting: 0, scrub_at: 0, scrubbing: Scrubbed::default(), unread: None,
+            deferred: [(0, 0, 0); DEFERRED], waiting: 0, calendar: None, stale_terms: [0; STALE_TERMS], stale: 0, term_floor: VOLUME,
+            scrub_at: 0, scrubbing: Scrubbed::default(), unread: None,
         };
         store.mount_pass()?;
         store.size_retained();
@@ -838,6 +899,7 @@ impl<'a, D: Device> Store<'a, D> {
             // A forgotten domain's records are all freed now: its tombstone goes, and its number may be given again.
             for k in 0..DOMAINS {
                 let Some(d) = self.domains[k].filter(|d| d.forgotten) else { continue };
+                if d.term_at != 0 { self.erase(d.term_at, 1)?; self.release(d.term_at, 1); }
                 if d.tomb_at != 0 { self.erase(d.tomb_at, 1)?; self.release(d.tomb_at, 1); }
                 self.domains[k] = None;
             }
@@ -870,16 +932,32 @@ impl<'a, D: Device> Store<'a, D> {
             let key_at = core::mem::take(&mut d.key_at);
             if self.dev.writable() { self.erase(key_at, 1)?; self.release(key_at, 1); }
         }
+        // A forgotten domain's term record goes with its key (a forget stopped in the middle); a term record whose
+        // domain has no key record and no tombstone (that record damaged) opens nothing: its domain is not kept.
+        for k in 0..DOMAINS {
+            let Some(d) = self.domains[k] else { continue };
+            if d.forgotten && d.term_at != 0 {
+                self.domains[k].as_mut().unwrap().term_at = 0;
+                if self.dev.writable() { self.erase(d.term_at, 1)?; self.release(d.term_at, 1); }
+            } else if !d.forgotten && d.key_at == 0 {
+                self.domains[k] = None;
+            }
+        }
+        // A change of term stopped between its two writes: the older record goes.
+        for k in 0..core::mem::take(&mut self.stale) {
+            if self.dev.writable() { self.erase(self.stale_terms[k], 1)?; self.release(self.stale_terms[k], 1); }
+        }
         Ok(())
     }
 
     // A key record or tombstone found at `lba`.
-    fn key_found(&mut self, lba: u64, (id, state, owner, key): (u16, u16, u16, [u8; 32])) -> Result<(), Error> {
+    fn key_found(&mut self, lba: u64, record: KeyRecord) -> Result<(), Error> {
+        let KeyRecord { domain: id, state, owner, limit_kib, key } = record;
         let k = match self.slot_of(id) {
             Some(k) => k,
             None => {
                 let k = self.domains.iter().position(Option::is_none).ok_or(Error::Full)?;
-                self.domains[k] = Some(Domain { id, owner, forgotten: false, records: 0, keys: Keys::NONE, key_at: 0, tomb_at: 0 });
+                self.domains[k] = Some(Domain::new(id, owner, 0, Keys::NONE, 0));
                 k
             }
         };
@@ -890,9 +968,32 @@ impl<'a, D: Device> Store<'a, D> {
             // What the scan opened of it before the tombstone leaves the tables again.
             if was_live { self.drop_domain(id); }
         } else if d.key_at == 0 {
-            (d.key_at, d.owner) = (lba, owner);
+            (d.key_at, d.owner, d.limit) = (lba, owner, limit_kib as u64 * 1024);
             if !d.forgotten { d.keys = Keys::new(&key); }
         }
+        Ok(())
+    }
+
+    // A term record found at `lba`: the latest of its domain's is kept, the other left for erasing after the scan. Its
+    // domain's key record may lie further on.
+    fn term_found(&mut self, lba: u64, (id, mode, n, until): (u16, TermMode, u32, u64)) -> Result<(), Error> {
+        self.term_floor = self.term_floor.max(id);
+        let k = match self.slot_of(id) {
+            Some(k) => k,
+            None => {
+                let k = self.domains.iter().position(Option::is_none).ok_or(Error::Full)?;
+                self.domains[k] = Some(Domain::new(id, 0, 0, Keys::NONE, 0));
+                k
+            }
+        };
+        let d = self.domains[k].as_mut().unwrap();
+        if d.term_at == lba { return Ok(()); }
+        let older = if d.term_at == 0 || n > d.term_n {
+            let before = d.term_at;
+            (d.until, d.mode, d.term_n, d.term_at) = (until, mode, n, lba);
+            before
+        } else { lba };
+        if older != 0 && self.stale < STALE_TERMS { self.stale_terms[self.stale] = older; self.stale += 1; }
         Ok(())
     }
 
@@ -916,7 +1017,11 @@ impl<'a, D: Device> Store<'a, D> {
             // tombstone after it.
             if !sweep {
                 match self.open(here, n as usize, KEYS)? {
-                    true if n == 1 => match parse_key(&self.buffer[..SECTOR]) { Some(key) => self.key_found(here, key)?, None => self.corrupt += 1 },
+                    true if n == 1 => match (parse_key(&self.buffer[..SECTOR]), parse_term(&self.buffer[..SECTOR])) {
+                        (Some(key), _) => self.key_found(here, key)?,
+                        (None, Some(term)) => self.term_found(here, term)?,
+                        (None, None) => self.corrupt += 1,
+                    },
                     _ => self.corrupt += 1,
                 }
             }
@@ -1061,13 +1166,27 @@ impl<'a, D: Device> Store<'a, D> {
         self.end = self.end.max(here + n);
     }
 
+    // A blank run a scan met, after every run it met before.
     fn hole(&mut self, start: u64, len: u64) {
-        if len > 0 && self.runs < self.holes.len() { self.holes[self.runs] = Extent { start, len }; self.runs += 1; }
+        if len == 0 || !self.make_way(len) { return; }
+        self.holes[self.runs] = Extent { start, len };
+        self.runs += 1;
     }
 
-    // Sectors made blank outside a scan: back among the runs, in order (dropped if the list is full until the next scan).
+    // Room in the list of runs for one of `len` sectors: if the list is full, its shortest run (the first of them) gives
+    // way to a longer one, so the list keeps the longest met (310-STO-0048); false if each kept is as long.
+    fn make_way(&mut self, len: u64) -> bool {
+        if self.runs < self.holes.len() { return true; }
+        let Some(i) = (0..self.runs).min_by_key(|&i| self.holes[i].len) else { return false };
+        if self.holes[i].len >= len { return false; }
+        self.holes.copy_within(i + 1..self.runs, i);
+        self.runs -= 1;
+        true
+    }
+
+    // Sectors made blank outside a scan: back among the runs, in order, as a scan's are kept.
     fn release(&mut self, start: u64, len: u64) {
-        if self.runs == self.holes.len() { return; }
+        if !self.make_way(len) { return; }
         let at = self.holes[..self.runs].iter().position(|h| h.start > start).unwrap_or(self.runs);
         self.holes.copy_within(at..self.runs, at + 1);
         self.holes[at] = Extent { start, len };
@@ -1319,10 +1438,47 @@ impl<'a, D: Device> Store<'a, D> {
     // owner the reserve is not for, together, within the same quota.
     fn within_quota(&self, owner: u16, extra: &[(Root, u64)]) -> bool {
         if self.retained_by(owner, extra) > self.quota { return false; }
+        // A domain with a limit of its own: its names and pins together within it too (312-STO-0046).
+        if let Some(limit) = self.domain_limit(self.domain) {
+            if self.retained_in(self.domain, extra) > limit { return false; }
+        }
         match self.reserve {
             Some(kept_for) if !kept_for(owner) => self.retained_where(move |o| !kept_for(o), extra) <= self.quota,
             _ => true,
         }
+    }
+
+    // Domain `id`'s own limit in bytes; none for the volume, a forgotten or unknown domain, or a limit of 0.
+    fn domain_limit(&self, id: u16) -> Option<u64> {
+        if id == VOLUME { return None; }
+        self.domains().find(|d| d.id == id && !d.forgotten).map(|d| d.limit).filter(|&limit| limit > 0)
+    }
+
+    // The bytes domain `id`'s names and pins retain, whoever owns them, each root counted once; with `extra`'s roots
+    // in that domain added unless it holds them already.
+    fn retained_in(&self, id: u16, extra: &[(Root, u64)]) -> u64 {
+        let held = || self.owned_where(|_| true).filter(move |(root, _)| root.1 == id);
+        let mut total = 0;
+        for (k, (root, size)) in held().enumerate() {
+            if !held().take(k).any(|(r, _)| r == root) { total += size; }
+        }
+        for (k, (root, size)) in extra.iter().enumerate() {
+            if root.1 == id && !held().any(|(r, _)| r == *root) && !extra[..k].iter().any(|(r, _)| r == root) { total += size; }
+        }
+        total
+    }
+
+    /// What domain `id` of `owner` retains, its own limit (`quota`, 0 for none), and its names and pins (312-STO-0046).
+    /// `NotFound` for a domain not live, `Rights` for another owner's.
+    pub fn domain_usage(&self, id: u16, owner: u16) -> Result<Usage, Error> {
+        let d = self.domains().find(|d| d.id == id && !d.forgotten).ok_or(Error::NotFound)?;
+        if d.owner != owner { return Err(Error::Rights); }
+        Ok(Usage {
+            retained: self.retained_in(id, &[]),
+            quota: d.limit,
+            names: self.heads[..self.names].iter().filter(|h| h.domain == id && !h.removed()).count() as u32,
+            pins: self.pins[..self.pinned].iter().filter(|p| p.domain == id).count() as u32,
+        })
     }
 
     /// What `owner` retains and may retain.
@@ -1349,6 +1505,7 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn publish(&mut self, name: &[u8], expected: u64, root: &Cid, owner: u16) -> Result<u64, Error> {
         if !valid_name(name) { return Err(Error::Invalid); }
         if !self.dev.writable() { return Err(Error::ReadOnly); }
+        self.retaining()?;
         let current = self.find(name).map_or(0, |i| self.heads[i].latest().version);
         if expected != current { return Err(Error::Conflict); }
         if self.find(name).is_err() && self.names == self.heads.len() { return Err(Error::Full); }
@@ -1389,6 +1546,7 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn commit(&mut self, updates: &[Update], owner: u16) -> Result<[u64; COMMIT_MAX], Error> {
         let n = updates.len();
         if n == 0 || n > COMMIT_MAX { return Err(Error::Invalid); }
+        self.retaining()?;
         for (k, u) in updates.iter().enumerate() {
             if !valid_name(u.name) || updates[..k].iter().any(|w| w.name == u.name) { return Err(Error::Invalid); }
         }
@@ -1454,6 +1612,7 @@ impl<'a, D: Device> Store<'a, D> {
     /// quota; returns the pin's id after the device has flushed it.
     pub fn pin(&mut self, root: &Cid, owner: u16) -> Result<u32, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
+        self.retaining()?;
         if self.pinned == self.pins.len() { return Err(Error::Full); }
         let lba = self.room(1)?;
         let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
@@ -1489,6 +1648,10 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn collect(&mut self) -> Result<Collected, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         for e in self.index.iter_mut() { e.flags &= !LIVE; }
+        // A released domain's names and pins retain nothing (312-STO-0050): out of the tables, their records freed below.
+        for k in 0..DOMAINS {
+            if let Some(id) = self.domains[k].map(|d| d.id).filter(|&id| self.released(id)) { self.release_names(id); }
+        }
         let current = self.domain;
         let marked = self.mark();
         self.domain = current;
@@ -1523,6 +1686,7 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, Error> {
         if data.len() > BLOCK_MAX { return Err(Error::TooLarge); }
         if !typed(codec, data) { return Err(Error::Invalid); }
+        self.retaining()?;
         let cid = Cid::of(codec, data);
         if let Ok(i) = self.position(&cid.to_bytes(), self.domain) { self.index[i].lease = self.now; return Ok(cid); }
         if !self.dev.writable() { return Err(Error::ReadOnly); }
@@ -1572,20 +1736,26 @@ impl<'a, D: Device> Store<'a, D> {
 
     /// Makes a domain for `owner` (a badge), its key random and kept in a record sealed under the volume key; returns
     /// its number. Without a random source none is made: a key derived from anything kept could not be destroyed.
-    pub fn domain_create(&mut self, owner: u16) -> Result<u16, Error> {
+    pub fn domain_create(&mut self, owner: u16) -> Result<u16, Error> { self.domain_create_limited(owner, 0) }
+
+    /// Makes a domain as `domain_create` does, whose names and pins retain at most `limit_kib` KiB together, each root
+    /// counted once, beside the owner's quota (312-STO-0046, MC-4.11); 0 sets no limit of its own. The limit is kept in
+    /// the domain's key record and does not change while the domain lives.
+    pub fn domain_create_limited(&mut self, owner: u16, limit_kib: u32) -> Result<u16, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         let slot = self.domains.iter().position(Option::is_none).ok_or(Error::Full)?;
-        let id = self.domains().map(|d| d.id).max().unwrap_or(VOLUME) + 1;
+        // Above any domain a term record named, so a term left on the medium never meets a new domain (312-STO-0050).
+        let id = self.domains().map(|d| d.id).max().unwrap_or(VOLUME).max(self.term_floor) + 1;
         if id >= RECOVERY { return Err(Error::Full); }
         let mut key = [0u8; 32];
         if !self.crypto.random(&mut key) { return Err(Error::NoRandom); }
         let lba = self.room(1)?;
         self.claim(lba, 1);
-        let written = self.write_record(lba, &key_record(id, KEY_LIVE, owner, &key), KEYS);
+        let written = self.write_record(lba, &key_record(id, KEY_LIVE, owner, limit_kib, &key), KEYS);
         let keys = Keys::new(&key);
         key.fill(0);
         written?;
-        self.domains[slot] = Some(Domain { id, owner, forgotten: false, records: 0, keys, key_at: lba, tomb_at: 0 });
+        self.domains[slot] = Some(Domain::new(id, owner, limit_kib as u64 * 1024, keys, lba));
         Ok(id)
     }
 
@@ -1598,23 +1768,82 @@ impl<'a, D: Device> Store<'a, D> {
         if self.domains[k].is_some_and(|d| d.owner != owner) { return Err(Error::Rights); }
         let lba = self.room(1)?;
         self.claim(lba, 1);
-        self.write_record(lba, &key_record(id, KEY_GONE, owner, &[0; 32]), KEYS)?;
+        self.write_record(lba, &key_record(id, KEY_GONE, owner, 0, &[0; 32]), KEYS)?;
         // Forgotten from here whatever follows: a mount that finds the tombstone erases the key record too.
         let d = self.domains[k].as_mut().unwrap();
         (d.forgotten, d.tomb_at, d.keys) = (true, lba, Keys::NONE);
         let key_at = core::mem::take(&mut d.key_at);
+        let term_at = core::mem::take(&mut d.term_at);
         self.drop_domain(id);
         if self.domain == id { self.domain = VOLUME; }
         if key_at != 0 { self.erase(key_at, 1)?; self.release(key_at, 1); }
+        if term_at != 0 { self.erase(term_at, 1)?; self.release(term_at, 1); }
         Ok(())
     }
 
-    // Takes a forgotten domain's names, pins and blocks out of the store's tables.
-    fn drop_domain(&mut self, id: u16) {
+    /// Sets `owner`'s domain `id`'s term (seconds since 1970 UTC, 0 none) and mode (312-STO-0050): a term record with the
+    /// next counter written first, then the one before erased, so a cut leaves one of the two and a mount takes the
+    /// latest. Either way at any time: a mode or a term set again applies from the next calendar time heard.
+    pub fn domain_set_term(&mut self, id: u16, owner: u16, until: u64, mode: TermMode) -> Result<(), Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let k = self.slot_of(id).filter(|&k| self.domains[k].is_some_and(|d| !d.forgotten)).ok_or(Error::NotFound)?;
+        let d = self.domains[k].unwrap();
+        if d.owner != owner { return Err(Error::Rights); }
+        let n = d.term_n.wrapping_add(1);
+        let lba = self.room(1)?;
+        self.claim(lba, 1);
+        self.write_record(lba, &term_record(id, mode, n, until), KEYS)?;
+        let d = self.domains[k].as_mut().unwrap();
+        let before = core::mem::replace(&mut d.term_at, lba);
+        (d.until, d.mode, d.term_n) = (until, mode, n);
+        if before != 0 { self.erase(before, 1)?; self.release(before, 1); }
+        Ok(())
+    }
+
+    /// `owner`'s domain `id`'s term, mode, and whether it has passed by the calendar time last heard (312-STO-0050).
+    pub fn domain_term(&self, id: u16, owner: u16) -> Result<Term, Error> {
+        let d = self.domains().find(|d| d.id == id && !d.forgotten).ok_or(Error::NotFound)?;
+        if d.owner != owner { return Err(Error::Rights); }
+        Ok(Term { until: d.until, mode: d.mode, clock: self.calendar.is_some(), passed: self.passed(d) })
+    }
+
+    /// The calendar time heard from the clock (seconds since 1970 UTC), or none: without it no term acts (312-STO-0050).
+    pub fn set_calendar(&mut self, now: Option<u64>) { self.calendar = now; }
+
+    // Whether a live domain's term has passed by the calendar time last heard; never without one.
+    fn passed(&self, d: &Domain) -> bool { !d.forgotten && d.until != 0 && self.calendar.is_some_and(|now| now >= d.until) }
+
+    // Whether domain `id` is released: past its term in mode release. Its names and pins retain nothing, and writes
+    // through it are refused; reading goes on until a collection frees its records.
+    fn released(&self, id: u16) -> bool {
+        id != VOLUME && self.slot_of(id).and_then(|k| self.domains[k]).is_some_and(|d| d.mode == TermMode::Release && self.passed(&d))
+    }
+
+    // Refused in a released domain: what would retain more (312-STO-0050).
+    fn retaining(&self) -> Result<(), Error> { if self.released(self.domain) { Err(Error::ReadOnly) } else { Ok(()) } }
+
+    /// Forgets the next domain past its term in mode forget, as `domain_forget` does (312-STO-0050); its number, or none.
+    /// The caller revokes its clients, and calls again until none is left.
+    pub fn expire(&mut self) -> Result<Option<u16>, Error> {
+        let Some(d) = self.domains().find(|d| d.mode == TermMode::Forget && self.passed(d)).copied() else { return Ok(None) };
+        self.domain_forget(d.id, d.owner)?;
+        Ok(Some(d.id))
+    }
+
+    /// The domains past their term in mode report or release, for their owners to be told (312-STO-0050).
+    pub fn past_terms(&self) -> impl Iterator<Item = &Domain> + '_ { self.domains().filter(move |d| d.mode != TermMode::Forget && self.passed(d)) }
+
+    // Takes a released domain's names and pins out of the store's tables; its blocks stay while a lease holds them.
+    fn release_names(&mut self, id: u16) {
         let mut k = 0;
         while k < self.names { if self.heads[k].domain == id { self.heads.copy_within(k + 1..self.names, k); self.names -= 1; } else { k += 1; } }
         let mut k = 0;
         while k < self.pinned { if self.pins[k].domain == id { self.pins.copy_within(k + 1..self.pinned, k); self.pinned -= 1; } else { k += 1; } }
+    }
+
+    // Takes a forgotten domain's names, pins and blocks out of the store's tables.
+    fn drop_domain(&mut self, id: u16) {
+        self.release_names(id);
         // A removal shifts later entries back, so the same slot is looked at again.
         let mut i = 0;
         while i < self.index.len() { if self.index[i].used() && self.index[i].domain == id { self.remove(i); } else { i += 1; } }

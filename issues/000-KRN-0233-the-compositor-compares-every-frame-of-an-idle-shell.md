@@ -1,6 +1,6 @@
 # 000-KRN-0233 — The compositor compares a whole frame each time the shell wakes, so an idle machine's CPU 0 seldom halts
 
-**Type:** kernel (the screen's dirty mark, `kernel/src/scheduler.rs`) and the compositor · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (in `main` since round 122, 33c38b60; ten runs of "x86: x2APIC" on acc-2 beside a loaded lane, and a real machine's measure, left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.2, MC-5.1, MC-12.2
+**Type:** kernel (the screen's dirty mark, `kernel/src/scheduler.rs`) and the compositor · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (in `main` since round 122, 33c38b60; ten runs of "x86: x2APIC" on acc-2 beside a loaded lane passed; a real machine's measure left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-1.2, MC-5.1, MC-12.2
 
 ## Problem
 
@@ -64,6 +64,16 @@ The check's loop, made to sample each CPU's registers for 10 s (every 20 ms or s
 - **Left:** the gate; the ten runs of "x86: x2APIC" on acc-2 beside a loaded lane; the real machine's measure.
 
 **Landed** in round 122 (`main` 33c38b60, 2026-11-11), with 000-KRN-0234's step 1: every group of the gate passed on its first run, "x86: x2APIC" among them (acc-1, 230 s). The kernel is 7566 lines against its budget of 7600. **Left:** ten runs of "x86: x2APIC" on acc-2 beside a loaded lane (started), and the compositor's share of a CPU at idle on a real machine.
+
+**The ten runs** (2026-11-11 and 2026-11-12, operations `KRN-krn0233-ten-acc2-01` to `-10`): "x86: x2APIC" on `main` 33c38b60 in lane acc2 on acc-2. Each run had "x86: services, storage, audio" running in lane acc2-2 on the same machine, five runs of it in all (`KRN-krn0233-ten-busy-acc2-2-01` to `-05`, the fifth cancelled once the series ended). **Ten of ten passed**, in 240 to 244 s each. Before the change, rounds 65, 70 and 120 each failed it once in a gate. This is evidence for that machine, that load and those runs, not a proof (MC-12.1, MC-12.2).
+
+**Round 130's gate (2026-11-13)** failed the idle check twice on acc-1, one group after the other, and passed it there before and after:
+- **The failures:** "x86: one CPU" at 18:39 UTC (CPU 0 halted in 19 of 50 samples) and "x86: padded vector area" at 18:42 (24 of 50).
+- **On the same host:** "x86: x2APIC" at 18:31 and "x86: scheduling, isolation, heap" at 18:39 passed the same check.
+- **Alone on x32-128** both groups passed again (138 s and 129 s).
+- **What else ran there:** acc-1 also runs other users' KVM guests; under TCG a guest slowed by its host halts in fewer samples. Neither the guests' load nor a cause in the candidate was measured, so this is not a cause found. If it comes back, the next step is the samples beside the host's load at that moment.
+
+**Left:** the compositor's share of one CPU at idle, before and after, on one real machine. It needs a machine with a screen that runs MIND Core: the maintainer's, or DRV's DEXP or Ryzen.
 
 ## Related
 

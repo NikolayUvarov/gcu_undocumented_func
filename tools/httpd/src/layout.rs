@@ -5,7 +5,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-/// What a path names; a blob never changes, a channel is fetched fresh.
+/// What a path names; a blob never changes, a channel, its timestamp and the key file are fetched fresh.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { Blob, Manifest, Channel }
 
@@ -65,6 +65,10 @@ pub fn resolve(target: &str) -> Result<(String, Kind), Refusal> {
         ["blobs", digest] if sha256_hex(digest) => Kind::Blob,
         ["releases", version, arch, file] if digits(version) && ARCHES.contains(arch) && MANIFESTS.contains(file) => Kind::Manifest,
         ["channels", name] if channel_name(name) => Kind::Channel,
+        ["keys", "current"] => Kind::Channel, // the key file (351-UPD-0026), fetched fresh as a channel is
+        ["keys", version] if digits(version) => Kind::Manifest, // its history (351-UPD-0027): a version never changes
+        ["timestamps", name] if channel_name(name) => Kind::Channel, // a channel's timestamp (351-UPD-0028), fetched fresh
+        ["recovery", name] if channel_name(name) => Kind::Channel, // a channel's recovery order (351-UPD-0030), fetched fresh
         _ => return Err(Refusal::NotInLayout),
     };
     Ok((names.join("/"), kind))
@@ -102,6 +106,10 @@ mod tests {
         assert_eq!(resolve("/releases/6/x86_64/MANIFEST").unwrap(), ("releases/6/x86_64/MANIFEST".into(), Kind::Manifest));
         assert_eq!(resolve("/releases/12/aarch64/MANIFEST.SIG").unwrap().1, Kind::Manifest);
         assert_eq!(resolve("/channels/stable").unwrap().1, Kind::Channel);
+        assert_eq!(resolve("/keys/current").unwrap(), ("keys/current".to_string(), Kind::Channel));
+        assert_eq!(resolve("/keys/12").unwrap(), ("keys/12".to_string(), Kind::Manifest));
+        assert_eq!(resolve("/timestamps/stable").unwrap(), ("timestamps/stable".to_string(), Kind::Channel));
+        assert_eq!(resolve("/keys/other"), Err(Refusal::NotInLayout));
         let refused = [
             ("/channels/stable?x=1", Refusal::Query), ("channels/stable", Refusal::NotAbsolute), ("/channels/st%61ble", Refusal::Byte),
             ("/channels/a b", Refusal::Byte), ("/channels\\stable", Refusal::Byte), ("/channels//stable", Refusal::EmptyName),
