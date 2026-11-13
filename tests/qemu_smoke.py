@@ -8746,8 +8746,10 @@ def update_store_suite(args):
     # What a kept tree holds: the blobs of the files a slot holds, each digest once, the channel, the manifest and its
     # signature.
     def tree_of(directory, manifest, channel):
+        # The blobs, then the channel, the key file (351-UPD-0026), the manifest and its signature.
+        keys = (server / "keys/current").read_bytes()
         blobs = {digest: size for name, size, digest in release_tool.manifest_files(manifest) if (name.endswith(".elf") and "/" not in name) or name == BOOT_EFI}
-        return len(blobs) + 3, sum(blobs.values()) + len(channel) + len(manifest) + len((directory / "MANIFEST.SIG").read_bytes())
+        return len(blobs) + 4, sum(blobs.values()) + len(channel) + len(keys) + len(manifest) + len((directory / "MANIFEST.SIG").read_bytes())
     cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
     disks = ["-drive", f"format=raw,file={store},if=none,id=store", "-device", "virtio-blk-pci,drive=store"]
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
