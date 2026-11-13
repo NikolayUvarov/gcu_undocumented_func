@@ -241,8 +241,9 @@ fn a_bundle_of_release_py_is_read_in_place() {
     let data = std::fs::read(dir.join("bundle.zip")).unwrap();
     let read = read_bundle(&data).expect("the bundle reads");
     let names: Vec<&str> = read.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(&names[..4], ["keys/current", "channels/stable", "releases/1/x86_64/MANIFEST", "releases/1/x86_64/MANIFEST.SIG"]);
-    assert!(names.len() > 4 && names[4..].iter().all(|n| n.starts_with("blobs/")), "{names:?}");
+    // The key file's history first (351-UPD-0027), then the key file, the channel, its timestamp (351-UPD-0028) and the manifest.
+    assert_eq!(&names[..6], ["keys/1", "keys/current", "channels/stable", "timestamps/stable", "releases/1/x86_64/MANIFEST", "releases/1/x86_64/MANIFEST.SIG"]);
+    assert!(names.len() > 6 && names[6..].iter().all(|n| n.starts_with("blobs/")), "{names:?}");
     for (name, bytes) in &read { assert_eq!(bytes, &std::fs::read(dir.join("server").join(name)).unwrap(), "{name}"); }
     // A byte past the end record, a count one more, a compressed entry, one of a name changed in its local header: refused.
     let mut longer = data.clone();

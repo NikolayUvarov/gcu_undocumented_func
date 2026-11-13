@@ -35,6 +35,8 @@ def test_release_files():
     # licence or model; the key file after the manifest (351-UPD-0026).
     assert files == ["blobs/aa", "blobs/bb", "blobs/dd", "blobs/ab", "blobs/cc", "blobs/cd", "releases/7/x86_64/MANIFEST",
                      "releases/7/x86_64/MANIFEST.SIG", "keys/current"], files
+    # The key file's history before it, for a device that holds an older version (351-UPD-0027).
+    assert lu.release_files(manifest, "x86_64", 7, [1, 2])[-3:] == ["keys/1", "keys/2", "keys/current"]
     # Another processor's loader is not this one's.
     assert "blobs/ab" not in lu.release_files(manifest, "aarch64", 7)
 

@@ -9,9 +9,9 @@ pub enum Zone { ReadOnly, Writable, BootRoot, BootReadOnly, System, Hidden, Slot
 
 /// The private directories of the boot disk's `system/`, each with the only badge that may open, read or write it;
 /// `own` holds the programs' own directories, which only the loader opens and scopes, one to each (000-KRN-0170);
-/// `timed` the network time's floor (111-KRN-0206).
-pub const PRIVATE: [(&str, u16); 6] = [("keystore", BADGE_KEYSTORE), ("netpolicy", BADGE_NETPOLICY), ("effector", BADGE_EFFECTOR), ("effector_gw", BADGE_EFFECTOR_GW), ("own", BADGE_OWNERS),
-                                      ("timed", BADGE_TIMED)];
+/// `timed` the network time's floor (111-KRN-0206); `updater` the key file the updater trusts (351-UPD-0027).
+pub const PRIVATE: [(&str, u16); 7] = [("keystore", BADGE_KEYSTORE), ("netpolicy", BADGE_NETPOLICY), ("effector", BADGE_EFFECTOR), ("effector_gw", BADGE_EFFECTOR_GW), ("own", BADGE_OWNERS),
+                                      ("timed", BADGE_TIMED), ("updater", BADGE_UPDATE)];
 
 /// A boot record's size: it is written whole, in place (docs/update/slots.md).
 pub const RECORD: u32 = 512;
