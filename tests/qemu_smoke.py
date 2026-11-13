@@ -3090,7 +3090,10 @@ def search_check(vm):
     assert lines(vm.command("find ram:")) == ["ram:a.txt", "ram:docs/", "ram:docs/b.md", "ram:docs/заметки.txt"], vm.output
     assert lines(vm.command("find ram: -name *.txt -type f")) == ["ram:a.txt", "ram:docs/заметки.txt"]
     assert lines(vm.command("find ram: -size +12")) == ["ram:docs/заметки.txt"], "20 bytes of Cyrillic text"
-    assert lines(vm.command("find A: -name kernel.elf")) == ["kernel.elf"]
+    # system/'s private directories are refused on the way (keystore's holds the device key where no TPM seals it, as
+    # on aarch64's virt): find says so for them alone.
+    found = lines(vm.command("find A: -name kernel.elf"))
+    assert [l for l in found if not re.fullmatch(r"FIND: system/[\w.-]+: DENIED", l)] == ["kernel.elf"], found
     assert lines(utf8("grep -rn привет ram:")) == [], "case matters without -i"
     assert lines(utf8("grep -rin привет ram:")) == ["ram:docs/заметки.txt:1:Привет, мир"]
     assert lines(utf8("grep -l o ram:a.txt ram:docs/заметки.txt ram:docs/b.md")) == ["ram:a.txt"]
