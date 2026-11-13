@@ -1,6 +1,6 @@
 # 000-APP-0052 — Voice control as a service one can turn on
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done in QEMU on x86, the boot part through the shell; the MacBook Pro's microphone left, 2026-11-12) · **Blocked by:** the microphone on the MacBook Pro (551-DRV-0010) for the hardware check · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done in QEMU on x86, the boot part through the shell, in `main` since round 124, 267ad266; the MacBook Pro's microphone left, 2026-11-12) · **Blocked by:** the microphone on the MacBook Pro (551-DRV-0010) for the hardware check · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 

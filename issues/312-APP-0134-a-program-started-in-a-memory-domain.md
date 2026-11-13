@@ -1,6 +1,6 @@
 # 312-APP-0134 — The shell starts a program in a memory domain
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (`run -d` done, 2026-11-12; a read-only start waits for the store) · **Blocked by:** — (a read-only start: 312-STO-0049, `blockstore.wit` 2.8 `domain-client-with(id, rights)`, STO's answer of 2026-11-12) · **Main task:** [312](312-the-minds-memory.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (`run -d` in `main` since round 124, 267ad266, 2026-11-12; a read-only start waits for 312-STO-0049 in `main`) · **Blocked by:** — (a read-only start: 312-STO-0049, `blockstore.wit` 2.8 `domain-client-with(id, rights)`, STO's answer of 2026-11-12) · **Main task:** [312](312-the-minds-memory.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
 
 **Asked by:** STO, for 312's QEMU criterion, in [requests-APP.md](requests-APP.md), 2026-11-12. Numbered on 2026-11-12.
 
