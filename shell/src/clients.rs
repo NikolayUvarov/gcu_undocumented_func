@@ -26,14 +26,11 @@ pub const NOT_OVER_THE_LINK: [&str; 2] = ["netrevoke", "netpolicy"];
 /// Of what the link takes at once, refused to an SSH session as well: the TPM, the machine's own root of trust.
 pub const NOT_REMOTE: [&str; 1] = ["tpm"];
 
-/// The badge of the client `init` mints for `sshd` (112-NET-0072's `mind::process::BADGE_SHELL_REMOTE`, not in `main` yet).
-pub const BADGE_REMOTE: u16 = 3;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Taken { Refused, Now, Asked }
 
 /// Who calls: a program the shell lent its commands to, `link` in developer mode (`mind::process::BADGE_SHELL_LINK`),
-/// `link` while init reports the owner's `link-console` mode (800-APP-0108), or `sshd` for a login's console (`BADGE_REMOTE`).
+/// `link` while init reports the owner's `link-console` mode (800-APP-0108), or `sshd` for a login's console (`mind::process::BADGE_SHELL_REMOTE`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Client { Program, Link, LinkConsole, Remote }
 
