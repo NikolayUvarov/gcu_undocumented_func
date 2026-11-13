@@ -44,7 +44,9 @@ A channel's expiry is set when the channel is published, for days or weeks. So a
 - **The layout:** `tools/httpd` and `mind::http_serve` serve `timestamps/<channel>` fresh, as a channel; `scripts/link_update.py` puts it after the channel.
 - **Docs:** `docs/update/publishing.md` and `publishing_RU.md` 0.6 (the procedure), `updater.md` and `updater_RU.md` 0.12, the profile's Article 9 row, `docs/idl/README.md`.
 - **Tested** (this container): `tests/release_host.rs` (the format: read and encoded again, other forms refused, any byte changed refused or read as what it encodes, a lying parser caught); `tests/release_test.py` (renewed without the release key, one more version; expired, the release key's and another channel file's refused by `check`); `tests/updater_host.rs`, `tests/http_serve_host.rs`, `tests/idl_fuzz_host.rs`.
-- **The QEMU checks** (`tests/qemu_smoke.py`, the `update` suite, x86 and aarch64): an older timestamp, an expired one, one the release key signed and one naming another channel file, each refused with no record written; then the timestamp renewed by `release.py timestamp` with no release key, after which release 6 is fetched and booted as before. Every channel the suites serve gets its timestamp (`serve_channel`). Runs on the maintainer's machines: below, once made.
+- **The QEMU checks** (`tests/qemu_smoke.py`, the `update` suite, x86 and aarch64): an older timestamp, an expired one, one the release key signed and one naming another channel file, each refused with no record written; then the timestamp renewed by `release.py timestamp` with no release key, after which release 6 is fetched and booted as before. Every channel the suites serve gets its timestamp (`serve_channel`). 
+- **On the maintainer's machines** (Effector, QEMU under TCG), at 6b96b059 (351-UPD-0028's branch with `main` 86794305 merged): "x86: the updater and an update through the link" on x32 (973 s), "aarch64: the updater and the modes" on acc-1 (862 s), "aarch64: an update through the link" on acc-2 (745 s) and "host tests" on x32-2 (1768 s) passed. The `update` suite's timestamp checks are in both.
+- **Left:** the gate.
 
 ## Related
 
