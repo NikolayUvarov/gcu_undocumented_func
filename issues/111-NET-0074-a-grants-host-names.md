@@ -33,7 +33,9 @@ NTS-KE checks the server's certificate for the server's name (RFC 8915, section 
 
 **QEMU, x86** (this container, with 111-NET-0075's `nts_check`): `timed`'s grant made with 5 of its 8 lines waiting for the network, the 5 rules added once DHCP was done, and the name `mind.test` read back by `timed` and checked by `tls` for each NTS-KE.
 
-**Left:** aarch64, on the maintainer's machines; the gate.
+**On the maintainer's machines** (8869cfda): both TLS groups passed, 111-NET-0075's `nts_check` among them.
+
+**Left:** the gate.
 
 ## Related
 

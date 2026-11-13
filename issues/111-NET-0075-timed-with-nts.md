@@ -48,7 +48,8 @@ Stage 1's `timed` takes SNTP answers that anyone on the path can forge, within b
 - **QEMU, aarch64** (this container, QEMU under TCG, `virt`, `-cpu max`, `--arch aarch64 --suites nts`): passed. There the network was up before `timed`'s grant: `GRANT 1 TO timed: 8 RULES`, every name resolved at once (the other path of 111-NET-0074). Four NTS-KE `VERIFIED, PROTOCOL ntske/1, SUITE 1302`; `SET 2026-11-12 22:49:54 (WAS 2024-01-01 00:00:12, …), 2 OF 4 SERVERS AGREED, 2 BY NTS`; the forged and replayed answers and the second boot's two servers refused as on x86.
 - **Interop** (this container, a local script, not a gate test): `timed` against two `chronyd` 4.5 NTS servers (GnuTLS) on the host, the same certificate: NTS-KE with both (`SUITE 1303`, ChaCha20-Poly1305-SHA256, so the exporter's SHA-256 path), `SET … 2 OF 2 SERVERS AGREED, 2 BY NTS`. So `timed`'s NTS-KE, keys, packets and cookies agree with an implementation other than the test's, on both hashes of the exporter. Evidence of these runs, not a proof (MC-12.2); not on a machine (MC-12.1).
 - **`scripts/host_tests.sh`:** `nts` and `tls_exporter` are Cargo packages: in `OWN_LINES` (000-KRN-0238, merged with 110-NET-0069's branch).
-- **Left:** the `tls` suite on x86 and aarch64 on the maintainer's machines; the gate.
+- **On the maintainer's machines** (Effector, QEMU under TCG), at 8869cfda (`main` 60b995bd merged): "x86: network, TLS and Effector" passed on x32-2 (1342 s), "aarch64: network, TLS and Effector" on acc-2 (1153 s), `nts_check` among them. The first run, at 959212a6, failed on both in `nts_check` alone: `httpd_check` had removed the certificates' directory before it; `nts_check` now runs first.
+- **Left:** the gate.
 
 ## Related
 
