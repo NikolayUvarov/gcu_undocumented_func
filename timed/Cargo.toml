@@ -7,6 +7,8 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
+# AEAD_AES_SIV_CMAC_256 for NTS's NTP packets (111-NET-0075).
+aes-siv = { version = "0.7", default-features = false, features = ["alloc"] }
 
 [profile.release]
 panic = "abort"
