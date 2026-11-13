@@ -36,8 +36,8 @@ use mind::idl::update::{self as api, Error, Metadata, Offer, State};
 use mind::idl::codec::{List, Text};
 use mind::idl::{init, wire};
 use mind::ipc::Endpoint;
-use mind::parse::{read_channel, read_keys, read_manifest, Refused, Session};
-use mind::release::{self, Channel, Keys, Step, CHANNEL_MAX, KEYS_MAX, MANIFEST_MAX};
+use mind::parse::{read_channel, read_keys, read_manifest, read_timestamp, Refused, Session};
+use mind::release::{self, Channel, Keys, Step, Timestamp, CHANNEL_MAX, KEYS_MAX, MANIFEST_MAX, TIMESTAMP_MAX};
 use mind::zip; // the names a bundle may hold (bundle.rs)
 use mind::{cid, dag, tree}; // kept.rs names them as crate::cid, crate::dag and crate::tree, as the host tests build it
 use cid::Cid;
@@ -75,6 +75,9 @@ const BLOBS_MAX: u64 = 4096;
 const TRUSTED_DIR: &str = "system/updater";
 const TRUSTED: &str = "system/updater/keys";
 const TRUSTED_NEW: &str = "system/updater/keys.new";
+// The highest timestamp version it took for its channel (351-UPD-0028): `<channel> <version>`, kept the same way.
+const STAMP: &str = "system/updater/timestamp";
+const STAMP_NEW: &str = "system/updater/timestamp.new";
 
 // About 110 KiB: kept here rather than on the stack; only `builder` takes it, and no call of it is reentrant.
 static mut BUILDER: Builder = Builder::new();
@@ -170,15 +173,30 @@ fn kept_keys(parser: Endpoint) -> Option<(Keys, Vec<u8>, &'static str)> {
     }).max_by_key(|(keys, _, _)| keys.version)
 }
 
-/// Key file `file` kept as the one trusted: written whole beside it, then put in its place.
-fn keep_keys(file: &[u8]) -> Result<(), mind::fs::Error> {
+/// `data` kept in system/updater as `path`: written whole as `new` beside it, then put in its place.
+fn put_kept(path: &str, new: &str, data: &[u8]) -> Result<(), mind::fs::Error> {
     match mind::fs::mkdir(TRUSTED_DIR) { Ok(()) | Err(mind::fs::Error::Exists) => {} Err(e) => return Err(e) }
-    let mut new = File::create(TRUSTED_NEW)?;
-    if new.write_at(0, file)? != file.len() { return Err(mind::fs::Error::Io); }
-    new.flush()?;
-    drop(new);
-    match mind::fs::remove(TRUSTED) { Ok(()) | Err(mind::fs::Error::NotFound) => {} Err(e) => return Err(e) }
-    mind::fs::rename(TRUSTED_NEW, TRUSTED)
+    let mut file = File::create(new)?;
+    if file.write_at(0, data)? != data.len() { return Err(mind::fs::Error::Io); }
+    file.flush()?;
+    drop(file);
+    match mind::fs::remove(path) { Ok(()) | Err(mind::fs::Error::NotFound) => {} Err(e) => return Err(e) }
+    mind::fs::rename(new, path)
+}
+
+/// Key file `file` kept as the one trusted.
+fn keep_keys(file: &[u8]) -> Result<(), mind::fs::Error> { put_kept(TRUSTED, TRUSTED_NEW, file) }
+
+/// The highest timestamp version kept for channel `channel` (351-UPD-0028): of `timestamp` and `timestamp.new`, 0 without one.
+fn kept_stamp(channel: &str) -> u64 {
+    [STAMP, STAMP_NEW].into_iter().filter_map(|path| {
+        let file = File::open(path).ok().filter(|f| f.size() <= 64)?;
+        let mut data = alloc::vec![0u8; file.size()];
+        if file.read_at(0, &mut data) != Ok(data.len()) { return None; }
+        let text = core::str::from_utf8(&data).ok()?;
+        let (name, version) = text.strip_suffix('\n')?.split_once(' ')?;
+        (name == channel).then(|| version.parse::<u64>().ok()).flatten()
+    }).max().unwrap_or(0)
 }
 
 /// The files of a manifest a slot holds, by name, size and SHA-256: the kernel, the services the bootloader loads, its
@@ -211,6 +229,8 @@ struct Updater {
     store: Option<Store>,
     /// The key file it trusts and its bytes (351-UPD-0027): the highest version it took; None before the first.
     trusted: Option<(Keys, Vec<u8>)>,
+    /// The highest timestamp version it took for its channel (351-UPD-0028): a lower one is refused.
+    stamp_seen: u64,
 }
 
 /// Where the channel the updater holds came from.
@@ -316,6 +336,37 @@ impl Updater {
         for slot in [slot_name(self.slot), self.other()] {
             if let Some(file) = slot_file(slot, "KEYS", KEYS_MAX) { let _ = self.take(&file, &format!("SLOT {}", slot), true, parser); }
         }
+    }
+
+    /// Timestamp file `file` of the channel update.txt names (351-UPD-0028), if the timestamp keys of `keys` signed it to
+    /// their threshold, its version is not below the one seen before and it has not expired; refused and said otherwise.
+    fn timestamp_of(&self, file: &[u8], keys: &Keys, parser: Endpoint) -> Result<Timestamp, Error> {
+        let (stamp, signed) = read_timestamp(parser, file).map_err(refused)?;
+        let role = keys.role("timestamp").ok_or(Error::Signature)?;
+        let refusal = if !release::signed_by(role.keys(), role.threshold, &file[..signed.body], &signed, &verify) {
+            Some((format!("FEWER THAN {} OF THE TIMESTAMP KEYS OF KEY FILE VERSION {} SIGNED IT", role.threshold, keys.version), Error::Signature))
+        } else if stamp.channel.as_str() != self.config.channel {
+            Some((format!("IT IS CHANNEL {}'S", stamp.channel.as_str()), Error::Malformed))
+        } else if stamp.version < self.stamp_seen {
+            Some((format!("BELOW VERSION {}, TAKEN BEFORE", self.stamp_seen), Error::Older))
+        } else if plan::expired(release::expires_unix(&stamp.expires), mind::rtc::unix_time()) {
+            Some((format!("EXPIRED AT {}, OR THE CLOCK CANNOT BE READ", core::str::from_utf8(&stamp.expires).unwrap_or("")), Error::Expired))
+        } else {
+            None
+        };
+        if let Some((why, error)) = refusal {
+            mind::println!("[UPDATER] TIMESTAMP VERSION {} REFUSED: {}", stamp.version, why);
+            return Err(error);
+        }
+        Ok(stamp)
+    }
+
+    /// The timestamp version taken, kept when it is above the one seen.
+    fn keep_stamp(&mut self, stamp: &Timestamp) {
+        if stamp.version <= self.stamp_seen { return; }
+        self.stamp_seen = stamp.version;
+        let text = format!("{} {}\n", stamp.channel.as_str(), stamp.version);
+        if let Err(e) = put_kept(STAMP, STAMP_NEW, text.as_bytes()) { mind::println!("[UPDATER] TIMESTAMP VERSION {} NOT KEPT ({:?})", stamp.version, e); }
     }
 
     /// The key file `source` holds as `keys/current`, taken as the one it trusts (351-UPD-0027): first each version
@@ -433,13 +484,23 @@ impl Updater {
     }
 
     /// The channel update.txt names as `source` holds it: the key file first, taken as the next of the one trusted, and
-    /// its expiry (351-UPD-0026, 351-UPD-0027); then the channel's release signatures, form and expiry, and its version
-    /// against the running one; with the channel's file and the key file as read.
+    /// its expiry (351-UPD-0026, 351-UPD-0027); then the channel's timestamp, and the channel file it names by SHA-256
+    /// (351-UPD-0028); then the channel's release signatures, form and expiry, the shorter of its own and its
+    /// timestamp's, and its version against the running one; with the channel's file and the key file as read.
     fn read_channel(&mut self, source: &Source, from: Held, parser: &mut Session) -> Result<(Channel, Vec<u8>, Vec<u8>), Error> {
         let (keys, keys_file) = self.trust_source(source, parser)?;
+        let stamp_file = source.small(&format!("timestamps/{}", self.config.channel), TIMESTAMP_MAX, parser)?;
+        let stamp = self.timestamp_of(&stamp_file, &keys, parser.endpoint())?;
         let bytes = source.small(&format!("channels/{}", self.config.channel), CHANNEL_MAX, parser)?;
-        let channel = channel_of(&bytes, &keys, parser.endpoint())?;
+        if mind::sha256::digest(&bytes) != stamp.digest {
+            mind::println!("[UPDATER] TIMESTAMP VERSION {} NAMES ANOTHER FILE THAN channels/{}", stamp.version, self.config.channel);
+            return Err(Error::Digest);
+        }
+        let mut channel = channel_of(&bytes, &keys, parser.endpoint())?;
         if channel.name.as_str() != self.config.channel { return Err(Error::Malformed); }
+        self.keep_stamp(&stamp);
+        // A channel is current for as long as its timestamp, at most (351-UPD-0028).
+        if release::expires_unix(&stamp.expires) < release::expires_unix(&channel.expires) { channel.expires = stamp.expires; }
         self.hold(channel, from);
         // A clock that cannot be read cannot show the channel current (MC-9.4: expiry handled by a set policy).
         if expired(&channel) { return Err(Error::Expired); }
@@ -658,8 +719,10 @@ impl Updater {
             let channel = match self.verify_other() { Ok(channel) => channel, Err(why) => self.restage(why)? };
             let version = channel.version;
             if version <= self.running { return Err(Error::Older); }
-            // Past its channel's expiry a staged release waits for a current one (351-UPD-0025); a rollback does not.
-            if expired(&channel) { return Err(Error::Expired); }
+            // Past its channel's expiry, or the timestamp's of the same channel as last read (351-UPD-0028), a staged release
+            // waits for a current one (351-UPD-0025); a rollback does not.
+            let stamped = self.held.is_some_and(|(c, from)| matches!(from, Held::Source | Held::Bundle) && c.version == version && expired(&c));
+            if expired(&channel) || stamped { return Err(Error::Expired); }
             let write = plan::trial_of_other(self.records(), self.slot, tries).ok_or(Error::Write)?;
             mind::println!("[UPDATER] APPLY: VERSION {} IN SLOT {} ON TRIAL WITH {} TRIES, FALLING BACK TO {}", version, self.other(), tries, slot_name(self.slot));
             self.write_record(write)?;
@@ -973,7 +1036,10 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let slot = match info.boot_slot.slot { BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
     let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None,
-                                failure: String::new(), install: None, handles: 0, store: None, trusted: None };
+                                failure: String::new(), install: None, handles: 0, store: None, trusted: None, stamp_seen: 0 };
+    // The highest timestamp version taken before (351-UPD-0028): a lower one is refused.
+    updater.stamp_seen = kept_stamp(&updater.config.channel);
+    if updater.stamp_seen > 0 { mind::println!("[UPDATER] TIMESTAMP VERSION {} OF CHANNEL {} FROM {}, TAKEN BEFORE", updater.stamp_seen, updater.config.channel, STAMP); }
     if keys::ROOT_TEST_KEYS || keys::BOOT_TEST_KEY {
         mind::println!("[UPDATER] KEYS: {}{}", if keys::ROOT_TEST_KEYS { "THE TEST ROOT KEYS " } else { "" }, if keys::BOOT_TEST_KEY { "THE TEST BOOT KEY" } else { "" });
     }

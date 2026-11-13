@@ -303,6 +303,32 @@ pub fn read_keys(endpoint: Endpoint, file: &[u8]) -> Result<(release::Keys, rele
     if release::keys_is(file, &keys, &signed) { Ok((keys, signed)) } else { Err(Refused::Lied) }
 }
 
+/// The record of a timestamp file `mind::release` read (parse.wit 4.1, 351-UPD-0028).
+pub fn timestamp_record(stamp: &release::Timestamp, signed: &release::Signed) -> parse::Timestamp {
+    parse::Timestamp {
+        channel: Text::new(stamp.channel.as_str()).unwrap_or_default(), digest: List::from_slice(&stamp.digest).unwrap_or_default(),
+        expires: Text::new(core::str::from_utf8(&stamp.expires).unwrap_or("")).unwrap_or_default(), version: stamp.version,
+        signed: signed.body as u32, signatures: signature_records(signed),
+    }
+}
+
+/// A timestamp from the service's record, if every field has its form: still to be compared with the signed bytes.
+pub fn timestamp_from(record: &parse::Timestamp) -> Option<(release::Timestamp, release::Signed)> {
+    let stamp = release::Timestamp {
+        channel: release::Text::new(record.channel.as_str().as_bytes())?, digest: record.digest.as_slice().try_into().ok()?,
+        expires: record.expires.as_str().as_bytes().try_into().ok()?, version: record.version,
+    };
+    Some((stamp, signed_from(record.signed, record.signatures.as_slice())?))
+}
+
+/// A timestamp file read by the service at `endpoint`, taken only if its fields and signatures encode again to exactly
+/// `file` (351-UPD-0028). Which signatures count is the caller's.
+pub fn read_timestamp(endpoint: Endpoint, file: &[u8]) -> Result<(release::Timestamp, release::Signed), Refused> {
+    let record = match parse::timestamp(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
+    let (stamp, signed) = timestamp_from(&record).ok_or(Refused::Lied)?;
+    if release::timestamp_is(file, &stamp, &signed) { Ok((stamp, signed)) } else { Err(Refused::Lied) }
+}
+
 /// A boot manifest read by the service at `endpoint` a page at a time, taken only if its header lines and its files,
 /// encoded again, make exactly `text`; `each` sees every file in order (and may act only once this returns Ok). Gives
 /// the number of header lines and of files.

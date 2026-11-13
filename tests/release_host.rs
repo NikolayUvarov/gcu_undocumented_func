@@ -2,13 +2,14 @@
 //! and boot manifests made by scripts/release.py and scripts/sign_manifest.py are read field by field and encode again
 //! to exactly their bytes; every other form is refused, and any byte changed in a valid file is refused or reads as what
 //! it then encodes. A key file's root signatures are counted as the updater counts them (`signed_by`), and a device takes
-//! the next version only when the root before it and its own both signed it (`step`, 351-UPD-0027).
+//! the next version only when the root before it and its own both signed it (`step`, 351-UPD-0027). A channel's timestamp
+//! file (351-UPD-0028) is read and refused as a channel is.
 #![allow(dead_code)]
 #[path = "../libmind/src/release.rs"]
 mod release;
 
-use release::{channel_is, encode_channel, encode_file, encode_keys, expires_unix, keys_is, parse_channel, parse_keys, signed_by, step, Malformed, Manifest, Rebuild,
-               Step, CHANNEL_MAX, FILE_LINE_MAX, KEYS_MAX, ROLES};
+use release::{channel_is, encode_channel, encode_file, encode_keys, encode_timestamp, expires_unix, keys_is, parse_channel, parse_keys, parse_timestamp, signed_by, step,
+               timestamp_is, Malformed, Manifest, Rebuild, Step, CHANNEL_MAX, FILE_LINE_MAX, KEYS_MAX, ROLES, TIMESTAMP_MAX};
 use std::process::Command;
 
 // Output of a Python snippet run with scripts/ on its path.
@@ -422,4 +423,60 @@ fn a_device_takes_the_next_key_file_signed_by_both_roots() {
     assert_eq!(take(2, root2.keys(), root2.threshold, &first), Step::Lower);
     assert_eq!(take(2, root2.keys(), root2.threshold, &version_file(2, "*NEW", 1, "NEW[0]")), Step::Same);
     assert_eq!(take(1, root.keys(), root.threshold, &version_file(3, old, 2, TWO)), Step::Skips);
+}
+
+// A timestamp as `release.py` writes it: channel stable, the digest of `b"a channel"`, signed by the test timestamp key.
+fn timestamp_file() -> Vec<u8> {
+    python("import release, hashlib\nbody = release.timestamp_bytes('stable', hashlib.sha256(b'a channel').hexdigest(), '2026-11-14T06:00:00Z', 7)\n\
+            sys.stdout.buffer.write(body + release.signature_lines(body, [release.TEST_TIMESTAMP_SEED]))")
+}
+
+#[test]
+fn a_timestamp_reads_and_encodes_to_its_signed_line() {
+    let file = timestamp_file();
+    let (stamp, signed) = parse_timestamp(&file).unwrap();
+    assert_eq!((stamp.channel.as_str(), stamp.version, &stamp.expires), ("stable", 7, b"2026-11-14T06:00:00Z"));
+    let mut body = [0u8; TIMESTAMP_MAX];
+    let n = encode_timestamp(&stamp, &mut body).unwrap();
+    assert_eq!(&body[..n], &file[..signed.body]);
+    assert!(timestamp_is(&file, &stamp, &signed));
+    let digest = python("import hashlib\nsys.stdout.buffer.write(hashlib.sha256(b'a channel').digest())");
+    assert_eq!(&stamp.digest[..], &digest[..]);
+    // A parser that lies about any field is caught.
+    let mut lies = vec![stamp; 3];
+    lies[0].version += 1;
+    lies[1].digest[0] ^= 1;
+    lies[2].expires[3] = b'7';
+    for lie in &lies { assert!(!timestamp_is(&file, lie, &signed), "{:?}", lie); }
+}
+
+#[test]
+fn other_forms_of_a_timestamp_are_refused() {
+    let good = String::from_utf8(timestamp_file()).unwrap();
+    let changed = |from: &str, to: &str| -> Vec<u8> { assert!(good.contains(from), "{}", from); good.replacen(from, to, 1).into_bytes() };
+    let digest = &good[good.find("\"digest\":\"").unwrap() + 10..][..64];
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("a space", changed("\"version\":7", "\"version\": 7")),
+        ("version 0", changed("\"version\":7}", "\"version\":0}")),
+        ("an upper-case digest", changed(digest, &digest.to_uppercase())),
+        ("a short digest", changed(digest, &digest[..62])),
+        ("no expiry", changed("\"expires\":\"2026-11-14T06:00:00Z\",", "")),
+        ("an expiry not a time", changed("2026-11-14T06", "2026-11-31T06")),
+        ("fields out of order", changed("{\"channel\":\"stable\",", "{\"zchannel\":\"stable\",")),
+        ("no signature", good.split_inclusive('\n').next().unwrap().as_bytes().to_vec()),
+    ];
+    for (what, bytes) in &cases { assert_eq!(parse_timestamp(bytes).err(), Some(Malformed), "{}", what); }
+    let mut big = good.clone().into_bytes();
+    big.resize(TIMESTAMP_MAX + 1, b'\n');
+    assert_eq!(parse_timestamp(&big).err(), Some(Malformed), "larger than TIMESTAMP_MAX");
+    // Any byte changed: refused, or read as what it then encodes.
+    let file = good.into_bytes();
+    for at in 0..file.len() {
+        for value in [b'0', b'9', b'a', b'f', b'"', b'\n', b' '] {
+            let mut bytes = file.clone();
+            if bytes[at] == value { continue; }
+            bytes[at] = value;
+            if let Ok((stamp, signed)) = parse_timestamp(&bytes) { assert!(timestamp_is(&bytes, &stamp, &signed), "at {}", at); }
+        }
+    }
 }

@@ -7,7 +7,7 @@
 //! gives the content coding, the media type, `Location` and `Retry-After`; 1.x's `http-head` is gone. 2.1 (110-NET-0070):
 //! `http-request`, a request head as a server reads it. 3.0 (351-UPD-0026): a channel's signatures name their keys, one
 //! to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
-//! that sign the next one; 3.x's key file of four roles is gone.
+//! that sign the next one; 3.x's key file of four roles is gone. 4.1 (351-UPD-0028): `timestamp`, a channel's timestamp file.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -17,7 +17,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (4, 0, 0);
+pub const VERSION: (u8, u8, u8) = (4, 1, 0);
 const MAJOR: usize = 4;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -89,6 +89,16 @@ impl Wire for KeyFile {
     const MAX: usize = <u64 as Wire>::MAX + <Text<20> as Wire>::MAX + <List<Role, 5> as Wire>::MAX + <u32 as Wire>::MAX + <List<Signature, 8> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.expires.encode(w)?; self.roles.encode(w)?; self.signed.encode(w)?; self.signatures.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, expires: Wire::decode(r)?, roles: Wire::decode(r)?, signed: Wire::decode(r)?, signatures: Wire::decode(r)? }) }
+}
+
+/// A channel's timestamp file (351-UPD-0028): the channel, its file's SHA-256, a short expiry and the timestamp's own
+/// version; the timestamp keys' signatures cover its first `signed` bytes. Taken as a channel is (4.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Timestamp { pub channel: Text<32>, pub digest: List<u8, 32>, pub expires: Text<20>, pub version: u64, pub signed: u32, pub signatures: List<Signature, 8> }
+impl Wire for Timestamp {
+    const MAX: usize = <Text<32> as Wire>::MAX + <List<u8, 32> as Wire>::MAX + <Text<20> as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <List<Signature, 8> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.channel.encode(w)?; self.digest.encode(w)?; self.expires.encode(w)?; self.version.encode(w)?; self.signed.encode(w)?; self.signatures.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { channel: Wire::decode(r)?, digest: Wire::decode(r)?, expires: Wire::decode(r)?, version: Wire::decode(r)?, signed: Wire::decode(r)?, signatures: Wire::decode(r)? }) }
 }
 
 /// A file line of a boot manifest.
@@ -277,6 +287,21 @@ pub fn keys(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<KeyF
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <KeyFile as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// A timestamp file (4.1).
+pub fn timestamp(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<Timestamp, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<2048>(file, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 3 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 904, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Timestamp as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
 pub fn manifest(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result::Result<Manifest, Error>> {
     let mut buffer = wire::Wiped(Pages::new(36864).ok_or(SysError::NoMemory)?);
@@ -286,7 +311,7 @@ pub fn manifest(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::res
         start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 3 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 2232, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -303,7 +328,7 @@ pub fn model(endpoint: Endpoint, text: &[u8], index: u32, start: u32) -> Result<
         start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1204, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -318,7 +343,7 @@ pub fn http_response(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Re
         codec::encode_bytes::<8192>(head, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1141, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -333,7 +358,7 @@ pub fn json(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result:
         start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 9334, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -348,7 +373,7 @@ pub fn http_request(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Res
         codec::encode_bytes::<8192>(head, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1291, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -363,6 +388,7 @@ pub const REQUEST_MAX: usize = 60010;
 pub enum Request<'a> {
     Channel { file: &'a [u8] },
     Keys { file: &'a [u8] },
+    Timestamp { file: &'a [u8] },
     Manifest { text: &'a [u8], start: u32 },
     Model { text: &'a [u8], index: u32, start: u32 },
     HttpResponse { head: &'a [u8] },
@@ -395,6 +421,14 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Keys { file }, call))
         }
         3 => {
+            let (call, length) = wire::take_buffer(request, cap, 904, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let file = codec::decode_bytes::<2048>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Timestamp { file }, call))
+        }
+        4 => {
             let (call, length) = wire::take_buffer(request, cap, 2232, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -403,7 +437,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Manifest { text, start }, call))
         }
-        4 => {
+        5 => {
             let (call, length) = wire::take_buffer(request, cap, 1204, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -413,7 +447,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Model { text, index, start }, call))
         }
-        5 => {
+        6 => {
             let (call, length) = wire::take_buffer(request, cap, 1141, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -421,7 +455,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::HttpResponse { head }, call))
         }
-        6 => {
+        7 => {
             let (call, length) = wire::take_buffer(request, cap, 9334, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -430,7 +464,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Json { text, start }, call))
         }
-        7 => {
+        8 => {
             let (call, length) = wire::take_buffer(request, cap, 1291, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -447,6 +481,10 @@ pub fn reply_channel(call: Call, value: core::result::Result<&Channel, Error>) -
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_keys(call: Call, value: core::result::Result<&KeyFile, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_timestamp(call: Call, value: core::result::Result<&Timestamp, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

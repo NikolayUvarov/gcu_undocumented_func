@@ -1,6 +1,6 @@
 # Publishing releases
 
-**Version:** 0.5 (2026-11-13): the key file's `root` role, its history and the device's chain of versions; rotation and revocation (351-UPD-0027); 0.4 (2026-11-13): the key file and the root keys, and signature lines that name their keys (351-UPD-0026); 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
+**Version:** 0.6 (2026-11-13): a channel's timestamp, short-lived and renewed without the release key (351-UPD-0028); 0.5 (2026-11-13): the key file's `root` role, its history and the device's chain of versions; rotation and revocation (351-UPD-0027); 0.4 (2026-11-13): the key file and the root keys, and signature lines that name their keys (351-UPD-0026); 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
 
 How a build becomes a release a device can fetch and check, how to publish it to a server, and who holds which key. The device side is the updater ([updater.md](updater.md)): it checks a channel and stages its release in a slot with the same checks as `check` below.
 
@@ -23,6 +23,13 @@ ed25519 <root key 1> <its signature of the first line>
 ed25519 <root key 2> <its signature of the first line>
 ```
 
+A channel's **timestamp** (351-UPD-0028, after TUF's timestamp metadata) says the channel is current. It is one line of JSON in one encoding: the `channel`, the SHA-256 of the channel's file as published (`digest`, signatures included), a short `expires` (24 hours by default) and its own `version`, which each renewal raises. Signature lines follow, by the **timestamp keys** the key file's `timestamp` role names. A device reads it before the channel and refuses it when the timestamp keys did not sign it to their threshold, when its version is below one it took before, or when it has expired; then it takes only the channel file it names. A channel is current for as long as its timestamp, at most: a server, or anyone holding an old file, can freeze a device on the latest signed channel for a day, not for the channel's weeks (Appendix B.5). A source without a timestamp is refused (`missing`).
+
+```
+{"channel":"stable","digest":"9c1f…","expires":"2026-11-14T06:00:00Z","version":12}
+ed25519 <timestamp key> <its signature of the first line>
+```
+
 Server layout:
 
 ```
@@ -32,6 +39,7 @@ releases/<version>/<arch>/MANIFEST.SIG      its signature (the boot key)
 channels/<channel>                          the signed channel file (the release keys)
 keys/current                                the key file (the root keys)
 keys/<version>                              every version of it, from 1: each signed by the root of the one before and its own
+timestamps/<channel>                        the channel's timestamp (the timestamp keys)
 ```
 
 ## Making and publishing a release
@@ -42,7 +50,10 @@ python3 scripts/release.py stage 7 /tmp/release-7          # checks each volume,
 python3 scripts/release.py publish /tmp/release-7 updates@example.org:/srv/mind --channel stable --minimum 5
 python3 scripts/release.py check /srv/mind --channel stable   # on the server, or on a copy
 python3 scripts/release.py bundle /srv/mind /tmp/mind-7.zip --arch x86_64   # one file for the Effector gateway
+python3 scripts/release.py timestamp updates@example.org:/srv/mind --channel stable   # on the server, at least daily
 ```
+
+The timestamp is renewed with the timestamp key alone (`$MIND_TIMESTAMP_KEY`), which is kept on the publishing server; the release key is not needed there. Renew it well within its life, from a timer on that server: a device that cannot read a current one holds what it has, as past a channel's expiry ([updater.md](updater.md#metadata-past-its-expiry)).
 
 A key file is made once and again when a key changes, signed one root key at a time on the machines that keep them:
 
@@ -81,18 +92,20 @@ python3 scripts/release.py publish /tmp/release-8 updates@example.org:/srv/mind 
 - `publish` refuses a version that is not above the channel's, a version whose manifests are already on the server, and release keys the server's key file does not name or fewer than its release threshold. A server without a key file gets the test one when the channel is signed with the test release key alone; with any other key it is refused. It uploads in this order:
   1. the blobs, never overwriting one;
   2. the release's manifests;
-  3. the channel, in one rename.
+  3. the channel, in one rename;
+  4. the channel's timestamp, its version one above the server's (351-UPD-0028).
 
-  An upload cut at any point leaves the previous channel naming files that are all there.
+  An upload cut at any point leaves the previous channel naming files that are all there. Until the timestamp is there, a device refuses the new channel (`digest`) and holds the one it had.
 - The destination is a directory on this machine or `host:directory`, reached with the system's OpenSSH (`ssh`, `rsync -e ssh`). The SSH login belongs to the uploader and is never the release key.
 - `check` verifies:
   - the key file's history, `keys/1` up, each version against the root before it and its own (version 1 against `$MIND_ROOT_KEYS`'s set, the test set without it), and `keys/current`, the last of them: their form, and the last one's expiry;
   - the channel's signatures: at least the release threshold of the keys the key file names; then its fields as the device reads them (UTF-8 JSON of `channel`, `version`, `minimum`, `expires` and `manifests`, each of its type and range: 1 ≤ minimum ≤ version < 2^64, `expires` a real time as `YYYY-MM-DDTHH:MM:SSZ`, 1 to 4 architectures with 64 lower-case hex digits each), its one encoding and its expiry. A body signed with the release key that is not a channel gets a reason, never an exception (351-UPD-0014);
+  - the channel's timestamp: the timestamp threshold of the keys the key file names, the channel file it names, and its expiry (351-UPD-0028);
   - every manifest it names: its hash and its boot signature;
   - every blob those manifests list: its size and hash.
 - `bundle` runs `check` first, then writes one ZIP of stored entries with fixed dates (751-UPD-0032):
   - the key file's history, `keys/1` up (351-UPD-0027), and the key file;
-  - the channel file;
+  - the channel file and its timestamp (351-UPD-0028): a bundle is installed within its timestamp's life, else renewed and made again;
   - the manifest and signature of each architecture asked for (all the channel names, by default);
   - the blobs those manifests list.
 
@@ -105,9 +118,10 @@ python3 scripts/release.py publish /tmp/release-8 updates@example.org:/srv/mind 
 | Boot key | boot manifests (`MANIFEST.SIG`) | whoever builds a release; its public half is built into the bootloader | only the **test** key, derived from public text (`scripts/sign_manifest.py`) |
 | Root keys | key files (`keys/<version>`), at least the root threshold of them: of the version before and of its own `root` role | each one apart from the others, offline; the first set's public halves and threshold are built into the updater, the key file's `root` role names the current ones | only the **test** set: three keys from fixed text, two of which sign (`scripts/release.py`) |
 | Release keys | channel files, at least the release threshold of them | whoever publishes; the key file names them | only the **test** key (`scripts/release.py`) |
+| Timestamp keys | timestamp files, at least the timestamp threshold of them (351-UPD-0028) | the publishing server, which renews the timestamp; the key file names them | only the **test** key (`scripts/release.py`) |
 | SSH login | nothing: it lets the uploader write the server | the uploader's own SSH key | none |
 
-- A real key is a file of 64 hex digits (a 32-byte seed) outside the repository. It is named by `$MIND_BOOT_SIGNING_KEY` and `$MIND_RELEASE_KEY` (several release keys separated by the path separator); a root key is given to `keys sign` alone. The bootloader is built with the boot key's public half (`$MIND_BOOT_PUBLIC_KEY`). The updater is built with it and with the root set's public file, `$MIND_ROOT_KEYS` (`threshold T`, then a key a line, as `keys root` prints it); no release key is built in, the key file names them (`release.py --public` prints the test release key's).
+- A real key is a file of 64 hex digits (a 32-byte seed) outside the repository. It is named by `$MIND_BOOT_SIGNING_KEY`, `$MIND_RELEASE_KEY` and `$MIND_TIMESTAMP_KEY` (several release or timestamp keys separated by the path separator); a root key is given to `keys sign` alone. The bootloader is built with the boot key's public half (`$MIND_BOOT_PUBLIC_KEY`). The updater is built with it and with the root set's public file, `$MIND_ROOT_KEYS` (`threshold T`, then a key a line, as `keys root` prints it); no release key is built in, the key file names them (`release.py --public` prints the test release key's).
 - The test keys are public. A release signed with them is checked for accidents, not against an attacker, and the tools say `THE TEST KEY` / `THE TEST RELEASE KEY` / `THE TEST ROOT KEYS`.
 - Rotation and revocation are above (351-UPD-0027). The boot key at boot is not under the key file yet ([351-UPD-0029](../../issues/351-UPD-0029-the-boot-key-under-the-root.md)), and the compromise protocol, who rotates what and when, is not defined yet ([351-UPD-0031](../../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md)).
 - A device whose image was written when the key file was above version 1 takes none from its slots at its first start, and its first check reads the versions from 1 from the server.
