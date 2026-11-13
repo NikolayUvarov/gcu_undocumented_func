@@ -41,9 +41,13 @@ Each program keeps its copied text to itself: `edit`'s Ctrl+C/X/V, `fm`'s comman
   - **`edit` and `fm`'s editor:** Ctrl+C/X/V through it (`Outcome::Copy`, `Outcome::Paste`), their own copy where it does not answer; `fm`'s store wrapper (`WithStore`) passes the clipboard on to its disk;
   - **`view`:** Ctrl+C copies the line found, else the top one; **`console`** and **`fm`'s command line:** Ctrl+V or Shift+Insert paste the first line.
 - **Tests:** host `tests/clipboard_host.rs` (who may, the parts in order and within 64 KiB, generations, characters' ends; 3 tests), `tests/edit_host.rs` (the editor's outcomes), `tests/viewer_host.rs`, `tests/console_host.rs`, `tests/fm_host.rs` (through the store wrapper too), the IDL fuzz test with the new receiver.
+- **QEMU, on a local merge with KRN's 000-KRN-0235** (`claude/000-KRN-0235-clipboard` 7828fbd6, `init` starting the service with the right to badge; the merge was not pushed, MC-12.1), x86, 4 CPUs:
+  - the `tools` suite's `clipboard_check` (11 checks): `edit` copied a line through the service (Ctrl+C, the shell naming it in front), the shell's line pasted it (Ctrl+V) and a second `edit` pasted it into its file; the service logged each set and read by its length alone;
+  - the `wm` suite (17): `wm`'s programs started `WITH … clipboard` (`fm`, `console`, `edit`, `view`), through `program-client`;
+  - it found the shell's manager copy without `CAP_GRANT`, which get-part and set-part need for their buffer: fixed (e18d2811).
 - **Left:**
   - `init` starting the service (KRN's 000-KRN-0235), with `clipboard` in `BOOT_SERVICES`, and giving it its server endpoint with `CAP_BADGE` for `program-client`; then `clipboard.elf` back in `02_build.sh`'s list, left out until then since `wm`'s menu lists a program on the disk that opens no window;
-  - the QEMU `tools` suite's check once it runs: `edit`'s text pasted into the shell's line and a second `edit`, a program without the request holding nothing in the slot, a program behind refused;
+  - the same checks on `main` once 000-KRN-0235 is there; a program behind is refused in the host tests (`clipboard_host`), not yet in QEMU, as no program that is not in front calls the clipboard by itself;
 
 ## Related
 
