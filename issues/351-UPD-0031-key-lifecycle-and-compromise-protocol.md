@@ -1,6 +1,6 @@
 # 351-UPD-0031 — The key lifecycle and the compromise protocol, written down
 
-**Type:** update (documentation, policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0028](../issues-done/351-UPD-0028-a-short-lived-timestamp-key.done), [351-UPD-0029](../issues-done/351-UPD-0029-the-boot-key-under-the-root.done), [351-UPD-0030](../issues-done/351-UPD-0030-a-separate-recovery-authority.done) (for the procedures they show; the document may start before) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.6, MC-11.9
+**Type:** update (documentation, policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0028](../issues-done/351-UPD-0028-a-short-lived-timestamp-key.done), [351-UPD-0029](../issues-done/351-UPD-0029-the-boot-key-under-the-root.done), [351-UPD-0030](../issues-done/351-UPD-0030-a-separate-recovery-authority.done) (for the procedures they show; the document may start before) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.6, MC-11.9
 
 Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
@@ -37,6 +37,22 @@ MC-11.9 keeps access to key material apart from the right to ask for a signature
 - Each step names its command and its test from [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done) to [351-UPD-0030](../issues-done/351-UPD-0030-a-separate-recovery-authority.done).
 - The profile lines are updated.
 - The document has been checked against MC-9.4 to 9.6 and MC-11.9, clause by clause.
+
+## Progress
+
+**Written (2026-11-13)** on `claude/351-UPD-0031-keys`, on 351-UPD-0029's branch, which carries 0030:
+- **docs/update/keys.md and keys_RU.md** 0.1. For each role (root, release, timestamp, boot, recovery, the test keys, Secure Boot by reference) they give the lifecycle: where a seed is made and who holds it; storage and use; rotation and revocation, with what each device then does; destruction. Each step names its command and the test that shows the device's side, from 351-UPD-0024 to 0030.
+- **The compromise protocol, role by role:**
+  - what the key's holder can do meanwhile;
+  - what stays valid;
+  - how devices learn of it (the key file only);
+  - what an offline device does (351-UPD-0025);
+  - how recovery stays available;
+  - what a key change does not undo.
+- **MC-11.9:** signing runs through the tools, which read seeds from files; the device holds public keys only; no hardware token (listed as not provided).
+- **Checked clause by clause** against MC-9.4, 9.5, 9.6 and 11.9, with what is not given for each: the table at the end of keys.md.
+- **Brought up to date:** publishing.md and publishing_RU.md (the "not defined yet" line now points to keys.md); the profile's Article 9 row.
+- **Left:** 351-UPD-0029 and 0030, whose tests the document names, reach `main`; then this closes as text.
 
 ## Related
 
