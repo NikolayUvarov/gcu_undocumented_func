@@ -1,12 +1,13 @@
 #![no_std]
 #![no_main]
-// clipboard (000-APP-0032, idl/clipboard.wit 1.0): one text the user copied, in this service's memory only. The badge of
-// a client says who calls: a manager (the shell, the window manager it started) or a program the shell lent a copy;
-// a program is answered only while a manager names it in front. Each text set and read is logged, never the text.
+// clipboard (000-APP-0032, idl/clipboard.wit 1.1): one text the user copied, in this service's memory only. The badge of
+// a client says who calls: a manager (the shell, the window manager it started) or a program a manager lent a copy;
+// a program is answered only while a manager names it in front. A manager's program-client is minted here from the
+// service's endpoint, as a copy on the wire carries no right to badge. Each text set and read is logged, never the text.
 extern crate alloc;
 
 use clipboard::state::{Clipboard, Refusal, Who, PART};
-use mind::abi::BootInfo;
+use mind::abi::{BootInfo, CAP_GRANT, CAP_WRITE, SLOT_SERVICE};
 use mind::clipboard::{BADGE_MANAGER, BADGE_PROGRAM};
 use mind::idl::{clipboard as api, wire};
 use mind::ipc::Endpoint;
@@ -52,6 +53,17 @@ fn main(_info: &'static BootInfo) {
                 Err(refusal) => { mind::println!("[CLIPBOARD] READ REFUSED TO PID {}: {:?}", pid, refusal); api::reply_get_part(call, Err(error(refusal))) }
             },
             Ok((api::Request::Generation, call)) => api::reply_generation(call, clipboard.generation_for(caller).map_err(error)),
+            Ok((api::Request::ProgramClient, call)) => {
+                // Moved to the manager, which lends it: the service keeps no copy.
+                let minted = clipboard.program_client(caller).map_err(error)
+                    .and_then(|()| mind::ipc::mint_badged(SLOT_SERVICE, CAP_WRITE | CAP_GRANT, BADGE_PROGRAM).map_err(|_| api::Error::Unavailable));
+                match minted {
+                    Ok(_) => mind::println!("[CLIPBOARD] A PROGRAM'S CLIENT MINTED FOR PID {}", pid),
+                    Err(api::Error::Unavailable) => mind::println!("[CLIPBOARD] NO PROGRAM'S CLIENT FOR PID {}: THIS SERVICE MAY NOT BADGE ITS ENDPOINT", pid),
+                    Err(e) => mind::println!("[CLIPBOARD] PROGRAM'S CLIENT REFUSED TO PID {}: {:?}", pid, e),
+                }
+                api::reply_program_client(call, minted)
+            }
             Ok((api::Request::Front { pid: front }, call)) => {
                 let set = clipboard.set_front(caller, front);
                 if set.is_ok() && clipboard.in_front() != 0 { mind::println!("[CLIPBOARD] IN FRONT: PID {} (NAMED BY PID {})", front, pid); }

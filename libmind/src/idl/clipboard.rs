@@ -5,7 +5,8 @@
 //! `REQUEST_CLIPBOARD`, a copy badged `mind::clipboard::BADGE_PROGRAM`, and its calls but `generation` are answered
 //! only while it is the program in front. The managers, the shell for its consoles and the window manager it started
 //! for its windows, hold copies badged `BADGE_MANAGER`: they name the program in front, and copy and paste themselves.
-//! The service logs each text set and read, never the text.
+//! A window manager's copy comes on the wire, which carries no right to badge (000-KRN-0073), so the service mints its
+//! programs' copies (1.1). The service logs each text set and read, never the text.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -15,18 +16,18 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:clipboard";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// `behind`: the caller is not the program in front; `refused`: a manager's call from another client, or a client
 /// with neither badge; `invalid`: a part out of order, or one past 65536 bytes in all; `changed`: the text was set
-/// again since the generation asked for.
+/// again since the generation asked for; `unavailable`: the service holds no right to badge its endpoint (1.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] Behind = 0, Refused = 1, Invalid = 2, Changed = 3 }
+pub enum Error { #[default] Behind = 0, Refused = 1, Invalid = 2, Changed = 3, Unavailable = 4 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Behind), 1 => Some(Self::Refused), 2 => Some(Self::Invalid), 3 => Some(Self::Changed), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Behind), 1 => Some(Self::Refused), 2 => Some(Self::Invalid), 3 => Some(Self::Changed), 4 => Some(Self::Unavailable), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
@@ -96,6 +97,17 @@ pub fn front(endpoint: Endpoint, pid: u64) -> Result<core::result::Result<(), Er
     Ok(Ok(()))
 }
 
+/// A program's client, badged `BADGE_PROGRAM`, for a manager to lend (a manager's alone, 1.1): moved to the caller,
+/// the service keeps no copy.
+pub fn program_client(endpoint: Endpoint, receive: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [5 | MAJOR << 8, 0];
+    let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
+    match wire::check_cap_reply(&reply, received, receive)? {
+        None => Ok(Ok(())),
+        Some(code) => Ok(Err(Error::from_code(wire::enum_code(code)?).ok_or(SysError::Invalid)?)),
+    }
+}
+
 /// A request to the `clipboard` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -103,6 +115,7 @@ pub enum Request {
     GetPart { generation: u32, at: u32 },
     Generation,
     Front { pid: u64 },
+    ProgramClient,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -139,6 +152,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::Front { pid: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
         }
+        5 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::ProgramClient, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -158,4 +175,9 @@ pub fn reply_generation(call: Call, value: core::result::Result<u32, Error>) -> 
 pub fn reply_front(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+/// `value` is the handle of the capability to send (moved).
+pub fn reply_program_client(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish_cap(call, value, true)
 }
